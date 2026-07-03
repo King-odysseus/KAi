@@ -24,6 +24,10 @@
         "title": "KAI: Open Settings"
       },
       {
+        "command": "kai.openChatTab",
+        "title": "KAI: Open Chat in Editor (full window)"
+      },
+      {
         "command": "kai.setAgent",
         "title": "KAI: Set Agent"
       },

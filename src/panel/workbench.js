@@ -419,6 +419,14 @@
     els.prompt.focus();
   });
 
+  // Open as full editor tab (maximizable / split-screen)
+  var openTabBtn = document.getElementById('openTab');
+  if (openTabBtn) {
+    openTabBtn.addEventListener('click', function () {
+      vscode.postMessage({ type: 'openTab' });
+    });
+  }
+
   // Details toggle — reveal/hide the muted telemetry log
   var showDetails = false;
   els.chat.classList.add('hide-telemetry');

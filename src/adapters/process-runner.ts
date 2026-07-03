@@ -1,5 +1,17 @@
 import { spawn } from 'child_process';
 
+/**
+ * Quote an argument for cmd.exe. When spawning with `shell: true` on Windows,
+ * Node joins args with spaces WITHOUT quoting, so any arg containing spaces or
+ * shell metacharacters (e.g. a multi-word prompt) would be split into separate
+ * tokens. Wrapping such args in double quotes keeps them as a single argument.
+ */
+export function quoteWinArg(arg: string): string {
+  if (arg === '') return '""';
+  if (!/[\s"&|<>^()%!]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
 export interface CommandInfo {
   available: boolean;
   version?: string;
@@ -41,9 +53,14 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 
   async *run(command: string, args: string[], cwd?: string, signal?: AbortSignal): AsyncIterable<ProcessChunk | ProcessResult> {
-    const child = spawn(command, args, {
+    const useShell = process.platform === 'win32';
+    // Under shell mode Node does not quote args, so quote them ourselves to keep
+    // multi-word arguments (e.g. the prompt) intact.
+    const spawnCommand = useShell ? quoteWinArg(command) : command;
+    const spawnArgs = useShell ? args.map(quoteWinArg) : args;
+    const child = spawn(spawnCommand, spawnArgs, {
       cwd,
-      shell: process.platform === 'win32',
+      shell: useShell,
       windowsHide: true,
       env: process.env
     });

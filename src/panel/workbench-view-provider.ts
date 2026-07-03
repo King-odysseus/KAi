@@ -6,7 +6,7 @@ import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 
 interface WebviewMessage {
   type: 'ready' | 'startTask' | 'setAgent' | 'setRoute' | 'setAutonomy' | 'stop'
-    | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost';
+    | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -20,7 +20,8 @@ const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
 export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'kai.workbench';
 
-  private view?: vscode.WebviewView;
+  /** All live webviews (sidebar view + any editor-tab panels), kept in sync. */
+  private readonly webviews = new Set<vscode.Webview>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -28,26 +29,38 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.extensionUri],
-    };
-    webviewView.webview.html = this.getHtml(webviewView.webview);
-    webviewView.webview.onDidReceiveMessage((message: WebviewMessage) => {
-      void this.handleMessage(message);
+    this.attachWebview(webviewView.webview);
+    webviewView.onDidDispose(() => this.detachWebview(webviewView.webview));
+  }
+
+  /** Wire a webview (sidebar or editor panel) to the shared chat controller. */
+  attachWebview(webview: vscode.Webview): void {
+    webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
+    webview.html = this.getHtml(webview);
+    webview.onDidReceiveMessage((message: WebviewMessage) => {
+      void this.handleMessage(message, webview);
     });
+    this.webviews.add(webview);
+  }
+
+  detachWebview(webview: vscode.Webview): void {
+    this.webviews.delete(webview);
   }
 
   postEvent(event: WorkbenchEvent): void {
-    void this.view?.webview.postMessage({ type: 'event', event });
+    for (const webview of this.webviews) {
+      void webview.postMessage({ type: 'event', event });
+    }
   }
 
-  private async handleMessage(message: WebviewMessage): Promise<void> {
+  private async handleMessage(message: WebviewMessage, webview: vscode.Webview): Promise<void> {
     switch (message.type) {
       case 'ready':
         await this.postState();
         await this.postCapabilities();
+        break;
+      case 'openTab':
+        await vscode.commands.executeCommand('kai.openChatTab');
         break;
       case 'refreshCapabilities':
         await this.postCapabilities();
@@ -125,7 +138,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
             message.agent || this.orchestrator.getState().activeAgent,
             message.route || this.orchestrator.getState().route,
           );
-          void this.view?.webview.postMessage({ type: 'costEstimate', estimate: est });
+          void webview.postMessage({ type: 'costEstimate', estimate: est });
         }
         break;
       case 'stop':
@@ -135,15 +148,21 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async postState(): Promise<void> {
+  postState(): Promise<void> {
     const state = this.orchestrator.getState();
-    await this.view?.webview.postMessage({ type: 'state', state });
+    return this.broadcast({ type: 'state', state });
   }
 
   private async postCapabilities(): Promise<void> {
     const capabilities = await this.orchestrator.getCapabilities();
     const cognitive1 = await this.orchestrator.getCognitive1Health();
-    await this.view?.webview.postMessage({ type: 'capabilities', capabilities, cognitive1 });
+    await this.broadcast({ type: 'capabilities', capabilities, cognitive1 });
+  }
+
+  private async broadcast(message: unknown): Promise<void> {
+    for (const webview of this.webviews) {
+      await webview.postMessage(message);
+    }
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -181,6 +200,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       <span id="statePill"></span>
       <span id="costPill"></span>
       <button id="newChat" class="ghost-btn" title="Start a new chat (clears this transcript)">＋ New</button>
+      <button id="openTab" class="ghost-btn" title="Open KAI as a full editor tab (maximize / split screen)">⤢ Tab</button>
       <button id="detailsToggle" class="ghost-btn" title="Show agent activity log (lifecycle, memory, raw, cost)">Details</button>
     </div>
 

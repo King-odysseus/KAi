@@ -225,6 +225,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Orchestrator state listener
   orchestrator.on('state', (s: WorkbenchState) => {
     updateStatus(s);
+    void workbenchProvider.postState();
     engineRoomProvider.refresh();
     settingsProvider.refresh();
     void prefs.setAgent(s.activeAgent);
@@ -268,6 +269,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('kai.openSettings', async () => {
       await vscode.commands.executeCommand('kai.settings.focus');
+    }),
+
+    vscode.commands.registerCommand('kai.openChatTab', () => {
+      const panel = vscode.window.createWebviewPanel(
+        'kai.chatTab',
+        'KAI Chat',
+        vscode.ViewColumn.Active,
+        { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [context.extensionUri] },
+      );
+      panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'kai.svg');
+      workbenchProvider.attachWebview(panel.webview);
+      panel.onDidDispose(() => workbenchProvider.detachWebview(panel.webview));
     }),
 
     vscode.commands.registerCommand('kai.setAgent', async () => {
