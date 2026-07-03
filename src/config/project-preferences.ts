@@ -1,0 +1,59 @@
+import * as vscode from 'vscode';
+import type { AgentId, AutonomyMode, RouteMode } from '../core/types';
+
+const KEYS = {
+  agent: 'kai.project.agent',
+  route: 'kai.project.route',
+  autonomy: 'kai.project.autonomy',
+} as const;
+
+/**
+ * Per-project preference store.
+ *
+ * Reads/writes agent, route, and autonomy preferences scoped to
+ * the current VS Code workspace. Falls back to global KAI settings
+ * when no project-level overrides exist.
+ */
+export class ProjectPreferences {
+  constructor(private readonly workspaceState: vscode.Memento) {}
+
+  getAgent(fallback: AgentId): AgentId {
+    return this.workspaceState.get<AgentId>(KEYS.agent, fallback);
+  }
+
+  getRoute(fallback: RouteMode): RouteMode {
+    return this.workspaceState.get<RouteMode>(KEYS.route, fallback);
+  }
+
+  getAutonomy(fallback: AutonomyMode): AutonomyMode {
+    return this.workspaceState.get<AutonomyMode>(KEYS.autonomy, fallback);
+  }
+
+  async setAgent(agent: AgentId): Promise<void> {
+    await this.workspaceState.update(KEYS.agent, agent);
+  }
+
+  async setRoute(route: RouteMode): Promise<void> {
+    await this.workspaceState.update(KEYS.route, route);
+  }
+
+  async setAutonomy(autonomy: AutonomyMode): Promise<void> {
+    await this.workspaceState.update(KEYS.autonomy, autonomy);
+  }
+
+  /**
+   * Returns all three project preferences, falling back to the provided
+   * global defaults when no override exists.
+   */
+  getState(
+    defaultAgent: AgentId,
+    defaultRoute: RouteMode,
+    defaultAutonomy: AutonomyMode,
+  ): { agent: AgentId; route: RouteMode; autonomy: AutonomyMode } {
+    return {
+      agent: this.getAgent(defaultAgent),
+      route: this.getRoute(defaultRoute),
+      autonomy: this.getAutonomy(defaultAutonomy),
+    };
+  }
+}

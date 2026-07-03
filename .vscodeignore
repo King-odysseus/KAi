@@ -1,0 +1,12 @@
+src/**
+test/**
+out/test/**
+coverage/**
+.vscode/**
+tsconfig.json
+vitest.config.ts
+**/*.map
+
+# Keep webview static assets (loaded at runtime from src/panel)
+!src/panel/workbench.css
+!src/panel/workbench.js

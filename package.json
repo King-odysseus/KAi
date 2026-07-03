@@ -1,0 +1,241 @@
+{
+  "name": "kai-agent-workbench",
+  "displayName": "KAI Agent Workbench",
+  "description": "A multi-agent coding workbench with route control and durable Cognitive1 memory.",
+  "version": "0.1.0",
+  "publisher": "kai",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "kai.openWorkbench",
+        "title": "KAI: Open Agent Workbench"
+      },
+      {
+        "command": "kai.openSettings",
+        "title": "KAI: Open Settings"
+      },
+      {
+        "command": "kai.setAgent",
+        "title": "KAI: Set Agent"
+      },
+      {
+        "command": "kai.setRoute",
+        "title": "KAI: Set Route"
+      },
+      {
+        "command": "kai.setAutonomy",
+        "title": "KAI: Set Autonomy Mode"
+      },
+      {
+        "command": "kai.getProxyStatus",
+        "title": "KAI: Show Proxy Status"
+      },
+      {
+        "command": "kai.restartProxy",
+        "title": "KAI: Restart Proxy"
+      },
+      {
+        "command": "kai.toggleRoute",
+        "title": "KAI: Toggle Route (Direct/Proxy)"
+      },
+      {
+        "command": "kai.cycleAutonomy",
+        "title": "KAI: Cycle Autonomy Mode"
+      },
+      {
+        "command": "kai.handoff",
+        "title": "KAI: Handoff to another agent"
+      },
+      {
+        "command": "kai.listBackups",
+        "title": "KAI: List Config Backups"
+      },
+      {
+        "command": "kai.restoreBackup",
+        "title": "KAI: Restore Config Backup"
+      },
+      {
+        "command": "kai.inspectRawEvents",
+        "title": "KAI: Inspect Raw Events"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "kai.setAgent",
+        "key": "ctrl+shift+k a",
+        "mac": "cmd+shift+k a"
+      },
+      {
+        "command": "kai.toggleRoute",
+        "key": "ctrl+shift+k r",
+        "mac": "cmd+shift+k r"
+      },
+      {
+        "command": "kai.cycleAutonomy",
+        "key": "ctrl+shift+k m",
+        "mac": "cmd+shift+k m"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "kai",
+          "title": "KAI",
+          "icon": "resources/kai.svg"
+        }
+      ]
+    },
+    "views": {
+      "kai": [
+        {
+          "id": "kai.workbench",
+          "name": "Agent Workbench",
+          "type": "webview"
+        },
+        {
+          "id": "kai.settings",
+          "name": "Settings",
+          "type": "webview"
+        },
+        {
+          "id": "kai.engineRoom",
+          "name": "Engine Room",
+          "type": "webview"
+        },
+        {
+          "id": "kai.memory",
+          "name": "Memory",
+          "type": "tree"
+        },
+        {
+          "id": "kai.sessions",
+          "name": "Sessions",
+          "type": "tree"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "KAI Agent Workbench",
+      "properties": {
+        "kai.defaultAgent": {
+          "type": "string",
+          "default": "claude",
+          "enum": [
+            "claude",
+            "codex",
+            "qwen",
+            "gemini"
+          ],
+          "description": "Default agent harness for new KAI tasks."
+        },
+        "kai.defaultRoute": {
+          "type": "string",
+          "default": "direct",
+          "enum": [
+            "direct",
+            "proxy"
+          ],
+          "description": "Default route for new KAI tasks."
+        },
+        "kai.defaultAutonomy": {
+          "type": "string",
+          "default": "review",
+          "enum": [
+            "review",
+            "auto",
+            "custom"
+          ],
+          "description": "Default autonomy mode for new KAI tasks."
+        },
+        "kai.brainPath": {
+          "type": "string",
+          "default": "",
+          "description": "External Cognitive1 brain data folder. KAI ships code, not private memory."
+        },
+        "kai.cognitive1Enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Call the local Cognitive1 HTTP daemon for session and recall events."
+        },
+        "kai.cognitive1Url": {
+          "type": "string",
+          "default": "http://127.0.0.1:9876",
+          "description": "Base URL for the Cognitive1 HTTP daemon."
+        },
+        "kai.codexCommand": {
+          "type": "string",
+          "default": "codex",
+          "description": "Command used to launch Codex CLI."
+        },
+        "kai.codexProxyProfile": {
+          "type": "string",
+          "default": "codeproxy",
+          "description": "Codex profile name used when KAI route is Proxy."
+        },
+        "kai.codexConfigModel": {
+          "type": "string",
+          "default": "gpt-5.5",
+          "description": "Placeholder model written to the KAI-managed Codex proxy profile."
+        },
+        "kai.proxyPort": {
+          "type": "number",
+          "default": 8082,
+          "description": "Local ClaudeCode-Proxy port used by KAI-managed agent profiles."
+        },
+        "kai.proxyScript": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the proxy server script. Leave empty to skip proxy auto-start."
+        },
+        "kai.claudeCommand": {
+          "type": "string",
+          "default": "claude",
+          "description": "Command used to launch Claude Code when the process adapter is enabled."
+        },
+        "kai.qwenCommand": {
+          "type": "string",
+          "default": "qwen",
+          "description": "Command used to launch Qwen Code CLI via ACP."
+        },
+        "kai.geminiCommand": {
+          "type": "string",
+          "default": "gemini",
+          "description": "Command used to launch Gemini CLI via ACP."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "lint": "eslint src/ test/ --ext .ts",
+    "lint:fix": "eslint src/ test/ --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+    "package": "npm run compile && vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.96.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.2",
+    "eslint": "^8.57.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
