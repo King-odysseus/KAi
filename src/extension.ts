@@ -1,4 +1,4 @@
-import * as path from 'path';
+﻿import * as path from 'path';
 import * as vscode from 'vscode';
 import { AcpAgentAdapter } from './adapters/acp-adapter';
 import { parseClaudeJsonLine } from './adapters/claude-parser';
@@ -11,6 +11,8 @@ import { Cognitive1HttpClient, DisabledCognitive1Client } from './cognitive1/cog
 import { EmbeddedCognitive1 } from './cognitive1/embedded-cognitive1';
 import { BackupManager } from './config/backup-manager';
 import { CodexConfigWriter, defaultCodexConfigPath } from './config/codex-config';
+import { ClaudeConfigWriter } from './config/claude-config';
+import { QwenConfigWriter } from './config/qwen-config';
 import { ProjectPreferences } from './config/project-preferences';
 import { createEventId, nowIso } from './core/events';
 import type { WorkbenchEvent } from './core/events';
@@ -70,6 +72,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const cognitive1 = createCognitive1Client(config);
   const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const codexConfigWriter = new CodexConfigWriter();
+  const claudeConfigWriter = new ClaudeConfigWriter();
+  const qwenConfigWriter = new QwenConfigWriter();
   const backupManager = new BackupManager();
   const configDir = path.dirname(defaultCodexConfigPath());
   const proxyPort = config.get<number>('proxyPort', 8082);
@@ -93,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     new VSCodeDiffApplier(),
   );
 
-  // Register Claude adapter — with dedicated parser
+  // Register Claude adapter — with dedicated parser + proxy config
   orchestrator.registerAdapter(
     new ProcessAgentAdapter({
       id: 'claude',
@@ -103,10 +107,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       parseLine: parseClaudeJsonLine,
       supportsApprovals: true,
       supportsMcp: true,
+      beforeRun: async (req) => {
+        if (req.route !== 'proxy') return [];
+        try {
+          const r = await claudeConfigWriter.ensureProxyConfig({ port: proxyPort });
+          return [
+            {
+              id: createEventId(),
+              type: 'agent.lifecycle',
+              taskId: req.taskId,
+              timestamp: nowIso(),
+              agent: 'claude',
+              status: 'running',
+              detail: r.changed
+                ? 'Claude proxy config written to ~/.claude/settings.json.'
+                : 'Claude proxy config up to date.',
+            },
+          ];
+        } catch (err) {
+          logger.error('config_failure', 'Failed to configure Claude proxy settings.', undefined, err);
+          return [];
+        }
+      },
     }),
   );
 
-  // Register Codex adapter — with proxy profile management
+  // Register Codex adapter â€” with proxy profile management
   orchestrator.registerAdapter(
     new ProcessAgentAdapter({
       id: 'codex',
@@ -145,7 +171,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // Register Qwen adapter — with dedicated parser
+  // Register Qwen adapter â€” with dedicated parser
   orchestrator.registerAdapter(
     new AcpAgentAdapter(
       {
@@ -157,7 +183,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
   );
 
-  // Register Gemini adapter — with dedicated parser
+  // Register Gemini adapter â€” with dedicated parser
   orchestrator.registerAdapter(
     new AcpAgentAdapter(
       {
@@ -224,6 +250,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Orchestrator state listener
   orchestrator.on('state', (s: WorkbenchState) => {
+    // When route switches to proxy, write Qwen config immediately
+    // (Qwen uses AcpAgentAdapter which has no beforeRun hook)
+    if (s.route === 'proxy') {
+      void qwenConfigWriter.ensureProxyConfig({ port: proxyPort }).catch(err =>
+        logger.error('config_failure', 'Failed to configure Qwen proxy settings.', undefined, err)
+      );
+    }
     updateStatus(s);
     void workbenchProvider.postState();
     engineRoomProvider.refresh();
@@ -354,7 +387,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const pick = await vscode.window.showQuickPick(
         backups.map((b) => ({
           label: b.originalName,
-          description: `${new Date(b.timestamp).toLocaleString()} — ${(b.size / 1024).toFixed(1)} KB`,
+          description: `${new Date(b.timestamp).toLocaleString()} â€” ${(b.size / 1024).toFixed(1)} KB`,
           detail: b.path,
           backup: b,
         })),
@@ -456,3 +489,6 @@ export function deactivate(): void {
   getLogger().info('internal', 'KAI Agent Workbench deactivating...');
   void proxyManager?.stop();
 }
+
+
+
