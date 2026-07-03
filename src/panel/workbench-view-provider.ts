@@ -180,6 +180,8 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       <span class="topbar-spacer"></span>
       <span id="statePill"></span>
       <span id="costPill"></span>
+      <button id="newChat" class="ghost-btn" title="Start a new chat (clears this transcript)">＋ New</button>
+      <button id="detailsToggle" class="ghost-btn" title="Show agent activity log (lifecycle, memory, raw, cost)">Details</button>
     </div>
 
     <div class="chat" id="chat">

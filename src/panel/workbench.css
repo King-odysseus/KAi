@@ -58,6 +58,20 @@ body {
 
 .topbar-spacer { flex: 1; }
 
+.ghost-btn {
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  border: 1px solid var(--kai-border);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ghost-btn:hover { border-color: var(--kai-accent-line); color: var(--kai-accent-strong); }
+.ghost-btn.active { color: var(--kai-accent-strong); border-color: var(--kai-accent-line); background: var(--kai-accent-soft); }
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -119,8 +133,11 @@ body {
   align-self: flex-start;
   background: var(--kai-surface);
   border: 1px solid var(--kai-border);
+  border-left: 3px solid var(--kai-accent);
   border-bottom-left-radius: 4px;
 }
+
+.msg.assistant .role { color: var(--kai-accent-strong); opacity: 0.95; }
 
 .msg .role {
   display: block;
@@ -159,7 +176,32 @@ body {
   background: var(--kai-border);
 }
 
-/* Activity cards (tool / diff / approval / error / memory / lifecycle) */
+/* Telemetry log rows — muted, compact, hidden by default */
+.log-row {
+  align-self: stretch;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--vscode-descriptionForeground);
+  padding: 0 2px;
+  overflow-wrap: anywhere;
+}
+.log-row .log-tag {
+  flex: none;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  opacity: 0.75;
+  border: 1px solid var(--kai-border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.chat.hide-telemetry .telemetry { display: none; }
+
+/* Activity cards (tool / diff / approval / error) */
 .event-card {
   align-self: stretch;
   border: 1px solid var(--kai-border);

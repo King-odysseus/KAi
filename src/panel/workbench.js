@@ -48,7 +48,17 @@
     if (force || nearBottom()) els.chat.scrollTop = els.chat.scrollHeight;
   }
   function removeEmpty() {
-    if (emptyState) { emptyState.remove(); emptyState = null; }
+    if (emptyState) emptyState.style.display = 'none';
+  }
+  function clearChat() {
+    finalizeAssistant();
+    Array.prototype.slice.call(els.chat.children).forEach(function (k) {
+      if (k !== emptyState) k.remove();
+    });
+    if (emptyState) emptyState.style.display = '';
+    totalCost = 0; totalInput = 0; totalOutput = 0;
+    els.costPill.innerHTML = '';
+    clearPrompt();
   }
   function autoGrow() {
     els.prompt.style.height = 'auto';
@@ -117,6 +127,49 @@
       'route.changed': 'Route', 'permission.escalation': 'Permission', 'raw.fallback': 'Raw',
     };
     return L[e.type] || e.type;
+  }
+
+  // Low-signal event types collapse into the muted, hidden-by-default log.
+  var TELEMETRY = {
+    'agent.lifecycle': 1, 'autonomy.changed': 1, 'route.changed': 1,
+    'cost.update': 1, 'memory.event': 1, 'raw.fallback': 1,
+  };
+  function isTelemetry(type) { return !!TELEMETRY[type]; }
+
+  function accumulateCost(event) {
+    if (event.inputTokens) totalInput += event.inputTokens;
+    if (event.outputTokens) totalOutput += event.outputTokens;
+    if (event.amountUsd != null) totalCost = event.amountUsd;
+    renderState(state);
+  }
+
+  function telemetryText(event) {
+    switch (event.type) {
+      case 'cost.update':
+        return [
+          event.inputTokens != null ? 'In ' + event.inputTokens : '',
+          event.outputTokens != null ? 'Out ' + event.outputTokens : '',
+          event.amountUsd != null ? '$' + event.amountUsd.toFixed(4) : '',
+        ].filter(Boolean).join(' · ');
+      case 'memory.event':
+        return (event.action ? event.action + ': ' : '') + (event.summary || '');
+      case 'raw.fallback':
+        var p = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
+        return p.length > 240 ? p.slice(0, 240) + '…' : p;
+      default:
+        return event.detail || event.summary || event.message || '';
+    }
+  }
+
+  function renderTelemetry(event) {
+    var row = document.createElement('div');
+    row.className = 'log-row telemetry';
+    var tag = document.createElement('span');
+    tag.className = 'log-tag';
+    tag.textContent = eventLabel(event) + (event.agent ? ' · ' + event.agent : '');
+    row.appendChild(tag);
+    row.appendChild(document.createTextNode(telemetryText(event)));
+    return row;
   }
 
   function renderCard(event) {
@@ -217,9 +270,15 @@
       appendAssistantText(event.text, event.agent);
       return;
     }
+    if (event.type === 'cost.update') accumulateCost(event);
+
     removeEmpty();
     finalizeAssistant();
-    els.chat.appendChild(renderCard(event));
+    if (isTelemetry(event.type)) {
+      els.chat.appendChild(renderTelemetry(event));
+    } else {
+      els.chat.appendChild(renderCard(event));
+    }
     scrollBottom();
   }
 
@@ -351,6 +410,25 @@
         els.costEstimate.textContent = '';
       }
     }, 400);
+  });
+
+  // New chat — clears this window's transcript (each window is independent)
+  document.getElementById('newChat').addEventListener('click', function () {
+    if (state && state.isRunning) vscode.postMessage({ type: 'stop' });
+    clearChat();
+    els.prompt.focus();
+  });
+
+  // Details toggle — reveal/hide the muted telemetry log
+  var showDetails = false;
+  els.chat.classList.add('hide-telemetry');
+  var detailsToggle = document.getElementById('detailsToggle');
+  detailsToggle.addEventListener('click', function () {
+    showDetails = !showDetails;
+    els.chat.classList.toggle('hide-telemetry', !showDetails);
+    detailsToggle.classList.toggle('active', showDetails);
+    detailsToggle.textContent = showDetails ? 'Hide log' : 'Details';
+    if (showDetails) scrollBottom(true);
   });
 
   // Delegated approve / reject buttons on diff cards
