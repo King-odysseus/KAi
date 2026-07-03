@@ -16,6 +16,7 @@ interface SettingsMessage {
     | 'saveCommand'
     | 'saveProxy'
     | 'openDocs'
+    | 'openBrowser'
     | 'reload';
   agent?: AgentId;
   value?: string;
@@ -100,10 +101,30 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           void vscode.env.openExternal(vscode.Uri.parse(AGENT_PROVIDERS[message.agent].keyDocsUrl));
         }
         break;
+      case 'openBrowser':
+        this.openInBrowser();
+        break;
       case 'reload':
         void vscode.commands.executeCommand('workbench.action.reloadWindow');
         break;
     }
+  }
+
+  private openInBrowser(): void {
+    const port = 8000;
+    const url = `http://127.0.0.1:${port}`;
+    const term =
+      vscode.window.terminals.find((t) => t.name === 'KAI Web') ??
+      vscode.window.createTerminal('KAI Web');
+    term.show();
+    // Launch VS Code's built-in web server (serves the full editor + KAI to a browser).
+    // Localhost-only, so the connection token is disabled for a friction-free open.
+    term.sendText(`code serve-web --port ${port} --without-connection-token`, true);
+    void vscode.window.showInformationMessage(
+      `Starting VS Code Web on ${url} — opening your browser. This serves the full editor (with KAI) from this machine. If the tab is blank, wait a few seconds and refresh.`,
+    );
+    // Give the server a moment to boot before opening the browser.
+    setTimeout(() => void vscode.env.openExternal(vscode.Uri.parse(url)), 3500);
   }
 
   private runInTerminal(command: string): void {
@@ -134,6 +155,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         installCommand: provider.installCommand,
         signInCommand: provider.signInCommand,
         authSummary: provider.authSummary,
+        strengths: provider.strengths,
+        bestFor: provider.bestFor,
         hasKey: keyStatus[id],
       };
     });
@@ -187,6 +210,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     .badge.ok { color: var(--vscode-testing-iconPassed); border-color: color-mix(in srgb, var(--vscode-testing-iconPassed) 45%, transparent); background: color-mix(in srgb, var(--vscode-testing-iconPassed) 10%, transparent); }
     .badge.warn { color: var(--vscode-testing-iconQueued); border-color: color-mix(in srgb, var(--vscode-testing-iconQueued) 45%, transparent); background: color-mix(in srgb, var(--vscode-testing-iconQueued) 10%, transparent); }
     .summary { font-size: 11px; color: var(--vscode-descriptionForeground); line-height: 1.5; margin-bottom: 9px; }
+    .strengths { border-left: 2px solid var(--kai-accent-line); padding-left: 9px; margin: 0 0 10px; }
+    .strengths .st-text { font-size: 11px; line-height: 1.5; margin-bottom: 6px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--kai-accent-soft); color: var(--kai-accent-strong); }
+    .st-label { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; font-weight: 700; }
     .field { margin-bottom: 8px; }
     .field label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--vscode-descriptionForeground); margin-bottom: 3px; }
     .row { display: flex; gap: 6px; }
@@ -241,6 +269,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   <h3>Proxy</h3>
   <div id="proxy"></div>
 
+  <h3>Browser access</h3>
+  <div class="card">
+    <div class="summary">Operate KAI from Chrome. This starts VS Code's web server and opens it in your browser &mdash; the full editor with KAI, served from this machine (localhost only).</div>
+    <div class="actions"><button class="primary" data-act="openBrowser">Open in browser ↗</button></div>
+  </div>
+
   <div class="toolbar">
     <button class="ghost" id="refresh">Re-check status</button>
     <button class="ghost" id="reload">Reload window</button>
@@ -261,9 +295,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         var keyPlaceholder = a.hasKey ? '•••••• saved — enter to replace' : 'Paste ' + a.envVar + '…';
         var installBtn = a.available ? '' : '<button class="ghost" data-act="install" data-id="' + a.id + '">Install</button>';
         var clearBtn = a.hasKey ? '<button class="link" data-act="clearKey" data-id="' + a.id + '">Remove key</button>' : '';
+        var tags = (a.bestFor || []).map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('');
         return '' +
           '<div class="card">' +
             '<div class="card-head"><div class="card-title">' + esc(a.displayName) + '</div>' + badge + '</div>' +
+            '<div class="strengths">' +
+              '<div class="st-label">Best for</div>' +
+              '<div class="st-text">' + esc(a.strengths) + '</div>' +
+              '<div class="tags">' + tags + '</div>' +
+            '</div>' +
             '<div class="summary">' + esc(a.authSummary) + '</div>' +
             (a.available ? '' : '<div class="note" style="margin-bottom:8px;">' + esc(a.unavailableReason || (a.command + ' not found on PATH')) + '</div>') +
             '<div class="field"><label>Command / path</label><div class="row">' +
@@ -313,6 +353,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       if (act === 'install') vscode.postMessage({ type: 'install', agent: id });
       else if (act === 'signin') vscode.postMessage({ type: 'signin', agent: id });
       else if (act === 'openDocs') vscode.postMessage({ type: 'openDocs', agent: id });
+      else if (act === 'openBrowser') vscode.postMessage({ type: 'openBrowser' });
       else if (act === 'clearKey') vscode.postMessage({ type: 'clearKey', agent: id });
       else if (act === 'saveCommand') vscode.postMessage({ type: 'saveCommand', agent: id, value: inputFor('command', id).value });
       else if (act === 'saveKey') {

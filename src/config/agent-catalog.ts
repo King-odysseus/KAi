@@ -21,6 +21,10 @@ export interface AgentProviderInfo {
   keyDocsUrl: string;
   /** One-line explanation of the auth options for this agent. */
   authSummary: string;
+  /** One-line "what this agent is best at" summary. */
+  strengths: string;
+  /** Short task tags this agent excels at (rendered as chips). */
+  bestFor: string[];
 }
 
 export const AGENT_ORDER: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -37,6 +41,9 @@ export const AGENT_PROVIDERS: Record<AgentId, AgentProviderInfo> = {
     keyDocsUrl: 'https://console.anthropic.com/settings/keys',
     authSummary:
       'Direct: sign in with your Anthropic account (Claude Pro/Max/Team). Proxy: set an Anthropic API key.',
+    strengths:
+      'Deepest reasoning and instruction-following. Excels at large multi-file refactors, careful code review, and complex agentic tool use.',
+    bestFor: ['Architecture', 'Refactors', 'Code review', 'Agentic tasks'],
   },
   codex: {
     id: 'codex',
@@ -49,6 +56,9 @@ export const AGENT_PROVIDERS: Record<AgentId, AgentProviderInfo> = {
     keyDocsUrl: 'https://platform.openai.com/api-keys',
     authSummary:
       'Direct: sign in with your ChatGPT account. Proxy: set an OpenAI API key.',
+    strengths:
+      'Fast, precise implementation of well-scoped tasks. Strong at focused edits, quick bug fixes, and running in a sandbox.',
+    bestFor: ['Quick fixes', 'Focused edits', 'Prototyping', 'Sandbox runs'],
   },
   qwen: {
     id: 'qwen',
@@ -61,6 +71,9 @@ export const AGENT_PROVIDERS: Record<AgentId, AgentProviderInfo> = {
     keyDocsUrl: 'https://dashscope.console.aliyun.com/apiKey',
     authSummary:
       'Direct: sign in via the qwen CLI. Proxy: set a DashScope / OpenAI-compatible API key.',
+    strengths:
+      'Capable open-weight coder that is cost-effective at scale. Good general coding and a strong budget-friendly fallback.',
+    bestFor: ['Budget runs', 'General coding', 'High volume', 'Fallback'],
   },
   gemini: {
     id: 'gemini',
@@ -73,5 +86,8 @@ export const AGENT_PROVIDERS: Record<AgentId, AgentProviderInfo> = {
     keyDocsUrl: 'https://aistudio.google.com/apikey',
     authSummary:
       'Direct: sign in with your Google account. Proxy: set a Gemini API key.',
+    strengths:
+      'Very large context window and strong multimodal understanding. Great for reasoning over big codebases, docs, and research.',
+    bestFor: ['Large context', 'Codebase Q&A', 'Docs', 'Research'],
   },
 };
