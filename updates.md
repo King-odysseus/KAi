@@ -27,6 +27,25 @@ without format translation. A plain host (e.g. `https://api.deepseek.com`) trigg
 Anthropic→OpenAI translation.
 
 
+
+### Provider-first upstream: one key, auto-derived agent endpoints
+The Upstream Provider now asks for exactly what matters — pick a provider, enter its
+API key — and the proxy auto-routes each agent to the correct endpoint format.
+
+- **Provider preset** now carries per-agent endpoint mappings (Claude → Anthropic
+  pass-through, Codex/Qwen → OpenAI-compatible). Picking DeepSeek auto-derives
+  https://api.deepseek.com/anthropic for Claude and https://api.deepseek.com
+  for Codex/Qwen — no manual Base URL entry needed.
+- **Agent endpoints display** shows the derived URLs per agent as read-only,
+  with format badges (Anthropic / OpenAI).
+- **Saving the upstream provider** now automatically writes the correct
+  per-agent base URLs and shared API key to the Codex/Qwen config blocks.
+- **Provider Overrides** section simplified — shows the current auto-derived
+  endpoint, with the toggle now labeled "Use different provider" and custom
+  fields tucked behind it. The override is only needed when switching to a
+  completely different provider like real OpenAI.
+- **Web UI button** fixed — uses --host 127.0.0.1 --accept-server-license-terms
+  instead of the invalid --without-connection-token flag.
 ### Cleaner Settings: API keys collapsed, provider routing clarified
 The Settings panel now reflects how you actually use KAI — agents normally sign in
 directly, and the proxy handles per-agent format routing automatically.

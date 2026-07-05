@@ -34,6 +34,8 @@ interface SettingsMessage {
   port?: number;
   script?: string;
   baseUrl?: string;
+  claudeUrl?: string;
+  openaiUrl?: string;
   apiKey?: string;
   defaultModel?: string;
   enabled?: boolean;
@@ -170,18 +172,34 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   private async handleSaveUpstream(message: SettingsMessage): Promise<void> {
     const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
-    if (message.baseUrl !== undefined) {
-      await proxyCfg.update('targetBaseUrl', message.baseUrl, vscode.ConfigurationTarget.Global);
+    const baseUrl = message.baseUrl;
+    const claudeUrl = message.claudeUrl || baseUrl;
+    const openaiUrl = message.openaiUrl || baseUrl;
+
+    if (baseUrl) {
+      await proxyCfg.update('targetBaseUrl', baseUrl, vscode.ConfigurationTarget.Global);
     }
-    if (message.apiKey !== undefined && message.baseUrl) {
+    if (message.apiKey !== undefined && baseUrl) {
       const apiKeys = proxyCfg.get<Record<string, string>>('apiKeys', {});
-      apiKeys[message.baseUrl] = message.apiKey;
+      apiKeys[baseUrl] = message.apiKey;
+      // Also store key for derived endpoints so per-agent blocks can use it
+      if (claudeUrl && claudeUrl !== baseUrl) apiKeys[claudeUrl] = message.apiKey;
+      if (openaiUrl && openaiUrl !== baseUrl) apiKeys[openaiUrl] = message.apiKey;
       await proxyCfg.update('apiKeys', apiKeys, vscode.ConfigurationTarget.Global);
     }
     if (message.defaultModel !== undefined) {
       await proxyCfg.update('defaultModel', message.defaultModel, vscode.ConfigurationTarget.Global);
     }
-    void vscode.window.showInformationMessage('Upstream provider saved. Restart the proxy to apply.');
+
+    // Auto-populate per-agent configs with derived endpoints + shared key
+    if (openaiUrl) {
+      const codexCfg = { ...(proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'gpt-5.5' };
+      await proxyCfg.update('codexConfig', codexCfg, vscode.ConfigurationTarget.Global);
+      const qwenCfg = { ...(proxyCfg.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'qwen-coder-plus' };
+      await proxyCfg.update('qwenConfig', qwenCfg, vscode.ConfigurationTarget.Global);
+    }
+
+    void vscode.window.showInformationMessage('Upstream provider saved. Endpoints auto-configured for all agents. Restart the proxy to apply.');
     await this.postState();
   }
 
@@ -366,15 +384,17 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   private getUpstreamState() {
     try {
       const pc = vscode.workspace.getConfiguration('claudeProxy');
-      const baseUrl = pc.get<string>('targetBaseUrl', 'https://api.deepseek.com');
+      const codexCfg = pc.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
+      const qwenCfg = pc.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>;
+      const baseUrl = pc.get<string>('targetBaseUrl', 'https://api.deepseek.com/anthropic');
       const apiKeys = pc.get<Record<string, string>>('apiKeys', {}) ?? {};
       return {
         baseUrl,
         hasKey: Boolean(apiKeys[baseUrl]),
         defaultModel: pc.get<string>('defaultModel', 'deepseek-v4-pro'),
         modelMap: pc.get<Record<string, string>>('modelMap', {}),
-        codexConfig: pc.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>,
-        qwenConfig: pc.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>,
+        codexConfig: codexCfg,
+        qwenConfig: qwenCfg,
       };
     } catch {
       return { baseUrl: 'https://api.deepseek.com', hasKey: false, defaultModel: 'deepseek-v4-pro', modelMap: {}, codexConfig: {}, qwenConfig: {} };
@@ -469,6 +489,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     .advanced-toggle .toggle-arrow { display: inline-block; transition: transform .15s ease; font-size: 9px; width: 10px; }
     .advanced-toggle.open .toggle-arrow { transform: rotate(90deg); }
     .advanced-section { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--kai-border); display: none; }
+    .endpoints-box { margin-top: 10px; padding: 8px 10px; background: var(--vscode-input-background); border-radius: 6px; border: 1px solid var(--kai-border); }
+    .endpoints-label { font-size: 10px; font-weight: 600; color: var(--vscode-descriptionForeground); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+    .endpoint-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11px; }
+    .endpoint-row span { min-width: 50px; font-weight: 600; }
+    .endpoint-row code { font-size: 10px; color: var(--vscode-descriptionForeground); background: var(--kai-surface); padding: 1px 6px; border-radius: 3px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .endpoint-format { font-size: 9px; color: var(--kai-accent-strong); background: var(--kai-accent-soft); padding: 1px 5px; border-radius: 3px; min-width: auto !important; }
     .toolbar { display: flex; gap: 6px; margin-top: 4px; }
     .toolbar button { flex: 1; }
     select {
@@ -575,14 +601,14 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }
 
     var PROVIDER_PRESETS = [
-      { label: 'DeepSeek (OpenAI-compat)', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
-      { label: 'DeepSeek (Anthropic pass-through)', url: 'https://api.deepseek.com/anthropic', model: 'deepseek-v4-pro' },
-      { label: 'Groq', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
-      { label: 'Moonshot (Kimi)', url: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
-      { label: 'Together AI', url: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
-      { label: 'Ollama (local)', url: 'http://localhost:11434/v1', model: 'qwen2.5-coder' },
-      { label: 'LM Studio (local)', url: 'http://localhost:1234/v1', model: 'local-model' },
-      { label: 'Anthropic (direct API)', url: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
+      { label: 'DeepSeek', claudeUrl: 'https://api.deepseek.com/anthropic', openaiUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
+      
+      { label: 'Groq', claudeUrl: null, openaiUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+      { label: 'Moonshot (Kimi)', claudeUrl: null, openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
+      { label: 'Together AI', claudeUrl: null, openaiUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+      { label: 'Ollama (local)', claudeUrl: null, openaiUrl: 'http://localhost:11434/v1', model: 'qwen2.5-coder' },
+      { label: 'LM Studio (local)', claudeUrl: null, openaiUrl: 'http://localhost:1234/v1', model: 'local-model' },
+      { label: 'Anthropic (direct API)', claudeUrl: 'https://api.anthropic.com', openaiUrl: null, model: 'claude-sonnet-4-6' },
     ];
 
     function renderProxy(p) {
@@ -592,8 +618,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
       // Preset matcher
       var presetOpts = PROVIDER_PRESETS.map(function (pr) {
-        var sel = pr.url === up.baseUrl ? ' selected' : '';
-        return '<option value="' + esc(pr.url) + '" data-model="' + esc(pr.model) + '"' + sel + '>' + esc(pr.label) + '</option>';
+        var sel = (pr.claudeUrl === up.baseUrl || pr.openaiUrl === up.baseUrl) ? ' selected' : '';
+        return '<option value="' + esc(pr.label) + '" data-claude="' + esc(pr.claudeUrl || '') + '" data-openai="' + esc(pr.openaiUrl || '') + '" data-model="' + esc(pr.model) + '"' + sel + '>' + esc(pr.label) + '</option>';
       }).join('');
 
       // Agent route rows
@@ -649,12 +675,9 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         // ---- Upstream Provider ----
         '<div class="card">' +
           '<div class="card-head"><div class="card-title">Upstream Provider</div></div>' +
-          '<div class="summary">All agents share this provider in proxy mode. The proxy auto-routes each agent to the correct API format (Claude → Anthropic, Codex/Qwen → OpenAI-compat) for this provider.</div>' +
+          '<div class="summary">Pick a provider, enter its API key. The proxy auto-routes each agent to the correct endpoint format.</div>' +
           '<div class="field"><label>Provider</label><div class="row">' +
             '<select data-field="upstreamPreset">' + presetOpts + '</select>' +
-          '</div></div>' +
-          '<div class="field"><label>Base URL</label><div class="row">' +
-            '<input data-field="upstreamUrl" value="' + esc(up.baseUrl) + '" placeholder="https://api.deepseek.com" />' +
           '</div></div>' +
           '<div class="field"><label>API Key</label><div class="row">' +
             '<input type="password" data-field="upstreamKey" placeholder="' + (up.hasKey ? '•••••• saved — enter to replace' : 'Paste API key...') + '" />' +
@@ -664,12 +687,18 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
             '<input data-field="upstreamModel" value="' + esc(up.defaultModel) + '" />' +
             '<button class="primary" data-act="saveUpstream">Save</button>' +
           '</div></div>' +
+          '<div class="endpoints-box">' +
+            '<div class="endpoints-label">Agent endpoints (auto-derived from provider)</div>' +
+            '<div class="endpoint-row"><span>Claude</span><code id="endpoint-claude">' + esc(up.baseUrl || '—') + '</code><span class="endpoint-format">Anthropic</span></div>' +
+            '<div class="endpoint-row"><span>Codex</span><code id="endpoint-codex">' + esc((up.codexConfig && up.codexConfig.baseUrl) || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
+            '<div class="endpoint-row"><span>Qwen</span><code id="endpoint-qwen">' + esc((up.qwenConfig && up.qwenConfig.baseUrl) || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
+          '</div>' +
         '</div>' +
 
         // ---- Provider Overrides ----
         '<div class="card">' +
           '<div class="card-head"><div class="card-title">Provider Overrides</div></div>' +
-          '<div class="summary">Switch an agent to a completely different provider (e.g. real OpenAI for Codex). Leave disabled — the proxy already routes each agent to the correct format endpoint for the main provider above.</div>' +
+          '<div class="summary">Only needed to switch an agent to a different provider. Endpoints are auto-derived from the upstream provider above.</div>' +
           agentBackend('codex', 'Codex', up.codexConfig) +
           agentBackend('qwen', 'Qwen', up.qwenConfig) +
         '</div>' +
@@ -721,9 +750,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           script: inputFor('proxyScript').value,
         });
       } else if (act === 'saveUpstream') {
+        var presetSel = document.querySelector('[data-field="upstreamPreset"]');
+        var presetOpt = presetSel ? presetSel.options[presetSel.selectedIndex] : null;
+        var claudeUrl = presetOpt ? (presetOpt.getAttribute('data-claude') || '') : '';
+        var openaiUrl = presetOpt ? (presetOpt.getAttribute('data-openai') || '') : '';
         vscode.postMessage({
           type: 'saveUpstream',
-          baseUrl: inputFor('upstreamUrl').value,
+          baseUrl: claudeUrl || openaiUrl,
+          claudeUrl: claudeUrl,
+          openaiUrl: openaiUrl,
           apiKey: inputFor('upstreamKey').value,
           defaultModel: inputFor('upstreamModel').value,
         });
@@ -750,14 +785,17 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       if (sel.getAttribute('data-field') !== 'upstreamPreset') return;
       var opt = sel.options[sel.selectedIndex];
       if (!opt) return;
-      var urlInput = inputFor('upstreamUrl');
       var modelInput = inputFor('upstreamModel');
-      if (urlInput) urlInput.value = opt.getAttribute('data-model') ? opt.value : urlInput.value;
       if (modelInput && opt.getAttribute('data-model')) modelInput.value = opt.getAttribute('data-model');
-      // Custom option detection
-      if (!opt.getAttribute('data-model') && !opt.value) {
-        if (urlInput) urlInput.value = '';
-      }
+      // Update derived endpoint display
+      var claudeUrl = opt.getAttribute('data-claude') || '';
+      var openaiUrl = opt.getAttribute('data-openai') || '';
+      var claudeEl = document.getElementById('endpoint-claude');
+      var codexEl = document.getElementById('endpoint-codex');
+      var qwenEl = document.getElementById('endpoint-qwen');
+      if (claudeEl) claudeEl.textContent = claudeUrl || '—';
+      if (codexEl) codexEl.textContent = openaiUrl || '—';
+      if (qwenEl) qwenEl.textContent = openaiUrl || '—';
     });
 
     // Agent backend toggle shows/hides the sub-section
