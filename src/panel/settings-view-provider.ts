@@ -151,7 +151,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private openInBrowser(): void {
+  openInBrowser(): void {
     const port = 8000;
     const url = `http://127.0.0.1:${port}`;
     const term =
@@ -425,8 +425,47 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Pre-render agent cards from the static catalog so inputs are always visible. */
+  private renderStaticAgentCards(): string {
+    const esc = (s: string) =>
+      String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const cfg = vscode.workspace.getConfiguration('kai');
+    return AGENT_ORDER.map((id) => {
+      const p = AGENT_PROVIDERS[id];
+      const cmd = cfg.get<string>(p.commandSetting, p.defaultCommand);
+      const tags = (p.bestFor ?? []).map((t) => `<span class="tag">${esc(t)}</span>`).join('');
+      return `<div class="card" id="card-${id}">
+  <div class="card-head"><div class="card-title">${esc(p.displayName)}</div><span class="badge warn" id="badge-${id}">checking…</span></div>
+  <div class="strengths">
+    <div class="st-label">Best for</div>
+    <div class="st-text">${esc(p.strengths)}</div>
+    <div class="tags">${tags}</div>
+  </div>
+  <div class="summary">${esc(p.authSummary)}</div>
+  <div class="note" style="margin-bottom:8px;display:none;" id="reason-${id}"></div>
+  <div class="field"><label>Command / path</label><div class="row">
+    <input data-field="command" data-id="${id}" value="${esc(cmd)}" placeholder="${id}" />
+    <button class="ghost" data-act="saveCommand" data-id="${id}">Save</button>
+  </div></div>
+  <div class="advanced-toggle" data-toggle="key-${id}"><span class="toggle-arrow">▸</span> Advanced: API key (rarely needed — use for Proxy)</div>
+  <div class="advanced-section" id="key-${id}">
+    <div class="field"><label>API key <span class="env" style="font-size:9px;">${esc(p.envVar)}</span></label><div class="row">
+      <input type="password" data-field="key" data-id="${id}" placeholder="Paste ${esc(p.envVar)}…" />
+      <button class="primary" data-act="saveKey" data-id="${id}">Save key</button>
+    </div>
+    <div class="keymeta"><button class="link" data-act="openDocs" data-id="${id}">Get an API key ↗</button><span id="keymeta-${id}"></span></div>
+  </div></div>
+  <div class="actions">
+    <button class="ghost" style="display:none;" data-act="install" data-id="${id}" id="install-${id}">Install</button>
+    <button class="ghost" data-act="signin" data-id="${id}">Sign in (Direct)</button>
+  </div>
+</div>`;
+    }).join('\n');
+  }
+
   private getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
+    const staticAgents = this.renderStaticAgentCards();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -529,6 +568,14 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     .route-badge.direct { color: var(--vscode-descriptionForeground); }
     button.small { font-size: 10px; padding: 3px 8px; }
     button.warn { color: #fff; background: var(--vscode-inputValidation-warningBackground, #554400); border-color: var(--vscode-inputValidation-warningBorder, #886600); }
+    a.primary-btn {
+      cursor: pointer; font: inherit; font-size: 11px; font-weight: 600;
+      border-radius: 5px; padding: 6px 12px; white-space: nowrap; text-decoration: none;
+      color: #05202e; background: linear-gradient(180deg, var(--kai-accent) 0%, var(--kai-accent-strong) 100%);
+      border: 1px solid var(--kai-accent-strong);
+      transition: filter .12s ease, box-shadow .12s ease;
+    }
+    a.primary-btn:hover { filter: brightness(1.06); box-shadow: 0 2px 8px var(--kai-accent-soft); }
   </style>
 </head>
 <body>
@@ -549,15 +596,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <h3>Agents</h3>
-  <div id="agents"></div>
+  ${staticAgents}
 
   <h3>Proxy</h3>
-  <div id="proxy"></div>
+  <div id="proxy"><div class="card"><div class="detail" style="font-style:italic;">Loading proxy status…</div></div></div>
 
   <h3>Browser access</h3>
   <div class="card">
     <div class="summary">Operate KAI from Chrome. This starts VS Code's web server and opens it in your browser &mdash; the full editor with KAI, served from this machine (localhost only).</div>
-    <div class="actions"><button class="primary" data-act="openBrowser">Open in browser ↗</button></div>
+    <a class="primary-btn" href="command:kai.openBrowser" style="display:inline-flex;align-items:center;gap:4px;text-decoration:none;">Open in browser ↗</a>
   </div>
 
   <div class="toolbar">
@@ -573,54 +620,40 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       b.textContent = 'Settings UI error: ' + msg;
     };
     var vscode = acquireVsCodeApi();
-    var agentsEl = document.getElementById('agents');
     var proxyEl = document.getElementById('proxy');
 
     function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-    function renderAgents(agents) {
-      agentsEl.innerHTML = agents.map(function (a) {
-        var badge = a.available
-          ? '<span class="badge ok">installed</span>'
-          : '<span class="badge warn">not installed</span>';
-        var keyPlaceholder = a.hasKey ? '•••••• saved — enter to replace' : 'Paste ' + a.envVar + '…';
-        var installBtn = a.available ? '' : '<button class="ghost" data-act="install" data-id="' + a.id + '">Install</button>';
-        var clearBtn = a.hasKey ? '<button class="link" data-act="clearKey" data-id="' + a.id + '">Remove key</button>' : '';
-        var tags = (a.bestFor || []).map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('');
-        return '' +
-          '<div class="card">' +
-            '<div class="card-head"><div class="card-title">' + esc(a.displayName) + '</div>' + badge + '</div>' +
-            '<div class="strengths">' +
-              '<div class="st-label">Best for</div>' +
-              '<div class="st-text">' + esc(a.strengths) + '</div>' +
-              '<div class="tags">' + tags + '</div>' +
-            '</div>' +
-            '<div class="summary">' + esc(a.authSummary) + '</div>' +
-            (a.available ? '' : '<div class="note" style="margin-bottom:8px;">' + esc(a.unavailableReason || (a.command + ' not found on PATH')) + '</div>') +
-            '<div class="field"><label>Command / path</label><div class="row">' +
-              '<input data-field="command" data-id="' + a.id + '" value="' + esc(a.command) + '" placeholder="' + esc(a.id) + '" />' +
-              '<button class="ghost" data-act="saveCommand" data-id="' + a.id + '">Save</button>' +
-            '</div></div>' +
-            '<div class="advanced-toggle" data-toggle="key-' + a.id + '"><span class="toggle-arrow">▸</span> Advanced: API key (rarely needed — use for Proxy)</div>' +
-            '<div class="advanced-section" id="key-' + a.id + '">' +
-              '<div class="field"><label>API key <span class="env" style="font-size:9px;">' + esc(a.envVar) + '</span></label><div class="row">' +
-                '<input type="password" data-field="key" data-id="' + a.id + '" placeholder="' + esc(keyPlaceholder) + '" />' +
-                '<button class="primary" data-act="saveKey" data-id="' + a.id + '">Save key</button>' +
-              '</div>' +
-                '<div class="keymeta"><button class="link" data-act="openDocs" data-id="' + a.id + '">Get an API key ↗</button>' + clearBtn + '</div>' +
-              '</div>' +
-            '</div>' +
-            '<div class="actions">' +
-              installBtn +
-              '<button class="ghost" data-act="signin" data-id="' + a.id + '">Sign in (Direct)</button>' +
-            '</div>' +
-          '</div>';
-      }).join('');
+    // ---- Update agent badges / key-status from async probe ----
+    function updateAgents(agents) {
+      agents.forEach(function (a) {
+        var badge = document.getElementById('badge-' + a.id);
+        if (badge) {
+          badge.textContent = a.available ? 'installed' : 'not installed';
+          badge.className = 'badge ' + (a.available ? 'ok' : 'warn');
+        }
+        // Show/hide Install button and reason note
+        var installBtn = document.getElementById('install-' + a.id);
+        var reasonEl = document.getElementById('reason-' + a.id);
+        if (installBtn) installBtn.style.display = a.available ? 'none' : '';
+        if (reasonEl) {
+          reasonEl.textContent = a.available ? '' : (a.unavailableReason || (a.command + ' not found on PATH'));
+          reasonEl.style.display = a.available ? 'none' : '';
+        }
+        // Update key placeholder
+        var keyInput = document.querySelector('[data-field="key"][data-id="' + a.id + '"]');
+        if (keyInput) keyInput.placeholder = a.hasKey ? '•••••• saved — enter to replace' : 'Paste ' + a.envVar + '…';
+        // Show/hide Remove key link
+        var keymeta = document.getElementById('keymeta-' + a.id);
+        if (keymeta) keymeta.innerHTML = a.hasKey ? '<button class="link" data-act="clearKey" data-id="' + a.id + '">Remove key</button>' : '';
+        // Update command path input
+        var cmdInput = document.querySelector('[data-field="command"][data-id="' + a.id + '"]');
+        if (cmdInput && a.command && cmdInput.value !== a.command) cmdInput.value = a.command;
+      });
     }
 
     var PROVIDER_PRESETS = [
       { label: 'DeepSeek', claudeUrl: 'https://api.deepseek.com/anthropic', openaiUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
-      
       { label: 'Groq', claudeUrl: null, openaiUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
       { label: 'Moonshot (Kimi)', claudeUrl: null, openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
       { label: 'Together AI', claudeUrl: null, openaiUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
@@ -634,13 +667,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       var up = p.upstream || {};
       var rt = p.routing || {};
 
-      // Preset matcher
       var presetOpts = PROVIDER_PRESETS.map(function (pr) {
         var sel = (pr.claudeUrl === up.baseUrl || pr.openaiUrl === up.baseUrl) ? ' selected' : '';
         return '<option value="' + esc(pr.label) + '" data-claude="' + esc(pr.claudeUrl || '') + '" data-openai="' + esc(pr.openaiUrl || '') + '" data-model="' + esc(pr.model) + '"' + sel + '>' + esc(pr.label) + '</option>';
       }).join('');
 
-      // Agent route rows
       function routeRow(id, label) {
         var routed = (id === 'claude' && rt.claudeCode) || (id === 'codex' && rt.codex) || (id === 'qwen' && rt.globalRoute === 'proxy');
         var rBadge = routed ? '<span class="route-badge routed">proxy</span>' : '<span class="route-badge direct">direct</span>';
@@ -651,7 +682,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         '</div>';
       }
 
-      // Per-agent backend subsection
       function agentBackend(id, label, cfg) {
         cfg = cfg || {};
         var checked = cfg.enabled ? ' checked' : '';
@@ -676,7 +706,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       }
 
       proxyEl.innerHTML = '' +
-        // ---- Server ----
         '<div class="card">' +
           '<div class="card-head"><div class="card-title">Proxy Server</div>' + badge + '</div>' +
           '<div class="field"><label>Script path</label><div class="row">' +
@@ -690,8 +719,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
             '<button class="ghost" data-act="restartProxy">Restart proxy ↻</button>' +
           '</div>' +
         '</div>' +
-
-        // ---- Upstream Provider ----
         '<div class="card">' +
           '<div class="card-head"><div class="card-title">Upstream Provider</div></div>' +
           '<div class="summary">Pick a provider, enter its API key. The proxy auto-routes each agent to the correct endpoint format.</div>' +
@@ -713,16 +740,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
             '<div class="endpoint-row"><span>Qwen</span><code id="endpoint-qwen">' + esc((up.qwenConfig && up.qwenConfig.baseUrl) || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
           '</div>' +
         '</div>' +
-
-        // ---- Provider Overrides ----
         '<div class="card">' +
           '<div class="card-head"><div class="card-title">Provider Overrides</div></div>' +
           '<div class="summary">Only needed to switch an agent to a different provider. Endpoints are auto-derived from the upstream provider above.</div>' +
           agentBackend('codex', 'Codex', up.codexConfig) +
           agentBackend('qwen', 'Qwen', up.qwenConfig) +
         '</div>' +
-
-        // ---- Agent Routing ----
         '<div class="card">' +
           '<div class="card-head"><div class="card-title">Agent Routing</div></div>' +
           '<div class="summary">Route rewrites each agent\'s config to point at <code>localhost:' + esc(p.port) + '</code>. Direct restores the default endpoint. Keys set above are used for direct mode; the upstream key is used in proxy mode.</div>' +
@@ -759,9 +782,9 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       else if (act === 'directAgent') vscode.postMessage({ type: 'directAgent', agent: id });
       else if (act === 'saveCommand') vscode.postMessage({ type: 'saveCommand', agent: id, value: inputFor('command', id).value });
       else if (act === 'saveKey') {
-        var input = inputFor('key', id);
-        vscode.postMessage({ type: 'saveKey', agent: id, value: input.value });
-        input.value = '';
+        var keyInput2 = inputFor('key', id);
+        vscode.postMessage({ type: 'saveKey', agent: id, value: keyInput2.value });
+        keyInput2.value = '';
       } else if (act === 'saveProxy') {
         vscode.postMessage({
           type: 'saveProxy',
@@ -781,8 +804,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           apiKey: inputFor('upstreamKey').value,
           defaultModel: inputFor('upstreamModel').value,
         });
-        var keyInput = inputFor('upstreamKey');
-        if (keyInput) keyInput.value = '';
+        var ukInput = inputFor('upstreamKey');
+        if (ukInput) ukInput.value = '';
       } else if (act === 'saveAgentBackend') {
         var enabledEl = document.querySelector('[data-field="agentBackendEnabled"][data-id="' + id + '"]');
         vscode.postMessage({
@@ -798,7 +821,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    // Preset dropdown changes auto-fill URL + model
     document.addEventListener('change', function (e) {
       var sel = e.target;
       if (sel.getAttribute('data-field') !== 'upstreamPreset') return;
@@ -806,7 +828,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       if (!opt) return;
       var modelInput = inputFor('upstreamModel');
       if (modelInput && opt.getAttribute('data-model')) modelInput.value = opt.getAttribute('data-model');
-      // Update derived endpoint display
       var claudeUrl = opt.getAttribute('data-claude') || '';
       var openaiUrl = opt.getAttribute('data-openai') || '';
       var claudeEl = document.getElementById('endpoint-claude');
@@ -817,7 +838,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       if (qwenEl) qwenEl.textContent = openaiUrl || '—';
     });
 
-    // Agent backend toggle shows/hides the sub-section
     document.addEventListener('change', function (e) {
       var cb = e.target;
       if (cb.getAttribute('data-field') !== 'agentBackendEnabled') return;
@@ -826,7 +846,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       if (section) section.style.display = cb.checked ? '' : 'none';
     });
 
-    // Advanced toggle click handler
     document.addEventListener('click', function (e) {
       var toggle = e.target.closest('[data-toggle]');
       if (!toggle) return;
@@ -843,7 +862,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
     window.addEventListener('message', function (e) {
       var m = e.data;
-      if (m.type === 'state') { renderAgents(m.agents); renderProxy(m.proxy); }
+      if (m.type === 'state') { updateAgents(m.agents); renderProxy(m.proxy); }
     });
 
     vscode.postMessage({ type: 'ready' });

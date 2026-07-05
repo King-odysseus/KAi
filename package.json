@@ -2,7 +2,7 @@
   "name": "kai-agent-workbench",
   "displayName": "KAI Agent Workbench",
   "description": "A multi-agent coding workbench with route control and durable Cognitive1 memory.",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "publisher": "kai",
   "license": "UNLICENSED",
   "engines": {
@@ -66,6 +66,10 @@
       {
         "command": "kai.restoreBackup",
         "title": "KAI: Restore Config Backup"
+      },
+      {
+        "command": "kai.openBrowser",
+        "title": "KAI: Open in Browser"
       },
       {
         "command": "kai.inspectRawEvents",

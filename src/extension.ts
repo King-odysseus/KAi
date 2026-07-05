@@ -444,6 +444,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
 
+    vscode.commands.registerCommand('kai.openBrowser', () => {
+      settingsProvider.openInBrowser();
+    }),
+
     registerRawInspectorCommand(context, rawInspector),
   );
 

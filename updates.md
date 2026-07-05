@@ -2,6 +2,24 @@
 
 ## 2026-07-05
 
+### Settings pre-rendered + Open in Browser bypasses JS (v0.2.8)
+Two structural fixes that make the Settings panel work regardless of whether the
+async capability probe completes.
+
+- **Agent cards are now pre-rendered in the HTML.** The `<div id="agents">` container
+  is no longer empty — all four agent cards (Claude, Codex, Qwen, Gemini) are written
+  server-side from the `AGENT_PROVIDERS` catalog before the webview loads. Every card
+  has its text, tags, command input, and API-key input immediately visible. The async
+  `state` message only updates the "installed"/"not installed" badge and key-status
+  indicator — it never creates or replaces the cards.
+- **"Open in browser" now uses a `command:` link** instead of relying on the webview
+  JavaScript to `postMessage`. VS Code natively intercepts `<a href="command:kai.openBrowser">`
+  clicks, so the button works even if the inline `<script>` is blocked by CSP or fails
+  to execute. A new `kai.openBrowser` command is registered in package.json and wired
+  to the `SettingsViewProvider.openInBrowser()` method.
+- **Error banner** (`window.onerror`) retained from v0.2.7 — any future script failure
+  shows a red bar instead of failing silently.
+
 ### Settings panel blank — API-key inputs missing, buttons dead (v0.2.7)
 **This was the real cause of "buttons don't work / nothing displays."** The Settings
 panel's agent cards (and the API-key inputs inside them) are rendered only after the
