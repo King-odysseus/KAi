@@ -160,7 +160,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     term.show();
     // Launch VS Code's built-in web server (serves the full editor + KAI to a browser).
     // Localhost-only, so the connection token is disabled for a friction-free open.
-    term.sendText(`code serve-web --port ${port} --without-connection-token`, true);
+    term.sendText(
+      `code serve-web --port ${port} --host 127.0.0.1 --without-connection-token --accept-server-license-terms`,
+      true,
+    );
     void vscode.window.showInformationMessage(
       `Starting VS Code Web on ${url} — opening your browser. This serves the full editor (with KAI) from this machine. If the tab is blank, wait a few seconds and refresh.`,
     );
@@ -637,12 +640,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       function agentBackend(id, label, cfg) {
         cfg = cfg || {};
         var checked = cfg.enabled ? ' checked' : '';
+        var sectionStyle = cfg.enabled ? '' : ' style="display:none;"';
         return '' +
           '<div class="toggle-row">' +
             '<input type="checkbox" data-field="agentBackendEnabled" data-id="' + id + '"' + checked + ' />' +
-            '<label>' + esc(label) + ' own backend</label>' +
+            '<label>Use different provider for ' + esc(label) + '</label>' +
           '</div>' +
-          '<div class="sub-section" data-section="agentBackend" data-id="' + id + '">' +
+          '<div class="sub-section" data-section="agentBackend" data-id="' + id + '"' + sectionStyle + '>' +
             '<div class="field"><label>Base URL</label><div class="row">' +
               '<input data-field="agentBackendUrl" data-id="' + id + '" value="' + esc(cfg.baseUrl || '') + '" />' +
             '</div></div>' +
@@ -814,8 +818,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       var id = toggle.getAttribute('data-toggle');
       var section = document.getElementById(id);
       if (!section) return;
-      var isOpen = section.style.display !== 'none';
-      section.style.display = isOpen ? 'none' : '';
+      var isOpen = getComputedStyle(section).display !== 'none';
+      section.style.display = isOpen ? 'none' : 'block';
       toggle.classList.toggle('open', !isOpen);
     });
 

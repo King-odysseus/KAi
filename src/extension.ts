@@ -141,6 +141,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       buildArgs: (r) => buildCodexArgs(config.get<string>('codexProxyProfile', 'codeproxy'), r),
       parseLine: parseCodexJsonLine,
       supportsApprovals: true,
+      supportsMcp: true,
       beforeRun: async (req) => {
         if (req.route !== 'proxy') return [];
         try {
@@ -231,6 +232,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     orchestrator,
     secretStore,
     proxyManager,
+    claudeConfigWriter,
+    qwenConfigWriter,
+    codexConfigWriter,
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewType, settingsProvider),

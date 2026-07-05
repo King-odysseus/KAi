@@ -379,6 +379,64 @@ body {
 .slash-hint code { background: var(--kai-accent-soft); color: var(--kai-accent-strong); padding: 1px 5px; border-radius: 4px; font-size: 9px; }
 .cost-estimate { font-size: 9px; color: var(--vscode-charts-green); min-height: 12px; font-variant-numeric: tabular-nums; }
 
+/* ---- Thinking / status indicator ---- */
+.thinking {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 13px;
+  border-radius: var(--kai-radius-lg);
+  border: 1px solid var(--kai-border);
+  border-left: 3px solid var(--kai-accent);
+  background: var(--kai-surface);
+  font-size: 12px;
+  color: var(--vscode-foreground);
+  animation: msgIn 0.16s ease;
+  max-width: 88%;
+}
+.thinking .spinner {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--kai-accent-soft);
+  border-top-color: var(--kai-accent);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.thinking .status-word {
+  font-weight: 600;
+  color: var(--kai-accent-strong);
+  min-width: 96px;
+}
+.thinking .status-word::after {
+  content: '';
+  animation: ellipsis 1.4s steps(4, end) infinite;
+}
+@keyframes ellipsis {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}
+.thinking .status-detail {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+.thinking .status-timer {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
 /* Scrollbars */
 .chat::-webkit-scrollbar, .diff-preview::-webkit-scrollbar { width: 8px; }
 .chat::-webkit-scrollbar-thumb, .diff-preview::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background); border-radius: 999px; }

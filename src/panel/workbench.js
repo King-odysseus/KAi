@@ -32,6 +32,77 @@
 
   var emptyState = document.getElementById('emptyState');
 
+  // ---- Thinking / status indicator ----
+  // Whimsical rotating gerunds shown while the agent works behind the scenes.
+  var STATUS_WORDS = [
+    'Thinking', 'Channelling', 'Pondering', 'Reasoning', 'Cogitating',
+    'Percolating', 'Scheming', 'Conjuring', 'Synthesizing', 'Noodling',
+    'Ruminating', 'Untangling', 'Deliberating', 'Formulating', 'Brewing',
+    'Contemplating', 'Wrangling', 'Computing', 'Divining', 'Mulling',
+  ];
+  var thinkingEl = null;      // the DOM node while running
+  var thinkingWordTimer = null;
+  var thinkingClockTimer = null;
+  var thinkingStart = 0;
+  var thinkingWordIdx = 0;
+  var thinkingDetail = '';    // latest real activity (tool name, etc.)
+
+  function fmtElapsed(ms) {
+    var s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    return m + 'm ' + (s % 60) + 's';
+  }
+
+  function pickStatusWord() {
+    // Advance deterministically but feel random-ish
+    thinkingWordIdx = (thinkingWordIdx + 1 + Math.floor(Math.random() * 3)) % STATUS_WORDS.length;
+    return STATUS_WORDS[thinkingWordIdx];
+  }
+
+  function startThinking() {
+    if (thinkingEl) return;
+    removeEmpty();
+    thinkingEl = document.createElement('div');
+    thinkingEl.className = 'thinking';
+    thinkingWordIdx = Math.floor(Math.random() * STATUS_WORDS.length);
+    thinkingEl.innerHTML =
+      '<span class="spinner"></span>' +
+      '<span class="status-word">' + esc(STATUS_WORDS[thinkingWordIdx]) + '</span>' +
+      '<span class="status-detail"></span>' +
+      '<span class="status-timer">0s</span>';
+    els.chat.appendChild(thinkingEl);
+    thinkingStart = Date.now();
+    thinkingDetail = '';
+    scrollBottom(true);
+
+    thinkingWordTimer = setInterval(function () {
+      if (!thinkingEl) return;
+      var w = thinkingEl.querySelector('.status-word');
+      if (w) w.textContent = pickStatusWord();
+    }, 2600);
+
+    thinkingClockTimer = setInterval(function () {
+      if (!thinkingEl) return;
+      var t = thinkingEl.querySelector('.status-timer');
+      if (t) t.textContent = fmtElapsed(Date.now() - thinkingStart);
+    }, 1000);
+  }
+
+  function setThinkingDetail(text) {
+    thinkingDetail = text || '';
+    if (thinkingEl) {
+      var d = thinkingEl.querySelector('.status-detail');
+      if (d) d.textContent = thinkingDetail;
+    }
+  }
+
+  function stopThinking() {
+    if (thinkingWordTimer) { clearInterval(thinkingWordTimer); thinkingWordTimer = null; }
+    if (thinkingClockTimer) { clearInterval(thinkingClockTimer); thinkingClockTimer = null; }
+    if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
+  }
+
   // ---- Helpers ----
   function esc(s) {
     return String(s == null ? '' : s)
@@ -52,6 +123,7 @@
   }
   function clearChat() {
     finalizeAssistant();
+    stopThinking();
     Array.prototype.slice.call(els.chat.children).forEach(function (k) {
       if (k !== emptyState) k.remove();
     });
@@ -66,6 +138,13 @@
   }
 
   // ---- Chat messages ----
+  // Keep the thinking indicator as the last child so it always sits at the bottom.
+  function pinThinking() {
+    if (thinkingEl && els.chat.lastChild !== thinkingEl) {
+      els.chat.appendChild(thinkingEl);
+    }
+  }
+
   function appendUserMessage(text) {
     removeEmpty();
     finalizeAssistant();
@@ -74,6 +153,7 @@
     el.innerHTML = '<span class="role">You</span>';
     el.appendChild(document.createTextNode(text));
     els.chat.appendChild(el);
+    startThinking();
     scrollBottom(true);
   }
 
@@ -100,6 +180,7 @@
     var last = currentAssistant.lastChild;
     if (last && last.nodeType === 3) last.nodeValue += text;
     else currentAssistant.appendChild(document.createTextNode(text));
+    pinThinking();
     scrollBottom();
   }
 
@@ -265,12 +346,34 @@
     return card;
   }
 
+  // Turn an event into a short activity phrase for the status indicator.
+  function activityDetail(event) {
+    switch (event.type) {
+      case 'tool.call':
+        return (event.name || 'tool') + (event.status && event.status !== 'started' ? ' · ' + event.status : '');
+      case 'diff.proposal':
+        return 'Editing ' + (event.filePath || 'file');
+      case 'file.edit.applied':
+        return 'Applied edit to ' + (event.filePath || 'file');
+      case 'memory.event':
+        return event.action ? 'Memory: ' + event.action : '';
+      case 'agent.lifecycle':
+        return event.detail || '';
+      default:
+        return '';
+    }
+  }
+
   function appendEvent(event) {
     if (event.type === 'text.delta') {
       appendAssistantText(event.text, event.agent);
       return;
     }
     if (event.type === 'cost.update') accumulateCost(event);
+
+    // Feed real activity into the live status indicator (if running).
+    var detail = activityDetail(event);
+    if (detail) setThinkingDetail(detail);
 
     removeEmpty();
     finalizeAssistant();
@@ -279,6 +382,7 @@
     } else {
       els.chat.appendChild(renderCard(event));
     }
+    pinThinking();
     scrollBottom();
   }
 
@@ -297,10 +401,12 @@
     if (running) {
       els.send.textContent = 'Stop';
       els.send.classList.add('stop');
+      startThinking();
     } else {
       els.send.textContent = 'Send';
       els.send.classList.remove('stop');
       finalizeAssistant();
+      stopThinking();
     }
 
     els.statePill.innerHTML = running

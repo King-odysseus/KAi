@@ -2,6 +2,22 @@
 
 ## 2026-07-05
 
+### Button & display audit fixes (v0.2.5)
+Swept every panel button and made sure each has a working handler and that dependent
+UI actually renders.
+
+- **Engine Room — Config Backups now load on open.** The panel only requested the
+  dashboard on `ready`/`refresh`; the backups list was never fetched unless an
+  unrelated state change happened to fire a full refresh. It now loads backups
+  alongside the dashboard, so the Refresh button and first open both populate it.
+- **Settings — Provider Overrides honor the toggle.** The per-agent override fields
+  rendered expanded even when "own backend" was off. They now start collapsed unless
+  the override is enabled, and the toggle reads **"Use different provider for …"** to
+  match the intended UX.
+- **Settings — "Open in browser" no longer hangs on a blank tab.** `code serve-web`
+  now runs with `--host 127.0.0.1 --accept-server-license-terms` so the first launch
+  doesn't stall on the interactive license prompt before the browser opens.
+
 ### Unified proxy configuration in KAI (no more fragmentation)
 All proxy/upstream provider settings now live in the **KAI → Settings** tab. You no
 longer need to jump into raw VS Code `claudeProxy.*` settings.

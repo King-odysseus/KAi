@@ -31,6 +31,7 @@ export class EngineRoomViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((message: EngineRoomMessage) => {
       if (message.type === 'ready' || message.type === 'refresh') {
         void this.postDashboard();
+        void this.postBackups();
       }
       if (message.type === 'listBackups') {
         void this.postBackups();

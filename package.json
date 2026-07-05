@@ -2,7 +2,7 @@
   "name": "kai-agent-workbench",
   "displayName": "KAI Agent Workbench",
   "description": "A multi-agent coding workbench with route control and durable Cognitive1 memory.",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "publisher": "kai",
   "license": "UNLICENSED",
   "engines": {
