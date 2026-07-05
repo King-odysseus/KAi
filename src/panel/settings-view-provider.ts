@@ -1,9 +1,13 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import type { AgentId } from '../core/types';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 import type { ProxyManager } from '../proxy/proxy-manager';
 import type { SecretStore } from '../config/secret-store';
 import { AGENT_ORDER, AGENT_PROVIDERS } from '../config/agent-catalog';
+import { ClaudeConfigWriter } from '../config/claude-config';
+import { QwenConfigWriter } from '../config/qwen-config';
+import { CodexConfigWriter, defaultCodexConfigPath } from '../config/codex-config';
 
 interface SettingsMessage {
   type:
@@ -15,6 +19,13 @@ interface SettingsMessage {
     | 'clearKey'
     | 'saveCommand'
     | 'saveProxy'
+    | 'saveUpstream'
+    | 'saveAgentBackend'
+    | 'routeAgent'
+    | 'directAgent'
+    | 'routeAll'
+    | 'directAll'
+    | 'restartProxy'
     | 'openDocs'
     | 'openBrowser'
     | 'reload';
@@ -22,6 +33,10 @@ interface SettingsMessage {
   value?: string;
   port?: number;
   script?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  defaultModel?: string;
+  enabled?: boolean;
 }
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
@@ -34,6 +49,9 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     private readonly orchestrator: WorkbenchOrchestrator,
     private readonly secretStore: SecretStore,
     private readonly proxyManager?: ProxyManager,
+    private readonly claudeConfigWriter = new ClaudeConfigWriter(),
+    private readonly qwenConfigWriter = new QwenConfigWriter(),
+    private readonly codexConfigWriter = new CodexConfigWriter(),
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -96,6 +114,27 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           await this.postState();
         }
         break;
+      case 'saveUpstream':
+        await this.handleSaveUpstream(message);
+        break;
+      case 'saveAgentBackend':
+        await this.handleSaveAgentBackend(message);
+        break;
+      case 'routeAgent':
+        if (message.agent) await this.handleRouteAgent(message.agent);
+        break;
+      case 'directAgent':
+        if (message.agent) await this.handleDirectAgent(message.agent);
+        break;
+      case 'routeAll':
+        await this.handleRouteAll();
+        break;
+      case 'directAll':
+        await this.handleDirectAll();
+        break;
+      case 'restartProxy':
+        await this.handleRestartProxy();
+        break;
       case 'openDocs':
         if (message.agent) {
           void vscode.env.openExternal(vscode.Uri.parse(AGENT_PROVIDERS[message.agent].keyDocsUrl));
@@ -125,6 +164,156 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     );
     // Give the server a moment to boot before opening the browser.
     setTimeout(() => void vscode.env.openExternal(vscode.Uri.parse(url)), 3500);
+  }
+
+  // ---- Proxy config handlers ----
+
+  private async handleSaveUpstream(message: SettingsMessage): Promise<void> {
+    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    if (message.baseUrl !== undefined) {
+      await proxyCfg.update('targetBaseUrl', message.baseUrl, vscode.ConfigurationTarget.Global);
+    }
+    if (message.apiKey !== undefined && message.baseUrl) {
+      const apiKeys = proxyCfg.get<Record<string, string>>('apiKeys', {});
+      apiKeys[message.baseUrl] = message.apiKey;
+      await proxyCfg.update('apiKeys', apiKeys, vscode.ConfigurationTarget.Global);
+    }
+    if (message.defaultModel !== undefined) {
+      await proxyCfg.update('defaultModel', message.defaultModel, vscode.ConfigurationTarget.Global);
+    }
+    void vscode.window.showInformationMessage('Upstream provider saved. Restart the proxy to apply.');
+    await this.postState();
+  }
+
+  private async handleSaveAgentBackend(message: SettingsMessage): Promise<void> {
+    if (!message.agent) return;
+    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    const key = message.agent === 'codex' ? 'codexConfig' : message.agent === 'qwen' ? 'qwenConfig' : null;
+    if (!key) return;
+
+    const current = proxyCfg.get<Record<string, unknown>>(key, {}) as Record<string, unknown>;
+    const next: Record<string, unknown> = { ...current };
+    if (message.enabled !== undefined) next.enabled = message.enabled;
+    if (message.baseUrl !== undefined) next.baseUrl = message.baseUrl;
+    if (message.apiKey !== undefined) next.apiKey = message.apiKey;
+    if (message.defaultModel !== undefined) next.defaultModel = message.defaultModel;
+    // Keep configModel for Codex if it exists
+    if (key === 'codexConfig' && !next.configModel) next.configModel = 'gpt-5.5';
+
+    await proxyCfg.update(key, next, vscode.ConfigurationTarget.Global);
+    void vscode.window.showInformationMessage(`Saved ${message.agent} backend config. Restart the proxy to apply.`);
+    await this.postState();
+  }
+
+  private async handleRouteAgent(agent: AgentId): Promise<void> {
+    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    const cfg = vscode.workspace.getConfiguration('kai');
+    const port = cfg.get<number>('proxyPort', 8082);
+
+    if (agent === 'claude') {
+      await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
+      await this.claudeConfigWriter.ensureProxyConfig({ port });
+    } else if (agent === 'codex') {
+      await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
+      const codexCfg = proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
+      const model = (codexCfg.configModel as string) || 'gpt-5.5';
+      const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
+      await this.codexConfigWriter.ensureProxyProfile({ profile, port, model });
+    } else if (agent === 'qwen') {
+      await this.qwenConfigWriter.ensureProxyConfig({ port });
+    }
+
+    // Set global route to proxy if any agent is routed
+    if (this.orchestrator.getState().route !== 'proxy') {
+      this.orchestrator.setRoute('proxy');
+    }
+    void vscode.window.showInformationMessage(`${AGENT_PROVIDERS[agent].displayName} routed through proxy.`);
+    await this.postState();
+  }
+
+  private async handleDirectAgent(agent: AgentId): Promise<void> {
+    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+
+    if (agent === 'claude') {
+      await proxyCfg.update('routeClaudeCode', false, vscode.ConfigurationTarget.Global);
+      await this.claudeConfigWriter.restoreConfig();
+    } else if (agent === 'codex') {
+      await proxyCfg.update('routeCodex', false, vscode.ConfigurationTarget.Global);
+      const cfg = vscode.workspace.getConfiguration('kai');
+      const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
+      try {
+        await this.codexConfigWriter.restoreConfig(undefined, profile);
+      } catch { /* config file may not exist */ }
+    } else if (agent === 'qwen') {
+      await this.qwenConfigWriter.restoreConfig();
+    }
+
+    // If no agents are routed, set global route to direct
+    const routeClaude = proxyCfg.get<boolean>('routeClaudeCode', false);
+    const routeCodex = proxyCfg.get<boolean>('routeCodex', false);
+    if (!routeClaude && !routeCodex && this.orchestrator.getState().route !== 'direct') {
+      this.orchestrator.setRoute('direct');
+    }
+    void vscode.window.showInformationMessage(`${AGENT_PROVIDERS[agent].displayName} restored to direct mode.`);
+    await this.postState();
+  }
+
+  private async handleRouteAll(): Promise<void> {
+    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    const cfg = vscode.workspace.getConfiguration('kai');
+    const port = cfg.get<number>('proxyPort', 8082);
+
+    await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
+    await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
+    await this.claudeConfigWriter.ensureProxyConfig({ port });
+    await this.qwenConfigWriter.ensureProxyConfig({ port });
+
+    const codexCfg = proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
+    const model = (codexCfg.configModel as string) || 'gpt-5.5';
+    const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
+    await this.codexConfigWriter.ensureProxyProfile({ profile, port, model });
+
+    if (this.orchestrator.getState().route !== 'proxy') {
+      this.orchestrator.setRoute('proxy');
+    }
+    void vscode.window.showInformationMessage('All agents routed through proxy.');
+    await this.postState();
+  }
+
+  private async handleDirectAll(): Promise<void> {
+    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    const cfg = vscode.workspace.getConfiguration('kai');
+    await proxyCfg.update('routeClaudeCode', false, vscode.ConfigurationTarget.Global);
+    await proxyCfg.update('routeCodex', false, vscode.ConfigurationTarget.Global);
+    await this.claudeConfigWriter.restoreConfig();
+    await this.qwenConfigWriter.restoreConfig();
+    try {
+      const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
+      await this.codexConfigWriter.restoreConfig(undefined, profile);
+    } catch { /* config file may not exist */ }
+
+    if (this.orchestrator.getState().route !== 'direct') {
+      this.orchestrator.setRoute('direct');
+    }
+    void vscode.window.showInformationMessage('All agents restored to direct mode.');
+    await this.postState();
+  }
+
+  private async handleRestartProxy(): Promise<void> {
+    if (!this.proxyManager) {
+      void vscode.window.showWarningMessage('Proxy manager not available.');
+      return;
+    }
+    try {
+      const cfg = vscode.workspace.getConfiguration('kai');
+      const script = cfg.get<string>('proxyScript', '');
+      await this.proxyManager.stop();
+      await this.proxyManager.start(script);
+      void vscode.window.showInformationMessage('Proxy restarted.');
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Proxy restart failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    await this.postState();
   }
 
   private runInTerminal(command: string): void {
@@ -168,8 +357,41 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         port: cfg.get<number>('proxyPort', 8082),
         script: cfg.get<string>('proxyScript', ''),
         running: this.proxyManager?.getStatus().running ?? false,
+        upstream: this.getUpstreamState(),
+        routing: this.getRoutingState(),
       },
     });
+  }
+
+  private getUpstreamState() {
+    try {
+      const pc = vscode.workspace.getConfiguration('claudeProxy');
+      const baseUrl = pc.get<string>('targetBaseUrl', 'https://api.deepseek.com');
+      const apiKeys = pc.get<Record<string, string>>('apiKeys', {}) ?? {};
+      return {
+        baseUrl,
+        hasKey: Boolean(apiKeys[baseUrl]),
+        defaultModel: pc.get<string>('defaultModel', 'deepseek-v4-pro'),
+        modelMap: pc.get<Record<string, string>>('modelMap', {}),
+        codexConfig: pc.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>,
+        qwenConfig: pc.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>,
+      };
+    } catch {
+      return { baseUrl: 'https://api.deepseek.com', hasKey: false, defaultModel: 'deepseek-v4-pro', modelMap: {}, codexConfig: {}, qwenConfig: {} };
+    }
+  }
+
+  private getRoutingState() {
+    try {
+      const pc = vscode.workspace.getConfiguration('claudeProxy');
+      return {
+        claudeCode: pc.get<boolean>('routeClaudeCode', false),
+        codex: pc.get<boolean>('routeCodex', false),
+        globalRoute: this.orchestrator.getState().route,
+      };
+    } catch {
+      return { claudeCode: false, codex: false, globalRoute: 'direct' };
+    }
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -242,8 +464,33 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     .keymeta { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 4px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .note { font-size: 10px; color: var(--vscode-descriptionForeground); font-style: italic; }
+    .advanced-toggle { font-size: 10px; color: var(--vscode-descriptionForeground); cursor: pointer; padding: 4px 0; user-select: none; display: flex; align-items: center; gap: 4px; }
+    .advanced-toggle:hover { color: var(--kai-accent-strong); }
+    .advanced-toggle .toggle-arrow { display: inline-block; transition: transform .15s ease; font-size: 9px; width: 10px; }
+    .advanced-toggle.open .toggle-arrow { transform: rotate(90deg); }
+    .advanced-section { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--kai-border); display: none; }
     .toolbar { display: flex; gap: 6px; margin-top: 4px; }
     .toolbar button { flex: 1; }
+    select {
+      flex: 1; min-width: 0; width: 100%;
+      border: 1px solid var(--vscode-input-border, var(--kai-border));
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      border-radius: 5px; padding: 6px 8px; font: inherit; font-size: 12px;
+      cursor: pointer;
+    }
+    select:focus { outline: none; border-color: var(--kai-accent); box-shadow: 0 0 0 2px var(--kai-accent-soft); }
+    .divider { border: none; border-top: 1px solid var(--kai-border); margin: 10px 0; }
+    .toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .toggle-row label { font-size: 12px; font-weight: 600; cursor: pointer; }
+    .toggle-row input[type=checkbox] { width: auto; flex: none; cursor: pointer; }
+    .sub-section { margin-left: 12px; padding-left: 10px; border-left: 2px solid var(--kai-accent-soft); margin-bottom: 8px; }
+    .route-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+    .route-row .agent-label { font-size: 12px; font-weight: 600; min-width: 90px; }
+    .route-row .route-badge { font-size: 10px; font-weight: 600; }
+    .route-badge.routed { color: var(--vscode-testing-iconPassed); }
+    .route-badge.direct { color: var(--vscode-descriptionForeground); }
+    button.small { font-size: 10px; padding: 3px 8px; }
+    button.warn { color: #fff; background: var(--vscode-inputValidation-warningBackground, #554400); border-color: var(--vscode-inputValidation-warningBorder, #886600); }
   </style>
 </head>
 <body>
@@ -310,11 +557,14 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
               '<input data-field="command" data-id="' + a.id + '" value="' + esc(a.command) + '" placeholder="' + esc(a.id) + '" />' +
               '<button class="ghost" data-act="saveCommand" data-id="' + a.id + '">Save</button>' +
             '</div></div>' +
-            '<div class="field"><label>API key <span class="env" style="font-size:9px;">' + esc(a.envVar) + '</span></label><div class="row">' +
-              '<input type="password" data-field="key" data-id="' + a.id + '" placeholder="' + esc(keyPlaceholder) + '" />' +
-              '<button class="primary" data-act="saveKey" data-id="' + a.id + '">Save key</button>' +
-            '</div>' +
-              '<div class="keymeta"><button class="link" data-act="openDocs" data-id="' + a.id + '">Get an API key ↗</button>' + clearBtn + '</div>' +
+            '<div class="advanced-toggle" data-toggle="key-' + a.id + '"><span class="toggle-arrow">▸</span> Advanced: API key (rarely needed — use for Proxy)</div>' +
+            '<div class="advanced-section" id="key-' + a.id + '">' +
+              '<div class="field"><label>API key <span class="env" style="font-size:9px;">' + esc(a.envVar) + '</span></label><div class="row">' +
+                '<input type="password" data-field="key" data-id="' + a.id + '" placeholder="' + esc(keyPlaceholder) + '" />' +
+                '<button class="primary" data-act="saveKey" data-id="' + a.id + '">Save key</button>' +
+              '</div>' +
+                '<div class="keymeta"><button class="link" data-act="openDocs" data-id="' + a.id + '">Get an API key ↗</button>' + clearBtn + '</div>' +
+              '</div>' +
             '</div>' +
             '<div class="actions">' +
               installBtn +
@@ -324,19 +574,117 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       }).join('');
     }
 
+    var PROVIDER_PRESETS = [
+      { label: 'DeepSeek (OpenAI-compat)', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
+      { label: 'DeepSeek (Anthropic pass-through)', url: 'https://api.deepseek.com/anthropic', model: 'deepseek-v4-pro' },
+      { label: 'Groq', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+      { label: 'Moonshot (Kimi)', url: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
+      { label: 'Together AI', url: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+      { label: 'Ollama (local)', url: 'http://localhost:11434/v1', model: 'qwen2.5-coder' },
+      { label: 'LM Studio (local)', url: 'http://localhost:1234/v1', model: 'local-model' },
+      { label: 'Anthropic (direct API)', url: 'https://api.anthropic.com', model: 'claude-sonnet-4-6' },
+    ];
+
     function renderProxy(p) {
       var badge = p.running ? '<span class="badge ok">running</span>' : '<span class="badge warn">stopped</span>';
+      var up = p.upstream || {};
+      var rt = p.routing || {};
+
+      // Preset matcher
+      var presetOpts = PROVIDER_PRESETS.map(function (pr) {
+        var sel = pr.url === up.baseUrl ? ' selected' : '';
+        return '<option value="' + esc(pr.url) + '" data-model="' + esc(pr.model) + '"' + sel + '>' + esc(pr.label) + '</option>';
+      }).join('');
+
+      // Agent route rows
+      function routeRow(id, label) {
+        var routed = (id === 'claude' && rt.claudeCode) || (id === 'codex' && rt.codex) || (id === 'qwen' && rt.globalRoute === 'proxy');
+        var rBadge = routed ? '<span class="route-badge routed">proxy</span>' : '<span class="route-badge direct">direct</span>';
+        return '<div class="route-row">' +
+          '<span class="agent-label">' + esc(label) + '</span>' + rBadge +
+          '<button class="ghost small" data-act="routeAgent" data-id="' + id + '">Route</button>' +
+          '<button class="ghost small" data-act="directAgent" data-id="' + id + '">Direct</button>' +
+        '</div>';
+      }
+
+      // Per-agent backend subsection
+      function agentBackend(id, label, cfg) {
+        cfg = cfg || {};
+        var checked = cfg.enabled ? ' checked' : '';
+        return '' +
+          '<div class="toggle-row">' +
+            '<input type="checkbox" data-field="agentBackendEnabled" data-id="' + id + '"' + checked + ' />' +
+            '<label>' + esc(label) + ' own backend</label>' +
+          '</div>' +
+          '<div class="sub-section" data-section="agentBackend" data-id="' + id + '">' +
+            '<div class="field"><label>Base URL</label><div class="row">' +
+              '<input data-field="agentBackendUrl" data-id="' + id + '" value="' + esc(cfg.baseUrl || '') + '" />' +
+            '</div></div>' +
+            '<div class="field"><label>API Key</label><div class="row">' +
+              '<input type="password" data-field="agentBackendKey" data-id="' + id + '" placeholder="' + (cfg.apiKey ? '•••••• saved' : 'Paste API key...') + '" />' +
+            '</div></div>' +
+            '<div class="field"><label>Model</label><div class="row">' +
+              '<input data-field="agentBackendModel" data-id="' + id + '" value="' + esc(cfg.defaultModel || '') + '" />' +
+              '<button class="primary small" data-act="saveAgentBackend" data-id="' + id + '">Save</button>' +
+            '</div></div>' +
+          '</div>';
+      }
+
       proxyEl.innerHTML = '' +
+        // ---- Server ----
         '<div class="card">' +
-          '<div class="card-head"><div class="card-title">ClaudeCode-Proxy</div>' + badge + '</div>' +
-          '<div class="summary">Point KAI at your proxy server script to enable the Proxy route. Leave the script empty to disable.</div>' +
-          '<div class="field"><label>Proxy server script</label><div class="row">' +
-            '<input data-field="proxyScript" value="' + esc(p.script) + '" placeholder="C:\\\\path\\\\to\\\\proxy.js" />' +
+          '<div class="card-head"><div class="card-title">Proxy Server</div>' + badge + '</div>' +
+          '<div class="field"><label>Script path</label><div class="row">' +
+            '<input data-field="proxyScript" value="' + esc(p.script) + '" placeholder="Path to proxy server script" />' +
           '</div></div>' +
           '<div class="field"><label>Port</label><div class="row">' +
             '<input data-field="proxyPort" value="' + esc(p.port) + '" placeholder="8082" />' +
-            '<button class="primary" data-act="saveProxy">Save proxy</button>' +
+            '<button class="primary" data-act="saveProxy">Save</button>' +
           '</div></div>' +
+          '<div class="actions" style="margin-top:8px;">' +
+            '<button class="ghost" data-act="restartProxy">Restart proxy ↻</button>' +
+          '</div>' +
+        '</div>' +
+
+        // ---- Upstream Provider ----
+        '<div class="card">' +
+          '<div class="card-head"><div class="card-title">Upstream Provider</div></div>' +
+          '<div class="summary">All agents share this provider in proxy mode. The proxy auto-routes each agent to the correct API format (Claude → Anthropic, Codex/Qwen → OpenAI-compat) for this provider.</div>' +
+          '<div class="field"><label>Provider</label><div class="row">' +
+            '<select data-field="upstreamPreset">' + presetOpts + '</select>' +
+          '</div></div>' +
+          '<div class="field"><label>Base URL</label><div class="row">' +
+            '<input data-field="upstreamUrl" value="' + esc(up.baseUrl) + '" placeholder="https://api.deepseek.com" />' +
+          '</div></div>' +
+          '<div class="field"><label>API Key</label><div class="row">' +
+            '<input type="password" data-field="upstreamKey" placeholder="' + (up.hasKey ? '•••••• saved — enter to replace' : 'Paste API key...') + '" />' +
+            '<button class="primary" data-act="saveUpstream">Save</button>' +
+          '</div></div>' +
+          '<div class="field"><label>Default model</label><div class="row">' +
+            '<input data-field="upstreamModel" value="' + esc(up.defaultModel) + '" />' +
+            '<button class="primary" data-act="saveUpstream">Save</button>' +
+          '</div></div>' +
+        '</div>' +
+
+        // ---- Provider Overrides ----
+        '<div class="card">' +
+          '<div class="card-head"><div class="card-title">Provider Overrides</div></div>' +
+          '<div class="summary">Switch an agent to a completely different provider (e.g. real OpenAI for Codex). Leave disabled — the proxy already routes each agent to the correct format endpoint for the main provider above.</div>' +
+          agentBackend('codex', 'Codex', up.codexConfig) +
+          agentBackend('qwen', 'Qwen', up.qwenConfig) +
+        '</div>' +
+
+        // ---- Agent Routing ----
+        '<div class="card">' +
+          '<div class="card-head"><div class="card-title">Agent Routing</div></div>' +
+          '<div class="summary">Route rewrites each agent\'s config to point at <code>localhost:' + esc(p.port) + '</code>. Direct restores the default endpoint. Keys set above are used for direct mode; the upstream key is used in proxy mode.</div>' +
+          '<div class="actions" style="margin-bottom:10px;">' +
+            '<button class="primary small" data-act="routeAll">Route All</button>' +
+            '<button class="ghost small" data-act="directAll">Direct All</button>' +
+          '</div>' +
+          routeRow('claude', 'Claude Code') +
+          routeRow('codex', 'Codex') +
+          routeRow('qwen', 'Qwen Code') +
         '</div>';
     }
 
@@ -355,6 +703,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       else if (act === 'openDocs') vscode.postMessage({ type: 'openDocs', agent: id });
       else if (act === 'openBrowser') vscode.postMessage({ type: 'openBrowser' });
       else if (act === 'clearKey') vscode.postMessage({ type: 'clearKey', agent: id });
+      else if (act === 'reload') vscode.postMessage({ type: 'reload' });
+      else if (act === 'restartProxy') vscode.postMessage({ type: 'restartProxy' });
+      else if (act === 'routeAll') vscode.postMessage({ type: 'routeAll' });
+      else if (act === 'directAll') vscode.postMessage({ type: 'directAll' });
+      else if (act === 'routeAgent') vscode.postMessage({ type: 'routeAgent', agent: id });
+      else if (act === 'directAgent') vscode.postMessage({ type: 'directAgent', agent: id });
       else if (act === 'saveCommand') vscode.postMessage({ type: 'saveCommand', agent: id, value: inputFor('command', id).value });
       else if (act === 'saveKey') {
         var input = inputFor('key', id);
@@ -366,7 +720,65 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           port: parseInt(inputFor('proxyPort').value, 10),
           script: inputFor('proxyScript').value,
         });
+      } else if (act === 'saveUpstream') {
+        vscode.postMessage({
+          type: 'saveUpstream',
+          baseUrl: inputFor('upstreamUrl').value,
+          apiKey: inputFor('upstreamKey').value,
+          defaultModel: inputFor('upstreamModel').value,
+        });
+        var keyInput = inputFor('upstreamKey');
+        if (keyInput) keyInput.value = '';
+      } else if (act === 'saveAgentBackend') {
+        var enabledEl = document.querySelector('[data-field="agentBackendEnabled"][data-id="' + id + '"]');
+        vscode.postMessage({
+          type: 'saveAgentBackend',
+          agent: id,
+          enabled: enabledEl ? enabledEl.checked : false,
+          baseUrl: inputFor('agentBackendUrl', id).value,
+          apiKey: inputFor('agentBackendKey', id).value,
+          defaultModel: inputFor('agentBackendModel', id).value,
+        });
+        var backendKeyInput = inputFor('agentBackendKey', id);
+        if (backendKeyInput) backendKeyInput.value = '';
       }
+    });
+
+    // Preset dropdown changes auto-fill URL + model
+    document.addEventListener('change', function (e) {
+      var sel = e.target;
+      if (sel.getAttribute('data-field') !== 'upstreamPreset') return;
+      var opt = sel.options[sel.selectedIndex];
+      if (!opt) return;
+      var urlInput = inputFor('upstreamUrl');
+      var modelInput = inputFor('upstreamModel');
+      if (urlInput) urlInput.value = opt.getAttribute('data-model') ? opt.value : urlInput.value;
+      if (modelInput && opt.getAttribute('data-model')) modelInput.value = opt.getAttribute('data-model');
+      // Custom option detection
+      if (!opt.getAttribute('data-model') && !opt.value) {
+        if (urlInput) urlInput.value = '';
+      }
+    });
+
+    // Agent backend toggle shows/hides the sub-section
+    document.addEventListener('change', function (e) {
+      var cb = e.target;
+      if (cb.getAttribute('data-field') !== 'agentBackendEnabled') return;
+      var id = cb.getAttribute('data-id');
+      var section = document.querySelector('[data-section="agentBackend"][data-id="' + id + '"]');
+      if (section) section.style.display = cb.checked ? '' : 'none';
+    });
+
+    // Advanced toggle click handler
+    document.addEventListener('click', function (e) {
+      var toggle = e.target.closest('[data-toggle]');
+      if (!toggle) return;
+      var id = toggle.getAttribute('data-toggle');
+      var section = document.getElementById(id);
+      if (!section) return;
+      var isOpen = section.style.display !== 'none';
+      section.style.display = isOpen ? 'none' : '';
+      toggle.classList.toggle('open', !isOpen);
     });
 
     document.getElementById('refresh').addEventListener('click', function () { vscode.postMessage({ type: 'refresh' }); });

@@ -2,7 +2,7 @@
   "name": "kai-agent-workbench",
   "displayName": "KAI Agent Workbench",
   "description": "A multi-agent coding workbench with route control and durable Cognitive1 memory.",
-  "version": "0.1.0",
+  "version": "0.2.3",
   "publisher": "kai",
   "license": "UNLICENSED",
   "engines": {
@@ -214,6 +214,66 @@
           "type": "string",
           "default": "gemini",
           "description": "Command used to launch Gemini CLI via ACP."
+        },
+        "claudeProxy.targetBaseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "Base URL of the upstream API for proxy mode. DeepSeek: https://api.deepseek.com. DeepSeek pass-through: https://api.deepseek.com/anthropic. Groq: https://api.groq.com/openai/v1."
+        },
+        "claudeProxy.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Upstream API key for the proxy (legacy single key). Prefer claudeProxy.apiKeys for per-provider keys."
+        },
+        "claudeProxy.apiKeys": {
+          "type": "object",
+          "default": {},
+          "description": "Per-provider API keys keyed by base URL. Example: { \"https://api.deepseek.com\": \"sk-...\" }"
+        },
+        "claudeProxy.defaultModel": {
+          "type": "string",
+          "default": "deepseek-v4-pro",
+          "description": "Default upstream model when no mapping is found."
+        },
+        "claudeProxy.modelMap": {
+          "type": "object",
+          "default": {
+            "claude-opus-4-7": "deepseek-v4-pro",
+            "claude-sonnet-4-6": "deepseek-v4-flash",
+            "claude-haiku-4-5-20251001": "deepseek-v4-flash"
+          },
+          "description": "Map Claude model names to upstream model names."
+        },
+        "claudeProxy.routeClaudeCode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Route Claude Code through the proxy."
+        },
+        "claudeProxy.routeCodex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Route Codex through the proxy."
+        },
+        "claudeProxy.codexConfig": {
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "baseUrl": "https://api.openai.com/v1",
+            "apiKey": "",
+            "defaultModel": "gpt-5.5",
+            "configModel": "gpt-5.5"
+          },
+          "description": "Per-agent backend for Codex. When enabled, Codex uses this backend instead of the main upstream provider."
+        },
+        "claudeProxy.qwenConfig": {
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "apiKey": "",
+            "defaultModel": "qwen-coder-plus"
+          },
+          "description": "Per-agent backend for Qwen. When enabled, Qwen uses this backend instead of the main upstream provider."
         }
       }
     }
