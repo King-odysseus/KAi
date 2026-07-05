@@ -30,6 +30,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ---- Top bar ---- */
@@ -96,13 +98,17 @@ body {
 
 /* ---- Chat scroll area ---- */
 .chat {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
+
+/* Composer is always pinned at the bottom and never shrinks out of view. */
+.composer { flex: 0 0 auto; }
 
 /* Message bubbles */
 .msg {

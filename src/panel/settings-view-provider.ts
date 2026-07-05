@@ -434,6 +434,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       --kai-accent: #38bdf8;
       --kai-accent-strong: #0ea5e9;
       --kai-accent-soft: rgba(56, 189, 248, 0.14);
+      --kai-accent-line: rgba(56, 189, 248, 0.35);
       --kai-border: color-mix(in srgb, var(--vscode-panel-border) 80%, transparent);
       --kai-surface: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent);
     }

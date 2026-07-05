@@ -2,6 +2,23 @@
 
 ## 2026-07-05
 
+### Chat input field not showing / buttons unclickable (v0.2.6)
+Fixed the chat composer (message input + Send button + template chips) being pushed
+off the bottom of the sidebar and clipped out of view.
+
+- **Root cause:** the scrollable `.chat` area was `flex: 1` with no `min-height: 0`.
+  Because a flex item defaults to `min-height: auto`, `.chat` refused to shrink below
+  its content height. In the KAI sidebar — where the Agent Workbench view shares
+  vertical space with Settings, Engine Room, Memory and Sessions — the pane is short,
+  so the un-shrinkable chat area shoved the composer below the visible edge. The input
+  and its buttons were rendered but off-screen, so they appeared "missing" and
+  couldn't be clicked.
+- **Fix:** `.chat` is now `flex: 1 1 auto; min-height: 0` so it shrinks and scrolls
+  internally, and `.composer` is `flex: 0 0 auto` so the input row stays pinned at the
+  bottom and always visible. `.app` also gets `min-height: 0; overflow: hidden`.
+- Tip: you can still drag the "Agent Workbench" section header taller, or use the
+  **⤢ Tab** button to pop the chat into a full editor tab.
+
 ### Button & display audit fixes (v0.2.5)
 Swept every panel button and made sure each has a working handler and that dependent
 UI actually renders.
