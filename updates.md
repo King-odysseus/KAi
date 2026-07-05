@@ -2,6 +2,32 @@
 
 ## 2026-07-05
 
+### Settings panel blank — API-key inputs missing, buttons dead (v0.2.7)
+**This was the real cause of "buttons don't work / nothing displays."** The Settings
+panel's agent cards (and the API-key inputs inside them) are rendered only after the
+extension replies to the webview with agent capabilities. That reply could hang
+forever, leaving the panel half-rendered and unresponsive.
+
+- **Root cause:** `commandInfo()` probed each agent CLI with `<agent> --version` and
+  had **no timeout** — it only resolved on the process's `close`/`error` event. If any
+  of `claude`/`codex`/`qwen`/`gemini` existed on PATH but didn't cleanly exit on
+  `--version` (e.g. a wrapper waiting on stdin, or an interactive prompt — common on
+  Windows with `shell: true`), the probe never resolved. Because capabilities were
+  gathered with `Promise.all`, that one hang blocked the whole set, so the Settings
+  `state` message was never sent and the agent cards / key inputs never appeared.
+- **Fixes:**
+  - `commandInfo()` now has a hard **5s timeout** that kills the probe and reports the
+    agent as unavailable, so it always resolves.
+  - `getCapabilities()` resolves each adapter independently — one failing agent can no
+    longer blank the panel.
+  - Settings `postState()` falls back to catalog defaults if probing fails, so the
+    cards always render.
+  - Added a visible error banner (`window.onerror`) in the Settings webview so any
+    future script failure is shown instead of failing silently.
+- If the **Open in browser** button still does nothing, it's because `code serve-web`
+  needs the `code` CLI on your PATH; the button now also passes
+  `--accept-server-license-terms` so it won't stall on the first-run license prompt.
+
 ### Chat input field not showing / buttons unclickable (v0.2.6)
 Fixed the chat composer (message input + Send button + template chips) being pushed
 off the bottom of the sidebar and clipped out of view.

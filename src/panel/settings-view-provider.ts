@@ -347,8 +347,16 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   private async postState(): Promise<void> {
     if (!this.view) return;
-    const capabilities = await this.orchestrator.getCapabilities();
-    const keyStatus = await this.secretStore.status();
+    // Never let a slow/failed capability probe leave the panel blank — fall back
+    // to catalog defaults so the agent cards (and their key inputs) always render.
+    let capabilities: Awaited<ReturnType<WorkbenchOrchestrator['getCapabilities']>> = [];
+    let keyStatus: Record<string, boolean> = {};
+    try {
+      capabilities = await this.orchestrator.getCapabilities();
+    } catch { /* render cards as unavailable */ }
+    try {
+      keyStatus = await this.secretStore.status();
+    } catch { /* treat as no keys stored */ }
     const cfg = vscode.workspace.getConfiguration('kai');
 
     const agents = AGENT_ORDER.map((id) => {
@@ -558,6 +566,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <script nonce="${nonce}">
+    // Surface any script error visibly instead of failing silently.
+    window.onerror = function (msg) {
+      var b = document.getElementById('kai-err');
+      if (!b) { b = document.createElement('div'); b.id = 'kai-err'; b.style.cssText = 'margin:8px 0;padding:8px 10px;border-radius:6px;font-size:11px;color:#fff;background:#a11;'; document.body.insertBefore(b, document.body.firstChild); }
+      b.textContent = 'Settings UI error: ' + msg;
+    };
     var vscode = acquireVsCodeApi();
     var agentsEl = document.getElementById('agents');
     var proxyEl = document.getElementById('proxy');

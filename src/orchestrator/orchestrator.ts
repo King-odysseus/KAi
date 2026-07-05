@@ -35,7 +35,30 @@ export class WorkbenchOrchestrator extends EventEmitter {
   }
 
   async getCapabilities(): Promise<AgentCapability[]> {
-    return Promise.all([...this.adapters.values()].map((a) => a.getCapability()));
+    // One adapter that hangs or throws must never blank the whole panel:
+    // resolve each independently and substitute an "unavailable" card on failure.
+    const results = await Promise.all(
+      [...this.adapters.entries()].map(async ([id, a]): Promise<AgentCapability> => {
+        try {
+          return await a.getCapability();
+        } catch (err) {
+          return {
+            id,
+            displayName: id,
+            available: false,
+            unavailableReason: err instanceof Error ? err.message : String(err),
+            supportsRoutes: ['direct', 'proxy'],
+            supportsAutonomy: ['review', 'auto', 'custom'],
+            supportsTools: true,
+            supportsApprovals: false,
+            supportsDiffs: true,
+            supportsMcp: false,
+            requiredConfigKeys: [],
+          };
+        }
+      }),
+    );
+    return results;
   }
 
   async getCognitive1Health(): Promise<{ available: boolean; detail: string }> {

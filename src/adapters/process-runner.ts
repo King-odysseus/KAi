@@ -34,19 +34,38 @@ export interface ProcessRunner {
 }
 
 export class NodeProcessRunner implements ProcessRunner {
+  /** Max time to wait for `<command> --version`. A CLI that hangs (e.g. drops
+   * into an interactive prompt or waits on stdin) must never block the panel. */
+  private static readonly VERSION_TIMEOUT_MS = 5000;
+
   async commandInfo(command: string): Promise<CommandInfo> {
     return new Promise((resolve) => {
       const child = spawn(command, ['--version'], { shell: process.platform === 'win32', windowsHide: true });
       let output = '';
       let error = '';
+      let settled = false;
+      const finish = (info: CommandInfo) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(info);
+      };
+      // Guarantee the promise always resolves so getCapabilities() can't hang.
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch { /* already gone */ }
+        finish({ available: false, detail: `${command} --version timed out` });
+      }, NodeProcessRunner.VERSION_TIMEOUT_MS);
+      // Don't let a spawned probe keep the event loop / host alive.
+      timer.unref?.();
+
       child.stdout?.on('data', (chunk) => { output += chunk.toString(); });
       child.stderr?.on('data', (chunk) => { error += chunk.toString(); });
-      child.on('error', (err) => resolve({ available: false, detail: err.message }));
+      child.on('error', (err) => finish({ available: false, detail: err.message }));
       child.on('close', (code) => {
         if (code === 0) {
-          resolve({ available: true, version: output.trim() || undefined });
+          finish({ available: true, version: output.trim() || undefined });
         } else {
-          resolve({ available: false, detail: (error || output || `Exited with ${code}`).trim() });
+          finish({ available: false, detail: (error || output || `Exited with ${code}`).trim() });
         }
       });
     });
