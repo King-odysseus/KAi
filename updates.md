@@ -1,6 +1,41 @@
 # KAI Agent Workbench — Updates
+## 2026-07-05 (later)
+
+### Settings — Upstream Provider and Agent Routing always visible (v0.2.9)
+The Proxy section (where you enter your DeepSeek API key for all agents) was
+rendered entirely by JavaScript. If the async capabilities probe stalled or JS
+failed silently, the user was stuck staring at "Loading proxy status…" with no
+way to enter an upstream key. Same root cause as the agent-card blanking fixed
+in v0.2.8.
+
+- **Upstream Provider, Agent Routing, Proxy Server, and Provider Overrides are
+  now pre-rendered as static HTML** — same pattern as the agent cards. The DeepSeek
+  API key input, provider dropdown, model field, Route/Direct buttons, and endpoint
+  display are all present in the DOM from the moment the page loads. No dependency
+  on the async state message.
+- **`renderStaticProxySection()`** method added to `SettingsViewProvider`. Reads
+  the current `claudeProxy.*` config (upstream provider, routing toggles, proxy
+  port/script) at HTML generation time and produces the full proxy section as static
+  HTML, including preselected provider and current route badge states.
+- **`renderProxy()` → `updateProxy()`** — the JS function no longer replaces
+  `innerHTML`. It only patches dynamic indicators: proxy running/stopped badge,
+  upstream key saved-state placeholder, endpoint URLs, and route badge labels.
+  The form structure survives regardless of JS state.
+- **"Loading proxy status…" placeholder removed** — the `<div id="proxy">` now
+  contains `${staticProxy}` directly.
+
 
 ## 2026-07-05
+
+### Auto-find free port for "Open in browser" (v0.2.9)
+Port 8000 was hardcoded, so clicking the button a second time (or when something
+else was already using that port) would fail with `os error 10048`.
+
+- **Fix:** the button now probes for a free port with `net.createServer` bound to
+  `127.0.0.1:0`, then passes the assigned port to `code serve-web`. No more port
+  collision.
+- Also extracted the serve-web launch into its own `launchServeWeb(port)` method
+  for cleanliness.
 
 ### Settings pre-rendered + Open in Browser bypasses JS (v0.2.8)
 Two structural fixes that make the Settings panel work regardless of whether the

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as net from 'net';
 import type { AgentId } from '../core/types';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 import type { ProxyManager } from '../proxy/proxy-manager';
@@ -58,7 +59,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
-    webviewView.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
+    webviewView.webview.options = { enableScripts: true, enableCommandUris: true, localResourceRoots: [this.extensionUri] };
     webviewView.webview.html = this.getHtml(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((m: SettingsMessage) => void this.handle(m));
   }
@@ -152,7 +153,24 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   openInBrowser(): void {
-    const port = 8000;
+    // Probe for an available port instead of hardcoding 8000 (which may
+    // already be in use). Listen briefly, grab the assigned port, close,
+    // then pass that port to `code serve-web`.
+    const probe = net.createServer();
+    probe.listen(0, '127.0.0.1', () => {
+      const addr = probe.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 8000;
+      probe.close(() => {
+        void this.launchServeWeb(port);
+      });
+    });
+    probe.on('error', () => {
+      // If even the probe fails, fall back to 8000 and let the user see any error.
+      void this.launchServeWeb(8000);
+    });
+  }
+
+  private async launchServeWeb(port: number): Promise<void> {
     const url = `http://127.0.0.1:${port}`;
     const term =
       vscode.window.terminals.find((t) => t.name === 'KAI Web') ??
@@ -168,7 +186,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       `Starting VS Code Web on ${url} — opening your browser. This serves the full editor (with KAI) from this machine. If the tab is blank, wait a few seconds and refresh.`,
     );
     // Give the server a moment to boot before opening the browser.
-    setTimeout(() => void vscode.env.openExternal(vscode.Uri.parse(url)), 3500);
+    await new Promise((r) => setTimeout(r, 3500));
+    void vscode.env.openExternal(vscode.Uri.parse(url));
   }
 
   // ---- Proxy config handlers ----
@@ -198,7 +217,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     if (openaiUrl) {
       const codexCfg = { ...(proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'gpt-5.5' };
       await proxyCfg.update('codexConfig', codexCfg, vscode.ConfigurationTarget.Global);
-      const qwenCfg = { ...(proxyCfg.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'qwen-coder-plus' };
+      const qwenCfg = { ...(proxyCfg.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>), apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'qwen-coder-plus' };
       await proxyCfg.update('qwenConfig', qwenCfg, vscode.ConfigurationTarget.Global);
     }
 
@@ -463,9 +482,141 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }).join('\n');
   }
 
+
+  /** Pre-render the proxy section from current VSCode config so the upstream
+   *  provider key input, routing buttons, and proxy config are always visible
+   *  — even before the async state probe completes. */
+  private renderStaticProxySection(): string {
+    const esc = (s: string) =>
+      String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const kaiCfg = vscode.workspace.getConfiguration('kai');
+    const port = kaiCfg.get<number>('proxyPort', 8082);
+    const script = kaiCfg.get<string>('proxyScript', '');
+    const up = this.getUpstreamState();
+    const rt = this.getRoutingState();
+
+    const presets = [
+      { label: 'DeepSeek', claudeUrl: 'https://api.deepseek.com/anthropic', openaiUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
+      { label: 'Groq', claudeUrl: '', openaiUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+      { label: 'Moonshot (Kimi)', claudeUrl: '', openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
+      { label: 'Together AI', claudeUrl: '', openaiUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+      { label: 'Ollama (local)', claudeUrl: '', openaiUrl: 'http://localhost:11434/v1', model: 'qwen2.5-coder' },
+      { label: 'LM Studio (local)', claudeUrl: '', openaiUrl: 'http://localhost:1234/v1', model: 'local-model' },
+      { label: 'Anthropic (direct API)', claudeUrl: 'https://api.anthropic.com', openaiUrl: '', model: 'claude-sonnet-4-6' },
+    ];
+
+    const presetOpts = presets.map((pr) => {
+      const sel = (pr.claudeUrl && pr.claudeUrl === up.baseUrl) || (pr.openaiUrl && pr.openaiUrl === up.baseUrl) ? ' selected' : '';
+      return '<option value="' + esc(pr.label) + '" data-claude="' + esc(pr.claudeUrl) + '" data-openai="' + esc(pr.openaiUrl) + '" data-model="' + esc(pr.model) + '"' + sel + '>' + esc(pr.label) + '</option>';
+    }).join('');
+
+    const matchedPreset = presets.find((pr) => (pr.claudeUrl && pr.claudeUrl === up.baseUrl) || (pr.openaiUrl && pr.openaiUrl === up.baseUrl));
+    const derivedOpenaiUrl = matchedPreset?.openaiUrl || '';
+    const codexBaseUrl = (up.codexConfig as Record<string, unknown>).baseUrl as string || derivedOpenaiUrl || '';
+    const qwenBaseUrl = (up.qwenConfig as Record<string, unknown>).baseUrl as string || derivedOpenaiUrl || '';
+
+    const routeBadge = (id: string) => {
+      const routed = (id === 'claude' && rt.claudeCode) || (id === 'codex' && rt.codex) || (id === 'qwen' && rt.globalRoute === 'proxy');
+      return routed
+        ? '<span class="route-badge routed" id="route-badge-' + id + '">proxy</span>'
+        : '<span class="route-badge direct" id="route-badge-' + id + '">direct</span>';
+    };
+
+    const agentBackend = (id: string, label: string, cfg: Record<string, unknown>) => {
+      const enabled = Boolean(cfg?.enabled);
+      const checked = enabled ? ' checked' : '';
+      const sectionStyle = enabled ? '' : ' style="display:none;"';
+      return '' +
+        '<div class="toggle-row">' +
+          '<input type="checkbox" data-field="agentBackendEnabled" data-id="' + id + '"' + checked + ' />' +
+          '<label>Use different provider for ' + esc(label) + '</label>' +
+        '</div>' +
+        '<div class="sub-section" data-section="agentBackend" data-id="' + id + '"' + sectionStyle + '>' +
+          '<div class="field"><label>Base URL</label><div class="row">' +
+            '<input data-field="agentBackendUrl" data-id="' + id + '" value="' + esc((cfg?.baseUrl as string) || '') + '" />' +
+          '</div></div>' +
+          '<div class="field"><label>API Key</label><div class="row">' +
+            '<input type="password" data-field="agentBackendKey" data-id="' + id + '" placeholder="' + ((cfg?.apiKey as string) ? '•••••• saved' : 'Paste API key...') + '" />' +
+          '</div></div>' +
+          '<div class="field"><label>Model</label><div class="row">' +
+            '<input data-field="agentBackendModel" data-id="' + id + '" value="' + esc((cfg?.defaultModel as string) || '') + '" />' +
+            '<button class="primary small" data-act="saveAgentBackend" data-id="' + id + '">Save</button>' +
+          '</div></div>' +
+        '</div>';
+    };
+
+    return '' +
+      '<div class="card">' +
+        '<div class="card-head"><div class="card-title">Proxy Server</div>' +
+          '<span class="badge warn" id="proxy-badge">stopped</span>' +
+        '</div>' +
+        '<div class="field"><label>Script path</label><div class="row">' +
+          '<input data-field="proxyScript" value="' + esc(script) + '" placeholder="Path to proxy server script" />' +
+        '</div></div>' +
+        '<div class="field"><label>Port</label><div class="row">' +
+          '<input data-field="proxyPort" value="' + esc(String(port)) + '" placeholder="8082" />' +
+          '<button class="primary" data-act="saveProxy">Save</button>' +
+        '</div></div>' +
+        '<div class="actions" style="margin-top:8px;">' +
+          '<button class="ghost" data-act="restartProxy">Restart proxy ↻</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="card-head"><div class="card-title">Upstream Provider</div></div>' +
+        '<div class="summary">Pick a provider, enter its API key. The proxy auto-routes each agent to the correct endpoint format.</div>' +
+        '<div class="field"><label>Provider</label><div class="row">' +
+          '<select data-field="upstreamPreset">' + presetOpts + '</select>' +
+        '</div></div>' +
+        '<div class="field"><label>API Key</label><div class="row">' +
+          '<input type="password" data-field="upstreamKey" id="upstream-key" placeholder="' + (up.hasKey ? '•••••• saved — enter to replace' : 'Paste API key...') + '" />' +
+          '<button class="primary" data-act="saveUpstream">Save</button>' +
+        '</div></div>' +
+        '<div class="field"><label>Default model</label><div class="row">' +
+          '<input data-field="upstreamModel" id="upstream-model" value="' + esc(up.defaultModel) + '" />' +
+          '<button class="primary" data-act="saveUpstream">Save</button>' +
+        '</div></div>' +
+        '<div class="endpoints-box">' +
+          '<div class="endpoints-label">Agent endpoints (auto-derived from provider)</div>' +
+          '<div class="endpoint-row"><span>Claude</span><code id="endpoint-claude">' + esc(up.baseUrl || '—') + '</code><span class="endpoint-format">Anthropic</span></div>' +
+          '<div class="endpoint-row"><span>Codex</span><code id="endpoint-codex">' + esc(codexBaseUrl || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
+          '<div class="endpoint-row"><span>Qwen</span><code id="endpoint-qwen">' + esc(qwenBaseUrl || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card" id="provider-overrides-card">' +
+        '<div class="card-head"><div class="card-title">Provider Overrides</div></div>' +
+        '<div class="summary">Only needed to switch an agent to a different provider. Endpoints are auto-derived from the upstream provider above.</div>' +
+        agentBackend('codex', 'Codex', up.codexConfig as Record<string, unknown>) +
+        agentBackend('qwen', 'Qwen', up.qwenConfig as Record<string, unknown>) +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="card-head"><div class="card-title">Agent Routing</div></div>' +
+        '<div class="summary">Route rewrites each agent\'s config to point at <code>localhost:' + esc(String(port)) + '</code>. Direct restores the default endpoint. Keys set above are used for direct mode; the upstream key is used in proxy mode.</div>' +
+        '<div class="actions" style="margin-bottom:10px;">' +
+          '<button class="primary small" data-act="routeAll">Route All</button>' +
+          '<button class="ghost small" data-act="directAll">Direct All</button>' +
+        '</div>' +
+        '<div class="route-row">' +
+          '<span class="agent-label">Claude Code</span>' + routeBadge('claude') +
+          '<button class="ghost small" data-act="routeAgent" data-id="claude">Route</button>' +
+          '<button class="ghost small" data-act="directAgent" data-id="claude">Direct</button>' +
+        '</div>' +
+        '<div class="route-row">' +
+          '<span class="agent-label">Codex</span>' + routeBadge('codex') +
+          '<button class="ghost small" data-act="routeAgent" data-id="codex">Route</button>' +
+          '<button class="ghost small" data-act="directAgent" data-id="codex">Direct</button>' +
+        '</div>' +
+        '<div class="route-row">' +
+          '<span class="agent-label">Qwen Code</span>' + routeBadge('qwen') +
+          '<button class="ghost small" data-act="routeAgent" data-id="qwen">Route</button>' +
+          '<button class="ghost small" data-act="directAgent" data-id="qwen">Direct</button>' +
+        '</div>' +
+      '</div>';
+  }
+
   private getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
     const staticAgents = this.renderStaticAgentCards();
+    const staticProxy = this.renderStaticProxySection();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -599,7 +750,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   ${staticAgents}
 
   <h3>Proxy</h3>
-  <div id="proxy"><div class="card"><div class="detail" style="font-style:italic;">Loading proxy status…</div></div></div>
+  <div id="proxy">${staticProxy}</div>
 
   <h3>Browser access</h3>
   <div class="card">
@@ -662,104 +813,35 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       { label: 'Anthropic (direct API)', claudeUrl: 'https://api.anthropic.com', openaiUrl: null, model: 'claude-sonnet-4-6' },
     ];
 
-    function renderProxy(p) {
-      var badge = p.running ? '<span class="badge ok">running</span>' : '<span class="badge warn">stopped</span>';
+    function updateProxy(p) {
+      // Only patches dynamic indicators — the form structure is static HTML
       var up = p.upstream || {};
       var rt = p.routing || {};
-
-      var presetOpts = PROVIDER_PRESETS.map(function (pr) {
-        var sel = (pr.claudeUrl === up.baseUrl || pr.openaiUrl === up.baseUrl) ? ' selected' : '';
-        return '<option value="' + esc(pr.label) + '" data-claude="' + esc(pr.claudeUrl || '') + '" data-openai="' + esc(pr.openaiUrl || '') + '" data-model="' + esc(pr.model) + '"' + sel + '>' + esc(pr.label) + '</option>';
-      }).join('');
-
-      function routeRow(id, label) {
+      // Update proxy badge
+      var badge = document.getElementById('proxy-badge');
+      if (badge) { badge.textContent = p.running ? 'running' : 'stopped'; badge.className = 'badge ' + (p.running ? 'ok' : 'warn'); }
+      // Update upstream key placeholder
+      var uk = document.getElementById('upstream-key');
+      if (uk) uk.placeholder = up.hasKey ? '•••••• saved — enter to replace' : 'Paste API key...';
+      // Update upstream model value if changed externally
+      var um = document.getElementById('upstream-model');
+      if (um && um.value !== up.defaultModel) um.value = up.defaultModel || '';
+      // Update endpoint URLs
+      var ec = document.getElementById('endpoint-claude');
+      if (ec) ec.textContent = up.baseUrl || '—';
+      var ex = document.getElementById('endpoint-codex');
+      if (ex) ex.textContent = (up.codexConfig && up.codexConfig.baseUrl) || '—';
+      var eq = document.getElementById('endpoint-qwen');
+      if (eq) eq.textContent = (up.qwenConfig && up.qwenConfig.baseUrl) || '—';
+      // Update route badges
+      ['claude','codex','qwen'].forEach(function(id) {
+        var rb = document.getElementById('route-badge-' + id);
+        if (!rb) return;
         var routed = (id === 'claude' && rt.claudeCode) || (id === 'codex' && rt.codex) || (id === 'qwen' && rt.globalRoute === 'proxy');
-        var rBadge = routed ? '<span class="route-badge routed">proxy</span>' : '<span class="route-badge direct">direct</span>';
-        return '<div class="route-row">' +
-          '<span class="agent-label">' + esc(label) + '</span>' + rBadge +
-          '<button class="ghost small" data-act="routeAgent" data-id="' + id + '">Route</button>' +
-          '<button class="ghost small" data-act="directAgent" data-id="' + id + '">Direct</button>' +
-        '</div>';
-      }
-
-      function agentBackend(id, label, cfg) {
-        cfg = cfg || {};
-        var checked = cfg.enabled ? ' checked' : '';
-        var sectionStyle = cfg.enabled ? '' : ' style="display:none;"';
-        return '' +
-          '<div class="toggle-row">' +
-            '<input type="checkbox" data-field="agentBackendEnabled" data-id="' + id + '"' + checked + ' />' +
-            '<label>Use different provider for ' + esc(label) + '</label>' +
-          '</div>' +
-          '<div class="sub-section" data-section="agentBackend" data-id="' + id + '"' + sectionStyle + '>' +
-            '<div class="field"><label>Base URL</label><div class="row">' +
-              '<input data-field="agentBackendUrl" data-id="' + id + '" value="' + esc(cfg.baseUrl || '') + '" />' +
-            '</div></div>' +
-            '<div class="field"><label>API Key</label><div class="row">' +
-              '<input type="password" data-field="agentBackendKey" data-id="' + id + '" placeholder="' + (cfg.apiKey ? '•••••• saved' : 'Paste API key...') + '" />' +
-            '</div></div>' +
-            '<div class="field"><label>Model</label><div class="row">' +
-              '<input data-field="agentBackendModel" data-id="' + id + '" value="' + esc(cfg.defaultModel || '') + '" />' +
-              '<button class="primary small" data-act="saveAgentBackend" data-id="' + id + '">Save</button>' +
-            '</div></div>' +
-          '</div>';
-      }
-
-      proxyEl.innerHTML = '' +
-        '<div class="card">' +
-          '<div class="card-head"><div class="card-title">Proxy Server</div>' + badge + '</div>' +
-          '<div class="field"><label>Script path</label><div class="row">' +
-            '<input data-field="proxyScript" value="' + esc(p.script) + '" placeholder="Path to proxy server script" />' +
-          '</div></div>' +
-          '<div class="field"><label>Port</label><div class="row">' +
-            '<input data-field="proxyPort" value="' + esc(p.port) + '" placeholder="8082" />' +
-            '<button class="primary" data-act="saveProxy">Save</button>' +
-          '</div></div>' +
-          '<div class="actions" style="margin-top:8px;">' +
-            '<button class="ghost" data-act="restartProxy">Restart proxy ↻</button>' +
-          '</div>' +
-        '</div>' +
-        '<div class="card">' +
-          '<div class="card-head"><div class="card-title">Upstream Provider</div></div>' +
-          '<div class="summary">Pick a provider, enter its API key. The proxy auto-routes each agent to the correct endpoint format.</div>' +
-          '<div class="field"><label>Provider</label><div class="row">' +
-            '<select data-field="upstreamPreset">' + presetOpts + '</select>' +
-          '</div></div>' +
-          '<div class="field"><label>API Key</label><div class="row">' +
-            '<input type="password" data-field="upstreamKey" placeholder="' + (up.hasKey ? '•••••• saved — enter to replace' : 'Paste API key...') + '" />' +
-            '<button class="primary" data-act="saveUpstream">Save</button>' +
-          '</div></div>' +
-          '<div class="field"><label>Default model</label><div class="row">' +
-            '<input data-field="upstreamModel" value="' + esc(up.defaultModel) + '" />' +
-            '<button class="primary" data-act="saveUpstream">Save</button>' +
-          '</div></div>' +
-          '<div class="endpoints-box">' +
-            '<div class="endpoints-label">Agent endpoints (auto-derived from provider)</div>' +
-            '<div class="endpoint-row"><span>Claude</span><code id="endpoint-claude">' + esc(up.baseUrl || '—') + '</code><span class="endpoint-format">Anthropic</span></div>' +
-            '<div class="endpoint-row"><span>Codex</span><code id="endpoint-codex">' + esc((up.codexConfig && up.codexConfig.baseUrl) || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
-            '<div class="endpoint-row"><span>Qwen</span><code id="endpoint-qwen">' + esc((up.qwenConfig && up.qwenConfig.baseUrl) || '—') + '</code><span class="endpoint-format">OpenAI</span></div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="card">' +
-          '<div class="card-head"><div class="card-title">Provider Overrides</div></div>' +
-          '<div class="summary">Only needed to switch an agent to a different provider. Endpoints are auto-derived from the upstream provider above.</div>' +
-          agentBackend('codex', 'Codex', up.codexConfig) +
-          agentBackend('qwen', 'Qwen', up.qwenConfig) +
-        '</div>' +
-        '<div class="card">' +
-          '<div class="card-head"><div class="card-title">Agent Routing</div></div>' +
-          '<div class="summary">Route rewrites each agent\'s config to point at <code>localhost:' + esc(p.port) + '</code>. Direct restores the default endpoint. Keys set above are used for direct mode; the upstream key is used in proxy mode.</div>' +
-          '<div class="actions" style="margin-bottom:10px;">' +
-            '<button class="primary small" data-act="routeAll">Route All</button>' +
-            '<button class="ghost small" data-act="directAll">Direct All</button>' +
-          '</div>' +
-          routeRow('claude', 'Claude Code') +
-          routeRow('codex', 'Codex') +
-          routeRow('qwen', 'Qwen Code') +
-        '</div>';
-    }
-
-    function inputFor(field, id) {
+        rb.textContent = routed ? 'proxy' : 'direct';
+        rb.className = 'route-badge ' + (routed ? 'routed' : 'direct');
+      });
+    }    function inputFor(field, id) {
       var sel = '[data-field="' + field + '"]' + (id ? '[data-id="' + id + '"]' : '');
       return document.querySelector(sel);
     }
@@ -862,7 +944,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
     window.addEventListener('message', function (e) {
       var m = e.data;
-      if (m.type === 'state') { updateAgents(m.agents); renderProxy(m.proxy); }
+      if (m.type === 'state') { updateAgents(m.agents); updateProxy(m.proxy); }
     });
 
     vscode.postMessage({ type: 'ready' });
@@ -878,3 +960,4 @@ function getNonce(): string {
   for (let i = 0; i < 32; i += 1) nonce += chars.charAt(Math.floor(Math.random() * chars.length));
   return nonce;
 }
+
