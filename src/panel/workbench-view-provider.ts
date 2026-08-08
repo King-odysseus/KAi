@@ -3,16 +3,20 @@ import { createEventId, nowIso, type WorkbenchEvent } from '../core/events';
 import type { AgentId, AutonomyMode, RouteMode, WorkbenchState } from '../core/types';
 import { estimateCost } from '../core/cost-estimator';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
+import type { Plan } from '../core/plan';
+import type { PlanEvent } from '../orchestrator/plan-runner';
 
 interface WebviewMessage {
   type: 'ready' | 'startTask' | 'setAgent' | 'setRoute' | 'setAutonomy' | 'stop'
-    | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab';
+    | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab'
+    | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
   autonomy?: AutonomyMode;
   targetAgent?: AgentId;
   eventId?: string;
+  value?: string;
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -26,7 +30,26 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly orchestrator: WorkbenchOrchestrator,
-  ) {}
+  ) {
+    // Forward plan events to all webviews
+    this.orchestrator.on('planEvent', (planEvent: PlanEvent) => {
+      for (const webview of this.webviews) {
+        void webview.postMessage({ type: 'planEvent', planEvent });
+      }
+      // Also emit a plan.update workbench event
+      const plan = this.orchestrator.getPlan();
+      if (plan) {
+        const event: WorkbenchEvent = {
+          id: createEventId('plan'),
+          type: 'plan.update',
+          taskId: plan.id,
+          timestamp: nowIso(),
+          plan,
+        };
+        this.postEvent(event);
+      }
+    });
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.attachWebview(webviewView.webview);
@@ -81,6 +104,53 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
               message: error instanceof Error ? error.message : String(error), recoverable: true,
             });
           }
+        }
+        break;
+      case 'executePlan':
+        if (message.value) {
+          try {
+            const plan: Plan = JSON.parse(message.value);
+            await this.orchestrator.executePlan(plan);
+            await this.postState();
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+      case 'pausePlan':
+        try {
+          await this.orchestrator.pausePlan();
+          await this.postState();
+        } catch (error) {
+          this.postEvent({
+            id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+            message: error instanceof Error ? error.message : String(error), recoverable: true,
+          });
+        }
+        break;
+      case 'resumePlan':
+        try {
+          await this.orchestrator.resumePlan();
+          await this.postState();
+        } catch (error) {
+          this.postEvent({
+            id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+            message: error instanceof Error ? error.message : String(error), recoverable: true,
+          });
+        }
+        break;
+      case 'abortPlan':
+        try {
+          await this.orchestrator.abortPlan();
+          await this.postState();
+        } catch (error) {
+          this.postEvent({
+            id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+            message: error instanceof Error ? error.message : String(error), recoverable: true,
+          });
         }
         break;
       case 'handoff':
@@ -150,7 +220,8 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
 
   postState(): Promise<void> {
     const state = this.orchestrator.getState();
-    return this.broadcast({ type: 'state', state });
+    const plan = this.orchestrator.getPlan();
+    return this.broadcast({ type: 'state', state, plan });
   }
 
   private async postCapabilities(): Promise<void> {
@@ -168,6 +239,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   private getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
     const state = JSON.stringify(this.orchestrator.getState()).replace(/</g, '\\u003c');
+    const plan = JSON.stringify(this.orchestrator.getPlan()).replace(/</g, '\\u003c');
     const agentIdsJson = JSON.stringify(AGENT_IDS);
 
     const styleUri = webview.asWebviewUri(
@@ -211,11 +283,25 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/>
         </svg>
         <div class="empty-title">Ready when you are</div>
-        <div class="empty-sub">Send a message to KAI, or pick a template below. Agents, keys and the proxy are in the <strong>Settings</strong> tab.</div>
+        <div class="empty-sub">Send a message to KAI, or pick a template below. Switch to <strong>Plan</strong> mode for multi-step agent workflows.</div>
       </div>
     </div>
 
     <div class="composer">
+      <div class="plan-editor" id="planEditor" style="display:none;">
+        <div class="plan-header">
+          <input type="text" id="planTitle" class="plan-title-input" placeholder="Plan title…" />
+          <span class="plan-step-count" id="planStepCount">0 steps</span>
+        </div>
+        <div class="plan-steps" id="planSteps"></div>
+        <div class="plan-actions">
+          <button id="addStep" class="plan-btn secondary">+ Add step</button>
+          <button id="runPlan" class="plan-btn primary">▶ Run plan</button>
+        </div>
+      </div>
+
+      <div class="plan-progress" id="planProgress" style="display:none;"></div>
+
       <div class="templates" id="templates">
         <button data-tpl="review">Review</button>
         <button data-tpl="implement">Implement</button>
@@ -242,6 +328,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       </div>
       <div class="input-row">
         <textarea id="prompt" rows="1" placeholder="Message KAI…  (Enter to send, Shift+Enter for newline)"></textarea>
+        <button id="planToggle" class="plan-toggle" title="Plan mode: define multi-step agent workflows">≡</button>
         <button id="send">Send</button>
       </div>
       <div class="cost-estimate" id="costEstimate"></div>
@@ -256,6 +343,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     // Seed initial state before loading the main script
     window.__KAI_INITIAL_STATE__ = ${state};
+    window.__KAI_INITIAL_PLAN__ = ${plan};
     window.__KAI_AGENT_IDS__ = ${agentIdsJson};
   </script>
   <script nonce="${nonce}" src="${scriptUri}"></script>

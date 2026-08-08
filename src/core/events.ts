@@ -1,4 +1,5 @@
 import type { AgentId, AutonomyMode, RouteMode } from './types';
+import type { Plan } from './plan';
 
 export type WorkbenchEvent =
   | TextDeltaEvent
@@ -13,7 +14,8 @@ export type WorkbenchEvent =
   | MemoryEvent
   | RouteChangedEvent
   | AgentLifecycleEvent
-  | RawFallbackEvent;
+  | RawFallbackEvent
+  | PlanUpdateEvent;
 
 export interface BaseEvent {
   id: string;
@@ -106,6 +108,11 @@ export interface RawFallbackEvent extends Omit<BaseEvent, 'type'> {
   payload: unknown;
 }
 
+export interface PlanUpdateEvent extends Omit<BaseEvent, 'type'> {
+  type: 'plan.update';
+  plan: Plan;
+}
+
 export function createEventId(prefix = 'evt'): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -113,4 +120,3 @@ export function createEventId(prefix = 'evt'): string {
 export function nowIso(): string {
   return new Date().toISOString();
 }
-

@@ -193,67 +193,120 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   // ---- Proxy config handlers ----
 
   private async handleSaveUpstream(message: SettingsMessage): Promise<void> {
-    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    const kaiProxyCfg = vscode.workspace.getConfiguration('kai.proxy');
+    const legacyCfg = vscode.workspace.getConfiguration('claudeProxy');
     const baseUrl = message.baseUrl;
     const claudeUrl = message.claudeUrl || baseUrl;
     const openaiUrl = message.openaiUrl || baseUrl;
 
+    // Write non-secret config to kai.proxy.* (authoritative namespace)
     if (baseUrl) {
-      await proxyCfg.update('targetBaseUrl', baseUrl, vscode.ConfigurationTarget.Global);
-    }
-    if (message.apiKey !== undefined && baseUrl) {
-      const apiKeys = proxyCfg.get<Record<string, string>>('apiKeys', {});
-      apiKeys[baseUrl] = message.apiKey;
-      // Also store key for derived endpoints so per-agent blocks can use it
-      if (claudeUrl && claudeUrl !== baseUrl) apiKeys[claudeUrl] = message.apiKey;
-      if (openaiUrl && openaiUrl !== baseUrl) apiKeys[openaiUrl] = message.apiKey;
-      await proxyCfg.update('apiKeys', apiKeys, vscode.ConfigurationTarget.Global);
+      await kaiProxyCfg.update('targetBaseUrl', baseUrl, vscode.ConfigurationTarget.Global);
+      // Also update legacy for backward compatibility
+      await legacyCfg.update('targetBaseUrl', baseUrl, vscode.ConfigurationTarget.Global);
     }
     if (message.defaultModel !== undefined) {
-      await proxyCfg.update('defaultModel', message.defaultModel, vscode.ConfigurationTarget.Global);
+      await kaiProxyCfg.update('defaultModel', message.defaultModel, vscode.ConfigurationTarget.Global);
+      await legacyCfg.update('defaultModel', message.defaultModel, vscode.ConfigurationTarget.Global);
     }
 
-    // Auto-populate per-agent configs with derived endpoints + shared key
+    // Store API key in SecretStorage (never plaintext)
+    if (message.apiKey !== undefined && message.apiKey.trim()) {
+      await this.secretStore.setUpstreamKey(message.apiKey);
+      // Also update legacy apiKeys for backward compatibility
+      const apiKeys = legacyCfg.get<Record<string, string>>('apiKeys', {});
+      apiKeys[baseUrl!] = message.apiKey;
+      if (claudeUrl && claudeUrl !== baseUrl) apiKeys[claudeUrl] = message.apiKey;
+      if (openaiUrl && openaiUrl !== baseUrl) apiKeys[openaiUrl] = message.apiKey;
+      await legacyCfg.update('apiKeys', apiKeys, vscode.ConfigurationTarget.Global);
+      // Clear legacy plaintext single key if it exists
+      await legacyCfg.update('apiKey', '', vscode.ConfigurationTarget.Global);
+      await kaiProxyCfg.update('apiKey', '', vscode.ConfigurationTarget.Global);
+    }
+
+    // Auto-populate per-agent configs with derived endpoints
     if (openaiUrl) {
-      const codexCfg = { ...(proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'gpt-5.5' };
-      await proxyCfg.update('codexConfig', codexCfg, vscode.ConfigurationTarget.Global);
-      const qwenCfg = { ...(proxyCfg.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>), apiKey: message.apiKey || '', defaultModel: message.defaultModel || 'qwen-coder-plus' };
-      await proxyCfg.update('qwenConfig', qwenCfg, vscode.ConfigurationTarget.Global);
+      // Write per-agent non-secret config to kai.proxy.*
+      const codexCfg = {
+        enabled: kaiProxyCfg.get<Record<string, unknown>>('codexConfig', {})?.enabled ?? false,
+        baseUrl: openaiUrl,
+        defaultModel: message.defaultModel || 'gpt-5.5',
+        configModel: 'gpt-5.5',
+      };
+      await kaiProxyCfg.update('codexConfig', codexCfg, vscode.ConfigurationTarget.Global);
+      // Legacy compat
+      const legacyCodexCfg = { ...(legacyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, defaultModel: message.defaultModel || 'gpt-5.5' };
+      await legacyCfg.update('codexConfig', legacyCodexCfg, vscode.ConfigurationTarget.Global);
+
+      const qwenCfg = {
+        enabled: kaiProxyCfg.get<Record<string, unknown>>('qwenConfig', {})?.enabled ?? false,
+        baseUrl: openaiUrl,
+        defaultModel: message.defaultModel || 'qwen-coder-plus',
+      };
+      await kaiProxyCfg.update('qwenConfig', qwenCfg, vscode.ConfigurationTarget.Global);
+      // Legacy compat
+      const legacyQwenCfg = { ...(legacyCfg.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>), baseUrl: openaiUrl, defaultModel: message.defaultModel || 'qwen-coder-plus' };
+      await legacyCfg.update('qwenConfig', legacyQwenCfg, vscode.ConfigurationTarget.Global);
     }
 
-    void vscode.window.showInformationMessage('Upstream provider saved. Endpoints auto-configured for all agents. Restart the proxy to apply.');
+    void vscode.window.showInformationMessage('Upstream provider saved. API key stored securely in OS keychain. Restart the proxy to apply.');
     await this.postState();
   }
 
   private async handleSaveAgentBackend(message: SettingsMessage): Promise<void> {
     if (!message.agent) return;
-    const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
+    const kaiProxyCfg = vscode.workspace.getConfiguration('kai.proxy');
+    const legacyCfg = vscode.workspace.getConfiguration('claudeProxy');
     const key = message.agent === 'codex' ? 'codexConfig' : message.agent === 'qwen' ? 'qwenConfig' : null;
     if (!key) return;
 
-    const current = proxyCfg.get<Record<string, unknown>>(key, {}) as Record<string, unknown>;
+    const current = kaiProxyCfg.get<Record<string, unknown>>(key, {}) as Record<string, unknown>;
     const next: Record<string, unknown> = { ...current };
     if (message.enabled !== undefined) next.enabled = message.enabled;
     if (message.baseUrl !== undefined) next.baseUrl = message.baseUrl;
-    if (message.apiKey !== undefined) next.apiKey = message.apiKey;
     if (message.defaultModel !== undefined) next.defaultModel = message.defaultModel;
-    // Keep configModel for Codex if it exists
     if (key === 'codexConfig' && !next.configModel) next.configModel = 'gpt-5.5';
+    // apiKey is NOT stored in settings — write to SecretStorage only
+    delete next.apiKey;
 
-    await proxyCfg.update(key, next, vscode.ConfigurationTarget.Global);
-    void vscode.window.showInformationMessage(`Saved ${message.agent} backend config. Restart the proxy to apply.`);
+    // Write non-secret config to kai.proxy.* (authoritative namespace)
+    await kaiProxyCfg.update(key, next, vscode.ConfigurationTarget.Global);
+
+    // Write API key to SecretStorage
+    if (message.apiKey !== undefined && message.apiKey.trim()) {
+      if (message.agent === 'codex') {
+        await this.secretStore.setCodexBackendKey(message.apiKey);
+      } else if (message.agent === 'qwen') {
+        await this.secretStore.setQwenBackendKey(message.apiKey);
+      }
+    }
+
+    // Legacy backward compatibility (without apiKey)
+    const legacyCurrent = legacyCfg.get<Record<string, unknown>>(key, {}) as Record<string, unknown>;
+    const legacyNext: Record<string, unknown> = { ...legacyCurrent };
+    if (message.enabled !== undefined) legacyNext.enabled = message.enabled;
+    if (message.baseUrl !== undefined) legacyNext.baseUrl = message.baseUrl;
+    if (message.defaultModel !== undefined) legacyNext.defaultModel = message.defaultModel;
+    if (key === 'codexConfig' && !legacyNext.configModel) legacyNext.configModel = 'gpt-5.5';
+    delete legacyNext.apiKey;
+    await legacyCfg.update(key, legacyNext, vscode.ConfigurationTarget.Global);
+
+    void vscode.window.showInformationMessage(`Saved ${message.agent} backend config. API key stored in OS keychain. Restart the proxy to apply.`);
     await this.postState();
   }
 
   private async handleRouteAgent(agent: AgentId): Promise<void> {
+    const kp = vscode.workspace.getConfiguration('kai.proxy');
     const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
     const cfg = vscode.workspace.getConfiguration('kai');
     const port = cfg.get<number>('proxyPort', 8082);
 
     if (agent === 'claude') {
+      await kp.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
       await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
       await this.claudeConfigWriter.ensureProxyConfig({ port });
     } else if (agent === 'codex') {
+      await kp.update('routeCodex', true, vscode.ConfigurationTarget.Global);
       await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
       const codexCfg = proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
       const model = (codexCfg.configModel as string) || 'gpt-5.5';
@@ -272,12 +325,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleDirectAgent(agent: AgentId): Promise<void> {
+    const kp = vscode.workspace.getConfiguration('kai.proxy');
     const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
 
     if (agent === 'claude') {
+      await kp.update('routeClaudeCode', false, vscode.ConfigurationTarget.Global);
       await proxyCfg.update('routeClaudeCode', false, vscode.ConfigurationTarget.Global);
       await this.claudeConfigWriter.restoreConfig();
     } else if (agent === 'codex') {
+      await kp.update('routeCodex', false, vscode.ConfigurationTarget.Global);
       await proxyCfg.update('routeCodex', false, vscode.ConfigurationTarget.Global);
       const cfg = vscode.workspace.getConfiguration('kai');
       const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
@@ -289,8 +345,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     }
 
     // If no agents are routed, set global route to direct
-    const routeClaude = proxyCfg.get<boolean>('routeClaudeCode', false);
-    const routeCodex = proxyCfg.get<boolean>('routeCodex', false);
+    const routeClaude = kp.get<boolean>('routeClaudeCode', false) || proxyCfg.get<boolean>('routeClaudeCode', false);
+    const routeCodex = kp.get<boolean>('routeCodex', false) || proxyCfg.get<boolean>('routeCodex', false);
     if (!routeClaude && !routeCodex && this.orchestrator.getState().route !== 'direct') {
       this.orchestrator.setRoute('direct');
     }
@@ -299,10 +355,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleRouteAll(): Promise<void> {
+    const kp = vscode.workspace.getConfiguration('kai.proxy');
     const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
     const cfg = vscode.workspace.getConfiguration('kai');
     const port = cfg.get<number>('proxyPort', 8082);
 
+    await kp.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
+    await kp.update('routeCodex', true, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
     await this.claudeConfigWriter.ensureProxyConfig({ port });
@@ -321,8 +380,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleDirectAll(): Promise<void> {
+    const kp = vscode.workspace.getConfiguration('kai.proxy');
     const proxyCfg = vscode.workspace.getConfiguration('claudeProxy');
     const cfg = vscode.workspace.getConfiguration('kai');
+    await kp.update('routeClaudeCode', false, vscode.ConfigurationTarget.Global);
+    await kp.update('routeCodex', false, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeClaudeCode', false, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeCodex', false, vscode.ConfigurationTarget.Global);
     await this.claudeConfigWriter.restoreConfig();
@@ -398,6 +460,14 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       };
     });
 
+    let proxyKeyStatus = { upstream: false, codexBackend: false, qwenBackend: false };
+    try {
+      proxyKeyStatus = await this.secretStore.proxyKeyStatus();
+    } catch { /* treat as no keys stored */ }
+    const upstream = this.getUpstreamState();
+    // Patch hasKey from SecretStorage (more authoritative than legacy apiKeys)
+    upstream.hasKey = upstream.hasKey || proxyKeyStatus.upstream;
+
     await this.view.webview.postMessage({
       type: 'state',
       agents,
@@ -405,24 +475,45 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         port: cfg.get<number>('proxyPort', 8082),
         script: cfg.get<string>('proxyScript', ''),
         running: this.proxyManager?.getStatus().running ?? false,
-        upstream: this.getUpstreamState(),
+        upstream,
         routing: this.getRoutingState(),
+        proxyKeyStatus,
       },
     });
   }
 
   private getUpstreamState() {
     try {
-      const pc = vscode.workspace.getConfiguration('claudeProxy');
-      const codexCfg = pc.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
-      const qwenCfg = pc.get<Record<string, unknown>>('qwenConfig', {}) as Record<string, unknown>;
-      const baseUrl = pc.get<string>('targetBaseUrl', 'https://api.deepseek.com/anthropic');
-      const apiKeys = pc.get<Record<string, string>>('apiKeys', {}) ?? {};
+      // Read from kai.proxy.* (primary) with claudeProxy.* legacy fallback
+      const kp = vscode.workspace.getConfiguration('kai.proxy');
+      const lp = vscode.workspace.getConfiguration('claudeProxy');
+
+      const kaiBase = kp.get<string>('targetBaseUrl', '');
+      const legBase = lp.get<string>('targetBaseUrl', '');
+      const baseUrl = kaiBase || legBase || 'https://api.deepseek.com/anthropic';
+
+      const defaultModel = kp.get<string>('defaultModel', '') || lp.get<string>('defaultModel', '') || 'deepseek-v4-pro';
+      const modelMap = nonEmptyRecord(kp.get<Record<string, string>>('modelMap', {}))
+        ?? nonEmptyRecord(lp.get<Record<string, string>>('modelMap', {}))
+        ?? {};
+
+      const kCodex = (kp.get<Record<string, unknown>>('codexConfig', {}) ?? {}) as Record<string, unknown>;
+      const lCodex = (lp.get<Record<string, unknown>>('codexConfig', {}) ?? {}) as Record<string, unknown>;
+      const codexCfg = { ...lCodex, ...kCodex };
+      delete codexCfg.apiKey; // never expose apiKey
+
+      const kQwen = (kp.get<Record<string, unknown>>('qwenConfig', {}) ?? {}) as Record<string, unknown>;
+      const lQwen = (lp.get<Record<string, unknown>>('qwenConfig', {}) ?? {}) as Record<string, unknown>;
+      const qwenCfg = { ...lQwen, ...kQwen };
+      delete qwenCfg.apiKey;
+
+      // hasKey is initially false — the async postState will patch it
+      const apiKeys = lp.get<Record<string, string>>('apiKeys', {}) ?? {};
       return {
         baseUrl,
         hasKey: Boolean(apiKeys[baseUrl]),
-        defaultModel: pc.get<string>('defaultModel', 'deepseek-v4-pro'),
-        modelMap: pc.get<Record<string, string>>('modelMap', {}),
+        defaultModel,
+        modelMap,
         codexConfig: codexCfg,
         qwenConfig: qwenCfg,
       };
@@ -433,10 +524,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   private getRoutingState() {
     try {
-      const pc = vscode.workspace.getConfiguration('claudeProxy');
+      const kp = vscode.workspace.getConfiguration('kai.proxy');
+      const lp = vscode.workspace.getConfiguration('claudeProxy');
       return {
-        claudeCode: pc.get<boolean>('routeClaudeCode', false),
-        codex: pc.get<boolean>('routeCodex', false),
+        claudeCode: kp.get<boolean>('routeClaudeCode', false) || lp.get<boolean>('routeClaudeCode', false),
+        codex: kp.get<boolean>('routeCodex', false) || lp.get<boolean>('routeCodex', false),
         globalRoute: this.orchestrator.getState().route,
       };
     } catch {
@@ -959,5 +1051,10 @@ function getNonce(): string {
   let nonce = '';
   for (let i = 0; i < 32; i += 1) nonce += chars.charAt(Math.floor(Math.random() * chars.length));
   return nonce;
+}
+
+function nonEmptyRecord<T extends Record<string, unknown>>(r: T | undefined): T | undefined {
+  if (!r || typeof r !== 'object') return undefined;
+  return Object.keys(r).length > 0 ? r : undefined;
 }
 

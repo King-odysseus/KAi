@@ -1,4 +1,34 @@
 # KAI Agent Workbench — Updates
+
+## 2026-07-06
+
+### Self-contained proxy and embedded Cognitive1 (v0.3.0)
+
+KAI no longer depends on external servers or scripts. The ClaudeCode-Proxy and
+Cognitive1 features are now built directly into the extension.
+
+- **Built-in proxy server** (`src/proxy/proxy-server.ts`) — Full HTTP proxy
+  handling `/v1/responses` (Codex Responses API), `/v1/chat/completions`,
+  `/v1/messages` (Anthropic Messages API). Translates Responses → Chat
+  Completions for non-OpenAI targets (DeepSeek, Groq), with streaming SSE in
+  both directions, model mapping, and DeepSeek reasoning round-tripping. Auto-starts
+  on activation, reads config from `kai.proxy.*` settings with `claudeProxy.*`
+  fallback.
+- **API translator** (`src/proxy/translator.ts`, `src/proxy/types.ts`) —
+  OpenAI ↔ Anthropic format translator ported from ClaudeCode-Proxy. Handles
+  requests, responses, streaming, tool calls, and token estimation.
+- **Embedded Cognitive1 default** — `createCognitive1Client` now defaults to
+  `EmbeddedCognitive1` using `~/.kai/brain` (file-based JSONL + TF-IDF search).
+  External HTTP client is opt-in via `kai.cognitive1Embedded: false`. Added
+  `kai.cognitive1Embedded` setting (defaults `true`).
+- **KAI-owned proxy settings** — Added `kai.proxy.*` settings to package.json
+  (targetBaseUrl, apiKey, defaultModel, modelMap, codexConfig). Proxy reads from
+  `kai.proxy.*` first, falls back to `claudeProxy.*`.
+- **Codex TOML config** — `CodexConfigWriter.withProxyProfile` now saves original
+  `model_provider`/`model` into an inline `[proxy.backup]` table. `restoreConfig`
+  restores from that backup, uses `profileName` variable (not hardcoded), and
+  detects managed configs by both KAI markers and bare table names (compatible
+  with ClaudeCode-Proxy-written configs). Added `escapeRegex` helper.
 ## 2026-07-05 (later)
 
 ### Settings — Upstream Provider and Agent Routing always visible (v0.2.9)

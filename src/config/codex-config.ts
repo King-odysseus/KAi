@@ -36,50 +36,81 @@ export class CodexConfigWriter {
   }
 
   /**
-   * Build the full config.toml with:
-   *   1. Top-level keys so the VS Code Codex extension picks the proxy up
-   *      (model_provider, model, preferred_auth_method).
-   *   2. The KAI-managed [model_providers.<profile>] and [profiles.<profile>] tables,
-   *      used by codex --profile <profile> (CLI mode).
+   * Build the full config.toml.
+   *
+   * Layout:
+   *   1. Top-level keys (model_provider, model, preferred_auth_method) so the
+   *      VS Code Codex extension picks the proxy up without --profile.
+   *   2. The original user config minus any previously-written KAI blocks.
+   *   3. A [proxy.backup] table with the original model_provider / model so
+   *      they can be restored on Stop.
+   *   4. The KAI-managed [model_providers.<profile>] and [profiles.<profile>]
+   *      tables, used by codex --profile <profile> (CLI mode).
    *
    * In TOML, top-level keys that appear AFTER any [table] header belong to that
-   * table — so we MUST write them at the very top. Tables are self-contained and
-   * can safely go after.
+   * table — so we MUST write them at the very top.
    */
   withProxyProfile(existing: string, config: CodexProxyConfig): string {
+    // Save original model_provider / model so we can restore on Stop.
+    const origProvider = existing.match(/^model_provider\s*=\s*"([^"]*)"/m)?.[1];
+    const origModel = existing.match(/^model\s*=\s*"([^"]*)"/m)?.[1];
+
+    let backupBlock = '';
+    if (origProvider && origProvider !== config.profile) {
+      backupBlock += '[proxy.backup]\n';
+      backupBlock += 'model_provider = "' + origProvider + '"\n';
+      if (origModel && origModel !== config.model) {
+        backupBlock += 'model = "' + origModel + '"\n';
+      }
+      backupBlock += '\n';
+    }
+
     const stripped = stripProfileTables(existing, config.profile).trim();
     const topLevel = codexTopLevelKeys(config.profile, config.model);
     const tables = codexProviderTables(config.profile, config.port, config.model);
+
     return topLevel + '\n\n'
       + (stripped ? stripped + '\n\n' : '')
+      + backupBlock
       + tables + '\n';
   }
 
   /**
-   * Remove the KAI-managed blocks and restore any previously backed-up
-   * original top-level model_provider / model values.
+   * Remove the KAI-managed blocks and restore original model_provider / model
+   * values from the [proxy.backup] table.
    */
   async restoreConfig(configPath?: string, profile?: string): Promise<{ configPath: string; changed: boolean }> {
     const targetPath = configPath ?? defaultCodexConfigPath();
     const profileName = profile ?? 'codeproxy';
     const existing = await this.readOptional(targetPath);
-    if (!existing.includes('# >>> KAI codex-' + profileName)) {
+
+    // Detect managed configs by marker or bare table names (compatible with
+    // configs written by claude-openai-proxy which uses no markers).
+    const isManaged = existing.includes('# >>> KAI codex-' + profileName)
+      || new RegExp('\\[(?:model_providers|profiles)\\.' + escapeRegex(profileName) + '\\]').test(existing);
+    if (!isManaged) {
       return { configPath: targetPath, changed: false };
     }
 
     let stripped = stripProfileTables(existing, profileName);
-    // Remove top-level keys we wrote
-    stripped = stripped
-      .replace(/^model_provider\s*=\s*"codeproxy"\s*\nmodel\s*=\s*"[^"]*"\s*\n(?:preferred_auth_method\s*=\s*"apikey"\s*\n)?/gm, '')
-      .replace(/^preferred_auth_method\s*=\s*"apikey"\s*\n/gm, '');
+
+    // Remove top-level keys we wrote (use profileName variable, not hardcoded string)
+    const topLevelRegex = new RegExp(
+      '^model_provider\\s*=\\s*"' + escapeRegex(profileName) + '"\\s*\\n'
+      + 'model\\s*=\\s*"[^"]*"\\s*\\n'
+      + '(?:preferred_auth_method\\s*=\\s*"apikey"\\s*\\n)?',
+      'gm'
+    );
+    stripped = stripped.replace(topLevelRegex, '');
+    stripped = stripped.replace(/^preferred_auth_method\s*=\s*"apikey"\s*\n/gm, '');
 
     // Restore original provider/model from backup block if present
-    const backupProvider = existing.match(new RegExp(
-      '\\[proxy\\.backup\\][^\\[]*model_provider\\s*=\\s*"([^"]*)"', 's'
-    ))?.[1];
-    const backupModel = existing.match(new RegExp(
-      '\\[proxy\\.backup\\][^\\[]*model\\s*=\\s*"([^"]*)"', 's'
-    ))?.[1];
+    const backupProvider = existing.match(
+      /\[proxy\.backup\][^\[]*model_provider\s*=\s*"([^"]*)"/s
+    )?.[1];
+    const backupModel = existing.match(
+      /\[proxy\.backup\][^\[]*model\s*=\s*"([^"]*)"/s
+    )?.[1];
     stripped = stripBackupBlock(stripped);
 
     if (backupProvider) {
@@ -131,14 +162,13 @@ export function defaultCodexConfigPath(): string {
 // ---- TOML helpers ----
 
 /**
- * Top-level keys placed at the very top of config.toml — picked up by the
- * VS Code Codex extension (no --profile needed).
- *   model_provider = "codeproxy"
- *   model = "gpt-5.5"
- *   preferred_auth_method = "apikey"
+ * Top-level keys placed at the very top of config.toml.
+ * These are picked up by the VS Code Codex extension without --profile.
  *
  * The placeholder model (e.g. "gpt-5.5") is a name Codex accepts client-side.
- * The proxy maps it to the real target model (e.g. deepseek-v4-pro).
+ * The proxy maps it to the real target model (e.g. deepseek-v4-pro) via
+ * codexConfig.defaultModel.
+ *
  * preferred_auth_method = "apikey" makes Codex use the provider key without
  * signing out of ChatGPT — removed on restore so the login path resumes.
  */
@@ -169,7 +199,11 @@ function codexProviderTables(profile: string, port: number, model: string): stri
   ].join('\n');
 }
 
-/** Remove KAI-managed blocks (top-level + tables) and any backup block. */
+/**
+ * Remove KAI-managed blocks (top-level markers + tables with markers) and any
+ * bare tables written without markers (compatible with claude-openai-proxy configs).
+ * Also strips [proxy.backup] table.
+ */
 function stripProfileTables(toml: string, profile: string): string {
   const managedBlocks = [
     { start: '# >>> KAI top-level', end: '# <<< KAI top-level' },
@@ -192,7 +226,7 @@ function stripProfileTables(toml: string, profile: string): string {
     result = kept.join('\n');
   }
 
-  // Also strip bare table sections that may have been written without markers
+  // Also strip bare table sections written without markers
   const lines = result.split(/\r?\n/);
   const kept: string[] = [];
   let skippingTable = false;
@@ -215,6 +249,11 @@ function stripProfileTables(toml: string, profile: string): string {
 /** Remove any [proxy.backup] table block. */
 function stripBackupBlock(toml: string): string {
   return toml.replace(/^[ \t]*\[proxy\.backup\][^\[]*/gm, '');
+}
+
+/** Escape special regex characters in a string. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

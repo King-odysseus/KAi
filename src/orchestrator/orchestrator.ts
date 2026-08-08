@@ -7,6 +7,8 @@ import { canRunWithoutApproval, createPermissionProfile } from '../core/permissi
 import type { DiffApplier } from './diff-applier';
 import { NoopDiffApplier } from './diff-applier';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import type { Plan } from '../core/plan';
+import { PlanRunner } from './plan-runner';
 
 export interface DiffRecord {
   event: DiffProposalEvent;
@@ -19,6 +21,8 @@ export class WorkbenchOrchestrator extends EventEmitter {
   private readonly pendingDiffs = new Map<string, DiffRecord>();
   private lastPrompt: string = '';
   private handoffInProgress = false;
+  private planRunner: PlanRunner | null = null;
+  private planRunning = false;
 
   constructor(
     initialState: WorkbenchState,
@@ -72,6 +76,79 @@ export class WorkbenchOrchestrator extends EventEmitter {
     return [...this.pendingDiffs.values()].filter((d) => d.status === 'pending');
   }
 
+  // ─── Plan execution ───────────────────────────────────────────
+
+  getPlan(): Plan | null {
+    return this.planRunner?.getPlan() ?? null;
+  }
+
+  isPlanRunning(): boolean {
+    return this.planRunning;
+  }
+
+  async executePlan(plan: Plan): Promise<void> {
+    if (this.state.isRunning || this.planRunning) {
+      throw new Error('KAI already has an active run. Stop it before starting a plan.');
+    }
+
+    this.planRunning = true;
+    this.planRunner = new PlanRunner(
+      plan,
+      this.adapters,
+      this.cognitive1,
+      this.projectPath,
+      (event) => this.emitEvent(event),
+    );
+
+    this.planRunner.on('planEvent', (planEvent) => {
+      this.emit('planEvent', planEvent);
+
+      // Update orchestrator state to reflect current step
+      if (planEvent.type === 'plan.step.starting' && planEvent.step) {
+        this.state = {
+          ...this.state,
+          activeAgent: planEvent.step.agent,
+          route: plan.route,
+          autonomy: plan.autonomy,
+          activeTaskId: planEvent.step.id,
+          isRunning: true,
+        };
+        this.emitState();
+      } else if (planEvent.type === 'plan.completed' || planEvent.type === 'plan.aborted') {
+        this.state = { ...this.state, isRunning: false };
+        this.planRunning = false;
+        this.emitState();
+      }
+    });
+
+    try {
+      await this.planRunner.execute();
+    } finally {
+      this.planRunning = false;
+      this.state = { ...this.state, isRunning: false };
+      this.emitState();
+    }
+  }
+
+  async pausePlan(): Promise<void> {
+    this.planRunner?.pause();
+  }
+
+  async resumePlan(): Promise<void> {
+    this.planRunner?.resume();
+  }
+
+  async abortPlan(): Promise<void> {
+    if (this.planRunner) {
+      await this.planRunner.abort();
+      this.planRunning = false;
+      this.state = { ...this.state, isRunning: false };
+      this.emitState();
+    }
+  }
+
+  // ─── Agent control ─────────────────────────────────────────────
+
   setAgent(agent: AgentId): void {
     this.state = { ...this.state, activeAgent: agent };
     this.emitState();
@@ -100,6 +177,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   async startTask(request: TaskRequest): Promise<string> {
     if (this.state.isRunning) throw new Error('KAI already has an active agent run.');
+    if (this.planRunning) throw new Error('A plan is currently executing. Abort the plan first.');
     const agent = request.agent ?? this.state.activeAgent;
     const route = request.route ?? this.state.route;
     const autonomy = request.autonomy ?? this.state.autonomy;
@@ -131,6 +209,12 @@ export class WorkbenchOrchestrator extends EventEmitter {
   }
 
   async stopActiveTask(): Promise<void> {
+    // Abort any running plan first
+    if (this.planRunning && this.planRunner) {
+      await this.planRunner.abort();
+      this.planRunning = false;
+    }
+
     if (!this.state.activeTaskId) return;
     const adapter = this.adapters.get(this.state.activeAgent);
     await adapter?.stop(this.state.activeTaskId);

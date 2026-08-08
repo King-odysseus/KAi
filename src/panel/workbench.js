@@ -9,6 +9,9 @@
   var totalInput = 0;
   var totalOutput = 0;
   var currentAssistant = null; // active streaming assistant bubble
+  var planMode = false;
+  var planSteps = [];
+  var currentPlan = window.__KAI_INITIAL_PLAN__ || null;
 
   var TPLS = {
     review: 'Review this code for bugs, style issues, and improvements:',
@@ -28,24 +31,31 @@
     costPill: document.getElementById('costPill'),
     chat: document.getElementById('chat'),
     costEstimate: document.getElementById('costEstimate'),
+    planToggle: document.getElementById('planToggle'),
+    planEditor: document.getElementById('planEditor'),
+    planTitle: document.getElementById('planTitle'),
+    planSteps: document.getElementById('planSteps'),
+    addStep: document.getElementById('addStep'),
+    runPlan: document.getElementById('runPlan'),
+    planProgress: document.getElementById('planProgress'),
+    planStepCount: document.getElementById('planStepCount'),
   };
 
   var emptyState = document.getElementById('emptyState');
 
   // ---- Thinking / status indicator ----
-  // Whimsical rotating gerunds shown while the agent works behind the scenes.
   var STATUS_WORDS = [
     'Thinking', 'Channelling', 'Pondering', 'Reasoning', 'Cogitating',
     'Percolating', 'Scheming', 'Conjuring', 'Synthesizing', 'Noodling',
     'Ruminating', 'Untangling', 'Deliberating', 'Formulating', 'Brewing',
     'Contemplating', 'Wrangling', 'Computing', 'Divining', 'Mulling',
   ];
-  var thinkingEl = null;      // the DOM node while running
+  var thinkingEl = null;
   var thinkingWordTimer = null;
   var thinkingClockTimer = null;
   var thinkingStart = 0;
   var thinkingWordIdx = 0;
-  var thinkingDetail = '';    // latest real activity (tool name, etc.)
+  var thinkingDetail = '';
 
   function fmtElapsed(ms) {
     var s = Math.floor(ms / 1000);
@@ -55,7 +65,6 @@
   }
 
   function pickStatusWord() {
-    // Advance deterministically but feel random-ish
     thinkingWordIdx = (thinkingWordIdx + 1 + Math.floor(Math.random() * 3)) % STATUS_WORDS.length;
     return STATUS_WORDS[thinkingWordIdx];
   }
@@ -137,8 +146,169 @@
     els.prompt.style.height = Math.min(els.prompt.scrollHeight, 180) + 'px';
   }
 
+  // ---- Plan mode ----
+  function togglePlanMode() {
+    planMode = !planMode;
+    els.planEditor.style.display = planMode ? 'block' : 'none';
+    els.planToggle.classList.toggle('active', planMode);
+    els.planToggle.title = planMode ? 'Exit plan mode' : 'Plan mode: define multi-step agent workflows';
+  }
+
+  function addPlanStep() {
+    planSteps.push({ agent: els.agent.value, prompt: '' });
+    renderPlanSteps();
+  }
+
+  function removePlanStep(idx) {
+    planSteps.splice(idx, 1);
+    renderPlanSteps();
+  }
+
+  function renderPlanSteps() {
+    els.planStepCount.textContent = planSteps.length + ' step' + (planSteps.length !== 1 ? 's' : '');
+    var html = '';
+    for (var i = 0; i < planSteps.length; i++) {
+      var s = planSteps[i];
+      var agentOpts = '';
+      for (var j = 0; j < AGENT_IDS.length; j++) {
+        var sel = AGENT_IDS[j] === s.agent ? ' selected' : '';
+        agentOpts += '<option value="' + esc(AGENT_IDS[j]) + '"' + sel + '>' + esc(AGENT_IDS[j]) + '</option>';
+      }
+      html += '<div class="plan-step-row">' +
+        '<span class="plan-step-idx">' + (i + 1) + '</span>' +
+        '<select class="plan-step-agent" data-idx="' + i + '">' + agentOpts + '</select>' +
+        '<textarea class="plan-step-prompt" data-idx="' + i + '" rows="2" placeholder="Step prompt…">' + esc(s.prompt) + '</textarea>' +
+        '<button class="plan-step-remove" data-idx="' + i + '" title="Remove step">&times;</button>' +
+        '</div>';
+    }
+    els.planSteps.innerHTML = html;
+
+    // Wire up change handlers
+    var agentSelects = els.planSteps.querySelectorAll('.plan-step-agent');
+    for (var k = 0; k < agentSelects.length; k++) {
+      (function (el) {
+        el.addEventListener('change', function () {
+          var idx = parseInt(el.getAttribute('data-idx'), 10);
+          if (planSteps[idx]) planSteps[idx].agent = el.value;
+        });
+      })(agentSelects[k]);
+    }
+
+    var promptTextareas = els.planSteps.querySelectorAll('.plan-step-prompt');
+    for (var p = 0; p < promptTextareas.length; p++) {
+      (function (el) {
+        el.addEventListener('input', function () {
+          var idx = parseInt(el.getAttribute('data-idx'), 10);
+          if (planSteps[idx]) planSteps[idx].prompt = el.value;
+        });
+      })(promptTextareas[p]);
+    }
+
+    var removeBtns = els.planSteps.querySelectorAll('.plan-step-remove');
+    for (var r = 0; r < removeBtns.length; r++) {
+      (function (el) {
+        el.addEventListener('click', function () {
+          var idx = parseInt(el.getAttribute('data-idx'), 10);
+          removePlanStep(idx);
+        });
+      })(removeBtns[r]);
+    }
+  }
+
+  function executePlan() {
+    if (planSteps.length === 0) return;
+    var plan = {
+      id: 'plan_' + Date.now(),
+      title: els.planTitle.value.trim() || 'Untitled Plan',
+      steps: planSteps.map(function (s, i) {
+        return {
+          id: 'step_' + i,
+          agent: s.agent,
+          prompt: s.prompt.trim(),
+          status: 'pending',
+        };
+      }),
+      route: els.route.value,
+      autonomy: els.autonomy.value,
+      status: 'ready',
+      currentStepIndex: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    removeEmpty();
+    appendUserMessage('▶ Plan: ' + plan.title + ' (' + plan.steps.length + ' steps)');
+    vscode.postMessage({ type: 'executePlan', value: JSON.stringify(plan) });
+    togglePlanMode();
+    planSteps = [];
+    els.planTitle.value = '';
+    renderPlanSteps();
+  }
+
+  function renderPlanProgress(plan) {
+    if (!plan) { els.planProgress.style.display = 'none'; return; }
+    els.planProgress.style.display = 'block';
+    var html = '<div class="pp-header">' +
+      '<span class="pp-title">' + esc(plan.title) + '</span>' +
+      '<span class="pp-status status-' + plan.status + '">' + plan.status + '</span>' +
+      '</div>';
+
+    html += '<div class="pp-controls">';
+    if (plan.status === 'running') {
+      html += '<button id="pausePlanBtn" class="plan-ctrl-btn">⏸ Pause</button>';
+      html += '<button id="abortPlanBtn" class="plan-ctrl-btn abort">⏹ Abort</button>';
+    } else if (plan.status === 'paused') {
+      html += '<button id="resumePlanBtn" class="plan-ctrl-btn">▶ Resume</button>';
+      html += '<button id="abortPlanBtn" class="plan-ctrl-btn abort">⏹ Abort</button>';
+    }
+    html += '</div>';
+
+    html += '<div class="pp-steps">';
+    for (var i = 0; i < plan.steps.length; i++) {
+      var st = plan.steps[i];
+      var icon = st.status === 'completed' ? '✓' : st.status === 'running' ? '◉' : st.status === 'failed' ? '✗' : st.status === 'skipped' ? '−' : '○';
+      html += '<div class="pp-step pp-' + st.status + '">' +
+        '<span class="pp-step-icon">' + icon + '</span>' +
+        '<span class="pp-step-agent">' + esc(st.agent) + '</span>' +
+        '<span class="pp-step-label">' + esc(st.label || st.prompt.slice(0, 60)) + '</span>' +
+        (st.error ? '<span class="pp-step-error">' + esc(st.error) + '</span>' : '') +
+        '</div>';
+    }
+    html += '</div>';
+
+    els.planProgress.innerHTML = html;
+
+    // Wire control buttons
+    var pauseBtn = document.getElementById('pausePlanBtn');
+    var resumeBtn = document.getElementById('resumePlanBtn');
+    var abortBtn = document.getElementById('abortPlanBtn');
+    if (pauseBtn) pauseBtn.addEventListener('click', function () { vscode.postMessage({ type: 'pausePlan' }); });
+    if (resumeBtn) resumeBtn.addEventListener('click', function () { vscode.postMessage({ type: 'resumePlan' }); });
+    if (abortBtn) abortBtn.addEventListener('click', function () { vscode.postMessage({ type: 'abortPlan' }); });
+  }
+
+  function handlePlanEvent(planEvent) {
+    switch (planEvent.type) {
+      case 'plan.started':
+        els.planProgress.style.display = 'block';
+        els.planProgress.innerHTML = '<div class="pp-header">Plan started…</div>';
+        break;
+      case 'plan.step.starting':
+      case 'plan.step.completed':
+      case 'plan.step.failed':
+        // Plan object comes through state updates; render from there
+        break;
+      case 'plan.completed':
+        renderPlanProgress(null);
+        break;
+      case 'plan.aborted':
+        renderPlanProgress(null);
+        break;
+      case 'plan.paused':
+        break;
+    }
+  }
+
   // ---- Chat messages ----
-  // Keep the thinking indicator as the last child so it always sits at the bottom.
   function pinThinking() {
     if (thinkingEl && els.chat.lastChild !== thinkingEl) {
       els.chat.appendChild(thinkingEl);
@@ -176,7 +346,6 @@
       currentAssistant.appendChild(document.createTextNode(''));
       els.chat.appendChild(currentAssistant);
     }
-    // Append to the trailing text node
     var last = currentAssistant.lastChild;
     if (last && last.nodeType === 3) last.nodeValue += text;
     else currentAssistant.appendChild(document.createTextNode(text));
@@ -184,7 +353,7 @@
     scrollBottom();
   }
 
-  // ---- Activity cards (tools, diffs, approvals, errors…) ----
+  // ---- Activity cards ----
   function cardClass(e) {
     switch (e.type) {
       case 'tool.call': return 'tool';
@@ -210,7 +379,6 @@
     return L[e.type] || e.type;
   }
 
-  // Low-signal event types collapse into the muted, hidden-by-default log.
   var TELEMETRY = {
     'agent.lifecycle': 1, 'autonomy.changed': 1, 'route.changed': 1,
     'cost.update': 1, 'memory.event': 1, 'raw.fallback': 1,
@@ -346,7 +514,6 @@
     return card;
   }
 
-  // Turn an event into a short activity phrase for the status indicator.
   function activityDetail(event) {
     switch (event.type) {
       case 'tool.call':
@@ -371,7 +538,6 @@
     }
     if (event.type === 'cost.update') accumulateCost(event);
 
-    // Feed real activity into the live status indicator (if running).
     var detail = activityDetail(event);
     if (detail) setThinkingDetail(detail);
 
@@ -397,6 +563,7 @@
     els.agent.disabled = running;
     els.route.disabled = running;
     els.autonomy.disabled = running;
+    els.planToggle.disabled = running;
 
     if (running) {
       els.send.textContent = 'Stop';
@@ -455,7 +622,6 @@
       return;
     }
 
-    // Real task → show user bubble, then run
     appendUserMessage(prompt);
     vscode.postMessage({
       type: 'startTask',
@@ -497,6 +663,14 @@
     else dispatchPrompt(els.prompt.value);
   });
 
+  els.planToggle.addEventListener('click', function () {
+    togglePlanMode();
+    if (planMode && planSteps.length === 0) addPlanStep();
+  });
+
+  els.addStep.addEventListener('click', addPlanStep);
+  els.runPlan.addEventListener('click', executePlan);
+
   els.prompt.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -518,14 +692,12 @@
     }, 400);
   });
 
-  // New chat — clears this window's transcript (each window is independent)
   document.getElementById('newChat').addEventListener('click', function () {
     if (state && state.isRunning) vscode.postMessage({ type: 'stop' });
     clearChat();
     els.prompt.focus();
   });
 
-  // Open as full editor tab (maximizable / split-screen)
   var openTabBtn = document.getElementById('openTab');
   if (openTabBtn) {
     openTabBtn.addEventListener('click', function () {
@@ -533,7 +705,6 @@
     });
   }
 
-  // Details toggle — reveal/hide the muted telemetry log
   var showDetails = false;
   els.chat.classList.add('hide-telemetry');
   var detailsToggle = document.getElementById('detailsToggle');
@@ -545,7 +716,6 @@
     if (showDetails) scrollBottom(true);
   });
 
-  // Delegated approve / reject buttons on diff cards
   els.chat.addEventListener('click', function (e) {
     var ap = e.target.closest('[data-approve]');
     var rj = e.target.closest('[data-reject]');
@@ -556,9 +726,17 @@
   // ---- Messages from extension ----
   window.addEventListener('message', function (e) {
     var m = e.data;
-    if (m.type === 'state') renderState(m.state);
-    else if (m.type === 'event') appendEvent(m.event);
-    else if (m.type === 'costEstimate') {
+    if (m.type === 'state') {
+      renderState(m.state);
+      if (m.plan != null) {
+        currentPlan = m.plan;
+        renderPlanProgress(m.plan);
+      }
+    } else if (m.type === 'event') {
+      appendEvent(m.event);
+    } else if (m.type === 'planEvent') {
+      handlePlanEvent(m.planEvent);
+    } else if (m.type === 'costEstimate') {
       var est = m.estimate;
       els.costEstimate.textContent = est.modelName + ': ~' +
         est.estimatedInputTokens.toLocaleString() + ' in / ~' +
@@ -569,6 +747,7 @@
 
   // ---- Init ----
   if (state) renderState(state);
+  if (currentPlan) renderPlanProgress(currentPlan);
   autoGrow();
   vscode.postMessage({ type: 'ready' });
 })();

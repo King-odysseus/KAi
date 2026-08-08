@@ -23,11 +23,13 @@ import { VSCodeDiffApplier } from './orchestrator/vscode-diff-applier';
 import { EngineRoomViewProvider } from './panel/engine-room-view-provider';
 import { SettingsViewProvider } from './panel/settings-view-provider';
 import { SecretStore } from './config/secret-store';
+import { resolveProxyConfig, toProxyServerConfig, migrateLegacyProxySecrets } from './config/proxy-config';
 import { MemoryTreeProvider } from './panel/memory-tree-provider';
 import { SessionsTreeProvider } from './panel/sessions-tree-provider';
 import { WorkbenchViewProvider } from './panel/workbench-view-provider';
 import { RawEventInspector, registerRawInspectorCommand } from './panel/raw-event-inspector';
 import { ProxyManager } from './proxy/proxy-manager';
+import { KaiProxyServer, type ProxyServerConfig } from './proxy/proxy-server';
 
 interface SessionRecoveryState {
   prompt: string;
@@ -39,6 +41,7 @@ interface SessionRecoveryState {
 }
 
 let proxyManager: ProxyManager | undefined;
+let kaiProxy: KaiProxyServer | undefined;
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
 const RECOVERY_KEY = 'kai.lastSession';
 
@@ -79,17 +82,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const proxyPort = config.get<number>('proxyPort', 8082);
   const proxyScript = config.get<string>('proxyScript', '');
 
-  if (proxyScript) {
-    try {
-      proxyManager = new ProxyManager(proxyPort);
-      void proxyManager.start(proxyScript);
-      context.subscriptions.push({ dispose: () => { void proxyManager?.stop(); } });
-      logger.info('proxy_error', `Proxy manager started on port ${proxyPort}.`);
-    } catch (err) {
-      logger.error('proxy_error', 'Failed to start proxy manager.', undefined, err);
+  // Migrate legacy plaintext proxy keys to SecretStorage (one-time, idempotent)
+  const legacyCfg = vscode.workspace.getConfiguration('claudeProxy');
+  void migrateLegacyProxySecrets(legacyCfg, config, secretStore).then((result) => {
+    if (result.migrated.length > 0) {
+      logger.info('internal', `Migrated legacy proxy keys: ${result.migrated.join(', ')}.`);
     }
+  });
+
+  // Start the built-in KAI proxy server (always)
+  try {
+    const resolved = await resolveProxyConfig(config, legacyCfg, secretStore);
+    const proxyCfg: ProxyServerConfig = toProxyServerConfig(resolved);
+    kaiProxy = new KaiProxyServer(proxyCfg);
+    await kaiProxy.start();
+    context.subscriptions.push({ dispose: () => { void kaiProxy?.stop(); } });
+    logger.info('proxy_error', `KAI proxy server started on port ${proxyPort}.`);
+  } catch (err) {
+    logger.error('proxy_error', 'Failed to start KAI proxy server.', undefined, err);
   }
 
+  // Optional external proxy script (for advanced/custom setups)
+  if (proxyScript) {
+    try {
+      proxyManager = new ProxyManager(proxyPort + 1);
+      void proxyManager.start(proxyScript);
+      context.subscriptions.push({ dispose: () => { void proxyManager?.stop(); } });
+      logger.info("proxy_error", `External proxy manager started on port ${proxyPort + 1}.`);
+    } catch (err) {
+      logger.error("proxy_error", "Failed to start external proxy manager.", undefined, err);
+    }
+  }
   const orchestrator = new WorkbenchOrchestrator(
     initialState,
     cognitive1,
@@ -203,7 +226,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const updateStatus = (s: WorkbenchState) => {
     const run = s.isRunning ? 'running' : 'idle';
-    const px = proxyManager?.getStatus().running ? 'proxy:on' : 'proxy:off';
+    const px = kaiProxy?.isRunning() ? 'proxy:on' : 'proxy:off';
     statusBar.text = `KAI: ${s.activeAgent} | ${s.route} | ${s.autonomy} | ${px} | ${run}`;
     statusBar.tooltip = 'Open KAI Agent Workbench';
     statusBar.show();
@@ -424,21 +447,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand('kai.getProxyStatus', () => {
-      const s = proxyManager?.getStatus();
+      const running = kaiProxy?.isRunning() ?? false;
       void vscode.window.showInformationMessage(
-        s?.running ? `Proxy running on :${s.port} (pid ${s.pid}).` : 'Proxy not running.',
+        running ? `KAI proxy running on :${proxyPort}.` : 'KAI proxy not running.',
       );
     }),
 
     vscode.commands.registerCommand('kai.restartProxy', async () => {
-      if (!proxyManager) {
+      if (!kaiProxy) {
         void vscode.window.showWarningMessage('Proxy not configured.');
         return;
       }
       try {
-        await proxyManager.stop();
-        await proxyManager.start(proxyScript);
-        void vscode.window.showInformationMessage('Proxy restarted.');
+        await kaiProxy.stop();
+        await kaiProxy.start();
+        void vscode.window.showInformationMessage('KAI proxy restarted.');
       } catch (e) {
         getLogger().error('proxy_error', 'Proxy restart failed', undefined, e);
       }
@@ -455,17 +478,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 function createCognitive1Client(config: vscode.WorkspaceConfiguration): Cognitive1Client {
-  const brainPath = config.get<string>('brainPath', '');
-  if (brainPath) {
+  // Default to embedded Cognitive1 (file-based, no external server needed).
+  // Set kai.brainPath to "" and kai.cognitive1Enabled to true with a valid
+  // kai.cognitive1Url to use an external Cognitive1 server instead.
+  const brainPath = config.get<string>('brainPath') || defaultBrainPath();
+  if (brainPath && config.get<boolean>('cognitive1Embedded', true)) {
     getLogger().info('internal', `Using embedded Cognitive1 at ${brainPath}.`);
     return new EmbeddedCognitive1(brainPath);
   }
-  if (config.get<boolean>('cognitive1Enabled', true)) {
+  if (config.get<boolean>('cognitive1Enabled', false)) {
     const url = config.get<string>('cognitive1Url', 'http://127.0.0.1:9876');
     getLogger().info('internal', `Using Cognitive1 HTTP client at ${url}.`);
     return new Cognitive1HttpClient(url);
   }
   return new DisabledCognitive1Client();
+}
+
+function defaultBrainPath(): string {
+  return path.join(require('os').homedir(), '.kai', 'brain');
 }
 
 async function checkSessionRecovery(
@@ -495,6 +525,7 @@ async function checkSessionRecovery(
 
 export function deactivate(): void {
   getLogger().info('internal', 'KAI Agent Workbench deactivating...');
+  void kaiProxy?.stop();
   void proxyManager?.stop();
 }
 

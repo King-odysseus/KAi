@@ -219,25 +219,83 @@
           "default": "gemini",
           "description": "Command used to launch Gemini CLI via ACP."
         },
+        "kai.cognitive1Embedded": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use embedded file-based Cognitive1 (no external server needed). Disable to use an external Cognitive1 HTTP daemon."
+        },
+        "kai.proxy.targetBaseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "Base URL of the upstream API for the KAI built-in proxy."
+        },
+        "kai.proxy.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DEPRECATED: Upstream API keys are now stored in OS keychain (SecretStorage). Use the Settings panel to save keys securely. This field is ignored when a key exists in SecretStorage."
+        },
+        "kai.proxy.defaultModel": {
+          "type": "string",
+          "default": "deepseek-v4-pro",
+          "description": "Default upstream model for the KAI proxy when no mapping is found."
+        },
+        "kai.proxy.modelMap": {
+          "type": "object",
+          "default": {
+            "claude-opus-4-7": "deepseek-v4-pro",
+            "claude-sonnet-4-6": "deepseek-v4-flash",
+            "claude-haiku-4-5-20251001": "deepseek-v4-flash"
+          },
+          "description": "Map model names to upstream model names for the KAI proxy."
+        },
+        "kai.proxy.routeClaudeCode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Route Claude Code through the KAI proxy."
+        },
+        "kai.proxy.routeCodex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Route Codex through the KAI proxy."
+        },
+        "kai.proxy.codexConfig": {
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "baseUrl": "https://api.openai.com/v1",
+            "defaultModel": "gpt-5.5",
+            "configModel": "gpt-5.5"
+          },
+          "description": "Per-agent backend for Codex via the KAI proxy. API keys are stored in OS keychain (use the Settings panel)."
+        },
+        "kai.proxy.qwenConfig": {
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "defaultModel": "qwen-coder-plus"
+          },
+          "description": "Per-agent backend for Qwen via the KAI proxy. API keys are stored in OS keychain (use the Settings panel)."
+        },
         "claudeProxy.targetBaseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com",
-          "description": "Base URL of the upstream API for proxy mode. DeepSeek: https://api.deepseek.com. DeepSeek pass-through: https://api.deepseek.com/anthropic. Groq: https://api.groq.com/openai/v1."
+          "description": "DEPRECATED: Use kai.proxy.targetBaseUrl instead. Base URL of the upstream API for proxy mode."
         },
         "claudeProxy.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Upstream API key for the proxy (legacy single key). Prefer claudeProxy.apiKeys for per-provider keys."
+          "description": "DEPRECATED: API keys are now stored in OS keychain via the Settings panel. This field is migrated automatically on next activation."
         },
         "claudeProxy.apiKeys": {
           "type": "object",
           "default": {},
-          "description": "Per-provider API keys keyed by base URL. Example: { \"https://api.deepseek.com\": \"sk-...\" }"
+          "description": "DEPRECATED: API keys are now stored in OS keychain via the Settings panel. These are migrated automatically on next activation."
         },
         "claudeProxy.defaultModel": {
           "type": "string",
           "default": "deepseek-v4-pro",
-          "description": "Default upstream model when no mapping is found."
+          "description": "DEPRECATED: Use kai.proxy.defaultModel instead. Default upstream model when no mapping is found."
         },
         "claudeProxy.modelMap": {
           "type": "object",
@@ -246,17 +304,17 @@
             "claude-sonnet-4-6": "deepseek-v4-flash",
             "claude-haiku-4-5-20251001": "deepseek-v4-flash"
           },
-          "description": "Map Claude model names to upstream model names."
+          "description": "DEPRECATED: Use kai.proxy.modelMap instead."
         },
         "claudeProxy.routeClaudeCode": {
           "type": "boolean",
           "default": false,
-          "description": "Route Claude Code through the proxy."
+          "description": "DEPRECATED: Use kai.proxy.routeClaudeCode instead."
         },
         "claudeProxy.routeCodex": {
           "type": "boolean",
           "default": false,
-          "description": "Route Codex through the proxy."
+          "description": "DEPRECATED: Use kai.proxy.routeCodex instead."
         },
         "claudeProxy.codexConfig": {
           "type": "object",
@@ -267,7 +325,7 @@
             "defaultModel": "gpt-5.5",
             "configModel": "gpt-5.5"
           },
-          "description": "Per-agent backend for Codex. When enabled, Codex uses this backend instead of the main upstream provider."
+          "description": "DEPRECATED: Use kai.proxy.codexConfig instead. API keys are now stored in OS keychain."
         },
         "claudeProxy.qwenConfig": {
           "type": "object",
@@ -277,7 +335,7 @@
             "apiKey": "",
             "defaultModel": "qwen-coder-plus"
           },
-          "description": "Per-agent backend for Qwen. When enabled, Qwen uses this backend instead of the main upstream provider."
+          "description": "DEPRECATED: Use kai.proxy.qwenConfig instead. API keys are now stored in OS keychain."
         }
       }
     }
