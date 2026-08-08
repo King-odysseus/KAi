@@ -191,7 +191,22 @@
   }
 
   function activityDetail(event) { switch(event.type){case'tool.call':return(event.name||'tool')+(event.status&&event.status!=='started'?' . '+event.status:'');case'diff.proposal':return'Editing '+(event.filePath||'file');case'file.edit.applied':return'Applied edit to '+(event.filePath||'file');case'memory.event':return event.action?'Memory: '+event.action:'';case'agent.lifecycle':return event.detail||'';default:return'';} }
-  function appendEvent(event) { if(event.type==='text.delta'){appendAssistantText(event.text,event.agent);return;} if(event.type==='cost.update') accumulateCost(event); var detail=activityDetail(event); if(detail) setThinkingDetail(detail); removeEmpty(); finalizeAssistant(); if(isTelemetry(event.type)){els.chat.appendChild(renderTelemetry(event));}else{els.chat.appendChild(renderCard(event));} pinThinking(); scrollBottom(); }
+  function appendEvent(event) {
+    if(event.compareId){
+      if(!activeCompare) activeCompare={left:event.side==='left'?event.agent:'',right:event.side==='right'?event.agent:''};
+      if(!document.getElementById('compare-panes')){
+        var panes=document.createElement('div');panes.id='compare-panes';
+        panes.innerHTML='<div class="compare-pane left" id="cp-left"><div class="compare-label">'+esc(activeCompare.left||'Left')+'</div></div><div class="compare-pane right" id="cp-right"><div class="compare-label">'+esc(activeCompare.right||'Right')+'</div></div>';
+        els.chat.appendChild(panes); removeEmpty();
+      }
+      var tp=document.getElementById(event.side==='left'?'cp-left':'cp-right'); if(!tp) return;
+      if(event.type==='text.delta'){ var t=document.createElement('span');t.className='cmp-text';t.textContent=event.text; tp.appendChild(t); }
+      else if(event.type==='raw.fallback'&&event.sourceType==='compare.complete'){ renderCompareSummary(event.payload); }
+      else if(event.type==='cost.update') accumulateCost(event);
+      scrollBottom(true); return;
+    }
+    if(event.type==='text.delta'){appendAssistantText(event.text,event.agent);return;} if(event.type==='cost.update') accumulateCost(event); var detail=activityDetail(event); if(detail) setThinkingDetail(detail); removeEmpty(); finalizeAssistant(); if(isTelemetry(event.type)){els.chat.appendChild(renderTelemetry(event));}else{els.chat.appendChild(renderCard(event));} pinThinking(); scrollBottom();
+  }
 
   function renderState(next) {
     state=next;

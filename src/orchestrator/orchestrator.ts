@@ -147,6 +147,56 @@ export class WorkbenchOrchestrator extends EventEmitter {
     }
   }
 
+  // ─── Agent comparison ─────────────────────────────────────────
+
+  async compareTask(prompt: string, agentA: AgentId, agentB: AgentId): Promise<string> {
+    if (this.state.isRunning || this.planRunning) {
+      throw new Error("KAI already has an active run. Stop it before comparing.");
+    }
+    if (!this.adapters.has(agentA)) throw new Error(`No adapter for ${agentA}`);
+    if (!this.adapters.has(agentB)) throw new Error(`No adapter for ${agentB}`);
+
+    const compareId = "compare_" + Date.now();
+    const route = this.state.route;
+    const autonomy = this.state.autonomy;
+
+    this.state = { ...this.state, activeAgent: (agentA + " vs " + agentB) as AgentId, activeTaskId: compareId, isRunning: true };
+    this.emitState();
+
+    void this.cognitive1.sessionStart({ task: prompt, agent: agentA + "+" + agentB, projectPath: this.projectPath }).catch(() => {});
+    void this.cognitive1.recall({ query: prompt }).catch(() => {});
+
+    this.emitEvent({ id: createEventId("cmp"), type: "agent.lifecycle", taskId: compareId, timestamp: nowIso(), agent: agentA + " vs " + agentB as AgentId, status: "starting", detail: "Comparing " + agentA + " vs " + agentB });
+
+    const runSide = async (agent: AgentId, side: "left" | "right") => {
+      const taskId = compareId + "_" + side;
+      const adapter = this.adapters.get(agent)!;
+      try {
+        for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd: this.projectPath })) {
+          (event as any).compareId = compareId;
+          (event as any).side = side;
+          if (event.type === "diff.proposal") void this.autoApproveDiff(event);
+          this.emitEvent(event);
+        }
+        return { side, taskId, ok: true };
+      } catch (err) {
+        return { side, taskId, ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    };
+
+    const [left, right] = await Promise.all([runSide(agentA, "left"), runSide(agentB, "right")]);
+
+    this.emitEvent({
+      id: createEventId("cmp"), type: "raw.fallback", taskId: compareId, timestamp: nowIso(),
+      agent: (agentA + " vs " + agentB) as AgentId, sourceType: "compare.complete",
+      payload: { compareId, left: { agent: agentA, taskId: left.taskId, ok: left.ok, error: (left as any).error }, right: { agent: agentB, taskId: right.taskId, ok: right.ok, error: (right as any).error } },
+    });
+
+    this.state = { ...this.state, isRunning: false };
+    this.emitState();
+    return compareId;
+  }
+
   async pausePlan(): Promise<void> {
     this.planRunner?.pause();
   }

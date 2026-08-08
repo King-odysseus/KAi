@@ -12,7 +12,7 @@ import * as path from 'path';
 interface WebviewMessage {
   type: 'ready' | 'startTask' | 'setAgent' | 'setRoute' | 'setAutonomy' | 'stop'
     | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab'
-    | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan'
+    | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan' | 'compareTask'
     | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
     | 'retryStep' | 'skipStep';
   prompt?: string;
@@ -238,6 +238,19 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           }
         }
         break;
+      case 'compareTask':
+        if (message.prompt?.trim() && message.agent && message.targetAgent) {
+          try {
+            await this.orchestrator.compareTask(message.prompt.trim(), message.agent, message.targetAgent);
+            await this.postState();
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
       case 'handoff':
         if (message.targetAgent) {
           try {
@@ -395,7 +408,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         <button data-tpl="test">Test</button>
       </div>
       <div class="controls">
-        <select id="agent" title="Agent">
+        <select id="agentB" class="compare-agent" title="Compare agent" style="display:none;"><option value="claude">Claude</option><option value="codex">Codex</option><option value="qwen">Qwen</option><option value="gemini">Gemini</option></select><select id="agent" title="Agent">
           <option value="claude">Claude</option>
           <option value="codex">Codex</option>
           <option value="qwen">Qwen</option>
@@ -413,7 +426,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       </div>
       <div class="input-row">
         <textarea id="prompt" rows="1" placeholder="Message KAI…  (Enter to send, Shift+Enter for newline)"></textarea>
-        <button id="planToggle" class="plan-toggle" title="Plan mode: define multi-step agent workflows">≡</button>
+        <button id="compareBtn" class="plan-toggle compare-btn" title="Compare: run two agents on the same prompt side-by-side">⇶</button><button id="planToggle" class="plan-toggle" title="Plan mode: define multi-step agent workflows">≡</button>
         <button id="send">Send</button>
       </div>
       <div class="cost-estimate" id="costEstimate"></div>
