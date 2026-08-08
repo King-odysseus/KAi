@@ -1,0 +1,23 @@
+{
+  "route": "proxy",
+  "description": "Fast single-step dispatch to any agent using optimal CLI flags",
+  "autonomy": "auto",
+  "steps": [
+    {
+      "prompt": "Implement the requested change. Be thorough and read existing code first.",
+      "label": "Claude (fast)",
+      "agent": "claude"
+    },
+    {
+      "prompt": "Implement the requested change.",
+      "label": "Codex",
+      "agent": "codex"
+    },
+    {
+      "prompt": "Implement the requested change.",
+      "label": "Qwen",
+      "agent": "qwen"
+    }
+  ],
+  "name": "Quick agent dispatch"
+}
