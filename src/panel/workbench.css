@@ -663,3 +663,12 @@ body {
   white-space: nowrap;
   max-width: 140px;
 }
+
+/* Template picker */
+.plan-template-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.plan-template-select { flex: 1; padding: 4px 6px; border: 1px solid var(--vscode-input-border,#444); border-radius: 4px; background: var(--vscode-dropdown-background,#333); color: var(--vscode-input-foreground,#ccc); font-size: 12px; }
+.template-save-btn { padding: 5px 10px; border: 1px solid var(--vscode-input-border,#444); border-radius: 4px; background: var(--vscode-input-background,#333); color: var(--vscode-input-foreground,#ccc); font-size: 11px; cursor: pointer; font-family: var(--vscode-editor-font-family,monospace); }
+.template-save-btn:hover { background: var(--vscode-toolbar-hoverBackground,#444); }
+.pp-retry-btn, .pp-skip-btn { padding: 2px 8px; border: 1px solid var(--vscode-input-border,#444); border-radius: 3px; background: var(--vscode-input-background,#333); color: var(--vscode-input-foreground,#ccc); font-size: 10px; cursor: pointer; margin-left: 4px; }
+.pp-retry-btn:hover { background: rgba(76,175,80,0.15); color: #81c784; }
+.pp-skip-btn:hover { background: rgba(255,185,0,0.15); color: #ffd54f; }

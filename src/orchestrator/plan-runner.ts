@@ -6,7 +6,7 @@ import type { Plan, PlanStep } from '../core/plan';
 import type { AgentId } from '../core/types';
 
 export interface PlanEvent {
-  type: "plan.started" | "plan.step.starting" | "plan.step.completed" | "plan.step.failed" | "plan.completed" | "plan.aborted" | "plan.paused";
+  type: "plan.started" | "plan.step.starting" | "plan.step.completed" | "plan.step.failed" | "plan.step.paused_for_retry" | "plan.completed" | "plan.aborted" | "plan.paused";
   planId: string;
   step?: PlanStep;
   error?: string;
@@ -30,60 +30,49 @@ export class PlanRunner extends EventEmitter {
     super();
   }
 
-  /** Return the live plan object (mutated in-place during execution). */
-  getPlan(): Plan {
-    return this.plan;
-  }
+  getPlan(): Plan { return this.plan; }
 
-  /** Execute the plan sequentially. Call this once; it resolves when done or aborted. */
   async execute(): Promise<void> {
     this.plan.status = 'running';
     this.emitPlanEvent('plan.started');
 
     for (let i = this.plan.currentStepIndex; i < this.plan.steps.length; i++) {
       if (this.isAborted) break;
-
-      // Wait if paused
       if (this.isPaused) {
         await this.waitForResume();
         if (this.isAborted) break;
       }
 
       const step = this.plan.steps[i];
-
-      // Check dependencies — skip steps whose deps failed
       if (step.dependsOn && step.dependsOn.length > 0) {
         const depsFailed = step.dependsOn.some(depId => {
           const dep = this.plan.steps.find(s => s.id === depId);
           return dep && dep.status === 'failed';
         });
-        if (depsFailed) {
-          step.status = 'skipped';
-          continue;
-        }
+        if (depsFailed) { step.status = 'skipped'; continue; }
       }
 
       this.plan.currentStepIndex = i;
       await this.executeStep(step);
 
-      // After step completion, log progress via C1
       if (step.status === 'completed') {
         try {
           await this.cognitive1.sessionStart({
             task: `Plan "${this.plan.title}" step ${i + 1}/${this.plan.steps.length} completed`,
-            agent: step.agent,
-            projectPath: this.projectPath,
+            agent: step.agent, projectPath: this.projectPath,
           });
         } catch { /* best-effort */ }
       }
 
-      // On step failure: pause so user can decide
       if (step.status === 'failed') {
         this.plan.status = 'paused';
         this.isPaused = true;
         this.emitPlanEvent('plan.paused');
+        this.emitPlanEvent('plan.step.paused_for_retry', step);
         await this.waitForResume();
         if (this.isAborted) break;
+        // After resume, re-run this step (i-- because the loop increments)
+        i--;
       }
     }
 
@@ -97,25 +86,40 @@ export class PlanRunner extends EventEmitter {
     }
   }
 
-  /** Pause after the current step finishes (or while waiting on resume). */
-  pause(): void {
-    this.isPaused = true;
-  }
+  pause(): void { this.isPaused = true; }
 
-  /** Resume a paused plan. */
   resume(): void {
     this.isPaused = false;
     this.resumeResolver?.();
     this.resumeResolver = null;
   }
 
-  /** Abort the plan — stops the current adapter run and marks the plan aborted. */
+  /** Retry a failed step with optional new prompt, then resume. */
+  retryStep(stepId: string, newPrompt?: string): void {
+    const step = this.plan.steps.find(s => s.id === stepId);
+    if (!step || step.status !== 'failed') return;
+    step.status = 'pending';
+    step.error = undefined;
+    if (newPrompt) step.prompt = newPrompt;
+    // Rewind currentStepIndex to this step
+    const idx = this.plan.steps.indexOf(step);
+    if (idx >= 0) this.plan.currentStepIndex = idx;
+    this.resume();
+  }
+
+  /** Skip a failed step and continue with the next. */
+  skipStep(stepId: string): void {
+    const step = this.plan.steps.find(s => s.id === stepId);
+    if (!step || step.status !== 'failed') return;
+    step.status = 'skipped';
+    this.resume();
+  }
+
   async abort(): Promise<void> {
     this.isAborted = true;
     if (this.currentAdapter && this.currentTaskId) {
       await this.currentAdapter.stop(this.currentTaskId);
     }
-    // Unblock any waitForResume() so execute() can reach the isAborted check
     this.resumeResolver?.();
     this.resumeResolver = null;
   }
@@ -135,28 +139,17 @@ export class PlanRunner extends EventEmitter {
     step.startedAt = new Date().toISOString();
     this.emitPlanEvent('plan.step.starting', step);
 
-    // C1 recall for context
-    try {
-      await this.cognitive1.recall({ query: step.prompt, project: this.projectPath });
-    } catch { /* best-effort */ }
+    try { await this.cognitive1.recall({ query: step.prompt, project: this.projectPath }); } catch { /* */ }
 
     const taskId = `planstep_${step.id}_${Date.now()}`;
     this.currentAdapter = adapter;
     this.currentTaskId = taskId;
 
     try {
-      const events = adapter.run({
-        taskId,
-        prompt: step.prompt,
-        route: this.plan.route,
-        autonomy: this.plan.autonomy,
-        cwd: this.projectPath,
-      });
-
+      const events = adapter.run({ taskId, prompt: step.prompt, route: this.plan.route, autonomy: this.plan.autonomy, cwd: this.projectPath });
       for await (const event of events) {
         if (this.isAborted) break;
         this.onEvent?.(event);
-
         if (event.type === 'agent.lifecycle') {
           if (event.status === 'completed') {
             step.status = 'completed';
@@ -172,15 +165,12 @@ export class PlanRunner extends EventEmitter {
           }
         }
       }
-
-      // Fell through — adapters should emit lifecycle completed, but if not:
       step.status = 'completed';
       step.completedAt = new Date().toISOString();
       this.emitPlanEvent('plan.step.completed', step);
     } catch (err) {
       if (this.isAborted) {
-        step.status = 'failed';
-        step.error = 'Plan aborted';
+        step.status = 'failed'; step.error = 'Plan aborted';
       } else {
         step.status = 'failed';
         step.error = err instanceof Error ? err.message : String(err);
@@ -193,9 +183,7 @@ export class PlanRunner extends EventEmitter {
   }
 
   private async waitForResume(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.resumeResolver = resolve;
-    });
+    return new Promise<void>((resolve) => { this.resumeResolver = resolve; });
   }
 
   private allStepsDone(): boolean {
@@ -203,13 +191,7 @@ export class PlanRunner extends EventEmitter {
   }
 
   private emitPlanEvent(type: PlanEvent['type'], step?: PlanStep, error?: string): void {
-    const event: PlanEvent = {
-      type,
-      planId: this.plan.id,
-      step,
-      error,
-      timestamp: nowIso(),
-    };
+    const event: PlanEvent = { type, planId: this.plan.id, step, error, timestamp: nowIso() };
     this.emit('planEvent', event);
   }
 }

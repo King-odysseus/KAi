@@ -5,11 +5,16 @@ import { estimateCost } from '../core/cost-estimator';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 import type { Plan } from '../core/plan';
 import type { PlanEvent } from '../orchestrator/plan-runner';
+import type { PlanTemplate } from '../core/plan-templates';
+import { listPlanTemplates, savePlanTemplate, deletePlanTemplate, templateToPlan } from '../core/plan-templates';
+import * as path from 'path';
 
 interface WebviewMessage {
   type: 'ready' | 'startTask' | 'setAgent' | 'setRoute' | 'setAutonomy' | 'stop'
     | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab'
-    | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan';
+    | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan'
+    | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
+    | 'retryStep' | 'skipStep';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -153,6 +158,86 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           });
         }
         break;
+      case 'loadTemplates':
+        try {
+          const plansDir = path.join(this.orchestrator['projectPath'] || process.cwd(), '.kai', 'plans');
+          const templates = await listPlanTemplates(plansDir);
+          void webview.postMessage({ type: 'templates', templates });
+        } catch (error) {
+          void webview.postMessage({ type: 'templates', templates: [] });
+        }
+        break;
+      case 'saveTemplate':
+        if (message.value) {
+          try {
+            const template: PlanTemplate = JSON.parse(message.value);
+            const plansDir = path.join(this.orchestrator['projectPath'] || process.cwd(), '.kai', 'plans');
+            await savePlanTemplate(plansDir, template);
+            const templates = await listPlanTemplates(plansDir);
+            void webview.postMessage({ type: 'templates', templates });
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+      case 'deleteTemplate':
+        if (message.value) {
+          try {
+            const plansDir = path.join(this.orchestrator['projectPath'] || process.cwd(), '.kai', 'plans');
+            await deletePlanTemplate(plansDir, message.value);
+            const templates = await listPlanTemplates(plansDir);
+            void webview.postMessage({ type: 'templates', templates });
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+      case 'loadTemplate':
+        if (message.value) {
+          try {
+            const template: PlanTemplate = JSON.parse(message.value);
+            const plan = templateToPlan(template, this.orchestrator.getState().route, this.orchestrator.getState().autonomy);
+            void webview.postMessage({ type: 'templateLoaded', plan });
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+      case 'retryStep':
+        if (message.eventId) {
+          try {
+            await this.orchestrator.retryPlanStep(message.eventId, message.value);
+            await this.postState();
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+      case 'skipStep':
+        if (message.eventId) {
+          try {
+            await this.orchestrator.skipPlanStep(message.eventId);
+            await this.postState();
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
       case 'handoff':
         if (message.targetAgent) {
           try {
@@ -290,13 +375,13 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     <div class="composer">
       <div class="plan-editor" id="planEditor" style="display:none;">
         <div class="plan-header">
-          <input type="text" id="planTitle" class="plan-title-input" placeholder="Plan title…" />
+          <div class="plan-template-row"><input type="text" id="planTitle" class="plan-title-input" placeholder="Plan title…" /><select id="planTemplate" class="plan-template-select"><option value="">Load template…</option></select></div>
           <span class="plan-step-count" id="planStepCount">0 steps</span>
         </div>
         <div class="plan-steps" id="planSteps"></div>
         <div class="plan-actions">
           <button id="addStep" class="plan-btn secondary">+ Add step</button>
-          <button id="runPlan" class="plan-btn primary">▶ Run plan</button>
+          <button id="saveTemplateBtn" class="plan-btn secondary template-save-btn">Save template</button><button id="runPlan" class="plan-btn primary">▶ Run plan</button>
         </div>
       </div>
 

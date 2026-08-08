@@ -103,6 +103,23 @@ export class WorkbenchOrchestrator extends EventEmitter {
     this.planRunner.on('planEvent', (planEvent) => {
       this.emit('planEvent', planEvent);
 
+      // Store completed plans in c1 memory
+      if (planEvent.type === 'plan.completed' && this.planRunner) {
+        const p = this.planRunner.getPlan();
+        // Store plan summary in c1 — use learn() if available, fallback to sessionStart
+        const c1 = this.cognitive1 as any;
+        const summary = JSON.stringify({
+          steps: p.steps.length,
+          agents: [...new Set(p.steps.map(s => s.agent))],
+          completedAt: p.completedAt,
+        });
+        if (typeof c1.learn === 'function') {
+          void c1.learn({ title: p.title, description: summary, tags: ['plan', 'completed'] }).catch(() => {});
+        } else {
+          void c1.sessionStart({ task: 'Plan completed: ' + p.title + ' ' + summary, agent: p.steps[0]?.agent || 'codex', projectPath: this.projectPath }).catch(() => {});
+        }
+      }
+
       // Update orchestrator state to reflect current step
       if (planEvent.type === 'plan.step.starting' && planEvent.step) {
         this.state = {
@@ -145,6 +162,14 @@ export class WorkbenchOrchestrator extends EventEmitter {
       this.state = { ...this.state, isRunning: false };
       this.emitState();
     }
+  }
+
+  async retryPlanStep(stepId: string, newPrompt?: string): Promise<void> {
+    this.planRunner?.retryStep(stepId, newPrompt);
+  }
+
+  async skipPlanStep(stepId: string): Promise<void> {
+    this.planRunner?.skipStep(stepId);
   }
 
   // ─── Agent control ─────────────────────────────────────────────
