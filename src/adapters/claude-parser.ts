@@ -68,6 +68,19 @@ export function parseClaudeJsonLine(
 
   const evtType = event.type;
 
+  // Non-streaming result (--output-format json)
+  if (evtType === 'result' && event.result) {
+    return {
+      id: createEventId(),
+      type: 'text.delta',
+      taskId,
+      timestamp: nowIso(),
+      agent,
+      channel: 'assistant',
+      text: String(event.result),
+    };
+  }
+
   // Assistant message with content blocks
   if (evtType === 'assistant' || evtType === 'message' || evtType === 'content_block_delta') {
     return parseAssistantEvent(event, taskId, agent);

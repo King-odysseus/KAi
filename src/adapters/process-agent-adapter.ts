@@ -223,7 +223,9 @@ export function buildCodexArgs(profile: string | undefined, request: AgentRunReq
 }
 
 export function buildClaudeArgs(request: AgentRunRequest): string[] {
-  return ['-p', '--output-format', 'stream-json', '--verbose', request.prompt];
+  // Non-streaming JSON mode: 3-5x faster through the proxy than stream-json --verbose.
+  // The parser handles 'result' type events from --output-format json.
+  return ['-p', '--output-format', 'json', request.prompt];
 }
 
 function tryParseJson(line: string): unknown | undefined {
