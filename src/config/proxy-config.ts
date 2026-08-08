@@ -47,7 +47,7 @@ const SECRET_QWEN_BACKEND = 'kai.proxy.qwenBackendKey';
 // ---- defaults ----
 
 const DEFAULT_TARGET_BASE_URL = 'https://api.deepseek.com';
-const DEFAULT_MODEL = 'deepseek-v4-pro';
+const DEFAULT_MODEL = 'deepseek-chat';
 
 // ---- public API ----
 

@@ -85,7 +85,7 @@ describe('resolveProxyConfig', () => {
 
     const result = await resolveProxyConfig(kaiCfg, legacyCfg, secrets);
     expect(result.targetBaseUrl).toBe('https://api.deepseek.com');
-    expect(result.defaultModel).toBe('deepseek-v4-pro');
+    expect(result.defaultModel).toBe('deepseek-chat');
   });
 
   it('resolves API key from SecretStorage', async () => {

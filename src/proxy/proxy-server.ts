@@ -509,6 +509,19 @@ export class KaiProxyServer {
             msgs.unshift({ role: 'system', content: toolNote });
           }
         }
+        // Force text-only response — DeepSeek otherwise returns empty tool_calls
+        parsed.tool_choice = "none";
+        body = JSON.stringify(parsed);
+      }
+    } catch { /* forward original */ }
+
+    // Map model name to a DeepSeek-supported model
+    try {
+      const parsed = JSON.parse(body);
+      const origModel = parsed.model as string;
+      const targetModel = this.config.modelMap[origModel] || this.config.defaultModel;
+      if (targetModel && targetModel !== origModel) {
+        parsed.model = targetModel;
         body = JSON.stringify(parsed);
       }
     } catch { /* forward original */ }
