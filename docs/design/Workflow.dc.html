@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; background: #181818; color: #cccccc; font-family: "Segoe WPC", "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { color: #0ea5e9; }
+    .mono { font-family: Consolas, "Cascadia Mono", "Courier New", monospace; }
+    svg.i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    svg.s12 { width: 12px; height: 12px; }
+    .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #2e2e2e; border-radius: 999px; padding: 2px 8px; font-size: 10.5px; line-height: 16px; white-space: nowrap; background: #1e1e1e; color: #9d9d9d; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 16px; padding: 4px 11px; border-radius: 5px; border: 1px solid #3c3c3c; background: #2a2a2a; color: #cccccc; white-space: nowrap; }
+    .btn.primary { background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%); border-color: #0ea5e9; color: #05202e; font-weight: 600; }
+    .ibtn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 5px; color: #9d9d9d; }
+    .label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #9d9d9d; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .node { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
+    .rail { width: 22px; display: flex; flex-direction: column; align-items: center; flex: none; }
+    .line { width: 2px; flex: 1; background: #2e2e2e; min-height: 14px; }
+    .meta { font-size: 10.5px; color: #9d9d9d; }
+  </style>
+</helmet>
+<div style="width: 440px; display: flex; flex-direction: column; background: #181818;">
+  <div style="display: flex; align-items: center; gap: 9px; padding: 11px 12px 11px 14px; border-bottom: 1px solid #272727;">
+    <svg class="i" viewBox="0 0 24 24" style="color: #38bdf8; width: 16px; height: 16px;"><rect x="3" y="3" width="6" height="6" rx="1"></rect><rect x="15" y="15" width="6" height="6" rx="1"></rect><path d="M6 9v4a2 2 0 0 0 2 2h7"></path></svg>
+    <div style="display: flex; flex-direction: column; flex: 1; min-width: 0;">
+      <span style="font-size: 12.5px; font-weight: 600; color: #e6e6e6;">Ship the proxy fix</span>
+      <span class="meta">Workflow · 4 steps · $0.028 · 3m 12s</span>
+    </div>
+    <span class="chip" style="color: #e8b060; border-color: #5a4217; background: #261f14;">Paused</span>
+    <span class="ibtn"><svg class="i" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg></span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; padding: 16px 14px 8px;">
+
+    <div style="display: flex; gap: 11px;">
+      <div class="rail">
+        <span class="node" style="background: rgba(137, 209, 133, 0.14); color: #89d185;"><svg class="i s12" viewBox="0 0 24 24" style="stroke-width: 2.2;"><path d="M5 12l5 5L20 7"></path></svg></span>
+        <span class="line"></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; flex: 1;">
+        <div style="display: flex; align-items: center; gap: 7px;">
+          <span class="dot" style="background: #e0976f;"></span><span style="font-size: 11px; color: #9d9d9d;">Claude</span>
+          <span class="meta" style="margin-left: auto;">41s · $0.004</span>
+        </div>
+        <span style="font-size: 12.5px; color: #e6e6e6;">Investigate and write a plan</span>
+        <a style="font-size: 11px;">Plan · 4 tasks</a>
+      </div>
+    </div>
+    <div style="display: flex; gap: 11px;">
+      <div class="rail"><span class="line"></span></div>
+      <div class="meta" style="padding: 2px 0 10px; font-style: italic;">Handoff to Codex: the plan and 2 memories</div>
+    </div>
+
+    <div style="display: flex; gap: 11px;">
+      <div class="rail">
+        <span class="node" style="background: rgba(137, 209, 133, 0.14); color: #89d185;"><svg class="i s12" viewBox="0 0 24 24" style="stroke-width: 2.2;"><path d="M5 12l5 5L20 7"></path></svg></span>
+        <span class="line"></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; flex: 1;">
+        <div style="display: flex; align-items: center; gap: 7px;">
+          <span class="dot" style="background: #62c4a0;"></span><span style="font-size: 11px; color: #9d9d9d;">Codex</span>
+          <span class="meta" style="margin-left: auto;">1m 20s · $0.018</span>
+        </div>
+        <span style="font-size: 12.5px; color: #e6e6e6;">Implement the fix</span>
+        <span style="display: flex; gap: 6px; align-items: center; font-size: 11px;"><span style="color: #cccccc;">3 files</span><span class="mono" style="color: #89d185;">+18</span><span class="mono" style="color: #f14c4c;">−6</span></span>
+      </div>
+    </div>
+    <div style="display: flex; gap: 11px;">
+      <div class="rail"><span class="line"></span></div>
+      <div class="meta" style="padding: 2px 0 10px; font-style: italic;">Handoff to Qwen: summary and the 3 changed files</div>
+    </div>
+
+    <div style="display: flex; gap: 11px;">
+      <div class="rail">
+        <span class="node" style="background: rgba(241, 76, 76, 0.16); color: #f14c4c;"><svg class="i s12" viewBox="0 0 24 24" style="stroke-width: 2.2;"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+        <span class="line"></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; flex: 1;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; align-items: center; gap: 7px;">
+            <span class="dot" style="background: #a996e6;"></span><span style="font-size: 11px; color: #9d9d9d;">Qwen</span>
+            <span class="meta" style="margin-left: auto;">58s · $0.006</span>
+          </div>
+          <span style="font-size: 12.5px; color: #e6e6e6;">Add regression tests</span>
+        </div>
+        <div style="border: 1px solid #4a2626; border-radius: 8px; background: #261a1a; padding: 9px 10px; display: flex; flex-direction: column; gap: 8px;">
+          <span style="font-size: 11.5px; color: #f08a8a; font-weight: 600;">npm test: 1 failing</span>
+          <span class="mono" style="font-size: 11px; color: #cccccc; line-height: 1.5;">proxy-server.test.ts › routes Ollama base URL<br>expected /v1/chat/completions, got /chat/completions</span>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <span class="btn primary">Retry</span>
+            <span class="btn">Retry with<span class="dot" style="background: #e0976f; width: 7px; height: 7px;"></span>Claude<svg class="i s12" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg></span>
+            <span class="btn">Edit prompt</span>
+            <span class="btn">Skip</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 11px;">
+      <div class="rail">
+        <span class="node" style="border: 2px solid #3c3c3c;"></span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; opacity: 0.7;">
+        <div style="display: flex; align-items: center; gap: 7px;">
+          <span class="dot" style="background: #e0976f;"></span><span style="font-size: 11px; color: #9d9d9d;">Claude</span>
+          <span class="meta" style="margin-left: auto;">Waiting</span>
+        </div>
+        <span style="font-size: 12.5px; color: #e6e6e6;">Review the full diff</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 6px; padding: 12px 14px; border-top: 1px solid #272727; margin-top: 12px;">
+    <span class="btn primary"><svg class="i s12" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"></path></svg>Resume</span>
+    <span class="btn" style="color: #f08a8a;">Abort</span>
+    <span class="btn" style="margin-left: auto; background: transparent;">Save as template</span>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
