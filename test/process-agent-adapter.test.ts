@@ -12,9 +12,26 @@ describe('prompt stdin arguments', () => {
       autonomy: 'review' as const,
     };
 
-    expect(buildClaudeArgs(request)).toEqual(['-p', '--output-format', 'json']);
+    expect(buildClaudeArgs(request)).toEqual([
+      '-p', '--output-format', 'json', '--permission-mode', 'default',
+    ]);
     expect(buildCodexArgs(undefined, request)).toContain('-');
     expect(buildCodexArgs(undefined, request)).not.toContain(request.prompt);
+  });
+});
+
+describe('buildClaudeArgs', () => {
+  it.each([
+    ['review', 'default'],
+    ['custom', 'default'],
+    ['auto', 'acceptEdits'],
+  ] as const)('maps %s autonomy to Claude %s permission mode', (autonomy, permissionMode) => {
+    expect(buildClaudeArgs({
+      taskId: 'task_1',
+      prompt: 'prompt',
+      route: 'direct',
+      autonomy,
+    })).toEqual(['-p', '--output-format', 'json', '--permission-mode', permissionMode]);
   });
 });
 
