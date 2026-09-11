@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('vscode', () => ({
+  Uri: { file: (value: string) => ({ fsPath: value }) },
+  WorkspaceEdit: class {},
+  Range: class {},
+  Position: class {},
+  workspace: { workspaceFolders: [] },
+}));
+
+import { applyUnifiedDiff } from '../src/orchestrator/vscode-diff-applier';
 
 /**
  * Diff parsing pattern tests.
@@ -79,5 +89,46 @@ describe('Diff parsing patterns', () => {
     // \ No newline at end of file
     const noNewline = '\\ No newline at end of file';
     expect(noNewline.startsWith('\\')).toBe(true);
+  });
+
+  it('rejects a hunk whose context does not match', () => {
+    const result = applyUnifiedDiff(
+      'alpha\nbeta\ngamma',
+      '@@ -1,2 +1,2 @@\n wrong\n-beta\n+changed',
+    );
+
+    expect(result).toEqual({
+      applied: false,
+      detail: 'Hunk 1 did not apply',
+      content: 'alpha\nbeta\ngamma',
+    });
+  });
+
+  it('searches the whole file when the hunk position drifts', () => {
+    const result = applyUnifiedDiff(
+      'header\nalpha\nbeta\ngamma',
+      '@@ -1,2 +1,2 @@\n alpha\n-beta\n+changed',
+    );
+
+    expect(result.applied).toBe(true);
+    expect(result.content).toBe('header\nalpha\nchanged\ngamma');
+  });
+
+  it('preserves CRLF line endings', () => {
+    const result = applyUnifiedDiff(
+      'alpha\r\nbeta\r\n',
+      '@@ -1,2 +1,2 @@\n alpha\n-beta\n+changed',
+    );
+
+    expect(result.content).toBe('alpha\r\nchanged\r\n');
+  });
+
+  it('does not treat +++ headers as added file content', () => {
+    const result = applyUnifiedDiff(
+      'old\n',
+      '--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new',
+    );
+
+    expect(result.content).toBe('new\n');
   });
 });

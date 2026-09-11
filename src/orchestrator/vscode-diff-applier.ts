@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { DiffApplier } from './diff-applier';
 
@@ -17,26 +18,37 @@ export class VSCodeDiffApplier implements DiffApplier {
     diff: string,
   ): Promise<{ applied: boolean; detail: string }> {
     const workspaceEdit = new vscode.WorkspaceEdit();
-    const fileUri = vscode.Uri.file(filePath);
+    const resolvedPath = resolveFilePath(filePath);
+    const fileUri = vscode.Uri.file(resolvedPath);
 
+    let document: vscode.TextDocument;
     try {
-      const document = await vscode.workspace.openTextDocument(fileUri);
-      const original = document.getText();
-      const newText = applyUnifiedDiff(original, diff);
-
-      if (newText === original) {
-        return { applied: true, detail: `No changes needed for ${filePath}.` };
-      }
-
-      const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
-      workspaceEdit.replace(fileUri, fullRange, newText);
+      document = await vscode.workspace.openTextDocument(fileUri);
     } catch {
-      // File doesn't exist — create it from the diff
       const newContent = diffToNewContent(diff);
       workspaceEdit.createFile(fileUri, { overwrite: true });
       workspaceEdit.insert(fileUri, new vscode.Position(0, 0), newContent);
+      const applied = await vscode.workspace.applyEdit(workspaceEdit);
+      return {
+        applied,
+        detail: applied
+          ? `Applied diff to ${filePath}.`
+          : `Failed to apply diff to ${filePath}.`,
+      };
     }
 
+    const original = document.getText();
+    const result = applyUnifiedDiff(original, diff);
+    if (!result.applied) {
+      return result;
+    }
+
+    if (result.content === original) {
+      return { applied: true, detail: `No changes needed for ${filePath}.` };
+    }
+
+    const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
+    workspaceEdit.replace(fileUri, fullRange, result.content);
     const applied = await vscode.workspace.applyEdit(workspaceEdit);
     return {
       applied,
@@ -73,51 +85,51 @@ interface Hunk {
 /**
  * Applies a unified diff to the original text.
  *
- * Handles multiple hunks, fuzzy context matching, and line-ending
- * normalisation. Returns the resulting text.
+ * Handles multiple hunks and preserves the original line endings. Returns the resulting text.
  */
-function applyUnifiedDiff(original: string, diff: string): string {
+export function applyUnifiedDiff(
+  original: string,
+  diff: string,
+): { applied: boolean; detail: string; content: string } {
   const hunks = parseHunks(diff);
-  if (hunks.length === 0) return original;
+  if (hunks.length === 0) {
+    return { applied: true, detail: 'No changes needed.', content: original };
+  }
 
   const originalLines = normalizeLines(original);
   const result: string[] = [];
   let origIdx = 0;
 
-  for (const hunk of hunks) {
-    // Copy lines from original up to where this hunk starts
+  for (const [index, hunk] of hunks.entries()) {
     const matchIdx = findHunkPosition(originalLines, hunk, origIdx);
-    const targetIdx = matchIdx >= 0 ? matchIdx : hunk.header.origStart;
+    if (matchIdx < 0) {
+      return { applied: false, detail: `Hunk ${index + 1} did not apply`, content: original };
+    }
 
-    while (origIdx < targetIdx && origIdx < originalLines.length) {
+    while (origIdx < matchIdx) {
       result.push(originalLines[origIdx]);
       origIdx++;
     }
 
-    // Apply the hunk
     for (const line of hunk.lines) {
-      switch (line.kind) {
-        case 'context':
-          result.push(line.content);
-          origIdx++;
-          break;
-        case 'add':
-          result.push(line.content);
-          break;
-        case 'remove':
-          origIdx++;
-          break;
+      if (line.kind === 'context') {
+        result.push(line.content);
+        origIdx++;
+      } else if (line.kind === 'add') {
+        result.push(line.content);
+      } else {
+        origIdx++;
       }
     }
   }
 
-  // Append any remaining lines after the last hunk
   while (origIdx < originalLines.length) {
     result.push(originalLines[origIdx]);
     origIdx++;
   }
 
-  return result.join('\n');
+  const lineEnding = original.includes('\r\n') ? '\r\n' : '\n';
+  return { applied: true, detail: 'Applied.', content: result.join(lineEnding) };
 }
 
 /**
@@ -188,8 +200,7 @@ function parseHunks(diff: string): Hunk[] {
 
 /**
  * Find where a hunk should be applied in the original file.
- * Tries exact match first, then fuzzy match with ±3 line tolerance.
- * Returns the 0-based line index, or -1 if no match found.
+ * Returns the 0-based line index, or -1 if no exact match is found.
  */
 function findHunkPosition(
   originalLines: string[],
@@ -205,39 +216,17 @@ function findHunkPosition(
     return hunk.header.origStart;
   }
 
-  // Try exact match first
-  const exactMatch = findPattern(originalLines, contextPattern, searchFrom, 0);
-  if (exactMatch >= 0) return exactMatch;
-
-  // Fuzzy match with ±3 line tolerance
-  for (let drift = 1; drift <= 3; drift++) {
-    const match = findPattern(originalLines, contextPattern, searchFrom, drift);
-    if (match >= 0) return match;
-  }
-
-  return -1;
+  return findPattern(originalLines, contextPattern, searchFrom);
 }
 
-/**
- * Find a pattern in lines, tolerating `maxDrift` mismatched lines.
- */
-function findPattern(
-  lines: string[],
-  pattern: string[],
-  startFrom: number,
-  maxDrift: number,
-): number {
+/** Find an exact pattern in lines. */
+function findPattern(lines: string[], pattern: string[], startFrom: number): number {
   if (pattern.length === 0) return startFrom;
 
   for (let i = startFrom; i <= lines.length - pattern.length; i++) {
-    let mismatches = 0;
-    for (let j = 0; j < pattern.length; j++) {
-      if (lines[i + j] !== pattern[j]) {
-        mismatches++;
-        if (mismatches > maxDrift) break;
-      }
+    if (pattern.every((line, index) => lines[i + index] === line)) {
+      return i;
     }
-    if (mismatches <= maxDrift) return i;
   }
 
   return -1;
@@ -254,6 +243,18 @@ function diffToNewContent(diff: string): string {
   const result: string[] = [];
 
   for (const line of lines) {
+    if (
+      line.startsWith('---') ||
+      line.startsWith('+++') ||
+      line.startsWith('@@') ||
+      line.startsWith('diff ') ||
+      line.startsWith('index ') ||
+      line.startsWith('new file ') ||
+      line.startsWith('deleted file ') ||
+      line.startsWith('rename ')
+    ) {
+      continue;
+    }
     if (line.startsWith('+')) {
       result.push(line.slice(1));
     } else if (
@@ -276,6 +277,12 @@ function diffToNewContent(diff: string): string {
 }
 
 // ---- Helpers ----
+
+function resolveFilePath(filePath: string): string {
+  if (path.isAbsolute(filePath)) return filePath;
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  return workspaceFolder ? path.join(workspaceFolder.uri.fsPath, filePath) : filePath;
+}
 
 /**
  * Normalize line endings to \n and remove trailing empty lines
