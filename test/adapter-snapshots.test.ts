@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseClaudeJsonLine } from '../src/adapters/claude-parser';
 import { parseCodexJsonLine } from '../src/adapters/codex-parser';
 import { AcpAgentAdapter } from '../src/adapters/acp-adapter';
+import type { ProcessChunk, ProcessResult, ProcessRunner } from '../src/adapters/process-runner';
 import type { WorkbenchEvent } from '../src/core/events';
 
 const taskId = 'task_snap';
@@ -41,27 +42,27 @@ describe('Unified event model conformance', () => {
 
     it('maps assistant text → text.delta', () => {
       const result = parseClaudeJsonLine(claudeAssistant, taskId, agent);
-      expect(result?.type).toBe('text.delta');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('text.delta');
     });
 
     it('maps tool_use → tool.call', () => {
       const result = parseClaudeJsonLine(claudeToolUse, taskId, agent);
-      expect(result?.type).toBe('tool.call');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('tool.call');
     });
 
     it('maps usage → cost.update', () => {
       const result = parseClaudeJsonLine(claudeUsage, taskId, agent);
-      expect(result?.type).toBe('cost.update');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('cost.update');
     });
 
     it('maps errors → error', () => {
       const result = parseClaudeJsonLine(claudeError, taskId, agent);
-      expect(result?.type).toBe('error');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('error');
     });
 
     it('maps unknown → raw.fallback (never drops)', () => {
       const result = parseClaudeJsonLine(claudeUnknown, taskId, agent);
-      expect(result?.type).toBe('raw.fallback');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('raw.fallback');
     });
 
     it('suppresses system/ping events', () => {
@@ -86,37 +87,37 @@ describe('Unified event model conformance', () => {
 
     it('maps delta → text.delta', () => {
       const result = parseCodexJsonLine(codexDelta, taskId, 'codex');
-      expect(result?.type).toBe('text.delta');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('text.delta');
     });
 
     it('maps content → text.delta', () => {
       const result = parseCodexJsonLine(codexContent, taskId, 'codex');
-      expect(result?.type).toBe('text.delta');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('text.delta');
     });
 
     it('maps tool_call → tool.call', () => {
       const result = parseCodexJsonLine(codexTool, taskId, 'codex');
-      expect(result?.type).toBe('tool.call');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('tool.call');
     });
 
     it('maps file_edit → diff.proposal', () => {
       const result = parseCodexJsonLine(codexDiff, taskId, 'codex');
-      expect(result?.type).toBe('diff.proposal');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('diff.proposal');
     });
 
     it('maps usage → cost.update', () => {
       const result = parseCodexJsonLine(codexUsage, taskId, 'codex');
-      expect(result?.type).toBe('cost.update');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('cost.update');
     });
 
     it('maps error → error', () => {
       const result = parseCodexJsonLine(codexError, taskId, 'codex');
-      expect(result?.type).toBe('error');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('error');
     });
 
     it('maps unknown → raw.fallback (never drops)', () => {
       const result = parseCodexJsonLine(codexUnknown, taskId, 'codex');
-      expect(result?.type).toBe('raw.fallback');
+      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('raw.fallback');
     });
 
     it('suppresses done/complete lifecycle events', () => {
@@ -124,9 +125,50 @@ describe('Unified event model conformance', () => {
     });
   });
 
+  describe('Parser event arrays', () => {
+    it('yields every event returned by an ACP parser', async () => {
+      const adapter = new AcpAgentAdapter(
+        {
+          id: 'qwen',
+          displayName: 'Qwen',
+          command: 'qwen',
+          parseLine: (line, taskId, agent) => [
+            {
+              id: 'acp_event_1',
+              type: 'text.delta',
+              taskId,
+              timestamp: '2026-07-03T00:00:00.000Z',
+              agent,
+              channel: 'assistant',
+              text: line,
+            },
+            {
+              id: 'acp_event_2',
+              type: 'raw.fallback',
+              taskId,
+              timestamp: '2026-07-03T00:00:00.000Z',
+              agent,
+              sourceType: 'test',
+              payload: line,
+            },
+          ],
+        },
+        new ArrayRunner(),
+      );
+
+      const events: WorkbenchEvent[] = [];
+      for await (const event of adapter.run({ taskId: 'task_acp_parser', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+        events.push(event);
+      }
+
+      expect(events.filter((event) => event.id.startsWith('acp_event_')).map((event) => event.id))
+        .toEqual(['acp_event_1', 'acp_event_2']);
+    });
+  });
+
   describe('Event shape invariants', () => {
     // Every event must carry id, type, taskId, timestamp
-    const allParsers: Array<{ name: string; parse: (line: string) => WorkbenchEvent | null; line: string }> = [
+    const allParsers: Array<{ name: string; parse: (line: string) => WorkbenchEvent | WorkbenchEvent[] | null; line: string }> = [
       {
         name: 'claude text',
         parse: (l) => parseClaudeJsonLine(l, taskId, 'claude'),
@@ -142,12 +184,24 @@ describe('Unified event model conformance', () => {
     for (const { name, parse, line } of allParsers) {
       it(`${name} event has required fields`, () => {
         const result = parse(line);
-        expect(result).not.toBeNull();
-        expect(result!.id).toBeTruthy();
-        expect(result!.type).toBeTruthy();
-        expect(result!.taskId).toBe(taskId);
-        expect(result!.timestamp).toBeTruthy();
+        const event = Array.isArray(result) ? result[0] : result;
+        expect(event).not.toBeNull();
+        expect(event!.id).toBeTruthy();
+        expect(event!.type).toBeTruthy();
+        expect(event!.taskId).toBe(taskId);
+        expect(event!.timestamp).toBeTruthy();
       });
     }
   });
 });
+
+class ArrayRunner implements ProcessRunner {
+  async commandInfo() {
+    return { available: true, version: 'qwen 1.0.0' };
+  }
+
+  async *run(): AsyncIterable<ProcessChunk | ProcessResult> {
+    yield { stream: 'stdout', text: 'parsed\\n' };
+    yield { code: 0, signal: null };
+  }
+}

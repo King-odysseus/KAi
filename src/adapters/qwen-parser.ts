@@ -43,7 +43,7 @@ export const parseQwenJsonLine: StreamLineParser = (
   line: string,
   taskId: string,
   agent: AgentId,
-): WorkbenchEvent | null => {
+): WorkbenchEvent | WorkbenchEvent[] | null => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);

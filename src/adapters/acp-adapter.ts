@@ -1,7 +1,7 @@
 import { createEventId, nowIso, type WorkbenchEvent } from '../core/events';
 import type { AgentCapability, AgentId } from '../core/types';
 import type { AgentAdapter, AgentRunRequest } from './agent-adapter';
-import { NodeProcessRunner, type ProcessRunner, type CommandInfo, isProcessResult } from './process-runner';
+import { NodeProcessRunner, type ProcessRunner, isProcessResult } from './process-runner';
 import type { StreamLineParser } from './process-agent-adapter';
 
 export interface AcpAdapterOptions {
@@ -134,9 +134,9 @@ export class AcpAgentAdapter implements AgentAdapter {
 
       // Use the pluggable parser if provided
       if (this.parseLine) {
-        const event = this.parseLine(line, request.taskId, this.id);
-        if (event) {
-          yield event;
+        const events = this.parseLine(line, request.taskId, this.id);
+        if (events) {
+          yield* Array.isArray(events) ? events : [events];
         }
         continue;
       }

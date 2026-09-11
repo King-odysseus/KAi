@@ -7,7 +7,7 @@ export type StreamLineParser = (
   line: string,
   taskId: string,
   agent: AgentId,
-) => WorkbenchEvent | null;
+) => WorkbenchEvent | WorkbenchEvent[] | null;
 
 export interface ProcessAgentAdapterOptions {
   id: AgentId;
@@ -130,9 +130,9 @@ export class ProcessAgentAdapter implements AgentAdapter {
       }
 
       if (this.parseLine) {
-        const event = this.parseLine(line, request.taskId, this.id);
-        if (event) {
-          yield event;
+        const events = this.parseLine(line, request.taskId, this.id);
+        if (events) {
+          yield* Array.isArray(events) ? events : [events];
         }
         continue;
       }

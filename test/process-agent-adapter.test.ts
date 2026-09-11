@@ -68,6 +68,50 @@ describe('ProcessAgentAdapter', () => {
     expect(events.at(-1)).toMatchObject({ type: 'agent.lifecycle', status: 'completed' });
   });
 
+  it('yields every event returned by a parser', async () => {
+    const adapter = new ProcessAgentAdapter({
+      id: 'codex',
+      displayName: 'Codex',
+      command: 'codex',
+      buildArgs: (request) => buildCodexArgs(undefined, request),
+      parseLine: (line, taskId, agent) => [
+        {
+          id: 'event_1',
+          type: 'text.delta',
+          taskId,
+          timestamp: '2026-07-03T00:00:00.000Z',
+          agent,
+          channel: 'assistant',
+          text: line,
+        },
+        {
+          id: 'event_2',
+          type: 'raw.fallback',
+          taskId,
+          timestamp: '2026-07-03T00:00:00.000Z',
+          agent,
+          sourceType: 'test',
+          payload: line,
+        },
+      ],
+      runner: new FakeRunner(
+        { available: true, version: 'codex 1.0.0' },
+        [
+          { stream: 'stdout', text: 'parsed\\n' },
+          { code: 0, signal: null },
+        ],
+      ),
+    });
+
+    const events: WorkbenchEvent[] = [];
+    for await (const event of adapter.run({ taskId: 'task_parser', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+      events.push(event);
+    }
+
+    expect(events.filter((event) => event.id === 'event_1' || event.id === 'event_2').map((event) => event.id))
+      .toEqual(['event_1', 'event_2']);
+  });
+
   it('emits beforeRun events before process output', async () => {
     const adapter = new ProcessAgentAdapter({
       id: 'codex',
