@@ -84,7 +84,7 @@ export class ProcessAgentAdapter implements AgentAdapter {
     yield this.lifecycle(request.taskId, 'starting', `${this.displayName} starting with ${request.route}/${request.autonomy}`);
 
     try {
-      for await (const chunk of this.runner.run(this.command, args, request.cwd, controller.signal)) {
+      for await (const chunk of this.runner.run(this.command, args, request.cwd, controller.signal, request.prompt)) {
         if (isProcessResult(chunk)) {
           yield* this.mapOutput(request, carry.get('stdout') || '', 'stdout');
           yield* this.mapOutput(request, carry.get('stderr') || '', 'stderr');
@@ -229,14 +229,14 @@ export function buildCodexArgs(profile: string | undefined, request: AgentRunReq
   if (request.route === 'proxy' && profile) {
     args.push('--profile', profile);
   }
-  args.push(request.prompt);
+  args.push('-');
   return args;
 }
 
-export function buildClaudeArgs(request: AgentRunRequest): string[] {
+export function buildClaudeArgs(_request: AgentRunRequest): string[] {
   // Non-streaming JSON mode: 3-5x faster through the proxy than stream-json --verbose.
   // The parser handles 'result' type events from --output-format json.
-  return ['-p', '--output-format', 'json', request.prompt];
+  return ['-p', '--output-format', 'json'];
 }
 
 function tryParseJson(line: string): unknown | undefined {

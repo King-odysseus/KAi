@@ -30,7 +30,13 @@ export interface ProcessResult {
 
 export interface ProcessRunner {
   commandInfo(command: string): Promise<CommandInfo>;
-  run(command: string, args: string[], cwd?: string, signal?: AbortSignal): AsyncIterable<ProcessChunk | ProcessResult>;
+  run(
+    command: string,
+    args: string[],
+    cwd?: string,
+    signal?: AbortSignal,
+    stdin?: string,
+  ): AsyncIterable<ProcessChunk | ProcessResult>;
 }
 
 export class NodeProcessRunner implements ProcessRunner {
@@ -71,7 +77,13 @@ export class NodeProcessRunner implements ProcessRunner {
     });
   }
 
-  async *run(command: string, args: string[], cwd?: string, signal?: AbortSignal): AsyncIterable<ProcessChunk | ProcessResult> {
+  async *run(
+    command: string,
+    args: string[],
+    cwd?: string,
+    signal?: AbortSignal,
+    stdin?: string,
+  ): AsyncIterable<ProcessChunk | ProcessResult> {
     const useShell = process.platform === 'win32';
     // Under shell mode Node does not quote args, so quote them ourselves to keep
     // multi-word arguments (e.g. the prompt) intact.
@@ -81,8 +93,13 @@ export class NodeProcessRunner implements ProcessRunner {
       cwd,
       shell: useShell,
       windowsHide: true,
-      env: process.env
+      env: process.env,
     });
+
+    if (stdin !== undefined) {
+      child.stdin?.write(stdin);
+      child.stdin?.end();
+    }
 
     const queue: Array<ProcessChunk | ProcessResult> = [];
     let done = false;

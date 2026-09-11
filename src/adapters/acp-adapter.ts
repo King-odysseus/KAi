@@ -73,7 +73,6 @@ export class AcpAgentAdapter implements AgentAdapter {
       return;
     }
 
-    const args = [...this.acpArgs, request.prompt];
     const controller = new AbortController();
     const carry = new Map<'stdout' | 'stderr', string>([
       ['stdout', ''],
@@ -84,7 +83,7 @@ export class AcpAgentAdapter implements AgentAdapter {
     yield this.lifecycle(request.taskId, 'starting', `${this.displayName} starting with ACP`);
 
     try {
-      for await (const chunk of this.runner.run(this.command, args, request.cwd, controller.signal)) {
+      for await (const chunk of this.runner.run(this.command, this.acpArgs, request.cwd, controller.signal, request.prompt)) {
         if (isProcessResult(chunk)) {
           yield* this.parseOutput(request, carry.get('stdout') || '', 'stdout');
           yield* this.parseOutput(request, carry.get('stderr') || '', 'stderr');

@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { buildCodexArgs, ProcessAgentAdapter } from '../src/adapters/process-agent-adapter';
+import { buildClaudeArgs, buildCodexArgs, ProcessAgentAdapter } from '../src/adapters/process-agent-adapter';
 import type { CommandInfo, ProcessChunk, ProcessResult, ProcessRunner } from '../src/adapters/process-runner';
 import type { WorkbenchEvent } from '../src/core/events';
+
+describe('prompt stdin arguments', () => {
+  it('does not put prompts in Claude or Codex argv', () => {
+    const request = {
+      taskId: 'task_1',
+      prompt: 'line one %PATH%\\nline two',
+      route: 'direct' as const,
+      autonomy: 'review' as const,
+    };
+
+    expect(buildClaudeArgs(request)).toEqual(['-p', '--output-format', 'json']);
+    expect(buildCodexArgs(undefined, request)).toContain('-');
+    expect(buildCodexArgs(undefined, request)).not.toContain(request.prompt);
+  });
+});
 
 describe('buildCodexArgs', () => {
   it('uses read-only sandbox in review mode', () => {
@@ -11,7 +26,7 @@ describe('buildCodexArgs', () => {
       route: 'direct',
       autonomy: 'review',
       cwd: 'C:/repo'
-    })).toEqual(['exec', '--json', '--sandbox', 'read-only', '--cd', 'C:/repo', 'inspect']);
+    })).toEqual(['exec', '--json', '--sandbox', 'read-only', '--cd', 'C:/repo', '-']);
   });
 
   it('uses workspace-write and profile in proxy auto mode', () => {
@@ -21,7 +36,7 @@ describe('buildCodexArgs', () => {
       route: 'proxy',
       autonomy: 'auto',
       cwd: 'C:/repo'
-    })).toEqual(['exec', '--json', '--sandbox', 'workspace-write', '--cd', 'C:/repo', '--profile', 'codeproxy', 'edit']);
+    })).toEqual(['exec', '--json', '--sandbox', 'workspace-write', '--cd', 'C:/repo', '--profile', 'codeproxy', '-']);
   });
 });
 
@@ -40,6 +55,27 @@ describe('ProcessAgentAdapter', () => {
       available: true,
       version: 'codex 1.0.0'
     });
+  });
+
+  it('passes a multiline percent prompt through stdin unchanged', async () => {
+    const runner = new FakeRunner(
+      { available: true, version: 'codex 1.0.0' },
+      [{ code: 0, signal: null }],
+    );
+    const adapter = new ProcessAgentAdapter({
+      id: 'codex',
+      displayName: 'Codex',
+      command: 'codex',
+      buildArgs: (request) => buildCodexArgs(undefined, request),
+      runner,
+    });
+    const prompt = 'line one %PATH%\nline two';
+
+    for await (const _event of adapter.run({ taskId: 'task_stdin', prompt, route: 'direct', autonomy: 'review' })) {
+      // Consume the run.
+    }
+
+    expect(runner.lastStdin).toBe(prompt);
   });
 
   it('maps stdout JSON and plain text into events', async () => {
@@ -243,6 +279,8 @@ describe('ProcessAgentAdapter', () => {
 });
 
 class FakeRunner implements ProcessRunner {
+  lastStdin?: string;
+
   constructor(
     private readonly info: CommandInfo,
     private readonly chunks: Array<ProcessChunk | ProcessResult>
@@ -252,7 +290,8 @@ class FakeRunner implements ProcessRunner {
     return this.info;
   }
 
-  async *run(_command: string, _args: string[], _cwd?: string, _signal?: AbortSignal): AsyncIterable<ProcessChunk | ProcessResult> {
+  async *run(_command: string, _args: string[], _cwd?: string, _signal?: AbortSignal, stdin?: string): AsyncIterable<ProcessChunk | ProcessResult> {
+    this.lastStdin = stdin;
     for (const chunk of this.chunks) {
       yield chunk;
     }
