@@ -21,6 +21,19 @@ const PRICING: Record<string, { input: number; output: number; model: string }> 
   'gemini:proxy': { input: 0.4, output: 1.2, model: 'DeepSeek V4 Pro (via proxy)' },
 };
 
+function resolvePricing(agent: AgentId, route: RouteMode): { input: number; output: number; model: string } {
+  const key = `${agent}:${route}`;
+  return PRICING[key] || PRICING['claude:direct'];
+}
+
+/**
+ * The display model name for an agent/route pair — used for the reply
+ * header's route chip (e.g. "Proxy · DeepSeek V4 Pro (via proxy)").
+ */
+export function getModelName(agent: AgentId, route: RouteMode): string {
+  return resolvePricing(agent, route).model;
+}
+
 /**
  * Improved token estimation using character-count heuristics that better
  * model real tokenization.
@@ -101,8 +114,7 @@ export function estimateCost(
   agent: AgentId,
   route: RouteMode,
 ): CostEstimate {
-  const key = `${agent}:${route}`;
-  const pricing = PRICING[key] || PRICING['claude:direct'];
+  const pricing = resolvePricing(agent, route);
 
   const inputTokens = Math.max(100, countTokens(prompt));
   // Conservative output estimate: 3–4x input

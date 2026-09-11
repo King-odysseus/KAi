@@ -306,6 +306,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   // Orchestrator event listener
+  const runStartedAt = new Map<string, number>();
+  const NOTIFY_AFTER_MS = 20_000;
   orchestrator.on('event', (e: WorkbenchEvent) => {
     workbenchProvider.postEvent(e);
     memoryProvider.refresh();
@@ -315,6 +317,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Log errors through the centralized logger
     if (e.type === 'error') {
       getLogger().error('agent_crash', e.message, e.recoverable ? 'Recoverable' : 'Fatal');
+    }
+
+    // Notify + badge when something needs attention while the chat isn't
+    // visible: a run that took a while to finish, or an approval waiting.
+    if (e.type === 'agent.lifecycle' && e.status === 'starting') {
+      runStartedAt.set(e.taskId, Date.now());
+    } else if (e.type === 'agent.lifecycle' && (e.status === 'completed' || e.status === 'failed')) {
+      const startedAt = runStartedAt.get(e.taskId);
+      runStartedAt.delete(e.taskId);
+      const elapsed = startedAt ? Date.now() - startedAt : 0;
+      if (elapsed >= NOTIFY_AFTER_MS && !workbenchProvider.isSidebarVisible()) {
+        workbenchProvider.notifyUnseen();
+        const verb = e.status === 'completed' ? 'finished' : 'failed';
+        void vscode.window.showInformationMessage(`KAI: ${e.agent ?? 'Agent'} ${verb}.`, 'Open').then((choice) => {
+          if (choice === 'Open') void vscode.commands.executeCommand('kai.openWorkbench');
+        });
+      }
+    } else if (e.type === 'approval.request' && !workbenchProvider.isSidebarVisible()) {
+      workbenchProvider.notifyUnseen();
+      void vscode.window.showInformationMessage(`KAI: ${e.title} needs your approval.`, 'Open').then((choice) => {
+        if (choice === 'Open') void vscode.commands.executeCommand('kai.openWorkbench');
+      });
     }
   });
 

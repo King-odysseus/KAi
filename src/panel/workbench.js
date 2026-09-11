@@ -4,6 +4,7 @@
 
   var vscode = acquireVsCodeApi();
   var AGENT_IDS = window.__KAI_AGENT_IDS__ || ['claude', 'codex', 'qwen', 'gemini'];
+  var AGENT_NAMES = window.__KAI_AGENT_NAMES__ || {};
   var state = window.__KAI_INITIAL_STATE__ || null;
   var totalCost = 0;
   var totalInput = 0;
@@ -13,6 +14,13 @@
   var planSteps = [];
   var currentPlan = window.__KAI_INITIAL_PLAN__ || null;
   var activeCompare = null;
+
+  // Reply "turns" — one per taskId, holding the agent header, grouped tool
+  // calls, streamed markdown text and message actions. See ensureTurn().
+  var turns = {};
+  var pendingTurnMeta = {};
+  var capabilitiesById = {};
+  var lastUserPrompt = '';
 
   var TPLS = {
     review: 'Review this code for bugs, style issues, and improvements:',
@@ -69,10 +77,48 @@
   function nearBottom() { return els.chat.scrollHeight-els.chat.scrollTop-els.chat.clientHeight<120; }
   function scrollBottom(force) { if(force||nearBottom()) els.chat.scrollTop=els.chat.scrollHeight; }
   function removeEmpty() { if(emptyState) emptyState.style.display='none'; }
-  function clearChat() { finalizeAssistant(); stopThinking(); Array.prototype.slice.call(els.chat.children).forEach(function(k){ if(k!==emptyState) k.remove(); }); if(emptyState) emptyState.style.display=''; totalCost=0;totalInput=0;totalOutput=0; els.costPill.innerHTML=''; clearPrompt(); }
+  function clearChat() {
+    finalizeAssistant(); stopThinking();
+    Array.prototype.slice.call(els.chat.children).forEach(function(k){ if(k!==emptyState) k.remove(); });
+    if(emptyState) emptyState.style.display='';
+    totalCost=0;totalInput=0;totalOutput=0; els.costPill.innerHTML='';
+    for (var id in turns) { if (turns[id].timerInterval) clearInterval(turns[id].timerInterval); }
+    turns = {};
+    clearPrompt();
+  }
   function autoGrow() { els.prompt.style.height='auto'; els.prompt.style.height=Math.min(els.prompt.scrollHeight,180)+'px'; }
+  function agentLabel(agent) { return AGENT_NAMES[agent] || (agent ? agent.charAt(0).toUpperCase()+agent.slice(1) : 'Assistant'); }
 
-  // Plan mode
+  // ---- Small floating menu helper (used by "Continue with" and future pickers) ----
+  var openMenuEl = null;
+  function closeMenu() { if (openMenuEl) { openMenuEl.remove(); openMenuEl = null; document.removeEventListener('mousedown', onMenuOutside, true); document.removeEventListener('keydown', onMenuEscape, true); } }
+  function onMenuOutside(e) { if (openMenuEl && !openMenuEl.contains(e.target)) closeMenu(); }
+  function onMenuEscape(e) { if (e.key === 'Escape') closeMenu(); }
+  function openMenu(anchor, items) {
+    closeMenu();
+    var menu = document.createElement('div'); menu.className = 'kai-menu';
+    items.forEach(function (it) {
+      var row = document.createElement('div');
+      row.className = 'kai-menu-item' + (it.disabled ? ' disabled' : '');
+      row.textContent = it.label;
+      if (it.title) row.title = it.title;
+      if (!it.disabled) row.addEventListener('click', function () { closeMenu(); it.onClick(); });
+      menu.appendChild(row);
+    });
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    var top = Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+    var left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+    menu.style.top = Math.max(4, top) + 'px';
+    menu.style.left = Math.max(4, left) + 'px';
+    openMenuEl = menu;
+    setTimeout(function () {
+      document.addEventListener('mousedown', onMenuOutside, true);
+      document.addEventListener('keydown', onMenuEscape, true);
+    }, 0);
+  }
+
+  // ---- Plan mode ----
   function togglePlanMode() { planMode=!planMode; els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit plan mode':'Plan mode'; }
   function addPlanStep() { planSteps.push({agent:els.agent.value,prompt:''}); renderPlanSteps(); }
   function removePlanStep(idx) { planSteps.splice(idx,1); renderPlanSteps(); }
@@ -158,18 +204,268 @@
     }
   }
 
-  // Chat
+  // ---- User messages ----
   function pinThinking() { if(thinkingEl&&els.chat.lastChild!==thinkingEl) els.chat.appendChild(thinkingEl); }
   function appendUserMessage(text) { removeEmpty(); finalizeAssistant(); var el=document.createElement('div'); el.className='msg user'; el.innerHTML='<span class="role">You</span>'; el.appendChild(document.createTextNode(text)); els.chat.appendChild(el); startThinking(); scrollBottom(true); }
   function finalizeAssistant() { if(currentAssistant){currentAssistant.classList.remove('streaming');currentAssistant=null;} }
-  function appendAssistantText(text,agent) { removeEmpty(); if(!currentAssistant){ currentAssistant=document.createElement('div');currentAssistant.className='msg assistant streaming';var role=document.createElement('span');role.className='role';role.textContent=agent||(state&&state.activeAgent)||'Assistant';currentAssistant.appendChild(role);currentAssistant.appendChild(document.createTextNode(''));els.chat.appendChild(currentAssistant); } var last=currentAssistant.lastChild; if(last&&last.nodeType===3) last.nodeValue+=text; else currentAssistant.appendChild(document.createTextNode(text)); pinThinking(); scrollBottom(); }
 
+  // ---- Reply turns ----
+
+  function toolIconSvg(name) {
+    var n = (name || '').toLowerCase();
+    if (/read|write|edit|file/.test(n)) {
+      return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+    }
+    if (/grep|search|find/.test(n)) {
+      return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
+    }
+    if (/bash|shell|exec|command|run/.test(n)) {
+      return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l6 6-6 6"/><path d="M12 19h8"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>';
+  }
+
+  function toolInputSummary(input) {
+    if (input == null) return '';
+    if (typeof input === 'string') return input.length > 80 ? input.slice(0, 80) + '…' : input;
+    if (typeof input === 'object') {
+      var key = ['file_path', 'path', 'command', 'pattern'].filter(function (k) { return typeof input[k] === 'string'; })[0];
+      if (key) return input[key];
+      try { var s = JSON.stringify(input); return s.length > 80 ? s.slice(0, 80) + '…' : s; } catch (e) { return ''; }
+    }
+    return String(input);
+  }
+
+  function ensureTurn(taskId, agent) {
+    if (turns[taskId]) return turns[taskId];
+    removeEmpty();
+    finalizeAssistant();
+
+    var meta = pendingTurnMeta[taskId];
+    var el = document.createElement('div'); el.className = 'turn streaming';
+
+    var header = document.createElement('div'); header.className = 'turn-header';
+    var dot = document.createElement('span'); dot.className = 'agent-dot ' + (agent || '');
+    var name = document.createElement('span'); name.className = 'agent-name'; name.textContent = agentLabel(agent);
+    header.appendChild(dot); header.appendChild(name);
+    if (meta && meta.modelName) {
+      var routeChip = document.createElement('span'); routeChip.className = 'turn-chip';
+      routeChip.textContent = (meta.route === 'proxy' ? 'Proxy' : 'Direct') + ' · ' + meta.modelName;
+      header.appendChild(routeChip);
+    }
+    var costChip = document.createElement('span'); costChip.className = 'turn-chip cost'; costChip.style.display = 'none';
+    header.appendChild(costChip);
+    var elapsed = document.createElement('span'); elapsed.className = 'turn-elapsed'; elapsed.textContent = '0s';
+    header.appendChild(elapsed);
+    el.appendChild(header);
+
+    var chipsRow = document.createElement('div'); chipsRow.className = 'turn-chips-row'; chipsRow.style.display = 'none';
+    el.appendChild(chipsRow);
+
+    var body = document.createElement('div'); body.className = 'turn-body';
+    el.appendChild(body);
+
+    els.chat.appendChild(el);
+
+    var turn = {
+      taskId: taskId,
+      agent: agent,
+      el: el,
+      costChip: costChip,
+      elapsedEl: elapsed,
+      chipsRow: chipsRow,
+      bodyEl: body,
+      toolGroup: null,
+      textEl: null,
+      rawText: '',
+      renderScheduled: false,
+      startedAt: Date.now(),
+      amountUsd: undefined,
+      inputTokens: 0,
+      outputTokens: 0,
+      finalized: false,
+    };
+    turn.timerInterval = setInterval(function () {
+      elapsed.textContent = fmtElapsed(Date.now() - turn.startedAt);
+    }, 1000);
+    turns[taskId] = turn;
+    delete pendingTurnMeta[taskId];
+    return turn;
+  }
+
+  function closeToolGroup(turn) { turn.toolGroup = null; }
+
+  function appendToolCall(turn, event) {
+    var group = turn.toolGroup;
+    if (!group) {
+      var card = document.createElement('div'); card.className = 'tool-group';
+      var head = document.createElement('div'); head.className = 'tool-group-head';
+      head.innerHTML =
+        '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg>' +
+        '<span class="tool-group-title">Ran 0 tools</span>' +
+        '<span class="tool-group-tally"></span>' +
+        '<svg class="chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+      var list = document.createElement('div'); list.className = 'tool-group-list';
+      head.addEventListener('click', function () { card.classList.toggle('expanded'); });
+      card.appendChild(head); card.appendChild(list);
+      turn.bodyEl.appendChild(card);
+      group = turn.toolGroup = { card: card, head: head, list: list, counts: {}, order: [], total: 0 };
+    }
+    group.total++;
+    var toolName = event.name || 'unknown';
+    if (group.counts[toolName] == null) { group.counts[toolName] = 0; group.order.push(toolName); }
+    group.counts[toolName]++;
+    group.head.querySelector('.tool-group-title').textContent = 'Ran ' + group.total + ' tool' + (group.total !== 1 ? 's' : '');
+    group.head.querySelector('.tool-group-tally').textContent = group.order.map(function (n) {
+      return n + (group.counts[n] > 1 ? ' ×' + group.counts[n] : '');
+    }).join(' · ');
+
+    var row = document.createElement('div'); row.className = 'tool-row';
+    var icon = document.createElement('span'); icon.className = 'tool-row-icon'; icon.innerHTML = toolIconSvg(toolName);
+    var nameEl = document.createElement('span'); nameEl.className = 'tool-row-name'; nameEl.textContent = toolName;
+    var inputEl = document.createElement('span'); inputEl.className = 'tool-row-input'; inputEl.textContent = toolInputSummary(event.input);
+    var statusEl = document.createElement('span'); statusEl.className = 'tool-row-status ' + (event.status || ''); statusEl.textContent = event.status || '';
+    row.appendChild(icon); row.appendChild(nameEl); row.appendChild(inputEl); row.appendChild(statusEl);
+    group.list.appendChild(row);
+  }
+
+  function appendChip(turn, className, text, detail) {
+    turn.chipsRow.style.display = 'flex';
+    var chip = document.createElement('span');
+    chip.className = 'turn-chip ' + className + (detail ? ' clickable' : '');
+    chip.textContent = text;
+    turn.chipsRow.appendChild(chip);
+    if (detail) {
+      var open = false;
+      var panel = null;
+      chip.addEventListener('click', function () {
+        open = !open;
+        if (open) {
+          panel = document.createElement('div'); panel.className = 'turn-chip-detail'; panel.textContent = detail;
+          turn.bodyEl.insertBefore(panel, turn.bodyEl.firstChild);
+          scrollBottom();
+        } else if (panel) { panel.remove(); panel = null; }
+      });
+    }
+    return chip;
+  }
+
+  function appendMemoryChip(turn, event) {
+    var summary = event.summary || '';
+    var m = summary.match(/Recall found (\d+)/);
+    if (!m || m[1] === '0') return; // "No recall results found." or nothing usable — no chip.
+    appendChip(turn, 'memory', 'Used ' + m[1] + ' ' + (m[1] === '1' ? 'memory' : 'memories'), summary);
+  }
+
+  function appendThoughtChip(turn, text) {
+    appendChip(turn, '', 'Thought', text);
+  }
+
+  function renderTurnText(turn) {
+    turn.renderScheduled = false;
+    if (!turn.textEl) {
+      turn.textEl = document.createElement('div'); turn.textEl.className = 'md-text';
+      turn.bodyEl.appendChild(turn.textEl);
+    }
+    if (typeof window.kaiMarkdown === 'function') {
+      turn.textEl.innerHTML = window.kaiMarkdown(turn.rawText);
+    } else {
+      turn.textEl.textContent = turn.rawText;
+    }
+  }
+
+  function appendTurnText(turn, text) {
+    closeToolGroup(turn);
+    turn.rawText += text;
+    if (!turn.renderScheduled) {
+      turn.renderScheduled = true;
+      requestAnimationFrame(function () { renderTurnText(turn); });
+    }
+  }
+
+  function updateTurnCost(turn, event) {
+    if (event.inputTokens) turn.inputTokens += event.inputTokens;
+    if (event.outputTokens) turn.outputTokens += event.outputTokens;
+    if (event.amountUsd != null) turn.amountUsd = event.amountUsd;
+    var text = turn.amountUsd != null
+      ? '$' + turn.amountUsd.toFixed(4)
+      : (turn.inputTokens || turn.outputTokens) ? (turn.inputTokens + ' in / ' + turn.outputTokens + ' out') : '';
+    if (text) { turn.costChip.textContent = text; turn.costChip.style.display = 'inline-flex'; }
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () { fallbackCopy(text); });
+    } else {
+      fallbackCopy(text);
+    }
+  }
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* best effort */ }
+    ta.remove();
+  }
+
+  function isAgentAvailable(agent) {
+    var cap = capabilitiesById[agent];
+    return !cap || cap.available !== false;
+  }
+
+  function finalizeTurn(turn) {
+    if (turn.finalized) return;
+    turn.finalized = true;
+    turn.el.classList.remove('streaming');
+    if (turn.timerInterval) { clearInterval(turn.timerInterval); turn.timerInterval = null; }
+
+    var actions = document.createElement('div'); actions.className = 'turn-actions';
+
+    var copyBtn = document.createElement('button'); copyBtn.type = 'button'; copyBtn.className = 'turn-action-btn'; copyBtn.title = 'Copy reply';
+    copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>';
+    copyBtn.addEventListener('click', function () { copyToClipboard(turn.rawText); });
+    actions.appendChild(copyBtn);
+
+    var retryBtn = document.createElement('button'); retryBtn.type = 'button'; retryBtn.className = 'turn-action-btn'; retryBtn.title = 'Retry with ' + agentLabel(turn.agent);
+    retryBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>';
+    retryBtn.addEventListener('click', function () {
+      if (!lastUserPrompt || (state && state.isRunning)) return;
+      appendUserMessage(lastUserPrompt);
+      vscode.postMessage({ type: 'startTask', prompt: lastUserPrompt, agent: turn.agent, route: els.route.value, autonomy: els.autonomy.value });
+    });
+    actions.appendChild(retryBtn);
+
+    var continueBtn = document.createElement('button'); continueBtn.type = 'button'; continueBtn.className = 'turn-action-btn wide'; continueBtn.title = 'Hand off to another agent';
+    continueBtn.innerHTML = 'Continue with <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+    continueBtn.addEventListener('click', function () {
+      var others = AGENT_IDS.filter(function (a) { return a !== turn.agent; });
+      openMenu(continueBtn, others.map(function (a) {
+        var available = isAgentAvailable(a);
+        return {
+          label: agentLabel(a) + (available ? '' : ' (unavailable)'),
+          disabled: !available || (state && state.isRunning),
+          title: !available && capabilitiesById[a] ? capabilitiesById[a].unavailableReason : undefined,
+          onClick: function () { vscode.postMessage({ type: 'handoff', targetAgent: a }); },
+        };
+      }));
+    });
+    actions.appendChild(continueBtn);
+
+    turn.bodyEl.appendChild(actions);
+  }
+
+  // ---- Legacy generic event cards (diff/approval/error/tool fallback) ----
   function cardClass(e) { switch(e.type){case'tool.call':return'tool';case'diff.proposal':case'file.edit.applied':return'diff';case'approval.request':return'approval';case'error':return'error';case'cost.update':return'cost';case'memory.event':return'memory';case'agent.lifecycle':case'autonomy.changed':case'route.changed':return'lifecycle';default:return'raw';} }
   function eventLabel(e) { var L={'tool.call':'Tool Call','diff.proposal':'Diff','file.edit.applied':'Edit Applied','approval.request':'Approval','error':'Error','cost.update':'Cost','memory.event':'Memory','agent.lifecycle':'Lifecycle','autonomy.changed':'Autonomy','route.changed':'Route','permission.escalation':'Permission','raw.fallback':'Raw'}; return L[e.type]||e.type; }
   var TELEMETRY={'agent.lifecycle':1,'autonomy.changed':1,'route.changed':1,'cost.update':1,'memory.event':1,'raw.fallback':1};
   function isTelemetry(type) { return !!TELEMETRY[type]; }
 
-  function accumulateCost(event) { if(event.inputTokens) totalInput+=event.inputTokens; if(event.outputTokens) totalOutput+=event.outputTokens; if(event.amountUsd!=null) totalCost=event.amountUsd; renderState(state); }
+  // Only refreshes the topbar cost pill — never routes through renderState(),
+  // which would also re-evaluate the running/thinking UI and (since a turn's
+  // own header timer replaces the spinner once content starts) incorrectly
+  // restart it on every cost update that arrives mid-run.
+  function updateCostPill() { if(totalCost>0) els.costPill.innerHTML='<span class="pill cost">$'+totalCost.toFixed(4)+' . '+totalInput+' in / '+totalOutput+' out</span>'; }
+  function accumulateCost(event) { if(event.inputTokens) totalInput+=event.inputTokens; if(event.outputTokens) totalOutput+=event.outputTokens; if(event.amountUsd!=null) totalCost=event.amountUsd; updateCostPill(); }
   function telemetryText(event) { switch(event.type){case'cost.update':return[event.inputTokens!=null?'In '+event.inputTokens:'',event.outputTokens!=null?'Out '+event.outputTokens:'',event.amountUsd!=null?'$'+event.amountUsd.toFixed(4):''].filter(Boolean).join(' . ');case'memory.event':return(event.action?event.action+': ':'')+(event.summary||'');case'raw.fallback':var p=typeof event.payload==='string'?event.payload:JSON.stringify(event.payload);return p.length>240?p.slice(0,240)+'...':p;default:return event.detail||event.summary||event.message||'';} }
 
   function renderTelemetry(event) { var row=document.createElement('div');row.className='log-row telemetry';var tag=document.createElement('span');tag.className='log-tag';tag.textContent=eventLabel(event)+(event.agent?' . '+event.agent:'');row.appendChild(tag);row.appendChild(document.createTextNode(telemetryText(event)));return row; }
@@ -184,7 +480,7 @@
       case'file.edit.applied':body.innerHTML='<div class="diff-summary">'+esc(event.filePath)+'</div><div>'+esc(event.summary)+'</div>';break;
       case'approval.request':body.innerHTML='<strong>'+esc(event.title)+'</strong> <span class="risk-'+esc(event.risk)+'">['+esc(event.risk)+' risk]</span><div>'+esc(event.detail)+'</div>';break;
       case'error':body.textContent=event.message;break;
-      case'cost.update':if(event.inputTokens) totalInput+=event.inputTokens;if(event.outputTokens) totalOutput+=event.outputTokens;if(event.amountUsd!=null) totalCost=event.amountUsd;body.innerHTML='<div class="cost-detail">'+(event.inputTokens!=null?'In: '+event.inputTokens+' tk':'')+(event.outputTokens!=null?' | Out: '+event.outputTokens+' tk':'')+(event.amountUsd!=null?' | $'+event.amountUsd.toFixed(4):'')+'</div>';renderState(state);break;
+      case'cost.update':body.innerHTML='<div class="cost-detail">'+(event.inputTokens!=null?'In: '+event.inputTokens+' tk':'')+(event.outputTokens!=null?' | Out: '+event.outputTokens+' tk':'')+(event.amountUsd!=null?' | $'+event.amountUsd.toFixed(4):'')+'</div>';break;
       case'memory.event':body.innerHTML='<span class="memory-action">'+esc(event.action)+'</span><div>'+esc(event.summary)+'</div>';break;
       default:body.textContent=event.detail||event.summary||event.message||'';
     }
@@ -192,6 +488,7 @@
   }
 
   function activityDetail(event) { switch(event.type){case'tool.call':return(event.name||'tool')+(event.status&&event.status!=='started'?' . '+event.status:'');case'diff.proposal':return'Editing '+(event.filePath||'file');case'file.edit.applied':return'Applied edit to '+(event.filePath||'file');case'memory.event':return event.action?'Memory: '+event.action:'';case'agent.lifecycle':return event.detail||'';default:return'';} }
+
   function appendEvent(event) {
     if(event.compareId){
       if(!activeCompare) activeCompare={left:event.side==='left'?event.agent:'',right:event.side==='right'?event.agent:''};
@@ -206,8 +503,60 @@
       else if(event.type==='cost.update') accumulateCost(event);
       scrollBottom(true); return;
     }
-    if(event.type==='text.delta'){appendAssistantText(event.text,event.agent);return;} if(event.type==='cost.update') accumulateCost(event); var detail=activityDetail(event); if(detail) setThinkingDetail(detail); removeEmpty(); finalizeAssistant(); if(isTelemetry(event.type)){els.chat.appendChild(renderTelemetry(event));}else{els.chat.appendChild(renderCard(event));} pinThinking(); scrollBottom();
+
+    var detail = activityDetail(event);
+    if (detail) setThinkingDetail(detail);
+
+    // Route agent-attributable events with a real taskId into their turn.
+    var taskId = event.taskId;
+    var isTurnEvent = taskId && taskId !== 'workbench' && event.agent;
+    if (isTurnEvent) {
+      var turn = ensureTurn(taskId, event.agent);
+      removeEmpty(); finalizeAssistant(); stopThinking();
+
+      if (event.type === 'text.delta') {
+        if (event.channel === 'summary') { appendThoughtChip(turn, event.text); }
+        else { appendTurnText(turn, event.text); }
+        pinThinking(); scrollBottom(); return;
+      }
+      if (event.type === 'tool.call') { appendToolCall(turn, event); pinThinking(); scrollBottom(); return; }
+      if (event.type === 'memory.event') {
+        if (event.action === 'recall') { appendMemoryChip(turn, event); pinThinking(); scrollBottom(); return; }
+        turn.bodyEl.appendChild(renderTelemetry(event)); return;
+      }
+      if (event.type === 'cost.update') { updateTurnCost(turn, event); accumulateCost(event); return; }
+      if (event.type === 'diff.proposal' || event.type === 'file.edit.applied' || event.type === 'approval.request' || event.type === 'error') {
+        closeToolGroup(turn);
+        turn.bodyEl.appendChild(renderCard(event));
+        // A bare error (e.g. "agent unavailable") can end a turn with no
+        // terminal agent.lifecycle event following it — finalize here too,
+        // so the turn doesn't stay "streaming" with a timer that never stops.
+        if (event.type === 'error') finalizeTurn(turn);
+        pinThinking(); scrollBottom(); return;
+      }
+      if (event.type === 'agent.lifecycle') {
+        // 'paused' covers both a user-initiated stop and a handoff pause —
+        // either way this turn's run is over and needs its actions + a
+        // stopped timer, same as completed/failed.
+        if (event.status === 'completed' || event.status === 'failed' || event.status === 'paused') { finalizeTurn(turn); }
+        else { turn.bodyEl.appendChild(renderTelemetry(event)); }
+        scrollBottom(); return;
+      }
+      // Other telemetry (autonomy.changed, route.changed, raw.fallback, permission.escalation)
+      turn.bodyEl.appendChild(renderTelemetry(event));
+      pinThinking(); scrollBottom(); return;
+    }
+
+    // Fallback for events with no agent/taskId context (workbench-level errors etc.)
+    if(event.type==='text.delta'){appendAssistantTextFallback(event.text,event.agent);return;}
+    if(event.type==='cost.update') accumulateCost(event);
+    removeEmpty(); finalizeAssistant();
+    if(isTelemetry(event.type)){els.chat.appendChild(renderTelemetry(event));}else{els.chat.appendChild(renderCard(event));}
+    pinThinking(); scrollBottom();
   }
+
+  // Only used for the no-taskId fallback path above; normal replies go through appendTurnText.
+  function appendAssistantTextFallback(text,agent) { removeEmpty(); if(!currentAssistant){ currentAssistant=document.createElement('div');currentAssistant.className='msg assistant streaming';var role=document.createElement('span');role.className='role';role.textContent=agent||(state&&state.activeAgent)||'Assistant';currentAssistant.appendChild(role);currentAssistant.appendChild(document.createTextNode(''));els.chat.appendChild(currentAssistant); } var last=currentAssistant.lastChild; if(last&&last.nodeType===3) last.nodeValue+=text; else currentAssistant.appendChild(document.createTextNode(text)); pinThinking(); scrollBottom(); }
 
   function renderState(next) {
     state=next;
@@ -219,6 +568,18 @@
     if(totalCost>0) els.costPill.innerHTML='<span class="pill cost">$'+totalCost.toFixed(4)+' . '+totalInput+' in / '+totalOutput+' out</span>';
   }
 
+  function applyCapabilities(capabilities) {
+    capabilitiesById = {};
+    (capabilities || []).forEach(function (c) { capabilitiesById[c.id] = c; });
+    Array.prototype.forEach.call(els.agent.options, function (opt) {
+      var cap = capabilitiesById[opt.value];
+      var unavailable = cap && cap.available === false;
+      opt.disabled = !!unavailable;
+      opt.title = unavailable ? (cap.unavailableReason || 'Unavailable') : '';
+      opt.textContent = agentLabel(opt.value) + (unavailable ? ' (unavailable)' : '');
+    });
+  }
+
   function dispatchPrompt(prompt) {
     prompt=prompt.trim();if(!prompt) return;
     var m;
@@ -226,6 +587,7 @@
     if((m=prompt.match(/^\/agent\s+(\S+)/i))){var a=m[1].toLowerCase();if(AGENT_IDS.indexOf(a)>=0){vscode.postMessage({type:'setAgent',agent:a});clearPrompt();return;}}
     if((m=prompt.match(/^\/route\s+(\S+)/i))){var r=m[1].toLowerCase();if(r==='direct'||r==='proxy'){vscode.postMessage({type:'setRoute',route:r});clearPrompt();return;}}
     if((m=prompt.match(/^\/(review|implement|debug|explain|test)$/i))){var tid=m[1].toLowerCase();if(TPLS[tid]){els.prompt.value=TPLS[tid];autoGrow();els.prompt.focus();}return;}
+    lastUserPrompt = prompt;
     appendUserMessage(prompt);vscode.postMessage({type:'startTask',prompt:prompt,agent:els.agent.value,route:els.route.value,autonomy:els.autonomy.value});clearPrompt();
   }
 
@@ -249,7 +611,21 @@
 
   var showDetails=false;els.chat.classList.add('hide-telemetry');
   var detailsToggle=document.getElementById('detailsToggle');detailsToggle.addEventListener('click',function(){showDetails=!showDetails;els.chat.classList.toggle('hide-telemetry',!showDetails);detailsToggle.classList.toggle('active',showDetails);detailsToggle.textContent=showDetails?'Hide log':'Details';if(showDetails) scrollBottom(true);});
-  els.chat.addEventListener('click',function(e){var ap=e.target.closest('[data-approve]');var rj=e.target.closest('[data-reject]');if(ap) vscode.postMessage({type:'approveDiff',eventId:ap.getAttribute('data-approve')});else if(rj) vscode.postMessage({type:'rejectDiff',eventId:rj.getAttribute('data-reject')});});
+  els.chat.addEventListener('click',function(e){
+    var ap=e.target.closest('[data-approve]');var rj=e.target.closest('[data-reject]');
+    if(ap){vscode.postMessage({type:'approveDiff',eventId:ap.getAttribute('data-approve')});return;}
+    if(rj){vscode.postMessage({type:'rejectDiff',eventId:rj.getAttribute('data-reject')});return;}
+
+    var link=e.target.closest('[data-kai-link]');
+    if(link){e.preventDefault();vscode.postMessage({type:'openLink',url:link.getAttribute('data-kai-link')});return;}
+
+    var copyEl=e.target.closest('[data-copy-text]');
+    if(copyEl){
+      copyToClipboard(copyEl.getAttribute('data-copy-text'));
+      var original=copyEl.textContent;copyEl.textContent='Copied';copyEl.classList.add('copied');
+      setTimeout(function(){copyEl.textContent=original;copyEl.classList.remove('copied');},1200);
+    }
+  });
 
   // Messages from extension
   window.addEventListener('message',function(e){
@@ -257,6 +633,8 @@
     if(m.type==='state'){renderState(m.state);if(m.plan!=null){currentPlan=m.plan;renderPlanProgress(m.plan);}}
     else if(m.type==='event') appendEvent(m.event);
     else if(m.type==='planEvent') handlePlanEvent(m.planEvent);
+    else if(m.type==='capabilities') applyCapabilities(m.capabilities);
+    else if(m.type==='turnMeta') pendingTurnMeta[m.taskId]={agent:m.agent,route:m.route,modelName:m.modelName};
     else if(m.type==='templates'){if(els.planTemplate){els.planTemplate.innerHTML='<option value="">Load template...</option>';for(var i=0;i<m.templates.length;i++){var t=m.templates[i];els.planTemplate.innerHTML+='<option value="'+esc(JSON.stringify(t))+'">'+esc(t.name)+'</option>';}}}
     else if(m.type==='templateLoaded'&&m.plan) loadTemplateIntoScreen(m.plan);
     else if(m.type==='costEstimate'){var est=m.estimate;els.costEstimate.textContent=est.modelName+': ~'+est.estimatedInputTokens.toLocaleString()+' in / ~'+est.estimatedOutputTokens.toLocaleString()+' out = $'+est.estimatedCostUsd.toFixed(est.estimatedCostUsd<0.01?4:2);}

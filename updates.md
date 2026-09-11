@@ -2,6 +2,39 @@
 
 ## 2026-09-11
 
+### Phase 1 chat redesign
+
+Reworked how replies render in the Agent Workbench chat, following the
+`docs/design/*.dc.html` reference screens.
+
+- **Reply turns** — each reply is now a "turn": an agent-coloured dot and
+  name, a route/model chip (e.g. "Proxy · DeepSeek V4 Pro (via proxy)"), a
+  live cost chip, and an elapsed timer, instead of a generic bordered bubble.
+- **Markdown rendering** (`src/panel/markdown.js`) — replies render fenced
+  code blocks (with a language label and a working Copy button), inline
+  code, bold/italic, headings, lists, and clickable links (opened via
+  `vscode.env.openExternal`, never a raw `href`).
+- **Grouped tool calls** — consecutive tool calls collapse into a single
+  "Ran N tools" card with a per-tool tally, expandable to see each call.
+- **Memory and thinking chips** — a successful recall shows as a "Used N
+  memories" chip you can click to see the recall text; a `channel: 'summary'`
+  text delta renders as a collapsible "Thought" chip.
+- **Message actions** — Copy, Retry (resend the last prompt to the same
+  agent), and Continue with ▾ (hand off to another agent, dimming ones the
+  Settings capability check reports as unavailable).
+- **Unavailable agents** are now greyed out in the agent picker with the
+  reason as a tooltip, driven by the `capabilities` message the webview
+  previously ignored.
+- **Notifications** — a run that takes over 20 seconds, or an approval
+  request, shows a VS Code notification with an Open button and an
+  activity-bar badge when the KAI sidebar isn't visible; both clear when you
+  open it.
+- Replaced hard-coded hex colours in the plan-progress and compare-mode CSS
+  with `--vscode-*`/`--kai-*` tokens so they track the active theme (Dark
+  Modern, Light Modern, and High Contrast all checked).
+- Added `getModelName()` to the cost estimator so the reply header and any
+  future composer work share one source for per-agent/route model names.
+
 ### Phase 0 correctness fixes
 
 - Preserved `/v1` in proxy base URLs while normalizing only Anthropic paths.

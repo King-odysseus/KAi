@@ -12,3 +12,4 @@ vitest.config.ts
 # Keep webview static assets (loaded at runtime from src/panel)
 !src/panel/workbench.css
 !src/panel/workbench.js
+!src/panel/markdown.js

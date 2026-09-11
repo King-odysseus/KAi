@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import { createEventId, nowIso, type WorkbenchEvent } from '../core/events';
 import type { AgentId, AutonomyMode, RouteMode, WorkbenchState } from '../core/types';
-import { estimateCost } from '../core/cost-estimator';
+import { estimateCost, getModelName } from '../core/cost-estimator';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 import type { Plan } from '../core/plan';
 import type { PlanEvent } from '../orchestrator/plan-runner';
 import type { PlanTemplate } from '../core/plan-templates';
 import { listPlanTemplates, savePlanTemplate, deletePlanTemplate, templateToPlan } from '../core/plan-templates';
+import { AGENT_PROVIDERS } from '../config/agent-catalog';
 import * as path from 'path';
 
 interface WebviewMessage {
@@ -14,7 +15,7 @@ interface WebviewMessage {
     | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab'
     | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan' | 'compareTask'
     | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
-    | 'retryStep' | 'skipStep';
+    | 'retryStep' | 'skipStep' | 'openLink';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -22,6 +23,7 @@ interface WebviewMessage {
   targetAgent?: AgentId;
   eventId?: string;
   value?: string;
+  url?: string;
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -31,6 +33,15 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
 
   /** All live webviews (sidebar view + any editor-tab panels), kept in sync. */
   private readonly webviews = new Set<vscode.Webview>();
+
+  /** The sidebar view specifically — the only one with `.visible`/`.badge`. */
+  private sidebarView: vscode.WebviewView | undefined;
+  private unseenCount = 0;
+
+  /** taskId of the run we already announced turnMeta for, so state changes
+   * that don't start a new run (e.g. a plain agent/route switch) don't
+   * re-announce. */
+  private lastAnnouncedTaskId: string | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -54,11 +65,53 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         this.postEvent(event);
       }
     });
+
+    // Announce agent/route/model for a run the moment it starts, so the
+    // chat can show a reply header before the first content event arrives.
+    this.orchestrator.on('state', (s: WorkbenchState) => {
+      if (s.isRunning && s.activeTaskId && s.activeTaskId !== this.lastAnnouncedTaskId) {
+        this.lastAnnouncedTaskId = s.activeTaskId;
+        void this.broadcast({
+          type: 'turnMeta',
+          taskId: s.activeTaskId,
+          agent: s.activeAgent,
+          route: s.route,
+          modelName: getModelName(s.activeAgent, s.route),
+        });
+      }
+    });
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.attachWebview(webviewView.webview);
-    webviewView.onDidDispose(() => this.detachWebview(webviewView.webview));
+    this.sidebarView = webviewView;
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) this.clearUnseen();
+    });
+    webviewView.onDidDispose(() => {
+      this.detachWebview(webviewView.webview);
+      if (this.sidebarView === webviewView) this.sidebarView = undefined;
+    });
+  }
+
+  /** Whether the sidebar chat view is currently the visible one — used to
+   * decide whether a finished run needs a notification/badge. */
+  isSidebarVisible(): boolean {
+    return this.sidebarView?.visible ?? false;
+  }
+
+  /** Bumps the activity-bar badge — call when something happened (a run
+   * finished, an approval is waiting) while the sidebar wasn't visible.
+   * No-op for editor-tab panels, which don't support badges. */
+  notifyUnseen(): void {
+    if (!this.sidebarView) return;
+    this.unseenCount++;
+    this.sidebarView.badge = { value: this.unseenCount, tooltip: 'KAI has updates' };
+  }
+
+  private clearUnseen(): void {
+    this.unseenCount = 0;
+    if (this.sidebarView) this.sidebarView.badge = undefined;
   }
 
   /** Wire a webview (sidebar or editor panel) to the shared chat controller. */
@@ -313,6 +366,11 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         await this.orchestrator.stopActiveTask();
         await this.postState();
         break;
+      case 'openLink':
+        if (message.url && /^https?:\/\//i.test(message.url)) {
+          await vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
+        break;
     }
   }
 
@@ -339,9 +397,19 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     const state = JSON.stringify(this.orchestrator.getState()).replace(/</g, '\\u003c');
     const plan = JSON.stringify(this.orchestrator.getPlan()).replace(/</g, '\\u003c');
     const agentIdsJson = JSON.stringify(AGENT_IDS);
+    const agentNames: Record<AgentId, string> = {
+      claude: AGENT_PROVIDERS.claude.displayName,
+      codex: AGENT_PROVIDERS.codex.displayName,
+      qwen: AGENT_PROVIDERS.qwen.displayName,
+      gemini: AGENT_PROVIDERS.gemini.displayName,
+    };
+    const agentNamesJson = JSON.stringify(agentNames);
 
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'panel', 'workbench.css'),
+    );
+    const markdownUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'src', 'panel', 'markdown.js'),
     );
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'panel', 'workbench.js'),
@@ -443,7 +511,9 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     window.__KAI_INITIAL_STATE__ = ${state};
     window.__KAI_INITIAL_PLAN__ = ${plan};
     window.__KAI_AGENT_IDS__ = ${agentIdsJson};
+    window.__KAI_AGENT_NAMES__ = ${agentNamesJson};
   </script>
+  <script nonce="${nonce}" src="${markdownUri}"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

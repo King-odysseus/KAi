@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countTokens, estimateCost, formatCostEstimate } from '../src/core/cost-estimator';
+import { countTokens, estimateCost, formatCostEstimate, getModelName } from '../src/core/cost-estimator';
 
 describe('countTokens', () => {
   it('returns 0 for empty string', () => {
@@ -70,6 +70,16 @@ describe('cost-estimator', () => {
     expect(summary).toContain('~');
     expect(summary).toContain('in');
     expect(summary).toContain('out');
+  });
+
+  it('getModelName matches the model name embedded in a cost estimate', () => {
+    const agents = ['claude', 'codex', 'qwen', 'gemini'] as const;
+    const routes = ['direct', 'proxy'] as const;
+    for (const agent of agents) {
+      for (const route of routes) {
+        expect(getModelName(agent, route)).toBe(estimateCost('test', agent, route).modelName);
+      }
+    }
   });
 
   it('includes model name for each agent/route combo', () => {
