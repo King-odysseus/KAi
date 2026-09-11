@@ -12,6 +12,7 @@
   var planMode = false;
   var planSteps = [];
   var currentPlan = window.__KAI_INITIAL_PLAN__ || null;
+  var activeCompare = null;
 
   var TPLS = {
     review: 'Review this code for bugs, style issues, and improvements:',
@@ -201,7 +202,7 @@
       }
       var tp=document.getElementById(event.side==='left'?'cp-left':'cp-right'); if(!tp) return;
       if(event.type==='text.delta'){ var t=document.createElement('span');t.className='cmp-text';t.textContent=event.text; tp.appendChild(t); }
-      else if(event.type==='raw.fallback'&&event.sourceType==='compare.complete'){ renderCompareSummary(event.payload); }
+      else if(event.type==='raw.fallback'&&event.sourceType==='compare.complete' && typeof renderCompareSummary==='function'){ renderCompareSummary(event.payload); }
       else if(event.type==='cost.update') accumulateCost(event);
       scrollBottom(true); return;
     }

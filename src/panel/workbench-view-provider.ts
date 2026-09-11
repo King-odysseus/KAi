@@ -408,7 +408,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         <button data-tpl="test">Test</button>
       </div>
       <div class="controls">
-        <select id="agentB" class="compare-agent" title="Compare agent" style="display:none;"><option value="claude">Claude</option><option value="codex">Codex</option><option value="qwen">Qwen</option><option value="gemini">Gemini</option></select><select id="agent" title="Agent">
+        <select id="agent" title="Agent">
           <option value="claude">Claude</option>
           <option value="codex">Codex</option>
           <option value="qwen">Qwen</option>
@@ -426,7 +426,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       </div>
       <div class="input-row">
         <textarea id="prompt" rows="1" placeholder="Message KAI…  (Enter to send, Shift+Enter for newline)"></textarea>
-        <button id="compareBtn" class="plan-toggle compare-btn" title="Compare: run two agents on the same prompt side-by-side">⇶</button><button id="planToggle" class="plan-toggle" title="Plan mode: define multi-step agent workflows">≡</button>
+        <button id="planToggle" class="plan-toggle" title="Plan mode: define multi-step agent workflows">≡</button>
         <button id="send">Send</button>
       </div>
       <div class="cost-estimate" id="costEstimate"></div>
