@@ -25,7 +25,7 @@ describe('Orchestrator (integration)', () => {
     const state: WorkbenchState = {
       activeAgent: 'claude',
       route: 'direct',
-      autonomy: 'review',
+      autonomy: 'ask',
       isRunning: false,
     };
     return new WorkbenchOrchestrator(state, undefined, undefined, new NoopDiffApplier());
@@ -36,7 +36,7 @@ describe('Orchestrator (integration)', () => {
     const state = orch.getState();
     expect(state.activeAgent).toBe('claude');
     expect(state.route).toBe('direct');
-    expect(state.autonomy).toBe('review');
+    expect(state.autonomy).toBe('ask');
     expect(state.isRunning).toBe(false);
   });
 
@@ -46,8 +46,8 @@ describe('Orchestrator (integration)', () => {
     expect(orch.getState().activeAgent).toBe('codex');
     orch.setRoute('proxy');
     expect(orch.getState().route).toBe('proxy');
-    orch.setAutonomy('auto');
-    expect(orch.getState().autonomy).toBe('auto');
+    orch.setAutonomy('autoEdit');
+    expect(orch.getState().autonomy).toBe('autoEdit');
   });
 
   it('prevents concurrent tasks', async () => {
@@ -141,7 +141,7 @@ describe('Permission model (integration)', () => {
     const state: WorkbenchState = {
       activeAgent: 'claude',
       route: 'direct',
-      autonomy: 'review',
+      autonomy: 'ask',
       isRunning: false,
     };
     return new WorkbenchOrchestrator(state, undefined, undefined, new NoopDiffApplier());
@@ -156,7 +156,7 @@ describe('Permission model (integration)', () => {
 
   it('auto mode allows workspace edits', () => {
     const orch = createOrch();
-    orch.setAutonomy('auto');
+    orch.setAutonomy('autoEdit');
     const result = orch.checkPermission('workspaceEdit');
     expect(result.allowed).toBe(true);
     expect(result.escalated).toBe(false);

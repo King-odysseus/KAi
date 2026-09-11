@@ -34,6 +34,26 @@ export function getModelName(agent: AgentId, route: RouteMode): string {
   return resolvePricing(agent, route).model;
 }
 
+// Approximate context window (tokens) per agent/route pair, as of mid-2026.
+// Used only for the composer's context-used meter — an estimate, not a hard
+// limit enforced anywhere.
+const CONTEXT_WINDOW: Record<string, number> = {
+  'claude:direct': 200_000,
+  'claude:proxy': 128_000,
+  'codex:direct': 200_000,
+  'codex:proxy': 64_000,
+  'qwen:direct': 128_000,
+  'qwen:proxy': 64_000,
+  'gemini:direct': 1_000_000,
+  'gemini:proxy': 64_000,
+};
+
+/** The approximate context window size for an agent/route pair, in tokens. */
+export function getContextWindow(agent: AgentId, route: RouteMode): number {
+  const key = `${agent}:${route}`;
+  return CONTEXT_WINDOW[key] || CONTEXT_WINDOW['claude:direct'];
+}
+
 /**
  * Improved token estimation using character-count heuristics that better
  * model real tokenization.

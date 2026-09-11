@@ -16,7 +16,7 @@ export class StubAgentAdapter implements AgentAdapter {
       available: this.available,
       unavailableReason: this.available ? undefined : `${this.displayName} adapter is scaffolded but not wired yet.`,
       supportsRoutes: ['direct', 'proxy'],
-      supportsAutonomy: ['review', 'auto', 'custom'],
+      supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
       supportsTools: false,
       supportsApprovals: true,
       supportsDiffs: true,

@@ -9,7 +9,7 @@ describe('prompt stdin arguments', () => {
       taskId: 'task_1',
       prompt: 'line one %PATH%\\nline two',
       route: 'direct' as const,
-      autonomy: 'review' as const,
+      autonomy: 'ask' as const,
     };
 
     expect(buildClaudeArgs(request)).toEqual([
@@ -21,10 +21,13 @@ describe('prompt stdin arguments', () => {
 });
 
 describe('buildClaudeArgs', () => {
+  // Verified against `claude --help`: --permission-mode choices are
+  // acceptEdits, auto, bypassPermissions, default, dontAsk, plan.
   it.each([
-    ['review', 'default'],
+    ['plan', 'plan'],
+    ['ask', 'default'],
     ['custom', 'default'],
-    ['auto', 'acceptEdits'],
+    ['autoEdit', 'acceptEdits'],
   ] as const)('maps %s autonomy to Claude %s permission mode', (autonomy, permissionMode) => {
     expect(buildClaudeArgs({
       taskId: 'task_1',
@@ -33,27 +36,66 @@ describe('buildClaudeArgs', () => {
       autonomy,
     })).toEqual(['-p', '--output-format', 'json', '--permission-mode', permissionMode]);
   });
+
+  it('full mode adds --dangerously-skip-permissions alongside bypassPermissions', () => {
+    expect(buildClaudeArgs({
+      taskId: 'task_1', prompt: 'prompt', route: 'direct', autonomy: 'full',
+    })).toEqual(['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions']);
+  });
+
+  it('custom mode with workspaceEdit allowed maps to acceptEdits', () => {
+    expect(buildClaudeArgs({
+      taskId: 'task_1', prompt: 'prompt', route: 'direct', autonomy: 'custom',
+      customAllowed: { workspaceEdit: true },
+    })).toEqual(['-p', '--output-format', 'json', '--permission-mode', 'acceptEdits']);
+  });
+
+  it('appends --resume when a session id is given', () => {
+    expect(buildClaudeArgs({
+      taskId: 'task_1', prompt: 'prompt', route: 'direct', autonomy: 'ask', resumeSessionId: 'abc-123',
+    })).toEqual(['-p', '--output-format', 'json', '--permission-mode', 'default', '--resume', 'abc-123']);
+  });
 });
 
 describe('buildCodexArgs', () => {
-  it('uses read-only sandbox in review mode', () => {
+  // Verified against `codex exec --help`: --sandbox choices are read-only,
+  // workspace-write, danger-full-access.
+  it('uses read-only sandbox in plan mode', () => {
     expect(buildCodexArgs('codeproxy', {
       taskId: 'task_1',
       prompt: 'inspect',
       route: 'direct',
-      autonomy: 'review',
+      autonomy: 'plan',
       cwd: 'C:/repo'
     })).toEqual(['exec', '--json', '--sandbox', 'read-only', '--cd', 'C:/repo', '-']);
   });
 
-  it('uses workspace-write and profile in proxy auto mode', () => {
+  it('uses read-only sandbox in ask mode (no non-interactive approval channel yet)', () => {
+    expect(buildCodexArgs('codeproxy', {
+      taskId: 'task_1', prompt: 'inspect', route: 'direct', autonomy: 'ask',
+    })).toEqual(['exec', '--json', '--sandbox', 'read-only', '-']);
+  });
+
+  it('uses workspace-write and profile in proxy autoEdit mode', () => {
     expect(buildCodexArgs('codeproxy', {
       taskId: 'task_1',
       prompt: 'edit',
       route: 'proxy',
-      autonomy: 'auto',
+      autonomy: 'autoEdit',
       cwd: 'C:/repo'
     })).toEqual(['exec', '--json', '--sandbox', 'workspace-write', '--cd', 'C:/repo', '--profile', 'codeproxy', '-']);
+  });
+
+  it('uses danger-full-access sandbox in full mode', () => {
+    expect(buildCodexArgs(undefined, {
+      taskId: 'task_1', prompt: 'edit', route: 'direct', autonomy: 'full',
+    })).toEqual(['exec', '--json', '--sandbox', 'danger-full-access', '-']);
+  });
+
+  it('resume uses its own flag set with no --sandbox/--cd/--profile', () => {
+    expect(buildCodexArgs('codeproxy', {
+      taskId: 'task_1', prompt: 'continue', route: 'proxy', autonomy: 'ask', cwd: 'C:/repo', resumeSessionId: 'sess-1',
+    })).toEqual(['exec', 'resume', 'sess-1', '--json', '-']);
   });
 });
 
@@ -88,7 +130,7 @@ describe('ProcessAgentAdapter', () => {
     });
     const prompt = 'line one %PATH%\nline two';
 
-    for await (const _event of adapter.run({ taskId: 'task_stdin', prompt, route: 'direct', autonomy: 'review' })) {
+    for await (const _event of adapter.run({ taskId: 'task_stdin', prompt, route: 'direct', autonomy: 'ask' })) {
       // Consume the run.
     }
 
@@ -112,7 +154,7 @@ describe('ProcessAgentAdapter', () => {
     });
 
     const events: WorkbenchEvent[] = [];
-    for await (const event of adapter.run({ taskId: 'task_1', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+    for await (const event of adapter.run({ taskId: 'task_1', prompt: 'hi', route: 'direct', autonomy: 'ask' })) {
       events.push(event);
     }
 
@@ -148,7 +190,7 @@ describe('ProcessAgentAdapter', () => {
     });
 
     const events: WorkbenchEvent[] = [];
-    for await (const event of adapter.run({ taskId: 'task_split', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+    for await (const event of adapter.run({ taskId: 'task_split', prompt: 'hi', route: 'direct', autonomy: 'ask' })) {
       events.push(event);
     }
 
@@ -182,7 +224,7 @@ describe('ProcessAgentAdapter', () => {
     });
 
     const events: WorkbenchEvent[] = [];
-    for await (const event of adapter.run({ taskId: 'task_final', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+    for await (const event of adapter.run({ taskId: 'task_final', prompt: 'hi', route: 'direct', autonomy: 'ask' })) {
       events.push(event);
     }
 
@@ -225,7 +267,7 @@ describe('ProcessAgentAdapter', () => {
     });
 
     const events: WorkbenchEvent[] = [];
-    for await (const event of adapter.run({ taskId: 'task_parser', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+    for await (const event of adapter.run({ taskId: 'task_parser', prompt: 'hi', route: 'direct', autonomy: 'ask' })) {
       events.push(event);
     }
 
@@ -258,7 +300,7 @@ describe('ProcessAgentAdapter', () => {
     });
 
     const events: WorkbenchEvent[] = [];
-    for await (const event of adapter.run({ taskId: 'task_1', prompt: 'hi', route: 'proxy', autonomy: 'review' })) {
+    for await (const event of adapter.run({ taskId: 'task_1', prompt: 'hi', route: 'proxy', autonomy: 'ask' })) {
       events.push(event);
     }
 
@@ -278,7 +320,7 @@ describe('ProcessAgentAdapter', () => {
 
     const events: WorkbenchEvent[] = [];
     const consume = (async () => {
-      for await (const event of adapter.run({ taskId: 'task_stop', prompt: 'wait', route: 'direct', autonomy: 'auto' })) {
+      for await (const event of adapter.run({ taskId: 'task_stop', prompt: 'wait', route: 'direct', autonomy: 'autoEdit' })) {
         events.push(event);
       }
     })();

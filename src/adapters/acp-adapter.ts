@@ -54,7 +54,7 @@ export class AcpAgentAdapter implements AgentAdapter {
         ? undefined
         : info.detail || `${this.command} not found. Install ${this.displayName} to enable.`,
       supportsRoutes: ['direct', 'proxy'],
-      supportsAutonomy: ['review', 'auto', 'custom'],
+      supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
       supportsTools: true,
       supportsApprovals: true,
       supportsDiffs: true,

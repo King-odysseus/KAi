@@ -54,7 +54,7 @@ export class ProcessAgentAdapter implements AgentAdapter {
       version: info.version,
       unavailableReason: info.available ? undefined : info.detail || `${this.command} was not found.`,
       supportsRoutes: ['direct', 'proxy'],
-      supportsAutonomy: ['review', 'auto', 'custom'],
+      supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
       supportsTools: true,
       supportsApprovals: this.supportsApprovals,
       supportsDiffs: true,
@@ -220,8 +220,35 @@ export class ProcessAgentAdapter implements AgentAdapter {
   }
 }
 
+/** Codex sandbox policy per autonomy mode. Verified against `codex exec --help`
+ * (possible values: read-only, workspace-write, danger-full-access). Codex
+ * exec has no per-edit approval channel in non-interactive mode, so 'ask'
+ * behaves like 'plan' (read-only) until Phase 6 wires up real approvals. */
+function codexSandboxFor(autonomy: AgentRunRequest['autonomy'], customAllowed?: AgentRunRequest['customAllowed']): string {
+  switch (autonomy) {
+    case 'plan':
+    case 'ask':
+      return 'read-only';
+    case 'autoEdit':
+      return 'workspace-write';
+    case 'full':
+      return 'danger-full-access';
+    case 'custom':
+      return customAllowed?.destructiveFilesystem ? 'danger-full-access' : customAllowed?.workspaceEdit ? 'workspace-write' : 'read-only';
+    default:
+      return 'read-only';
+  }
+}
+
 export function buildCodexArgs(profile: string | undefined, request: AgentRunRequest): string[] {
-  const sandbox = request.autonomy === 'review' ? 'read-only' : 'workspace-write';
+  // `codex exec resume <id>` has its own, much smaller flag set (verified
+  // against `codex exec resume --help`) — no --sandbox, --cd, or --profile.
+  // A resumed session keeps whatever sandbox/cwd/profile it started with.
+  if (request.resumeSessionId) {
+    return ['exec', 'resume', request.resumeSessionId, '--json', '-'];
+  }
+
+  const sandbox = codexSandboxFor(request.autonomy, request.customAllowed);
   const args = ['exec', '--json', '--sandbox', sandbox];
   if (request.cwd) {
     args.push('--cd', request.cwd);
@@ -233,11 +260,38 @@ export function buildCodexArgs(profile: string | undefined, request: AgentRunReq
   return args;
 }
 
+/** Claude permission mode per autonomy mode. Verified against `claude --help`
+ * (--permission-mode choices: acceptEdits, auto, bypassPermissions, default,
+ * dontAsk, plan). 'full' additionally needs --dangerously-skip-permissions —
+ * bypassPermissions alone is not honored without it. */
+function claudePermissionFor(autonomy: AgentRunRequest['autonomy'], customAllowed?: AgentRunRequest['customAllowed']): string {
+  switch (autonomy) {
+    case 'plan':
+      return 'plan';
+    case 'autoEdit':
+      return 'acceptEdits';
+    case 'full':
+      return 'bypassPermissions';
+    case 'custom':
+      return customAllowed?.workspaceEdit ? 'acceptEdits' : 'default';
+    case 'ask':
+    default:
+      return 'default';
+  }
+}
+
 export function buildClaudeArgs(request: AgentRunRequest): string[] {
   // Non-streaming JSON mode: 3-5x faster through the proxy than stream-json --verbose.
   // The parser handles 'result' type events from --output-format json.
-  const permissionMode = request.autonomy === 'auto' ? 'acceptEdits' : 'default';
-  return ['-p', '--output-format', 'json', '--permission-mode', permissionMode];
+  const permissionMode = claudePermissionFor(request.autonomy, request.customAllowed);
+  const args = ['-p', '--output-format', 'json', '--permission-mode', permissionMode];
+  if (permissionMode === 'bypassPermissions') {
+    args.push('--dangerously-skip-permissions');
+  }
+  if (request.resumeSessionId) {
+    args.push('--resume', request.resumeSessionId);
+  }
+  return args;
 }
 
 function tryParseJson(line: string): unknown | undefined {

@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
-import type { AgentId, AutonomyMode, RouteMode } from '../core/types';
+import type { AgentId, AutonomyMode, PermissionKey, RouteMode } from '../core/types';
+import { migrateAutonomyMode } from '../core/types';
 
 const KEYS = {
   agent: 'kai.project.agent',
   route: 'kai.project.route',
   autonomy: 'kai.project.autonomy',
+  customPermissions: 'kai.project.customPermissions',
 } as const;
 
 /**
@@ -26,7 +28,8 @@ export class ProjectPreferences {
   }
 
   getAutonomy(fallback: AutonomyMode): AutonomyMode {
-    return this.workspaceState.get<AutonomyMode>(KEYS.autonomy, fallback);
+    // Migrate a possibly-legacy value stored by an older KAI version.
+    return migrateAutonomyMode(this.workspaceState.get<string>(KEYS.autonomy, fallback));
   }
 
   async setAgent(agent: AgentId): Promise<void> {
@@ -39,6 +42,14 @@ export class ProjectPreferences {
 
   async setAutonomy(autonomy: AutonomyMode): Promise<void> {
     await this.workspaceState.update(KEYS.autonomy, autonomy);
+  }
+
+  getCustomPermissions(): Partial<Record<PermissionKey, boolean>> {
+    return this.workspaceState.get(KEYS.customPermissions, {});
+  }
+
+  async setCustomPermissions(allowed: Partial<Record<PermissionKey, boolean>>): Promise<void> {
+    await this.workspaceState.update(KEYS.customPermissions, allowed);
   }
 
   /**

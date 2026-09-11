@@ -18,6 +18,7 @@ import { createEventId, nowIso } from './core/events';
 import type { WorkbenchEvent } from './core/events';
 import { getLogger, initLogger } from './core/logger';
 import type { AgentId, AutonomyMode, RouteMode, WorkbenchState } from './core/types';
+import { migrateAutonomyMode } from './core/types';
 import { WorkbenchOrchestrator } from './orchestrator/orchestrator';
 import { VSCodeDiffApplier } from './orchestrator/vscode-diff-applier';
 import { EngineRoomViewProvider } from './panel/engine-room-view-provider';
@@ -62,8 +63,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const globalAgent = config.get<AgentId>('defaultAgent', 'claude');
   const globalRoute = config.get<RouteMode>('defaultRoute', 'direct');
-  const globalAutonomy = config.get<AutonomyMode>('defaultAutonomy', 'review');
+  const globalAutonomy = migrateAutonomyMode(config.get<string>('defaultAutonomy', 'ask'));
   const project = prefs.getState(globalAgent, globalRoute, globalAutonomy);
+  const customPermissions = prefs.getCustomPermissions();
 
   const initialState: WorkbenchState = {
     activeAgent: project.agent,
@@ -119,6 +121,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     projectPath,
     new VSCodeDiffApplier(),
   );
+  orchestrator.setCustomPermissions(customPermissions);
 
   // Register Claude adapter — with dedicated parser + proxy config
   orchestrator.registerAdapter(
@@ -234,10 +237,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   updateStatus(orchestrator.getState());
 
   // Register webview providers
-  const workbenchProvider = new WorkbenchViewProvider(context.extensionUri, orchestrator);
+  const attachmentsDir = path.join(context.globalStorageUri.fsPath, 'attachments');
+  const workbenchProvider = new WorkbenchViewProvider(context.extensionUri, orchestrator, prefs, attachmentsDir);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(WorkbenchViewProvider.viewType, workbenchProvider),
   );
+
+  // Active-file tracking for the composer's "active file" context chip.
+  const postActiveEditor = (editor: vscode.TextEditor | undefined) => {
+    if (!editor || editor.document.uri.scheme !== 'file') {
+      workbenchProvider.postActiveFile(undefined);
+      return;
+    }
+    workbenchProvider.postActiveFile(vscode.workspace.asRelativePath(editor.document.uri, false));
+  };
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(postActiveEditor));
+  postActiveEditor(vscode.window.activeTextEditor);
 
   const engineRoomProvider = new EngineRoomViewProvider(
     context.extensionUri,
@@ -394,19 +409,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand('kai.setAutonomy', async () => {
-      const s = await vscode.window.showQuickPick(['review', 'auto', 'custom'], {
-        title: 'Choose autonomy',
-      });
+      const picks: Array<{ label: string; description: string; mode: AutonomyMode }> = [
+        { label: 'Plan', description: 'Read-only. Proposes a plan before touching any file.', mode: 'plan' },
+        { label: 'Ask before edits', description: 'Asks before each file edit and command.', mode: 'ask' },
+        { label: 'Edit automatically', description: 'Edits files without asking. Still asks before risky commands.', mode: 'autoEdit' },
+        { label: 'Full access', description: 'Never asks. Best inside a worktree or a sandbox.', mode: 'full' },
+        { label: 'Custom…', description: 'Choose which actions need approval.', mode: 'custom' },
+      ];
+      const s = await vscode.window.showQuickPick(picks, { title: 'Choose autonomy' });
       if (s) {
-        orchestrator.setAutonomy(s as AutonomyMode);
-        void prefs.setAutonomy(s as AutonomyMode);
+        orchestrator.setAutonomy(s.mode);
+        void prefs.setAutonomy(s.mode);
       }
     }),
 
     vscode.commands.registerCommand('kai.cycleAutonomy', () => {
-      const modes: AutonomyMode[] = ['review', 'auto', 'custom'];
+      const modes: AutonomyMode[] = ['plan', 'ask', 'autoEdit', 'full'];
       const s = orchestrator.getState();
-      const n = modes[(modes.indexOf(s.autonomy) + 1) % modes.length];
+      const idx = modes.indexOf(s.autonomy);
+      const n = modes[(idx === -1 ? 0 : idx + 1) % modes.length];
       orchestrator.setAutonomy(n);
       void prefs.setAutonomy(n);
       void vscode.window.showInformationMessage(`KAI autonomy: ${n}`);
@@ -496,6 +517,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     registerRawInspectorCommand(context, rawInspector),
+
+    vscode.commands.registerCommand('kai.addSelectionToChat', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.selection.isEmpty) {
+        void vscode.window.showInformationMessage('KAI: Select some text first.');
+        return;
+      }
+      const rel = vscode.workspace.asRelativePath(editor.document.uri, false);
+      workbenchProvider.postAddSelection(rel, editor.selection.start.line + 1, editor.selection.end.line + 1);
+      await vscode.commands.executeCommand('kai.openWorkbench');
+    }),
   );
 
   logger.info('internal', 'KAI Agent Workbench activated successfully.');

@@ -23,6 +23,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
   private handoffInProgress = false;
   private planRunner: PlanRunner | null = null;
   private planRunning = false;
+  private customPermissions: Partial<Record<PermissionKey, boolean>> = {};
 
   constructor(
     initialState: WorkbenchState,
@@ -52,7 +53,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
             available: false,
             unavailableReason: err instanceof Error ? err.message : String(err),
             supportsRoutes: ['direct', 'proxy'],
-            supportsAutonomy: ['review', 'auto', 'custom'],
+            supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
             supportsTools: true,
             supportsApprovals: false,
             supportsDiffs: true,
@@ -67,6 +68,13 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   async getCognitive1Health(): Promise<{ available: boolean; detail: string }> {
     return this.cognitive1.health();
+  }
+
+  /** Runs a one-off recall for the composer's "Search memory" context chip —
+   * does not log a session/task, unlike the recall run automatically at the
+   * start of every task. */
+  async searchMemory(query: string): Promise<string> {
+    return this.cognitive1.recall({ query, project: this.projectPath });
   }
 
   getState(): WorkbenchState { return { ...this.state }; }
@@ -297,9 +305,19 @@ export class WorkbenchOrchestrator extends EventEmitter {
     this.emitState();
   }
 
+  /** Sets the Custom-mode permission profile. Persisted per-workspace by the
+   * caller (see extension.ts); has no effect unless autonomy is 'custom'. */
+  setCustomPermissions(allowed: Partial<Record<PermissionKey, boolean>>): void {
+    this.customPermissions = { ...allowed };
+  }
+
+  getCustomPermissions(): Partial<Record<PermissionKey, boolean>> {
+    return { ...this.customPermissions };
+  }
+
   // Permission check — gates risky operations based on autonomy mode
   checkPermission(permission: PermissionKey): { allowed: boolean; escalated: boolean } {
-    const profile = createPermissionProfile(this.state.autonomy);
+    const profile = createPermissionProfile(this.state.autonomy, this.customPermissions);
     const allowed = canRunWithoutApproval(profile, permission);
     return { allowed, escalated: !allowed };
   }

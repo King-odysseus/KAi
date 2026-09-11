@@ -74,9 +74,28 @@
       {
         "command": "kai.inspectRawEvents",
         "title": "KAI: Inspect Raw Events"
+      },
+      {
+        "command": "kai.addSelectionToChat",
+        "title": "KAI: Add Selection to Chat"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "kai.addSelectionToChat",
+          "when": "editorHasSelection",
+          "group": "9_kai"
+        }
+      ]
+    },
     "keybindings": [
+      {
+        "command": "kai.addSelectionToChat",
+        "key": "alt+k",
+        "mac": "alt+k",
+        "when": "editorHasSelection"
+      },
       {
         "command": "kai.setAgent",
         "key": "ctrl+shift+k a",
@@ -156,13 +175,22 @@
         },
         "kai.defaultAutonomy": {
           "type": "string",
-          "default": "review",
+          "default": "ask",
           "enum": [
-            "review",
-            "auto",
+            "plan",
+            "ask",
+            "autoEdit",
+            "full",
             "custom"
           ],
-          "description": "Default autonomy mode for new KAI tasks."
+          "enumDescriptions": [
+            "Read-only. Proposes a plan before touching any file.",
+            "Asks before each file edit and command.",
+            "Edits files without asking. Still asks before risky commands.",
+            "Never asks. Best inside a worktree or a sandbox.",
+            "Choose which actions need approval."
+          ],
+          "description": "Default autonomy mode for new KAI tasks. Legacy 'review'/'auto' values are migrated to 'ask'/'autoEdit' automatically."
         },
         "kai.brainPath": {
           "type": "string",

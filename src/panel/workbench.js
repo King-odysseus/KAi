@@ -5,7 +5,14 @@
   var vscode = acquireVsCodeApi();
   var AGENT_IDS = window.__KAI_AGENT_IDS__ || ['claude', 'codex', 'qwen', 'gemini'];
   var AGENT_NAMES = window.__KAI_AGENT_NAMES__ || {};
+  var AGENT_MODELS = window.__KAI_AGENT_MODELS__ || {};
+  var CONTEXT_WINDOWS = window.__KAI_CONTEXT_WINDOWS__ || {};
+  var PERMISSION_KEYS = window.__KAI_PERMISSION_KEYS__ || {};
+  var customPermissions = window.__KAI_CUSTOM_PERMISSIONS__ || {};
   var state = window.__KAI_INITIAL_STATE__ || null;
+  function currentAgent() { return state ? state.activeAgent : 'claude'; }
+  function currentRoute() { return state ? state.route : 'direct'; }
+  function currentAutonomy() { return state ? state.autonomy : 'ask'; }
   var totalCost = 0;
   var totalInput = 0;
   var totalOutput = 0;
@@ -30,10 +37,16 @@
     test: 'Write tests for:',
   };
 
+  var MODES = [
+    { id: 'plan', label: 'Plan', desc: 'Read-only. Looks around and proposes a plan before editing.' },
+    { id: 'ask', label: 'Ask before edits', desc: 'Asks before each file edit and command.' },
+    { id: 'autoEdit', label: 'Edit automatically', desc: 'Edits files without asking. Still asks before risky commands.' },
+    { id: 'full', label: 'Full access', desc: 'Never asks. Best inside a worktree or a sandbox.', warn: true },
+    { id: 'custom', label: 'Custom…', desc: 'Choose which actions need approval.' },
+  ];
+  function modeLabel(id) { var m = MODES.filter(function (x) { return x.id === id; })[0]; return m ? m.label : id; }
+
   var els = {
-    agent: document.getElementById('agent'),
-    route: document.getElementById('route'),
-    autonomy: document.getElementById('autonomy'),
     prompt: document.getElementById('prompt'),
     send: document.getElementById('send'),
     statePill: document.getElementById('statePill'),
@@ -50,6 +63,16 @@
     planStepCount: document.getElementById('planStepCount'),
     planTemplate: document.getElementById('planTemplate'),
     saveTemplateBtn: document.getElementById('saveTemplateBtn'),
+    composerBox: document.getElementById('composerBox'),
+    modeChip: document.getElementById('modeChip'),
+    agentChip: document.getElementById('agentChip'),
+    ctxMeter: document.getElementById('ctxMeter'),
+    ctxChipRow: document.getElementById('ctxChipRow'),
+    queueList: document.getElementById('queueList'),
+    attachBtn: document.getElementById('attachBtn'),
+    imageFileInput: document.getElementById('imageFileInput'),
+    atBtn: document.getElementById('atBtn'),
+    sessionMeta: document.getElementById('sessionMeta'),
   };
 
   var emptyState = document.getElementById('emptyState');
@@ -81,9 +104,11 @@
     finalizeAssistant(); stopThinking();
     Array.prototype.slice.call(els.chat.children).forEach(function(k){ if(k!==emptyState) k.remove(); });
     if(emptyState) emptyState.style.display='';
-    totalCost=0;totalInput=0;totalOutput=0; els.costPill.innerHTML='';
+    totalCost=0;totalInput=0;totalOutput=0; els.costPill.innerHTML=''; els.sessionMeta.textContent='';
+    lastKnownInputTokens = 0; renderContextMeter();
     for (var id in turns) { if (turns[id].timerInterval) clearInterval(turns[id].timerInterval); }
     turns = {};
+    contextChips = []; messageQueue = []; renderCtxChips(); renderQueue();
     clearPrompt();
   }
   function autoGrow() { els.prompt.style.height='auto'; els.prompt.style.height=Math.min(els.prompt.scrollHeight,180)+'px'; }
@@ -119,8 +144,8 @@
   }
 
   // ---- Plan mode ----
-  function togglePlanMode() { planMode=!planMode; els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit plan mode':'Plan mode'; }
-  function addPlanStep() { planSteps.push({agent:els.agent.value,prompt:''}); renderPlanSteps(); }
+  function togglePlanMode() { planMode=!planMode; els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit workflow mode':'Workflow mode: define multi-step agent runs'; }
+  function addPlanStep() { planSteps.push({agent:currentAgent(),prompt:''}); renderPlanSteps(); }
   function removePlanStep(idx) { planSteps.splice(idx,1); renderPlanSteps(); }
 
   function renderPlanSteps() {
@@ -139,7 +164,7 @@
 
   function executePlan() {
     if(planSteps.length===0) return;
-    var plan={id:'plan_'+Date.now(),title:els.planTitle.value.trim()||'Untitled Plan',steps:planSteps.map(function(s,i){return{id:'step_'+i,agent:s.agent,prompt:s.prompt.trim(),status:'pending'};}),route:els.route.value,autonomy:els.autonomy.value,status:'ready',currentStepIndex:0,createdAt:new Date().toISOString()};
+    var plan={id:'plan_'+Date.now(),title:els.planTitle.value.trim()||'Untitled Plan',steps:planSteps.map(function(s,i){return{id:'step_'+i,agent:s.agent,prompt:s.prompt.trim(),status:'pending'};}),route:currentRoute(),autonomy:currentAutonomy(),status:'ready',currentStepIndex:0,createdAt:new Date().toISOString()};
     removeEmpty(); appendUserMessage('Plan: '+plan.title+' ('+plan.steps.length+' steps)'); vscode.postMessage({type:'executePlan',value:JSON.stringify(plan)});
     togglePlanMode(); planSteps=[]; els.planTitle.value=''; renderPlanSteps();
   }
@@ -147,7 +172,7 @@
   function saveAsTemplate() {
     if(planSteps.length===0) return;
     var name = els.planTitle.value.trim()||'My Plan';
-    var template={name:name,description:'',steps:planSteps.map(function(s){return{agent:s.agent,prompt:s.prompt};}),route:els.route.value,autonomy:els.autonomy.value};
+    var template={name:name,description:'',steps:planSteps.map(function(s){return{agent:s.agent,prompt:s.prompt};}),route:currentRoute(),autonomy:currentAutonomy()};
     vscode.postMessage({type:'saveTemplate',value:JSON.stringify(template)});
   }
 
@@ -391,6 +416,9 @@
       ? '$' + turn.amountUsd.toFixed(4)
       : (turn.inputTokens || turn.outputTokens) ? (turn.inputTokens + ' in / ' + turn.outputTokens + ' out') : '';
     if (text) { turn.costChip.textContent = text; turn.costChip.style.display = 'inline-flex'; }
+    // The most recent turn's input tokens are the best available estimate of
+    // context used so far (each new call resends/accumulates prior context).
+    if (event.inputTokens) { lastKnownInputTokens = turn.inputTokens; renderContextMeter(); }
   }
 
   function copyToClipboard(text) {
@@ -431,7 +459,7 @@
     retryBtn.addEventListener('click', function () {
       if (!lastUserPrompt || (state && state.isRunning)) return;
       appendUserMessage(lastUserPrompt);
-      vscode.postMessage({ type: 'startTask', prompt: lastUserPrompt, agent: turn.agent, route: els.route.value, autonomy: els.autonomy.value });
+      vscode.postMessage({ type: 'startTask', prompt: lastUserPrompt, agent: turn.agent, route: currentRoute(), autonomy: currentAutonomy() });
     });
     actions.appendChild(retryBtn);
 
@@ -452,6 +480,302 @@
     actions.appendChild(continueBtn);
 
     turn.bodyEl.appendChild(actions);
+  }
+
+  // ---- Composer: mode + agent/route chips ----
+
+  function renderModeChip() {
+    var mode = currentAutonomy();
+    var info = MODES.filter(function (m) { return m.id === mode; })[0];
+    els.modeChip.innerHTML =
+      '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/></svg> ' +
+      esc(info ? info.label : mode) +
+      ' <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+    els.modeChip.classList.toggle('warn', !!(info && info.warn));
+  }
+
+  function renderAgentChip() {
+    var agent = currentAgent(), route = currentRoute();
+    els.agentChip.innerHTML =
+      '<span class="agent-dot ' + agent + '"></span> ' + esc(agentLabel(agent)) + ' · ' + (route === 'proxy' ? 'Proxy' : 'Direct') +
+      ' <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  }
+
+  function openModeMenu() {
+    var current = currentAutonomy();
+    openMenuRich(els.modeChip, MODES.map(function (m) {
+      return {
+        label: m.label, desc: m.desc, selected: m.id === current, warn: m.warn,
+        onClick: function () {
+          if (m.id === 'custom') { openCustomPermissionsMenu(); return; }
+          vscode.postMessage({ type: 'setAutonomy', autonomy: m.id });
+        },
+      };
+    }));
+  }
+
+  function openCustomPermissionsMenu() {
+    var keys = Object.keys(PERMISSION_KEYS);
+    var menu = document.createElement('div'); menu.className = 'kai-menu';
+    keys.forEach(function (key) {
+      var info = PERMISSION_KEYS[key];
+      var row = document.createElement('label'); row.className = 'kai-menu-item custom-perm-row';
+      var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!customPermissions[key];
+      cb.addEventListener('change', function () {
+        customPermissions[key] = cb.checked;
+        vscode.postMessage({ type: 'setCustomPermissions', allowed: customPermissions });
+      });
+      var text = document.createElement('div'); text.className = 'custom-perm-text';
+      var title = document.createElement('div'); title.className = 'title'; title.textContent = info.label;
+      var desc = document.createElement('div'); desc.className = 'desc'; desc.textContent = info.description;
+      text.appendChild(title); text.appendChild(desc);
+      row.appendChild(cb); row.appendChild(text);
+      menu.appendChild(row);
+    });
+    var apply = document.createElement('button'); apply.type = 'button'; apply.className = 'turn-action-btn wide'; apply.textContent = 'Use Custom mode';
+    apply.style.marginTop = '4px';
+    apply.addEventListener('click', function () { closeMenu(); vscode.postMessage({ type: 'setAutonomy', autonomy: 'custom' }); });
+    menu.appendChild(apply);
+    placeMenu(menu, els.modeChip);
+  }
+
+  function openAgentMenu() {
+    var menu = document.createElement('div'); menu.className = 'kai-menu agent-menu';
+    AGENT_IDS.forEach(function (a) {
+      var available = isAgentAvailable(a);
+      var row = document.createElement('div'); row.className = 'kai-menu-item agent-menu-row' + (a === currentAgent() ? ' selected' : '') + (!available ? ' disabled' : '');
+      var dot = document.createElement('span'); dot.className = 'agent-dot ' + a;
+      var name = document.createElement('span'); name.className = 'agent-menu-name'; name.textContent = agentLabel(a);
+      row.appendChild(dot); row.appendChild(name);
+      if (!available) {
+        var install = document.createElement('span'); install.className = 'agent-menu-install'; install.textContent = 'Not installed';
+        row.appendChild(install);
+      } else {
+        ['direct', 'proxy'].forEach(function (r) {
+          var seg = document.createElement('span');
+          seg.className = 'agent-menu-seg' + (r === currentRoute() && a === currentAgent() ? ' on' : '');
+          seg.textContent = r === 'direct' ? 'Direct' : 'Proxy';
+          seg.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            vscode.postMessage({ type: 'setAgent', agent: a });
+            vscode.postMessage({ type: 'setRoute', route: r });
+            closeMenu();
+          });
+          row.appendChild(seg);
+        });
+        var model = document.createElement('span'); model.className = 'agent-menu-model';
+        var models = AGENT_MODELS[a];
+        model.textContent = models ? (currentRoute() === 'proxy' ? models.proxy : models.direct) : '';
+        row.appendChild(model);
+      }
+      if (available) {
+        row.addEventListener('click', function () { vscode.postMessage({ type: 'setAgent', agent: a }); closeMenu(); });
+      }
+      menu.appendChild(row);
+    });
+    placeMenu(menu, els.agentChip);
+  }
+
+  // Richer popover for the mode menu: title + description per row.
+  function openMenuRich(anchor, items) {
+    closeMenu();
+    var menu = document.createElement('div'); menu.className = 'kai-menu';
+    items.forEach(function (it) {
+      var row = document.createElement('div'); row.className = 'kai-menu-item rich' + (it.selected ? ' selected' : '');
+      var text = document.createElement('div'); text.className = 'rich-text';
+      var title = document.createElement('div'); title.className = 'title' + (it.warn ? ' warn' : ''); title.textContent = it.label;
+      var desc = document.createElement('div'); desc.className = 'desc'; desc.textContent = it.desc || '';
+      text.appendChild(title); text.appendChild(desc);
+      row.appendChild(text);
+      if (it.selected) {
+        var check = document.createElement('span'); check.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>';
+        row.appendChild(check);
+      }
+      row.addEventListener('click', function () { closeMenu(); it.onClick(); });
+      menu.appendChild(row);
+    });
+    document.body.appendChild(menu);
+    placeMenuPositioned(menu, anchor);
+  }
+
+  function placeMenu(menu, anchor) {
+    document.body.appendChild(menu);
+    placeMenuPositioned(menu, anchor);
+    openMenuEl = menu;
+    setTimeout(function () {
+      document.addEventListener('mousedown', onMenuOutside, true);
+      document.addEventListener('keydown', onMenuEscape, true);
+    }, 0);
+  }
+  function placeMenuPositioned(menu, anchor) {
+    var r = anchor.getBoundingClientRect();
+    var top = Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8);
+    var left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+    menu.style.top = Math.max(4, top) + 'px';
+    menu.style.left = Math.max(4, left) + 'px';
+    if (!openMenuEl) {
+      openMenuEl = menu;
+      setTimeout(function () {
+        document.addEventListener('mousedown', onMenuOutside, true);
+        document.addEventListener('keydown', onMenuEscape, true);
+      }, 0);
+    }
+  }
+
+  // ---- Composer: context chips (@) ----
+  var activeFile = null; // {path, included}
+  var contextChips = []; // {type, path, startLine, endLine, name, key}
+
+  function chipKey(c) { return c.type + ':' + (c.path || c.name || c.query || ''); }
+  function addContextChip(chip) {
+    var key = chipKey(chip);
+    if (contextChips.some(function (c) { return chipKey(c) === key; })) return;
+    contextChips.push(chip);
+    renderCtxChips();
+  }
+  function removeContextChip(key) {
+    contextChips = contextChips.filter(function (c) { return chipKey(c) !== key; });
+    renderCtxChips();
+  }
+  function chipDisplayText(c) {
+    switch (c.type) {
+      case 'file': return c.path;
+      case 'selection': return c.path + ':' + c.startLine + '-' + c.endLine;
+      case 'gitDiff': return 'Uncommitted changes';
+      case 'memory': return 'Memory: ' + c.query;
+      case 'image': return c.name;
+      default: return c.type;
+    }
+  }
+  function renderCtxChips() {
+    var hasAny = (activeFile != null) || contextChips.length > 0;
+    els.ctxChipRow.style.display = hasAny ? 'flex' : 'none';
+    els.ctxChipRow.innerHTML = '';
+    if (activeFile) {
+      var afChip = document.createElement('span'); afChip.className = 'ctx-chip' + (activeFile.included ? '' : ' excluded');
+      afChip.innerHTML =
+        '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg> ' +
+        esc(activeFile.path) + ' <span class="eye" title="' + (activeFile.included ? 'Exclude' : 'Include') + '">' +
+        (activeFile.included
+          ? '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>'
+          : '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2"/><path d="M9.9 5.2A11 11 0 0 1 12 5c7 0 11 7 11 7a13.2 13.2 0 0 1-3.2 3.9M6.6 6.6C4 8.3 2 11 2 12c0 0 4 7 11 7 1.4 0 2.7-.2 3.9-.6"/></svg>') +
+        '</span>';
+      afChip.querySelector('.eye').addEventListener('click', function () { activeFile.included = !activeFile.included; renderCtxChips(); });
+      els.ctxChipRow.appendChild(afChip);
+    }
+    contextChips.forEach(function (c) {
+      var chip = document.createElement('span'); chip.className = 'ctx-chip';
+      chip.appendChild(document.createTextNode(chipDisplayText(c)));
+      var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = 'Remove';
+      rm.addEventListener('click', function () { removeContextChip(chipKey(c)); });
+      chip.appendChild(rm);
+      els.ctxChipRow.appendChild(chip);
+    });
+  }
+
+  function collectChipsForSend() {
+    var out = [];
+    if (activeFile && activeFile.included) out.push({ type: 'file', path: activeFile.path });
+    contextChips.forEach(function (c) {
+      if (c.type === 'file') out.push({ type: 'file', path: c.path });
+      else if (c.type === 'selection') out.push({ type: 'selection', path: c.path, startLine: c.startLine, endLine: c.endLine });
+      else if (c.type === 'gitDiff') out.push({ type: 'gitDiff', stat: c.stat });
+      else if (c.type === 'memory') out.push({ type: 'memory', query: c.query, summary: c.summary });
+      else if (c.type === 'image') out.push({ type: 'image', name: c.name });
+    });
+    return out;
+  }
+  function clearNonPersistentChips() { contextChips = []; renderCtxChips(); }
+
+  function openAtMenu() {
+    var menu = document.createElement('div'); menu.className = 'kai-menu at-menu';
+    var searchWrap = document.createElement('div'); searchWrap.className = 'at-search-wrap';
+    var search = document.createElement('input'); search.type = 'text'; search.placeholder = 'Search files…'; search.className = 'at-search';
+    searchWrap.appendChild(search); menu.appendChild(searchWrap);
+    var results = document.createElement('div'); results.className = 'at-results'; menu.appendChild(results);
+
+    var staticWrap = document.createElement('div'); staticWrap.className = 'at-static';
+    function staticRow(label, hint, onClick) {
+      var row = document.createElement('div'); row.className = 'kai-menu-item';
+      row.innerHTML = '<span>' + esc(label) + '</span>';
+      if (hint) { var h = document.createElement('span'); h.style.marginLeft = 'auto'; h.style.opacity = '0.7'; h.style.fontSize = '10px'; h.textContent = hint; row.appendChild(h); }
+      row.addEventListener('click', function () { closeMenu(); onClick(); });
+      staticWrap.appendChild(row);
+    }
+    staticRow('Current selection', '', function () { vscode.postMessage({ type: 'requestSelection' }); });
+    staticRow('Uncommitted changes', '', function () { vscode.postMessage({ type: 'requestGitDiffStat' }); });
+    staticRow('Search memory', '', function () {
+      var q = prompt('Search memory for:');
+      if (q && q.trim()) vscode.postMessage({ type: 'requestMemorySearch', query: q.trim() });
+    });
+    menu.appendChild(staticWrap);
+
+    document.body.appendChild(menu);
+    placeMenuPositioned(menu, els.atBtn);
+    search.focus();
+
+    var searchTimer = null;
+    search.addEventListener('input', function () {
+      clearTimeout(searchTimer);
+      var q = search.value;
+      searchTimer = setTimeout(function () { vscode.postMessage({ type: 'searchFiles', query: q }); }, 200);
+    });
+    window.__kaiAtResultsEl = results; // populated by the searchFilesResult handler while this menu is open
+    vscode.postMessage({ type: 'searchFiles', query: '' });
+  }
+
+  function renderAtResults(files) {
+    var results = window.__kaiAtResultsEl;
+    if (!results || !openMenuEl || !openMenuEl.contains(results)) return;
+    results.innerHTML = '';
+    files.forEach(function (f) {
+      var row = document.createElement('div'); row.className = 'kai-menu-item';
+      row.textContent = f.path;
+      row.addEventListener('click', function () { closeMenu(); addContextChip({ type: 'file', path: f.path }); });
+      results.appendChild(row);
+    });
+  }
+
+  // ---- Composer: context meter ----
+  var lastKnownInputTokens = 0;
+  function renderContextMeter() {
+    var windows = CONTEXT_WINDOWS[currentAgent()];
+    var windowSize = windows ? windows[currentRoute()] : 0;
+    if (!windowSize || !lastKnownInputTokens) { els.ctxMeter.style.display = 'none'; return; }
+    var pct = Math.min(100, Math.round((lastKnownInputTokens / windowSize) * 100));
+    var r = 6, c = 2 * Math.PI * r;
+    els.ctxMeter.style.display = 'inline-flex';
+    els.ctxMeter.innerHTML =
+      '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="' + r + '" fill="none" stroke="var(--kai-border)" stroke-width="2"/>' +
+      '<circle cx="8" cy="8" r="' + r + '" fill="none" stroke="var(--kai-accent)" stroke-width="2" stroke-dasharray="' + (c * pct / 100).toFixed(1) + ' ' + c.toFixed(1) + '" transform="rotate(-90 8 8)"/></svg> ' +
+      pct + '%';
+  }
+
+  // ---- Composer: message queue (queue while running, steer now) ----
+  var messageQueue = [];
+  function renderQueue() {
+    els.queueList.innerHTML = '';
+    els.queueList.style.display = messageQueue.length ? 'flex' : 'none';
+    messageQueue.forEach(function (item, idx) {
+      var row = document.createElement('div'); row.className = 'queue-row';
+      var label = document.createElement('span'); label.className = 'label'; label.textContent = 'Queued';
+      var text = document.createElement('span'); text.className = 'queue-text'; text.textContent = item.text;
+      var editBtn = document.createElement('span'); editBtn.className = 'ibtn small'; editBtn.title = 'Edit';
+      editBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>';
+      editBtn.addEventListener('click', function () { els.prompt.value = item.text; autoGrow(); messageQueue.splice(idx, 1); renderQueue(); els.prompt.focus(); });
+      var rmBtn = document.createElement('span'); rmBtn.className = 'ibtn small'; rmBtn.title = 'Remove';
+      rmBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      rmBtn.addEventListener('click', function () { messageQueue.splice(idx, 1); renderQueue(); });
+      row.appendChild(label); row.appendChild(text); row.appendChild(editBtn); row.appendChild(rmBtn);
+      els.queueList.appendChild(row);
+    });
+  }
+  function sendNextQueued() {
+    if (messageQueue.length && !(state && state.isRunning)) {
+      var item = messageQueue.shift();
+      renderQueue();
+      reallyDispatch(item.text);
+    }
   }
 
   // ---- Legacy generic event cards (diff/approval/error/tool fallback) ----
@@ -558,26 +882,33 @@
   // Only used for the no-taskId fallback path above; normal replies go through appendTurnText.
   function appendAssistantTextFallback(text,agent) { removeEmpty(); if(!currentAssistant){ currentAssistant=document.createElement('div');currentAssistant.className='msg assistant streaming';var role=document.createElement('span');role.className='role';role.textContent=agent||(state&&state.activeAgent)||'Assistant';currentAssistant.appendChild(role);currentAssistant.appendChild(document.createTextNode(''));els.chat.appendChild(currentAssistant); } var last=currentAssistant.lastChild; if(last&&last.nodeType===3) last.nodeValue+=text; else currentAssistant.appendChild(document.createTextNode(text)); pinThinking(); scrollBottom(); }
 
+  var wasRunning = false;
   function renderState(next) {
     state=next;
-    els.agent.value=state.activeAgent;els.route.value=state.route;els.autonomy.value=state.autonomy;
     var running=state.isRunning;
-    els.agent.disabled=running;els.route.disabled=running;els.autonomy.disabled=running;els.planToggle.disabled=running;
+    els.planToggle.disabled=running;
     if(running){els.send.textContent='Stop';els.send.classList.add('stop');startThinking();}else{els.send.textContent='Send';els.send.classList.remove('stop');finalizeAssistant();stopThinking();}
     els.statePill.innerHTML=running?'<span class="pill running"><span class="dot"></span>running</span>':'<span class="pill"><span class="dot"></span>idle</span>';
     if(totalCost>0) els.costPill.innerHTML='<span class="pill cost">$'+totalCost.toFixed(4)+' . '+totalInput+' in / '+totalOutput+' out</span>';
+    renderModeChip(); renderAgentChip(); renderContextMeter();
+    if (totalCost > 0) { els.sessionMeta.textContent = 'Session $' + totalCost.toFixed(4) + ' · ' + (totalInput + totalOutput).toLocaleString() + ' tokens'; }
+    if (wasRunning && !running) { setTimeout(sendNextQueued, 0); }
+    wasRunning = running;
   }
 
   function applyCapabilities(capabilities) {
     capabilitiesById = {};
     (capabilities || []).forEach(function (c) { capabilitiesById[c.id] = c; });
-    Array.prototype.forEach.call(els.agent.options, function (opt) {
-      var cap = capabilitiesById[opt.value];
-      var unavailable = cap && cap.available === false;
-      opt.disabled = !!unavailable;
-      opt.title = unavailable ? (cap.unavailableReason || 'Unavailable') : '';
-      opt.textContent = agentLabel(opt.value) + (unavailable ? ' (unavailable)' : '');
-    });
+    renderAgentChip();
+  }
+
+  function reallyDispatch(text) {
+    lastUserPrompt = text;
+    var chips = collectChipsForSend();
+    appendUserMessage(text);
+    vscode.postMessage({ type: 'startTask', prompt: text, agent: currentAgent(), route: currentRoute(), autonomy: currentAutonomy(), contextChips: chips });
+    clearNonPersistentChips();
+    clearPrompt();
   }
 
   function dispatchPrompt(prompt) {
@@ -587,24 +918,67 @@
     if((m=prompt.match(/^\/agent\s+(\S+)/i))){var a=m[1].toLowerCase();if(AGENT_IDS.indexOf(a)>=0){vscode.postMessage({type:'setAgent',agent:a});clearPrompt();return;}}
     if((m=prompt.match(/^\/route\s+(\S+)/i))){var r=m[1].toLowerCase();if(r==='direct'||r==='proxy'){vscode.postMessage({type:'setRoute',route:r});clearPrompt();return;}}
     if((m=prompt.match(/^\/(review|implement|debug|explain|test)$/i))){var tid=m[1].toLowerCase();if(TPLS[tid]){els.prompt.value=TPLS[tid];autoGrow();els.prompt.focus();}return;}
-    lastUserPrompt = prompt;
-    appendUserMessage(prompt);vscode.postMessage({type:'startTask',prompt:prompt,agent:els.agent.value,route:els.route.value,autonomy:els.autonomy.value});clearPrompt();
+    reallyDispatch(prompt);
+  }
+
+  function enqueueMessage(text) { messageQueue.push({ text: text }); renderQueue(); }
+
+  function steerNow() {
+    var text = els.prompt.value.trim(); if (!text) return;
+    messageQueue.unshift({ text: text }); renderQueue(); clearPrompt();
+    if (state && state.isRunning) { vscode.postMessage({ type: 'stop' }); } else { sendNextQueued(); }
   }
 
   function clearPrompt() { els.prompt.value='';els.costEstimate.textContent='';autoGrow(); }
 
   // Listeners
-  document.querySelectorAll('#templates button').forEach(function(b){b.addEventListener('click',function(){els.prompt.value=TPLS[this.getAttribute('data-tpl')];autoGrow();els.prompt.focus();});});
-  els.agent.addEventListener('change',function(){vscode.postMessage({type:'setAgent',agent:els.agent.value});});
-  els.route.addEventListener('change',function(){vscode.postMessage({type:'setRoute',route:els.route.value});});
-  els.autonomy.addEventListener('change',function(){vscode.postMessage({type:'setAutonomy',autonomy:els.autonomy.value});});
   els.send.addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});else dispatchPrompt(els.prompt.value);});
   els.planToggle.addEventListener('click',function(){togglePlanMode();if(planMode&&planSteps.length===0) addPlanStep();});
   els.addStep.addEventListener('click',addPlanStep);
   els.runPlan.addEventListener('click',executePlan);
   if(els.saveTemplateBtn) els.saveTemplateBtn.addEventListener('click',saveAsTemplate);
-  els.prompt.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(!(state&&state.isRunning)) dispatchPrompt(els.prompt.value);}});
-  var estTimer=null;els.prompt.addEventListener('input',function(){autoGrow();clearTimeout(estTimer);estTimer=setTimeout(function(){var p=els.prompt.value.trim();if(p.length>10&&p.charAt(0)!=='/'){vscode.postMessage({type:'estimateCost',prompt:p,agent:els.agent.value,route:els.route.value});}else{els.costEstimate.textContent='';}},400);});
+  els.modeChip.addEventListener('click', openModeMenu);
+  els.agentChip.addEventListener('click', openAgentMenu);
+  els.atBtn.addEventListener('click', openAtMenu);
+  els.attachBtn.addEventListener('click', function () { els.imageFileInput.click(); });
+  els.imageFileInput.addEventListener('change', function () {
+    var file = els.imageFileInput.files && els.imageFileInput.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () { vscode.postMessage({ type: 'attachImage', dataUrl: reader.result, name: file.name }); };
+    reader.readAsDataURL(file);
+    els.imageFileInput.value = '';
+  });
+  els.prompt.addEventListener('paste', function (e) {
+    var items = e.clipboardData && e.clipboardData.items; if (!items) return;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image/') === 0) {
+        var file = items[i].getAsFile(); if (!file) continue;
+        e.preventDefault();
+        var reader = new FileReader();
+        reader.onload = function () { vscode.postMessage({ type: 'attachImage', dataUrl: reader.result, name: file.name || 'pasted-image.png' }); };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  });
+  els.prompt.addEventListener('keydown',function(e){
+    if(e.key==='Enter' && (e.ctrlKey||e.metaKey) && e.shiftKey){ e.preventDefault(); steerNow(); return; }
+    if(e.key==='Tab' && e.shiftKey){
+      e.preventDefault();
+      var ids=MODES.filter(function(m){return m.id!=='custom';}).map(function(m){return m.id;});
+      var idx=ids.indexOf(currentAutonomy());
+      var next=ids[(idx===-1?0:idx+1)%ids.length];
+      vscode.postMessage({type:'setAutonomy',autonomy:next});
+      return;
+    }
+    if(e.key==='Enter'&&!e.shiftKey){
+      e.preventDefault();
+      var text=els.prompt.value.trim(); if(!text) return;
+      if(state&&state.isRunning){ enqueueMessage(text); clearPrompt(); } else { dispatchPrompt(text); }
+    }
+  });
+  var estTimer=null;els.prompt.addEventListener('input',function(){autoGrow();clearTimeout(estTimer);estTimer=setTimeout(function(){var p=els.prompt.value.trim();if(p.length>10&&p.charAt(0)!=='/'){vscode.postMessage({type:'estimateCost',prompt:p,agent:currentAgent(),route:currentRoute()});}else{els.costEstimate.textContent='';}},400);});
   document.getElementById('newChat').addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});clearChat();els.prompt.focus();});
   var openTabBtn=document.getElementById('openTab');if(openTabBtn) openTabBtn.addEventListener('click',function(){vscode.postMessage({type:'openTab'});});
   if(els.planTemplate) els.planTemplate.addEventListener('change',function(){var v=els.planTemplate.value;if(!v) return; vscode.postMessage({type:'loadTemplate',value:v});els.planTemplate.value='';});
@@ -638,10 +1012,25 @@
     else if(m.type==='templates'){if(els.planTemplate){els.planTemplate.innerHTML='<option value="">Load template...</option>';for(var i=0;i<m.templates.length;i++){var t=m.templates[i];els.planTemplate.innerHTML+='<option value="'+esc(JSON.stringify(t))+'">'+esc(t.name)+'</option>';}}}
     else if(m.type==='templateLoaded'&&m.plan) loadTemplateIntoScreen(m.plan);
     else if(m.type==='costEstimate'){var est=m.estimate;els.costEstimate.textContent=est.modelName+': ~'+est.estimatedInputTokens.toLocaleString()+' in / ~'+est.estimatedOutputTokens.toLocaleString()+' out = $'+est.estimatedCostUsd.toFixed(est.estimatedCostUsd<0.01?4:2);}
+    else if(m.type==='activeFile'){
+      if(m.path){ activeFile = activeFile && activeFile.path===m.path ? activeFile : { path: m.path, included: activeFile ? activeFile.included : true }; }
+      else { activeFile = null; }
+      renderCtxChips();
+    }
+    else if(m.type==='addSelection'){ addContextChip({ type:'selection', path:m.path, startLine:m.startLine, endLine:m.endLine }); }
+    else if(m.type==='searchFilesResult'){ renderAtResults(m.files||[]); }
+    else if(m.type==='selectionResult'){
+      if(m.none){ void 0; /* no selection — silently ignore, nothing to add */ }
+      else { addContextChip({ type:'selection', path:m.path, startLine:m.startLine, endLine:m.endLine }); }
+    }
+    else if(m.type==='gitDiffStatResult'){ if(m.stat) addContextChip({ type:'gitDiff', stat:m.stat }); }
+    else if(m.type==='memorySearchResult'){ addContextChip({ type:'memory', query:m.query, summary:m.summary }); }
+    else if(m.type==='attachImageResult'){ if(m.ok) addContextChip({ type:'image', name:m.name, path:m.path }); }
   });
 
-  if(state) renderState(state);
+  if(state) renderState(state); else { renderModeChip(); renderAgentChip(); }
   if(currentPlan) renderPlanProgress(currentPlan);
+  renderCtxChips(); renderQueue();
   autoGrow();
   vscode.postMessage({type:'ready'});
   vscode.postMessage({type:'loadTemplates'});

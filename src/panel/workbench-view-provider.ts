@@ -1,21 +1,31 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs/promises';
 import { createEventId, nowIso, type WorkbenchEvent } from '../core/events';
-import type { AgentId, AutonomyMode, RouteMode, WorkbenchState } from '../core/types';
-import { estimateCost, getModelName } from '../core/cost-estimator';
+import type { AgentId, AutonomyMode, PermissionKey, RouteMode, WorkbenchState } from '../core/types';
+import { estimateCost, getModelName, getContextWindow } from '../core/cost-estimator';
+import { buildPromptWithContext, type ContextChip } from '../core/prompt-builder';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 import type { Plan } from '../core/plan';
 import type { PlanEvent } from '../orchestrator/plan-runner';
 import type { PlanTemplate } from '../core/plan-templates';
 import { listPlanTemplates, savePlanTemplate, deletePlanTemplate, templateToPlan } from '../core/plan-templates';
 import { AGENT_PROVIDERS } from '../config/agent-catalog';
+import { PERMISSION_KEY_INFO } from '../core/permissions';
+import type { ProjectPreferences } from '../config/project-preferences';
 import * as path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 interface WebviewMessage {
   type: 'ready' | 'startTask' | 'setAgent' | 'setRoute' | 'setAutonomy' | 'stop'
     | 'refreshCapabilities' | 'handoff' | 'approveDiff' | 'rejectDiff' | 'estimateCost' | 'openTab'
     | 'executePlan' | 'pausePlan' | 'resumePlan' | 'abortPlan' | 'compareTask'
     | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
-    | 'retryStep' | 'skipStep' | 'openLink';
+    | 'retryStep' | 'skipStep' | 'openLink'
+    | 'searchFiles' | 'requestSelection' | 'requestGitDiffStat' | 'requestMemorySearch'
+    | 'attachImage' | 'setCustomPermissions' | 'queueOverflow';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -24,6 +34,11 @@ interface WebviewMessage {
   eventId?: string;
   value?: string;
   url?: string;
+  query?: string;
+  contextChips?: ContextChip[];
+  dataUrl?: string;
+  name?: string;
+  allowed?: Partial<Record<PermissionKey, boolean>>;
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -46,6 +61,8 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly orchestrator: WorkbenchOrchestrator,
+    private readonly prefs?: ProjectPreferences,
+    private readonly attachmentsDir?: string,
   ) {
     // Forward plan events to all webviews
     this.orchestrator.on('planEvent', (planEvent: PlanEvent) => {
@@ -134,6 +151,19 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Pushed on every active-editor change so the composer can show/refresh
+   * its "active file" context chip. `undefined` clears it (no editor open,
+   * or an unsaved/non-file document). */
+  postActiveFile(relativePath: string | undefined): void {
+    void this.broadcast({ type: 'activeFile', path: relativePath });
+  }
+
+  /** Pushed by the `KAI: Add Selection to Chat` command — adds a selection
+   * chip to whichever webview is currently focused/visible. */
+  postAddSelection(relativePath: string, startLine: number, endLine: number): void {
+    void this.broadcast({ type: 'addSelection', path: relativePath, startLine, endLine });
+  }
+
   private async handleMessage(message: WebviewMessage, webview: vscode.Webview): Promise<void> {
     switch (message.type) {
       case 'ready':
@@ -149,8 +179,9 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       case 'startTask':
         if (message.prompt?.trim()) {
           try {
+            const finalPrompt = buildPromptWithContext(message.prompt, message.contextChips ?? []);
             await this.orchestrator.startTask({
-              prompt: message.prompt.trim(),
+              prompt: finalPrompt,
               agent: message.agent,
               route: message.route,
               autonomy: message.autonomy,
@@ -371,6 +402,115 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           await vscode.env.openExternal(vscode.Uri.parse(message.url));
         }
         break;
+      case 'searchFiles':
+        await this.handleSearchFiles(message.query ?? '', webview);
+        break;
+      case 'requestSelection':
+        this.handleRequestSelection(webview);
+        break;
+      case 'requestGitDiffStat':
+        await this.handleRequestGitDiffStat(webview);
+        break;
+      case 'requestMemorySearch':
+        if (message.query?.trim()) {
+          try {
+            const summary = await this.orchestrator.searchMemory(message.query.trim());
+            void webview.postMessage({ type: 'memorySearchResult', query: message.query.trim(), summary });
+          } catch (error) {
+            void webview.postMessage({
+              type: 'memorySearchResult', query: message.query.trim(),
+              summary: `Memory search failed: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+        }
+        break;
+      case 'attachImage':
+        await this.handleAttachImage(message, webview);
+        break;
+      case 'setCustomPermissions':
+        if (message.allowed) {
+          this.orchestrator.setCustomPermissions(message.allowed);
+          void this.prefs?.setCustomPermissions(message.allowed);
+        }
+        break;
+    }
+  }
+
+  /** Fuzzy-ish file search for the composer's @ menu: substring match on the
+   * workspace-relative path, capped at 20 results. */
+  private async handleSearchFiles(query: string, webview: vscode.Webview): Promise<void> {
+    try {
+      const found = await vscode.workspace.findFiles('**/*', '**/{node_modules,.git,out,dist,coverage}/**', 200);
+      const q = query.trim().toLowerCase();
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      const results = found
+        .map((uri) => ({ uri, rel: folder ? vscode.workspace.asRelativePath(uri, false) : uri.fsPath }))
+        .filter((f) => !q || f.rel.toLowerCase().includes(q))
+        .slice(0, 20)
+        .map((f) => ({ path: f.rel }));
+      void webview.postMessage({ type: 'searchFilesResult', query, files: results });
+    } catch (error) {
+      void webview.postMessage({ type: 'searchFilesResult', query, files: [], error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /** Reads the active editor's current selection for the "Current selection"
+   * @ menu entry. Replies with `none: true` when there is no real selection. */
+  private handleRequestSelection(webview: vscode.Webview): void {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      void webview.postMessage({ type: 'selectionResult', none: true });
+      return;
+    }
+    const rel = vscode.workspace.asRelativePath(editor.document.uri, false);
+    void webview.postMessage({
+      type: 'selectionResult',
+      none: false,
+      path: rel,
+      startLine: editor.selection.start.line + 1,
+      endLine: editor.selection.end.line + 1,
+    });
+  }
+
+  /** Runs `git diff --stat` (including untracked files) for the "Uncommitted
+   * changes" @ menu entry. */
+  private async handleRequestGitDiffStat(webview: vscode.Webview): Promise<void> {
+    const cwd = this.orchestrator['projectPath'];
+    if (!cwd) {
+      void webview.postMessage({ type: 'gitDiffStatResult', stat: '', error: 'No workspace folder open.' });
+      return;
+    }
+    try {
+      const { stdout } = await execAsync('git diff --stat HEAD', { cwd, timeout: 5000 });
+      const stat = stdout.trim();
+      void webview.postMessage({ type: 'gitDiffStatResult', stat: stat || 'No uncommitted changes.' });
+    } catch (error) {
+      void webview.postMessage({ type: 'gitDiffStatResult', stat: '', error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /** Saves a pasted/dropped image (data: URI from the webview) to the
+   * extension's global storage so it survives across sessions, and hands
+   * back a stable id the composer keeps as an 'image' context chip. */
+  private async handleAttachImage(message: WebviewMessage, webview: vscode.Webview): Promise<void> {
+    if (!message.dataUrl || !this.attachmentsDir) {
+      void webview.postMessage({ type: 'attachImageResult', ok: false, error: 'Attachments are not available.' });
+      return;
+    }
+    const match = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/.exec(message.dataUrl);
+    if (!match) {
+      void webview.postMessage({ type: 'attachImageResult', ok: false, error: 'Unsupported image type.' });
+      return;
+    }
+    try {
+      await fs.mkdir(this.attachmentsDir, { recursive: true });
+      const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+      const id = createEventId('img');
+      const filePath = path.join(this.attachmentsDir, `${id}.${ext}`);
+      await fs.writeFile(filePath, Buffer.from(match[2], 'base64'));
+      void webview.postMessage({ type: 'attachImageResult', ok: true, id, name: message.name || `${id}.${ext}`, path: filePath });
+    } catch (error) {
+      void webview.postMessage({ type: 'attachImageResult', ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -404,6 +544,22 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       gemini: AGENT_PROVIDERS.gemini.displayName,
     };
     const agentNamesJson = JSON.stringify(agentNames);
+    const agentMeta: Record<AgentId, { direct: string; proxy: string }> = {
+      claude: { direct: getModelName('claude', 'direct'), proxy: getModelName('claude', 'proxy') },
+      codex: { direct: getModelName('codex', 'direct'), proxy: getModelName('codex', 'proxy') },
+      qwen: { direct: getModelName('qwen', 'direct'), proxy: getModelName('qwen', 'proxy') },
+      gemini: { direct: getModelName('gemini', 'direct'), proxy: getModelName('gemini', 'proxy') },
+    };
+    const agentMetaJson = JSON.stringify(agentMeta);
+    const contextWindows: Record<AgentId, { direct: number; proxy: number }> = {
+      claude: { direct: getContextWindow('claude', 'direct'), proxy: getContextWindow('claude', 'proxy') },
+      codex: { direct: getContextWindow('codex', 'direct'), proxy: getContextWindow('codex', 'proxy') },
+      qwen: { direct: getContextWindow('qwen', 'direct'), proxy: getContextWindow('qwen', 'proxy') },
+      gemini: { direct: getContextWindow('gemini', 'direct'), proxy: getContextWindow('gemini', 'proxy') },
+    };
+    const contextWindowsJson = JSON.stringify(contextWindows);
+    const permissionKeyInfoJson = JSON.stringify(PERMISSION_KEY_INFO);
+    const customPermissionsJson = JSON.stringify(this.prefs?.getCustomPermissions() ?? {});
 
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'panel', 'workbench.css'),
@@ -468,36 +624,32 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
 
       <div class="plan-progress" id="planProgress" style="display:none;"></div>
 
-      <div class="templates" id="templates">
-        <button data-tpl="review">Review</button>
-        <button data-tpl="implement">Implement</button>
-        <button data-tpl="debug">Debug</button>
-        <button data-tpl="explain">Explain</button>
-        <button data-tpl="test">Test</button>
-      </div>
-      <div class="controls">
-        <select id="agent" title="Agent">
-          <option value="claude">Claude</option>
-          <option value="codex">Codex</option>
-          <option value="qwen">Qwen</option>
-          <option value="gemini">Gemini</option>
-        </select>
-        <select id="route" title="Route">
-          <option value="direct">Direct</option>
-          <option value="proxy">Proxy</option>
-        </select>
-        <select id="autonomy" title="Autonomy">
-          <option value="review">Review</option>
-          <option value="auto">Auto</option>
-          <option value="custom">Custom</option>
-        </select>
-      </div>
-      <div class="input-row">
-        <textarea id="prompt" rows="1" placeholder="Message KAI…  (Enter to send, Shift+Enter for newline)"></textarea>
-        <button id="planToggle" class="plan-toggle" title="Plan mode: define multi-step agent workflows">≡</button>
-        <button id="send">Send</button>
+      <div class="queue-list" id="queueList"></div>
+
+      <div class="ctx-chip-row" id="ctxChipRow" style="display:none;"></div>
+
+      <div class="composer-box" id="composerBox">
+        <textarea id="prompt" rows="1" placeholder="Ask KAI, type @ to add files, / for commands"></textarea>
+        <div class="composer-toolbar">
+          <button id="attachBtn" class="ibtn" type="button" title="Attach an image">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></svg>
+          </button>
+          <input type="file" id="imageFileInput" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;" />
+          <button id="atBtn" class="ibtn" type="button" title="Add context">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/></svg>
+          </button>
+          <button id="modeChip" class="chip-btn" type="button" title="Permission mode (Shift+Tab to cycle)"></button>
+          <button id="agentChip" class="chip-btn" type="button" title="Agent and route"></button>
+          <span class="ctx-meter" id="ctxMeter" title="Context used" style="display:none;"></span>
+          <button id="planToggle" class="plan-toggle" type="button" title="Workflow mode: define multi-step agent runs">≡</button>
+          <button id="send" type="button">Send</button>
+        </div>
       </div>
       <div class="cost-estimate" id="costEstimate"></div>
+      <div class="composer-footer">
+        <span>Enter to send · Ctrl+Shift+Enter to steer now</span>
+        <span id="sessionMeta"></span>
+      </div>
       <div class="slash-hint">
         <code>/agent</code> <code>/route</code> <code>/handoff</code>
         <code>/review</code> <code>/implement</code> <code>/debug</code>
@@ -512,6 +664,10 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     window.__KAI_INITIAL_PLAN__ = ${plan};
     window.__KAI_AGENT_IDS__ = ${agentIdsJson};
     window.__KAI_AGENT_NAMES__ = ${agentNamesJson};
+    window.__KAI_AGENT_MODELS__ = ${agentMetaJson};
+    window.__KAI_CONTEXT_WINDOWS__ = ${contextWindowsJson};
+    window.__KAI_PERMISSION_KEYS__ = ${permissionKeyInfoJson};
+    window.__KAI_CUSTOM_PERMISSIONS__ = ${customPermissionsJson};
   </script>
   <script nonce="${nonce}" src="${markdownUri}"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>

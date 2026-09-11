@@ -146,7 +146,7 @@ describe('Unified event model conformance', () => {
       );
 
       const events: WorkbenchEvent[] = [];
-      for await (const event of adapter.run({ taskId: 'task_acp_split', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+      for await (const event of adapter.run({ taskId: 'task_acp_split', prompt: 'hi', route: 'direct', autonomy: 'ask' })) {
         events.push(event);
       }
 
@@ -186,7 +186,7 @@ describe('Unified event model conformance', () => {
       );
 
       const events: WorkbenchEvent[] = [];
-      for await (const event of adapter.run({ taskId: 'task_acp_parser', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+      for await (const event of adapter.run({ taskId: 'task_acp_parser', prompt: 'hi', route: 'direct', autonomy: 'ask' })) {
         events.push(event);
       }
 

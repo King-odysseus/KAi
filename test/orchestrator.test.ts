@@ -7,7 +7,7 @@ import { WorkbenchOrchestrator } from '../src/orchestrator/orchestrator';
 describe('WorkbenchOrchestrator', () => {
   it('emits memory and agent events for a task', async () => {
     const orchestrator = new WorkbenchOrchestrator({
-      activeAgent: 'claude', route: 'direct', autonomy: 'review', isRunning: false,
+      activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false,
     });
     orchestrator.registerAdapter(new StubAgentAdapter('claude', 'Claude', true));
 
@@ -24,7 +24,7 @@ describe('WorkbenchOrchestrator', () => {
 
   it('uses the Cognitive1 bridge for session and recall summaries', async () => {
     const orchestrator = new WorkbenchOrchestrator(
-      { activeAgent: 'claude', route: 'direct', autonomy: 'review', isRunning: false },
+      { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
       new FakeCognitive1Client(),
     );
     orchestrator.registerAdapter(new StubAgentAdapter('claude', 'Claude', true));
@@ -39,7 +39,7 @@ describe('WorkbenchOrchestrator', () => {
 
   it('prevents concurrent active agent runs', async () => {
     const orchestrator = new WorkbenchOrchestrator({
-      activeAgent: 'claude', route: 'direct', autonomy: 'auto', isRunning: false,
+      activeAgent: 'claude', route: 'direct', autonomy: 'autoEdit', isRunning: false,
     });
     orchestrator.registerAdapter(new SlowAdapter());
 
@@ -50,7 +50,7 @@ describe('WorkbenchOrchestrator', () => {
 
   it('reports registered adapter capabilities', async () => {
     const orchestrator = new WorkbenchOrchestrator({
-      activeAgent: 'claude', route: 'direct', autonomy: 'review', isRunning: false,
+      activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false,
     });
     orchestrator.registerAdapter(new StubAgentAdapter('claude', 'Claude', true));
     orchestrator.registerAdapter(new StubAgentAdapter('codex', 'Codex', false));
@@ -64,7 +64,7 @@ describe('WorkbenchOrchestrator', () => {
   it('handles handoff between agents', async () => {
     const c1 = new FakeCognitive1Client();
     const orchestrator = new WorkbenchOrchestrator(
-      { activeAgent: 'claude', route: 'direct', autonomy: 'review', isRunning: false },
+      { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
       c1,
     );
     orchestrator.registerAdapter(new StubAgentAdapter('claude', 'Claude', true));
@@ -95,7 +95,7 @@ describe('WorkbenchOrchestrator', () => {
 
   it('rejects handoff to the same agent', async () => {
     const orchestrator = new WorkbenchOrchestrator(
-      { activeAgent: 'claude', route: 'direct', autonomy: 'review', isRunning: false },
+      { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
     );
     orchestrator.registerAdapter(new StubAgentAdapter('claude', 'Claude', true));
 
@@ -109,7 +109,7 @@ describe('WorkbenchOrchestrator', () => {
 
   it('rejects handoff with no active task', async () => {
     const orchestrator = new WorkbenchOrchestrator(
-      { activeAgent: 'claude', route: 'direct', autonomy: 'review', isRunning: false },
+      { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
     );
     await expect(orchestrator.handoff('codex')).rejects.toThrow(/No active task/);
   });

@@ -2,7 +2,35 @@ export type AgentId = 'claude' | 'codex' | 'qwen' | 'gemini';
 
 export type RouteMode = 'direct' | 'proxy';
 
-export type AutonomyMode = 'review' | 'auto' | 'custom';
+/**
+ * Permission mode for how much an agent can do without asking first.
+ *
+ * - plan: read-only. The agent looks around and proposes a plan before
+ *   touching any file.
+ * - ask: asks before each file edit and command (the old "review").
+ * - autoEdit: edits files without asking; still asks before risky commands
+ *   (the old "auto").
+ * - full: never asks. Best inside a worktree or sandbox.
+ * - custom: a user-defined PermissionProfile (see permissions.ts).
+ *
+ * Legacy values 'review' and 'auto' are still accepted at the config/storage
+ * boundary and migrated to 'ask'/'autoEdit' — see migrateAutonomyMode().
+ */
+export type AutonomyMode = 'plan' | 'ask' | 'autoEdit' | 'full' | 'custom';
+
+/** Autonomy mode values as they existed before the 5-mode redesign. */
+export type LegacyAutonomyMode = 'review' | 'auto' | 'custom';
+
+/**
+ * Migrates a possibly-legacy autonomy mode (from settings.json or
+ * workspaceState written by an older KAI version) to the current set.
+ */
+export function migrateAutonomyMode(mode: string): AutonomyMode {
+  if (mode === 'review') return 'ask';
+  if (mode === 'auto') return 'autoEdit';
+  if (mode === 'plan' || mode === 'ask' || mode === 'autoEdit' || mode === 'full' || mode === 'custom') return mode;
+  return 'ask';
+}
 
 export type PermissionKey =
   | 'workspaceEdit'
