@@ -4,6 +4,9 @@ import type { AgentId } from '../core/types';
 export interface ClaudeStreamEvent {
   type?: string;
   message?: ClaudeMessage;
+  result?: unknown;
+  session_id?: string;
+  total_cost_usd?: number;
   usage?: ClaudeUsage;
   error?: { type?: string; message?: string };
   [key: string]: unknown;
@@ -61,24 +64,31 @@ export function parseClaudeJsonLine(
 
   const event = parsed as ClaudeStreamEvent;
 
-  // Usage/cost — check before type-matching since usage can appear on any event
-  if (event.usage) {
-    return parseUsageEvent(event.usage, taskId, agent);
-  }
-
   const evtType = event.type;
 
   // Non-streaming result (--output-format json)
-  if (evtType === 'result' && event.result) {
-    return {
-      id: createEventId(),
-      type: 'text.delta',
-      taskId,
-      timestamp: nowIso(),
-      agent,
-      channel: 'assistant',
-      text: String(event.result),
-    };
+  if (evtType === 'result') {
+    const events: WorkbenchEvent[] = [];
+    if (typeof event.result === 'string' && event.result) {
+      events.push({
+        id: createEventId(),
+        type: 'text.delta',
+        taskId,
+        timestamp: nowIso(),
+        agent,
+        channel: 'assistant',
+        text: event.result,
+      });
+    }
+    if (event.usage) {
+      events.push(parseUsageEvent(event.usage, taskId, agent, event.session_id, event.total_cost_usd));
+    }
+    return events.length > 0 ? events : null;
+  }
+
+  // Usage/cost on other Claude events
+  if (event.usage) {
+    return parseUsageEvent(event.usage, taskId, agent, event.session_id);
   }
 
   // Assistant message with content blocks
@@ -121,15 +131,16 @@ export function parseClaudeJsonLine(
   };
 }
 
-function parseAssistantEvent(event: ClaudeStreamEvent, taskId: string, agent: AgentId): WorkbenchEvent | null {
+function parseAssistantEvent(event: ClaudeStreamEvent, taskId: string, agent: AgentId): WorkbenchEvent[] | null {
   const blocks = event.message?.content ?? [];
   if (blocks.length === 0) {
     return null;
   }
 
+  const events: WorkbenchEvent[] = [];
   for (const block of blocks) {
     if (block.type === 'text' && block.text?.trim()) {
-      return {
+      events.push({
         id: createEventId(),
         type: 'text.delta',
         taskId,
@@ -137,11 +148,11 @@ function parseAssistantEvent(event: ClaudeStreamEvent, taskId: string, agent: Ag
         agent,
         channel: 'assistant',
         text: block.text,
-      };
+      });
     }
 
     if (block.type === 'tool_use') {
-      return {
+      events.push({
         id: createEventId(),
         type: 'tool.call',
         taskId,
@@ -150,21 +161,29 @@ function parseAssistantEvent(event: ClaudeStreamEvent, taskId: string, agent: Ag
         name: block.name || 'unknown',
         status: 'started',
         input: block.input,
-      };
+      });
     }
   }
 
-  return null;
+  return events.length > 0 ? events : null;
 }
 
-function parseUsageEvent(usage: ClaudeUsage, taskId: string, agent: AgentId): WorkbenchEvent {
+function parseUsageEvent(
+  usage: ClaudeUsage,
+  taskId: string,
+  agent: AgentId,
+  sessionId?: string,
+  amountUsd?: number,
+): WorkbenchEvent {
   return {
     id: createEventId(),
     type: 'cost.update',
     taskId,
     timestamp: nowIso(),
     agent,
+    amountUsd,
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
+    sessionId,
   };
 }

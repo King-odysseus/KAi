@@ -82,6 +82,7 @@ export interface CostUpdateEvent extends Omit<BaseEvent, 'type'> {
   amountUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  sessionId?: string;
 }
 
 export interface MemoryEvent extends Omit<BaseEvent, 'type'> {
