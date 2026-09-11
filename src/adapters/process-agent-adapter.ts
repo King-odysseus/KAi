@@ -76,12 +76,20 @@ export class ProcessAgentAdapter implements AgentAdapter {
 
     const args = this.buildArgs(request);
     const controller = new AbortController();
+    const carry = new Map<'stdout' | 'stderr', string>([
+      ['stdout', ''],
+      ['stderr', ''],
+    ]);
     this.activeRuns.set(request.taskId, controller);
     yield this.lifecycle(request.taskId, 'starting', `${this.displayName} starting with ${request.route}/${request.autonomy}`);
 
     try {
       for await (const chunk of this.runner.run(this.command, args, request.cwd, controller.signal)) {
         if (isProcessResult(chunk)) {
+          yield* this.mapOutput(request, carry.get('stdout') || '', 'stdout');
+          yield* this.mapOutput(request, carry.get('stderr') || '', 'stderr');
+          carry.set('stdout', '');
+          carry.set('stderr', '');
           if (controller.signal.aborted) {
             yield this.lifecycle(request.taskId, 'paused', `${this.displayName} stopped by user.`);
           } else if (chunk.code === 0) {
@@ -95,7 +103,10 @@ export class ProcessAgentAdapter implements AgentAdapter {
           continue;
         }
 
-        yield* this.mapOutput(request, chunk.text, chunk.stream);
+        const buffered = `${carry.get(chunk.stream) || ''}${chunk.text}`;
+        const parts = buffered.split(/\r?\n/);
+        carry.set(chunk.stream, parts.pop() || '');
+        yield* this.mapOutput(request, parts.join('\n'), chunk.stream);
       }
     } finally {
       this.activeRuns.delete(request.taskId);

@@ -68,6 +68,74 @@ describe('ProcessAgentAdapter', () => {
     expect(events.at(-1)).toMatchObject({ type: 'agent.lifecycle', status: 'completed' });
   });
 
+  it('buffers a JSON line split across chunks', async () => {
+    const adapter = new ProcessAgentAdapter({
+      id: 'codex',
+      displayName: 'Codex',
+      command: 'codex',
+      buildArgs: (request) => buildCodexArgs(undefined, request),
+      parseLine: (line, taskId, agent) => ({
+        id: 'split_event',
+        type: 'text.delta',
+        taskId,
+        timestamp: '2026-07-03T00:00:00.000Z',
+        agent,
+        channel: 'assistant',
+        text: JSON.parse(line).message as string,
+      }),
+      runner: new FakeRunner(
+        { available: true, version: 'codex 1.0.0' },
+        [
+          { stream: 'stdout', text: '{"mes' },
+          { stream: 'stdout', text: 'sage":"hello' },
+          { stream: 'stdout', text: '"}\n' },
+          { code: 0, signal: null },
+        ],
+      ),
+    });
+
+    const events: WorkbenchEvent[] = [];
+    for await (const event of adapter.run({ taskId: 'task_split', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+      events.push(event);
+    }
+
+    expect(events.filter((event) => event.id === 'split_event')).toMatchObject([
+      { type: 'text.delta', text: 'hello' },
+    ]);
+  });
+
+  it('flushes an unterminated final line when the process exits', async () => {
+    const adapter = new ProcessAgentAdapter({
+      id: 'codex',
+      displayName: 'Codex',
+      command: 'codex',
+      buildArgs: (request) => buildCodexArgs(undefined, request),
+      parseLine: (line, taskId, agent) => ({
+        id: 'final_event',
+        type: 'text.delta',
+        taskId,
+        timestamp: '2026-07-03T00:00:00.000Z',
+        agent,
+        channel: 'assistant',
+        text: line,
+      }),
+      runner: new FakeRunner(
+        { available: true, version: 'codex 1.0.0' },
+        [
+          { stream: 'stdout', text: 'final line' },
+          { code: 0, signal: null },
+        ],
+      ),
+    });
+
+    const events: WorkbenchEvent[] = [];
+    for await (const event of adapter.run({ taskId: 'task_final', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(expect.objectContaining({ id: 'final_event', text: 'final line' }));
+  });
+
   it('yields every event returned by a parser', async () => {
     const adapter = new ProcessAgentAdapter({
       id: 'codex',

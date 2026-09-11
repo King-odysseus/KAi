@@ -125,6 +125,35 @@ describe('Unified event model conformance', () => {
     });
   });
 
+  describe('ACP stream buffering', () => {
+    it('buffers a JSON line split across three chunks', async () => {
+      const adapter = new AcpAgentAdapter(
+        {
+          id: 'qwen',
+          displayName: 'Qwen',
+          command: 'qwen',
+          parseLine: (line, taskId, agent) => ({
+            id: 'acp_split_event',
+            type: 'text.delta',
+            taskId,
+            timestamp: '2026-07-03T00:00:00.000Z',
+            agent,
+            channel: 'assistant',
+            text: JSON.parse(line).message as string,
+          }),
+        },
+        new SplitRunner(),
+      );
+
+      const events: WorkbenchEvent[] = [];
+      for await (const event of adapter.run({ taskId: 'task_acp_split', prompt: 'hi', route: 'direct', autonomy: 'review' })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual(expect.objectContaining({ id: 'acp_split_event', text: 'hello' }));
+    });
+  });
+
   describe('Parser event arrays', () => {
     it('yields every event returned by an ACP parser', async () => {
       const adapter = new AcpAgentAdapter(
@@ -202,6 +231,19 @@ class ArrayRunner implements ProcessRunner {
 
   async *run(): AsyncIterable<ProcessChunk | ProcessResult> {
     yield { stream: 'stdout', text: 'parsed\\n' };
+    yield { code: 0, signal: null };
+  }
+}
+
+class SplitRunner implements ProcessRunner {
+  async commandInfo() {
+    return { available: true, version: 'qwen 1.0.0' };
+  }
+
+  async *run(): AsyncIterable<ProcessChunk | ProcessResult> {
+    yield { stream: 'stdout', text: '{"mes' };
+    yield { stream: 'stdout', text: 'sage":"hello' };
+    yield { stream: 'stdout', text: '"}\n' };
     yield { code: 0, signal: null };
   }
 }
