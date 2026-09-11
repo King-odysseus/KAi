@@ -64,11 +64,11 @@ export async function resolveProxyConfig(
   const port = kaiCfg.get<number>('proxyPort', 8082);
 
   // Non-secret values: kai.proxy.* first, then claudeProxy.* fallback
-  const targetBaseUrl = firstOf(
+  const targetBaseUrl = normalizeBaseUrl(firstOf(
     kaiCfg.get<string>('proxy.targetBaseUrl', ''),
     legacyCfg.get<string>('targetBaseUrl', ''),
     DEFAULT_TARGET_BASE_URL,
-  );
+  ));
 
   const defaultModel = firstOf(
     kaiCfg.get<string>('proxy.defaultModel', ''),
@@ -289,4 +289,17 @@ function firstOf<T>(...candidates: (T | undefined | null | '')[]): T {
 function nonEmptyRecord<T extends Record<string, unknown>>(r: T): T | undefined {
   if (!r || typeof r !== 'object') return undefined;
   return Object.keys(r).length > 0 ? r : undefined;
+}
+
+/**
+ * Strip Anthropic API path suffixes from a base URL while preserving OpenAI
+ * compatible paths such as /v1.
+ */
+function normalizeBaseUrl(url: string): string {
+  for (const suffix of ['/anthropic/v1', '/anthropic']) {
+    if (url.endsWith(suffix)) {
+      return url.slice(0, -suffix.length);
+    }
+  }
+  return url;
 }

@@ -88,6 +88,37 @@ describe('resolveProxyConfig', () => {
     expect(result.defaultModel).toBe('deepseek-chat');
   });
 
+  it('strips /anthropic suffix from legacy targetBaseUrl', async () => {
+    const kaiCfg = mockConfig({});
+    const legacyCfg = mockConfig({ targetBaseUrl: 'https://api.deepseek.com/anthropic' });
+    const secrets = mockSecretStore();
+
+    const result = await resolveProxyConfig(kaiCfg, legacyCfg, secrets);
+    expect(result.targetBaseUrl).toBe('https://api.deepseek.com');
+  });
+
+  it('strips /anthropic/v1 suffix from legacy targetBaseUrl', async () => {
+    const kaiCfg = mockConfig({});
+    const legacyCfg = mockConfig({ targetBaseUrl: 'https://api.deepseek.com/anthropic/v1' });
+    const secrets = mockSecretStore();
+
+    const result = await resolveProxyConfig(kaiCfg, legacyCfg, secrets);
+    expect(result.targetBaseUrl).toBe('https://api.deepseek.com');
+  });
+
+  it.each([
+    'https://api.groq.com/openai/v1',
+    'https://api.openai.com/v1',
+    'http://localhost:11434/v1',
+  ])('preserves OpenAI-compatible /v1 base URL: %s', async (targetBaseUrl) => {
+    const kaiCfg = mockConfig({ 'proxy.targetBaseUrl': targetBaseUrl });
+    const legacyCfg = mockConfig({});
+    const secrets = mockSecretStore();
+
+    const result = await resolveProxyConfig(kaiCfg, legacyCfg, secrets);
+    expect(result.targetBaseUrl).toBe(targetBaseUrl);
+  });
+
   it('resolves API key from SecretStorage', async () => {
     const kaiCfg = mockConfig({});
     const legacyCfg = mockConfig({});
