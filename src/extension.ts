@@ -12,6 +12,7 @@ import { EmbeddedCognitive1 } from './cognitive1/embedded-cognitive1';
 import { BackupManager } from './config/backup-manager';
 import { CodexConfigWriter, defaultCodexConfigPath } from './config/codex-config';
 import { ClaudeConfigWriter } from './config/claude-config';
+import { loadOrCreateProxyToken } from './config/proxy-token';
 import { QwenConfigWriter } from './config/qwen-config';
 import { ProjectPreferences } from './config/project-preferences';
 import { createEventId, nowIso } from './core/events';
@@ -92,10 +93,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
 
+  // Token Claude sends back on every proxy-routed request (via
+  // ANTHROPIC_AUTH_TOKEN — see claude-config.ts) so the proxy can tell KAI's
+  // own Claude process apart from any other local caller. Stable per
+  // installation — see loadOrCreateProxyToken.
+  const proxyAuthToken = await loadOrCreateProxyToken(context.globalStorageUri.fsPath);
+
   // Start the built-in KAI proxy server (always)
   try {
     const resolved = await resolveProxyConfig(config, legacyCfg, secretStore);
-    const proxyCfg: ProxyServerConfig = toProxyServerConfig(resolved);
+    const proxyCfg: ProxyServerConfig = { ...toProxyServerConfig(resolved), authToken: proxyAuthToken };
     kaiProxy = new KaiProxyServer(proxyCfg);
     await kaiProxy.start();
     context.subscriptions.push({ dispose: () => { void kaiProxy?.stop(); } });
@@ -138,7 +145,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       beforeRun: async (req) => {
         if (req.route !== 'proxy') return [];
         try {
-          const r = await claudeConfigWriter.ensureProxyConfig({ port: proxyPort });
+          const r = await claudeConfigWriter.ensureProxyConfig({ port: proxyPort, authToken: proxyAuthToken });
           return [
             {
               id: createEventId(),
@@ -276,6 +283,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     claudeConfigWriter,
     qwenConfigWriter,
     codexConfigWriter,
+    proxyAuthToken,
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewType, settingsProvider),

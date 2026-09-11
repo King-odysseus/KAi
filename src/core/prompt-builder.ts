@@ -46,3 +46,21 @@ export function buildPromptWithContext(userText: string, chips: ContextChip[]): 
   const lines = chips.map(describeChip).filter(Boolean);
   return `Context:\n${lines.join('\n')}\n\n${trimmed}`;
 }
+
+const MEMORY_BRIEFING_MAX_CHARS = 1500;
+/** Placeholder recall summaries that carry no real memory content — never
+ * worth injecting into a prompt. */
+const EMPTY_RECALL_PATTERNS = [/^No recall results found\.?$/i, /^Cognitive1 disabled/i];
+
+/**
+ * Turns a Cognitive1 recall summary into a bounded prompt preamble, or ''
+ * when there's nothing real to inject (recall found nothing, or the client
+ * is disabled) — the orchestrator sends this ahead of the user's prompt so
+ * the "Used N memories" chip reflects something the agent actually saw.
+ */
+export function buildMemoryBriefing(recallSummary: string | undefined): string {
+  const text = (recallSummary ?? '').trim();
+  if (!text || EMPTY_RECALL_PATTERNS.some((p) => p.test(text))) return '';
+  const capped = text.length > MEMORY_BRIEFING_MAX_CHARS ? `${text.slice(0, MEMORY_BRIEFING_MAX_CHARS)}…` : text;
+  return `Relevant memory from past sessions:\n${capped}`;
+}

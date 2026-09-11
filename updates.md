@@ -2,6 +2,48 @@
 
 ## 2026-09-11
 
+### Phase 6 memory injection and a locked-down proxy (partial)
+
+- **Relevant memory is now injected into every prompt.** Recall results are
+  prepended as a `Relevant memory from past sessions:` briefing built by
+  `buildMemoryBriefing()` in `src/core/prompt-builder.ts` — capped at 1500
+  characters, and suppressed entirely when recall returns nothing or
+  Cognitive1 is disabled, so the agent is never told "No recall results
+  found." in place of real context.
+- **KAI learns from each turn.** A completed run saves a memory entry via
+  `learnFromTurn()`.
+  - Caught by this work's own test: it was saving the *memory-augmented*
+    prompt — the one KAI sends to the agent — as the memory title, so every
+    new memory was just an echo of the last recall. It now uses the user's
+    own prompt text.
+- **The proxy is no longer an open door on localhost.** It holds your real
+  upstream API key, so anything on the machine — or any web page whose
+  `fetch()` reaches `127.0.0.1` — could previously ride it. Two locks now
+  close that (`src/proxy/proxy-server.ts`):
+  - A random token (`randomBytes(24)`, `src/config/proxy-token.ts`), written
+    into `~/.claude/settings.json`'s `ANTHROPIC_AUTH_TOKEN` and required back
+    on `/v1/messages` as `Authorization: Bearer <token>`.
+    - Stored per installation rather than regenerated on each activation.
+      KAI only rewrites that settings file just before a proxy-routed run, so
+      a fresh window would leave a stale token behind and 401 any agent
+      started another way (a `claude` typed into a terminal, say) until KAI
+      happened to run one itself.
+  - Any request carrying an `Origin` header gets 403 unconditionally —
+    that header means a browser context, and no legitimate CLI HTTP client
+    sends one. This lock applies even when no token is configured.
+  - Both fall back to the previous unauthenticated behavior when no token is
+    set, so nothing that worked before breaks. `test/proxy-auth.test.ts`
+    (9 tests) runs a real proxy against a fake upstream that records every
+    request it receives, so each unauthorized path is shown to return
+    401/403 *and* to never have reached the upstream key at all;
+    `test/proxy-token.test.ts` (6 tests) covers token persistence.
+- **Still to do in this phase**, each as its own session and each starting
+  with a short written spike reviewed before any coding: a real ACP JSON-RPC
+  client for Qwen/Gemini (replacing the current parser-only adapter), and
+  Claude interactive approvals. Codex and Qwen are also not yet covered by
+  the proxy token — their config schema for carrying a matching token hasn't
+  been verified against a live run.
+
 ### Phase 5 workflows and compare in real git worktrees
 
 - **"Plan mode" renamed "Workflow"** in every user-facing label (button

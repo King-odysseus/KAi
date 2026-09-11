@@ -16,6 +16,15 @@ export interface ProxyServerConfig {
     apiKey?: string;
     defaultModel?: string;
   };
+  /** Random token written into ~/.claude/settings.json's
+   * ANTHROPIC_AUTH_TOKEN (see proxy-token.ts). When set, /v1/messages
+   * rejects any request whose Authorization header doesn't match it —
+   * closing the gap where any local process (or, unauthenticated, a web
+   * page's fetch()) could ride this proxy to your real upstream key.
+   * Left undefined preserves the old unauthenticated behavior. Codex/Qwen
+   * aren't covered yet — their config.toml/settings schema for carrying a
+   * matching token hasn't been verified against a live run. */
+  authToken?: string;
 }
 
 // ---- HTTP helpers ----
@@ -362,7 +371,11 @@ export class KaiProxyServer {
     });
   }
 
+  /** The actually-bound port. Differs from config.port when that was 0
+   *  (OS-assigned), which is how tests bind an ephemeral port. */
   getPort(): number {
+    const address = this.server?.address();
+    if (address && typeof address === 'object') return address.port;
     return this.config.port;
   }
 
@@ -377,6 +390,16 @@ export class KaiProxyServer {
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const parsed = new URL(req.url || '/', 'http://localhost');
     const pathname = parsed.pathname;
+
+    // A request carrying an Origin header came from a browser context (a
+    // web page's fetch/XHR) — no legitimate CLI HTTP client sends one.
+    // Reject unconditionally, regardless of authToken, so this proxy can't
+    // be ridden by an open tab to reach the real upstream key.
+    if (req.headers.origin) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Forbidden', type: 'forbidden_origin' } }));
+      return;
+    }
 
     // Health check
     if (req.method === 'GET' && pathname === '/health') {
@@ -409,6 +432,11 @@ export class KaiProxyServer {
 
     // Anthropic Messages (translate → Chat Completions)
     if (req.method === 'POST' && pathname === '/v1/messages') {
+      if (!this.isAuthorizedClaudeRequest(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'unauthorized' } }));
+        return;
+      }
       await this.handleAnthropicMessages(req, res);
       return;
     }
@@ -416,6 +444,17 @@ export class KaiProxyServer {
     // 404
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'Not found: ' + pathname, type: 'not_found' } }));
+  }
+
+  /** Checks the caller's Authorization header against config.authToken —
+   * the value claude-config.ts writes into ANTHROPIC_AUTH_TOKEN, which
+   * Claude Code sends back as `Authorization: Bearer <token>`. No
+   * authToken configured (the pre-Phase-6 default) skips the check
+   * entirely, so this can't newly break anyone who hasn't set one. */
+  private isAuthorizedClaudeRequest(req: http.IncomingMessage): boolean {
+    if (!this.config.authToken) return true;
+    const header = req.headers.authorization;
+    return header === `Bearer ${this.config.authToken}`;
   }
 
   private async handleResponses(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

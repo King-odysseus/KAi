@@ -5,6 +5,11 @@ import * as path from 'path';
 export interface ClaudeProxyConfig {
   configPath?: string;
   port: number;
+  /** Token Claude sends back as its Authorization header, checked by
+   *  proxy-server.ts — see loadOrCreateProxyToken for how it's stored.
+   *  Omitting it falls back to a fixed placeholder (the pre-Phase-6
+   *  behavior, unauthenticated), so existing callers keep working. */
+  authToken?: string;
 }
 
 export interface ClaudeProxyConfigResult {
@@ -13,11 +18,13 @@ export interface ClaudeProxyConfigResult {
   changed: boolean;
 }
 
+const LEGACY_PLACEHOLDER_TOKEN = 'sk-ant-proxy-placeholder-000000000000000000000000000000';
+
 /** Proxy env vars injected into ~/.claude/settings.json so Claude Code
  *  routes through the proxy. The proxy supplies the real upstream key. */
-const PROXY_ENV: Record<string, string> = {
+const PROXY_ENV_BASE: Record<string, string> = {
   ANTHROPIC_BASE_URL: '',
-  ANTHROPIC_AUTH_TOKEN: 'sk-ant-proxy-placeholder-000000000000000000000000000000',
+  ANTHROPIC_AUTH_TOKEN: LEGACY_PLACEHOLDER_TOKEN,
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
   API_TIMEOUT_MS: '3000000',
 };
@@ -30,8 +37,9 @@ export class ClaudeConfigWriter {
     const existingRaw = await this.readOptional(configPath);
 
     const env: Record<string, string> = {
-      ...PROXY_ENV,
+      ...PROXY_ENV_BASE,
       ANTHROPIC_BASE_URL: 'http://127.0.0.1:' + config.port,
+      ANTHROPIC_AUTH_TOKEN: config.authToken ?? LEGACY_PLACEHOLDER_TOKEN,
     };
 
     const next = this.upsertEnv(existingRaw, env);
@@ -71,7 +79,7 @@ export class ClaudeConfigWriter {
       const settings = JSON.parse(raw) as Record<string, unknown>;
       if (settings.env) {
         const env = settings.env as Record<string, string>;
-        for (const key of Object.keys(PROXY_ENV)) {
+        for (const key of Object.keys(PROXY_ENV_BASE)) {
           delete env[key];
         }
         if (Object.keys(env).length === 0) {

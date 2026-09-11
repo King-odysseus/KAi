@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPromptWithContext, type ContextChip } from '../src/core/prompt-builder';
+import { buildPromptWithContext, buildMemoryBriefing, type ContextChip } from '../src/core/prompt-builder';
 
 describe('buildPromptWithContext', () => {
   it('returns the trimmed prompt unchanged with no chips', () => {
@@ -39,5 +39,32 @@ describe('buildPromptWithContext', () => {
     const result = buildPromptWithContext('continue', chips);
     expect(result).toContain('- memory search "proxy bug":');
     expect(result).toContain('  Fixed /v1 stripping.');
+  });
+});
+
+describe('buildMemoryBriefing', () => {
+  it('returns empty for undefined or blank input', () => {
+    expect(buildMemoryBriefing(undefined)).toBe('');
+    expect(buildMemoryBriefing('   ')).toBe('');
+  });
+
+  it('returns empty for the embedded client\'s "nothing found" message', () => {
+    expect(buildMemoryBriefing('No recall results found.')).toBe('');
+  });
+
+  it('returns empty when Cognitive1 is disabled', () => {
+    expect(buildMemoryBriefing('Cognitive1 disabled: recall pending.')).toBe('');
+  });
+
+  it('wraps a real recall summary as a briefing preamble', () => {
+    const result = buildMemoryBriefing('Recall found 2 relevant result(s): [session] claude: fixed the bug');
+    expect(result).toBe('Relevant memory from past sessions:\nRecall found 2 relevant result(s): [session] claude: fixed the bug');
+  });
+
+  it('caps a very long recall summary', () => {
+    const long = 'x'.repeat(2000);
+    const result = buildMemoryBriefing(long);
+    expect(result.length).toBeLessThan(long.length);
+    expect(result).toContain('…');
   });
 });

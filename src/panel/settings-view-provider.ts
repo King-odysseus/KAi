@@ -55,6 +55,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     private readonly claudeConfigWriter = new ClaudeConfigWriter(),
     private readonly qwenConfigWriter = new QwenConfigWriter(),
     private readonly codexConfigWriter = new CodexConfigWriter(),
+    private readonly proxyAuthToken?: string,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -304,7 +305,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     if (agent === 'claude') {
       await kp.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
       await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
-      await this.claudeConfigWriter.ensureProxyConfig({ port });
+      await this.claudeConfigWriter.ensureProxyConfig({ port, authToken: this.proxyAuthToken });
     } else if (agent === 'codex') {
       await kp.update('routeCodex', true, vscode.ConfigurationTarget.Global);
       await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
@@ -364,7 +365,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     await kp.update('routeCodex', true, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
-    await this.claudeConfigWriter.ensureProxyConfig({ port });
+    await this.claudeConfigWriter.ensureProxyConfig({ port, authToken: this.proxyAuthToken });
     await this.qwenConfigWriter.ensureProxyConfig({ port });
 
     const codexCfg = proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;

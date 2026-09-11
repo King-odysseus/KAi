@@ -7,6 +7,7 @@ import { canRunWithoutApproval, createPermissionProfile } from '../core/permissi
 import type { DiffApplier } from './diff-applier';
 import { NoopDiffApplier } from './diff-applier';
 import type { AgentAdapter, ApprovalResponse } from '../adapters/agent-adapter';
+import { buildMemoryBriefing } from '../core/prompt-builder';
 import type { Plan } from '../core/plan';
 import { PlanRunner } from './plan-runner';
 import type { Checkpoint } from './checkpoints';
@@ -543,6 +544,37 @@ export class WorkbenchOrchestrator extends EventEmitter {
     }
   }
 
+  /** Saves a short pattern (task + reply excerpt + changed files) to
+   * Cognitive1 after a turn finishes, so a later recall has something real
+   * to find. `learn()` isn't part of the shared Cognitive1Client interface
+   * (only EmbeddedCognitive1 has it) — same defensive cast plan-runner.ts
+   * already uses for the same reason. */
+  private async learnFromTurn(taskId: string, agent: AgentId): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+    const c1 = this.cognitive1 as any;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    if (typeof c1.learn !== 'function') return;
+    try {
+      // this.lastPrompt is the user's original task — never the
+      // memory-briefing-augmented prompt actually sent to the agent
+      // (runAgentStream's own `prompt` param), which would make the saved
+      // pattern's title/description just echo the last recall back at itself.
+      const task = this.lastPrompt;
+      const replyExcerpt = this.lastReplyText.trim().slice(0, 500);
+      const checkpoint = this.checkpoints.get(taskId);
+      const files = checkpoint && this.projectPath ? await diffFromCheckpoint(this.projectPath, checkpoint).catch(() => []) : [];
+      const description = [
+        `Task: ${task.slice(0, 300)}`,
+        replyExcerpt ? `Reply: ${replyExcerpt}` : '',
+        files.length ? `Files: ${files.map((f) => f.path).join(', ')}` : '',
+      ].filter(Boolean).join('\n');
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      await c1.learn({ title: task.slice(0, 80), description, tags: [agent, 'turn'] });
+    } catch {
+      // Best effort — never fail a run over saving a memory.
+    }
+  }
+
   // Permission check — gates risky operations based on autonomy mode
   checkPermission(permission: PermissionKey): { allowed: boolean; escalated: boolean } {
     const profile = createPermissionProfile(this.state.autonomy, this.customPermissions);
@@ -601,7 +633,13 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const rs = await this.cognitive1.recall({ query: prompt });
     this.emitEvent({ id: createEventId(), type: 'memory.event', taskId, timestamp: nowIso(), agent, action: 'recall', summary: rs });
 
-    await this.runAgentStream(agent, route, autonomy, prompt);
+    // Actually give the agent what was recalled — previously fetched but
+    // never sent, so the "Used N memories" chip showed even though the
+    // agent never saw a word of it.
+    const briefing = buildMemoryBriefing(rs);
+    const finalPrompt = briefing ? `${briefing}\n\n${prompt}` : prompt;
+
+    await this.runAgentStream(agent, route, autonomy, finalPrompt);
     return taskId;
   }
 
@@ -635,6 +673,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
       if (!this.handoffInProgress) {
         this.state = { ...this.state, isRunning: false };
         this.emitState();
+        void this.learnFromTurn(taskId, agent);
       }
     }
   }
