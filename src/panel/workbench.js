@@ -78,6 +78,8 @@
     historySearch: document.getElementById('historySearch'),
     historyClose: document.getElementById('historyClose'),
     historyList: document.getElementById('historyList'),
+    compareToggle: document.getElementById('compareToggle'),
+    compareAgentB: document.getElementById('compareAgentB'),
   };
 
   var emptyState = document.getElementById('emptyState');
@@ -214,7 +216,7 @@
   }
 
   // ---- Plan mode ----
-  function togglePlanMode() { planMode=!planMode; els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit workflow mode':'Workflow mode: define multi-step agent runs'; }
+  function togglePlanMode() { planMode=!planMode; els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit workflow mode':'Workflow mode: define multi-step agent runs'; if(planMode&&compareMode) toggleCompareMode(); }
   function addPlanStep() { planSteps.push({agent:currentAgent(),prompt:''}); renderPlanSteps(); }
   function removePlanStep(idx) { planSteps.splice(idx,1); renderPlanSteps(); }
 
@@ -234,14 +236,14 @@
 
   function executePlan() {
     if(planSteps.length===0) return;
-    var plan={id:'plan_'+Date.now(),title:els.planTitle.value.trim()||'Untitled Plan',steps:planSteps.map(function(s,i){return{id:'step_'+i,agent:s.agent,prompt:s.prompt.trim(),status:'pending'};}),route:currentRoute(),autonomy:currentAutonomy(),status:'ready',currentStepIndex:0,createdAt:new Date().toISOString()};
+    var plan={id:'plan_'+Date.now(),title:els.planTitle.value.trim()||'Untitled workflow',steps:planSteps.map(function(s,i){return{id:'step_'+i,agent:s.agent,prompt:s.prompt.trim(),status:'pending'};}),route:currentRoute(),autonomy:currentAutonomy(),status:'ready',currentStepIndex:0,createdAt:new Date().toISOString()};
     removeEmpty(); appendUserMessage('Plan: '+plan.title+' ('+plan.steps.length+' steps)'); vscode.postMessage({type:'executePlan',value:JSON.stringify(plan)});
     togglePlanMode(); planSteps=[]; els.planTitle.value=''; renderPlanSteps();
   }
 
   function saveAsTemplate() {
     if(planSteps.length===0) return;
-    var name = els.planTitle.value.trim()||'My Plan';
+    var name = els.planTitle.value.trim()||'My workflow';
     var template={name:name,description:'',steps:planSteps.map(function(s){return{agent:s.agent,prompt:s.prompt};}),route:currentRoute(),autonomy:currentAutonomy()};
     vscode.postMessage({type:'saveTemplate',value:JSON.stringify(template)});
   }
@@ -253,46 +255,126 @@
     if(!planMode) togglePlanMode();
   }
 
+  // Per-step live stats (cost, elapsed), keyed by step id — plan-runner.ts
+  // gives each step run a taskId of `planstep_<step.id>_<timestamp>`.
+  var planStepStats = {};
+  function stepIdFromTaskId(taskId) {
+    var m = /^planstep_(.+)_\d+$/.exec(taskId || '');
+    return m ? m[1] : null;
+  }
+  function trackPlanStepStats(event) {
+    var stepId = stepIdFromTaskId(event.taskId);
+    if (!stepId) return;
+    var stats = planStepStats[stepId] || (planStepStats[stepId] = { costUsd: undefined, inputTokens: 0, outputTokens: 0, startedAt: null, endedAt: null });
+    if (event.type === 'agent.lifecycle' && event.status === 'starting') stats.startedAt = Date.now();
+    if (event.type === 'agent.lifecycle' && (event.status === 'completed' || event.status === 'failed' || event.status === 'paused')) stats.endedAt = Date.now();
+    if (event.type === 'cost.update') {
+      if (event.inputTokens) stats.inputTokens += event.inputTokens;
+      if (event.outputTokens) stats.outputTokens += event.outputTokens;
+      if (event.amountUsd != null) stats.costUsd = event.amountUsd;
+    }
+  }
+  function fmtStepStats(stepId) {
+    var s = planStepStats[stepId];
+    if (!s) return '';
+    var parts = [];
+    if (s.startedAt) parts.push(fmtElapsed((s.endedAt || Date.now()) - s.startedAt));
+    if (s.costUsd != null) parts.push('$' + s.costUsd.toFixed(4));
+    return parts.join(' · ');
+  }
+
   function renderPlanProgress(plan) {
     if(!plan){ els.planProgress.style.display='none'; return; }
     els.planProgress.style.display='block';
-    var h='<div class="pp-header"><span class="pp-title">'+esc(plan.title)+'</span><span class="pp-status status-'+plan.status+'">'+plan.status+'</span></div>';
-    h+='<div class="pp-controls">';
-    if(plan.status==='running'){ h+='<button id="pausePlanBtn" class="plan-ctrl-btn">Pause</button><button id="abortPlanBtn" class="plan-ctrl-btn abort">Abort</button>'; }
-    else if(plan.status==='paused'){ h+='<button id="resumePlanBtn" class="plan-ctrl-btn">Resume</button><button id="abortPlanBtn" class="plan-ctrl-btn abort">Abort</button>'; }
-    h+='</div><div class="pp-steps">';
-    for(var i=0;i<plan.steps.length;i++){
-      var st=plan.steps[i], icon=st.status==='completed'?'V':st.status==='running'?'O':st.status==='failed'?'X':st.status==='skipped'?'-':'o';
-      h+='<div class="pp-step pp-'+st.status+'"><span class="pp-step-icon">'+icon+'</span><span class="pp-step-agent">'+esc(st.agent)+'</span><span class="pp-step-label">'+esc(st.label||st.prompt.slice(0,60))+'</span>';
-      if(st.status==='failed'&&plan.status==='paused'){
-        h+='<button class="pp-retry-btn" data-step-id="'+esc(st.id)+'">Retry</button><button class="pp-skip-btn" data-step-id="'+esc(st.id)+'">Skip</button>';
+    var totalCostForPlan = 0;
+    plan.steps.forEach(function (s) { var st = planStepStats[s.id]; if (st && st.costUsd != null) totalCostForPlan += st.costUsd; });
+
+    var h = '<div class="wf-header"><span class="wf-title">' + esc(plan.title) + '</span>' +
+      '<span class="wf-meta">' + plan.steps.length + ' step' + (plan.steps.length !== 1 ? 's' : '') + (totalCostForPlan > 0 ? ' · $' + totalCostForPlan.toFixed(4) : '') + '</span>' +
+      '<span class="pp-status status-' + plan.status + '">' + plan.status + '</span></div>';
+
+    h += '<div class="wf-stepper">';
+    for (var i = 0; i < plan.steps.length; i++) {
+      var st = plan.steps[i];
+      var nodeClass = st.status === 'completed' ? 'done' : st.status === 'failed' ? 'failed' : st.status === 'running' ? 'running' : st.status === 'skipped' ? 'skipped' : 'pending';
+      var nodeIcon = st.status === 'completed'
+        ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>'
+        : st.status === 'failed'
+        ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+        : st.status === 'running'
+        ? '<span class="spinner" style="width:10px;height:10px;"></span>'
+        : '';
+      h += '<div class="wf-step">' +
+        '<div class="wf-rail"><span class="wf-node ' + nodeClass + '">' + nodeIcon + '</span>' + (i < plan.steps.length - 1 ? '<span class="wf-line"></span>' : '') + '</div>' +
+        '<div class="wf-step-body">' +
+        '<div class="wf-step-top"><span class="agent-dot ' + esc(st.agent) + '"></span><span class="wf-step-agent">' + esc(agentLabel(st.agent)) + '</span><span class="wf-step-stats">' + esc(fmtStepStats(st.id)) + '</span></div>' +
+        '<div class="wf-step-label">' + esc(st.label || st.prompt.slice(0, 80)) + '</div>';
+      if (st.status === 'failed' && plan.status === 'paused') {
+        h += '<div class="wf-step-error">' + esc(st.error || 'Step failed') + '</div>' +
+          '<div class="wf-step-actions">' +
+          '<button class="turn-action-btn wide primary" data-retry="' + esc(st.id) + '">Retry</button>' +
+          '<button class="turn-action-btn wide" data-retry-with="' + esc(st.id) + '">Retry with ▾</button>' +
+          '<button class="turn-action-btn wide" data-edit-prompt="' + esc(st.id) + '">Edit prompt</button>' +
+          '<button class="turn-action-btn wide" data-skip="' + esc(st.id) + '">Skip</button>' +
+          '</div>' +
+          '<div class="wf-step-edit" id="wf-edit-' + esc(st.id) + '" style="display:none;"></div>';
+      } else if (st.error) {
+        h += '<div class="wf-step-error">' + esc(st.error) + '</div>';
       }
-      if(st.error) h+='<span class="pp-step-error">'+esc(st.error)+'</span>';
-      h+='</div>';
+      h += '</div></div>';
+      if (i < plan.steps.length - 1) {
+        h += '<div class="wf-handoff-note">Handoff to ' + esc(agentLabel(plan.steps[i + 1].agent)) + '</div>';
+      }
     }
-    h+='</div>';
-    els.planProgress.innerHTML=h;
+    h += '</div>';
+
+    h += '<div class="wf-footer">';
+    if (plan.status === 'running') { h += '<button id="pausePlanBtn" class="plan-ctrl-btn">Pause</button><button id="abortPlanBtn" class="plan-ctrl-btn abort">Abort</button>'; }
+    else if (plan.status === 'paused') { h += '<button id="resumePlanBtn" class="plan-ctrl-btn">Resume</button><button id="abortPlanBtn" class="plan-ctrl-btn abort">Abort</button>'; }
+    h += '</div>';
+
+    els.planProgress.innerHTML = h;
 
     var pb=document.getElementById('pausePlanBtn'),rb=document.getElementById('resumePlanBtn'),ab=document.getElementById('abortPlanBtn');
     if(pb) pb.addEventListener('click',function(){vscode.postMessage({type:'pausePlan'});});
     if(rb) rb.addEventListener('click',function(){vscode.postMessage({type:'resumePlan'});});
     if(ab) ab.addEventListener('click',function(){vscode.postMessage({type:'abortPlan'});});
 
-    els.planProgress.querySelectorAll('.pp-retry-btn').forEach(function(btn){
+    els.planProgress.querySelectorAll('[data-retry]').forEach(function(btn){
+      btn.addEventListener('click',function(){ vscode.postMessage({type:'retryStep',eventId:btn.getAttribute('data-retry')}); });
+    });
+    els.planProgress.querySelectorAll('[data-skip]').forEach(function(btn){
+      btn.addEventListener('click',function(){ vscode.postMessage({type:'skipStep',eventId:btn.getAttribute('data-skip')}); });
+    });
+    els.planProgress.querySelectorAll('[data-retry-with]').forEach(function(btn){
       btn.addEventListener('click',function(){
-        var sid=btn.getAttribute('data-step-id');
-        var newPrompt=prompt('Edit prompt for retry (leave blank to keep original):');
-        vscode.postMessage({type:'retryStep',eventId:sid,value:newPrompt||undefined});
+        var sid=btn.getAttribute('data-retry-with');
+        var step=plan.steps.filter(function(s){return s.id===sid;})[0];
+        var others=AGENT_IDS.filter(function(a){return !step||a!==step.agent;});
+        openMenu(btn, others.map(function(a){
+          return { label: agentLabel(a), disabled: !isAgentAvailable(a), onClick: function(){ vscode.postMessage({type:'retryStep',eventId:sid,agent:a}); } };
+        }));
       });
     });
-    els.planProgress.querySelectorAll('.pp-skip-btn').forEach(function(btn){
-      btn.addEventListener('click',function(){ vscode.postMessage({type:'skipStep',eventId:btn.getAttribute('data-step-id')}); });
+    els.planProgress.querySelectorAll('[data-edit-prompt]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var sid=btn.getAttribute('data-edit-prompt');
+        var step=plan.steps.filter(function(s){return s.id===sid;})[0];
+        var box=document.getElementById('wf-edit-'+sid);
+        if(!box) return;
+        if(box.style.display!=='none'){ box.style.display='none'; box.innerHTML=''; return; }
+        box.style.display='block';
+        var ta=document.createElement('textarea'); ta.className='wf-edit-textarea'; ta.rows=3; ta.value=step?step.prompt:'';
+        var send=document.createElement('button'); send.type='button'; send.className='turn-action-btn wide primary'; send.textContent='Retry with this prompt';
+        send.addEventListener('click',function(){ vscode.postMessage({type:'retryStep',eventId:sid,value:ta.value}); });
+        box.appendChild(ta); box.appendChild(send);
+      });
     });
   }
 
   function handlePlanEvent(planEvent) {
     switch(planEvent.type){
-      case 'plan.started': els.planProgress.style.display='block'; els.planProgress.innerHTML='<div class="pp-header">Plan started...</div>'; break;
+      case 'plan.started': els.planProgress.style.display='block'; els.planProgress.innerHTML='<div class="pp-header">Workflow started...</div>'; break;
       case 'plan.step.paused_for_retry': break;
       case 'plan.completed': case 'plan.aborted': renderPlanProgress(null); break;
       default: break;
@@ -892,6 +974,45 @@
     return parts.join(' ');
   }
 
+  function renderCompareSummary(payload) {
+    var panes = document.getElementById('compare-panes');
+    if (!panes) return;
+    var old = document.getElementById('compare-summary-' + payload.compareId); if (old) old.remove();
+    var box = document.createElement('div'); box.id = 'compare-summary-' + payload.compareId; box.className = 'compare-summary';
+    [payload.left, payload.right].forEach(function (side, idx) {
+      var sideKey = idx === 0 ? 'left' : 'right';
+      var col = document.createElement('div'); col.className = 'cmp-result-col';
+      var files = side.files || [];
+      var added = 0, removed = 0; files.forEach(function (f) { added += f.added || 0; removed += f.removed || 0; });
+      col.innerHTML =
+        '<div class="cmp-agent-row"><span class="agent-dot"></span><strong class="cmp-agent">' + esc(agentLabel(side.agent)) + '</strong>' +
+        '<span class="cmp-ok ' + (side.ok ? 'ok' : 'fail') + '">' + (side.ok ? 'OK' : 'Failed') + '</span></div>' +
+        '<div class="cmp-stat-row">' + fmtElapsed(side.elapsedMs || 0) +
+        (files.length ? ' · ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' <span class="add">+' + added + '</span> <span class="remove">−' + removed + '</span>' : ' · no changes') + '</div>';
+      col.querySelector('.agent-dot').className = 'agent-dot ' + side.agent;
+      if (side.error) { var errEl = document.createElement('div'); errEl.className = 'cmp-error'; errEl.textContent = side.error; col.appendChild(errEl); }
+      var actions = document.createElement('div'); actions.className = 'cmp-actions';
+      var pick = document.createElement('button'); pick.type = 'button'; pick.className = 'turn-action-btn wide primary'; pick.textContent = 'Pick this one';
+      pick.addEventListener('click', function () {
+        vscode.postMessage({ type: 'pickCompareWinner', compareId: payload.compareId, side: sideKey });
+        box.querySelectorAll('.cmp-actions').forEach(function (a) { a.remove(); });
+        var note = document.createElement('div'); note.className = 'cmp-picked-note'; note.textContent = 'Applied to your workspace.';
+        col.appendChild(note);
+      });
+      var openWt = document.createElement('button'); openWt.type = 'button'; openWt.className = 'turn-action-btn wide'; openWt.textContent = 'Open worktree';
+      openWt.addEventListener('click', function () { vscode.postMessage({ type: 'openCompareWorktree', compareId: payload.compareId, side: sideKey }); });
+      actions.appendChild(pick); actions.appendChild(openWt);
+      col.appendChild(actions);
+      box.appendChild(col);
+    });
+    var discardRow = document.createElement('div'); discardRow.className = 'cmp-discard-row';
+    var discard = document.createElement('button'); discard.type = 'button'; discard.className = 'turn-action-btn'; discard.textContent = 'Discard both';
+    discard.addEventListener('click', function () { vscode.postMessage({ type: 'discardCompare', compareId: payload.compareId }); box.remove(); });
+    discardRow.appendChild(discard);
+    box.appendChild(discardRow);
+    panes.parentNode.insertBefore(box, panes.nextSibling);
+  }
+
   function renderTurnChangesCard(event, turn) {
     var totalAdded = 0, totalRemoved = 0;
     (event.files || []).forEach(function (f) { totalAdded += f.added || 0; totalRemoved += f.removed || 0; });
@@ -980,9 +1101,16 @@
 
   function activityDetail(event) { switch(event.type){case'tool.call':return(event.name||'tool')+(event.status&&event.status!=='started'?' . '+event.status:'');case'diff.proposal':return'Editing '+(event.filePath||'file');case'file.edit.applied':return'Applied edit to '+(event.filePath||'file');case'memory.event':return event.action?'Memory: '+event.action:'';case'agent.lifecycle':return event.detail||'';default:return'';} }
 
+  var currentCompareId = null;
   function appendEvent(event) {
     if(event.compareId){
-      if(!activeCompare) activeCompare={left:event.side==='left'?event.agent:'',right:event.side==='right'?event.agent:''};
+      if (event.compareId !== currentCompareId) {
+        // A new compare run — drop any stale panes/labels from a previous one.
+        currentCompareId = event.compareId;
+        activeCompare = { left: event.side==='left'?event.agent:'', right: event.side==='right'?event.agent:'' };
+        var stale = document.getElementById('compare-panes'); if (stale) stale.remove();
+      }
+      if (activeCompare && !activeCompare[event.side] && event.agent) activeCompare[event.side] = event.agent;
       if(!document.getElementById('compare-panes')){
         var panes=document.createElement('div');panes.id='compare-panes';
         panes.innerHTML='<div class="compare-pane left" id="cp-left"><div class="compare-label">'+esc(activeCompare.left||'Left')+'</div></div><div class="compare-pane right" id="cp-right"><div class="compare-label">'+esc(activeCompare.right||'Right')+'</div></div>';
@@ -990,13 +1118,15 @@
       }
       var tp=document.getElementById(event.side==='left'?'cp-left':'cp-right'); if(!tp) return;
       if(event.type==='text.delta'){ var t=document.createElement('span');t.className='cmp-text';t.textContent=event.text; tp.appendChild(t); }
-      else if(event.type==='raw.fallback'&&event.sourceType==='compare.complete' && typeof renderCompareSummary==='function'){ renderCompareSummary(event.payload); }
+      else if(event.type==='raw.fallback'&&event.sourceType==='compare.complete'){ renderCompareSummary(event.payload); }
       else if(event.type==='cost.update') accumulateCost(event);
       scrollBottom(true); return;
     }
 
     var detail = activityDetail(event);
     if (detail) setThinkingDetail(detail);
+
+    trackPlanStepStats(event);
 
     // Route agent-attributable events with a real taskId into their turn.
     var taskId = event.taskId;
@@ -1071,11 +1201,23 @@
     renderAgentChip();
   }
 
+  var compareMode = false;
+  function toggleCompareMode() {
+    compareMode = !compareMode;
+    els.compareAgentB.style.display = compareMode ? 'inline-flex' : 'none';
+    els.compareToggle.classList.toggle('active', compareMode);
+    if (compareMode && planMode) togglePlanMode();
+  }
+
   function reallyDispatch(text) {
     lastUserPrompt = text;
     var chips = collectChipsForSend();
     appendUserMessage(text);
-    vscode.postMessage({ type: 'startTask', prompt: text, agent: currentAgent(), route: currentRoute(), autonomy: currentAutonomy(), contextChips: chips });
+    if (compareMode) {
+      vscode.postMessage({ type: 'compareTask', prompt: text, agent: currentAgent(), targetAgent: els.compareAgentB.value });
+    } else {
+      vscode.postMessage({ type: 'startTask', prompt: text, agent: currentAgent(), route: currentRoute(), autonomy: currentAutonomy(), contextChips: chips });
+    }
     clearNonPersistentChips();
     clearPrompt();
   }
@@ -1103,6 +1245,7 @@
   // Listeners
   els.send.addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});else dispatchPrompt(els.prompt.value);});
   els.planToggle.addEventListener('click',function(){togglePlanMode();if(planMode&&planSteps.length===0) addPlanStep();});
+  els.compareToggle.addEventListener('click', toggleCompareMode);
   els.addStep.addEventListener('click',addPlanStep);
   els.runPlan.addEventListener('click',executePlan);
   if(els.saveTemplateBtn) els.saveTemplateBtn.addEventListener('click',saveAsTemplate);

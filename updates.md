@@ -2,6 +2,40 @@
 
 ## 2026-09-11
 
+### Phase 5 workflows and compare in real git worktrees
+
+- **"Plan mode" renamed "Workflow"** in every user-facing label (button
+  title, empty-state copy, placeholders) — Claude Code, Codex and Qwen
+  Code all use "Plan" for a read-only planning mode, which is what KAI's
+  own Phase 2 Plan permission mode now means too; keeping "Plan mode" for
+  the multi-step runner would have meant two different things called Plan
+  in the same app.
+- **Workflow stepper redesign** — a vertical stepper (agent, step label,
+  live time/cost, an italic handoff note between steps) replaces the flat
+  list. A failed step gets Retry, Retry with ▾ (pick a different agent for
+  just that retry — `PlanRunner.retryStep()` now takes an optional agent),
+  an inline Edit prompt textarea (replacing a `window.prompt` dialog), and
+  Skip.
+- **Compare runs in real git worktrees** (`src/orchestrator/worktrees.ts`),
+  not the live workspace — each agent gets its own `git worktree add`
+  checkout, so neither can see or overwrite the other's edits, and nothing
+  touches the user's files until they click "Pick this one" (which applies
+  that side's patch via `git apply` and removes both worktrees) or
+  "Discard both". "Open worktree" opens a side in a new VS Code window.
+  This was previously disabled (Phase 0.8) because it ran both agents
+  directly in the workspace at once.
+  - Found and fixed a second real cross-platform bug while building this:
+    on this machine's Windows git config, `git worktree add`'s checkout
+    also silently converts LF to CRLF (the same class of bug Phase 3 fixed
+    for checkpoint restores) — every worktree git call now runs with
+    `-c core.autocrlf=false`, verified by this module's own tests against
+    a real repo.
+  - `renderCompareSummary()` — referenced since the original compare-mode
+    commit but never implemented (dead code behind a `typeof === function`
+    guard, so compare silently showed no summary) — is now implemented:
+    per-side result card with elapsed time, file stats, and the actions
+    above.
+
 ### Phase 4 conversations, multi-turn sessions, and a real Codex parser bug fix
 
 - **Codex parser rewritten against real output.** Ran

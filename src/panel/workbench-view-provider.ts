@@ -30,7 +30,8 @@ interface WebviewMessage {
     | 'attachImage' | 'setCustomPermissions' | 'queueOverflow'
     | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval'
     | 'newConversation' | 'listConversations' | 'searchConversations' | 'loadConversation'
-    | 'renameConversation' | 'archiveConversation' | 'unarchiveConversation' | 'forkConversation';
+    | 'renameConversation' | 'archiveConversation' | 'unarchiveConversation' | 'forkConversation'
+    | 'pickCompareWinner' | 'discardCompare' | 'openCompareWorktree';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -47,6 +48,8 @@ interface WebviewMessage {
   taskId?: string;
   response?: 'once' | 'always' | 'deny';
   conversationId?: string;
+  compareId?: string;
+  side?: 'left' | 'right';
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -366,7 +369,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       case 'retryStep':
         if (message.eventId) {
           try {
-            await this.orchestrator.retryPlanStep(message.eventId, message.value);
+            await this.orchestrator.retryPlanStep(message.eventId, message.value, message.agent);
             await this.postState();
           } catch (error) {
             this.postEvent({
@@ -399,6 +402,33 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
               id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
               message: error instanceof Error ? error.message : String(error), recoverable: true,
             });
+          }
+        }
+        break;
+      case 'pickCompareWinner':
+        if (message.compareId && message.side) {
+          try {
+            await this.orchestrator.pickCompareWinner(message.compareId, message.side);
+            void vscode.window.showInformationMessage(`KAI: applied the ${message.side} side's changes.`);
+          } catch (error) {
+            void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+          }
+        }
+        break;
+      case 'discardCompare':
+        if (message.compareId) {
+          try {
+            await this.orchestrator.discardCompare(message.compareId);
+          } catch (error) {
+            void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+          }
+        }
+        break;
+      case 'openCompareWorktree':
+        if (message.compareId && message.side) {
+          const wtPath = this.orchestrator.getCompareWorktreePath(message.compareId, message.side);
+          if (wtPath) {
+            await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(wtPath), { forceNewWindow: true });
           }
         }
         break;
@@ -781,20 +811,20 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/>
         </svg>
         <div class="empty-title">Ready when you are</div>
-        <div class="empty-sub">Send a message to KAI, or pick a template below. Switch to <strong>Plan</strong> mode for multi-step agent workflows.</div>
+        <div class="empty-sub">Send a message to KAI, or type <code>/</code> for a template. Use <strong>Workflow</strong> mode (≡) for a multi-step agent run.</div>
       </div>
     </div>
 
     <div class="composer">
       <div class="plan-editor" id="planEditor" style="display:none;">
         <div class="plan-header">
-          <div class="plan-template-row"><input type="text" id="planTitle" class="plan-title-input" placeholder="Plan title…" /><select id="planTemplate" class="plan-template-select"><option value="">Load template…</option></select></div>
+          <div class="plan-template-row"><input type="text" id="planTitle" class="plan-title-input" placeholder="Workflow title…" /><select id="planTemplate" class="plan-template-select"><option value="">Load template…</option></select></div>
           <span class="plan-step-count" id="planStepCount">0 steps</span>
         </div>
         <div class="plan-steps" id="planSteps"></div>
         <div class="plan-actions">
           <button id="addStep" class="plan-btn secondary">+ Add step</button>
-          <button id="saveTemplateBtn" class="plan-btn secondary template-save-btn">Save template</button><button id="runPlan" class="plan-btn primary">▶ Run plan</button>
+          <button id="saveTemplateBtn" class="plan-btn secondary template-save-btn">Save template</button><button id="runPlan" class="plan-btn primary">▶ Run workflow</button>
         </div>
       </div>
 
@@ -817,6 +847,13 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           <button id="modeChip" class="chip-btn" type="button" title="Permission mode (Shift+Tab to cycle)"></button>
           <button id="agentChip" class="chip-btn" type="button" title="Agent and route"></button>
           <span class="ctx-meter" id="ctxMeter" title="Context used" style="display:none;"></span>
+          <select id="compareAgentB" class="chip-btn" title="Compare against" style="display:none;">
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+            <option value="qwen">Qwen</option>
+            <option value="gemini">Gemini</option>
+          </select>
+          <button id="compareToggle" class="plan-toggle" type="button" title="Compare: run two agents on the same prompt side by side">⇶</button>
           <button id="planToggle" class="plan-toggle" type="button" title="Workflow mode: define multi-step agent runs">≡</button>
           <button id="send" type="button">Send</button>
         </div>

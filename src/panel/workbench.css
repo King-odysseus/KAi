@@ -916,6 +916,40 @@ body {
 }
 .plan-btn.secondary:hover { background: var(--vscode-toolbar-hoverBackground, #444); }
 
+/* Workflow stepper */
+.wf-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.wf-title { font-weight: 600; font-size: 12.5px; }
+.wf-meta { font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+.wf-stepper { display: flex; flex-direction: column; }
+.wf-step { display: flex; gap: 10px; }
+.wf-rail { width: 20px; display: flex; flex-direction: column; align-items: center; flex: none; }
+.wf-node {
+  width: 20px; height: 20px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--kai-border); color: var(--vscode-descriptionForeground);
+}
+.wf-node.done { background: color-mix(in srgb, var(--kai-add) 16%, transparent); border-color: var(--kai-add); color: var(--kai-add); }
+.wf-node.failed { background: color-mix(in srgb, var(--kai-remove) 16%, transparent); border-color: var(--kai-remove); color: var(--kai-remove); }
+.wf-node.running { border-color: var(--kai-accent); color: var(--kai-accent); }
+.wf-node.skipped { opacity: 0.5; }
+.wf-line { width: 2px; flex: 1; background: var(--kai-border); min-height: 12px; }
+.wf-step-body { flex: 1; min-width: 0; padding-bottom: 10px; display: flex; flex-direction: column; gap: 3px; }
+.wf-step-top { display: flex; align-items: center; gap: 6px; }
+.wf-step-agent { font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+.wf-step-stats { margin-left: auto; font-size: 10px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+.wf-step-label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-step-error { font-size: 10.5px; color: var(--kai-remove); }
+.wf-step-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
+.wf-step-edit { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.wf-edit-textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  border: 1px solid var(--vscode-input-border, var(--kai-border));
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border-radius: var(--kai-radius-sm); padding: 6px 8px; font: inherit; font-size: 11.5px;
+}
+.wf-handoff-note { margin: 0 0 8px 30px; font-size: 10.5px; font-style: italic; color: var(--vscode-descriptionForeground); }
+.wf-footer { display: flex; gap: 6px; margin-top: 4px; }
+
 /* Plan progress */
 .plan-progress {
   margin-bottom: 8px;
@@ -1026,11 +1060,25 @@ body {
 .compare-pane.right .compare-label { color: var(--kai-add); }
 .cmp-text { display: block; font-size: 12px; line-height: 1.5; color: var(--vscode-input-foreground,#ccc); white-space: pre-wrap; word-break: break-word; }
 
-.compare-summary { display: flex; gap: 8px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--vscode-input-border,#444); }
+.compare-summary { display: flex; gap: 8px; margin: 8px 0; }
+.cmp-result-col {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--kai-border); border-radius: var(--kai-radius); background: var(--kai-surface);
+  padding: 9px 10px;
+}
 .cmp-result { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 11px; }
 .cmp-agent { font-weight: 600; }
+.cmp-agent-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.cmp-ok { margin-left: auto; font-size: 10px; text-transform: uppercase; font-weight: 700; }
 .cmp-ok.ok { color: var(--kai-add); }
 .cmp-ok.fail { color: var(--kai-remove); }
+.cmp-stat-row { font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+.cmp-stat-row .add { color: var(--kai-add); }
+.cmp-stat-row .remove { color: var(--kai-remove); }
+.cmp-error { font-size: 10.5px; color: var(--kai-remove); }
+.cmp-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+.cmp-picked-note { font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+.cmp-discard-row { display: flex; align-items: flex-start; padding-top: 2px; }
 
 /* Quick rerun */
 .quick-rerun { display: flex; align-items: center; gap: 6px; padding: 6px 0; margin: 4px 0; border-top: 1px dashed var(--vscode-input-border,#444); }

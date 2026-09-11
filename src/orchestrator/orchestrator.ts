@@ -11,6 +11,7 @@ import type { Plan } from '../core/plan';
 import { PlanRunner } from './plan-runner';
 import type { Checkpoint } from './checkpoints';
 import { createCheckpoint, diffFromCheckpoint, gitDiffStat, isGitRepo, restoreCheckpoint, restoreFile as restoreOneFile, readFileAtCheckpoint } from './checkpoints';
+import { createCompareWorktree, removeCompareWorktree, worktreeChanges, worktreeDiffPatch, applyWorktreePatch } from './worktrees';
 
 export interface DiffRecord {
   event: DiffProposalEvent;
@@ -44,6 +45,9 @@ export class WorkbenchOrchestrator extends EventEmitter {
   /** Accumulated assistant text for the current task — used to build a real
    * handoff summary instead of just re-sending the original prompt. */
   private lastReplyText = '';
+  /** Active compare runs, keyed by compareId, so pickCompareWinner/
+   * removeCompareSides know which worktrees to apply from and clean up. */
+  private readonly compareRuns = new Map<string, { agentA: AgentId; agentB: AgentId; worktreeLeft: string; worktreeRight: string }>();
 
   constructor(
     initialState: WorkbenchState,
@@ -177,12 +181,20 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   // ─── Agent comparison ─────────────────────────────────────────
 
+  /**
+   * Runs two agents on the same prompt side by side. Each runs in its own
+   * git worktree (never the real workspace) so neither can see or overwrite
+   * the other's edits, and nothing touches the user's actual files until
+   * they pick a winner with pickCompareWinner(). Requires a git repo.
+   */
   async compareTask(prompt: string, agentA: AgentId, agentB: AgentId): Promise<string> {
     if (this.state.isRunning || this.planRunning) {
       throw new Error("KAI already has an active run. Stop it before comparing.");
     }
     if (!this.adapters.has(agentA)) throw new Error(`No adapter for ${agentA}`);
     if (!this.adapters.has(agentB)) throw new Error(`No adapter for ${agentB}`);
+    if (!this.projectPath) throw new Error('Compare needs an open workspace folder.');
+    if (!(await isGitRepo(this.projectPath))) throw new Error('Compare needs a git repository (each side runs in its own worktree).');
 
     const compareId = "compare_" + Date.now();
     const route = this.state.route;
@@ -194,35 +206,91 @@ export class WorkbenchOrchestrator extends EventEmitter {
     void this.cognitive1.sessionStart({ task: prompt, agent: agentA + "+" + agentB, projectPath: this.projectPath }).catch(() => {});
     void this.cognitive1.recall({ query: prompt }).catch(() => {});
 
-    this.emitEvent({ id: createEventId("cmp"), type: "agent.lifecycle", taskId: compareId, timestamp: nowIso(), agent: agentA + " vs " + agentB as AgentId, status: "starting", detail: "Comparing " + agentA + " vs " + agentB });
+    this.emitEvent({ id: createEventId("cmp"), type: "agent.lifecycle", taskId: compareId, timestamp: nowIso(), agent: agentA + " vs " + agentB as AgentId, status: "starting", detail: "Comparing " + agentA + " vs " + agentB + " in separate worktrees" });
 
-    const runSide = async (agent: AgentId, side: "left" | "right") => {
+    const [worktreeLeft, worktreeRight] = await Promise.all([
+      createCompareWorktree(this.projectPath, `${compareId}-left`),
+      createCompareWorktree(this.projectPath, `${compareId}-right`),
+    ]);
+    this.compareRuns.set(compareId, { agentA, agentB, worktreeLeft, worktreeRight });
+
+    const runSide = async (agent: AgentId, side: "left" | "right", cwd: string) => {
       const taskId = compareId + "_" + side;
       const adapter = this.adapters.get(agent)!;
+      const startedAt = Date.now();
       try {
-        for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd: this.projectPath })) {
-          (event as any).compareId = compareId;
-          (event as any).side = side;
-          if (event.type === "diff.proposal") void this.autoApproveDiff(event);
+        for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd })) {
+          (event as WorkbenchEvent & { compareId?: string; side?: string }).compareId = compareId;
+          (event as WorkbenchEvent & { compareId?: string; side?: string }).side = side;
+          // Never auto-apply diffs here — each side's edits stay inside its
+          // own worktree until the user picks a winner.
           this.emitEvent(event);
         }
-        return { side, taskId, ok: true };
+        return { side, taskId, ok: true, elapsedMs: Date.now() - startedAt };
       } catch (err) {
-        return { side, taskId, ok: false, error: err instanceof Error ? err.message : String(err) };
+        return { side, taskId, ok: false, error: err instanceof Error ? err.message : String(err), elapsedMs: Date.now() - startedAt };
       }
     };
 
-    const [left, right] = await Promise.all([runSide(agentA, "left"), runSide(agentB, "right")]);
+    const [left, right] = await Promise.all([
+      runSide(agentA, "left", worktreeLeft),
+      runSide(agentB, "right", worktreeRight),
+    ]);
+
+    const [leftFiles, rightFiles] = await Promise.all([
+      worktreeChanges(worktreeLeft).catch(() => []),
+      worktreeChanges(worktreeRight).catch(() => []),
+    ]);
 
     this.emitEvent({
       id: createEventId("cmp"), type: "raw.fallback", taskId: compareId, timestamp: nowIso(),
       agent: (agentA + " vs " + agentB) as AgentId, sourceType: "compare.complete",
-      payload: { compareId, left: { agent: agentA, taskId: left.taskId, ok: left.ok, error: (left as any).error }, right: { agent: agentB, taskId: right.taskId, ok: right.ok, error: (right as any).error } },
+      payload: {
+        compareId,
+        left: { agent: agentA, taskId: left.taskId, ok: left.ok, error: left.ok ? undefined : left.error, elapsedMs: left.elapsedMs, files: leftFiles },
+        right: { agent: agentB, taskId: right.taskId, ok: right.ok, error: right.ok ? undefined : right.error, elapsedMs: right.elapsedMs, files: rightFiles },
+      },
     });
 
     this.state = { ...this.state, isRunning: false };
     this.emitState();
     return compareId;
+  }
+
+  /** Applies the winning side's changes onto the real workspace and
+   * removes both worktrees. Throws if the patch doesn't apply cleanly
+   * (e.g. the user edited the same files in the meantime) — the worktrees
+   * are left in place in that case so nothing is lost. */
+  async pickCompareWinner(compareId: string, side: 'left' | 'right'): Promise<void> {
+    const run = this.compareRuns.get(compareId);
+    if (!run) throw new Error('No active compare run found.');
+    if (!this.projectPath) throw new Error('No workspace folder open.');
+    const winnerPath = side === 'left' ? run.worktreeLeft : run.worktreeRight;
+    const loserPath = side === 'left' ? run.worktreeRight : run.worktreeLeft;
+
+    const patch = await worktreeDiffPatch(winnerPath);
+    await applyWorktreePatch(this.projectPath, patch);
+
+    await removeCompareWorktree(this.projectPath, winnerPath);
+    await removeCompareWorktree(this.projectPath, loserPath);
+    this.compareRuns.delete(compareId);
+  }
+
+  /** Discards both sides of a compare run without applying either. */
+  async discardCompare(compareId: string): Promise<void> {
+    const run = this.compareRuns.get(compareId);
+    if (!run || !this.projectPath) return;
+    await removeCompareWorktree(this.projectPath, run.worktreeLeft);
+    await removeCompareWorktree(this.projectPath, run.worktreeRight);
+    this.compareRuns.delete(compareId);
+  }
+
+  /** The worktree path for one side of an active compare run — used by
+   * "Open worktree" (opens a new VS Code window there). */
+  getCompareWorktreePath(compareId: string, side: 'left' | 'right'): string | undefined {
+    const run = this.compareRuns.get(compareId);
+    if (!run) return undefined;
+    return side === 'left' ? run.worktreeLeft : run.worktreeRight;
   }
 
   async pausePlan(): Promise<void> {
@@ -242,8 +310,8 @@ export class WorkbenchOrchestrator extends EventEmitter {
     }
   }
 
-  async retryPlanStep(stepId: string, newPrompt?: string): Promise<void> {
-    this.planRunner?.retryStep(stepId, newPrompt);
+  async retryPlanStep(stepId: string, newPrompt?: string, newAgent?: AgentId): Promise<void> {
+    this.planRunner?.retryStep(stepId, newPrompt, newAgent);
   }
 
   async skipPlanStep(stepId: string): Promise<void> {

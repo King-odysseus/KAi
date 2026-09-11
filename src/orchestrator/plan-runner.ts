@@ -94,13 +94,15 @@ export class PlanRunner extends EventEmitter {
     this.resumeResolver = null;
   }
 
-  /** Retry a failed step with optional new prompt, then resume. */
-  retryStep(stepId: string, newPrompt?: string): void {
+  /** Retry a failed step, optionally with a new prompt and/or a different
+   * agent ("Retry with ▾"), then resume. */
+  retryStep(stepId: string, newPrompt?: string, newAgent?: AgentId): void {
     const step = this.plan.steps.find(s => s.id === stepId);
     if (!step || step.status !== 'failed') return;
     step.status = 'pending';
     step.error = undefined;
     if (newPrompt) step.prompt = newPrompt;
+    if (newAgent) step.agent = newAgent;
     // Rewind currentStepIndex to this step
     const idx = this.plan.steps.indexOf(step);
     if (idx >= 0) this.plan.currentStepIndex = idx;
