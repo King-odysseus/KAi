@@ -10,7 +10,7 @@ import type { AgentAdapter, ApprovalResponse } from '../adapters/agent-adapter';
 import type { Plan } from '../core/plan';
 import { PlanRunner } from './plan-runner';
 import type { Checkpoint } from './checkpoints';
-import { createCheckpoint, diffFromCheckpoint, isGitRepo, restoreCheckpoint, restoreFile as restoreOneFile, readFileAtCheckpoint } from './checkpoints';
+import { createCheckpoint, diffFromCheckpoint, gitDiffStat, isGitRepo, restoreCheckpoint, restoreFile as restoreOneFile, readFileAtCheckpoint } from './checkpoints';
 
 export interface DiffRecord {
   event: DiffProposalEvent;
@@ -36,6 +36,14 @@ export class WorkbenchOrchestrator extends EventEmitter {
   private readonly pendingApprovals = new Map<string, ApprovalRequestEvent>();
   /** "Always allow" rules the user has set, keyed by `${agent}:${title}`. */
   private alwaysAllowRules = new Set<string>();
+  /** Native session/thread id per agent for the CURRENT conversation, so a
+   * follow-up to the same agent continues its session (claude --resume,
+   * codex exec resume) instead of starting fresh each message. Cleared by
+   * startNewConversation(). */
+  private readonly agentSessions = new Map<AgentId, string>();
+  /** Accumulated assistant text for the current task — used to build a real
+   * handoff summary instead of just re-sending the original prompt. */
+  private lastReplyText = '';
 
   constructor(
     initialState: WorkbenchState,
@@ -296,7 +304,15 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const handoffSummary = await this.cognitive1.handoff({ fromAgent, toAgent, summary: `Task: ${this.lastPrompt}. Handoff from ${fromAgent} to ${toAgent}.`, projectPath: this.projectPath });
     this.emitEvent({ id: createEventId(), type: 'memory.event', taskId: this.state.activeTaskId, timestamp: nowIso(), agent: toAgent, action: 'handoff', summary: handoffSummary });
 
-    const handoffPrompt = `[HANDOFF from ${fromAgent}]\nContinuing task: ${this.lastPrompt}\n\nPick up where ${fromAgent} left off.`;
+    const replyExcerpt = this.lastReplyText.trim().slice(0, 2000);
+    const diffStat = this.projectPath ? await gitDiffStat(this.projectPath) : '';
+    const handoffPrompt = [
+      `[HANDOFF from ${fromAgent}]`,
+      `Original task: ${this.lastPrompt}`,
+      replyExcerpt ? `\n${fromAgent}'s last reply:\n${replyExcerpt}` : '',
+      diffStat ? `\nFiles changed so far:\n${diffStat}` : '',
+      `\nPick up where ${fromAgent} left off.`,
+    ].filter(Boolean).join('\n');
     this.state = { ...this.state, activeAgent: toAgent, isRunning: true };
     this.emitState();
 
@@ -326,6 +342,16 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   getCustomPermissions(): Partial<Record<PermissionKey, boolean>> {
     return { ...this.customPermissions };
+  }
+
+  /** Starts a fresh conversation: no agent resumes its previous session
+   * until it runs again. Call when the user clicks "New chat". */
+  startNewConversation(): void {
+    this.agentSessions.clear();
+  }
+
+  getAgentSessionId(agent: AgentId): string | undefined {
+    return this.agentSessions.get(agent);
   }
 
   // ─── Checkpoints (diff summary, review, undo, rewind) ──────────
@@ -500,6 +526,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     this.state = { activeAgent: agent, route, autonomy, activeTaskId: taskId, isRunning: true };
     this.emitState();
     await this.ensureCheckpoint(taskId);
+    this.lastReplyText = '';
 
     const ss = await this.cognitive1.sessionStart({ task: prompt, agent, projectPath: this.projectPath });
     this.emitEvent({ id: createEventId(), type: 'memory.event', taskId, timestamp: nowIso(), agent, action: 'session_start', summary: ss });
@@ -514,14 +541,22 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const adapter = this.adapters.get(agent);
     if (!adapter) throw new Error(`No adapter registered for ${agent}.`);
     const taskId = this.state.activeTaskId!;
+    const resumeSessionId = this.agentSessions.get(agent);
+    const customAllowed = this.state.autonomy === 'custom' ? this.customPermissions : undefined;
 
     try {
-      for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd: this.projectPath })) {
+      for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd: this.projectPath, resumeSessionId, customAllowed })) {
         if (event.type === 'diff.proposal') {
           void this.autoApproveDiff(event);
         }
         if (event.type === 'approval.request') {
           this.trackApproval(event);
+        }
+        if (event.type === 'cost.update' && event.sessionId) {
+          this.agentSessions.set(agent, event.sessionId);
+        }
+        if (event.type === 'text.delta' && event.channel === 'assistant') {
+          this.lastReplyText += event.text;
         }
         this.emitEvent(event);
         if (event.type === 'agent.lifecycle' && (event.status === 'completed' || event.status === 'failed' || event.status === 'paused')) {

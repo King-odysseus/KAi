@@ -240,7 +240,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Register webview providers
   const attachmentsDir = path.join(context.globalStorageUri.fsPath, 'attachments');
-  const workbenchProvider = new WorkbenchViewProvider(context.extensionUri, orchestrator, prefs, attachmentsDir);
+  const workbenchProvider = new WorkbenchViewProvider(context.extensionUri, orchestrator, prefs, attachmentsDir, context.globalStorageUri.fsPath);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(WorkbenchViewProvider.viewType, workbenchProvider),
     workbenchProvider.registerCheckpointContentProvider(),
@@ -347,6 +347,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const elapsed = startedAt ? Date.now() - startedAt : 0;
       if (elapsed >= NOTIFY_AFTER_MS && !workbenchProvider.isSidebarVisible()) {
         workbenchProvider.notifyUnseen();
+        workbenchProvider.markCurrentConversationUnread();
         const verb = e.status === 'completed' ? 'finished' : 'failed';
         void vscode.window.showInformationMessage(`KAI: ${e.agent ?? 'Agent'} ${verb}.`, 'Open').then((choice) => {
           if (choice === 'Open') void vscode.commands.executeCommand('kai.openWorkbench');

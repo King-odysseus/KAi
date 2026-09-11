@@ -76,36 +76,26 @@ describe('Unified event model conformance', () => {
     });
   });
 
+  // Fixtures verified against a real `codex exec --json --sandbox
+  // read-only` run (codex-cli 0.153.4) — see codex-parser.ts's module doc.
   describe('Codex parser', () => {
-    const codexDelta = JSON.stringify({ delta: 'Here is the fix.' });
-    const codexContent = JSON.stringify({ type: 'assistant', content: 'Looking at this...' });
-    const codexTool = JSON.stringify({ type: 'tool_call', tool: 'write_file', tool_input: { path: '/src/app.ts' } });
-    const codexDiff = JSON.stringify({ type: 'file_edit', file: '/src/app.ts', edit_summary: 'Added export', diff: '+export {}' });
-    const codexUsage = JSON.stringify({ type: 'usage', usage: { input_tokens: 100, output_tokens: 60 } });
+    const codexAgentMessage = JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'Here is the fix.' } });
+    const codexToolStart = JSON.stringify({ type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'ls', aggregated_output: '', exit_code: null, status: 'in_progress' } });
+    const codexUsage = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 60 } });
     const codexError = JSON.stringify({ type: 'error', error: 'Model unavailable' });
     const codexUnknown = JSON.stringify({ type: 'custom_event', data: 99 });
 
-    it('maps delta → text.delta', () => {
-      const result = parseCodexJsonLine(codexDelta, taskId, 'codex');
+    it('maps an agent_message item → text.delta', () => {
+      const result = parseCodexJsonLine(codexAgentMessage, taskId, 'codex');
       expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('text.delta');
     });
 
-    it('maps content → text.delta', () => {
-      const result = parseCodexJsonLine(codexContent, taskId, 'codex');
-      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('text.delta');
-    });
-
-    it('maps tool_call → tool.call', () => {
-      const result = parseCodexJsonLine(codexTool, taskId, 'codex');
+    it('maps a started command_execution item → tool.call', () => {
+      const result = parseCodexJsonLine(codexToolStart, taskId, 'codex');
       expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('tool.call');
     });
 
-    it('maps file_edit → diff.proposal', () => {
-      const result = parseCodexJsonLine(codexDiff, taskId, 'codex');
-      expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('diff.proposal');
-    });
-
-    it('maps usage → cost.update', () => {
+    it('maps turn.completed usage → cost.update', () => {
       const result = parseCodexJsonLine(codexUsage, taskId, 'codex');
       expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('cost.update');
     });
@@ -120,8 +110,8 @@ describe('Unified event model conformance', () => {
       expect(Array.isArray(result) ? result[0]?.type : result?.type).toBe('raw.fallback');
     });
 
-    it('suppresses done/complete lifecycle events', () => {
-      expect(parseCodexJsonLine(JSON.stringify({ type: 'done' }), taskId, 'codex')).toBeNull();
+    it('suppresses turn.started', () => {
+      expect(parseCodexJsonLine(JSON.stringify({ type: 'turn.started' }), taskId, 'codex')).toBeNull();
     });
   });
 
@@ -204,9 +194,9 @@ describe('Unified event model conformance', () => {
         line: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } }),
       },
       {
-        name: 'codex delta',
+        name: 'codex agent_message',
         parse: (l) => parseCodexJsonLine(l, taskId, 'codex'),
-        line: JSON.stringify({ delta: 'hi' }),
+        line: JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'hi' } }),
       },
     ];
 

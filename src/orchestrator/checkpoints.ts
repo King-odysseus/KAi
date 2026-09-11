@@ -28,6 +28,17 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout;
 }
 
+/** A plain `git diff --stat` summary of uncommitted changes — used for the
+ * composer's "Uncommitted changes" context chip and for handoff summaries.
+ * Returns an empty string outside a git repo or on any git error. */
+export async function gitDiffStat(cwd: string): Promise<string> {
+  try {
+    return (await git(cwd, ['diff', '--stat', 'HEAD'])).trim();
+  } catch {
+    return '';
+  }
+}
+
 /** Whether `cwd` is inside a git working tree. Checkpoint features are
  * disabled entirely outside one. */
 export async function isGitRepo(cwd: string): Promise<boolean> {

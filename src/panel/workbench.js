@@ -73,6 +73,11 @@
     imageFileInput: document.getElementById('imageFileInput'),
     atBtn: document.getElementById('atBtn'),
     sessionMeta: document.getElementById('sessionMeta'),
+    historyBtn: document.getElementById('historyBtn'),
+    historyPanel: document.getElementById('historyPanel'),
+    historySearch: document.getElementById('historySearch'),
+    historyClose: document.getElementById('historyClose'),
+    historyList: document.getElementById('historyList'),
   };
 
   var emptyState = document.getElementById('emptyState');
@@ -113,6 +118,71 @@
   }
   function autoGrow() { els.prompt.style.height='auto'; els.prompt.style.height=Math.min(els.prompt.scrollHeight,180)+'px'; }
   function agentLabel(agent) { return AGENT_NAMES[agent] || (agent ? agent.charAt(0).toUpperCase()+agent.slice(1) : 'Assistant'); }
+
+  // ---- History panel (past conversations) ----
+  function openHistory() { els.historyPanel.style.display = 'flex'; els.historySearch.value = ''; els.historySearch.focus(); vscode.postMessage({ type: 'listConversations' }); }
+  function closeHistory() { els.historyPanel.style.display = 'none'; }
+
+  function fmtRelativeTime(iso) {
+    var ms = Date.now() - new Date(iso).getTime();
+    var mins = Math.floor(ms / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    return Math.floor(hrs / 24) + 'd ago';
+  }
+
+  function renderHistoryList(conversations) {
+    els.historyList.innerHTML = '';
+    if (!conversations || conversations.length === 0) {
+      var empty = document.createElement('div'); empty.className = 'history-empty'; empty.textContent = 'No conversations yet.';
+      els.historyList.appendChild(empty);
+      return;
+    }
+    conversations.forEach(function (meta) {
+      var item = document.createElement('div'); item.className = 'history-item' + (meta.archived ? ' archived' : '');
+      if (meta.unread) { var dot = document.createElement('span'); dot.className = 'unread-dot'; item.appendChild(dot); }
+
+      var main = document.createElement('div'); main.className = 'history-main';
+      var title = document.createElement('div'); title.className = 'history-title'; title.textContent = meta.title;
+      var metaRow = document.createElement('div'); metaRow.className = 'history-meta';
+      meta.agents.forEach(function (a) { var d = document.createElement('span'); d.className = 'agent-dot ' + a; metaRow.appendChild(d); });
+      var metaText = document.createElement('span');
+      metaText.textContent = (meta.costUsd > 0 ? '$' + meta.costUsd.toFixed(4) + ' · ' : '') + fmtRelativeTime(meta.updatedAt);
+      metaRow.appendChild(metaText);
+      main.appendChild(title); main.appendChild(metaRow);
+      item.appendChild(main);
+
+      var actions = document.createElement('div'); actions.className = 'history-actions';
+      function actionBtn(title_, svg, onClick) {
+        var b = document.createElement('span'); b.className = 'ibtn small'; b.title = title_; b.innerHTML = svg;
+        b.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
+        actions.appendChild(b);
+      }
+      actionBtn('Rename', '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>', function () {
+        var name = prompt('Rename conversation:', meta.title);
+        if (name && name.trim()) vscode.postMessage({ type: 'renameConversation', conversationId: meta.id, value: name.trim() });
+      });
+      actionBtn('Fork', '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10"/><path d="M18 10a6 6 0 0 1-6 6H8"/></svg>', function () {
+        vscode.postMessage({ type: 'forkConversation', conversationId: meta.id });
+      });
+      actionBtn(meta.archived ? 'Unarchive' : 'Archive', '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></svg>', function () {
+        vscode.postMessage({ type: meta.archived ? 'unarchiveConversation' : 'archiveConversation', conversationId: meta.id });
+      });
+      item.appendChild(actions);
+
+      item.addEventListener('click', function () { vscode.postMessage({ type: 'loadConversation', conversationId: meta.id }); });
+      els.historyList.appendChild(item);
+    });
+  }
+
+  function replayConversation(conversation) {
+    clearChat();
+    (conversation.events || []).forEach(function (e) { appendEvent(e); });
+    closeHistory();
+    scrollBottom(true);
+  }
 
   // ---- Small floating menu helper (used by "Continue with" and future pickers) ----
   var openMenuEl = null;
@@ -1078,7 +1148,15 @@
     }
   });
   var estTimer=null;els.prompt.addEventListener('input',function(){autoGrow();clearTimeout(estTimer);estTimer=setTimeout(function(){var p=els.prompt.value.trim();if(p.length>10&&p.charAt(0)!=='/'){vscode.postMessage({type:'estimateCost',prompt:p,agent:currentAgent(),route:currentRoute()});}else{els.costEstimate.textContent='';}},400);});
-  document.getElementById('newChat').addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});clearChat();els.prompt.focus();});
+  document.getElementById('newChat').addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});vscode.postMessage({type:'newConversation'});clearChat();els.prompt.focus();});
+  els.historyBtn.addEventListener('click', openHistory);
+  els.historyClose.addEventListener('click', closeHistory);
+  var historySearchTimer = null;
+  els.historySearch.addEventListener('input', function () {
+    clearTimeout(historySearchTimer);
+    var q = els.historySearch.value;
+    historySearchTimer = setTimeout(function () { vscode.postMessage({ type: 'searchConversations', query: q }); }, 250);
+  });
   var openTabBtn=document.getElementById('openTab');if(openTabBtn) openTabBtn.addEventListener('click',function(){vscode.postMessage({type:'openTab'});});
   if(els.planTemplate) els.planTemplate.addEventListener('change',function(){var v=els.planTemplate.value;if(!v) return; vscode.postMessage({type:'loadTemplate',value:v});els.planTemplate.value='';});
 
@@ -1125,6 +1203,8 @@
     else if(m.type==='gitDiffStatResult'){ if(m.stat) addContextChip({ type:'gitDiff', stat:m.stat }); }
     else if(m.type==='memorySearchResult'){ addContextChip({ type:'memory', query:m.query, summary:m.summary }); }
     else if(m.type==='attachImageResult'){ if(m.ok) addContextChip({ type:'image', name:m.name, path:m.path }); }
+    else if(m.type==='conversationsList'){ renderHistoryList(m.conversations); }
+    else if(m.type==='conversationLoaded'){ replayConversation(m.conversation); }
   });
 
   if(state) renderState(state); else { renderModeChip(); renderAgentChip(); }

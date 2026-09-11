@@ -13,6 +13,7 @@ import { AGENT_PROVIDERS } from '../config/agent-catalog';
 import { PERMISSION_KEY_INFO } from '../core/permissions';
 import type { ProjectPreferences } from '../config/project-preferences';
 import { diffFromCheckpoint } from '../orchestrator/checkpoints';
+import { ConversationStore, type Conversation } from './conversation-store';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -27,7 +28,9 @@ interface WebviewMessage {
     | 'retryStep' | 'skipStep' | 'openLink'
     | 'searchFiles' | 'requestSelection' | 'requestGitDiffStat' | 'requestMemorySearch'
     | 'attachImage' | 'setCustomPermissions' | 'queueOverflow'
-    | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval';
+    | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval'
+    | 'newConversation' | 'listConversations' | 'searchConversations' | 'loadConversation'
+    | 'renameConversation' | 'archiveConversation' | 'unarchiveConversation' | 'forkConversation';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -43,6 +46,7 @@ interface WebviewMessage {
   allowed?: Partial<Record<PermissionKey, boolean>>;
   taskId?: string;
   response?: 'once' | 'always' | 'deny';
+  conversationId?: string;
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -62,12 +66,18 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
    * re-announce. */
   private lastAnnouncedTaskId: string | undefined;
 
+  private readonly conversationStore: ConversationStore | undefined;
+  private currentConversation: Conversation | null = null;
+  private saveTimer: NodeJS.Timeout | undefined;
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly orchestrator: WorkbenchOrchestrator,
     private readonly prefs?: ProjectPreferences,
     private readonly attachmentsDir?: string,
+    storageDir?: string,
   ) {
+    this.conversationStore = storageDir ? new ConversationStore(storageDir) : undefined;
     // Forward plan events to all webviews
     this.orchestrator.on('planEvent', (planEvent: PlanEvent) => {
       for (const webview of this.webviews) {
@@ -168,8 +178,43 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   }
 
   postEvent(event: WorkbenchEvent): void {
+    this.recordEvent(event);
     for (const webview of this.webviews) {
       void webview.postMessage({ type: 'event', event });
+    }
+  }
+
+  /** Appends an event to the current conversation's persisted transcript
+   * (lazily created from the first event of a run) and saves, debounced so
+   * a fast stream of deltas doesn't write to disk on every token. */
+  private recordEvent(event: WorkbenchEvent): void {
+    if (!this.conversationStore) return;
+    if (event.taskId === 'workbench') return; // pure UI-level errors, not part of any conversation
+    if (!this.currentConversation) {
+      this.currentConversation = this.conversationStore.create(this.orchestrator.getLastPrompt());
+    }
+    const conv = this.currentConversation;
+    conv.events.push(event);
+    conv.updatedAt = new Date().toISOString();
+    if (event.agent && !conv.agents.includes(event.agent)) conv.agents.push(event.agent);
+    if (event.type === 'cost.update' && event.amountUsd != null) conv.costUsd = event.amountUsd;
+    this.scheduleConversationSave();
+  }
+
+  private scheduleConversationSave(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      if (this.currentConversation) void this.conversationStore?.save(this.currentConversation);
+    }, 500);
+  }
+
+  /** Marks the current conversation unread (a run finished, or an approval
+   * is waiting, while the sidebar wasn't visible) — see extension.ts. */
+  markCurrentConversationUnread(): void {
+    if (this.currentConversation) {
+      this.currentConversation.unread = true;
+      void this.conversationStore?.save(this.currentConversation);
     }
   }
 
@@ -482,7 +527,59 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           }
         }
         break;
+      case 'newConversation':
+        this.orchestrator.startNewConversation();
+        this.currentConversation = null;
+        break;
+      case 'listConversations':
+        await this.sendConversationList(webview, '');
+        break;
+      case 'searchConversations':
+        await this.sendConversationList(webview, message.query ?? '');
+        break;
+      case 'loadConversation':
+        if (message.conversationId && this.conversationStore) {
+          const conversation = await this.conversationStore.get(message.conversationId);
+          if (conversation) {
+            await this.conversationStore.setUnread(conversation.id, false);
+            void webview.postMessage({ type: 'conversationLoaded', conversation });
+          }
+        }
+        break;
+      case 'renameConversation':
+        if (message.conversationId && message.value && this.conversationStore) {
+          await this.conversationStore.rename(message.conversationId, message.value);
+          await this.sendConversationList(webview, '');
+        }
+        break;
+      case 'archiveConversation':
+        if (message.conversationId && this.conversationStore) {
+          await this.conversationStore.setArchived(message.conversationId, true);
+          await this.sendConversationList(webview, '');
+        }
+        break;
+      case 'unarchiveConversation':
+        if (message.conversationId && this.conversationStore) {
+          await this.conversationStore.setArchived(message.conversationId, false);
+          await this.sendConversationList(webview, '');
+        }
+        break;
+      case 'forkConversation':
+        if (message.conversationId && this.conversationStore) {
+          await this.conversationStore.fork(message.conversationId);
+          await this.sendConversationList(webview, '');
+        }
+        break;
     }
+  }
+
+  private async sendConversationList(webview: vscode.Webview, query: string): Promise<void> {
+    if (!this.conversationStore) {
+      void webview.postMessage({ type: 'conversationsList', conversations: [] });
+      return;
+    }
+    const conversations = query ? await this.conversationStore.search(query) : await this.conversationStore.list();
+    void webview.postMessage({ type: 'conversationsList', conversations });
   }
 
   /** Opens a read-only diff (checkpoint content vs current file) for every
@@ -661,9 +758,20 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       <span class="topbar-spacer"></span>
       <span id="statePill"></span>
       <span id="costPill"></span>
+      <button id="historyBtn" class="ghost-btn" title="Past conversations">History</button>
       <button id="newChat" class="ghost-btn" title="Start a new chat (clears this transcript)">＋ New</button>
       <button id="openTab" class="ghost-btn" title="Open KAI as a full editor tab (maximize / split screen)">⤢ Tab</button>
       <button id="detailsToggle" class="ghost-btn" title="Show agent activity log (lifecycle, memory, raw, cost)">Details</button>
+    </div>
+
+    <div class="history-panel" id="historyPanel" style="display:none;">
+      <div class="history-header">
+        <input type="text" id="historySearch" placeholder="Search conversations…" />
+        <button id="historyClose" class="ibtn" title="Close">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="history-list" id="historyList"></div>
     </div>
 
     <div class="chat" id="chat">

@@ -1,18 +1,49 @@
 import { createEventId, nowIso, type WorkbenchEvent } from '../core/events';
 import type { AgentId } from '../core/types';
 
+/**
+ * `codex exec --json` event shapes, verified against real output from
+ * `codex exec --json --sandbox read-only "<prompt>"` (codex-cli 0.153.4):
+ *
+ *   {"type":"thread.started","thread_id":"01a090b5-c6d2-7063-9bbc-bf9170a80787"}
+ *   {"type":"turn.started"}
+ *   {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"...","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+ *   {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"...","aggregated_output":"...","exit_code":0,"status":"completed"}}
+ *   {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"..."}}
+ *   {"type":"turn.completed","usage":{"input_tokens":9856,"cached_input_tokens":0,"cache_write_input_tokens":9853,"output_tokens":11,"reasoning_output_tokens":0}}
+ *
+ * This is a materially different shape from the flat delta/tool_input
+ * fields the previous version of this parser expected — none of those
+ * matched real output, so every Codex reply fell through to raw.fallback.
+ * Item types beyond agent_message/command_execution (a file edit item, for
+ * instance) haven't been observed directly; they fall through to
+ * raw.fallback rather than guessing field names, same as any other
+ * unrecognized shape.
+ */
+export interface CodexItem {
+  id?: string;
+  type?: string; // 'agent_message' | 'command_execution' | 'reasoning' | ...
+  text?: string;
+  command?: string;
+  aggregated_output?: string;
+  exit_code?: number | null;
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface CodexUsage {
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+}
+
 export interface CodexStreamEvent {
   type?: string;
-  content?: string;
-  delta?: string;
-  message?: string;
-  tool?: string;
-  tool_input?: unknown;
-  tool_output?: unknown;
-  file?: string;
-  diff?: string;
-  edit_summary?: string;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  thread_id?: string;
+  item?: CodexItem;
+  usage?: CodexUsage;
   error?: string;
   [key: string]: unknown;
 }
@@ -43,64 +74,22 @@ export function parseCodexJsonLine(
 
   const event = parsed as CodexStreamEvent;
 
-  // Text deltas from assistant/content/delta fields
-  const textContent = event.delta || event.content || event.message;
-  if (typeof textContent === 'string' && textContent.trim()) {
-    return {
-      id: createEventId(),
-      type: 'text.delta',
-      taskId,
-      timestamp: nowIso(),
-      agent,
-      channel: 'assistant',
-      text: textContent,
-    };
-  }
-
-  // Tool calls
-  if (event.type === 'tool_call' || event.type === 'tool_use' || event.tool) {
-    return {
-      id: createEventId(),
-      type: 'tool.call',
-      taskId,
-      timestamp: nowIso(),
-      agent,
-      name: event.tool || event.type || 'unknown',
-      status: event.type === 'tool_result' ? 'completed' : 'started',
-      input: event.tool_input,
-      output: event.tool_output,
-    };
-  }
-
-  // File edits / diffs
-  if (event.type === 'file_edit' || event.type === 'diff' || event.file) {
-    return {
-      id: createEventId(),
-      type: 'diff.proposal',
-      taskId,
-      timestamp: nowIso(),
-      agent,
-      filePath: event.file || '',
-      summary: event.edit_summary || event.message || 'File edit proposed',
-      diff: event.diff,
-    };
-  }
-
-  // Usage / cost
-  if (event.usage) {
+  // Session id, needed for `codex exec resume <id>` — carried on a
+  // cost.update event the same way Claude's parser carries session_id,
+  // since sessionId is the field the rest of KAI already reads for this.
+  if (event.type === 'thread.started' && event.thread_id) {
     return {
       id: createEventId(),
       type: 'cost.update',
       taskId,
       timestamp: nowIso(),
       agent,
-      inputTokens: event.usage.input_tokens,
-      outputTokens: event.usage.output_tokens,
+      sessionId: event.thread_id,
     };
   }
 
   // Errors
-  if (event.error || event.type === 'error') {
+  if (event.type === 'error' || event.error) {
     return {
       id: createEventId(),
       type: 'error',
@@ -112,19 +101,93 @@ export function parseCodexJsonLine(
     };
   }
 
-  // Lifecycle events
-  if (event.type === 'done' || event.type === 'complete' || event.type === 'exit') {
-    return null; // handled by process exit code
+  const item = event.item;
+
+  if (item?.type === 'agent_message') {
+    if (event.type === 'item.completed' && typeof item.text === 'string' && item.text.trim()) {
+      return {
+        id: createEventId(),
+        type: 'text.delta',
+        taskId,
+        timestamp: nowIso(),
+        agent,
+        channel: 'assistant',
+        text: item.text,
+      };
+    }
+    return null; // item.started for agent_message carries no text yet
   }
 
-  // Raw fallback
+  if (item?.type === 'reasoning') {
+    if (event.type === 'item.completed' && typeof item.text === 'string' && item.text.trim()) {
+      return {
+        id: createEventId(),
+        type: 'text.delta',
+        taskId,
+        timestamp: nowIso(),
+        agent,
+        channel: 'summary',
+        text: item.text,
+      };
+    }
+    return null;
+  }
+
+  if (item?.type === 'command_execution') {
+    if (event.type === 'item.started') {
+      return {
+        id: createEventId(),
+        type: 'tool.call',
+        taskId,
+        timestamp: nowIso(),
+        agent,
+        name: 'command_execution',
+        status: 'started',
+        input: item.command,
+      };
+    }
+    if (event.type === 'item.completed') {
+      return {
+        id: createEventId(),
+        type: 'tool.call',
+        taskId,
+        timestamp: nowIso(),
+        agent,
+        name: 'command_execution',
+        status: item.exit_code === 0 ? 'completed' : 'failed',
+        input: item.command,
+        output: item.aggregated_output,
+      };
+    }
+  }
+
+  // Usage/cost at the end of a turn
+  if (event.type === 'turn.completed' && event.usage) {
+    return {
+      id: createEventId(),
+      type: 'cost.update',
+      taskId,
+      timestamp: nowIso(),
+      agent,
+      inputTokens: event.usage.input_tokens,
+      outputTokens: event.usage.output_tokens,
+    };
+  }
+
+  // Lifecycle noise — handled by process exit code, nothing to show
+  if (event.type === 'turn.started' || event.type === 'turn.completed') {
+    return null;
+  }
+
+  // Raw fallback for anything unrecognized (including item types we
+  // haven't observed and confirmed the field shape of yet)
   return {
     id: createEventId(),
     type: 'raw.fallback',
     taskId,
     timestamp: nowIso(),
     agent,
-    sourceType: `codex.${event.type || 'unknown'}`,
+    sourceType: `codex.${event.type || item?.type || 'unknown'}`,
     payload: parsed,
   };
 }

@@ -2,6 +2,34 @@
 
 ## 2026-09-11
 
+### Phase 4 conversations, multi-turn sessions, and a real Codex parser bug fix
+
+- **Codex parser rewritten against real output.** Ran
+  `codex exec --json --sandbox read-only "<prompt>"` for real and found the
+  actual event shape (`thread.started`/`item.started`/`item.completed`/
+  `turn.completed`) is nothing like what `codex-parser.ts` expected
+  (`delta`/`tool_call`/flat `usage`) — every Codex reply, tool call, and
+  cost update was silently falling through to `raw.fallback`. Rewritten and
+  tested against the real captured session (see the parser's module doc);
+  fixtures in `test/codex-parser.test.ts` are copied verbatim from that run.
+- **Multi-turn sessions.** Claude's `session_id` (already captured in
+  Phase 0) and Codex's new `thread_id` are now remembered per agent for the
+  active conversation; a follow-up to the same agent passes `--resume`
+  (Claude) / `exec resume` (Codex) instead of starting fresh each message.
+  Verified live: asking "what did I just ask?" in a resumed session, for
+  both agents, correctly answered from the prior turn.
+- **Real handoff context.** A handoff prompt now carries the previous
+  agent's actual last reply (capped at 2000 characters) and
+  `git diff --stat`, not just the original prompt.
+- **Conversation history** (`src/panel/conversation-store.ts`) — every
+  turn's events persist to `globalStorageUri/conversations/*.json`. A
+  History panel lists past conversations (search, per-agent dots, cost,
+  relative time, an unread dot for ones that finished while KAI wasn't
+  visible) with rename, fork, and archive; clicking one replays its
+  transcript. "New chat" now actually starts a new conversation
+  (`orchestrator.startNewConversation()` clears remembered sessions) rather
+  than only clearing the visible transcript.
+
 ### Phase 3 checkpoints, diff review, and approvals
 
 - **Checkpoints** (`src/orchestrator/checkpoints.ts`) — a `git stash create`
