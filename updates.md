@@ -1,5 +1,16 @@
 # KAI Agent Workbench — Updates
 
+## 2026-09-11
+
+### Phase 0 correctness fixes
+
+- Preserved `/v1` in proxy base URLs while normalizing only Anthropic paths.
+- Preserved multi-event parser output and buffered partial agent output lines.
+- Passed prompts through stdin, including multiline prompts containing `%PATH%`.
+- Restored Claude replies, costs, session IDs, and autonomy permission modes.
+- Made diff application exact-match only with CRLF preservation and safe failure handling.
+- Hid unfinished compare mode and excluded roadmap/design files from packaged extensions.
+
 ## 2026-07-06
 
 ### Self-contained proxy and embedded Cognitive1 (v0.3.0)

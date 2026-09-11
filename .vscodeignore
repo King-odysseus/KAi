@@ -2,6 +2,8 @@ src/**
 test/**
 out/test/**
 coverage/**
+docs/**
+UPGRADE_PLAN.md
 .vscode/**
 tsconfig.json
 vitest.config.ts
