@@ -15,7 +15,8 @@ export type WorkbenchEvent =
   | RouteChangedEvent
   | AgentLifecycleEvent
   | RawFallbackEvent
-  | PlanUpdateEvent;
+  | PlanUpdateEvent
+  | TurnChangesEvent;
 
 export interface BaseEvent {
   id: string;
@@ -112,6 +113,14 @@ export interface RawFallbackEvent extends Omit<BaseEvent, 'type'> {
 export interface PlanUpdateEvent extends Omit<BaseEvent, 'type'> {
   type: 'plan.update';
   plan: Plan;
+}
+
+export interface TurnChangesEvent extends Omit<BaseEvent, 'type'> {
+  type: 'turn.changes';
+  files: Array<{ path: string; added: number; removed: number }>;
+  /** Whether a checkpoint exists for this turn — Review/Undo actions are
+   * only offered when true (e.g. not inside a git repo). */
+  hasCheckpoint: boolean;
 }
 
 export function createEventId(prefix = 'evt'): string {

@@ -231,7 +231,26 @@
 
   // ---- User messages ----
   function pinThinking() { if(thinkingEl&&els.chat.lastChild!==thinkingEl) els.chat.appendChild(thinkingEl); }
-  function appendUserMessage(text) { removeEmpty(); finalizeAssistant(); var el=document.createElement('div'); el.className='msg user'; el.innerHTML='<span class="role">You</span>'; el.appendChild(document.createTextNode(text)); els.chat.appendChild(el); startThinking(); scrollBottom(true); }
+  var lastUserMsgEl = null;
+  function appendUserMessage(text) {
+    removeEmpty(); finalizeAssistant();
+    var el=document.createElement('div'); el.className='msg user'; el.innerHTML='<span class="role">You</span>';
+    el.appendChild(document.createTextNode(text));
+    els.chat.appendChild(el); startThinking(); scrollBottom(true);
+    lastUserMsgEl = el;
+  }
+
+  function attachRewindButton(userMsgEl, taskId) {
+    if (userMsgEl.querySelector('.rewind-btn')) return;
+    var btn = document.createElement('span'); btn.className = 'rewind-btn'; btn.title = 'Rewind code to here';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v5h5"/></svg>';
+    btn.addEventListener('click', function () {
+      if (confirm('Revert every file this turn changed back to how it was before this message? This cannot be undone.')) {
+        vscode.postMessage({ type: 'rewindToHere', taskId: taskId });
+      }
+    });
+    userMsgEl.appendChild(btn);
+  }
   function finalizeAssistant() { if(currentAssistant){currentAssistant.classList.remove('streaming');currentAssistant=null;} }
 
   // ---- Reply turns ----
@@ -265,6 +284,8 @@
     if (turns[taskId]) return turns[taskId];
     removeEmpty();
     finalizeAssistant();
+
+    if (lastUserMsgEl) { attachRewindButton(lastUserMsgEl, taskId); lastUserMsgEl = null; }
 
     var meta = pendingTurnMeta[taskId];
     var el = document.createElement('div'); el.className = 'turn streaming';
@@ -794,6 +815,82 @@
 
   function renderTelemetry(event) { var row=document.createElement('div');row.className='log-row telemetry';var tag=document.createElement('span');tag.className='log-tag';tag.textContent=eventLabel(event)+(event.agent?' . '+event.agent:'');row.appendChild(tag);row.appendChild(document.createTextNode(telemetryText(event)));return row; }
 
+  function fmtFileStat(f) {
+    var parts = [];
+    if (f.added) parts.push('+' + f.added);
+    if (f.removed) parts.push('−' + f.removed);
+    return parts.join(' ');
+  }
+
+  function renderTurnChangesCard(event, turn) {
+    var totalAdded = 0, totalRemoved = 0;
+    (event.files || []).forEach(function (f) { totalAdded += f.added || 0; totalRemoved += f.removed || 0; });
+    var card = document.createElement('div'); card.className = 'changes-card';
+    var head = document.createElement('div'); head.className = 'changes-head';
+    var count = event.files.length;
+    head.innerHTML =
+      '<span class="changes-title">' + count + ' file' + (count !== 1 ? 's' : '') + ' changed</span>' +
+      (totalAdded ? '<span class="mono add">+' + totalAdded + '</span>' : '') +
+      (totalRemoved ? '<span class="mono remove">−' + totalRemoved + '</span>' : '');
+    card.appendChild(head);
+    var list = document.createElement('div'); list.className = 'changes-list';
+    event.files.forEach(function (f) {
+      var row = document.createElement('div'); row.className = 'changes-row';
+      var p = document.createElement('span'); p.className = 'mono path'; p.textContent = f.path;
+      var stat = document.createElement('span'); stat.className = 'mono stat';
+      stat.innerHTML = (f.added ? '<span class="add">+' + f.added + '</span>' : '') + (f.removed ? '<span class="remove">−' + f.removed + '</span>' : '');
+      row.appendChild(p); row.appendChild(stat);
+      list.appendChild(row);
+    });
+    card.appendChild(list);
+    var actions = document.createElement('div'); actions.className = 'changes-actions';
+    var reviewBtn = document.createElement('button'); reviewBtn.type = 'button'; reviewBtn.className = 'turn-action-btn wide primary'; reviewBtn.textContent = 'Review in editor';
+    reviewBtn.addEventListener('click', function () { vscode.postMessage({ type: 'reviewChanges', taskId: event.taskId }); });
+    var keepBtn = document.createElement('button'); keepBtn.type = 'button'; keepBtn.className = 'turn-action-btn wide'; keepBtn.textContent = 'Keep all';
+    keepBtn.addEventListener('click', function () { actions.remove(); });
+    var undoBtn = document.createElement('button'); undoBtn.type = 'button'; undoBtn.className = 'turn-action-btn wide'; undoBtn.textContent = 'Undo all';
+    undoBtn.addEventListener('click', function () {
+      vscode.postMessage({ type: 'undoAllChanges', taskId: event.taskId });
+      card.classList.add('reverted'); actions.remove();
+      var note = document.createElement('div'); note.className = 'changes-reverted-note'; note.textContent = 'Reverted.';
+      card.appendChild(note);
+    });
+    actions.appendChild(reviewBtn); actions.appendChild(keepBtn); actions.appendChild(undoBtn);
+    card.appendChild(actions);
+    return card;
+  }
+
+  function renderApprovalCard(event) {
+    var card = document.createElement('div'); card.className = 'approval-card';
+    var head = document.createElement('div'); head.className = 'approval-head';
+    head.innerHTML =
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/></svg>' +
+      '<span class="approval-title">' + esc(event.title) + '</span>' +
+      '<span class="approval-risk risk-' + esc(event.risk) + '">' + esc(event.risk) + ' risk</span>';
+    card.appendChild(head);
+    if (event.detail) {
+      var detailEl = document.createElement('div'); detailEl.className = 'approval-detail mono'; detailEl.textContent = event.detail;
+      card.appendChild(detailEl);
+    }
+    var actions = document.createElement('div'); actions.className = 'approval-actions-row';
+    function respond(response) {
+      vscode.postMessage({ type: 'respondToApproval', eventId: event.id, response: response });
+      actions.innerHTML = '';
+      var note = document.createElement('div'); note.className = 'approval-resolved';
+      note.textContent = response === 'deny' ? 'Denied.' : response === 'always' ? 'Always allowed.' : 'Allowed once.';
+      card.appendChild(note);
+    }
+    var allowOnce = document.createElement('button'); allowOnce.type = 'button'; allowOnce.className = 'turn-action-btn wide primary'; allowOnce.textContent = 'Allow once';
+    allowOnce.addEventListener('click', function () { respond('once'); });
+    var allowAlways = document.createElement('button'); allowAlways.type = 'button'; allowAlways.className = 'turn-action-btn wide'; allowAlways.textContent = 'Always allow ' + event.title;
+    allowAlways.addEventListener('click', function () { respond('always'); });
+    var deny = document.createElement('button'); deny.type = 'button'; deny.className = 'turn-action-btn wide'; deny.textContent = 'Deny';
+    deny.addEventListener('click', function () { respond('deny'); });
+    actions.appendChild(allowOnce); actions.appendChild(allowAlways); actions.appendChild(deny);
+    card.appendChild(actions);
+    return card;
+  }
+
   function renderCard(event) {
     var card=document.createElement('div');card.className='event-card '+cardClass(event);
     var hdr=document.createElement('div');hdr.className='event-header';hdr.innerHTML='<span class="event-source">'+eventLabel(event)+(event.agent?' . '+esc(event.agent):'')+'</span><span>'+fmtTime(event.timestamp)+'</span>';card.appendChild(hdr);
@@ -849,7 +946,9 @@
         turn.bodyEl.appendChild(renderTelemetry(event)); return;
       }
       if (event.type === 'cost.update') { updateTurnCost(turn, event); accumulateCost(event); return; }
-      if (event.type === 'diff.proposal' || event.type === 'file.edit.applied' || event.type === 'approval.request' || event.type === 'error') {
+      if (event.type === 'turn.changes') { closeToolGroup(turn); turn.bodyEl.appendChild(renderTurnChangesCard(event, turn)); scrollBottom(); return; }
+      if (event.type === 'approval.request') { closeToolGroup(turn); turn.bodyEl.appendChild(renderApprovalCard(event)); pinThinking(); scrollBottom(); return; }
+      if (event.type === 'diff.proposal' || event.type === 'file.edit.applied' || event.type === 'error') {
         closeToolGroup(turn);
         turn.bodyEl.appendChild(renderCard(event));
         // A bare error (e.g. "agent unavailable") can end a turn with no

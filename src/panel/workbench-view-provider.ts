@@ -12,6 +12,7 @@ import { listPlanTemplates, savePlanTemplate, deletePlanTemplate, templateToPlan
 import { AGENT_PROVIDERS } from '../config/agent-catalog';
 import { PERMISSION_KEY_INFO } from '../core/permissions';
 import type { ProjectPreferences } from '../config/project-preferences';
+import { diffFromCheckpoint } from '../orchestrator/checkpoints';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -25,7 +26,8 @@ interface WebviewMessage {
     | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
     | 'retryStep' | 'skipStep' | 'openLink'
     | 'searchFiles' | 'requestSelection' | 'requestGitDiffStat' | 'requestMemorySearch'
-    | 'attachImage' | 'setCustomPermissions' | 'queueOverflow';
+    | 'attachImage' | 'setCustomPermissions' | 'queueOverflow'
+    | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval';
   prompt?: string;
   agent?: AgentId;
   route?: RouteMode;
@@ -39,6 +41,8 @@ interface WebviewMessage {
   dataUrl?: string;
   name?: string;
   allowed?: Partial<Record<PermissionKey, boolean>>;
+  taskId?: string;
+  response?: 'once' | 'always' | 'deny';
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -108,6 +112,24 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     webviewView.onDidDispose(() => {
       this.detachWebview(webviewView.webview);
       if (this.sidebarView === webviewView) this.sidebarView = undefined;
+    });
+  }
+
+  /** Registers the `kai-checkpoint:` scheme so "Review in editor" can open a
+   * real VS Code diff editor against a task's checkpoint content. Call once
+   * at activation and push the returned Disposable into subscriptions. */
+  registerCheckpointContentProvider(): vscode.Disposable {
+    return vscode.workspace.registerTextDocumentContentProvider('kai-checkpoint', {
+      provideTextDocumentContent: async (uri: vscode.Uri): Promise<string> => {
+        const segments = uri.path.split('/').filter(Boolean);
+        const [taskId, ...fileParts] = segments;
+        if (!taskId || fileParts.length === 0) return '';
+        try {
+          return await this.orchestrator.readCheckpointFile(taskId, fileParts.join('/'));
+        } catch {
+          return '';
+        }
+      },
     });
   }
 
@@ -433,6 +455,52 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           void this.prefs?.setCustomPermissions(message.allowed);
         }
         break;
+      case 'reviewChanges':
+        if (message.taskId) await this.handleReviewChanges(message.taskId);
+        break;
+      case 'undoAllChanges':
+      case 'rewindToHere':
+        if (message.taskId) {
+          try {
+            const result = await this.orchestrator.restoreToCheckpoint(message.taskId);
+            const total = result.restored.length + result.deleted.length;
+            void vscode.window.showInformationMessage(`KAI: reverted ${total} file${total === 1 ? '' : 's'}.`);
+          } catch (error) {
+            void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+          }
+        }
+        break;
+      case 'respondToApproval':
+        if (message.eventId && message.response) {
+          try {
+            await this.orchestrator.respondToApproval(message.eventId, message.response);
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+    }
+  }
+
+  /** Opens a read-only diff (checkpoint content vs current file) for every
+   * changed file in a task, via the kai-checkpoint: content provider. */
+  private async handleReviewChanges(taskId: string): Promise<void> {
+    const checkpoint = this.orchestrator.getCheckpoint(taskId);
+    const projectPath = this.orchestrator['projectPath'];
+    if (!checkpoint || !projectPath) {
+      void vscode.window.showWarningMessage('KAI: no checkpoint recorded for this task.');
+      return;
+    }
+    const files = await diffFromCheckpoint(projectPath, checkpoint);
+    for (const file of files) {
+      const leftUri = vscode.Uri.parse(`kai-checkpoint:/${taskId}/${file.path}`);
+      const rightUri = vscode.Uri.file(path.join(projectPath, file.path));
+      await vscode.commands.executeCommand(
+        'vscode.diff', leftUri, rightUri, `${file.path} (Before ↔ Agent's edit)`,
+      );
     }
   }
 

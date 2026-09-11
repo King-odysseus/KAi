@@ -122,6 +122,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     new VSCodeDiffApplier(),
   );
   orchestrator.setCustomPermissions(customPermissions);
+  orchestrator.setAlwaysAllowRules(prefs.getAlwaysAllowRules());
+  orchestrator.on('approvalRuleChanged', (rules: string[]) => { void prefs.setAlwaysAllowRules(rules); });
 
   // Register Claude adapter — with dedicated parser + proxy config
   orchestrator.registerAdapter(
@@ -241,6 +243,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workbenchProvider = new WorkbenchViewProvider(context.extensionUri, orchestrator, prefs, attachmentsDir);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(WorkbenchViewProvider.viewType, workbenchProvider),
+    workbenchProvider.registerCheckpointContentProvider(),
   );
 
   // Active-file tracking for the composer's "active file" context chip.
@@ -517,6 +520,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     registerRawInspectorCommand(context, rawInspector),
+
+    vscode.commands.registerCommand('kai.rejectCheckpointFile', async () => {
+      const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+      const input = tab?.input;
+      if (!(input instanceof vscode.TabInputTextDiff) || input.original.scheme !== 'kai-checkpoint') {
+        void vscode.window.showWarningMessage('KAI: open a KAI diff review tab first (from a diff summary card\'s "Review in editor").');
+        return;
+      }
+      const segments = input.original.path.split('/').filter(Boolean);
+      const [taskId, ...fileParts] = segments;
+      const filePath = fileParts.join('/');
+      if (!taskId || !filePath) return;
+      try {
+        await orchestrator.restoreOneFileFromCheckpoint(taskId, filePath);
+        void vscode.window.showInformationMessage(`KAI: reverted ${filePath}.`);
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+      } catch (e) {
+        void vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e));
+      }
+    }),
 
     vscode.commands.registerCommand('kai.addSelectionToChat', async () => {
       const editor = vscode.window.activeTextEditor;

@@ -1,14 +1,16 @@
 import { EventEmitter } from 'events';
 import type { Cognitive1Client } from '../cognitive1/cognitive1-client';
 import { DisabledCognitive1Client } from '../cognitive1/cognitive1-client';
-import { createEventId, nowIso, type DiffProposalEvent, type WorkbenchEvent } from '../core/events';
+import { createEventId, nowIso, type ApprovalRequestEvent, type DiffProposalEvent, type WorkbenchEvent } from '../core/events';
 import type { AgentCapability, AgentId, AutonomyMode, PermissionKey, RouteMode, TaskRequest, WorkbenchState } from '../core/types';
 import { canRunWithoutApproval, createPermissionProfile } from '../core/permissions';
 import type { DiffApplier } from './diff-applier';
 import { NoopDiffApplier } from './diff-applier';
-import type { AgentAdapter } from '../adapters/agent-adapter';
+import type { AgentAdapter, ApprovalResponse } from '../adapters/agent-adapter';
 import type { Plan } from '../core/plan';
 import { PlanRunner } from './plan-runner';
+import type { Checkpoint } from './checkpoints';
+import { createCheckpoint, diffFromCheckpoint, isGitRepo, restoreCheckpoint, restoreFile as restoreOneFile, readFileAtCheckpoint } from './checkpoints';
 
 export interface DiffRecord {
   event: DiffProposalEvent;
@@ -24,6 +26,16 @@ export class WorkbenchOrchestrator extends EventEmitter {
   private planRunner: PlanRunner | null = null;
   private planRunning = false;
   private customPermissions: Partial<Record<PermissionKey, boolean>> = {};
+  /** One checkpoint per taskId, captured right before that task's first
+   * agent run. Kept for the life of the session so Review/Undo/Rewind work
+   * even well after the turn finished. */
+  private readonly checkpoints = new Map<string, Checkpoint>();
+  /** Approval events currently awaiting a response, keyed by event id, so
+   * respondToApproval() knows which adapter/taskId to feed the answer back
+   * into. */
+  private readonly pendingApprovals = new Map<string, ApprovalRequestEvent>();
+  /** "Always allow" rules the user has set, keyed by `${agent}:${title}`. */
+  private alwaysAllowRules = new Set<string>();
 
   constructor(
     initialState: WorkbenchState,
@@ -279,6 +291,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     await currentAdapter?.stop(this.state.activeTaskId);
 
     this.emitEvent({ id: createEventId(), type: 'agent.lifecycle', taskId: this.state.activeTaskId, timestamp: nowIso(), agent: fromAgent, status: 'paused', detail: `Handing off from ${fromAgent} to ${toAgent}.` });
+    void this.emitTurnChanges(this.state.activeTaskId, fromAgent);
 
     const handoffSummary = await this.cognitive1.handoff({ fromAgent, toAgent, summary: `Task: ${this.lastPrompt}. Handoff from ${fromAgent} to ${toAgent}.`, projectPath: this.projectPath });
     this.emitEvent({ id: createEventId(), type: 'memory.event', taskId: this.state.activeTaskId, timestamp: nowIso(), agent: toAgent, action: 'handoff', summary: handoffSummary });
@@ -313,6 +326,127 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   getCustomPermissions(): Partial<Record<PermissionKey, boolean>> {
     return { ...this.customPermissions };
+  }
+
+  // ─── Checkpoints (diff summary, review, undo, rewind) ──────────
+
+  getCheckpoint(taskId: string): Checkpoint | undefined {
+    return this.checkpoints.get(taskId);
+  }
+
+  /** Restores the working tree to a task's checkpoint — used by both
+   * "Undo all" on the diff summary card and "Rewind code to here" on a
+   * user message. Same operation; the UI just triggers it from two places. */
+  async restoreToCheckpoint(taskId: string): Promise<{ restored: string[]; deleted: string[] }> {
+    const checkpoint = this.checkpoints.get(taskId);
+    if (!checkpoint) throw new Error('No checkpoint recorded for this task.');
+    if (!this.projectPath) throw new Error('No workspace folder open.');
+    return restoreCheckpoint(this.projectPath, checkpoint);
+  }
+
+  /** Restores one file from a task's checkpoint — "Reject" in the diff
+   * editor for a single changed file. */
+  async restoreOneFileFromCheckpoint(taskId: string, filePath: string): Promise<void> {
+    const checkpoint = this.checkpoints.get(taskId);
+    if (!checkpoint) throw new Error('No checkpoint recorded for this task.');
+    if (!this.projectPath) throw new Error('No workspace folder open.');
+    await restoreOneFile(this.projectPath, checkpoint, filePath);
+  }
+
+  /** Reads a file's content as of a task's checkpoint — backs the diff
+   * editor's "before" side via the kai-checkpoint: content provider. */
+  async readCheckpointFile(taskId: string, filePath: string): Promise<string> {
+    const checkpoint = this.checkpoints.get(taskId);
+    if (!checkpoint) throw new Error('No checkpoint recorded for this task.');
+    if (!this.projectPath) throw new Error('No workspace folder open.');
+    return readFileAtCheckpoint(this.projectPath, checkpoint, filePath);
+  }
+
+  private async ensureCheckpoint(taskId: string): Promise<void> {
+    if (this.checkpoints.has(taskId) || !this.projectPath) return;
+    try {
+      if (!(await isGitRepo(this.projectPath))) return;
+      this.checkpoints.set(taskId, await createCheckpoint(this.projectPath));
+    } catch {
+      // Best effort — a checkpoint failure must never block a run.
+    }
+  }
+
+  /** Diffs the task's checkpoint against the current working tree and, if
+   * anything changed, emits a turn.changes event for the diff summary card.
+   * Safe to call more than once per task (e.g. once per handoff pause, once
+   * at final completion) — each call reflects everything changed so far. */
+  private async emitTurnChanges(taskId: string, agent: AgentId): Promise<void> {
+    const checkpoint = this.checkpoints.get(taskId);
+    if (!checkpoint || !this.projectPath) return;
+    try {
+      const files = await diffFromCheckpoint(this.projectPath, checkpoint);
+      if (files.length === 0) return;
+      this.emitEvent({ id: createEventId(), type: 'turn.changes', taskId, timestamp: nowIso(), agent, files, hasCheckpoint: true });
+    } catch {
+      // Best effort — never fail a run over the diff summary.
+    }
+  }
+
+  // ─── Approvals ──────────────────────────────────────────────────
+
+  private ruleKey(event: ApprovalRequestEvent): string {
+    return `${event.agent ?? ''}:${event.title}`;
+  }
+
+  /** Loads persisted "always allow" rules (see extension.ts, which persists
+   * them per workspace) — replaces the current set. */
+  setAlwaysAllowRules(rules: string[]): void {
+    this.alwaysAllowRules = new Set(rules);
+  }
+
+  getAlwaysAllowRules(): string[] {
+    return [...this.alwaysAllowRules];
+  }
+
+  /**
+   * Answers a pending approval.request. Records the decision and, when the
+   * originating adapter implements respondToApproval, feeds it back into
+   * the live run. Most adapters can't do that today (see AgentAdapter's
+   * respondToApproval doc) — the response is still recorded either way so
+   * the card resolves and an 'always' rule takes effect for future requests
+   * this session.
+   */
+  async respondToApproval(eventId: string, response: ApprovalResponse): Promise<void> {
+    const event = this.pendingApprovals.get(eventId);
+    if (!event) throw new Error(`No pending approval found for ${eventId}.`);
+    this.pendingApprovals.delete(eventId);
+
+    if (response === 'always') this.alwaysAllowRules.add(this.ruleKey(event));
+    this.emit('approvalRuleChanged', this.getAlwaysAllowRules());
+
+    const adapter = event.agent ? this.adapters.get(event.agent) : undefined;
+    await adapter?.respondToApproval?.(event.taskId, eventId, response);
+
+    this.emitEvent({
+      id: createEventId(), type: 'agent.lifecycle', taskId: event.taskId, timestamp: nowIso(), agent: event.agent,
+      status: 'running',
+      detail: response === 'deny' ? `Denied: ${event.title}` : `Approved${response === 'always' ? ' (always)' : ''}: ${event.title}`,
+    });
+  }
+
+  /** Tracks an approval.request as it streams by, and auto-resolves it
+   * (as 'once', silently) if an "always allow" rule already covers it. */
+  private trackApproval(event: ApprovalRequestEvent): void {
+    if (this.alwaysAllowRules.has(this.ruleKey(event))) {
+      void this.respondToApprovalSilently(event);
+      return;
+    }
+    this.pendingApprovals.set(event.id, event);
+  }
+
+  private async respondToApprovalSilently(event: ApprovalRequestEvent): Promise<void> {
+    const adapter = event.agent ? this.adapters.get(event.agent) : undefined;
+    try {
+      await adapter?.respondToApproval?.(event.taskId, event.id, 'once');
+    } catch {
+      // Best effort — an always-allow auto-response must never crash a run.
+    }
   }
 
   // Permission check — gates risky operations based on autonomy mode
@@ -365,6 +499,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const taskId = `task_${Date.now()}`;
     this.state = { activeAgent: agent, route, autonomy, activeTaskId: taskId, isRunning: true };
     this.emitState();
+    await this.ensureCheckpoint(taskId);
 
     const ss = await this.cognitive1.sessionStart({ task: prompt, agent, projectPath: this.projectPath });
     this.emitEvent({ id: createEventId(), type: 'memory.event', taskId, timestamp: nowIso(), agent, action: 'session_start', summary: ss });
@@ -385,7 +520,13 @@ export class WorkbenchOrchestrator extends EventEmitter {
         if (event.type === 'diff.proposal') {
           void this.autoApproveDiff(event);
         }
+        if (event.type === 'approval.request') {
+          this.trackApproval(event);
+        }
         this.emitEvent(event);
+        if (event.type === 'agent.lifecycle' && (event.status === 'completed' || event.status === 'failed' || event.status === 'paused')) {
+          void this.emitTurnChanges(taskId, agent);
+        }
       }
     } finally {
       if (!this.handoffInProgress) {

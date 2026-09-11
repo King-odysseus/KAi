@@ -709,6 +709,47 @@ body {
 .kai-menu-item:hover:not(.disabled) { background: var(--kai-accent-soft); color: var(--kai-accent-strong); }
 .kai-menu-item.disabled { opacity: 0.5; cursor: default; }
 
+/* Diff summary card (turn.changes) */
+.changes-card { border: 1px solid var(--kai-border); border-radius: var(--kai-radius); background: var(--kai-surface); overflow: hidden; }
+.changes-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 11.5px; }
+.changes-head .changes-title { font-weight: 600; }
+.changes-list { display: flex; flex-direction: column; border-top: 1px solid var(--kai-border); }
+.changes-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px; }
+.changes-row .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mono { font-family: var(--vscode-editor-font-family, monospace); }
+.mono.add, .add { color: var(--kai-add); }
+.mono.remove, .remove { color: var(--kai-remove); }
+.changes-actions { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--kai-border); flex-wrap: wrap; }
+.changes-reverted-note, .approval-resolved { padding: 6px 10px; font-size: 11px; color: var(--vscode-descriptionForeground); border-top: 1px solid var(--kai-border); }
+.changes-card.reverted { opacity: 0.75; }
+
+/* Approval card */
+.approval-card { border: 1px solid color-mix(in srgb, var(--kai-warn) 45%, var(--kai-border)); border-radius: var(--kai-radius); background: color-mix(in srgb, var(--kai-warn) 7%, var(--kai-surface)); overflow: hidden; }
+.approval-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; }
+.approval-head svg { color: var(--kai-warn); flex: none; }
+.approval-title { font-weight: 600; font-size: 12px; }
+.approval-risk { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
+.approval-risk.risk-low { color: var(--kai-add); }
+.approval-risk.risk-medium { color: var(--kai-warn); }
+.approval-risk.risk-high { color: var(--kai-remove); }
+.approval-detail { padding: 0 10px 8px; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-actions-row { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--kai-border); flex-wrap: wrap; }
+
+.turn-action-btn.primary {
+  background: linear-gradient(180deg, var(--kai-accent) 0%, var(--kai-accent-strong) 100%);
+  color: #05202e; border-color: var(--kai-accent-strong); font-weight: 600;
+}
+.turn-action-btn.primary:hover { filter: brightness(1.06); background: linear-gradient(180deg, var(--kai-accent) 0%, var(--kai-accent-strong) 100%); color: #05202e; }
+
+/* Rewind button on a user message */
+.msg.user { position: relative; }
+.rewind-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: 6px; vertical-align: -3px;
+  border-radius: 4px; cursor: pointer; opacity: 0.7;
+}
+.rewind-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.12); }
+
 /* Scrollbars */
 .chat::-webkit-scrollbar, .diff-preview::-webkit-scrollbar { width: 8px; }
 .chat::-webkit-scrollbar-thumb, .diff-preview::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background); border-radius: 999px; }

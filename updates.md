@@ -2,6 +2,60 @@
 
 ## 2026-09-11
 
+### Phase 3 checkpoints, diff review, and approvals
+
+- **Checkpoints** (`src/orchestrator/checkpoints.ts`) — a `git stash create`
+  snapshot taken at the start of every task, without touching the working
+  tree. Restoring reads each changed file's exact checkpoint content via
+  `git show` and writes it directly with `fs.writeFile`, rather than
+  `git checkout` — a real bug this module's own tests caught: on this
+  machine's Windows git config, `git checkout` silently re-introduces CRLF
+  into an LF file on restore, corrupting it the same way Phase 0's
+  diff-applier fix addressed for agent-proposed diffs.
+- **Diff summary card** — when a turn ends (including at a handoff pause),
+  the orchestrator diffs against the checkpoint and, if anything changed,
+  shows "N files changed +A −R" with per-file stats and Review in editor /
+  Keep all / Undo all.
+- **Review in editor** opens each changed file in VS Code's real diff
+  editor via a `kai-checkpoint:` read-only content provider; `KAI: Reject
+  This File` reverts just that file from the editor title bar.
+- **Rewind to here** — a button on each of your messages restores every
+  file that turn touched back to its checkpoint, after confirmation.
+- **Real approval cards** — Allow once / Always allow \<title\> / Deny,
+  wired through a new `AgentAdapter.respondToApproval()` (optional — no
+  current adapter can act on it yet, see Known limitations below) and an
+  "always allow" rule set persisted per workspace.
+
+### Phase 2 composer redesign
+
+- **Permission modes** — replaced Review/Auto/Custom with five modes
+  matching Claude Code's own: Plan (read-only), Ask before edits, Edit
+  automatically, Full access, and Custom (a per-action checklist). Mapped
+  to real, `--help`-verified flags: Claude's `--permission-mode`
+  (`bypassPermissions` for Full also needs `--dangerously-skip-permissions`
+  to take effect) and Codex's `--sandbox`. A stored `review`/`auto` value
+  from an older KAI version migrates automatically.
+- **New composer** — the three dropdowns are gone. A mode chip and an
+  agent/route chip open rich menus (label + description; the agent menu
+  shows a Direct/Proxy toggle, model name, and an "Install…" hint for an
+  agent that isn't on PATH). Shift+Tab cycles the mode.
+- **@ context menu** — search workspace files, add the current selection,
+  attach `git diff --stat`, or search memory; each becomes a removable
+  chip. An active-file chip tracks the editor and can be excluded without
+  removing it. `KAI: Add Selection to Chat` (Alt+K, and in the editor's
+  right-click menu) adds a selection chip from anywhere.
+- **Prompt assembly** moved server-side into a pure, unit-tested
+  `buildPromptWithContext()` (`src/core/prompt-builder.ts`) — one source of
+  truth for the exact preamble shape sent to the agent.
+- **Queue while running** — Enter during an active run queues the message
+  (editable, removable) instead of doing nothing; it sends automatically
+  once the run finishes. Ctrl+Shift+Enter stops the run and sends
+  immediately ("steer now").
+- **Context meter** — a ring in the composer shows the latest turn's input
+  tokens against a per-agent/route context-window estimate.
+- Paste or drop an image onto the composer to attach it (saved to the
+  extension's global storage).
+
 ### Phase 1 chat redesign
 
 Reworked how replies render in the Agent Workbench chat, following the

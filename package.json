@@ -78,6 +78,10 @@
       {
         "command": "kai.addSelectionToChat",
         "title": "KAI: Add Selection to Chat"
+      },
+      {
+        "command": "kai.rejectCheckpointFile",
+        "title": "KAI: Reject This File"
       }
     ],
     "menus": {
@@ -86,6 +90,13 @@
           "command": "kai.addSelectionToChat",
           "when": "editorHasSelection",
           "group": "9_kai"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "kai.rejectCheckpointFile",
+          "when": "resourceScheme == kai-checkpoint",
+          "group": "navigation"
         }
       ]
     },

@@ -7,6 +7,7 @@ const KEYS = {
   route: 'kai.project.route',
   autonomy: 'kai.project.autonomy',
   customPermissions: 'kai.project.customPermissions',
+  alwaysAllowRules: 'kai.project.alwaysAllowRules',
 } as const;
 
 /**
@@ -50,6 +51,14 @@ export class ProjectPreferences {
 
   async setCustomPermissions(allowed: Partial<Record<PermissionKey, boolean>>): Promise<void> {
     await this.workspaceState.update(KEYS.customPermissions, allowed);
+  }
+
+  getAlwaysAllowRules(): string[] {
+    return this.workspaceState.get(KEYS.alwaysAllowRules, []);
+  }
+
+  async setAlwaysAllowRules(rules: string[]): Promise<void> {
+    await this.workspaceState.update(KEYS.alwaysAllowRules, rules);
   }
 
   /**
