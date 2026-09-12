@@ -63,6 +63,23 @@ describe('ConversationStore', () => {
     expect((await store.get(conv.id))?.goal?.outcome).toBe('Ship it');
   });
 
+  it('round-trips native agent sessions and route context', async () => {
+    const conv = store.create('resume this');
+    conv.activeAgent = 'codex';
+    conv.route = 'proxy';
+    conv.autonomy = 'autoEdit';
+    conv.agentSessions = {
+      codex: { sessionId: 'thread-123', route: 'proxy', projectPath: '/repo' },
+    };
+    await store.save(conv);
+
+    const loaded = await store.get(conv.id);
+    expect(loaded?.activeAgent).toBe('codex');
+    expect(loaded?.route).toBe('proxy');
+    expect(loaded?.autonomy).toBe('autoEdit');
+    expect(loaded?.agentSessions?.codex?.sessionId).toBe('thread-123');
+  });
+
   it('returns undefined for a conversation that does not exist', async () => {
     expect(await store.get('nope')).toBeUndefined();
   });
@@ -87,6 +104,7 @@ describe('ConversationStore', () => {
   it('forks a conversation into a new one with copied events', async () => {
     const conv = store.create('original');
     conv.events.push({ id: 'e1', type: 'text.delta', taskId: 't1', timestamp: '2026-01-01T00:00:00Z', agent: 'claude', channel: 'assistant', text: 'hi' } as WorkbenchEvent);
+    conv.agentSessions = { claude: { sessionId: 'session-1', route: 'direct' } };
     await store.save(conv);
 
     const forked = await store.fork(conv.id);
@@ -94,6 +112,7 @@ describe('ConversationStore', () => {
     expect(forked?.id).not.toBe(conv.id);
     expect(forked?.title).toContain('copy');
     expect(forked?.events).toHaveLength(1);
+    expect(forked?.agentSessions).toEqual({});
 
     const list = await store.list();
     expect(list).toHaveLength(2);

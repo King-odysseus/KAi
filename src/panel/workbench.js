@@ -1253,12 +1253,13 @@
     var head = document.createElement('div'); head.className = 'changes-head';
     var count = event.files.length;
     head.innerHTML =
-      '<span class="changes-title">' + count + ' file' + (count !== 1 ? 's' : '') + ' changed</span>' +
+      '<span class="changes-title">Edited ' + count + ' file' + (count !== 1 ? 's' : '') + '</span>' +
       (totalAdded ? '<span class="mono add">+' + totalAdded + '</span>' : '') +
       (totalRemoved ? '<span class="mono remove">−' + totalRemoved + '</span>' : '');
     card.appendChild(head);
     var list = document.createElement('div'); list.className = 'changes-list';
-    event.files.forEach(function (f) {
+    var visibleFiles = event.files.slice(0, 3);
+    visibleFiles.forEach(function (f) {
       var row = document.createElement('div'); row.className = 'changes-row';
       var p = document.createElement('span'); p.className = 'mono path'; p.textContent = f.path;
       var stat = document.createElement('span'); stat.className = 'mono stat';
@@ -1267,12 +1268,33 @@
       list.appendChild(row);
     });
     card.appendChild(list);
+    if (event.files.length > visibleFiles.length) {
+      var more = document.createElement('button');
+      more.type = 'button'; more.className = 'changes-more';
+      more.textContent = 'Show ' + (event.files.length - visibleFiles.length) + ' more file' + (event.files.length - visibleFiles.length !== 1 ? 's' : '');
+      more.addEventListener('click', function () {
+        event.files.slice(visibleFiles.length).forEach(function (f) {
+          var row = document.createElement('div'); row.className = 'changes-row';
+          var p = document.createElement('span'); p.className = 'mono path'; p.textContent = f.path;
+          var stat = document.createElement('span'); stat.className = 'mono stat';
+          stat.innerHTML = (f.added ? '<span class="add">+' + f.added + '</span>' : '') + (f.removed ? '<span class="remove">−' + f.removed + '</span>' : '');
+          row.appendChild(p); row.appendChild(stat);
+          list.appendChild(row);
+        });
+        more.remove();
+      });
+      card.appendChild(more);
+    }
     var actions = document.createElement('div'); actions.className = 'changes-actions';
-    var reviewBtn = document.createElement('button'); reviewBtn.type = 'button'; reviewBtn.className = 'turn-action-btn wide primary'; reviewBtn.textContent = 'Review in editor';
+    var reviewBtn = document.createElement('button'); reviewBtn.type = 'button'; reviewBtn.className = 'turn-action-btn wide primary'; reviewBtn.textContent = 'Review changes';
+    reviewBtn.disabled = !event.hasCheckpoint;
+    reviewBtn.title = event.hasCheckpoint ? 'Open changed files in the diff editor' : 'Available when the workspace is inside a git repository.';
     reviewBtn.addEventListener('click', function () { vscode.postMessage({ type: 'reviewChanges', taskId: event.taskId }); });
     var keepBtn = document.createElement('button'); keepBtn.type = 'button'; keepBtn.className = 'turn-action-btn wide'; keepBtn.textContent = 'Keep all';
     keepBtn.addEventListener('click', function () { actions.remove(); });
     var undoBtn = document.createElement('button'); undoBtn.type = 'button'; undoBtn.className = 'turn-action-btn wide'; undoBtn.textContent = 'Undo all';
+    undoBtn.disabled = !event.hasCheckpoint;
+    undoBtn.title = event.hasCheckpoint ? 'Restore the files changed during this turn' : 'Undo needs a git checkpoint for this turn.';
     undoBtn.addEventListener('click', function () {
       vscode.postMessage({ type: 'undoAllChanges', taskId: event.taskId });
       card.classList.add('reverted'); actions.remove();
@@ -1374,6 +1396,7 @@
         pinThinking(); scrollBottom(); return;
       }
       if (event.type === 'tool.call') { appendToolCall(turn, event); pinThinking(); scrollBottom(); return; }
+      if (event.type === 'file.change') { pinThinking(); return; }
       if (event.type === 'memory.event') {
         if (event.action === 'recall') { appendMemoryChip(turn, event); pinThinking(); scrollBottom(); return; }
         turn.bodyEl.appendChild(renderTelemetry(event)); return;

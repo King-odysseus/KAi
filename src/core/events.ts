@@ -7,6 +7,7 @@ export type WorkbenchEvent =
   | ApprovalRequestEvent
   | DiffProposalEvent
   | FileEditAppliedEvent
+  | FileChangeEvent
   | AutonomyChangedEvent
   | PermissionEscalationEvent
   | ErrorEvent
@@ -58,6 +59,17 @@ export interface FileEditAppliedEvent extends Omit<BaseEvent, 'type'> {
   type: 'file.edit.applied';
   filePath: string;
   summary: string;
+}
+
+/** A file edit reported directly by an agent harness. Unlike
+ * `file.edit.applied`, this is not a proposal KAI executed — it is metadata
+ * from the agent's own stream, used for the per-turn changed-files summary. */
+export interface FileChangeEvent extends Omit<BaseEvent, 'type'> {
+  type: 'file.change';
+  path: string;
+  action: 'edited' | 'created' | 'deleted';
+  added?: number;
+  removed?: number;
 }
 
 export interface AutonomyChangedEvent extends Omit<BaseEvent, 'type'> {

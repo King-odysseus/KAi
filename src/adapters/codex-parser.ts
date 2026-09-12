@@ -28,6 +28,7 @@ export interface CodexItem {
   aggregated_output?: string;
   exit_code?: number | null;
   status?: string;
+  changes?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 }
 
@@ -159,6 +160,27 @@ export function parseCodexJsonLine(
         output: item.aggregated_output,
       };
     }
+  }
+
+  if (item?.type === 'file_change') {
+    const changes = Array.isArray(item.changes) ? item.changes : [];
+    return changes.flatMap((change) => {
+      const rawPath = typeof change.path === 'string' ? change.path : undefined;
+      if (!rawPath) return [];
+      const kind = typeof change.kind === 'string' ? change.kind : 'update';
+      const action = kind === 'add' ? 'created' : kind === 'delete' ? 'deleted' : 'edited';
+      return [{
+        id: createEventId(),
+        type: 'file.change' as const,
+        taskId,
+        timestamp: nowIso(),
+        agent,
+        path: rawPath,
+        action,
+        added: typeof change.added === 'number' ? change.added : undefined,
+        removed: typeof change.removed === 'number' ? change.removed : undefined,
+      }];
+    });
   }
 
   // Usage/cost at the end of a turn

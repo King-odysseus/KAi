@@ -212,6 +212,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     conv.updatedAt = new Date().toISOString();
     if (event.agent && !conv.agents.includes(event.agent)) conv.agents.push(event.agent);
     if (event.type === 'cost.update' && event.amountUsd != null) conv.costUsd = event.amountUsd;
+    this.persistConversationContext(conv);
     this.scheduleConversationSave();
   }
 
@@ -231,8 +232,19 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       this.currentConversation = this.conversationStore.create(goal?.outcome || 'Goal');
     }
     this.currentConversation.goal = goal;
+    this.persistConversationContext(this.currentConversation);
     this.currentConversation.updatedAt = new Date().toISOString();
     void this.conversationStore.save(this.currentConversation);
+  }
+
+  /** Captures the state needed to continue the same native agent context
+   * when this conversation is reopened later. */
+  private persistConversationContext(conversation: Conversation): void {
+    const state = this.orchestrator.getState();
+    conversation.agentSessions = this.orchestrator.getAgentSessions();
+    conversation.activeAgent = state.activeAgent;
+    conversation.route = state.route;
+    conversation.autonomy = state.autonomy;
   }
 
   /** Marks the current conversation unread (a run finished, or an approval
@@ -646,7 +658,11 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           if (conversation) {
             await this.conversationStore.setUnread(conversation.id, false);
             this.currentConversation = conversation;
+            if (conversation.activeAgent) this.orchestrator.setAgent(conversation.activeAgent);
+            if (conversation.route) this.orchestrator.setRoute(conversation.route);
+            if (conversation.autonomy) this.orchestrator.setAutonomy(conversation.autonomy);
             this.orchestrator.restoreGoal(conversation.goal ?? null);
+            this.orchestrator.restoreAgentSessions(conversation.agentSessions);
             void webview.postMessage({ type: 'conversationLoaded', conversation });
           }
         }

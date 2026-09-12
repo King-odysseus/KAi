@@ -100,12 +100,28 @@ describe('parseCodexJsonLine', () => {
     });
   });
 
-  it('raw-falls back for an unrecognized item type rather than guessing its fields', () => {
-    const result = parseCodexJsonLine(JSON.stringify({ type: 'item.completed', item: { id: 'item_9', type: 'file_change' } }), taskId, agent);
-    expect(result).toMatchObject({
-      type: 'raw.fallback',
-      sourceType: 'codex.item.completed',
+  it('parses item.completed file_change entries into file.change events', () => {
+    const line = JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item_9',
+        type: 'file_change',
+        changes: [
+          { path: 'src/a.ts', kind: 'update', added: 12, removed: 3 },
+          { path: 'src/new.ts', kind: 'add', added: 7, removed: 0 },
+        ],
+      },
     });
+    const result = parseCodexJsonLine(line, taskId, agent);
+    expect(result).toEqual([
+      expect.objectContaining({ type: 'file.change', path: 'src/a.ts', action: 'edited', added: 12, removed: 3 }),
+      expect.objectContaining({ type: 'file.change', path: 'src/new.ts', action: 'created', added: 7, removed: 0 }),
+    ]);
+  });
+
+  it('raw-falls back for unrecognized item types', () => {
+    const result = parseCodexJsonLine(JSON.stringify({ type: 'item.completed', item: { id: 'item_9', type: 'unknown_item' } }), taskId, agent);
+    expect(result).toMatchObject({ type: 'raw.fallback', sourceType: 'codex.item.completed' });
   });
 
   it('raw-falls back for unrecognized JSON shapes', () => {

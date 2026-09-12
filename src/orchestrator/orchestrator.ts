@@ -29,6 +29,15 @@ export interface DiffRecord {
   status: 'pending' | 'approved' | 'rejected';
 }
 
+/** Native agent session metadata persisted with a conversation. The route
+ * and workspace are part of the key because a session created through one
+ * provider (or in a different checkout) must not be resumed through another. */
+export interface AgentSessionRecord {
+  sessionId: string;
+  route: RouteMode;
+  projectPath?: string;
+}
+
 export class WorkbenchOrchestrator extends EventEmitter {
   private state: WorkbenchState;
   private readonly adapters = new Map<AgentId, AgentAdapter>();
@@ -49,13 +58,17 @@ export class WorkbenchOrchestrator extends EventEmitter {
    * respondToApproval() knows which adapter/taskId to feed the answer back
    * into. */
   private readonly pendingApprovals = new Map<string, ApprovalRequestEvent>();
+  /** File edits reported directly by an agent stream for the current task,
+   * used to produce a changed-files summary when checkpoint diffing is
+   * unavailable (for example outside git). */
+  private readonly observedFileChanges = new Map<string, Map<string, { path: string; added: number; removed: number }>>();
   /** "Always allow" rules the user has set, keyed by `${agent}:${title}`. */
   private alwaysAllowRules = new Set<string>();
   /** Native session/thread id per agent for the CURRENT conversation, so a
    * follow-up to the same agent continues its session (claude --resume,
    * codex exec resume) instead of starting fresh each message. Cleared by
    * startNewConversation(). */
-  private readonly agentSessions = new Map<AgentId, string>();
+  private readonly agentSessions = new Map<AgentId, AgentSessionRecord>();
   /** Accumulated assistant text for the current task — used to build a real
    * handoff summary instead of just re-sending the original prompt. */
   private lastReplyText = '';
@@ -490,7 +503,31 @@ export class WorkbenchOrchestrator extends EventEmitter {
   }
 
   getAgentSessionId(agent: AgentId): string | undefined {
-    return this.agentSessions.get(agent);
+    return this.agentSessions.get(agent)?.sessionId;
+  }
+
+  /** Snapshots the native session ids for persistence with a conversation. */
+  getAgentSessions(): Partial<Record<AgentId, AgentSessionRecord>> {
+    const sessions: Partial<Record<AgentId, AgentSessionRecord>> = {};
+    for (const [agent, record] of this.agentSessions) {
+      sessions[agent] = { ...record };
+    }
+    return sessions;
+  }
+
+  /** Restores persisted native session ids when reopening a conversation.
+   * Records from a different route or workspace are ignored so KAI starts a
+   * fresh native session instead of trying to resume an incompatible one. */
+  restoreAgentSessions(sessions?: Partial<Record<AgentId, AgentSessionRecord>>): void {
+    this.agentSessions.clear();
+    if (!sessions) return;
+    for (const agent of Object.keys(sessions) as AgentId[]) {
+      const record = sessions[agent];
+      if (!record?.sessionId) continue;
+      if (record.route !== this.state.route) continue;
+      if (record.projectPath !== this.projectPath) continue;
+      this.agentSessions.set(agent, { ...record });
+    }
   }
 
   // ─── Checkpoints (diff summary, review, undo, rewind) ──────────
@@ -543,14 +580,37 @@ export class WorkbenchOrchestrator extends EventEmitter {
    * at final completion) — each call reflects everything changed so far. */
   private async emitTurnChanges(taskId: string, agent: AgentId): Promise<void> {
     const checkpoint = this.checkpoints.get(taskId);
-    if (!checkpoint || !this.projectPath) return;
-    try {
-      const files = await diffFromCheckpoint(this.projectPath, checkpoint);
-      if (files.length === 0) return;
-      this.emitEvent({ id: createEventId(), type: 'turn.changes', taskId, timestamp: nowIso(), agent, files, hasCheckpoint: true });
-    } catch {
-      // Best effort — never fail a run over the diff summary.
+    if (checkpoint && this.projectPath) {
+      try {
+        const files = await diffFromCheckpoint(this.projectPath, checkpoint);
+        if (files.length > 0) {
+          this.emitEvent({ id: createEventId(), type: 'turn.changes', taskId, timestamp: nowIso(), agent, files, hasCheckpoint: true });
+          return;
+        }
+      } catch {
+        // Fall through to the agent-reported changes below.
+      }
     }
+
+    const observed = [...(this.observedFileChanges.get(taskId)?.values() ?? [])];
+    if (observed.length === 0) return;
+    this.emitEvent({
+      id: createEventId(), type: 'turn.changes', taskId, timestamp: nowIso(), agent,
+      files: observed, hasCheckpoint: false,
+    });
+  }
+
+  /** Records a file edit reported directly by an agent's stream. */
+  private recordFileChange(event: Extract<WorkbenchEvent, { type: 'file.change' }>): void {
+    let changes = this.observedFileChanges.get(event.taskId);
+    if (!changes) {
+      changes = new Map();
+      this.observedFileChanges.set(event.taskId, changes);
+    }
+    const existing = changes.get(event.path) ?? { path: event.path, added: 0, removed: 0 };
+    existing.added += event.added ?? 0;
+    existing.removed += event.removed ?? 0;
+    changes.set(event.path, existing);
   }
 
   // ─── Approvals ──────────────────────────────────────────────────
@@ -696,6 +756,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     this.state = { activeAgent: agent, route, autonomy, activeTaskId: taskId, isRunning: true };
     this.emitState();
     await this.ensureCheckpoint(taskId);
+    this.observedFileChanges.delete(taskId);
     this.lastReplyText = '';
 
     const ss = await this.cognitive1.sessionStart({ task: prompt, agent, projectPath: this.projectPath });
@@ -717,7 +778,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const adapter = this.adapters.get(agent);
     if (!adapter) throw new Error(`No adapter registered for ${agent}.`);
     const taskId = this.state.activeTaskId!;
-    const resumeSessionId = this.agentSessions.get(agent);
+    const resumeSessionId = this.agentSessions.get(agent)?.sessionId;
     const customAllowed = this.state.autonomy === 'custom' ? this.customPermissions : undefined;
 
     try {
@@ -729,7 +790,10 @@ export class WorkbenchOrchestrator extends EventEmitter {
           this.trackApproval(event);
         }
         if (event.type === 'cost.update' && event.sessionId) {
-          this.agentSessions.set(agent, event.sessionId);
+          this.agentSessions.set(agent, { sessionId: event.sessionId, route, projectPath: this.projectPath });
+        }
+        if (event.type === 'file.change') {
+          this.recordFileChange(event);
         }
         if (event.type === 'text.delta' && event.channel === 'assistant') {
           this.lastReplyText += event.text;

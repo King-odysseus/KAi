@@ -25,6 +25,19 @@ class FileWritingAdapter extends StubAgentAdapter {
   }
 }
 
+/** A stub adapter that reports a native file edit without touching disk —
+ * the fallback path used when checkpoint diffing is unavailable. */
+class FileChangeReportingAdapter extends StubAgentAdapter {
+  constructor() { super('codex', 'Codex', true); }
+  override async *run(request: AgentRunRequest): AsyncIterable<WorkbenchEvent> {
+    yield {
+      id: 'change_1', type: 'file.change', taskId: request.taskId, timestamp: new Date().toISOString(),
+      agent: 'codex', path: 'src/reported.ts', action: 'edited', added: 5, removed: 2,
+    };
+    yield* super.run(request);
+  }
+}
+
 describe('WorkbenchOrchestrator checkpoints', () => {
   let repo: string;
 
@@ -109,5 +122,22 @@ describe('WorkbenchOrchestrator checkpoints', () => {
     await orchestrator.startTask({ prompt: 'hi' });
 
     await expect(orchestrator.restoreToCheckpoint('does-not-exist')).rejects.toThrow(/No checkpoint/);
+  });
+
+  it('falls back to agent-reported file changes when checkpoint diffing has no files', async () => {
+    const orchestrator = new WorkbenchOrchestrator(
+      { activeAgent: 'codex', route: 'direct', autonomy: 'ask', isRunning: false },
+    );
+    orchestrator.registerAdapter(new FileChangeReportingAdapter());
+
+    const changesPromise = waitForEvent(orchestrator, 'turn.changes', 3000);
+    await orchestrator.startTask({ prompt: 'report an edit' });
+    const changesEvent = await changesPromise;
+
+    expect(changesEvent).toMatchObject({
+      type: 'turn.changes',
+      hasCheckpoint: false,
+      files: [{ path: 'src/reported.ts', added: 5, removed: 2 }],
+    });
   });
 });

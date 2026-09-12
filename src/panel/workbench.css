@@ -852,10 +852,13 @@ body.hide-details .telemetry {
 .changes-list { display: flex; flex-direction: column; border-top: 1px solid var(--kai-border); }
 .changes-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px; }
 .changes-row .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-more { display: block; width: 100%; padding: 5px 10px; border: 0; border-top: 1px solid var(--kai-border); background: transparent; color: var(--vscode-textLink-foreground); text-align: left; font-size: 10.5px; cursor: pointer; }
+.changes-more:hover { background: var(--kai-accent-soft); }
 .mono { font-family: var(--vscode-editor-font-family, monospace); }
 .mono.add, .add { color: var(--kai-add); }
 .mono.remove, .remove { color: var(--kai-remove); }
 .changes-actions { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--kai-border); flex-wrap: wrap; }
+.changes-actions .turn-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .changes-reverted-note, .approval-resolved { padding: 6px 10px; font-size: 11px; color: var(--vscode-descriptionForeground); border-top: 1px solid var(--kai-border); }
 .changes-card.reverted { opacity: 0.75; }
 

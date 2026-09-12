@@ -1,8 +1,9 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { WorkbenchEvent } from '../core/events';
-import type { AgentId } from '../core/types';
+import type { AgentId, AutonomyMode, RouteMode } from '../core/types';
 import type { WorkbenchGoal } from '../core/goal';
+import type { AgentSessionRecord } from '../orchestrator/orchestrator';
 
 export interface ConversationMeta {
   id: string;
@@ -22,6 +23,14 @@ export interface Conversation extends ConversationMeta {
   /** Goal state survives reopening the conversation and is cleared only when
    * the user clears it or starts a new chat. */
   goal?: WorkbenchGoal | null;
+  /** Native session ids for resuming the same agent context after reopening
+   * this conversation. Absent in conversations saved by older KAI versions. */
+  agentSessions?: Partial<Record<AgentId, AgentSessionRecord>>;
+  /** Last agent selection for this conversation. */
+  activeAgent?: AgentId;
+  /** Last route and autonomy used in this conversation. */
+  route?: RouteMode;
+  autonomy?: AutonomyMode;
 }
 
 /**
@@ -91,6 +100,7 @@ export class ConversationStore {
       archived: false,
       unread: false,
       goal: null,
+      agentSessions: {},
       events: [],
     };
   }
@@ -146,6 +156,9 @@ export class ConversationStore {
       createdAt: now,
       updatedAt: now,
       unread: false,
+      // A fork has its own context. Keeping the source's native session ids
+      // would make the copy attach to the original agent conversation.
+      agentSessions: {},
     };
     await this.save(forked);
     return forked;

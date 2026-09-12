@@ -66,6 +66,59 @@ describe('WorkbenchOrchestrator multi-turn sessions', () => {
     expect(adapter.seenResumeIds).toEqual([undefined, undefined]);
   });
 
+  it('snapshots and restores sessions for the same route and workspace', async () => {
+    const adapter = new SessionTrackingAdapter();
+    const orchestrator = new WorkbenchOrchestrator(
+      { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
+      undefined,
+      '/workspace/kai',
+    );
+    orchestrator.registerAdapter(adapter);
+
+    await orchestrator.startTask({ prompt: 'first message' });
+    const snapshot = orchestrator.getAgentSessions();
+    expect(snapshot.claude).toEqual({ sessionId: 'session-1', route: 'direct', projectPath: '/workspace/kai' });
+
+    orchestrator.startNewConversation();
+    orchestrator.restoreAgentSessions(snapshot);
+    expect(orchestrator.getAgentSessionId('claude')).toBe('session-1');
+
+    await orchestrator.startTask({ prompt: 'second message' });
+    expect(adapter.seenResumeIds).toEqual([undefined, 'session-1']);
+  });
+
+  it('does not restore a session from a different route or workspace', () => {
+    const orchestrator = new WorkbenchOrchestrator(
+      { activeAgent: 'claude', route: 'proxy', autonomy: 'ask', isRunning: false },
+      undefined,
+      '/workspace/kai',
+    );
+
+    orchestrator.restoreAgentSessions({
+      claude: { sessionId: 'direct-session', route: 'direct', projectPath: '/workspace/kai' },
+      codex: { sessionId: 'other-workspace', route: 'proxy', projectPath: '/workspace/other' },
+    });
+
+    expect(orchestrator.getAgentSessionId('claude')).toBeUndefined();
+    expect(orchestrator.getAgentSessionId('codex')).toBeUndefined();
+  });
+
+  it('records the route each agent actually ran with', async () => {
+    const adapter = new SessionTrackingAdapter();
+    const orchestrator = new WorkbenchOrchestrator(
+      { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
+      undefined,
+      '/workspace/kai',
+    );
+    orchestrator.registerAdapter(adapter);
+
+    await orchestrator.startTask({ prompt: 'direct turn', route: 'direct' });
+    await orchestrator.startTask({ prompt: 'proxy turn', route: 'proxy' });
+
+    const sessions = orchestrator.getAgentSessions();
+    expect(sessions.claude).toEqual({ sessionId: 'session-2', route: 'proxy', projectPath: '/workspace/kai' });
+  });
+
   it('builds the handoff prompt from the previous agent\'s actual reply, not just the original prompt', async () => {
     const c1: Cognitive1Client = {
       async health(): Promise<Cognitive1Health> { return { available: true, detail: 'ok' }; },
