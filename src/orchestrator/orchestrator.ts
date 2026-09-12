@@ -279,7 +279,12 @@ export class WorkbenchOrchestrator extends EventEmitter {
     void this.cognitive1.sessionStart({ task: prompt, agent: agentA + "+" + agentB, projectPath: this.projectPath }).catch(() => {});
     void this.cognitive1.recall({ query: prompt }).catch(() => {});
 
-    this.emitEvent({ id: createEventId("cmp"), type: "agent.lifecycle", taskId: compareId, timestamp: nowIso(), agent: agentA + " vs " + agentB as AgentId, status: "starting", detail: "Comparing " + agentA + " vs " + agentB + " in separate worktrees" });
+    this.emitEvent({
+      id: createEventId("cmp"), type: "agent.lifecycle", taskId: compareId, timestamp: nowIso(),
+      agent: agentA + " vs " + agentB as AgentId, status: "starting",
+      detail: "Comparing " + agentA + " vs " + agentB + " in separate worktrees",
+      compareAgents: [agentA, agentB],
+    } as WorkbenchEvent & { compareAgents: AgentId[] });
 
     const [worktreeLeft, worktreeRight] = await Promise.all([
       createCompareWorktree(this.projectPath, `${compareId}-left`),

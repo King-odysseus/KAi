@@ -991,15 +991,22 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           <button id="modeChip" class="chip-btn" type="button" title="Permission mode (Shift+Tab to cycle)"></button>
           <button id="agentChip" class="chip-btn" type="button" title="Agent and route"></button>
           <span class="ctx-meter" id="ctxMeter" title="Context used" style="display:none;"></span>
-          <select id="compareAgentB" class="chip-btn" title="Compare against" style="display:none;">
+          <select id="compareAgentB" class="chip-btn compare-agent-select" title="Compare against" style="display:none;">
             <option value="claude">Claude</option>
             <option value="codex">Codex</option>
             <option value="qwen">Qwen</option>
             <option value="gemini">Gemini</option>
           </select>
-          <button id="compareToggle" class="plan-toggle" type="button" title="Compare: run two agents on the same prompt side by side">⇶</button>
-          <button id="planToggle" class="plan-toggle" type="button" title="Workflow mode: define multi-step agent runs">≡</button>
-          <button id="send" type="button">Send</button>
+          <button id="compareToggle" class="plan-toggle toolbar-icon-btn" type="button" title="Compare: run two agents on the same prompt side by side" aria-label="Compare agents">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10"/><path d="M7 12h10"/><path d="M7 17h10"/><path d="M4 7h.01M4 12h.01M4 17h.01"/></svg>
+          </button>
+          <button id="planToggle" class="plan-toggle toolbar-icon-btn" type="button" title="Workflow mode: define multi-step agent runs" aria-label="Workflow mode">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="6" cy="18" r="2"/><path d="M8 6h4a4 4 0 0 1 4 4v0"/><path d="M8 18h4a4 4 0 0 0 4-4v0"/></svg>
+          </button>
+          <button id="send" type="button" title="Send" aria-label="Send message">
+            <svg class="send-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
+            <svg class="stop-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+          </button>
         </div>
       </div>
       <div class="cost-estimate" id="costEstimate"></div>

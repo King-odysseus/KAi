@@ -1362,15 +1362,27 @@
       if (event.compareId !== currentCompareId) {
         // A new compare run — drop any stale panes/labels from a previous one.
         currentCompareId = event.compareId;
-        activeCompare = { left: event.side==='left'?event.agent:'', right: event.side==='right'?event.agent:'' };
+        activeCompare = {
+          left: event.side==='left' ? event.agent : (event.compareAgents && event.compareAgents[0] || ''),
+          right: event.side==='right' ? event.agent : (event.compareAgents && event.compareAgents[1] || ''),
+        };
         var stale = document.getElementById('compare-panes'); if (stale) stale.remove();
       }
       if (activeCompare && !activeCompare[event.side] && event.agent) activeCompare[event.side] = event.agent;
+      if (activeCompare && event.payload && event.payload.left && event.payload.left.agent) activeCompare.left = event.payload.left.agent;
+      if (activeCompare && event.payload && event.payload.right && event.payload.right.agent) activeCompare.right = event.payload.right.agent;
+      function renderCompareLabels() {
+        var leftLabel = document.querySelector('#cp-left .compare-label');
+        var rightLabel = document.querySelector('#cp-right .compare-label');
+        if (leftLabel) leftLabel.textContent = activeCompare.left ? agentLabel(activeCompare.left) : 'Left';
+        if (rightLabel) rightLabel.textContent = activeCompare.right ? agentLabel(activeCompare.right) : 'Right';
+      }
       if(!document.getElementById('compare-panes')){
         var panes=document.createElement('div');panes.id='compare-panes';
-        panes.innerHTML='<div class="compare-pane left" id="cp-left"><div class="compare-label">'+esc(activeCompare.left||'Left')+'</div></div><div class="compare-pane right" id="cp-right"><div class="compare-label">'+esc(activeCompare.right||'Right')+'</div></div>';
+        panes.innerHTML='<div class="compare-pane left" id="cp-left"><div class="compare-label"></div></div><div class="compare-pane right" id="cp-right"><div class="compare-label"></div></div>';
         els.chat.appendChild(panes); removeEmpty();
       }
+      renderCompareLabels();
       var tp=document.getElementById(event.side==='left'?'cp-left':'cp-right'); if(!tp) return;
       if(event.type==='text.delta'){ var t=document.createElement('span');t.className='cmp-text';t.textContent=event.text; tp.appendChild(t); }
       else if(event.type==='raw.fallback'&&event.sourceType==='compare.complete'){ renderCompareSummary(event.payload); }
@@ -1443,7 +1455,17 @@
     var running=state.isRunning;
     els.planToggle.disabled=running;
     if (els.goalStart) els.goalStart.disabled = running;
-    if(running){els.send.textContent='Stop';els.send.classList.add('stop');startThinking();}else{els.send.textContent='Send';els.send.classList.remove('stop');finalizeAssistant();stopThinking();}
+    if(running){
+      els.send.classList.add('stop');
+      els.send.title='Stop';
+      els.send.setAttribute('aria-label','Stop response');
+      startThinking();
+    }else{
+      els.send.classList.remove('stop');
+      els.send.title='Send';
+      els.send.setAttribute('aria-label','Send message');
+      finalizeAssistant();stopThinking();
+    }
     els.statePill.innerHTML=running?'<span class="pill running"><span class="dot"></span>running</span>':'<span class="pill"><span class="dot"></span>idle</span>';
     if(totalCost>0) els.costPill.innerHTML='<span class="pill cost">$'+totalCost.toFixed(4)+' . '+totalInput+' in / '+totalOutput+' out</span>';
     renderModeChip(); renderAgentChip(); renderContextMeter();

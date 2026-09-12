@@ -61,8 +61,17 @@ describe('WorkbenchOrchestrator compareTask', () => {
     );
     orchestrator.registerAdapter(new WritesToCwdAdapter('claude', 'from-claude.ts', 'export const claude = true;\n'));
     orchestrator.registerAdapter(new WritesToCwdAdapter('codex', 'from-codex.ts', 'export const codex = true;\n'));
+    const compareAgents: Array<{ side?: string; agent?: AgentId }> = [];
+    orchestrator.on('event', (event: WorkbenchEvent & { side?: string; agent?: AgentId }) => {
+      if (event.taskId.startsWith('compare_') && event.side) compareAgents.push({ side: event.side, agent: event.agent });
+    });
 
     const compareId = await orchestrator.compareTask('add a file', 'claude', 'codex');
+
+    expect(compareAgents.sort((a, b) => (a.side ?? '').localeCompare(b.side ?? ''))).toEqual([
+      { side: 'left', agent: 'claude' },
+      { side: 'right', agent: 'codex' },
+    ]);
 
     // Neither side's file exists in the real repo yet.
     await expect(fs.access(path.join(repo, 'from-claude.ts'))).rejects.toThrow();
