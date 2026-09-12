@@ -100,7 +100,13 @@
 
   var emptyState = document.getElementById('emptyState');
 
-  var STATUS_WORDS = ['Thinking','Channelling','Pondering','Reasoning','Cogitating','Percolating','Scheming','Conjuring','Synthesizing','Noodling','Ruminating','Untangling','Deliberating','Formulating','Brewing','Contemplating','Wrangling','Computing','Divining','Mulling'];
+  var STATUS_WORDS = [
+    'Thinking','Reasoning','Reading context','Tracing the code','Building a plan','Checking the details',
+    'Connecting the dots','Untangling the problem','Synthesizing','Testing assumptions','Looking for edges',
+    'Wrangling the types','Asking the compiler nicely','Counting semicolons','Reading the stack trace',
+    'Making the pixels behave','Refactoring the vibes','Trying not to overthink this','Double-checking the obvious',
+    'Talking to the test suite'
+  ];
   var thinkingEl = null, thinkingWordTimer = null, thinkingClockTimer = null, thinkingStart = 0, thinkingWordIdx = 0, thinkingDetail = '';
 
   function fmtElapsed(ms) { var s = Math.floor(ms/1000); if(s<60) return s+'s'; var m = Math.floor(s/60); return m+'m '+(s%60)+'s'; }
@@ -109,10 +115,13 @@
   function startThinking() {
     if(thinkingEl) return; removeEmpty();
     thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking';
+    thinkingEl.setAttribute('role', 'status');
+    thinkingEl.setAttribute('aria-live', 'polite');
+    thinkingEl.setAttribute('aria-atomic', 'true');
     thinkingWordIdx = Math.floor(Math.random()*STATUS_WORDS.length);
     thinkingEl.innerHTML = '<span class="spinner"></span><span class="status-word">'+esc(STATUS_WORDS[thinkingWordIdx])+'</span><span class="status-detail"></span><span class="status-timer">0s</span>';
     els.chat.appendChild(thinkingEl); thinkingStart = Date.now(); thinkingDetail = ''; scrollBottom(true);
-    thinkingWordTimer = setInterval(function(){ if(!thinkingEl) return; var w=thinkingEl.querySelector('.status-word'); if(w) w.textContent=pickStatusWord(); },2600);
+    thinkingWordTimer = setInterval(function(){ if(!thinkingEl) return; var w=thinkingEl.querySelector('.status-word'); if(w) w.textContent=pickStatusWord(); },2200);
     thinkingClockTimer = setInterval(function(){ if(!thinkingEl) return; var t=thinkingEl.querySelector('.status-timer'); if(t) t.textContent=fmtElapsed(Date.now()-thinkingStart); },1000);
   }
   function setThinkingDetail(text) { thinkingDetail=text||''; if(thinkingEl){ var d=thinkingEl.querySelector('.status-detail'); if(d) d.textContent=thinkingDetail; } }
@@ -1182,9 +1191,8 @@
   var TELEMETRY={'agent.lifecycle':1,'autonomy.changed':1,'route.changed':1,'cost.update':1,'memory.event':1,'raw.fallback':1};
   function isTelemetry(type) { return !!TELEMETRY[type]; }
 
-  // Only refreshes the topbar cost pill — never routes through renderState(),
-  // which would also re-evaluate the running/thinking UI and (since a turn's
-  // own header timer replaces the spinner once content starts) incorrectly
+  // Only refreshes the bottom-bar cost pill — never routes through renderState(),
+  // which would also re-evaluate the running/thinking UI and incorrectly
   // restart it on every cost update that arrives mid-run.
   function updateCostPill() { if(totalCost>0) els.costPill.innerHTML='<span class="pill cost">$'+totalCost.toFixed(4)+' . '+totalInput+' in / '+totalOutput+' out</span>'; }
   function accumulateCost(event) { if(event.inputTokens) totalInput+=event.inputTokens; if(event.outputTokens) totalOutput+=event.outputTokens; if(event.amountUsd!=null) totalCost=event.amountUsd; updateCostPill(); }
@@ -1358,7 +1366,7 @@
     var isTurnEvent = taskId && taskId !== 'workbench' && event.agent;
     if (isTurnEvent) {
       var turn = ensureTurn(taskId, event.agent);
-      removeEmpty(); finalizeAssistant(); stopThinking();
+      removeEmpty(); finalizeAssistant();
 
       if (event.type === 'text.delta') {
         if (event.channel === 'summary') { appendThoughtChip(turn, event.text); }
@@ -1541,11 +1549,24 @@
   var openTabBtn=document.getElementById('openTab');if(openTabBtn) openTabBtn.addEventListener('click',function(){vscode.postMessage({type:'openTab'});});
   if(els.planTemplate) els.planTemplate.addEventListener('change',function(){var v=els.planTemplate.value;if(!v) return; vscode.postMessage({type:'loadTemplate',value:v});els.planTemplate.value='';});
 
-  var showDetails=false;els.chat.classList.add('hide-telemetry');
-  function toggleDetails(){showDetails=!showDetails;els.chat.classList.toggle('hide-telemetry',!showDetails);if(showDetails) scrollBottom(true);}
+  var showDetails=false;
+  var detailsBtn=document.getElementById('detailsBtn');
+  function setDetailsVisible(visible) {
+    showDetails=visible;
+    document.body.classList.toggle('hide-details',!showDetails);
+    if(detailsBtn){
+      detailsBtn.classList.toggle('active',showDetails);
+      detailsBtn.setAttribute('aria-pressed',showDetails?'true':'false');
+      detailsBtn.title=showDetails?'Hide run details and activity':'Show run details and activity';
+      detailsBtn.setAttribute('aria-label',showDetails?'Hide details':'Show details');
+    }
+  }
+  function toggleDetails(){setDetailsVisible(!showDetails);if(showDetails) scrollBottom(true);}
+  setDetailsVisible(false);
+  if(detailsBtn) detailsBtn.addEventListener('click',toggleDetails);
 
-  // Everything that isn't chat lives behind the gear, so the header stays two
-  // controls wide no matter how many panels we add later.
+  // Everything that isn't chat lives behind the gear, keeping the bottom bar
+  // compact no matter how many panels we add later.
   var gearBtn=document.getElementById('gearBtn');
   if(gearBtn) gearBtn.addEventListener('click',function(){
     openMenuRich(gearBtn,[

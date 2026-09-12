@@ -893,33 +893,8 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${styleUri}">
   <title>KAI Agent Workbench</title>
 </head>
-<body>
+<body class="hide-details">
   <div class="app">
-    <div class="topbar">
-      <svg class="brand-mark" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <rect width="128" height="128" rx="24" fill="#111827"/>
-        <path d="M30 84V44H40V60L55 44H68L50 62L70 84H57L40 65V84H30Z" fill="#F9FAFB"/>
-        <path d="M73 84L88 44H100L115 84H104L101 75H87L84 84H73ZM90 66H98L94 54L90 66Z" fill="#38BDF8"/>
-      </svg>
-      <span class="brand-title">K<span class="accent">A</span>I</span>
-      <span class="topbar-spacer"></span>
-      <span id="statePill"></span>
-      <span id="costPill"></span>
-      <button id="goalBtn" class="ghost-btn icon-only" title="Start or edit a goal (/goal)" aria-label="Goal">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
-      </button>
-      <button id="skillsBtn" class="ghost-btn icon-only" title="Browse skills" aria-label="Skills">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/></svg>
-      </button>
-      <button id="newChat" class="ghost-btn" title="Start a new chat (clears this transcript)">＋ New</button>
-      <button id="gearBtn" class="ghost-btn gear-btn" title="History, details, and settings" aria-haspopup="menu" aria-expanded="false">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.2"/>
-          <path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.3-1-2 3.4L4.6 11a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7.6 7.6 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.3 1 2-3.4z"/>
-        </svg>
-      </button>
-    </div>
-
     <div class="history-panel" id="historyPanel" style="display:none;">
       <div class="history-header">
         <input type="text" id="historySearch" placeholder="Search conversations…" />
@@ -1021,6 +996,37 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         <code>/agent</code> <code>/route</code> <code>/handoff</code>
         <code>/review</code> <code>/implement</code> <code>/debug</code>
         <code>/explain</code> <code>/test</code>
+      </div>
+      <div class="bottombar">
+        <div class="bottombar-brand">
+          <svg class="brand-mark" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M6 3v7a6 6 0 0 0 12 0V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4 3h4M16 3h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span class="brand-title">K<span class="accent">A</span>I</span>
+        </div>
+        <div class="bottombar-meta">
+          <span id="statePill"></span>
+          <span id="costPill"></span>
+        </div>
+        <div class="bottombar-actions">
+          <button id="goalBtn" class="ghost-btn icon-only" title="Start or edit a goal (/goal)" aria-label="Goal">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </button>
+          <button id="skillsBtn" class="ghost-btn icon-only" title="Browse skills" aria-label="Skills">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/></svg>
+          </button>
+          <button id="detailsBtn" class="ghost-btn icon-only" title="Show run details and activity" aria-label="Show details" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/></svg>
+          </button>
+          <button id="newChat" class="ghost-btn" title="Start a new chat (clears this transcript)">＋ New</button>
+          <button id="gearBtn" class="ghost-btn gear-btn" title="History, details, and settings" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.2"/>
+              <path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.3-1-2 3.4L4.6 11a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7.6 7.6 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.3 1 2-3.4z"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>

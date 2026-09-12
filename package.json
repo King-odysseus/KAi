@@ -5,6 +5,7 @@
   "version": "0.3.0",
   "publisher": "kai",
   "license": "UNLICENSED",
+  "icon": "resources/kai-icon.png",
   "engines": {
     "vscode": "^1.96.0"
   },

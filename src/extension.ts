@@ -375,7 +375,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [context.extensionUri] },
     );
-    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'kai.svg');
+    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'kai-icon.png');
     provider.attachWebview(panel.webview);
     panel.onDidDispose(() => provider.detachWebview(panel.webview));
   };
