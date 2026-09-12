@@ -49,6 +49,10 @@
         "title": "KAI: Browse Skills"
       },
       {
+        "command": "kai.openRules",
+        "title": "KAI: View and Edit Execution Rules"
+      },
+      {
         "command": "kai.setAgent",
         "title": "KAI: Set Agent"
       },
@@ -218,6 +222,11 @@
           "type": "string",
           "default": "",
           "description": "External Cognitive1 brain data folder. KAI ships code, not private memory."
+        },
+        "kai.executionRulesPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the authoritative Cognitive1 Instruct.md rule file. Empty auto-detects a sibling cognitive1 project or ~/.kai/brain/Instruct.md."
         },
         "kai.cognitive1Enabled": {
           "type": "boolean",

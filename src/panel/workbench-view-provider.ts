@@ -6,6 +6,7 @@ import { estimateCost, getModelName, getContextWindow } from '../core/cost-estim
 import { buildPromptWithContext, type ContextChip } from '../core/prompt-builder';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
 import { buildSkillPrompt, discoverSkills, skillCatalog, type SkillDefinition } from '../core/skills';
+import type { KaiRuleInput } from '../cognitive1/rule-store';
 import type { GoalInput } from '../core/goal';
 import type { Plan } from '../core/plan';
 import type { PlanEvent } from '../orchestrator/plan-runner';
@@ -29,7 +30,7 @@ interface WebviewMessage {
     | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
     | 'retryStep' | 'skipStep' | 'openLink'
     | 'searchFiles' | 'requestSelection' | 'requestGitDiffStat' | 'requestMemorySearch'
-    | 'listSkills'
+    | 'listSkills' | 'listRules' | 'saveRule'
     | 'attachImage' | 'setCustomPermissions' | 'queueOverflow'
     | 'setGoal' | 'clearGoal' | 'pauseGoal' | 'resumeGoal' | 'completeGoal'
     | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval'
@@ -39,6 +40,7 @@ interface WebviewMessage {
   prompt?: string;
   goal?: GoalInput;
   skills?: string[];
+  rule?: KaiRuleInput;
   agent?: AgentId;
   route?: RouteMode;
   autonomy?: AutonomyMode;
@@ -81,7 +83,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   private currentConversation: Conversation | null = null;
   private saveTimer: NodeJS.Timeout | undefined;
   private skillDefinitions: SkillDefinition[] = [];
-  private pendingPanel: 'goal' | 'skills' | undefined;
+  private pendingPanel: 'goal' | 'skills' | 'rules' | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -276,7 +278,11 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         await this.postState();
         await this.postCapabilities();
         if (this.pendingPanel) {
-          const type = this.pendingPanel === 'goal' ? 'openGoal' : 'openSkills';
+          const type = this.pendingPanel === 'goal'
+            ? 'openGoal'
+            : this.pendingPanel === 'skills'
+              ? 'openSkills'
+              : 'openRules';
           this.pendingPanel = undefined;
           void webview.postMessage({ type });
         }
@@ -607,6 +613,22 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       case 'listSkills':
         await this.sendSkills(webview);
         break;
+      case 'listRules':
+        await this.sendRules(webview);
+        break;
+      case 'saveRule':
+        if (message.rule) {
+          try {
+            const document = await this.orchestrator.saveRule(message.rule);
+            void webview.postMessage({ type: 'rules', document });
+          } catch (error) {
+            void webview.postMessage({
+              type: 'rules',
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        break;
       case 'attachImage':
         await this.handleAttachImage(message, webview);
         break;
@@ -713,6 +735,18 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       void webview.postMessage({
         type: 'skills',
         skills: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async sendRules(webview: vscode.Webview): Promise<void> {
+    try {
+      const document = await this.orchestrator.getRuleDocument();
+      void webview.postMessage({ type: 'rules', document });
+    } catch (error) {
+      void webview.postMessage({
+        type: 'rules',
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -849,6 +883,16 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     await vscode.commands.executeCommand('kai.openWorkbench');
   }
 
+  /** Opens the Cognitive1 execution-rules editor. */
+  async openRulesEditor(): Promise<void> {
+    if (this.webviews.size > 0) {
+      await this.broadcast({ type: 'openRules' });
+      return;
+    }
+    this.pendingPanel = 'rules';
+    await vscode.commands.executeCommand('kai.openWorkbench');
+  }
+
   private async postCapabilities(): Promise<void> {
     const capabilities = await this.orchestrator.getCapabilities();
     const cognitive1 = await this.orchestrator.getCognitive1Health();
@@ -931,6 +975,40 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         </button>
       </div>
       <div class="skills-list" id="skillsList"></div>
+    </div>
+
+    <div class="rules-panel" id="rulesPanel" style="display:none;">
+      <div class="rules-header">
+        <div class="rules-heading">
+          <span class="rules-title">Execution rules</span>
+          <span class="rules-count" id="rulesCount">Loading...</span>
+        </div>
+        <button id="rulesAdd" class="ghost-btn" type="button">Add rule</button>
+        <button id="rulesClose" class="ibtn" title="Close">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="rules-source-row">
+        <input type="text" id="rulesSearch" placeholder="Search execution rules..." />
+        <span class="rules-source" id="rulesSource"></span>
+      </div>
+      <div class="rules-list" id="rulesList"></div>
+      <div class="rule-editor" id="ruleEditor" style="display:none;">
+        <div class="rule-editor-head">
+          <div>
+            <div class="rule-editor-title" id="ruleEditorTitle">Edit rule</div>
+          </div>
+          <button id="ruleEditorClose" class="ibtn" title="Cancel">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        <label class="rule-field"><span>Title</span><input id="ruleTitle" type="text" /></label>
+        <label class="rule-field rule-field-grow"><span>Rule</span><textarea id="ruleBody"></textarea></label>
+        <div class="rule-editor-actions">
+          <button id="ruleCancel" class="plan-btn secondary" type="button">Cancel</button>
+          <button id="ruleSave" class="plan-btn primary" type="button">Save rule</button>
+        </div>
+      </div>
     </div>
 
     <div class="chat" id="chat">
@@ -1017,7 +1095,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         <span id="sessionMeta"></span>
       </div>
       <div class="slash-hint">
-        <code>/goal</code> <code>/skills</code>
+        <code>/goal</code> <code>/skills</code> <code>/rules</code>
         <code>/agent</code> <code>/route</code> <code>/handoff</code>
         <code>/review</code> <code>/implement</code> <code>/debug</code>
         <code>/explain</code> <code>/test</code>
@@ -1040,6 +1118,9 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           </button>
           <button id="skillsBtn" class="ghost-btn icon-only" title="Browse skills" aria-label="Skills">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/></svg>
+          </button>
+          <button id="rulesBtn" class="ghost-btn icon-only" title="View and edit Cognitive1 execution rules" aria-label="Execution rules">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3 6 2 2 3-4"/><path d="m3 12 2 2 3-4"/><path d="m3 18 2 2 3-4"/></svg>
           </button>
           <button id="detailsBtn" class="ghost-btn icon-only" title="Show run details and activity" aria-label="Show details" aria-pressed="false">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/></svg>

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import type { Cognitive1Client } from '../cognitive1/cognitive1-client';
 import { DisabledCognitive1Client } from '../cognitive1/cognitive1-client';
+import { buildExecutionRulesBriefing, type CognitiveRuleStore, type KaiRuleDocument, type KaiRuleInput } from '../cognitive1/rule-store';
 import { createEventId, nowIso, type ApprovalRequestEvent, type DiffProposalEvent, type WorkbenchEvent } from '../core/events';
 import type { AgentCapability, AgentId, AutonomyMode, PermissionKey, RouteMode, TaskRequest, WorkbenchState } from '../core/types';
 import { canRunWithoutApproval, createPermissionProfile } from '../core/permissions';
@@ -85,6 +86,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     private readonly cognitive1: Cognitive1Client = new DisabledCognitive1Client(),
     private readonly projectPath?: string,
     private readonly diffApplier: DiffApplier = new NoopDiffApplier(),
+    private readonly ruleStore?: CognitiveRuleStore,
   ) {
     super();
     this.state = { ...initialState };
@@ -123,6 +125,16 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   async getCognitive1Health(): Promise<{ available: boolean; detail: string }> {
     return this.cognitive1.health();
+  }
+
+  async getRuleDocument(): Promise<KaiRuleDocument> {
+    if (!this.ruleStore) throw new Error('Cognitive1 execution rules are not configured.');
+    return this.ruleStore.read();
+  }
+
+  async saveRule(input: KaiRuleInput): Promise<KaiRuleDocument> {
+    if (!this.ruleStore) throw new Error('Cognitive1 execution rules are not configured.');
+    return this.ruleStore.save(input);
   }
 
   /** Runs a one-off recall for the composer's "Search memory" context chip —
@@ -207,6 +219,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
       this.cognitive1,
       this.projectPath,
       (event) => this.emitEvent(event),
+      await this.getExecutionRulesBriefing(),
     );
 
     this.planRunner.on('planEvent', (planEvent) => {
@@ -283,6 +296,8 @@ export class WorkbenchOrchestrator extends EventEmitter {
     void this.cognitive1.sessionStart({ task: prompt, agent: agentA + "+" + agentB, projectPath: this.projectPath }).catch(() => {});
     void this.cognitive1.recall({ query: prompt }).catch(() => {});
 
+    const comparisonPrompt = [await this.getExecutionRulesBriefing(), prompt].filter(Boolean).join('\n\n');
+
     this.emitEvent({
       id: createEventId("cmp"), type: "agent.lifecycle", taskId: compareId, timestamp: nowIso(),
       agent: agentA + " vs " + agentB as AgentId, status: "starting",
@@ -301,7 +316,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
       const adapter = this.adapters.get(agent)!;
       const startedAt = Date.now();
       try {
-        for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd })) {
+        for await (const event of adapter.run({ taskId, prompt: comparisonPrompt, route, autonomy, cwd })) {
           (event as WorkbenchEvent & { compareId?: string; side?: string }).compareId = compareId;
           (event as WorkbenchEvent & { compareId?: string; side?: string }).side = side;
           // Never auto-apply diffs here — each side's edits stay inside its
@@ -809,9 +824,10 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const taskId = this.state.activeTaskId!;
     const resumeSessionId = this.agentSessions.get(agent)?.sessionId;
     const customAllowed = this.state.autonomy === 'custom' ? this.customPermissions : undefined;
+    const finalPrompt = [await this.getExecutionRulesBriefing(), prompt].filter(Boolean).join('\n\n');
 
     try {
-      for await (const event of adapter.run({ taskId, prompt, route, autonomy, cwd: this.projectPath, resumeSessionId, customAllowed })) {
+      for await (const event of adapter.run({ taskId, prompt: finalPrompt, route, autonomy, cwd: this.projectPath, resumeSessionId, customAllowed })) {
         if (event.type === 'diff.proposal') {
           void this.autoApproveDiff(event);
         }
@@ -846,4 +862,22 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   private emitState(): void { this.emit('state', this.getState()); }
   private emitEvent(event: WorkbenchEvent): void { this.emit('event', event); }
+
+  private async getExecutionRulesBriefing(): Promise<string> {
+    if (!this.ruleStore) return '';
+    try {
+      const document = await this.ruleStore.read();
+      return buildExecutionRulesBriefing(document.markdown);
+    } catch (error) {
+      this.emitEvent({
+        id: createEventId(),
+        type: 'error',
+        taskId: this.state.activeTaskId ?? 'workbench',
+        timestamp: nowIso(),
+        message: `Cognitive1 execution rules could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      });
+      return '';
+    }
+  }
 }

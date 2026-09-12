@@ -26,6 +26,7 @@ export class PlanRunner extends EventEmitter {
     private cognitive1: Cognitive1Client,
     private projectPath?: string,
     private onEvent?: (event: WorkbenchEvent) => void,
+    private executionRulesBriefing = '',
   ) {
     super();
   }
@@ -148,7 +149,8 @@ export class PlanRunner extends EventEmitter {
     this.currentTaskId = taskId;
 
     try {
-      const events = adapter.run({ taskId, prompt: step.prompt, route: this.plan.route, autonomy: this.plan.autonomy, cwd: this.projectPath });
+      const prompt = [this.executionRulesBriefing, step.prompt].filter(Boolean).join('\n\n');
+      const events = adapter.run({ taskId, prompt, route: this.plan.route, autonomy: this.plan.autonomy, cwd: this.projectPath });
       for await (const event of events) {
         if (this.isAborted) break;
         this.onEvent?.(event);

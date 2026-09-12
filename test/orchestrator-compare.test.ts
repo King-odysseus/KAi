@@ -8,6 +8,7 @@ import { createEventId, nowIso, type WorkbenchEvent } from '../src/core/events';
 import type { AgentCapability, AgentId } from '../src/core/types';
 import type { AgentAdapter, AgentRunRequest } from '../src/adapters/agent-adapter';
 import { WorkbenchOrchestrator } from '../src/orchestrator/orchestrator';
+import { CognitiveRuleStore } from '../src/cognitive1/rule-store';
 
 const execFileAsync = promisify(execFile);
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -18,6 +19,8 @@ async function git(cwd: string, args: string[]): Promise<string> {
 /** Writes a distinct file into whatever cwd it's given — the worktree
  * directory the orchestrator hands it, not the real repo. */
 class WritesToCwdAdapter implements AgentAdapter {
+  readonly prompts: string[] = [];
+
   constructor(readonly id: AgentId, private readonly fileName: string, private readonly content: string) {}
 
   async getCapability(): Promise<AgentCapability> {
@@ -30,6 +33,7 @@ class WritesToCwdAdapter implements AgentAdapter {
 
   async *run(request: AgentRunRequest): AsyncIterable<WorkbenchEvent> {
     if (!request.cwd) throw new Error('expected a cwd (the compare worktree)');
+    this.prompts.push(request.prompt);
     await fs.writeFile(path.join(request.cwd, this.fileName), this.content);
     yield { id: createEventId(), type: 'agent.lifecycle', taskId: request.taskId, timestamp: nowIso(), agent: this.id, status: 'completed', detail: 'done' };
   }
@@ -112,6 +116,39 @@ describe('WorkbenchOrchestrator compareTask', () => {
     expect(await fs.access(leftPath).then(() => true, () => false)).toBe(false);
     await expect(fs.access(path.join(repo, 'from-claude.ts'))).rejects.toThrow();
     await expect(orchestrator.pickCompareWinner(compareId, 'left')).rejects.toThrow(/No active compare run/);
+  }, 30000);
+
+  it('injects execution rules into both comparison sides', async () => {
+    const rulesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-rules-compare-'));
+    try {
+      const rulesPath = path.join(rulesDir, 'Instruct.md');
+      await fs.writeFile(
+        rulesPath,
+        '# Cognitive1\n\n## Rules\n\n1. **No API keys ever** - Never commit secrets.\n',
+        'utf8',
+      );
+      const orchestrator = new WorkbenchOrchestrator(
+        { activeAgent: 'claude', route: 'direct', autonomy: 'ask', isRunning: false },
+        undefined,
+        repo,
+        undefined,
+        new CognitiveRuleStore(rulesPath),
+      );
+      const left = new WritesToCwdAdapter('claude', 'from-claude.ts', 'export const claude = true;\n');
+      const right = new WritesToCwdAdapter('codex', 'from-codex.ts', 'export const codex = true;\n');
+      orchestrator.registerAdapter(left);
+      orchestrator.registerAdapter(right);
+
+      const compareId = await orchestrator.compareTask('add a file', 'claude', 'codex');
+
+      expect(left.prompts[0]).toContain('[COGNITIVE1 STANDING INSTRUCTIONS]');
+      expect(left.prompts[0]).toContain('No API keys ever');
+      expect(right.prompts[0]).toContain('[COGNITIVE1 STANDING INSTRUCTIONS]');
+      expect(right.prompts[0]).toContain('No API keys ever');
+      await orchestrator.discardCompare(compareId);
+    } finally {
+      await fs.rm(rulesDir, { recursive: true, force: true });
+    }
   }, 30000);
 
   it('rejects compareTask outside a git repository', async () => {

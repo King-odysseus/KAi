@@ -2,6 +2,27 @@
 
 ## 2026-09-12
 
+### Cognitive1 execution rules
+
+- **A Rules button now sits in the chat footer** beside Goal and Skills. It
+  opens a full panel that loads the authoritative `Instruct.md` file from the
+  Cognitive1 project, shows all 57 numbered rules, and supports searching,
+  editing, and adding rules.
+- **The rule source stays authoritative.** Edits are written directly back to
+  `Instruct.md`; KAI does not create a second rule copy. Set
+  `kai.executionRulesPath` when the file is not in a sibling `cognitive1`
+  repository or `~/.kai/brain/Instruct.md`.
+- **Enabled rules apply to every agent.** Normal tasks, handoffs, workflows,
+  and comparisons all receive the full Cognitive1 standing instructions and
+  session workflow as a prompt preamble.
+
+**Files:** `src/cognitive1/rule-store.ts`,
+`src/orchestrator/orchestrator.ts`, `src/orchestrator/plan-runner.ts`,
+`src/panel/workbench-view-provider.ts`, `src/panel/workbench.js`,
+`src/panel/workbench.css`, `src/extension.ts`, `package.json`
+
+**Action needed:** Run `npm run compile` and reload the extension host.
+
 ### Codex-style Goal mode and Skills
 
 - **Goal mode** now stores a durable goal per conversation with three explicit

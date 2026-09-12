@@ -1,5 +1,6 @@
 ﻿import * as path from 'path';
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { AcpAgentAdapter } from './adapters/acp-adapter';
 import { parseClaudeJsonLine } from './adapters/claude-parser';
 import { parseCodexJsonLine } from './adapters/codex-parser';
@@ -9,6 +10,7 @@ import { QwenAcpAdapter } from './adapters/qwen-acp-adapter';
 import type { Cognitive1Client } from './cognitive1/cognitive1-client';
 import { Cognitive1HttpClient, DisabledCognitive1Client } from './cognitive1/cognitive1-client';
 import { EmbeddedCognitive1 } from './cognitive1/embedded-cognitive1';
+import { CognitiveRuleStore } from './cognitive1/rule-store';
 import { BackupManager } from './config/backup-manager';
 import { CodexConfigWriter, defaultCodexConfigPath } from './config/codex-config';
 import { ClaudeConfigWriter } from './config/claude-config';
@@ -132,11 +134,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.error("proxy_error", "Failed to start external proxy manager.", undefined, err);
     }
   }
+  const executionRulesPath = resolveExecutionRulesPath(
+    config.get<string>('executionRulesPath', ''),
+    projectPath,
+  );
   const orchestrator = new WorkbenchOrchestrator(
     initialState,
     cognitive1,
     projectPath,
     new VSCodeDiffApplier(),
+    new CognitiveRuleStore(executionRulesPath),
   );
   orchestrator.setCustomPermissions(customPermissions);
   orchestrator.setAlwaysAllowRules(prefs.getAlwaysAllowRules());
@@ -423,6 +430,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await workbenchProvider.openSkillsBrowser();
     }),
 
+    vscode.commands.registerCommand('kai.openRules', async () => {
+      await workbenchProvider.openRulesEditor();
+    }),
+
     vscode.commands.registerCommand('kai.setAgent', async () => {
       const s = await vscode.window.showQuickPick(AGENT_IDS, { title: 'Choose KAI agent' });
       if (s) {
@@ -613,6 +624,22 @@ function createCognitive1Client(config: vscode.WorkspaceConfiguration): Cognitiv
 
 function defaultBrainPath(): string {
   return path.join(require('os').homedir(), '.kai', 'brain');
+}
+
+function resolveExecutionRulesPath(configuredPath: string, projectPath?: string): string {
+  const configured = configuredPath.trim();
+  if (configured) {
+    return path.isAbsolute(configured)
+      ? configured
+      : path.resolve(projectPath || process.cwd(), configured);
+  }
+
+  const candidates = [
+    projectPath ? path.join(path.dirname(projectPath), 'cognitive1', 'Instruct.md') : '',
+    projectPath ? path.join(projectPath, 'Instruct.md') : '',
+    path.join(defaultBrainPath(), 'Instruct.md'),
+  ].filter(Boolean);
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
 }
 
 async function checkSessionRecovery(

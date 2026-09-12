@@ -13,6 +13,8 @@
   var currentGoal = window.__KAI_INITIAL_GOAL__ || null;
   var skills = [];
   var selectedSkills = [];
+  var ruleDocument = null;
+  var editingRuleId = '';
   function currentAgent() { return state ? state.activeAgent : 'claude'; }
   function currentRoute() { return state ? state.route : 'direct'; }
   function currentAutonomy() { return state ? state.autonomy : 'ask'; }
@@ -80,6 +82,21 @@
     skillsSearch: document.getElementById('skillsSearch'),
     skillsClose: document.getElementById('skillsClose'),
     skillsList: document.getElementById('skillsList'),
+    rulesBtn: document.getElementById('rulesBtn'),
+    rulesPanel: document.getElementById('rulesPanel'),
+    rulesSearch: document.getElementById('rulesSearch'),
+    rulesClose: document.getElementById('rulesClose'),
+    rulesAdd: document.getElementById('rulesAdd'),
+    rulesCount: document.getElementById('rulesCount'),
+    rulesSource: document.getElementById('rulesSource'),
+    rulesList: document.getElementById('rulesList'),
+    ruleEditor: document.getElementById('ruleEditor'),
+    ruleEditorTitle: document.getElementById('ruleEditorTitle'),
+    ruleEditorClose: document.getElementById('ruleEditorClose'),
+    ruleTitle: document.getElementById('ruleTitle'),
+    ruleBody: document.getElementById('ruleBody'),
+    ruleCancel: document.getElementById('ruleCancel'),
+    ruleSave: document.getElementById('ruleSave'),
     composerBox: document.getElementById('composerBox'),
     modeChip: document.getElementById('modeChip'),
     agentChip: document.getElementById('agentChip'),
@@ -147,7 +164,7 @@
   function agentLabel(agent) { return AGENT_NAMES[agent] || (agent ? agent.charAt(0).toUpperCase()+agent.slice(1) : 'Assistant'); }
 
   // ---- History panel (past conversations) ----
-  function openHistory() { closeSkillsPanel(); els.historyPanel.style.display = 'flex'; els.historySearch.value = ''; els.historySearch.focus(); vscode.postMessage({ type: 'listConversations' }); }
+  function openHistory() { closeSkillsPanel(); closeRulesPanel(); els.historyPanel.style.display = 'flex'; els.historySearch.value = ''; els.historySearch.focus(); vscode.postMessage({ type: 'listConversations' }); }
   function closeHistory() { els.historyPanel.style.display = 'none'; }
 
   function fmtRelativeTime(iso) {
@@ -303,6 +320,7 @@
   // ---- Skills ----
   function openSkillsPanel() {
     closeHistory();
+    closeRulesPanel();
     els.skillsPanel.style.display = 'flex';
     els.skillsSearch.value = '';
     els.skillsSearch.focus();
@@ -310,6 +328,86 @@
   }
 
   function closeSkillsPanel() { els.skillsPanel.style.display = 'none'; }
+
+  function openRulesPanel() {
+    closeHistory();
+    closeSkillsPanel();
+    els.rulesPanel.style.display = 'flex';
+    els.rulesSearch.value = '';
+    els.rulesSearch.focus();
+    vscode.postMessage({ type: 'listRules' });
+  }
+
+  function closeRulesPanel() {
+    closeRuleEditor();
+    els.rulesPanel.style.display = 'none';
+  }
+
+  function closeRuleEditor() {
+    editingRuleId = '';
+    els.ruleEditor.style.display = 'none';
+    els.ruleTitle.value = '';
+    els.ruleBody.value = '';
+  }
+
+  function openRuleEditor(rule) {
+    editingRuleId = rule && rule.id ? rule.id : '';
+    els.ruleEditorTitle.textContent = rule ? 'Edit rule ' + rule.number : 'Add rule';
+    els.ruleTitle.value = rule ? rule.title : '';
+    els.ruleBody.value = rule ? rule.body : '';
+    els.ruleEditor.style.display = 'flex';
+    els.ruleTitle.focus();
+  }
+
+  function renderRulesList() {
+    var query = (els.rulesSearch.value || '').trim().toLowerCase();
+    els.rulesList.innerHTML = '';
+    var rules = ruleDocument && Array.isArray(ruleDocument.rules) ? ruleDocument.rules : [];
+    var visible = rules.filter(function (rule) {
+      var haystack = [rule.number, rule.section, rule.title, rule.body].join(' ').toLowerCase();
+      return !query || haystack.indexOf(query) >= 0;
+    });
+    els.rulesCount.textContent = rules.length ? String(rules.length) + ' rules' : 'No rules loaded';
+    els.rulesSource.textContent = ruleDocument && ruleDocument.path ? ruleDocument.path : '';
+    if (!visible.length) {
+      var empty = document.createElement('div');
+      empty.className = 'history-empty';
+      empty.textContent = rules.length ? 'No matching rules.' : 'No execution rules loaded from Cognitive1.';
+      els.rulesList.appendChild(empty);
+      return;
+    }
+    visible.forEach(function (rule) {
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'rule-row';
+      var head = document.createElement('div');
+      head.className = 'rule-row-head';
+      var number = document.createElement('span');
+      number.className = 'rule-number';
+      number.textContent = String(rule.number);
+      var title = document.createElement('span');
+      title.className = 'rule-title-text';
+      title.textContent = rule.title;
+      var section = document.createElement('span');
+      section.className = 'rule-section';
+      section.textContent = rule.section || 'Rules';
+      head.appendChild(number); head.appendChild(title); head.appendChild(section);
+      var body = document.createElement('div');
+      body.className = 'rule-body-preview';
+      body.textContent = rule.body || 'No additional rule text.';
+      row.appendChild(head); row.appendChild(body);
+      row.addEventListener('click', function () { openRuleEditor(rule); });
+      els.rulesList.appendChild(row);
+    });
+  }
+
+  function saveRuleEditor() {
+    var title = els.ruleTitle.value.trim();
+    var body = els.ruleBody.value.trim();
+    if (!title) { els.ruleTitle.focus(); return; }
+    if (!body) { els.ruleBody.focus(); return; }
+    vscode.postMessage({ type: 'saveRule', rule: { id: editingRuleId, title: title, body: body } });
+  }
 
   function skillIsSelected(name) { return selectedSkills.some(function (skill) { return skill.name === name; }); }
 
@@ -401,13 +499,14 @@
     var commands = [
       { name: 'goal', label: '/goal', desc: 'Define outcome, constraints, and verification' },
       { name: 'skills', label: '/skills', desc: 'Browse and select reusable skills' },
+      { name: 'rules', label: '/rules', desc: 'View and edit Cognitive1 execution rules' },
       { name: 'agent', label: '/agent', desc: 'Switch the active agent' },
       { name: 'route', label: '/route', desc: 'Switch direct or proxy route' },
     ].filter(function (command) { return command.name.indexOf(match[1]) === 0; });
     if (!commands.length) return;
     openMenu(els.prompt, commands.map(function (command) {
       return { label: command.label, title: command.desc, onClick: function () {
-        if (command.name === 'goal') openGoalEditor(''); else if (command.name === 'skills') openSkillsPanel(); else { els.prompt.value = command.label + ' '; els.prompt.focus(); }
+        if (command.name === 'goal') openGoalEditor(''); else if (command.name === 'skills') openSkillsPanel(); else if (command.name === 'rules') openRulesPanel(); else { els.prompt.value = command.label + ' '; els.prompt.focus(); }
       } };
     }));
   }
@@ -1509,6 +1608,7 @@
     var m;
     if((m=prompt.match(/^\/goal(?:\s+([\s\S]+))?$/i))){openGoalEditor(m[1]||'');clearPrompt();return;}
     if(/^\/skills$/i.test(prompt)){clearPrompt();openSkillsPanel();return;}
+    if(/^\/rules$/i.test(prompt)){clearPrompt();openRulesPanel();return;}
     if((m=prompt.match(/^\/handoff\s+(\S+)/i))){var t=m[1].toLowerCase();if(AGENT_IDS.indexOf(t)>=0){vscode.postMessage({type:'handoff',targetAgent:t});clearPrompt();return;}}
     if((m=prompt.match(/^\/agent\s+(\S+)/i))){var a=m[1].toLowerCase();if(AGENT_IDS.indexOf(a)>=0){vscode.postMessage({type:'setAgent',agent:a});clearPrompt();return;}}
     if((m=prompt.match(/^\/route\s+(\S+)/i))){var r=m[1].toLowerCase();if(r==='direct'||r==='proxy'){vscode.postMessage({type:'setRoute',route:r});clearPrompt();return;}}
@@ -1535,6 +1635,13 @@
   els.skillsBtn.addEventListener('click', openSkillsPanel);
   els.skillsClose.addEventListener('click', closeSkillsPanel);
   els.skillsSearch.addEventListener('input', renderSkillsList);
+  els.rulesBtn.addEventListener('click', openRulesPanel);
+  els.rulesClose.addEventListener('click', closeRulesPanel);
+  els.rulesAdd.addEventListener('click', function () { openRuleEditor(null); });
+  els.rulesSearch.addEventListener('input', renderRulesList);
+  els.ruleEditorClose.addEventListener('click', closeRuleEditor);
+  els.ruleCancel.addEventListener('click', closeRuleEditor);
+  els.ruleSave.addEventListener('click', saveRuleEditor);
   els.planToggle.addEventListener('click',function(){togglePlanMode();if(planMode&&planSteps.length===0) addPlanStep();});
   els.compareToggle.addEventListener('click', toggleCompareMode);
   els.addStep.addEventListener('click',addPlanStep);
@@ -1566,7 +1673,7 @@
     }
   });
   els.prompt.addEventListener('keydown',function(e){
-    if(e.key==='Escape'){ closeGoalEditor(); closeSkillsPanel(); return; }
+    if(e.key==='Escape'){ closeGoalEditor(); closeSkillsPanel(); closeRulesPanel(); return; }
     if(e.key==='Enter' && (e.ctrlKey||e.metaKey) && e.shiftKey){ e.preventDefault(); steerNow(); return; }
     if(e.key==='Tab' && e.shiftKey){
       e.preventDefault();
@@ -1616,6 +1723,7 @@
   if(gearBtn) gearBtn.addEventListener('click',function(){
     openMenuRich(gearBtn,[
       {label:'History',desc:'Past conversations',onClick:openHistory},
+      {label:'Execution Rules',desc:'Cognitive1 standing instructions',onClick:openRulesPanel},
       {label:'Open as editor tab',desc:'Maximize or split',onClick:function(){vscode.postMessage({type:'openTab'});}},
       {label:'Details',desc:'Agent activity log',onClick:toggleDetails},
       {label:'Settings',desc:'Agents, keys, proxy',onClick:function(){vscode.postMessage({type:'openView',view:'settings'});}},
@@ -1668,8 +1776,14 @@
     else if(m.type==='conversationsList'){ renderHistoryList(m.conversations); }
     else if(m.type==='conversationLoaded'){ replayConversation(m.conversation); }
     else if(m.type==='skills'){ setSkills(m.skills || []); }
+    else if(m.type==='rules'){
+      if(m.document){ ruleDocument = m.document; closeRuleEditor(); }
+      if(m.error){ els.rulesList.innerHTML = '<div class="history-empty"></div>'; els.rulesList.firstChild.textContent = m.error; els.rulesCount.textContent = 'Rules unavailable'; return; }
+      renderRulesList();
+    }
     else if(m.type==='openGoal'){ openGoalEditor(''); }
     else if(m.type==='openSkills'){ openSkillsPanel(); }
+    else if(m.type==='openRules'){ openRulesPanel(); }
   });
 
   if(state) renderState(state); else { renderModeChip(); renderAgentChip(); }
