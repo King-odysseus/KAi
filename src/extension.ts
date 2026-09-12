@@ -3,9 +3,9 @@ import * as vscode from 'vscode';
 import { AcpAgentAdapter } from './adapters/acp-adapter';
 import { parseClaudeJsonLine } from './adapters/claude-parser';
 import { parseCodexJsonLine } from './adapters/codex-parser';
-import { parseQwenJsonLine } from './adapters/qwen-parser';
 import { parseGeminiJsonLine } from './adapters/gemini-parser';
 import { buildClaudeArgs, buildCodexArgs, ProcessAgentAdapter } from './adapters/process-agent-adapter';
+import { QwenAcpAdapter } from './adapters/qwen-acp-adapter';
 import type { Cognitive1Client } from './cognitive1/cognitive1-client';
 import { Cognitive1HttpClient, DisabledCognitive1Client } from './cognitive1/cognitive1-client';
 import { EmbeddedCognitive1 } from './cognitive1/embedded-cognitive1';
@@ -26,6 +26,7 @@ import { EngineRoomViewProvider } from './panel/engine-room-view-provider';
 import { SettingsViewProvider } from './panel/settings-view-provider';
 import { SecretStore } from './config/secret-store';
 import { resolveProxyConfig, toProxyServerConfig, migrateLegacyProxySecrets } from './config/proxy-config';
+import { openListTab } from './panel/list-tab-panel';
 import { MemoryTreeProvider } from './panel/memory-tree-provider';
 import { SessionsTreeProvider } from './panel/sessions-tree-provider';
 import { WorkbenchViewProvider } from './panel/workbench-view-provider';
@@ -173,7 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       id: 'codex',
       displayName: 'Codex',
       command: config.get<string>('codexCommand', 'codex'),
-      buildArgs: (r) => buildCodexArgs(config.get<string>('codexProxyProfile', 'codeproxy'), r),
+      buildArgs: buildCodexArgs,
       parseLine: parseCodexJsonLine,
       supportsApprovals: true,
       supportsMcp: true,
@@ -207,16 +208,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // Register Qwen adapter â€” with dedicated parser
+  // Register Qwen adapter with the real JSON-RPC ACP client. The old
+  // parser-only adapter piped the prompt to stdin and could never complete
+  // ACP's initialize/session/prompt handshake.
   orchestrator.registerAdapter(
-    new AcpAgentAdapter(
-      {
-        id: 'qwen',
-        displayName: 'Qwen Code',
-        command: config.get<string>('qwenCommand', 'qwen'),
-        parseLine: parseQwenJsonLine,
-      },
-    ),
+    new QwenAcpAdapter({
+      command: config.get<string>('qwenCommand', 'qwen'),
+    }),
   );
 
   // Register Gemini adapter â€” with dedicated parser
@@ -271,9 +269,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     configDir,
     proxyManager,
   );
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(EngineRoomViewProvider.viewType, engineRoomProvider),
-  );
+  // No longer a sidebar view — reached from the workbench gear as an editor tab.
 
   const settingsProvider = new SettingsViewProvider(
     context.extensionUri,
@@ -285,19 +281,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     codexConfigWriter,
     proxyAuthToken,
   );
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewType, settingsProvider),
-  );
+  // Same — settings is an editor tab now, opened from the gear menu.
 
+  // Not registered as tree views any more — the sidebar is chat-only, so these
+  // back the Memory/Sessions editor tabs opened from the workbench gear menu.
   const memoryProvider = new MemoryTreeProvider(cognitive1);
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('kai.memory', memoryProvider),
-  );
-
   const sessionsProvider = new SessionsTreeProvider(cognitive1);
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('kai.sessions', sessionsProvider),
-  );
 
   const rawInspector = new RawEventInspector();
 
@@ -372,26 +361,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Session recovery
   void checkSessionRecovery(context, orchestrator);
 
+  // Gear-menu destinations all open as editor tabs. They go through the same
+  // attachWebview hook the (former) sidebar views used, so nothing needed a
+  // second render path when the sidebar became chat-only.
+  const openProviderTab = (
+    id: string,
+    title: string,
+    provider: { attachWebview(w: vscode.Webview): void; detachWebview(w: vscode.Webview): void },
+  ) => {
+    const panel = vscode.window.createWebviewPanel(
+      id,
+      title,
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [context.extensionUri] },
+    );
+    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'kai.svg');
+    provider.attachWebview(panel.webview);
+    panel.onDidDispose(() => provider.detachWebview(panel.webview));
+  };
+
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('kai.openWorkbench', async () => {
       await vscode.commands.executeCommand('workbench.view.extension.kai');
     }),
 
-    vscode.commands.registerCommand('kai.openSettings', async () => {
-      await vscode.commands.executeCommand('kai.settings.focus');
+    vscode.commands.registerCommand('kai.openSettings', () => {
+      openProviderTab('kai.settingsTab', 'KAI Settings', settingsProvider);
+    }),
+
+    vscode.commands.registerCommand('kai.openEngineRoom', () => {
+      openProviderTab('kai.engineRoomTab', 'KAI Engine Room', engineRoomProvider);
+    }),
+
+    vscode.commands.registerCommand('kai.openMemory', () => {
+      openListTab('KAI Memory', memoryProvider);
+    }),
+
+    vscode.commands.registerCommand('kai.openSessions', () => {
+      openListTab('KAI Sessions', sessionsProvider);
     }),
 
     vscode.commands.registerCommand('kai.openChatTab', () => {
-      const panel = vscode.window.createWebviewPanel(
-        'kai.chatTab',
-        'KAI Chat',
-        vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [context.extensionUri] },
-      );
-      panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'kai.svg');
-      workbenchProvider.attachWebview(panel.webview);
-      panel.onDidDispose(() => workbenchProvider.detachWebview(panel.webview));
+      openProviderTab('kai.chatTab', 'KAI Chat', workbenchProvider);
+    }),
+
+    vscode.commands.registerCommand('kai.openGoal', async () => {
+      await workbenchProvider.openGoalEditor();
+    }),
+
+    vscode.commands.registerCommand('kai.openSkills', async () => {
+      await workbenchProvider.openSkillsBrowser();
     }),
 
     vscode.commands.registerCommand('kai.setAgent', async () => {

@@ -56,5 +56,57 @@ describe('ConfigWriter', () => {
     expect(result.changed).toBe(false);
     expect(result.backupPath).toBeUndefined();
   });
+
+  // Another tool sharing the file can strip our closing marker and leave the
+  // opening one dangling. A `start[\s\S]*?end` match anchors on the earliest
+  // start, so it would span from the orphan to the next real end marker and
+  // delete every unrelated line in between.
+  it('does not span a dangling start marker to a later block', () => {
+    const writer = new ConfigWriter();
+    const existing = [
+      'model = "native"',
+      '',
+      '# >>> KAI codex-codeproxy',
+      '[model_providers.codeproxy]',
+      'base_url = "http://127.0.0.1:8082"',
+      '',
+      '[profiles.native]',
+      'model = "gpt-5.5"',
+      '',
+      '# >>> KAI codex-codeproxy',
+      '[model_providers.kai]',
+      'base_url = "http://old"',
+      '# <<< KAI codex-codeproxy',
+      '',
+    ].join('\n');
+
+    const next = writer.upsertBlock(existing, {
+      id: 'codex-codeproxy',
+      content: '[model_providers.kai]\nbase_url = "http://new"',
+    });
+
+    // Everything between the orphan and the real block has to survive.
+    expect(next).toContain('[profiles.native]');
+    expect(next).toContain('model = "gpt-5.5"');
+    expect(next).toContain('model = "native"');
+    // One block in, one block out — no duplicated markers.
+    expect(next.match(/# >>> KAI codex-codeproxy/g)).toHaveLength(1);
+    expect(next.match(/# <<< KAI codex-codeproxy/g)).toHaveLength(1);
+    expect(next).toContain('http://new');
+    expect(next).not.toContain('http://old');
+  });
+
+  it('clears a dangling start marker in the same write that appends', () => {
+    const writer = new ConfigWriter();
+    const existing = '# >>> KAI mcp\nurl = "old"\n\n[other]\nkey = 1\n';
+
+    const next = writer.upsertBlock(existing, { id: 'mcp', content: 'url = "new"' });
+
+    expect(next.match(/# >>> KAI mcp/g)).toHaveLength(1);
+    expect(next).toContain('url = "new"');
+    // The orphan's stray body and any later table stay put.
+    expect(next).toContain('[other]');
+    expect(next).toContain('key = 1');
+  });
 });
 

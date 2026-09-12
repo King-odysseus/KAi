@@ -264,16 +264,149 @@ function translateChatStreamToResponses(
 ): void {
   const respId = 'resp_' + randomHex(24);
   const msgId = 'msg_' + randomHex(24);
+  const rsId = 'rs_' + randomHex(24);
+  let nextOutputIndex = 0;
+  const itemIndexes = new Map<string, number>();
+  const allocOutputIndex = (itemId: string): number => {
+    const existing = itemIndexes.get(itemId);
+    if (existing !== undefined) return existing;
+    const index = nextOutputIndex++;
+    itemIndexes.set(itemId, index);
+    return index;
+  };
 
   // Send response.created
   res.write('event: response.created\ndata: ' + JSON.stringify({
     type: 'response.created',
-    response: { id: respId, object: 'response', status: 'in_progress', model: reqModel, output: [] },
+    response: {
+      id: respId,
+      object: 'response',
+      created_at: Math.floor(Date.now() / 1000),
+      status: 'in_progress',
+      model: reqModel,
+      output: [],
+    },
   }) + '\n\n');
 
   let buffer = '';
   let outputTokens = 0;
   let sentContentBlock = false;
+  let textContent = '';
+  let reasoningContent = '';
+  let upstreamUsage: { input: number; output: number } | null = null;
+  let finished = false;
+  const toolCalls = new Map<number, {
+    id: string;
+    itemId: string;
+    name: string;
+    args: string;
+    added: boolean;
+    outputIndex: number;
+  }>();
+
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+
+    const indexedOutput: Array<{ index: number; item: Record<string, unknown> }> = [];
+
+    if (reasoningContent) {
+      const reasoningIndex = allocOutputIndex(rsId);
+      const reasoningItem = {
+        type: 'reasoning',
+        id: rsId,
+        summary: [{ type: 'summary_text', text: reasoningContent }],
+        encrypted_content: reasoningContent,
+      };
+      indexedOutput.push({ index: reasoningIndex, item: reasoningItem });
+      res.write('event: response.reasoning_summary_text.done\ndata: ' + JSON.stringify({
+        type: 'response.reasoning_summary_text.done',
+        item_id: rsId,
+        output_index: reasoningIndex,
+        summary_index: 0,
+        text: reasoningContent,
+      }) + '\n\n');
+      res.write('event: response.output_item.done\ndata: ' + JSON.stringify({
+        type: 'response.output_item.done',
+        output_index: reasoningIndex,
+        item: reasoningItem,
+      }) + '\n\n');
+    }
+
+    if (textContent) {
+      const messageIndex = allocOutputIndex(msgId);
+      const messageItem = {
+        type: 'message',
+        id: msgId,
+        status: 'completed',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: textContent, annotations: [] }],
+      };
+      indexedOutput.push({ index: messageIndex, item: messageItem });
+      res.write('event: response.output_text.done\ndata: ' + JSON.stringify({
+        type: 'response.output_text.done',
+        item_id: msgId,
+        output_index: messageIndex,
+        content_index: 0,
+        text: textContent,
+      }) + '\n\n');
+      res.write('event: response.output_item.done\ndata: ' + JSON.stringify({
+        type: 'response.output_item.done',
+        output_index: messageIndex,
+        item: messageItem,
+      }) + '\n\n');
+    }
+
+    for (const toolCall of toolCalls.values()) {
+      if (!toolCall.name) continue;
+      const item = {
+        type: 'function_call',
+        id: toolCall.itemId,
+        call_id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.args,
+        status: 'completed',
+      };
+      indexedOutput.push({ index: toolCall.outputIndex, item });
+      res.write('event: response.function_call_arguments.done\ndata: ' + JSON.stringify({
+        type: 'response.function_call_arguments.done',
+        item_id: toolCall.itemId,
+        output_index: toolCall.outputIndex,
+        call_id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.args,
+      }) + '\n\n');
+      res.write('event: response.output_item.done\ndata: ' + JSON.stringify({
+        type: 'response.output_item.done',
+        output_index: toolCall.outputIndex,
+        item,
+      }) + '\n\n');
+    }
+
+    const output = indexedOutput
+      .sort((a, b) => a.index - b.index)
+      .map(entry => entry.item);
+    const inputTokens = upstreamUsage?.input ?? 0;
+    const totalOutputTokens = upstreamUsage?.output ?? outputTokens;
+
+    res.write('event: response.completed\ndata: ' + JSON.stringify({
+      type: 'response.completed',
+      response: {
+        id: respId,
+        object: 'response',
+        created_at: Math.floor(Date.now() / 1000),
+        status: 'completed',
+        model: reqModel,
+        output,
+        usage: {
+          input_tokens: inputTokens,
+          output_tokens: totalOutputTokens,
+          total_tokens: inputTokens + totalOutputTokens,
+        },
+      },
+    }) + '\n\n');
+    res.end();
+  };
 
   chatStream.on('data', (chunk: Buffer) => {
     buffer += chunk.toString('utf-8');
@@ -284,57 +417,123 @@ function translateChatStreamToResponses(
       if (!line.startsWith('data: ')) continue;
       const data = line.slice(6).trim();
       if (data === '[DONE]') {
-        // Send output_item.done + response.completed
-        if (sentContentBlock) {
-          res.write('event: output_item.done\ndata: ' + JSON.stringify({
-            type: 'output_item.done', item: { type: 'message', id: msgId, status: 'completed' },
-          }) + '\n\n');
-        }
-        res.write('event: response.completed\ndata: ' + JSON.stringify({
-          type: 'response.completed',
-          response: {
-            id: respId, object: 'response', status: 'completed', model: reqModel,
-            usage: { input_tokens: 0, output_tokens: outputTokens, total_tokens: outputTokens },
-          },
-        }) + '\n\n');
+        finish();
         continue;
       }
       try {
         const chunk = JSON.parse(data) as Record<string, unknown>;
+        const usage = chunk.usage as Record<string, number> | undefined;
+        if (usage) {
+          upstreamUsage = {
+            input: usage.prompt_tokens ?? 0,
+            output: usage.completion_tokens ?? 0,
+          };
+        }
         const choices = chunk.choices as Array<Record<string, unknown>> | undefined;
         const choice = choices?.[0];
         if (!choice) continue;
 
         const delta = choice.delta as Record<string, unknown> | undefined;
-        const text = delta?.content as string | undefined;
+        if (!delta) continue;
 
-        if (text) {
-          if (!sentContentBlock) {
-            sentContentBlock = true;
-            res.write('event: output_item.added\ndata: ' + JSON.stringify({
-              type: 'output_item.added',
-              item: { type: 'message', id: msgId, status: 'in_progress', role: 'assistant', content: [] },
-            }) + '\n\n');
-            res.write('event: content_part.added\ndata: ' + JSON.stringify({
-              type: 'content_part.added', item_id: msgId, part: { type: 'output_text', text: '', annotations: [] },
+        const reasoningDelta = delta.reasoning_content;
+        if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+          const reasoningIndex = allocOutputIndex(rsId);
+          if (!reasoningContent) {
+            res.write('event: response.output_item.added\ndata: ' + JSON.stringify({
+              type: 'response.output_item.added',
+              output_index: reasoningIndex,
+              item: { type: 'reasoning', id: rsId, summary: [] },
             }) + '\n\n');
           }
-          outputTokens += Math.ceil(text.length / 3.5);
-          res.write('event: content_part.delta\ndata: ' + JSON.stringify({
-            type: 'content_part.delta', item_id: msgId, delta: text,
+          reasoningContent += reasoningDelta;
+          outputTokens++;
+          res.write('event: response.reasoning_summary_text.delta\ndata: ' + JSON.stringify({
+            type: 'response.reasoning_summary_text.delta',
+            item_id: rsId,
+            output_index: reasoningIndex,
+            summary_index: 0,
+            delta: reasoningDelta,
           }) + '\n\n');
+        }
+
+        const text = delta.content;
+        if (typeof text === 'string' && text.length > 0) {
+          const messageIndex = allocOutputIndex(msgId);
+          if (!sentContentBlock) {
+            sentContentBlock = true;
+            res.write('event: response.output_item.added\ndata: ' + JSON.stringify({
+              type: 'response.output_item.added',
+              output_index: messageIndex,
+              item: { type: 'message', id: msgId, status: 'in_progress', role: 'assistant', content: [] },
+            }) + '\n\n');
+          }
+          textContent += text;
+          outputTokens++;
+          res.write('event: response.output_text.delta\ndata: ' + JSON.stringify({
+            type: 'response.output_text.delta',
+            item_id: msgId,
+            output_index: messageIndex,
+            content_index: 0,
+            delta: text,
+          }) + '\n\n');
+        }
+
+        const deltaToolCalls = delta.tool_calls as Array<Record<string, unknown>> | undefined;
+        if (deltaToolCalls) {
+          for (const toolCallDelta of deltaToolCalls) {
+            const index = typeof toolCallDelta.index === 'number' ? toolCallDelta.index : 0;
+            let toolCall = toolCalls.get(index);
+            if (!toolCall) {
+              const itemId = 'fc_' + randomHex(24);
+              toolCall = {
+                id: (toolCallDelta.id as string) || 'call_' + randomHex(24),
+                itemId,
+                name: '',
+                args: '',
+                added: false,
+                outputIndex: allocOutputIndex(itemId),
+              };
+              toolCalls.set(index, toolCall);
+            }
+            if (toolCallDelta.id) toolCall.id = toolCallDelta.id as string;
+            const fn = toolCallDelta.function as Record<string, string> | undefined;
+            if (fn?.name) toolCall.name += fn.name;
+            if (!toolCall.added && toolCall.name) {
+              toolCall.added = true;
+              res.write('event: response.output_item.added\ndata: ' + JSON.stringify({
+                type: 'response.output_item.added',
+                output_index: toolCall.outputIndex,
+                item: {
+                  type: 'function_call',
+                  id: toolCall.itemId,
+                  call_id: toolCall.id,
+                  name: toolCall.name,
+                  arguments: '',
+                  status: 'in_progress',
+                },
+              }) + '\n\n');
+            }
+            if (fn?.arguments) {
+              toolCall.args += fn.arguments;
+              outputTokens++;
+              res.write('event: response.function_call_arguments.delta\ndata: ' + JSON.stringify({
+                type: 'response.function_call_arguments.delta',
+                item_id: toolCall.itemId,
+                output_index: toolCall.outputIndex,
+                call_id: toolCall.id,
+                delta: fn.arguments,
+              }) + '\n\n');
+            }
+          }
         }
       } catch { /* skip unparseable chunks */ }
     }
   });
 
-  chatStream.on('end', () => {
-    if (!res.writableEnded) res.end();
-  });
+  chatStream.on('end', finish);
 
-  chatStream.on('error', () => {
-    if (!res.writableEnded) res.end();
-  });
+  chatStream.on('error', finish);
 }
 
 // ---- Proxy Server ----
@@ -408,13 +607,19 @@ export class KaiProxyServer {
       return;
     }
 
-    // Model list (for OpenAI-compatible clients)
+    // Model list (for OpenAI-compatible clients). Codex's models manager
+    // hard-requires `slug` on every entry — without it the whole list fails to
+    // decode and Codex logs a refresh error on every turn.
     if (req.method === 'GET' && pathname === '/v1/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        object: 'list',
-        data: [{ id: this.config.defaultModel, object: 'model', created: 1700000000, owned_by: 'kai' }],
-      }));
+      const model = {
+        id: this.config.defaultModel,
+        slug: this.config.defaultModel,
+        object: 'model',
+        created: 1700000000,
+        owned_by: 'kai',
+      };
+      res.end(JSON.stringify({ object: 'list', data: [model], models: [model] }));
       return;
     }
 

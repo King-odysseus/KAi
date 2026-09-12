@@ -53,6 +53,16 @@ describe('ConversationStore', () => {
     expect(loaded?.costUsd).toBe(0.01);
   });
 
+  it('round-trips an active goal with the conversation', async () => {
+    const conv = store.create('goal task');
+    conv.goal = {
+      id: 'goal_1', outcome: 'Ship it', constraints: '', verification: 'Tests pass',
+      status: 'running', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', startedAt: '2026-01-01T00:00:00Z',
+    };
+    await store.save(conv);
+    expect((await store.get(conv.id))?.goal?.outcome).toBe('Ship it');
+  });
+
   it('returns undefined for a conversation that does not exist', async () => {
     expect(await store.get('nope')).toBeUndefined();
   });

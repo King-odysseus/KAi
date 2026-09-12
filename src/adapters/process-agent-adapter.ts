@@ -240,21 +240,24 @@ function codexSandboxFor(autonomy: AgentRunRequest['autonomy'], customAllowed?: 
   }
 }
 
-export function buildCodexArgs(profile: string | undefined, request: AgentRunRequest): string[] {
+export function buildCodexArgs(request: AgentRunRequest): string[] {
   // `codex exec resume <id>` has its own, much smaller flag set (verified
-  // against `codex exec resume --help`) — no --sandbox, --cd, or --profile.
-  // A resumed session keeps whatever sandbox/cwd/profile it started with.
+  // against `codex exec resume --help`) — no --sandbox or --cd. A resumed
+  // session keeps whatever sandbox/cwd it started with.
   if (request.resumeSessionId) {
     return ['exec', 'resume', request.resumeSessionId, '--json', '-'];
   }
 
+  // Deliberately no --profile. Codex 0.153+ refuses `--profile` outright while
+  // config.toml still carries a legacy `[profiles.<name>]` table, and everyone
+  // sharing that file (the Codex VS Code extension, this writer) already
+  // selects the provider through the top-level model_provider/model keys that
+  // CodexConfigWriter writes. Passing the flag on top only adds a second,
+  // conflicting source of truth.
   const sandbox = codexSandboxFor(request.autonomy, request.customAllowed);
   const args = ['exec', '--json', '--sandbox', sandbox];
   if (request.cwd) {
     args.push('--cd', request.cwd);
-  }
-  if (request.route === 'proxy' && profile) {
-    args.push('--profile', profile);
   }
   args.push('-');
   return args;

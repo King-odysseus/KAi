@@ -5,6 +5,8 @@ import type { AgentId, AutonomyMode, PermissionKey, RouteMode, WorkbenchState } 
 import { estimateCost, getModelName, getContextWindow } from '../core/cost-estimator';
 import { buildPromptWithContext, type ContextChip } from '../core/prompt-builder';
 import type { WorkbenchOrchestrator } from '../orchestrator/orchestrator';
+import { buildSkillPrompt, discoverSkills, skillCatalog, type SkillDefinition } from '../core/skills';
+import type { GoalInput } from '../core/goal';
 import type { Plan } from '../core/plan';
 import type { PlanEvent } from '../orchestrator/plan-runner';
 import type { PlanTemplate } from '../core/plan-templates';
@@ -27,12 +29,16 @@ interface WebviewMessage {
     | 'loadTemplates' | 'saveTemplate' | 'deleteTemplate' | 'loadTemplate'
     | 'retryStep' | 'skipStep' | 'openLink'
     | 'searchFiles' | 'requestSelection' | 'requestGitDiffStat' | 'requestMemorySearch'
+    | 'listSkills'
     | 'attachImage' | 'setCustomPermissions' | 'queueOverflow'
+    | 'setGoal' | 'clearGoal' | 'pauseGoal' | 'resumeGoal' | 'completeGoal'
     | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval'
     | 'newConversation' | 'listConversations' | 'searchConversations' | 'loadConversation'
     | 'renameConversation' | 'archiveConversation' | 'unarchiveConversation' | 'forkConversation'
-    | 'pickCompareWinner' | 'discardCompare' | 'openCompareWorktree';
+    | 'pickCompareWinner' | 'discardCompare' | 'openCompareWorktree' | 'openView';
   prompt?: string;
+  goal?: GoalInput;
+  skills?: string[];
   agent?: AgentId;
   route?: RouteMode;
   autonomy?: AutonomyMode;
@@ -50,6 +56,8 @@ interface WebviewMessage {
   conversationId?: string;
   compareId?: string;
   side?: 'left' | 'right';
+  /** Which panel the gear menu asked for. */
+  view?: 'settings' | 'engineRoom' | 'memory' | 'sessions';
 }
 
 const AGENT_IDS: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
@@ -72,6 +80,8 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   private readonly conversationStore: ConversationStore | undefined;
   private currentConversation: Conversation | null = null;
   private saveTimer: NodeJS.Timeout | undefined;
+  private skillDefinitions: SkillDefinition[] = [];
+  private pendingPanel: 'goal' | 'skills' | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -197,6 +207,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       this.currentConversation = this.conversationStore.create(this.orchestrator.getLastPrompt());
     }
     const conv = this.currentConversation;
+    conv.goal = this.orchestrator.getGoal();
     conv.events.push(event);
     conv.updatedAt = new Date().toISOString();
     if (event.agent && !conv.agents.includes(event.agent)) conv.agents.push(event.agent);
@@ -210,6 +221,18 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       this.saveTimer = undefined;
       if (this.currentConversation) void this.conversationStore?.save(this.currentConversation);
     }, 500);
+  }
+
+  private persistGoal(): void {
+    if (!this.conversationStore) return;
+    const goal = this.orchestrator.getGoal();
+    if (!this.currentConversation && !goal) return;
+    if (!this.currentConversation) {
+      this.currentConversation = this.conversationStore.create(goal?.outcome || 'Goal');
+    }
+    this.currentConversation.goal = goal;
+    this.currentConversation.updatedAt = new Date().toISOString();
+    void this.conversationStore.save(this.currentConversation);
   }
 
   /** Marks the current conversation unread (a run finished, or an approval
@@ -239,22 +262,40 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       case 'ready':
         await this.postState();
         await this.postCapabilities();
+        if (this.pendingPanel) {
+          const type = this.pendingPanel === 'goal' ? 'openGoal' : 'openSkills';
+          this.pendingPanel = undefined;
+          void webview.postMessage({ type });
+        }
         break;
       case 'openTab':
         await vscode.commands.executeCommand('kai.openChatTab');
         break;
+      case 'openView': {
+        const commands: Record<string, string> = {
+          settings: 'kai.openSettings',
+          engineRoom: 'kai.openEngineRoom',
+          memory: 'kai.openMemory',
+          sessions: 'kai.openSessions',
+        };
+        const command = message.view ? commands[message.view] : undefined;
+        if (command) await vscode.commands.executeCommand(command);
+        break;
+      }
       case 'refreshCapabilities':
         await this.postCapabilities();
         break;
       case 'startTask':
         if (message.prompt?.trim()) {
           try {
-            const finalPrompt = buildPromptWithContext(message.prompt, message.contextChips ?? []);
+            const contextPrompt = buildPromptWithContext(message.prompt, message.contextChips ?? []);
+            const finalPrompt = buildSkillPrompt(this.resolveSkills(message.skills ?? []), contextPrompt);
             await this.orchestrator.startTask({
               prompt: finalPrompt,
               agent: message.agent,
               route: message.route,
               autonomy: message.autonomy,
+              goal: message.goal,
             });
             await this.postState();
           } catch (error) {
@@ -264,6 +305,35 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
             });
           }
         }
+        break;
+      case 'setGoal':
+        if (message.goal) {
+          try {
+            this.orchestrator.setGoal(message.goal);
+            await this.postState();
+          } catch (error) {
+            this.postEvent({
+              id: createEventId(), type: 'error', taskId: 'workbench', timestamp: nowIso(),
+              message: error instanceof Error ? error.message : String(error), recoverable: true,
+            });
+          }
+        }
+        break;
+      case 'clearGoal':
+        await this.orchestrator.clearGoal();
+        await this.postState();
+        break;
+      case 'pauseGoal':
+        await this.orchestrator.pauseGoal();
+        await this.postState();
+        break;
+      case 'resumeGoal':
+        await this.orchestrator.resumeGoal();
+        await this.postState();
+        break;
+      case 'completeGoal':
+        await this.orchestrator.completeGoal();
+        await this.postState();
         break;
       case 'executePlan':
         if (message.value) {
@@ -521,6 +591,9 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           }
         }
         break;
+      case 'listSkills':
+        await this.sendSkills(webview);
+        break;
       case 'attachImage':
         await this.handleAttachImage(message, webview);
         break;
@@ -572,6 +645,8 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           const conversation = await this.conversationStore.get(message.conversationId);
           if (conversation) {
             await this.conversationStore.setUnread(conversation.id, false);
+            this.currentConversation = conversation;
+            this.orchestrator.restoreGoal(conversation.goal ?? null);
             void webview.postMessage({ type: 'conversationLoaded', conversation });
           }
         }
@@ -610,6 +685,25 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     }
     const conversations = query ? await this.conversationStore.search(query) : await this.conversationStore.list();
     void webview.postMessage({ type: 'conversationsList', conversations });
+  }
+
+  private async sendSkills(webview: vscode.Webview): Promise<void> {
+    try {
+      this.skillDefinitions = await discoverSkills(this.orchestrator['projectPath']);
+      void webview.postMessage({ type: 'skills', skills: skillCatalog(this.skillDefinitions) });
+    } catch (error) {
+      void webview.postMessage({
+        type: 'skills',
+        skills: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private resolveSkills(names: string[]): SkillDefinition[] {
+    if (names.length === 0) return [];
+    const wanted = new Set(names);
+    return this.skillDefinitions.filter((skill) => wanted.has(skill.name));
   }
 
   /** Opens a read-only diff (checkpoint content vs current file) for every
@@ -710,9 +804,31 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
   }
 
   postState(): Promise<void> {
+    this.persistGoal();
     const state = this.orchestrator.getState();
     const plan = this.orchestrator.getPlan();
-    return this.broadcast({ type: 'state', state, plan });
+    const goal = this.orchestrator.getGoal();
+    return this.broadcast({ type: 'state', state, plan, goal });
+  }
+
+  /** Opens Goal mode from the command palette or a keybinding. */
+  async openGoalEditor(): Promise<void> {
+    if (this.webviews.size > 0) {
+      await this.broadcast({ type: 'openGoal' });
+      return;
+    }
+    this.pendingPanel = 'goal';
+    await vscode.commands.executeCommand('kai.openWorkbench');
+  }
+
+  /** Opens the Skills browser from the command palette or a keybinding. */
+  async openSkillsBrowser(): Promise<void> {
+    if (this.webviews.size > 0) {
+      await this.broadcast({ type: 'openSkills' });
+      return;
+    }
+    this.pendingPanel = 'skills';
+    await vscode.commands.executeCommand('kai.openWorkbench');
   }
 
   private async postCapabilities(): Promise<void> {
@@ -731,6 +847,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     const nonce = getNonce();
     const state = JSON.stringify(this.orchestrator.getState()).replace(/</g, '\\u003c');
     const plan = JSON.stringify(this.orchestrator.getPlan()).replace(/</g, '\\u003c');
+    const goal = JSON.stringify(this.orchestrator.getGoal()).replace(/</g, '\\u003c');
     const agentIdsJson = JSON.stringify(AGENT_IDS);
     const agentNames: Record<AgentId, string> = {
       claude: AGENT_PROVIDERS.claude.displayName,
@@ -788,10 +905,19 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       <span class="topbar-spacer"></span>
       <span id="statePill"></span>
       <span id="costPill"></span>
-      <button id="historyBtn" class="ghost-btn" title="Past conversations">History</button>
+      <button id="goalBtn" class="ghost-btn icon-only" title="Start or edit a goal (/goal)" aria-label="Goal">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <button id="skillsBtn" class="ghost-btn icon-only" title="Browse skills" aria-label="Skills">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/></svg>
+      </button>
       <button id="newChat" class="ghost-btn" title="Start a new chat (clears this transcript)">＋ New</button>
-      <button id="openTab" class="ghost-btn" title="Open KAI as a full editor tab (maximize / split screen)">⤢ Tab</button>
-      <button id="detailsToggle" class="ghost-btn" title="Show agent activity log (lifecycle, memory, raw, cost)">Details</button>
+      <button id="gearBtn" class="ghost-btn gear-btn" title="History, details, and settings" aria-haspopup="menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.3-1-2 3.4L4.6 11a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7.6 7.6 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.3 1 2-3.4z"/>
+        </svg>
+      </button>
     </div>
 
     <div class="history-panel" id="historyPanel" style="display:none;">
@@ -804,6 +930,16 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
       <div class="history-list" id="historyList"></div>
     </div>
 
+    <div class="skills-panel" id="skillsPanel" style="display:none;">
+      <div class="history-header">
+        <input type="text" id="skillsSearch" placeholder="Search skills…" />
+        <button id="skillsClose" class="ibtn" title="Close">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="skills-list" id="skillsList"></div>
+    </div>
+
     <div class="chat" id="chat">
       <div class="empty-state" id="emptyState">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -811,11 +947,26 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
           <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/>
         </svg>
         <div class="empty-title">Ready when you are</div>
-        <div class="empty-sub">Send a message to KAI, or type <code>/</code> for a template. Use <strong>Workflow</strong> mode (≡) for a multi-step agent run.</div>
+        <div class="empty-sub">Send a message to KAI, use <code>/goal</code> for durable work, or type <code>$</code> to invoke a skill.</div>
       </div>
     </div>
 
     <div class="composer">
+      <div class="goal-editor" id="goalEditor" style="display:none;">
+        <div class="goal-editor-head">
+          <span class="goal-editor-title">Goal</span>
+          <span class="goal-editor-note">Outcome, constraints, and proof of completion</span>
+        </div>
+        <label class="goal-field"><span>Outcome</span><textarea id="goalOutcome" rows="2" placeholder="What should be true when this work is done?"></textarea></label>
+        <label class="goal-field"><span>Constraints</span><textarea id="goalConstraints" rows="2" placeholder="Required tools, boundaries, or approaches to avoid"></textarea></label>
+        <label class="goal-field"><span>Verification</span><textarea id="goalVerification" rows="2" placeholder="Tests, measurements, or review criteria that prove completion"></textarea></label>
+        <div class="goal-editor-actions">
+          <button id="goalCancel" class="plan-btn secondary" type="button">Cancel</button>
+          <button id="goalSave" class="plan-btn secondary" type="button">Save</button>
+          <button id="goalStart" class="plan-btn primary" type="button">Start goal</button>
+        </div>
+      </div>
+
       <div class="plan-editor" id="planEditor" style="display:none;">
         <div class="plan-header">
           <div class="plan-template-row"><input type="text" id="planTitle" class="plan-title-input" placeholder="Workflow title…" /><select id="planTemplate" class="plan-template-select"><option value="">Load template…</option></select></div>
@@ -830,12 +981,14 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
 
       <div class="plan-progress" id="planProgress" style="display:none;"></div>
 
+      <div class="goal-progress" id="goalProgress" style="display:none;"></div>
+
       <div class="queue-list" id="queueList"></div>
 
       <div class="ctx-chip-row" id="ctxChipRow" style="display:none;"></div>
 
       <div class="composer-box" id="composerBox">
-        <textarea id="prompt" rows="1" placeholder="Ask KAI, type @ to add files, / for commands"></textarea>
+        <textarea id="prompt" rows="1" placeholder="Ask KAI, /goal for a target, $ for skills"></textarea>
         <div class="composer-toolbar">
           <button id="attachBtn" class="ibtn" type="button" title="Attach an image">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></svg>
@@ -864,6 +1017,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         <span id="sessionMeta"></span>
       </div>
       <div class="slash-hint">
+        <code>/goal</code> <code>/skills</code>
         <code>/agent</code> <code>/route</code> <code>/handoff</code>
         <code>/review</code> <code>/implement</code> <code>/debug</code>
         <code>/explain</code> <code>/test</code>
@@ -875,6 +1029,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     // Seed initial state before loading the main script
     window.__KAI_INITIAL_STATE__ = ${state};
     window.__KAI_INITIAL_PLAN__ = ${plan};
+    window.__KAI_INITIAL_GOAL__ = ${goal};
     window.__KAI_AGENT_IDS__ = ${agentIdsJson};
     window.__KAI_AGENT_NAMES__ = ${agentNamesJson};
     window.__KAI_AGENT_MODELS__ = ${agentMetaJson};

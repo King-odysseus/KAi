@@ -44,35 +44,44 @@ export class CodexConfigWriter {
    *   2. The original user config minus any previously-written KAI blocks.
    *   3. A [proxy.backup] table with the original model_provider / model so
    *      they can be restored on Stop.
-   *   4. The KAI-managed [model_providers.<profile>] and [profiles.<profile>]
-   *      tables, used by codex --profile <profile> (CLI mode).
+   *   4. The KAI-managed [model_providers.<profile>] table. No [profiles.<name>]
+   *      table: Codex 0.153+ rejects `--profile` while one is present, and the
+   *      top-level keys above already select this provider.
    *
    * In TOML, top-level keys that appear AFTER any [table] header belong to that
    * table — so we MUST write them at the very top.
    */
   withProxyProfile(existing: string, config: CodexProxyConfig): string {
-    // Save original model_provider / model so we can restore on Stop.
-    const origProvider = existing.match(/^model_provider\s*=\s*"([^"]*)"/m)?.[1];
-    const origModel = existing.match(/^model\s*=\s*"([^"]*)"/m)?.[1];
+    // Save original model_provider / model so we can restore on Stop. Prefer
+    // an existing proxy backup, then fall back to the user's top-level keys
+    // after KAI-managed blocks have been removed.
+    const existingBackup = readProxyBackup(existing);
+    const stripped = stripProfileTables(existing, config.profile).trim();
+    const { preamble, tables: userTables } = splitPreamble(stripped);
+    const userTopLevel = readTopLevelRoutingKeys(preamble);
+    const origProvider = existingBackup.provider ?? userTopLevel.provider;
+    const origModel = existingBackup.model ?? userTopLevel.model;
 
     let backupBlock = '';
     if (origProvider && origProvider !== config.profile) {
       backupBlock += '[proxy.backup]\n';
       backupBlock += 'model_provider = "' + origProvider + '"\n';
-      if (origModel && origModel !== config.model) {
-        backupBlock += 'model = "' + origModel + '"\n';
-      }
-      backupBlock += '\n';
+    }
+    if (origModel && origModel !== config.model) {
+      if (!backupBlock) backupBlock += '[proxy.backup]\n';
+      backupBlock += 'model = "' + origModel + '"\n';
     }
 
-    const stripped = stripProfileTables(existing, config.profile).trim();
     const topLevel = codexTopLevelKeys(config.profile, config.model);
-    const tables = codexProviderTables(config.profile, config.port, config.model);
+    const tables = codexProviderTables(config.profile, config.port);
+    const cleanPreamble = stripTopLevelRoutingKeys(preamble).trim();
 
-    return topLevel + '\n\n'
-      + (stripped ? stripped + '\n\n' : '')
-      + backupBlock
-      + tables + '\n';
+    const parts = [topLevel];
+    if (cleanPreamble) parts.push(cleanPreamble);
+    if (backupBlock) parts.push(backupBlock.trimEnd());
+    if (userTables) parts.push(userTables);
+    parts.push(tables);
+    return parts.join('\n\n').trimEnd() + '\n';
   }
 
   /**
@@ -92,6 +101,7 @@ export class CodexConfigWriter {
       return { configPath: targetPath, changed: false };
     }
 
+    const backup = readProxyBackup(existing);
     let stripped = stripProfileTables(existing, profileName);
 
     // Remove top-level keys we wrote (use profileName variable, not hardcoded string)
@@ -104,18 +114,11 @@ export class CodexConfigWriter {
     stripped = stripped.replace(topLevelRegex, '');
     stripped = stripped.replace(/^preferred_auth_method\s*=\s*"apikey"\s*\n/gm, '');
 
-    // Restore original provider/model from backup block if present
-    const backupProvider = existing.match(
-      /\[proxy\.backup\][^\[]*model_provider\s*=\s*"([^"]*)"/s
-    )?.[1];
-    const backupModel = existing.match(
-      /\[proxy\.backup\][^\[]*model\s*=\s*"([^"]*)"/s
-    )?.[1];
     stripped = stripBackupBlock(stripped);
 
-    if (backupProvider) {
-      stripped = 'model_provider = "' + backupProvider + '"\n'
-        + (backupModel ? 'model = "' + backupModel + '"\n' : '')
+    if (backup.provider || backup.model) {
+      stripped = (backup.provider ? 'model_provider = "' + backup.provider + '"\n' : '')
+        + (backup.model ? 'model = "' + backup.model + '"\n' : '')
         + '\n' + stripped;
     }
 
@@ -183,20 +186,60 @@ function codexTopLevelKeys(profile: string, model: string): string {
   return lines.join('\n');
 }
 
-/** Provider + profile tables — used by codex --profile <profile> (CLI). */
-function codexProviderTables(profile: string, port: number, model: string): string {
+/** The provider table the top-level `model_provider` key selects. */
+function codexProviderTables(profile: string, port: number): string {
   return [
     '# >>> KAI codex-' + profile,
     '[model_providers.' + profile + ']',
     'name = "KAI Proxy"',
     'base_url = "http://127.0.0.1:' + port + '/v1"',
     'wire_api = "responses"',
-    '',
-    '[profiles.' + profile + ']',
-    'model = "' + model + '"',
-    'model_provider = "' + profile + '"',
     '# <<< KAI codex-' + profile
   ].join('\n');
+}
+
+/** Split a TOML document into its top-level preamble and table body. */
+function splitPreamble(toml: string): { preamble: string; tables: string } {
+  const lines = toml.split(/\r?\n/);
+  const firstTable = lines.findIndex(line => /^\s*\[/.test(line));
+  if (firstTable === -1) return { preamble: toml, tables: '' };
+  return {
+    preamble: lines.slice(0, firstTable).join('\n'),
+    tables: lines.slice(firstTable).join('\n'),
+  };
+}
+
+/** Read the user's routing keys from a top-level preamble only. */
+function readTopLevelRoutingKeys(preamble: string): { provider?: string; model?: string } {
+  return {
+    provider: preamble.match(/^\s*model_provider\s*=\s*"([^"]*)"/m)?.[1],
+    model: preamble.match(/^\s*model\s*=\s*"([^"]*)"/m)?.[1],
+  };
+}
+
+/** Remove routing keys that KAI owns so they cannot be duplicated. */
+function stripTopLevelRoutingKeys(preamble: string): string {
+  return preamble
+    .split(/\r?\n/)
+    .filter(line => !/^\s*(?:model_provider|model|preferred_auth_method)\s*=/.test(line))
+    .join('\n');
+}
+
+/** Read original routing values from KAI's inline backup table. */
+function readProxyBackup(toml: string): { provider?: string; model?: string } {
+  const lines = toml.split(/\r?\n/);
+  const start = lines.findIndex(line => /^\s*\[proxy\.backup\]\s*$/.test(line));
+  if (start === -1) return {};
+  const table: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*\[/.test(lines[i])) break;
+    table.push(lines[i]);
+  }
+  const body = table.join('\n');
+  return {
+    provider: body.match(/^\s*model_provider\s*=\s*"([^"]*)"/m)?.[1],
+    model: body.match(/^\s*model\s*=\s*"([^"]*)"/m)?.[1],
+  };
 }
 
 /**
@@ -215,13 +258,23 @@ function stripProfileTables(toml: string, profile: string): string {
     const lines = result.split(/\r?\n/);
     const kept: string[] = [];
     let skipping = false;
-    for (const line of lines) {
-      if (line.trim() === block.start) { skipping = true; continue; }
-      if (skipping) {
-        if (line.trim() === block.end) { skipping = false; }
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!skipping && line === block.start) {
+        // Only treat this as a managed block if it is actually terminated.
+        // Another tool can strip the closing marker and leave ours dangling;
+        // skipping to a partner that never arrives would delete every line
+        // from here to EOF. Drop the stray marker, keep the tail.
+        const terminated = lines.slice(i + 1).some(l => l.trim() === block.end);
+        if (!terminated) continue;
+        skipping = true;
         continue;
       }
-      kept.push(line);
+      if (skipping) {
+        if (line === block.end) { skipping = false; }
+        continue;
+      }
+      kept.push(lines[i]);
     }
     result = kept.join('\n');
   }

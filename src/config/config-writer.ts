@@ -36,14 +36,53 @@ export class ConfigWriter {
     const end = this.endMarker(block.id);
     const normalizedContent = block.content.trimEnd();
     const replacement = `${start}\n${normalizedContent}\n${end}`;
-    const pattern = new RegExp(`${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}`, 'm');
 
-    if (pattern.test(existing)) {
-      return existing.replace(pattern, replacement);
+    // Pair markers with a stack rather than a `start[\s\S]*?end` regex. A lazy
+    // regex anchors on the *earliest* start marker, so one dangling start whose
+    // partner another tool stripped would make every later write span from it to
+    // the next end marker — swallowing all the unrelated config in between.
+    const lines = existing.split('\n');
+    const open: number[] = [];
+    const paired = new Map<number, number>();
+    const orphan = new Set<number>();
+
+    for (let i = 0; i < lines.length; i++) {
+      const marker = lines[i].trim();
+      if (marker === start) {
+        open.push(i);
+      } else if (marker === end) {
+        const opened = open.pop();
+        if (opened === undefined) orphan.add(i);
+        else paired.set(opened, i);
+      }
+    }
+    // A start marker still on the stack never found its partner.
+    for (const i of open) orphan.add(i);
+
+    const out: string[] = [];
+    let replaced = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (orphan.has(i)) continue;
+      const endIdx = paired.get(i);
+      if (endIdx !== undefined) {
+        // Keep the earliest block's position; any further pair is a duplicate.
+        if (!replaced) { out.push(replacement); replaced = true; }
+        i = endIdx;
+        continue;
+      }
+      out.push(lines[i]);
     }
 
-    const separator = existing.trim().length > 0 ? '\n\n' : '';
-    return `${existing.trimEnd()}${separator}${replacement}\n`;
+    if (replaced) {
+      return out.join('\n');
+    }
+
+    // No block of ours existed, so append one. `out` is the base rather than
+    // `existing` so a dangling marker is cleaned up in the same write instead of
+    // lingering until the next one.
+    const base = out.join('\n');
+    const separator = base.trim().length > 0 ? '\n\n' : '';
+    return `${base.trimEnd()}${separator}${replacement}\n`;
   }
 
   private async readOptional(targetPath: string): Promise<string> {
@@ -77,10 +116,6 @@ export class ConfigWriter {
   private endMarker(id: string): string {
     return `# <<< KAI ${id}`;
   }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

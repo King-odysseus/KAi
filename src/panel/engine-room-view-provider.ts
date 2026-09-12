@@ -8,10 +8,10 @@ interface EngineRoomMessage {
   type: 'ready' | 'refresh' | 'listBackups';
 }
 
-export class EngineRoomViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = 'kai.engineRoom';
-
-  private view?: vscode.WebviewView;
+export class EngineRoomViewProvider {
+  // More than one tab can be open at once, so every dashboard/backup push fans
+  // out to all of them.
+  private readonly webviews = new Set<vscode.Webview>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -19,16 +19,22 @@ export class EngineRoomViewProvider implements vscode.WebviewViewProvider {
     private readonly backupManager: BackupManager,
     private readonly configDir: string,
     private readonly proxyManager?: ProxyManager,
-  ) {}
+  ) {
+    // Registered once here rather than in resolveWebviewView, which re-fires on
+    // every sidebar reveal and would stack duplicate listeners.
+    this.proxyManager?.on('status', () => {
+      void this.postDashboard();
+    });
+  }
 
-  resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
-    webviewView.webview.options = {
+  /** Wire an editor-tab webview to this provider. */
+  attachWebview(webview: vscode.Webview): void {
+    webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     };
-    webviewView.webview.html = this.getHtml(webviewView.webview);
-    webviewView.webview.onDidReceiveMessage((message: EngineRoomMessage) => {
+    webview.html = this.getHtml(webview);
+    webview.onDidReceiveMessage((message: EngineRoomMessage) => {
       if (message.type === 'ready' || message.type === 'refresh') {
         void this.postDashboard();
         void this.postBackups();
@@ -37,12 +43,11 @@ export class EngineRoomViewProvider implements vscode.WebviewViewProvider {
         void this.postBackups();
       }
     });
+    this.webviews.add(webview);
+  }
 
-    if (this.proxyManager) {
-      this.proxyManager.on('status', () => {
-        void this.postDashboard();
-      });
-    }
+  detachWebview(webview: vscode.Webview): void {
+    this.webviews.delete(webview);
   }
 
   refresh(): void {
@@ -56,18 +61,23 @@ export class EngineRoomViewProvider implements vscode.WebviewViewProvider {
     const proxyStatus = this.proxyManager?.getStatus();
     const proxyHealth = this.proxyManager ? await this.proxyManager.health() : null;
 
-    await this.view?.webview.postMessage({
+    const message = {
       type: 'dashboard',
       capabilities,
       cognitive1,
       proxyStatus,
       proxyHealth,
-    });
+    };
+    for (const webview of this.webviews) {
+      await webview.postMessage(message);
+    }
   }
 
   private async postBackups(): Promise<void> {
     const backups = await this.backupManager.listBackups(this.configDir);
-    await this.view?.webview.postMessage({ type: 'backups', backups });
+    for (const webview of this.webviews) {
+      await webview.postMessage({ type: 'backups', backups });
+    }
   }
 
   private getHtml(webview: vscode.Webview): string {

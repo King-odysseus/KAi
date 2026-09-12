@@ -7,6 +7,14 @@ scripts required.
 
 ## Architecture
 
+- **Goal mode** (`src/core/goal.ts`) — durable per-conversation goals with an
+  outcome, constraints, and verification criteria injected into every agent
+  turn. The composer progress row can pause, resume, edit, complete, or clear
+  a goal.
+- **Agent Skills** (`src/core/skills.ts`) — discovers `SKILL.md` packages from
+  repository and user `.agents/skills` directories, exposes them through the
+  composer (`$` or `/skills`), and injects selected skill instructions into
+  the run for any agent.
 - **Built-in proxy** (`src/proxy/proxy-server.ts`) — HTTP proxy handling
   `/v1/responses` (Codex), `/v1/chat/completions`, `/v1/messages` (Claude Code)
   with full API format translation (Responses ↔ Chat Completions, Anthropic ↔

@@ -1,3 +1,5 @@
+import type { GoalInput } from './goal';
+
 export type AgentId = 'claude' | 'codex' | 'qwen' | 'gemini';
 
 export type RouteMode = 'direct' | 'proxy';
@@ -60,6 +62,8 @@ export interface TaskRequest {
   agent?: AgentId;
   route?: RouteMode;
   autonomy?: AutonomyMode;
+  /** Optional goal created together with this run (the `/goal` flow). */
+  goal?: GoalInput;
 }
 
 export interface AgentCapability {
@@ -77,4 +81,3 @@ export interface AgentCapability {
   contextWindow?: number;
   requiredConfigKeys: string[];
 }
-

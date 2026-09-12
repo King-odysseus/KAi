@@ -10,6 +10,9 @@
   var PERMISSION_KEYS = window.__KAI_PERMISSION_KEYS__ || {};
   var customPermissions = window.__KAI_CUSTOM_PERMISSIONS__ || {};
   var state = window.__KAI_INITIAL_STATE__ || null;
+  var currentGoal = window.__KAI_INITIAL_GOAL__ || null;
+  var skills = [];
+  var selectedSkills = [];
   function currentAgent() { return state ? state.activeAgent : 'claude'; }
   function currentRoute() { return state ? state.route : 'direct'; }
   function currentAutonomy() { return state ? state.autonomy : 'ask'; }
@@ -63,6 +66,20 @@
     planStepCount: document.getElementById('planStepCount'),
     planTemplate: document.getElementById('planTemplate'),
     saveTemplateBtn: document.getElementById('saveTemplateBtn'),
+    goalEditor: document.getElementById('goalEditor'),
+    goalProgress: document.getElementById('goalProgress'),
+    goalOutcome: document.getElementById('goalOutcome'),
+    goalConstraints: document.getElementById('goalConstraints'),
+    goalVerification: document.getElementById('goalVerification'),
+    goalCancel: document.getElementById('goalCancel'),
+    goalSave: document.getElementById('goalSave'),
+    goalStart: document.getElementById('goalStart'),
+    goalBtn: document.getElementById('goalBtn'),
+    skillsBtn: document.getElementById('skillsBtn'),
+    skillsPanel: document.getElementById('skillsPanel'),
+    skillsSearch: document.getElementById('skillsSearch'),
+    skillsClose: document.getElementById('skillsClose'),
+    skillsList: document.getElementById('skillsList'),
     composerBox: document.getElementById('composerBox'),
     modeChip: document.getElementById('modeChip'),
     agentChip: document.getElementById('agentChip'),
@@ -73,7 +90,6 @@
     imageFileInput: document.getElementById('imageFileInput'),
     atBtn: document.getElementById('atBtn'),
     sessionMeta: document.getElementById('sessionMeta'),
-    historyBtn: document.getElementById('historyBtn'),
     historyPanel: document.getElementById('historyPanel'),
     historySearch: document.getElementById('historySearch'),
     historyClose: document.getElementById('historyClose'),
@@ -115,14 +131,14 @@
     lastKnownInputTokens = 0; renderContextMeter();
     for (var id in turns) { if (turns[id].timerInterval) clearInterval(turns[id].timerInterval); }
     turns = {};
-    contextChips = []; messageQueue = []; renderCtxChips(); renderQueue();
+    contextChips = []; selectedSkills = []; messageQueue = []; renderCtxChips(); renderQueue();
     clearPrompt();
   }
   function autoGrow() { els.prompt.style.height='auto'; els.prompt.style.height=Math.min(els.prompt.scrollHeight,180)+'px'; }
   function agentLabel(agent) { return AGENT_NAMES[agent] || (agent ? agent.charAt(0).toUpperCase()+agent.slice(1) : 'Assistant'); }
 
   // ---- History panel (past conversations) ----
-  function openHistory() { els.historyPanel.style.display = 'flex'; els.historySearch.value = ''; els.historySearch.focus(); vscode.postMessage({ type: 'listConversations' }); }
+  function openHistory() { closeSkillsPanel(); els.historyPanel.style.display = 'flex'; els.historySearch.value = ''; els.historySearch.focus(); vscode.postMessage({ type: 'listConversations' }); }
   function closeHistory() { els.historyPanel.style.display = 'none'; }
 
   function fmtRelativeTime(iso) {
@@ -181,9 +197,210 @@
 
   function replayConversation(conversation) {
     clearChat();
+    currentGoal = conversation.goal || null;
+    renderGoal(currentGoal);
     (conversation.events || []).forEach(function (e) { appendEvent(e); });
     closeHistory();
     scrollBottom(true);
+  }
+
+  // ---- Goal mode ----
+  function goalInput() {
+    var outcome = els.goalOutcome.value.trim();
+    if (!outcome) { els.goalOutcome.focus(); return null; }
+    return {
+      outcome: outcome,
+      constraints: els.goalConstraints.value.trim(),
+      verification: els.goalVerification.value.trim(),
+    };
+  }
+
+  function openGoalEditor(prefill) {
+    if (planMode) togglePlanMode();
+    var goal = currentGoal;
+    els.goalOutcome.value = prefill || (goal ? goal.outcome : '');
+    els.goalConstraints.value = goal ? (goal.constraints || '') : '';
+    els.goalVerification.value = goal ? (goal.verification || '') : '';
+    els.goalStart.textContent = goal && goal.status === 'paused' ? 'Resume goal' : goal ? 'Continue goal' : 'Start goal';
+    els.goalStart.disabled = !!(state && state.isRunning);
+    els.goalEditor.style.display = 'flex';
+    els.goalOutcome.focus();
+  }
+
+  function closeGoalEditor() {
+    els.goalEditor.style.display = 'none';
+  }
+
+  function saveGoal(start) {
+    var goal = goalInput();
+    if (!goal) return;
+    closeGoalEditor();
+    if (start) {
+      if (state && state.isRunning) {
+        vscode.postMessage({ type: 'setGoal', goal: goal });
+        return;
+      }
+      appendUserMessage('Goal: ' + goal.outcome);
+      vscode.postMessage({
+        type: 'startTask', prompt: goal.outcome, goal: goal,
+        agent: currentAgent(), route: currentRoute(), autonomy: currentAutonomy(),
+        skills: selectedSkills.map(function (skill) { return skill.name; }),
+      });
+      selectedSkills = [];
+      renderCtxChips();
+    } else {
+      vscode.postMessage({ type: 'setGoal', goal: goal });
+    }
+  }
+
+  function goalControl(title, svg, className, onClick) {
+    var button = document.createElement('button');
+    button.type = 'button'; button.className = 'goal-control ' + (className || '');
+    button.title = title; button.setAttribute('aria-label', title); button.innerHTML = svg;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function renderGoal(goal) {
+    currentGoal = goal || null;
+    if (!goal) { els.goalProgress.style.display = 'none'; els.goalProgress.innerHTML = ''; return; }
+    els.goalProgress.innerHTML = '';
+    els.goalProgress.style.display = 'flex';
+    els.goalProgress.className = 'goal-progress status-' + goal.status;
+
+    var target = document.createElement('span'); target.className = 'goal-target';
+    target.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>';
+
+    var text = document.createElement('div'); text.className = 'goal-copy';
+    var title = document.createElement('div'); title.className = 'goal-title'; title.textContent = goal.outcome;
+    var meta = document.createElement('div'); meta.className = 'goal-meta';
+    meta.textContent = goal.status === 'completed' ? 'complete' : goal.status + (goal.verification ? ' · verified by definition of done' : '');
+    text.appendChild(title); text.appendChild(meta);
+
+    var controls = document.createElement('div'); controls.className = 'goal-controls';
+    if (goal.status === 'running') {
+      controls.appendChild(goalControl('Pause goal', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 5v14M16 5v14"/></svg>', '', function () { vscode.postMessage({ type: 'pauseGoal' }); }));
+    } else if (goal.status === 'paused') {
+      controls.appendChild(goalControl('Resume goal', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l11 7-11 7z"/></svg>', '', function () { appendUserMessage('Continue goal: ' + goal.outcome); vscode.postMessage({ type: 'resumeGoal' }); }));
+    }
+    if (goal.status !== 'completed') {
+      controls.appendChild(goalControl('Mark goal complete', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>', '', function () { vscode.postMessage({ type: 'completeGoal' }); }));
+    }
+    controls.appendChild(goalControl('Edit goal', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>', '', function () { openGoalEditor(''); }));
+    controls.appendChild(goalControl('Clear goal', '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>', 'clear', function () { vscode.postMessage({ type: 'clearGoal' }); }));
+    els.goalProgress.appendChild(target); els.goalProgress.appendChild(text); els.goalProgress.appendChild(controls);
+  }
+
+  // ---- Skills ----
+  function openSkillsPanel() {
+    closeHistory();
+    els.skillsPanel.style.display = 'flex';
+    els.skillsSearch.value = '';
+    els.skillsSearch.focus();
+    vscode.postMessage({ type: 'listSkills' });
+  }
+
+  function closeSkillsPanel() { els.skillsPanel.style.display = 'none'; }
+
+  function skillIsSelected(name) { return selectedSkills.some(function (skill) { return skill.name === name; }); }
+
+  function toggleSkill(skill) {
+    if (skillIsSelected(skill.name)) selectedSkills = selectedSkills.filter(function (item) { return item.name !== skill.name; });
+    else selectedSkills.push(skill);
+    renderSkillsList();
+    renderCtxChips();
+  }
+
+  function renderSkillsList() {
+    var query = (els.skillsSearch.value || '').trim().toLowerCase();
+    els.skillsList.innerHTML = '';
+    var visible = skills.filter(function (skill) {
+      return !query || skill.name.toLowerCase().indexOf(query) >= 0 || (skill.description || '').toLowerCase().indexOf(query) >= 0;
+    });
+    if (!visible.length) {
+      var empty = document.createElement('div'); empty.className = 'history-empty';
+      empty.textContent = skills.length ? 'No matching skills.' : 'No skills found in .agents/skills.';
+      els.skillsList.appendChild(empty); return;
+    }
+    visible.forEach(function (skill) {
+      var row = document.createElement('button'); row.type = 'button';
+      row.className = 'skill-row' + (skillIsSelected(skill.name) ? ' selected' : '');
+      var head = document.createElement('div'); head.className = 'skill-row-head';
+      var name = document.createElement('span'); name.className = 'skill-name'; name.textContent = '$' + skill.name;
+      var source = document.createElement('span'); source.className = 'skill-source'; source.textContent = skill.scope;
+      var description = document.createElement('div'); description.className = 'skill-description'; description.textContent = skill.description || 'No description provided.';
+      var path = document.createElement('div'); path.className = 'skill-path'; path.textContent = skill.path;
+      head.appendChild(name); head.appendChild(source); row.appendChild(head); row.appendChild(description); row.appendChild(path);
+      row.addEventListener('click', function () { toggleSkill(skill); });
+      els.skillsList.appendChild(row);
+    });
+  }
+
+  function setSkills(next) {
+    skills = Array.isArray(next) ? next : [];
+    selectedSkills = selectedSkills.filter(function (selected) {
+      var found = skills.filter(function (skill) { return skill.name === selected.name; })[0];
+      if (found) { selected.description = found.description; selected.path = found.path; selected.scope = found.scope; return true; }
+      return false;
+    });
+    if (els.skillsPanel.style.display !== 'none') renderSkillsList();
+    renderCtxChips();
+  }
+
+  function skillNamesInText(text) {
+    var names = [], seen = {}, re = /\$([A-Za-z0-9_-]+)/g, match;
+    while ((match = re.exec(text || ''))) {
+      var name = match[1];
+      if (seen[name]) continue;
+      var skill = skills.filter(function (item) { return item.name === name; })[0];
+      if (skill) { names.push(name); seen[name] = true; }
+    }
+    return names;
+  }
+
+  function collectSkillsForSend(text) {
+    var byName = {};
+    selectedSkills.forEach(function (skill) { byName[skill.name] = true; });
+    skillNamesInText(text).forEach(function (name) { byName[name] = true; });
+    return Object.keys(byName);
+  }
+
+  function openSkillPicker() {
+    var match = /(?:^|\s)\$([A-Za-z0-9_-]*)$/.exec(els.prompt.value);
+    if (!match) return;
+    var query = match[1].toLowerCase();
+    var matches = skills.filter(function (skill) {
+      return !query || skill.name.toLowerCase().indexOf(query) >= 0 || (skill.description || '').toLowerCase().indexOf(query) >= 0;
+    }).slice(0, 8);
+    if (!matches.length) return;
+    openMenu(els.prompt, matches.map(function (skill) {
+      return {
+        label: '$' + skill.name + (skillIsSelected(skill.name) ? '  ✓' : ''),
+        title: skill.description,
+        onClick: function () {
+          els.prompt.value = els.prompt.value.replace(/\$[A-Za-z0-9_-]*$/, '$' + skill.name + ' ');
+          if (!skillIsSelected(skill.name)) toggleSkill(skill);
+          els.prompt.focus();
+        },
+      };
+    }));
+  }
+
+  function openCommandPicker() {
+    var match = /^\/([a-z]*)$/.exec(els.prompt.value.trim().toLowerCase());
+    if (!match) return;
+    var commands = [
+      { name: 'goal', label: '/goal', desc: 'Define outcome, constraints, and verification' },
+      { name: 'skills', label: '/skills', desc: 'Browse and select reusable skills' },
+      { name: 'agent', label: '/agent', desc: 'Switch the active agent' },
+      { name: 'route', label: '/route', desc: 'Switch direct or proxy route' },
+    ].filter(function (command) { return command.name.indexOf(match[1]) === 0; });
+    if (!commands.length) return;
+    openMenu(els.prompt, commands.map(function (command) {
+      return { label: command.label, title: command.desc, onClick: function () {
+        if (command.name === 'goal') openGoalEditor(''); else if (command.name === 'skills') openSkillsPanel(); else { els.prompt.value = command.label + ' '; els.prompt.focus(); }
+      } };
+    }));
   }
 
   // ---- Small floating menu helper (used by "Continue with" and future pickers) ----
@@ -216,7 +433,7 @@
   }
 
   // ---- Plan mode ----
-  function togglePlanMode() { planMode=!planMode; els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit workflow mode':'Workflow mode: define multi-step agent runs'; if(planMode&&compareMode) toggleCompareMode(); }
+  function togglePlanMode() { planMode=!planMode; if(planMode) closeGoalEditor(); els.planEditor.style.display=planMode?'block':'none'; els.planToggle.classList.toggle('active',planMode); els.planToggle.title=planMode?'Exit workflow mode':'Workflow mode: define multi-step agent runs'; if(planMode&&compareMode) toggleCompareMode(); }
   function addPlanStep() { planSteps.push({agent:currentAgent(),prompt:''}); renderPlanSteps(); }
   function removePlanStep(idx) { planSteps.splice(idx,1); renderPlanSteps(); }
 
@@ -821,7 +1038,7 @@
     }
   }
   function renderCtxChips() {
-    var hasAny = (activeFile != null) || contextChips.length > 0;
+    var hasAny = (activeFile != null) || contextChips.length > 0 || selectedSkills.length > 0;
     els.ctxChipRow.style.display = hasAny ? 'flex' : 'none';
     els.ctxChipRow.innerHTML = '';
     if (activeFile) {
@@ -836,6 +1053,14 @@
       afChip.querySelector('.eye').addEventListener('click', function () { activeFile.included = !activeFile.included; renderCtxChips(); });
       els.ctxChipRow.appendChild(afChip);
     }
+    selectedSkills.forEach(function (skill) {
+      var chip = document.createElement('span'); chip.className = 'ctx-chip skill-chip';
+      chip.appendChild(document.createTextNode('$' + skill.name));
+      var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = 'Remove skill';
+      rm.addEventListener('click', function () { selectedSkills = selectedSkills.filter(function (item) { return item.name !== skill.name; }); renderCtxChips(); });
+      chip.appendChild(rm);
+      els.ctxChipRow.appendChild(chip);
+    });
     contextChips.forEach(function (c) {
       var chip = document.createElement('span'); chip.className = 'ctx-chip';
       chip.appendChild(document.createTextNode(chipDisplayText(c)));
@@ -1186,6 +1411,7 @@
     state=next;
     var running=state.isRunning;
     els.planToggle.disabled=running;
+    if (els.goalStart) els.goalStart.disabled = running;
     if(running){els.send.textContent='Stop';els.send.classList.add('stop');startThinking();}else{els.send.textContent='Send';els.send.classList.remove('stop');finalizeAssistant();stopThinking();}
     els.statePill.innerHTML=running?'<span class="pill running"><span class="dot"></span>running</span>':'<span class="pill"><span class="dot"></span>idle</span>';
     if(totalCost>0) els.costPill.innerHTML='<span class="pill cost">$'+totalCost.toFixed(4)+' . '+totalInput+' in / '+totalOutput+' out</span>';
@@ -1212,19 +1438,24 @@
   function reallyDispatch(text) {
     lastUserPrompt = text;
     var chips = collectChipsForSend();
+    var skillNames = collectSkillsForSend(text);
     appendUserMessage(text);
     if (compareMode) {
       vscode.postMessage({ type: 'compareTask', prompt: text, agent: currentAgent(), targetAgent: els.compareAgentB.value });
     } else {
-      vscode.postMessage({ type: 'startTask', prompt: text, agent: currentAgent(), route: currentRoute(), autonomy: currentAutonomy(), contextChips: chips });
+      vscode.postMessage({ type: 'startTask', prompt: text, agent: currentAgent(), route: currentRoute(), autonomy: currentAutonomy(), contextChips: chips, skills: skillNames });
     }
     clearNonPersistentChips();
+    selectedSkills = [];
+    renderCtxChips();
     clearPrompt();
   }
 
   function dispatchPrompt(prompt) {
     prompt=prompt.trim();if(!prompt) return;
     var m;
+    if((m=prompt.match(/^\/goal(?:\s+([\s\S]+))?$/i))){openGoalEditor(m[1]||'');clearPrompt();return;}
+    if(/^\/skills$/i.test(prompt)){clearPrompt();openSkillsPanel();return;}
     if((m=prompt.match(/^\/handoff\s+(\S+)/i))){var t=m[1].toLowerCase();if(AGENT_IDS.indexOf(t)>=0){vscode.postMessage({type:'handoff',targetAgent:t});clearPrompt();return;}}
     if((m=prompt.match(/^\/agent\s+(\S+)/i))){var a=m[1].toLowerCase();if(AGENT_IDS.indexOf(a)>=0){vscode.postMessage({type:'setAgent',agent:a});clearPrompt();return;}}
     if((m=prompt.match(/^\/route\s+(\S+)/i))){var r=m[1].toLowerCase();if(r==='direct'||r==='proxy'){vscode.postMessage({type:'setRoute',route:r});clearPrompt();return;}}
@@ -1244,6 +1475,13 @@
 
   // Listeners
   els.send.addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});else dispatchPrompt(els.prompt.value);});
+  els.goalBtn.addEventListener('click', function () { openGoalEditor(''); });
+  els.goalCancel.addEventListener('click', closeGoalEditor);
+  els.goalSave.addEventListener('click', function () { saveGoal(false); });
+  els.goalStart.addEventListener('click', function () { saveGoal(true); });
+  els.skillsBtn.addEventListener('click', openSkillsPanel);
+  els.skillsClose.addEventListener('click', closeSkillsPanel);
+  els.skillsSearch.addEventListener('input', renderSkillsList);
   els.planToggle.addEventListener('click',function(){togglePlanMode();if(planMode&&planSteps.length===0) addPlanStep();});
   els.compareToggle.addEventListener('click', toggleCompareMode);
   els.addStep.addEventListener('click',addPlanStep);
@@ -1275,6 +1513,7 @@
     }
   });
   els.prompt.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){ closeGoalEditor(); closeSkillsPanel(); return; }
     if(e.key==='Enter' && (e.ctrlKey||e.metaKey) && e.shiftKey){ e.preventDefault(); steerNow(); return; }
     if(e.key==='Tab' && e.shiftKey){
       e.preventDefault();
@@ -1290,9 +1529,8 @@
       if(state&&state.isRunning){ enqueueMessage(text); clearPrompt(); } else { dispatchPrompt(text); }
     }
   });
-  var estTimer=null;els.prompt.addEventListener('input',function(){autoGrow();clearTimeout(estTimer);estTimer=setTimeout(function(){var p=els.prompt.value.trim();if(p.length>10&&p.charAt(0)!=='/'){vscode.postMessage({type:'estimateCost',prompt:p,agent:currentAgent(),route:currentRoute()});}else{els.costEstimate.textContent='';}},400);});
+  var estTimer=null;els.prompt.addEventListener('input',function(){autoGrow();var value=els.prompt.value;if(!value){closeMenu();}else if(value.trim().charAt(0)==='/'){openCommandPicker();if(!/^\/([a-z]*)$/.test(value.trim().toLowerCase()))closeMenu();}else if(/\$[A-Za-z0-9_-]*$/.test(value)){openSkillPicker();}else{closeMenu();}clearTimeout(estTimer);estTimer=setTimeout(function(){var p=els.prompt.value.trim();if(p.length>10&&p.charAt(0)!=='/'){vscode.postMessage({type:'estimateCost',prompt:p,agent:currentAgent(),route:currentRoute()});}else{els.costEstimate.textContent='';}},400);});
   document.getElementById('newChat').addEventListener('click',function(){if(state&&state.isRunning) vscode.postMessage({type:'stop'});vscode.postMessage({type:'newConversation'});clearChat();els.prompt.focus();});
-  els.historyBtn.addEventListener('click', openHistory);
   els.historyClose.addEventListener('click', closeHistory);
   var historySearchTimer = null;
   els.historySearch.addEventListener('input', function () {
@@ -1304,7 +1542,22 @@
   if(els.planTemplate) els.planTemplate.addEventListener('change',function(){var v=els.planTemplate.value;if(!v) return; vscode.postMessage({type:'loadTemplate',value:v});els.planTemplate.value='';});
 
   var showDetails=false;els.chat.classList.add('hide-telemetry');
-  var detailsToggle=document.getElementById('detailsToggle');detailsToggle.addEventListener('click',function(){showDetails=!showDetails;els.chat.classList.toggle('hide-telemetry',!showDetails);detailsToggle.classList.toggle('active',showDetails);detailsToggle.textContent=showDetails?'Hide log':'Details';if(showDetails) scrollBottom(true);});
+  function toggleDetails(){showDetails=!showDetails;els.chat.classList.toggle('hide-telemetry',!showDetails);if(showDetails) scrollBottom(true);}
+
+  // Everything that isn't chat lives behind the gear, so the header stays two
+  // controls wide no matter how many panels we add later.
+  var gearBtn=document.getElementById('gearBtn');
+  if(gearBtn) gearBtn.addEventListener('click',function(){
+    openMenuRich(gearBtn,[
+      {label:'History',desc:'Past conversations',onClick:openHistory},
+      {label:'Open as editor tab',desc:'Maximize or split',onClick:function(){vscode.postMessage({type:'openTab'});}},
+      {label:'Details',desc:'Agent activity log',onClick:toggleDetails},
+      {label:'Settings',desc:'Agents, keys, proxy',onClick:function(){vscode.postMessage({type:'openView',view:'settings'});}},
+      {label:'Engine Room',desc:'Status and backups',onClick:function(){vscode.postMessage({type:'openView',view:'engineRoom'});}},
+      {label:'Memory',desc:'Cognitive1 brain',onClick:function(){vscode.postMessage({type:'openView',view:'memory'});}},
+      {label:'Sessions',desc:'History and cost',onClick:function(){vscode.postMessage({type:'openView',view:'sessions'});}}
+    ]);
+  });
   els.chat.addEventListener('click',function(e){
     var ap=e.target.closest('[data-approve]');var rj=e.target.closest('[data-reject]');
     if(ap){vscode.postMessage({type:'approveDiff',eventId:ap.getAttribute('data-approve')});return;}
@@ -1324,7 +1577,7 @@
   // Messages from extension
   window.addEventListener('message',function(e){
     var m=e.data;
-    if(m.type==='state'){renderState(m.state);if(m.plan!=null){currentPlan=m.plan;renderPlanProgress(m.plan);}}
+    if(m.type==='state'){renderState(m.state);renderGoal(m.goal);if(m.plan!=null){currentPlan=m.plan;renderPlanProgress(m.plan);}}
     else if(m.type==='event') appendEvent(m.event);
     else if(m.type==='planEvent') handlePlanEvent(m.planEvent);
     else if(m.type==='capabilities') applyCapabilities(m.capabilities);
@@ -1348,12 +1601,17 @@
     else if(m.type==='attachImageResult'){ if(m.ok) addContextChip({ type:'image', name:m.name, path:m.path }); }
     else if(m.type==='conversationsList'){ renderHistoryList(m.conversations); }
     else if(m.type==='conversationLoaded'){ replayConversation(m.conversation); }
+    else if(m.type==='skills'){ setSkills(m.skills || []); }
+    else if(m.type==='openGoal'){ openGoalEditor(''); }
+    else if(m.type==='openSkills'){ openSkillsPanel(); }
   });
 
   if(state) renderState(state); else { renderModeChip(); renderAgentChip(); }
   if(currentPlan) renderPlanProgress(currentPlan);
+  renderGoal(currentGoal);
   renderCtxChips(); renderQueue();
   autoGrow();
   vscode.postMessage({type:'ready'});
+  vscode.postMessage({type:'listSkills'});
   vscode.postMessage({type:'loadTemplates'});
 })();

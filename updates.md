@@ -1,5 +1,27 @@
 # KAI Agent Workbench — Updates
 
+## 2026-09-12
+
+### Codex-style Goal mode and Skills
+
+- **Goal mode** now stores a durable goal per conversation with three explicit
+  parts: outcome, constraints, and definition of done. Every goal-backed turn
+  receives that contract, so follow-up prompts and resumed runs do not lose the
+  original target.
+- **The goal progress row sits above the composer** and supports pause/resume,
+  mark complete, edit, and clear. `/goal` opens the editor, `/goal <outcome>`
+  pre-fills it, and goals survive saving, reopening a conversation, and app
+  restarts.
+- **Skills are now first-class KAI context.** KAI discovers `SKILL.md`
+  packages from ancestor and user `.agents/skills` directories, shows their
+  names, descriptions, scope, and paths in a browser, and accepts `$skill`
+  mentions or the `/skills` command. Selected skill instructions are injected
+  into the prompt, so the behavior works with every configured agent rather
+  than only Codex's native skill runner.
+- **Codex-style command affordances** include a slash-command picker for
+  `/goal` and `/skills`, `$` autocomplete from the composer, and a compact
+  goal row with icon controls.
+
 ## 2026-09-11
 
 ### Phase 6 memory injection and a locked-down proxy (partial)

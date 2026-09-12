@@ -2,7 +2,7 @@
   "name": "kai-agent-workbench",
   "displayName": "KAI Agent Workbench",
   "description": "A multi-agent coding workbench with route control and durable Cognitive1 memory.",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "publisher": "kai",
   "license": "UNLICENSED",
   "engines": {
@@ -24,8 +24,28 @@
         "title": "KAI: Open Settings"
       },
       {
+        "command": "kai.openEngineRoom",
+        "title": "KAI: Open Engine Room"
+      },
+      {
+        "command": "kai.openMemory",
+        "title": "KAI: Open Memory"
+      },
+      {
+        "command": "kai.openSessions",
+        "title": "KAI: Open Sessions"
+      },
+      {
         "command": "kai.openChatTab",
         "title": "KAI: Open Chat in Editor (full window)"
+      },
+      {
+        "command": "kai.openGoal",
+        "title": "KAI: Start or Edit Goal"
+      },
+      {
+        "command": "kai.openSkills",
+        "title": "KAI: Browse Skills"
       },
       {
         "command": "kai.setAgent",
@@ -121,6 +141,16 @@
         "command": "kai.cycleAutonomy",
         "key": "ctrl+shift+k m",
         "mac": "cmd+shift+k m"
+      },
+      {
+        "command": "kai.openGoal",
+        "key": "ctrl+shift+k g",
+        "mac": "cmd+shift+k g"
+      },
+      {
+        "command": "kai.openSkills",
+        "key": "ctrl+shift+k s",
+        "mac": "cmd+shift+k s"
       }
     ],
     "viewsContainers": {
@@ -138,26 +168,6 @@
           "id": "kai.workbench",
           "name": "Agent Workbench",
           "type": "webview"
-        },
-        {
-          "id": "kai.settings",
-          "name": "Settings",
-          "type": "webview"
-        },
-        {
-          "id": "kai.engineRoom",
-          "name": "Engine Room",
-          "type": "webview"
-        },
-        {
-          "id": "kai.memory",
-          "name": "Memory",
-          "type": "tree"
-        },
-        {
-          "id": "kai.sessions",
-          "name": "Sessions",
-          "type": "tree"
         }
       ]
     },

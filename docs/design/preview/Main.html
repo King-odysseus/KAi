@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAI — Conversation</title>
+<style>
+
+    body { margin: 0; background: #181818; color: #cccccc; font-family: "Segoe WPC", "Segoe UI", system-ui, -apple-system, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { color: #0ea5e9; }
+    .mono { font-family: Consolas, "Cascadia Mono", "Courier New", monospace; }
+    code { font-family: Consolas, "Cascadia Mono", "Courier New", monospace; font-size: 11.5px; background: #2b2b2b; color: #e6e6e6; padding: 1px 5px; border-radius: 4px; }
+    svg.i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    svg.s12 { width: 12px; height: 12px; }
+    svg.s16 { width: 16px; height: 16px; }
+    .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #2e2e2e; border-radius: 999px; padding: 2px 8px; font-size: 10.5px; line-height: 16px; white-space: nowrap; background: #1e1e1e; color: #9d9d9d; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 16px; padding: 4px 11px; border-radius: 5px; border: 1px solid #3c3c3c; background: #2a2a2a; color: #cccccc; white-space: nowrap; }
+    .btn.primary { background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%); border-color: #0ea5e9; color: #05202e; font-weight: 600; }
+    .ibtn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 5px; color: #9d9d9d; }
+    .label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #9d9d9d; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .ring { fill: none; stroke-width: 2; }
+    .kw { color: #569cd6; }
+    .ctl { color: #c586c0; }
+    .str { color: #ce9178; }
+    .id { color: #9cdcfe; }
+    .fn { color: #dcdcaa; }
+
+  body { margin: 0; padding: 24px; background: #101010; min-height: 100vh; }
+  .stage { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .frame { border: 1px solid #2e2e2e; border-radius: 10px; overflow: hidden; box-shadow: 0 10px 34px rgba(0,0,0,.5); }
+  .caption { font-size: 11px; color: #9d9d9d; margin: 0 0 8px; }
+  .back { display: inline-block; margin-bottom: 18px; font-size: 11.5px; }
+</style>
+</head>
+<body>
+<a class="back" href="./index.html">&larr; All screens</a>
+<div class="stage">
+<div style="width: 440px; display: flex; flex-direction: column; background: #181818;">
+
+  <div style="display: flex; align-items: center; gap: 9px; padding: 9px 12px 9px 14px; border-bottom: 1px solid #272727;">
+    <svg viewBox="0 0 128 128" style="width: 22px; height: 22px; border-radius: 6px; flex: none;"><rect width="128" height="128" rx="24" fill="#111827"></rect><path d="M30 84V44H40V60L55 44H68L50 62L70 84H57L40 65V84H30Z" fill="#F9FAFB"></path><path d="M73 84L88 44H100L115 84H104L101 75H87L84 84H73ZM90 66H98L94 54L90 66Z" fill="#38BDF8"></path></svg>
+    <div style="display: flex; flex-direction: column; min-width: 0; flex: 1;">
+      <span style="font-size: 12.5px; font-weight: 600; color: #e6e6e6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Fix Groq 404 after base-URL change</span>
+      <span style="font-size: 10.5px; color: #9d9d9d;">KAi · Claude, Codex · $0.011</span>
+    </div>
+    <span class="ibtn" title="Conversations"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></span>
+    <span class="ibtn" title="New conversation"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></span>
+    <span class="ibtn" title="Open in editor tab"><svg class="i" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"></path></svg></span>
+    <span class="ibtn" title="More"><svg class="i" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg></span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 16px; padding: 16px 14px;">
+
+    <div style="align-self: flex-end; max-width: 88%; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+      <div style="padding: 9px 12px; border-radius: 14px; border-bottom-right-radius: 4px; background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%); color: #05202e; font-weight: 500; font-size: 12.5px; line-height: 1.5;">Groq returns 404 through the proxy since the base-URL change. Find out why and fix it.</div>
+      <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end;">
+        <span class="chip mono"><svg class="i s12" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg>proxy-config.ts:290-310</span>
+        <span class="chip"><svg class="i s12" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="M21 16l-5-5-9 9"></path></svg>groq-error.png</span>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="display: flex; align-items: center; gap: 7px; flex-wrap: wrap;">
+        <span class="dot" style="background: #e0976f;"></span>
+        <span style="font-weight: 600; color: #e6e6e6; font-size: 12px;">Claude</span>
+        <span class="chip"><svg class="i s12" viewBox="0 0 24 24"><path d="M4 17h5l6-10h5"></path><path d="M17 4l3 3-3 3"></path></svg>Proxy · deepseek-v4-pro</span>
+        <span class="chip" style="color: #89d185;">$0.004</span>
+        <span style="margin-left: auto; font-size: 10.5px; color: #9d9d9d;">41s</span>
+      </div>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <span class="chip" style="color: #c7a3e6; border-color: #3a2f47; background: #221d29;"><svg class="i s12" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>Used 3 memories<svg class="i s12" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"></path></svg></span>
+        <span class="chip"><svg class="i s12" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"></path><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"></path></svg>Thought for 6s<svg class="i s12" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"></path></svg></span>
+      </div>
+
+      <div style="border: 1px solid #2e2e2e; border-radius: 8px; background: #1e1e1e; overflow: hidden;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #2a2a2a; font-size: 11.5px;">
+          <svg class="i" viewBox="0 0 24 24" style="color: #cca700;"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"></path></svg>
+          <span style="color: #e6e6e6;">Ran 5 tools</span>
+          <span style="color: #9d9d9d;">Read ×3 · Grep · Bash</span>
+          <svg class="i s12" viewBox="0 0 24 24" style="margin-left: auto; color: #9d9d9d;"><path d="M6 15l6-6 6 6"></path></svg>
+        </div>
+        <div style="display: flex; flex-direction: column; padding: 4px 0;">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px;">
+            <svg class="i s12" viewBox="0 0 24 24" style="color: #9d9d9d;"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg>
+            <span style="color: #9d9d9d; width: 34px;">Read</span>
+            <span class="mono" style="color: #cccccc; flex: 1;">src/config/proxy-config.ts</span>
+            <span style="color: #9d9d9d;">310 lines</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px;">
+            <svg class="i s12" viewBox="0 0 24 24" style="color: #9d9d9d;"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+            <span style="color: #9d9d9d; width: 34px;">Grep</span>
+            <span class="mono" style="color: #cccccc; flex: 1;">chat/completions  src/proxy</span>
+            <span style="color: #9d9d9d;">4 matches</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px;">
+            <svg class="i s12" viewBox="0 0 24 24" style="color: #9d9d9d;"><path d="M4 6l6 6-6 6"></path><path d="M12 19h8"></path></svg>
+            <span style="color: #9d9d9d; width: 34px;">Bash</span>
+            <span class="mono" style="color: #cccccc; flex: 1;">npm test -- proxy-config</span>
+            <span style="color: #89d185; display: inline-flex; align-items: center; gap: 3px;"><svg class="i s12" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"></path></svg>21 passed</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 9px; font-size: 12.5px; line-height: 1.6; color: #cccccc;">
+        <p style="margin: 0;">The new <code>normalizeBaseUrl</code> strips <code>/v1</code>, but the proxy appends <code>chat/completions</code> straight onto the base URL. So <code>https://api.groq.com/openai/v1</code> becomes <code>…/openai/chat/completions</code>, which Groq answers with a 404.</p>
+        <p style="margin: 0;">I kept <code>/v1</code> and now strip only the Anthropic suffixes:</p>
+        <div style="border: 1px solid #2e2e2e; border-radius: 6px; overflow: hidden;">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: #232323; font-size: 10.5px; color: #9d9d9d;">
+            <span class="mono">proxy-config.ts</span>
+            <span style="display: inline-flex; align-items: center; gap: 4px;"><svg class="i s12" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V6a2 2 0 0 1 2-2h8"></path></svg>Copy</span>
+          </div>
+          <pre class="mono" style="margin: 0; padding: 9px 10px; background: #141414; font-size: 11.5px; line-height: 1.55; color: #d4d4d4; white-space: pre;"><span class="kw">const</span> <span class="id">STRIP</span> = [<span class="str">'/anthropic/v1'</span>, <span class="str">'/anthropic'</span>];
+<span class="ctl">for</span> (<span class="kw">const</span> <span class="id">s</span> <span class="kw">of</span> <span class="id">STRIP</span>) {
+  <span class="ctl">if</span> (<span class="id">url</span>.<span class="fn">endsWith</span>(<span class="id">s</span>)) <span class="ctl">return</span> <span class="id">url</span>.<span class="fn">slice</span>(0, -<span class="id">s</span>.<span class="id">length</span>);
+}</pre>
+        </div>
+        <p style="margin: 0;">Added 4 regression tests covering Groq, OpenAI and Ollama base URLs.</p>
+      </div>
+
+      <div style="border: 1px solid #2e2e2e; border-radius: 8px; background: #1e1e1e;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #2a2a2a;">
+          <span style="font-size: 11.5px; color: #e6e6e6; font-weight: 600;">3 files changed</span>
+          <span class="mono" style="font-size: 11px; color: #89d185;">+18</span>
+          <span class="mono" style="font-size: 11px; color: #f14c4c;">−6</span>
+          <span class="btn" style="margin-left: auto; padding: 2px 9px;"><svg class="i s12" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7"></path><path d="M4 4v5h5"></path></svg>Undo all</span>
+        </div>
+        <div style="display: flex; flex-direction: column; padding: 4px 0;">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px;">
+            <span class="mono" style="flex: 1; color: #cccccc;">src/config/proxy-config.ts</span>
+            <span class="mono" style="color: #89d185;">+6</span><span class="mono" style="color: #f14c4c; width: 20px;">−4</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px;">
+            <span class="mono" style="flex: 1; color: #cccccc;">test/proxy-config.test.ts</span>
+            <span class="mono" style="color: #89d185;">+11</span><span class="mono" style="color: #f14c4c; width: 20px;">−2</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 11px;">
+            <span class="mono" style="flex: 1; color: #cccccc;">README.md</span>
+            <span class="mono" style="color: #89d185;">+1</span><span class="mono" style="color: #f14c4c; width: 20px;">−0</span>
+          </div>
+        </div>
+        <div style="display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid #2a2a2a;">
+          <span class="btn primary">Review in editor</span>
+          <span class="btn">Keep all</span>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 2px;">
+        <span class="ibtn" title="Copy"><svg class="i" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V6a2 2 0 0 1 2-2h8"></path></svg></span>
+        <span class="ibtn" title="Retry"><svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 4v7h-7"></path></svg></span>
+        <span class="ibtn" title="Rewind code to here"><svg class="i" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7"></path><path d="M4 4v5h5"></path><path d="M12 8v4l3 2"></path></svg></span>
+        <span class="ibtn" title="Fork from here"><svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="8" r="2"></circle><path d="M6 7v10"></path><path d="M18 10a6 6 0 0 1-6 6H8"></path></svg></span>
+        <span class="btn" style="margin-left: auto; padding: 3px 9px; background: transparent;">
+          <svg class="i s12" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg>Continue with
+          <span style="display: inline-flex; gap: 3px;"><span class="dot" style="background: #62c4a0; width: 7px; height: 7px;"></span><span class="dot" style="background: #a996e6; width: 7px; height: 7px;"></span><span class="dot" style="background: #d2b55b; width: 7px; height: 7px;"></span></span>
+          <svg class="i s12" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+        </span>
+      </div>
+    </div>
+
+    <div style="align-self: flex-end; max-width: 88%; padding: 9px 12px; border-radius: 14px; border-bottom-right-radius: 4px; background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%); color: #05202e; font-weight: 500; font-size: 12.5px; line-height: 1.5;">Run the whole suite before we call it done.</div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="display: flex; align-items: center; gap: 7px;">
+        <span class="dot" style="background: #e0976f;"></span>
+        <span style="font-weight: 600; color: #e6e6e6; font-size: 12px;">Claude</span>
+        <span class="chip"><svg class="i s12" viewBox="0 0 24 24"><path d="M4 17h5l6-10h5"></path><path d="M17 4l3 3-3 3"></path></svg>Proxy · deepseek-v4-pro</span>
+      </div>
+      <div style="font-size: 12.5px; line-height: 1.6;">Running everything to check nothing else relied on the old behaviour.</div>
+      <div style="border: 1px solid #5a4217; border-radius: 8px; background: #261f14; padding: 10px 11px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 7px;">
+          <svg class="i" viewBox="0 0 24 24" style="color: #d18616;"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"></path></svg>
+          <span style="font-weight: 600; color: #e6e6e6; font-size: 12px;">Run this command?</span>
+          <span class="chip" style="margin-left: auto; color: #89d185; background: transparent;">Low risk</span>
+        </div>
+        <div class="mono" style="background: #141414; border: 1px solid #2e2e2e; border-radius: 5px; padding: 7px 9px; font-size: 11.5px; color: #d4d4d4;">$ npm test</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span class="btn primary">Allow once</span>
+          <span class="btn">Always allow npm test</span>
+          <span class="btn">Deny</span>
+        </div>
+        <div style="font-size: 10.5px; color: #9d9d9d;">Or tell Claude what to do instead in the box below.</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: #9d9d9d;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #d18616; box-shadow: 0 0 0 3px rgba(209, 134, 22, 0.25);"></span>
+        <span style="color: #d9a560; font-weight: 600;">Waiting for your approval</span>
+        <span style="margin-left: auto;">0:08</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin: 0 12px 8px; border: 1px solid #2e2e2e; border-radius: 8px; background: #1e1e1e;">
+    <div style="display: flex; align-items: center; gap: 7px; padding: 7px 10px; font-size: 11.5px;">
+      <svg class="i" viewBox="0 0 24 24" style="color: #38bdf8;"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4 6h.01M4 12h.01M4 18h.01"></path></svg>
+      <span style="color: #e6e6e6; font-weight: 600;">Tasks</span>
+      <span style="color: #9d9d9d;">2 of 4</span>
+      <svg class="i s12" viewBox="0 0 24 24" style="margin-left: auto; color: #9d9d9d;"><path d="M6 9l6 6 6-6"></path></svg>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 5px; padding: 0 10px 9px; font-size: 11.5px;">
+      <div style="display: flex; align-items: center; gap: 8px; color: #7f7f7f; text-decoration: line-through;"><svg class="i s12" viewBox="0 0 24 24" style="color: #89d185;"><path d="M5 12l5 5L20 7"></path></svg>Reproduce the 404 with a Groq base URL</div>
+      <div style="display: flex; align-items: center; gap: 8px; color: #7f7f7f; text-decoration: line-through;"><svg class="i s12" viewBox="0 0 24 24" style="color: #89d185;"><path d="M5 12l5 5L20 7"></path></svg>Keep /v1 in the upstream base URL</div>
+      <div style="display: flex; align-items: center; gap: 8px; color: #e6e6e6;"><svg class="i s12" viewBox="0 0 24 24" style="color: #38bdf8;"><circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="3" style="fill: #38bdf8;"></circle></svg>Run the full test suite</div>
+      <div style="display: flex; align-items: center; gap: 8px; color: #9d9d9d;"><svg class="i s12" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"></circle></svg>Fix the pass-through note in the README</div>
+    </div>
+  </div>
+
+  <div style="border-top: 1px solid #272727; padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 7px;">
+    <div style="display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 9px; border: 1px dashed #3c3c3c; border-radius: 6px; font-size: 11.5px;">
+      <span class="label">Queued</span>
+      <span style="flex: 1; color: #cccccc;">Also check the Ollama localhost URL</span>
+      <span class="ibtn" style="width: 20px; height: 20px;"><svg class="i s12" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg></span>
+      <span class="ibtn" style="width: 20px; height: 20px;"><svg class="i s12" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+    </div>
+
+    <div style="border: 1px solid #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.14); border-radius: 8px; background: #313131; display: flex; flex-direction: column;">
+      <div style="display: flex; gap: 5px; flex-wrap: wrap; padding: 7px 8px 0;">
+        <span class="chip mono" style="background: #262626; border-color: #3c3c3c; color: #cccccc;"><svg class="i s12" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>proxy-config.ts</span>
+        <span class="chip mono" style="background: #262626; border-color: #3c3c3c; color: #cccccc;"><svg class="i s12" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg>proxy-server.ts<svg class="i s12" viewBox="0 0 24 24" style="color: #9d9d9d;"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+      </div>
+      <div style="padding: 8px 10px; font-size: 12.5px; line-height: 1.5; color: #8b8b8b; min-height: 40px;">Ask Claude, type @ to add files, / for commands</div>
+      <div style="display: flex; align-items: center; gap: 4px; padding: 2px 6px 6px;">
+        <span class="ibtn" title="Attach"><svg class="i" viewBox="0 0 24 24"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"></path></svg></span>
+        <span class="ibtn" title="Add context"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"></path></svg></span>
+        <span class="chip" style="background: transparent; border-color: #3c3c3c; color: #cccccc;"><svg class="i s12" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"></path></svg>Ask before edits<svg class="i s12" viewBox="0 0 24 24" style="color: #9d9d9d;"><path d="M6 9l6 6 6-6"></path></svg></span>
+        <span class="chip" style="background: transparent; border-color: #3c3c3c; color: #cccccc;"><span class="dot" style="background: #e0976f; width: 7px; height: 7px;"></span>Claude · Proxy<svg class="i s12" viewBox="0 0 24 24" style="color: #9d9d9d;"><path d="M6 9l6 6 6-6"></path></svg></span>
+        <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: #9d9d9d;" title="Context used">
+          <svg viewBox="0 0 16 16" style="width: 16px; height: 16px;"><circle class="ring" cx="8" cy="8" r="6" stroke="#4a4a4a"></circle><circle class="ring" cx="8" cy="8" r="6" stroke="#38bdf8" transform="rotate(-90 8 8)" style="stroke-dasharray: 14.3 23.4;"></circle></svg>38%
+        </span>
+        <span style="display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%); color: #05202e; margin-left: 4px;"><svg class="i" viewBox="0 0 24 24" style="stroke-width: 2.2;"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg></span>
+      </div>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: 10px; color: #9d9d9d;">
+      <span>Enter to send · Ctrl+Shift+Enter to steer now</span>
+      <span>Session $0.011 · 18.4k tokens</span>
+    </div>
+  </div>
+</div>
+</div>
+</body>
+</html>

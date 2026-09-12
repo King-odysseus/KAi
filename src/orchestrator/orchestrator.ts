@@ -8,6 +8,16 @@ import type { DiffApplier } from './diff-applier';
 import { NoopDiffApplier } from './diff-applier';
 import type { AgentAdapter, ApprovalResponse } from '../adapters/agent-adapter';
 import { buildMemoryBriefing } from '../core/prompt-builder';
+import {
+  buildGoalPrompt,
+  completeGoal as markGoalComplete,
+  createGoal,
+  pauseGoal as markGoalPaused,
+  resumeGoal as markGoalResumed,
+  updateGoal as editGoal,
+  type GoalInput,
+  type WorkbenchGoal,
+} from '../core/goal';
 import type { Plan } from '../core/plan';
 import { PlanRunner } from './plan-runner';
 import type { Checkpoint } from './checkpoints';
@@ -27,6 +37,9 @@ export class WorkbenchOrchestrator extends EventEmitter {
   private handoffInProgress = false;
   private planRunner: PlanRunner | null = null;
   private planRunning = false;
+  /** Durable goal state for the current conversation. Goals span turns until
+   * the user clears or completes them. */
+  private goal: WorkbenchGoal | null = null;
   private customPermissions: Partial<Record<PermissionKey, boolean>> = {};
   /** One checkpoint per taskId, captured right before that task's first
    * agent run. Kept for the life of the session so Review/Undo/Rewind work
@@ -104,6 +117,52 @@ export class WorkbenchOrchestrator extends EventEmitter {
 
   getState(): WorkbenchState { return { ...this.state }; }
   getLastPrompt(): string { return this.lastPrompt; }
+
+  getGoal(): WorkbenchGoal | null { return this.goal ? { ...this.goal } : null; }
+
+  /** Creates or edits the current goal without starting an agent run. */
+  setGoal(input: GoalInput): WorkbenchGoal {
+    this.goal = this.goal ? editGoal(this.goal, input) : createGoal(input);
+    this.emitState();
+    return { ...this.goal };
+  }
+
+  /** Restores persisted goal state when loading a conversation. */
+  restoreGoal(goal: WorkbenchGoal | null): void {
+    this.goal = goal ? { ...goal } : null;
+    this.emitState();
+  }
+
+  async clearGoal(): Promise<void> {
+    if (!this.goal) return;
+    this.goal = null;
+    this.emitState();
+    if (this.state.isRunning || this.planRunning) await this.stopActiveTask();
+  }
+
+  async pauseGoal(): Promise<void> {
+    if (!this.goal || this.goal.status !== 'running') return;
+    this.goal = markGoalPaused(this.goal);
+    this.emitState();
+    if (this.state.isRunning || this.planRunning) await this.stopActiveTask();
+  }
+
+  async resumeGoal(): Promise<void> {
+    if (!this.goal || this.goal.status !== 'paused') return;
+    this.goal = markGoalResumed(this.goal);
+    this.emitState();
+    if (this.state.isRunning || this.planRunning) return;
+    const prompt = buildGoalPrompt(this.goal);
+    this.lastPrompt = this.goal.outcome;
+    await this.runAgent(this.state.activeAgent, this.state.route, this.state.autonomy, prompt);
+  }
+
+  async completeGoal(): Promise<void> {
+    if (!this.goal || this.goal.status === 'completed') return;
+    this.goal = markGoalComplete(this.goal);
+    this.emitState();
+    if (this.state.isRunning || this.planRunning) await this.stopActiveTask();
+  }
 
   getPendingDiffs(): DiffRecord[] {
     return [...this.pendingDiffs.values()].filter((d) => d.status === 'pending');
@@ -350,11 +409,20 @@ export class WorkbenchOrchestrator extends EventEmitter {
   async startTask(request: TaskRequest): Promise<string> {
     if (this.state.isRunning) throw new Error('KAI already has an active agent run.');
     if (this.planRunning) throw new Error('A plan is currently executing. Abort the plan first.');
+    if (request.goal) {
+      if (!this.goal || this.goal.status === 'completed') this.goal = createGoal(request.goal);
+      else this.goal = editGoal(this.goal, request.goal);
+      if (this.goal.status === 'paused') this.goal = markGoalResumed(this.goal);
+      this.emitState();
+    }
     const agent = request.agent ?? this.state.activeAgent;
     const route = request.route ?? this.state.route;
     const autonomy = request.autonomy ?? this.state.autonomy;
     this.lastPrompt = request.prompt;
-    return this.runAgent(agent, route, autonomy, request.prompt);
+    const prompt = this.goal && this.goal.status === 'running'
+      ? buildGoalPrompt(this.goal, request.prompt)
+      : request.prompt;
+    return this.runAgent(agent, route, autonomy, prompt);
   }
 
   async handoff(toAgent: AgentId): Promise<void> {
@@ -417,6 +485,8 @@ export class WorkbenchOrchestrator extends EventEmitter {
    * until it runs again. Call when the user clicks "New chat". */
   startNewConversation(): void {
     this.agentSessions.clear();
+    this.goal = null;
+    this.emitState();
   }
 
   getAgentSessionId(agent: AgentId): string | undefined {

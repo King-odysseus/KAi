@@ -42,10 +42,10 @@ interface SettingsMessage {
   enabled?: boolean;
 }
 
-export class SettingsViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = 'kai.settings';
-
-  private view?: vscode.WebviewView;
+export class SettingsViewProvider {
+  // Editor-tab panels showing these settings. More than one can be open at
+  // once, so state changes broadcast to all of them.
+  private readonly webviews = new Set<vscode.Webview>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -58,11 +58,16 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     private readonly proxyAuthToken?: string,
   ) {}
 
-  resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
-    webviewView.webview.options = { enableScripts: true, enableCommandUris: true, localResourceRoots: [this.extensionUri] };
-    webviewView.webview.html = this.getHtml(webviewView.webview);
-    webviewView.webview.onDidReceiveMessage((m: SettingsMessage) => void this.handle(m));
+  /** Wire an editor-tab webview to this provider. */
+  attachWebview(webview: vscode.Webview): void {
+    webview.options = { enableScripts: true, enableCommandUris: true, localResourceRoots: [this.extensionUri] };
+    webview.html = this.getHtml(webview);
+    webview.onDidReceiveMessage((m: SettingsMessage) => void this.handle(m));
+    this.webviews.add(webview);
+  }
+
+  detachWebview(webview: vscode.Webview): void {
+    this.webviews.delete(webview);
   }
 
   refresh(): void {
@@ -428,7 +433,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async postState(): Promise<void> {
-    if (!this.view) return;
+    if (this.webviews.size === 0) return;
     // Never let a slow/failed capability probe leave the panel blank — fall back
     // to catalog defaults so the agent cards (and their key inputs) always render.
     let capabilities: Awaited<ReturnType<WorkbenchOrchestrator['getCapabilities']>> = [];
@@ -469,7 +474,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     // Patch hasKey from SecretStorage (more authoritative than legacy apiKeys)
     upstream.hasKey = upstream.hasKey || proxyKeyStatus.upstream;
 
-    await this.view.webview.postMessage({
+    const stateMessage = {
       type: 'state',
       agents,
       proxy: {
@@ -480,7 +485,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         routing: this.getRoutingState(),
         proxyKeyStatus,
       },
-    });
+    };
+
+    for (const webview of this.webviews) {
+      await webview.postMessage(stateMessage);
+    }
   }
 
   private getUpstreamState() {

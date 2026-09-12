@@ -33,7 +33,10 @@ describe('CodexConfigWriter', () => {
     expect(next).toContain('[profiles.native]');
     expect(next).toContain('[model_providers.codeproxy]');
     expect(next).toContain('base_url = "http://127.0.0.1:8082/v1"');
-    expect(next).toContain('[profiles.codeproxy]');
+    // Codex 0.153+ rejects `--profile` while a [profiles.<name>] table exists,
+    // and the top-level model_provider key already selects the proxy. Writing
+    // one would make `codex exec --profile codeproxy` a config-load error.
+    expect(next).not.toContain('[profiles.codeproxy]');
   });
 
   it('replaces existing codeproxy tables instead of duplicating them', async () => {
@@ -50,8 +53,69 @@ describe('CodexConfigWriter', () => {
     const next = await fs.readFile(configPath, 'utf8');
     expect(next).not.toContain('base_url = "old"');
     expect(next.match(/\[model_providers\.codeproxy\]/g)).toHaveLength(1);
-    expect(next.match(/\[profiles\.codeproxy\]/g)).toHaveLength(1);
+    // A legacy [profiles.codeproxy] table is stripped, not re-emitted.
+    expect(next).not.toContain('[profiles.codeproxy]');
     expect(next).toContain('base_url = "http://127.0.0.1:9090/v1"');
+  });
+
+  it('collapses duplicate top-level routing keys and preserves custom config', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    await fs.writeFile(configPath, [
+      '# >>> KAI top-level',
+      'model_provider = "codeproxy"',
+      'model = "gpt-5.5"',
+      'preferred_auth_method = "apikey"',
+      '# <<< KAI top-level',
+      '',
+      'model_provider = "codeproxy"',
+      'model = "gpt-5.5"',
+      'preferred_auth_method = "apikey"',
+      '',
+      'service_tier = "default"',
+      '',
+      '[mcp_servers.cognitive1]',
+      'url = "http://127.0.0.1:9876/mcp"',
+      '',
+    ].join('\n'), 'utf8');
+
+    await new CodexConfigWriter().ensureProxyProfile({
+      configPath,
+      profile: 'codeproxy',
+      port: 8083,
+      model: 'gpt-5.5'
+    });
+
+    const next = await fs.readFile(configPath, 'utf8');
+    const preamble = next.split(/\r?\n(?=\[)/)[0];
+    expect(preamble.match(/^model_provider\s*=/gm)).toHaveLength(1);
+    expect(preamble.match(/^model\s*=/gm)).toHaveLength(1);
+    expect(preamble.match(/^preferred_auth_method\s*=/gm)).toHaveLength(1);
+    expect(next).toContain('service_tier = "default"');
+    expect(next.match(/\[mcp_servers\.cognitive1\]/g)).toHaveLength(1);
+  });
+
+  it('preserves the original routing values when routing again', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    const writer = new CodexConfigWriter();
+    const input = { configPath, profile: 'codeproxy', port: 8083, model: 'gpt-5.5' };
+    await fs.writeFile(configPath, [
+      'model_provider = "openai"',
+      'model = "gpt-5.4"',
+      'service_tier = "default"',
+      '',
+      '[profiles.native]',
+      'model = "gpt-5.4"',
+      '',
+    ].join('\n'), 'utf8');
+
+    await writer.ensureProxyProfile(input);
+    await writer.ensureProxyProfile(input);
+
+    const next = await fs.readFile(configPath, 'utf8');
+    expect(next.match(/\[proxy\.backup\]/g)).toHaveLength(1);
+    expect(next).toContain('model_provider = "openai"');
+    expect(next).toContain('model = "gpt-5.4"');
+    expect(next).toContain('[profiles.native]');
   });
 
   it('does not rewrite when already current', async () => {
@@ -65,5 +129,32 @@ describe('CodexConfigWriter', () => {
     expect(result.changed).toBe(false);
     expect(result.backupPath).toBeUndefined();
   });
-});
 
+  // Another tool sharing the file can strip our closing marker. The strip used
+  // to run until it saw the partner, so an unterminated marker deleted every
+  // line from there to EOF — including tables KAI never wrote.
+  it('does not delete the tail when a start marker has no partner', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    await fs.writeFile(configPath, [
+      'model = "gpt-5.5"',
+      '',
+      '# >>> KAI codex-codeproxy',
+      '[model_providers.codeproxy]',
+      'base_url = "http://127.0.0.1:8082"',
+      '',
+      '[mcp_servers.important]',
+      'command = "keep-me"',
+      '',
+    ].join('\n'), 'utf8');
+
+    await new CodexConfigWriter().restoreConfig(configPath, 'codeproxy');
+    const next = await fs.readFile(configPath, 'utf8');
+
+    // The unrelated table below the dangling marker must survive.
+    expect(next).toContain('[mcp_servers.important]');
+    expect(next).toContain('keep-me');
+    // The dangling marker and the codeproxy table itself are still cleaned up.
+    expect(next).not.toContain('# >>> KAI codex-codeproxy');
+    expect(next).not.toContain('[model_providers.codeproxy]');
+  });
+});

@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { WorkbenchEvent } from '../core/events';
 import type { AgentId } from '../core/types';
+import type { WorkbenchGoal } from '../core/goal';
 
 export interface ConversationMeta {
   id: string;
@@ -18,6 +19,9 @@ export interface ConversationMeta {
 
 export interface Conversation extends ConversationMeta {
   events: WorkbenchEvent[];
+  /** Goal state survives reopening the conversation and is cleared only when
+   * the user clears it or starts a new chat. */
+  goal?: WorkbenchGoal | null;
 }
 
 /**
@@ -86,6 +90,7 @@ export class ConversationStore {
       costUsd: 0,
       archived: false,
       unread: false,
+      goal: null,
       events: [],
     };
   }

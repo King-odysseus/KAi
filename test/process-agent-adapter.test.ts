@@ -15,8 +15,8 @@ describe('prompt stdin arguments', () => {
     expect(buildClaudeArgs(request)).toEqual([
       '-p', '--output-format', 'json', '--permission-mode', 'default',
     ]);
-    expect(buildCodexArgs(undefined, request)).toContain('-');
-    expect(buildCodexArgs(undefined, request)).not.toContain(request.prompt);
+    expect(buildCodexArgs(request)).toContain('-');
+    expect(buildCodexArgs(request)).not.toContain(request.prompt);
   });
 });
 
@@ -61,7 +61,7 @@ describe('buildCodexArgs', () => {
   // Verified against `codex exec --help`: --sandbox choices are read-only,
   // workspace-write, danger-full-access.
   it('uses read-only sandbox in plan mode', () => {
-    expect(buildCodexArgs('codeproxy', {
+    expect(buildCodexArgs({
       taskId: 'task_1',
       prompt: 'inspect',
       route: 'direct',
@@ -71,29 +71,38 @@ describe('buildCodexArgs', () => {
   });
 
   it('uses read-only sandbox in ask mode (no non-interactive approval channel yet)', () => {
-    expect(buildCodexArgs('codeproxy', {
+    expect(buildCodexArgs({
       taskId: 'task_1', prompt: 'inspect', route: 'direct', autonomy: 'ask',
     })).toEqual(['exec', '--json', '--sandbox', 'read-only', '-']);
   });
 
-  it('uses workspace-write and profile in proxy autoEdit mode', () => {
-    expect(buildCodexArgs('codeproxy', {
+  // Codex 0.153+ rejects `--profile` while config.toml still has a legacy
+  // [profiles.<name>] table, so the proxy is selected purely by the top-level
+  // model_provider/model keys. The args must therefore be route-independent.
+  it('uses workspace-write sandbox in proxy autoEdit mode, without --profile', () => {
+    expect(buildCodexArgs({
       taskId: 'task_1',
       prompt: 'edit',
       route: 'proxy',
       autonomy: 'autoEdit',
       cwd: 'C:/repo'
-    })).toEqual(['exec', '--json', '--sandbox', 'workspace-write', '--cd', 'C:/repo', '--profile', 'codeproxy', '-']);
+    })).toEqual(['exec', '--json', '--sandbox', 'workspace-write', '--cd', 'C:/repo', '-']);
+  });
+
+  it('produces the same args for direct and proxy routes', () => {
+    const base = { taskId: 'task_1', prompt: 'edit', autonomy: 'autoEdit' as const, cwd: 'C:/repo' };
+    expect(buildCodexArgs({ ...base, route: 'proxy' }))
+      .toEqual(buildCodexArgs({ ...base, route: 'direct' }));
   });
 
   it('uses danger-full-access sandbox in full mode', () => {
-    expect(buildCodexArgs(undefined, {
+    expect(buildCodexArgs({
       taskId: 'task_1', prompt: 'edit', route: 'direct', autonomy: 'full',
     })).toEqual(['exec', '--json', '--sandbox', 'danger-full-access', '-']);
   });
 
   it('resume uses its own flag set with no --sandbox/--cd/--profile', () => {
-    expect(buildCodexArgs('codeproxy', {
+    expect(buildCodexArgs({
       taskId: 'task_1', prompt: 'continue', route: 'proxy', autonomy: 'ask', cwd: 'C:/repo', resumeSessionId: 'sess-1',
     })).toEqual(['exec', 'resume', 'sess-1', '--json', '-']);
   });
@@ -105,7 +114,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       runner: new FakeRunner({ available: true, version: 'codex 1.0.0' }, [])
     });
 
@@ -125,7 +134,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       runner,
     });
     const prompt = 'line one %PATH%\nline two';
@@ -142,7 +151,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       runner: new FakeRunner(
         { available: true, version: 'codex 1.0.0' },
         [
@@ -168,7 +177,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       parseLine: (line, taskId, agent) => ({
         id: 'split_event',
         type: 'text.delta',
@@ -204,7 +213,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       parseLine: (line, taskId, agent) => ({
         id: 'final_event',
         type: 'text.delta',
@@ -236,7 +245,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       parseLine: (line, taskId, agent) => [
         {
           id: 'event_1',
@@ -280,7 +289,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       beforeRun: async (request) => [{
         id: 'before',
         type: 'agent.lifecycle',
@@ -314,7 +323,7 @@ describe('ProcessAgentAdapter', () => {
       id: 'codex',
       displayName: 'Codex',
       command: 'codex',
-      buildArgs: (request) => buildCodexArgs(undefined, request),
+      buildArgs: (request) => buildCodexArgs(request),
       runner
     });
 
