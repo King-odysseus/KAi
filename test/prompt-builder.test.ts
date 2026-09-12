@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildPromptWithContext, buildMemoryBriefing, type ContextChip } from '../src/core/prompt-builder';
+import {
+  buildConversationBriefing,
+  buildPromptWithContext,
+  buildMemoryBriefing,
+  type ContextChip,
+} from '../src/core/prompt-builder';
 
 describe('buildPromptWithContext', () => {
   it('returns the trimmed prompt unchanged with no chips', () => {
@@ -66,5 +71,34 @@ describe('buildMemoryBriefing', () => {
     const result = buildMemoryBriefing(long);
     expect(result.length).toBeLessThan(long.length);
     expect(result).toContain('…');
+  });
+});
+
+describe('buildConversationBriefing', () => {
+  it('returns empty for an empty transcript', () => {
+    expect(buildConversationBriefing([])).toBe('');
+  });
+
+  it('renders recent user and assistant turns in chronological order', () => {
+    const result = buildConversationBriefing([
+      { role: 'user', text: 'Fix the parser' },
+      { role: 'assistant', text: 'I found the failing fixture.' },
+    ]);
+
+    expect(result).toContain('Conversation history from earlier turns');
+    expect(result.indexOf('User: Fix the parser')).toBeLessThan(
+      result.indexOf('Assistant: I found the failing fixture.'),
+    );
+  });
+
+  it('keeps only a bounded tail of a long conversation', () => {
+    const turns = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      text: `turn ${index}`,
+    }));
+    const result = buildConversationBriefing(turns);
+
+    expect(result).not.toContain('turn 0');
+    expect(result).toContain('turn 19');
   });
 });

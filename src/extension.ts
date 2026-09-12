@@ -77,6 +77,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const cognitive1 = createCognitive1Client(config);
+  const embeddedCognitive1 = cognitive1 instanceof EmbeddedCognitive1;
   const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const codexConfigWriter = new CodexConfigWriter();
   const claudeConfigWriter = new ClaudeConfigWriter();
@@ -85,6 +86,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const configDir = path.dirname(defaultCodexConfigPath());
   const proxyPort = config.get<number>('proxyPort', 8082);
   const proxyScript = config.get<string>('proxyScript', '');
+
+  // KAI's embedded brain does not listen on the legacy C1 HTTP port. Remove
+  // only that stale Codex MCP binding; leave all other MCP servers untouched.
+  void codexConfigWriter.reconcileCognitive1Mcp({ removeCognitive1HttpServer: embeddedCognitive1 })
+    .then((result) => {
+      if (result.changed) logger.info('config_failure', `Removed stale embedded Cognitive1 MCP server from ${result.configPath}.`);
+    })
+    .catch((error: unknown) => logger.error('config_failure', 'Failed to reconcile Codex Cognitive1 MCP config.', undefined, error));
 
   // Migrate legacy plaintext proxy keys to SecretStorage (one-time, idempotent)
   const legacyCfg = vscode.workspace.getConfiguration('claudeProxy');

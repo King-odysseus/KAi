@@ -3,6 +3,7 @@ import * as path from 'path';
 import type { WorkbenchEvent } from '../core/events';
 import type { AgentId, AutonomyMode, RouteMode } from '../core/types';
 import type { WorkbenchGoal } from '../core/goal';
+import type { ConversationTurn } from '../core/prompt-builder';
 import type { AgentSessionRecord } from '../orchestrator/orchestrator';
 
 export interface ConversationMeta {
@@ -31,6 +32,9 @@ export interface Conversation extends ConversationMeta {
   /** Last route and autonomy used in this conversation. */
   route?: RouteMode;
   autonomy?: AutonomyMode;
+  /** Compact user/assistant transcript used to catch up an agent selected
+   * after an earlier provider in this conversation. */
+  turns?: ConversationTurn[];
 }
 
 /**

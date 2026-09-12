@@ -9,6 +9,13 @@ export interface CodexProxyConfig {
   model: string;
 }
 
+export interface CodexMcpConfig {
+  configPath?: string;
+  /** When true, remove KAI's stale HTTP cognitive1 server because the brain
+   * is embedded in the extension and no daemon is listening on that URL. */
+  removeCognitive1HttpServer?: boolean;
+}
+
 export interface CodexProxyConfigResult {
   configPath: string;
   backupPath?: string;
@@ -33,6 +40,22 @@ export class CodexConfigWriter {
     await fs.writeFile(configPath, next, 'utf8');
 
     return { configPath, backupPath, changed: true, profile: config.profile };
+  }
+
+  /** Keeps Codex's MCP table in sync with KAI's Cognitive1 mode. */
+  async reconcileCognitive1Mcp(config: CodexMcpConfig): Promise<{ configPath: string; changed: boolean }> {
+    const configPath = config.configPath ?? defaultCodexConfigPath();
+    const existing = await this.readOptional(configPath);
+    if (!existing || !config.removeCognitive1HttpServer) {
+      return { configPath, changed: false };
+    }
+
+    const next = stripCognitive1HttpServer(existing);
+    if (next === existing) return { configPath, changed: false };
+
+    await this.backupExisting(configPath, existing);
+    await fs.writeFile(configPath, next, 'utf8');
+    return { configPath, changed: true };
   }
 
   /**
@@ -192,7 +215,7 @@ function codexProviderTables(profile: string, port: number): string {
     '# >>> KAI codex-' + profile,
     '[model_providers.' + profile + ']',
     'name = "KAI Proxy"',
-    'base_url = "http://127.0.0.1:' + port + '/v1"',
+    'base_url = "http://127.0.0.1:' + port + '/a/codex/v1"',
     'wire_api = "responses"',
     '# <<< KAI codex-' + profile
   ].join('\n');
@@ -302,6 +325,26 @@ function stripProfileTables(toml: string, profile: string): string {
 /** Remove any [proxy.backup] table block. */
 function stripBackupBlock(toml: string): string {
   return toml.replace(/^[ \t]*\[proxy\.backup\][^\[]*/gm, '');
+}
+
+/** Remove the cognitive1 HTTP MCP table written by earlier KAI versions while
+ * preserving every unrelated table, including later `[mcp_servers.*]` entries. */
+function stripCognitive1HttpServer(toml: string): string {
+  const lines = toml.split(/\r?\n/);
+  const kept: string[] = [];
+  let skipping = false;
+
+  for (const line of lines) {
+    const table = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (table) {
+      const name = table[1].trim();
+      skipping = name === 'mcp_servers.cognitive1'
+        || name.startsWith('mcp_servers.cognitive1.');
+    }
+    if (!skipping) kept.push(line);
+  }
+
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
 /** Escape special regex characters in a string. */

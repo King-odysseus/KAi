@@ -57,7 +57,7 @@ function deepseekSettings(): QwenSettings {
 describe('QwenConfigWriter.ensureProxyConfig', () => {
   // Qwen appends /chat/completions to the base URL, so a base URL without the
   // /v1 segment sends every request to the proxy's 404 handler.
-  it('points providers at the proxy including the /v1 path segment', async () => {
+  it('points providers at the tagged UAP-compatible proxy URL', async () => {
     const configPath = await writeSettings(deepseekSettings());
 
     const result = await new QwenConfigWriter().ensureProxyConfig({ configPath, port: 8083 });
@@ -65,8 +65,8 @@ describe('QwenConfigWriter.ensureProxyConfig', () => {
 
     expect(result.changed).toBe(true);
     expect(result.providerCount).toBe(1);
-    expect(next.modelProviders.openai[0].baseUrl).toBe('http://127.0.0.1:8083/v1');
-    expect(next.model?.baseUrl).toBe('http://127.0.0.1:8083/v1');
+    expect(next.modelProviders.openai[0].baseUrl).toBe('http://127.0.0.1:8083/a/qwen/v1');
+    expect(next.model?.baseUrl).toBe('http://127.0.0.1:8083/a/qwen/v1');
     // Everything else in the user's file survives untouched.
     expect(next.env?.DEEPSEEK_API_KEY).toBe('keep-me');
     expect(next.security?.auth?.selectedType).toBe('openai');
@@ -114,7 +114,7 @@ describe('QwenConfigWriter.ensureProxyConfig', () => {
     const next = await readSettings(configPath);
 
     expect(result.changed).toBe(true);
-    expect(next.modelProviders.openai[0].baseUrl).toBe('http://127.0.0.1:8083/v1');
+    expect(next.modelProviders.openai[0].baseUrl).toBe('http://127.0.0.1:8083/a/qwen/v1');
     expect(next._kaiProxyOriginals).toBeUndefined();
   });
 

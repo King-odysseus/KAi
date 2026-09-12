@@ -93,6 +93,26 @@ describe('Codex proxy compatibility', () => {
     ]);
   });
 
+  it('handles Codex UAP-tagged model and response paths', async () => {
+    const upstream = await startUpstream([
+      { choices: [{ index: 0, delta: { content: 'OK' }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    ]);
+    const port = await startProxy(upstream.url);
+
+    const models = await request(port, '/a/codex/v1/models', 'GET');
+    expect(models.status).toBe(200);
+    expect(JSON.parse(models.body).models[0].slug).toBe('deepseek-chat');
+
+    const response = await request(port, '/a/codex/v1/responses', 'POST', {
+      model: 'gpt-5.5',
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply with OK' }] }],
+      stream: true,
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('"text":"OK"');
+  });
+
   it('emits Responses stream events Codex can render', async () => {
     const upstream = await startUpstream([
       { choices: [{ index: 0, delta: { content: 'O' }, finish_reason: null }] },

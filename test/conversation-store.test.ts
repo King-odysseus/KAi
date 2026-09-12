@@ -80,6 +80,17 @@ describe('ConversationStore', () => {
     expect(loaded?.agentSessions?.codex?.sessionId).toBe('thread-123');
   });
 
+  it('round-trips the compact conversation transcript', async () => {
+    const conv = store.create('switch providers');
+    conv.turns = [
+      { role: 'user', text: 'first question' },
+      { role: 'assistant', text: 'first answer' },
+    ];
+    await store.save(conv);
+
+    expect((await store.get(conv.id))?.turns).toEqual(conv.turns);
+  });
+
   it('returns undefined for a conversation that does not exist', async () => {
     expect(await store.get('nope')).toBeUndefined();
   });

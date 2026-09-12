@@ -245,6 +245,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
     conversation.activeAgent = state.activeAgent;
     conversation.route = state.route;
     conversation.autonomy = state.autonomy;
+    conversation.turns = this.orchestrator.getConversationTurns();
   }
 
   /** Marks the current conversation unread (a run finished, or an approval
@@ -663,6 +664,7 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
             if (conversation.autonomy) this.orchestrator.setAutonomy(conversation.autonomy);
             this.orchestrator.restoreGoal(conversation.goal ?? null);
             this.orchestrator.restoreAgentSessions(conversation.agentSessions);
+            this.orchestrator.restoreConversationTurns(conversation.turns ?? []);
             void webview.postMessage({ type: 'conversationLoaded', conversation });
           }
         }

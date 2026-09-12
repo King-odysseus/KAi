@@ -149,7 +149,7 @@ interface RecordedOriginals {
  * the base URL — without it every request lands on the proxy's 404 handler.
  */
 function proxyBaseUrl(port: number): string {
-  return `http://127.0.0.1:${port}/v1`;
+  return `http://127.0.0.1:${port}/a/qwen/v1`;
 }
 
 /** Drop the snapshot key without a dynamic `delete` on a computed property. */

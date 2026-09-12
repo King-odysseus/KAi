@@ -7,7 +7,7 @@ import { canRunWithoutApproval, createPermissionProfile } from '../core/permissi
 import type { DiffApplier } from './diff-applier';
 import { NoopDiffApplier } from './diff-applier';
 import type { AgentAdapter, ApprovalResponse } from '../adapters/agent-adapter';
-import { buildMemoryBriefing } from '../core/prompt-builder';
+import { buildConversationBriefing, buildMemoryBriefing, type ConversationTurn } from '../core/prompt-builder';
 import {
   buildGoalPrompt,
   completeGoal as markGoalComplete,
@@ -72,6 +72,10 @@ export class WorkbenchOrchestrator extends EventEmitter {
   /** Accumulated assistant text for the current task — used to build a real
    * handoff summary instead of just re-sending the original prompt. */
   private lastReplyText = '';
+  /** User/assistant transcript for the current conversation. Agents with a
+   * native resumable session already have this context; a provider that was
+   * just selected for the first time gets it as a prompt briefing instead. */
+  private readonly conversationTurns: ConversationTurn[] = [];
   /** Active compare runs, keyed by compareId, so pickCompareWinner/
    * removeCompareSides know which worktrees to apply from and clean up. */
   private readonly compareRuns = new Map<string, { agentA: AgentId; agentB: AgentId; worktreeLeft: string; worktreeRight: string }>();
@@ -440,7 +444,9 @@ export class WorkbenchOrchestrator extends EventEmitter {
     const prompt = this.goal && this.goal.status === 'running'
       ? buildGoalPrompt(this.goal, request.prompt)
       : request.prompt;
-    return this.runAgent(agent, route, autonomy, prompt);
+    const conversationBriefing = this.agentSessions.has(agent) ? '' : buildConversationBriefing(this.conversationTurns);
+    this.conversationTurns.push({ role: 'user', text: request.prompt });
+    return this.runAgent(agent, route, autonomy, prompt, conversationBriefing);
   }
 
   async handoff(toAgent: AgentId): Promise<void> {
@@ -503,6 +509,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
    * until it runs again. Call when the user clicks "New chat". */
   startNewConversation(): void {
     this.agentSessions.clear();
+    this.conversationTurns.length = 0;
     this.goal = null;
     this.emitState();
   }
@@ -533,6 +540,17 @@ export class WorkbenchOrchestrator extends EventEmitter {
       if (record.projectPath !== this.projectPath) continue;
       this.agentSessions.set(agent, { ...record });
     }
+  }
+
+  /** Restores the in-memory transcript when reopening a saved conversation,
+   * so switching to an agent without a native session still carries context. */
+  restoreConversationTurns(turns: ConversationTurn[]): void {
+    this.conversationTurns.length = 0;
+    this.conversationTurns.push(...turns);
+  }
+
+  getConversationTurns(): ConversationTurn[] {
+    return this.conversationTurns.map((turn) => ({ ...turn }));
   }
 
   // ─── Checkpoints (diff summary, review, undo, rewind) ──────────
@@ -753,7 +771,13 @@ export class WorkbenchOrchestrator extends EventEmitter {
     this.emitEvent({ id: createEventId(), type: 'agent.lifecycle', taskId: record.event.taskId, timestamp: nowIso(), agent: record.event.agent, status: 'running', detail: `Diff for ${record.event.filePath} was rejected.` });
   }
 
-  private async runAgent(agent: AgentId, route: RouteMode, autonomy: AutonomyMode, prompt: string): Promise<string> {
+  private async runAgent(
+    agent: AgentId,
+    route: RouteMode,
+    autonomy: AutonomyMode,
+    prompt: string,
+    conversationBriefing = '',
+  ): Promise<string> {
     const adapter = this.adapters.get(agent);
     if (!adapter) throw new Error(`No adapter registered for ${agent}.`);
 
@@ -773,7 +797,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     // never sent, so the "Used N memories" chip showed even though the
     // agent never saw a word of it.
     const briefing = buildMemoryBriefing(rs);
-    const finalPrompt = briefing ? `${briefing}\n\n${prompt}` : prompt;
+    const finalPrompt = [conversationBriefing, briefing, prompt].filter(Boolean).join('\n\n');
 
     await this.runAgentStream(agent, route, autonomy, finalPrompt);
     return taskId;
@@ -809,6 +833,9 @@ export class WorkbenchOrchestrator extends EventEmitter {
         }
       }
     } finally {
+      if (this.lastReplyText.trim()) {
+        this.conversationTurns.push({ role: 'assistant', text: this.lastReplyText.trim() });
+      }
       if (!this.handoffInProgress) {
         this.state = { ...this.state, isRunning: false };
         this.emitState();

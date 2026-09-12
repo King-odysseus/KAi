@@ -32,7 +32,7 @@ describe('CodexConfigWriter', () => {
     expect(next).toContain('model = "gpt-5.5"');
     expect(next).toContain('[profiles.native]');
     expect(next).toContain('[model_providers.codeproxy]');
-    expect(next).toContain('base_url = "http://127.0.0.1:8082/v1"');
+    expect(next).toContain('base_url = "http://127.0.0.1:8082/a/codex/v1"');
     // Codex 0.153+ rejects `--profile` while a [profiles.<name>] table exists,
     // and the top-level model_provider key already selects the proxy. Writing
     // one would make `codex exec --profile codeproxy` a config-load error.
@@ -55,7 +55,7 @@ describe('CodexConfigWriter', () => {
     expect(next.match(/\[model_providers\.codeproxy\]/g)).toHaveLength(1);
     // A legacy [profiles.codeproxy] table is stripped, not re-emitted.
     expect(next).not.toContain('[profiles.codeproxy]');
-    expect(next).toContain('base_url = "http://127.0.0.1:9090/v1"');
+    expect(next).toContain('base_url = "http://127.0.0.1:9090/a/codex/v1"');
   });
 
   it('collapses duplicate top-level routing keys and preserves custom config', async () => {
@@ -156,5 +156,85 @@ describe('CodexConfigWriter', () => {
     // The dangling marker and the codeproxy table itself are still cleaned up.
     expect(next).not.toContain('# >>> KAI codex-codeproxy');
     expect(next).not.toContain('[model_providers.codeproxy]');
+  });
+
+  it('removes only stale cognitive1 MCP tables for embedded mode', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    await fs.writeFile(configPath, [
+      'model = "gpt-5.5"',
+      '',
+      '[mcp_servers.cognitive1]',
+      'url = "http://127.0.0.1:9876/mcp"',
+      'startup_timeout_sec = 20.0',
+      '',
+      '[mcp_servers.cognitive1.tools.remember]',
+      'enabled = true',
+      '',
+      '[mcp_servers.important]',
+      'command = "keep-me"',
+      '',
+      '[mcp_servers.important.env]',
+      'TOKEN = "keep-me-too"',
+      '',
+      '[mcp_servers.penpot]',
+      'url = "http://127.0.0.1:3333/mcp"',
+      '',
+    ].join('\n'), 'utf8');
+
+    const result = await new CodexConfigWriter().reconcileCognitive1Mcp({
+      configPath,
+      removeCognitive1HttpServer: true,
+    });
+    const next = await fs.readFile(configPath, 'utf8');
+
+    expect(result.changed).toBe(true);
+    expect(next).not.toContain('[mcp_servers.cognitive1]');
+    expect(next).not.toContain('[mcp_servers.cognitive1.tools.remember]');
+    expect(next).not.toContain('http://127.0.0.1:9876/mcp');
+    expect(next).toContain('[mcp_servers.important]');
+    expect(next).toContain('command = "keep-me"');
+    expect(next).toContain('[mcp_servers.important.env]');
+    expect(next).toContain('TOKEN = "keep-me-too"');
+    expect(next).toContain('[mcp_servers.penpot]');
+    expect(next).toContain('url = "http://127.0.0.1:3333/mcp"');
+  });
+
+  it('leaves cognitive1 MCP tables intact when reconciliation is disabled', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    const original = '[mcp_servers.cognitive1]\nurl = "http://127.0.0.1:9876/mcp"\n';
+    await fs.writeFile(configPath, original, 'utf8');
+
+    const result = await new CodexConfigWriter().reconcileCognitive1Mcp({ configPath });
+
+    expect(result.changed).toBe(false);
+    expect(await fs.readFile(configPath, 'utf8')).toBe(original);
+  });
+
+  it('rewrites a legacy profiles table so Codex 0.153+ can load the config', async () => {
+    const configPath = path.join(tempDir, 'config.toml');
+    await fs.writeFile(configPath, [
+      'model_provider = "codeproxy"',
+      'model = "gpt-5.5"',
+      'preferred_auth_method = "apikey"',
+      '',
+      '[model_providers.codeproxy]',
+      'base_url = "http://127.0.0.1:8082/a/codex/v1"',
+      '',
+      '[profiles.codeproxy]',
+      'model = "gpt-5.5"',
+      'model_provider = "codeproxy"',
+      '',
+    ].join('\n'), 'utf8');
+
+    await new CodexConfigWriter().ensureProxyProfile({
+      configPath,
+      profile: 'codeproxy',
+      port: 8082,
+      model: 'gpt-5.5',
+    });
+
+    const next = await fs.readFile(configPath, 'utf8');
+    expect(next).not.toContain('[profiles.codeproxy]');
+    expect(next).toContain('base_url = "http://127.0.0.1:8082/a/codex/v1"');
   });
 });

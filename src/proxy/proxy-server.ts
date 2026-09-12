@@ -77,6 +77,13 @@ function isOpenAIResponseTarget(url: string): boolean {
   }
 }
 
+/** UAP tags requests as /a/<agent>/v1/... so the proxy can route by caller.
+ * KAI serves the same handlers, so strip the tag before matching endpoints. */
+function normalizeAgentPath(pathname: string): string {
+  const match = /^\/(?:a|agent)\/[A-Za-z0-9_-]{1,32}(\/.*)?$/.exec(pathname);
+  return match ? match[1] || '/' : pathname;
+}
+
 // ---- Responses API → Chat Completions translation ----
 
 function randomHex(length: number): string {
@@ -588,7 +595,7 @@ export class KaiProxyServer {
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const parsed = new URL(req.url || '/', 'http://localhost');
-    const pathname = parsed.pathname;
+    const pathname = normalizeAgentPath(parsed.pathname);
 
     // A request carrying an Origin header came from a browser context (a
     // web page's fetch/XHR) — no legitimate CLI HTTP client sends one.

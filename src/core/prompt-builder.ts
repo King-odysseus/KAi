@@ -52,6 +52,45 @@ const MEMORY_BRIEFING_MAX_CHARS = 1500;
  * worth injecting into a prompt. */
 const EMPTY_RECALL_PATTERNS = [/^No recall results found\.?$/i, /^Cognitive1 disabled/i];
 
+export interface ConversationTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+const TRANSCRIPT_MAX_CHARS = 6000;
+const TRANSCRIPT_MAX_TURNS = 12;
+
+/**
+ * Makes a native session-less agent aware of the current conversation's
+ * earlier turns. This is used when switching agents: the new provider has no
+ * native resume id for the conversation yet, so KAI catches it up before
+ * sending the user's latest message.
+ */
+export function buildConversationBriefing(turns: ConversationTurn[]): string {
+  const recent = turns.filter((turn) => turn.text.trim()).slice(-TRANSCRIPT_MAX_TURNS);
+  if (recent.length === 0) return '';
+
+  const lines: string[] = [];
+  let used = 0;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const turn = recent[i];
+    const label = turn.role === 'user' ? 'User' : 'Assistant';
+    const line = `${label}: ${turn.text.trim()}`;
+    const remaining = TRANSCRIPT_MAX_CHARS - used;
+    if (remaining <= 0) break;
+    const bounded = line.length > remaining ? `${line.slice(0, Math.max(0, remaining - 3))}...` : line;
+    lines.unshift(bounded);
+    used += bounded.length + 1;
+  }
+
+  if (lines.length === 0) return '';
+  return [
+    'Conversation history from earlier turns (the user switched from another provider):',
+    lines.join('\n'),
+    'Continue this conversation in the same project context.',
+  ].join('\n');
+}
+
 /**
  * Turns a Cognitive1 recall summary into a bounded prompt preamble, or ''
  * when there's nothing real to inject (recall found nothing, or the client
