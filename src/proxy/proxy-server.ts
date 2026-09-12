@@ -548,32 +548,45 @@ function translateChatStreamToResponses(
 export class KaiProxyServer {
   private server: http.Server | null = null;
   private config: ProxyServerConfig;
+  private boundPort?: number;
+  private reused = false;
 
   constructor(config: ProxyServerConfig) {
     this.config = config;
   }
 
   async start(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => {
-        void this.handleRequest(req, res);
-      });
+    if (this.isRunning()) return;
 
-      this.server.on('error', (err) => {
-        reject(err);
-      });
+    this.reused = false;
+    this.boundPort = undefined;
 
-      this.server.listen(this.config.port, '127.0.0.1', () => {
-        resolve();
-      });
-    });
+    const ports = this.config.port > 0
+      ? [this.config.port, ...Array.from({ length: 9 }, (_, i) => this.config.port + i + 1), 0]
+      : [this.config.port];
+
+    for (const port of ports) {
+      const result = await this.tryListen(port);
+      if (result === 'bound') return;
+      if (result === 'reused') return;
+    }
+
+    throw new Error(`No available local port from ${this.config.port} through ${this.config.port + 9}.`);
   }
 
   async stop(): Promise<void> {
+    if (this.reused) {
+      this.reused = false;
+      this.boundPort = undefined;
+      return;
+    }
+
     return new Promise((resolve) => {
       if (!this.server) { resolve(); return; }
-      this.server.close(() => resolve());
+      const server = this.server;
       this.server = null;
+      this.boundPort = undefined;
+      server.close(() => { resolve(); });
     });
   }
 
@@ -582,15 +595,79 @@ export class KaiProxyServer {
   getPort(): number {
     const address = this.server?.address();
     if (address && typeof address === 'object') return address.port;
-    return this.config.port;
+    return this.boundPort ?? this.config.port;
   }
 
   isRunning(): boolean {
-    return this.server?.listening ?? false;
+    return this.reused || (this.server?.listening ?? false);
+  }
+
+  isReused(): boolean {
+    return this.reused;
   }
 
   updateConfig(config: Partial<ProxyServerConfig>): void {
     this.config = { ...this.config, ...config };
+  }
+
+  private tryListen(port: number): Promise<'bound' | 'occupied' | 'reused'> {
+    return new Promise((resolve, reject) => {
+      const server = http.createServer((req, res) => {
+        void this.handleRequest(req, res);
+      });
+
+      server.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EADDRINUSE' || port === 0) {
+          reject(error);
+          return;
+        }
+
+        void this.isKaiProxy(port).then((isKai) => {
+          if (isKai) {
+            this.reused = true;
+            this.boundPort = port;
+            resolve('reused');
+          } else {
+            resolve('occupied');
+          }
+        }, reject);
+      });
+
+      server.listen(port, '127.0.0.1', () => {
+        this.server = server;
+        this.boundPort = port;
+        resolve('bound');
+      });
+    });
+  }
+
+  /** A live KAI proxy can be shared by multiple VS Code windows. Check both
+   * the service marker and the model shape so another local proxy on the same
+   * port (for example ClaudeCode-Proxy) is never mistaken for KAI. */
+  private async isKaiProxy(port: number): Promise<boolean> {
+    try {
+      const healthResponse = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      if (!healthResponse.ok) return false;
+      const health = await healthResponse.json() as Record<string, unknown>;
+      if (health.status !== 'ok') return false;
+      if (health.service === 'kai-proxy') return true;
+
+      const modelsResponse = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      if (!modelsResponse.ok) return false;
+      const models = await modelsResponse.json() as Record<string, unknown>;
+      return Array.isArray(models.data)
+        && models.data.some((model) => {
+          if (!model || typeof model !== 'object') return false;
+          const entry = model as Record<string, unknown>;
+          return entry.object === 'model' && entry.owned_by === 'kai';
+        });
+    } catch {
+      return false;
+    }
   }
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -610,7 +687,7 @@ export class KaiProxyServer {
     // Health check
     if (req.method === 'GET' && pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', port: this.config.port }));
+      res.end(JSON.stringify({ status: 'ok', service: 'kai-proxy', port: this.getPort() }));
       return;
     }
 

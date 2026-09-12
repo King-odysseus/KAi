@@ -86,7 +86,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const qwenConfigWriter = new QwenConfigWriter();
   const backupManager = new BackupManager();
   const configDir = path.dirname(defaultCodexConfigPath());
-  const proxyPort = config.get<number>('proxyPort', 8082);
+  const configuredProxyPort = config.get<number>('proxyPort', 8082);
+  let proxyPort = configuredProxyPort;
   const proxyScript = config.get<string>('proxyScript', '');
 
   // KAI's embedded brain does not listen on the legacy C1 HTTP port. Remove
@@ -117,8 +118,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const proxyCfg: ProxyServerConfig = { ...toProxyServerConfig(resolved), authToken: proxyAuthToken };
     kaiProxy = new KaiProxyServer(proxyCfg);
     await kaiProxy.start();
+    proxyPort = kaiProxy.getPort();
     context.subscriptions.push({ dispose: () => { void kaiProxy?.stop(); } });
-    logger.info('proxy_error', `KAI proxy server started on port ${proxyPort}.`);
+    const detail = proxyPort === configuredProxyPort
+      ? `KAI proxy server started on port ${proxyPort}.`
+      : `KAI proxy server started on port ${proxyPort}; configured port ${configuredProxyPort} was occupied.`;
+    logger.info('proxy_error', detail);
   } catch (err) {
     logger.error('proxy_error', 'Failed to start KAI proxy server.', undefined, err);
   }
@@ -672,6 +677,3 @@ export function deactivate(): void {
   void kaiProxy?.stop();
   void proxyManager?.stop();
 }
-
-
-

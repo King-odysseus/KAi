@@ -51,12 +51,13 @@ export class KaiLogger {
    * Log a structured entry and optionally surface to the user.
    */
   log(severity: LogSeverity, category: ErrorCategory, message: string, detail?: string, error?: unknown): void {
+    const resolvedDetail = detail ?? errorDetail(error);
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       severity,
       category,
       message,
-      detail,
+      detail: resolvedDetail,
       stack: error instanceof Error ? error.stack : undefined,
     };
 
@@ -66,7 +67,7 @@ export class KaiLogger {
     }
 
     // Write to VS Code output channel
-    const formatted = `[${entry.timestamp}] [${severity.toUpperCase()}] [${category}] ${message}${detail ? ` — ${detail}` : ''}`;
+    const formatted = `[${entry.timestamp}] [${severity.toUpperCase()}] [${category}] ${message}${resolvedDetail ? ` — ${resolvedDetail}` : ''}`;
     switch (severity) {
       case 'debug': this.outputChannel.debug(formatted); break;
       case 'info': this.outputChannel.info(formatted); break;
@@ -143,6 +144,15 @@ export class KaiLogger {
     const order: LogSeverity[] = ['debug', 'info', 'warn', 'error'];
     return order.indexOf(severity) >= order.indexOf(this.showUserThreshold);
   }
+}
+
+function errorDetail(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (typeof error === 'number' || typeof error === 'boolean' || typeof error === 'bigint') {
+    return String(error);
+  }
+  return undefined;
 }
 
 function categoryIcon(category: ErrorCategory): string {
