@@ -1,5 +1,6 @@
 import {
   ChevronDown,
+  Check,
   Circle,
   Cloud,
   Cpu,
@@ -15,7 +16,7 @@ import {
   Sparkles,
   Square,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type {
   AgentCapability,
   AgentId,
@@ -173,33 +174,49 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
                   : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span>
               </button>
             ) : (
-              <label className={`chip-button agent-select ${ready ? '' : 'unavailable'}`} title={selectedCapability?.unavailableReason}>
-                <Cpu size={14} />
-                <select aria-label="Agent" value={selectedAgent} onChange={(event) => onSelectAgent(event.target.value as AgentId)} disabled={busy}>
-                  {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}{setupSuffix(agent)}</option>)}
-                </select>
-                <ChevronDown size={12} />
-              </label>
+              <SelectMenu
+                ariaLabel="Agent"
+                className={`agent-select ${ready ? '' : 'unavailable'}`}
+                disabled={busy}
+                icon={<Cpu size={14} />}
+                onChange={onSelectAgent}
+                options={agentCapabilities.map((agent) => ({
+                  value: agent.id,
+                  label: `${agent.displayName}${setupSuffix(agent)}`,
+                }))}
+                title={selectedCapability?.unavailableReason}
+                value={selectedAgent}
+              />
             )}
-            <label className={`chip-button control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} title={apiRun ? proxyReady ? 'Choose the direct provider route or KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route' : 'CLI agents currently use direct routing'}>
-              <Route size={14} />
-              <select aria-label="Route" value={apiRun ? selectedRoute : 'direct'} onChange={(event) => onSelectRoute(event.target.value as RouteMode)} disabled={busy || !apiRun}>
-                <option value="direct">Direct</option>
-                <option value="proxy" disabled={!apiRun || !proxyReady}>{proxyReady ? 'Proxy' : 'Proxy (not ready)'}</option>
-              </select>
-              <ChevronDown size={12} />
-            </label>
-            <label className="chip-button control-select autonomy-select" title="Choose how much project access the active run has">
-              <ShieldCheck size={14} />
-              <select aria-label="Autonomy" value={selectedAutonomy} onChange={(event) => onSelectAutonomy(event.target.value as AutonomyMode)} disabled={busy}>
-                <option value="plan">Plan</option>
-                <option value="ask">Ask</option>
-                <option value="autoEdit">Auto-edit</option>
-                <option value="full">Full control</option>
-                <option value="custom">Custom</option>
-              </select>
-              <ChevronDown size={12} />
-            </label>
+            <SelectMenu
+              ariaLabel="Route"
+              className={`control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
+              disabled={busy || !apiRun}
+              icon={<Route size={14} />}
+              onChange={onSelectRoute}
+              options={[
+                { value: 'direct', label: 'Direct' },
+                { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !apiRun || !proxyReady },
+              ]}
+              title={apiRun ? proxyReady ? 'Choose the direct provider route or KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route' : 'CLI agents currently use direct routing'}
+              value={apiRun ? selectedRoute : 'direct'}
+            />
+            <SelectMenu
+              ariaLabel="Autonomy"
+              className="control-select autonomy-select"
+              disabled={busy}
+              icon={<ShieldCheck size={14} />}
+              onChange={onSelectAutonomy}
+              options={[
+                { value: 'plan', label: 'Plan' },
+                { value: 'ask', label: 'Ask' },
+                { value: 'autoEdit', label: 'Auto-edit' },
+                { value: 'full', label: 'Full control' },
+                { value: 'custom', label: 'Custom' },
+              ]}
+              title="Choose how much project access the active run has"
+              value={selectedAutonomy}
+            />
           </div>
           {running ? (
             <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
@@ -208,6 +225,133 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface SelectMenuOption<T extends string> {
+  value: T;
+  label: string;
+  disabled?: boolean;
+}
+
+function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = false, icon, onChange, options, title, value }: {
+  ariaLabel: string;
+  className?: string;
+  disabled?: boolean;
+  icon: ReactNode;
+  onChange: (value: T) => void;
+  options: readonly SelectMenuOption<T>[];
+  title?: string;
+  value: T;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const selectedOption = options[selectedIndex];
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const focusTimer = window.setTimeout(() => optionRefs.current[selectedIndex]?.focus(), 0);
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open, selectedIndex]);
+
+  const choose = (option: SelectMenuOption<T>): void => {
+    if (option.disabled) return;
+    onChange(option.value);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const moveFocus = (currentIndex: number, direction: 1 | -1): void => {
+    for (let offset = 1; offset <= options.length; offset += 1) {
+      const nextIndex = (currentIndex + direction * offset + options.length) % options.length;
+      if (!options[nextIndex]?.disabled) {
+        optionRefs.current[nextIndex]?.focus();
+        return;
+      }
+    }
+  };
+
+  const focusEdge = (fromStart: boolean): void => {
+    const indexes = options.map((_, index) => index);
+    if (!fromStart) indexes.reverse();
+    for (const index of indexes) {
+      if (options[index]?.disabled) continue;
+      optionRefs.current[index]?.focus();
+      return;
+    }
+  };
+
+  const handleOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveFocus(index, 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveFocus(index, -1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusEdge(true);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusEdge(false);
+    }
+  };
+
+  return (
+    <div ref={rootRef} className={`chip-button select-menu ${className} ${disabled ? 'disabled' : ''}`.trim()}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="select-menu-trigger"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        title={title}
+      >
+        {icon}
+        <span className="select-menu-value truncate">{selectedOption?.label ?? value}</span>
+        <ChevronDown className="select-menu-chevron" size={12} />
+      </button>
+      {open && (
+        <div className="select-menu-popover" role="listbox" aria-label={ariaLabel}>
+          {options.map((option, index) => (
+            <button
+              ref={(element) => { optionRefs.current[index] = element; }}
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              className={`select-menu-option ${option.value === value ? 'selected' : ''}`.trim()}
+              disabled={option.disabled}
+              onClick={() => choose(option)}
+              onKeyDown={(event) => handleOptionKeyDown(event, index)}
+            >
+              <span>{option.label}</span>
+              {option.value === value && <Check size={13} />}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

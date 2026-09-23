@@ -7,8 +7,9 @@
 - **Agent, route, and autonomy controls are now functional and readable.** The
   workspace can switch agent harnesses, select Direct or the authenticated
   Universal Proxy route in API mode, and choose Plan, Ask, Auto-edit, Full
-  control, or Custom permissions. Dark native select options now use explicit
-  contrast instead of relying on the Windows popup theme.
+  control, or Custom permissions. Workspace menus use an in-app dark dropdown
+  with light option text, a mint selected state, and keyboard navigation instead
+  of relying on the Windows popup theme.
 - **DeepSeek and other API providers are visible in the composer.** API mode
   shows the configured provider and model, including DeepSeek API and
   OpenRouter, and links directly back to provider settings.
@@ -100,7 +101,7 @@
   smoke also verifies the approval dialog, process execution, stdout capture, and
   provider follow-up. The same installed smoke verifies a populated context
   preview and the context meter. Installer SHA-256:
-  `B6074C581265EC255EAD918522659385F4F6FE41D53044A211C797D5F7088210`.
+  `4386810FED417BC136392C02B893296460B1673FBBE45A52DFEBEAA9A523373E`.
 
 **Files:** `apps/desktop/src/main/project-tools.ts`,
 `apps/desktop/src/main/mcp-runtime.ts`,

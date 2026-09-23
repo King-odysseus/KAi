@@ -221,31 +221,79 @@ async function verifyAgentCapabilities(page) {
 }
 
 async function verifyWorkspaceControls(page) {
-  const agentSelect = page.getByLabel('Agent');
-  for (const agent of ['claude', 'codex', 'qwen', 'gemini']) {
-    await agentSelect.selectOption(agent);
-    if ((await agentSelect.inputValue()) !== agent) {
+  const agents = [
+    ['claude', /^Claude$/],
+    ['codex', /^Codex$/],
+    ['qwen', /^Qwen Code$/],
+    ['gemini', /^Gemini CLI/],
+  ];
+  for (const [agent, label] of agents) {
+    await selectMenuOption(page, 'Agent', label);
+    const selected = await page.getByRole('button', { name: 'Agent', exact: true }).innerText();
+    if (!label.test(selected)) {
       throw new Error(`The workspace did not switch to the ${agent} agent.`);
     }
   }
-  await agentSelect.selectOption('codex');
-  await verifySelectContrast(agentSelect, 'Agent');
+  await selectMenuOption(page, 'Agent', /^Codex$/);
+  await verifyMenuContrast(page, 'Agent');
 
-  const autonomy = page.getByLabel('Autonomy');
-  for (const mode of ['plan', 'ask', 'autoEdit', 'full', 'custom']) {
-    await autonomy.selectOption(mode);
-    if ((await autonomy.inputValue()) !== mode) {
+  const autonomyModes = [
+    ['plan', 'Plan'],
+    ['ask', 'Ask'],
+    ['autoEdit', 'Auto-edit'],
+    ['full', 'Full control'],
+    ['custom', 'Custom'],
+  ];
+  for (const [mode, label] of autonomyModes) {
+    await selectMenuOption(page, 'Autonomy', label);
+    const selected = await page.getByRole('button', { name: 'Autonomy', exact: true }).innerText();
+    if (!selected.includes(label)) {
       throw new Error(`The workspace did not switch to the ${mode} autonomy mode.`);
     }
   }
-  await autonomy.selectOption('ask');
-  await verifySelectContrast(autonomy, 'Autonomy');
+  await selectMenuOption(page, 'Autonomy', 'Ask');
+  await verifyMenuContrast(page, 'Autonomy');
 
-  const route = page.getByLabel('Route');
-  if ((await route.inputValue()) !== 'direct') {
-    throw new Error(`CLI routing should begin in direct mode, received ${await route.inputValue()}.`);
+  const route = page.getByRole('button', { name: 'Route', exact: true });
+  if (!await route.isDisabled()) {
+    throw new Error('CLI routing should keep the route control disabled in direct mode.');
   }
-  await verifySelectContrast(route, 'Route');
+  if (!(await route.innerText()).includes('Direct')) {
+    throw new Error(`CLI routing should begin in direct mode, received ${await route.innerText()}.`);
+  }
+}
+
+async function selectMenuOption(page, triggerLabel, optionName) {
+  await openSelectMenu(page, triggerLabel);
+  const option = page.getByRole('option', { name: optionName });
+  await option.click({ force: true });
+}
+
+async function verifyMenuContrast(page, label) {
+  await openSelectMenu(page, label);
+  const options = page.getByRole('listbox', { name: label, exact: true }).getByRole('option');
+  const firstOption = options.first();
+  const colors = await firstOption.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const parentStyle = getComputedStyle(element.parentElement);
+    const transparent = style.backgroundColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)';
+    return {
+      background: transparent ? parentStyle.backgroundColor : style.backgroundColor,
+      color: style.color,
+    };
+  });
+  const ratio = contrastRatio(colors.color, colors.background);
+  if (ratio < 4.5) {
+    throw new Error(`${label} menu has insufficient contrast (${ratio.toFixed(2)}): ${JSON.stringify(colors)}.`);
+  }
+  await page.keyboard.press('Escape');
+}
+
+async function openSelectMenu(page, label) {
+  const trigger = page.getByRole('button', { name: label, exact: true });
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('listbox', { name: label, exact: true }).waitFor({ state: 'visible' });
 }
 
 async function verifySelectContrast(select, label) {
@@ -267,6 +315,23 @@ async function verifySelectContrast(select, label) {
       `${label} select has unsafe contrast: ${JSON.stringify(colors)}.`,
     );
   }
+}
+
+function contrastRatio(foreground, background) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function relativeLuminance(color) {
+  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!match) throw new Error(`Could not parse menu color: ${color}`);
+  const channels = match.slice(1, 4).map((value) => Number(value) / 255).map((value) => (
+    value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  ));
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
 }
 
 async function verifyDirectApiCapability(page) {
@@ -320,6 +385,9 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
   await page.locator('.context-meter strong').filter({ hasText: '~' }).waitFor();
   await page.getByRole('button', { name: 'API' }).click();
   await page.getByText('API ready').waitFor();
+  const routeMenu = page.getByRole('button', { name: 'Route', exact: true });
+  if (await routeMenu.isDisabled()) throw new Error('The route menu should be enabled in API mode.');
+  await verifyMenuContrast(page, 'Route');
   const providerChip = page.locator('.api-provider-chip');
   const expectedProvider = provider === 'openrouter' ? 'OpenRouter' : provider === 'deepseek' ? 'DeepSeek API' : 'OpenAI Responses API';
   await providerChip.filter({ hasText: expectedProvider }).waitFor();

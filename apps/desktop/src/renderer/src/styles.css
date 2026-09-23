@@ -982,34 +982,119 @@ button:disabled {
   position: relative;
 }
 
-.agent-select select {
+.select-menu {
+  position: relative;
+  overflow: visible;
+  padding: 0;
+}
+
+.select-menu-trigger {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 25px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.select-menu-value {
+  display: block;
+}
+
+.agent-select .select-menu-value {
   max-width: 140px;
-  padding: 0 1px;
-  border: 0;
-  outline: 0;
-  color: #dce6f3;
-  background: transparent;
-  appearance: none;
-  cursor: pointer;
-  font: inherit;
 }
 
-.control-select select {
+.control-select .select-menu-value {
   max-width: 116px;
-  padding: 0 1px;
-  border: 0;
-  outline: 0;
-  color: #dce6f3;
-  background: transparent;
-  appearance: none;
-  cursor: pointer;
-  font: inherit;
 }
 
-.control-select select:disabled {
+.select-menu-chevron {
+  flex: 0 0 auto;
+  transition: color 120ms ease, transform 120ms ease;
+}
+
+.select-menu-trigger[aria-expanded="true"] .select-menu-chevron {
+  color: var(--mint);
+  transform: rotate(180deg);
+}
+
+.select-menu-popover {
+  position: absolute;
+  z-index: 60;
+  bottom: calc(100% + 7px);
+  left: 0;
+  min-width: max(100%, 184px);
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid #35506f;
+  border-radius: 8px;
+  background: #0d1a2b;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(255, 255, 255, 0.025) inset;
+}
+
+.select-menu-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 5px;
+  color: #dce6f3;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.select-menu-option:hover,
+.select-menu-option:focus-visible {
+  color: #ffffff;
+  background: #1c3652;
+}
+
+.select-menu-option.selected {
+  color: #04120e;
+  background: var(--mint);
+  font-weight: 700;
+}
+
+.select-menu-option.selected:hover,
+.select-menu-option.selected:focus-visible {
+  color: #04120e;
+  background: #7aebc8;
+}
+
+.select-menu-option:disabled {
+  color: #66758b;
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.select-menu.disabled {
   color: var(--text-muted);
   cursor: not-allowed;
-  opacity: 1;
+}
+
+.select-menu.disabled .select-menu-trigger {
+  cursor: not-allowed;
+}
+
+.select-menu:hover:not(.disabled) {
+  border-color: #38506f;
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .api-provider-chip {
@@ -1023,14 +1108,6 @@ button:disabled {
 .agent-select.unavailable {
   border-color: rgba(246, 174, 95, 0.3);
   color: var(--amber, #f6ae5f);
-}
-
-.agent-select.unavailable select {
-  color: var(--amber, #f6ae5f);
-}
-
-.agent-select select:disabled {
-  cursor: wait;
 }
 
 .secondary-button:hover,
