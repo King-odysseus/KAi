@@ -87,6 +87,149 @@ describe('desktop direct provider runtime', () => {
     );
   });
 
+  it('streams OpenRouter Chat Completions with attribution and measured usage', async () => {
+    const requests: Array<{ path?: string; authorization?: string; title?: string; body: Record<string, unknown> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push({
+          path: request.url,
+          authorization: request.headers.authorization,
+          title: request.headers['x-title'] as string | undefined,
+          body: JSON.parse(raw) as Record<string, unknown>,
+        });
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('data: {"choices":[{"delta":{"content":"Router "},"finish_reason":null}]}\n\n');
+        response.end('data: {"choices":[{"delta":{"content":"ready."},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2}}\n\ndata: [DONE]\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(chatProviderSettings(baseUrl, 'openrouter', 'anthropic/claude-3.7-sonnet')),
+      credentialPort('provider.openrouter', 'or-test-secret'),
+    );
+
+    const result = await runtime.run(
+      runRequest(),
+      process.cwd(),
+      undefined,
+      undefined,
+      undefined,
+      '# KAI project context\nRouter context.',
+      [{ role: 'user', text: 'Inspect the project' }],
+    );
+
+    expect(result).toMatchObject({ status: 'completed', output: 'Router ready.' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      path: '/v1/chat/completions',
+      authorization: 'Bearer or-test-secret',
+      title: 'KAI Desktop',
+      body: {
+        model: 'anthropic/claude-3.7-sonnet',
+        stream: true,
+      },
+    });
+    expect(requests[0].body.messages).toEqual([
+      { role: 'system', content: '# KAI project context\nRouter context.' },
+      { role: 'user', content: 'Inspect the project' },
+    ]);
+    expect(requests[0].body.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'read_file' }) }),
+    ]));
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'cost.update', inputTokens: 9, outputTokens: 2 }),
+    ]));
+  });
+
+  it('supports DeepSeek Chat Completions and ignores reasoning deltas', async () => {
+    const requests: Array<{ path?: string; body: Record<string, unknown> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push({ path: request.url, body: JSON.parse(raw) as Record<string, unknown> });
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('data: {"choices":[{"delta":{"reasoning_content":"hidden"},"finish_reason":null}]}\n\n');
+        response.end('data: {"choices":[{"delta":{"content":"DeepSeek ready."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(chatProviderSettings(baseUrl, 'deepseek', 'deepseek-reasoner')),
+      credentialPort('provider.deepseek', 'ds-test-secret'),
+    );
+
+    const result = await runtime.run(runRequest(), process.cwd());
+
+    expect(result).toMatchObject({ status: 'completed', output: 'DeepSeek ready.' });
+    expect(requests[0]).toMatchObject({ path: '/v1/chat/completions', body: { model: 'deepseek-reasoner' } });
+  });
+
+  it('cancels an in-flight Chat Completions stream', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write('data: {"choices":[{"delta":{"content":"working"}}]}\n\n');
+      const timer = setInterval(() => response.write(': keep-alive\n\n'), 100);
+      response.on('close', () => clearInterval(timer));
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(chatProviderSettings(baseUrl, 'openrouter', 'openai/gpt-4o-mini')),
+      credentialPort('provider.openrouter', 'or-test-secret'),
+    );
+
+    const pending = runtime.run(runRequest(), process.cwd());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(runtime.cancel('conv-direct')).toBe(true);
+
+    await expect(pending).resolves.toMatchObject({ status: 'failed', error: 'OpenRouter run cancelled.' });
+  });
+
+  it('executes fragmented Chat Completions tool calls and returns durable results', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-chat-tools-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'router.txt'), 'openrouter tool result\n', 'utf8');
+    const bodies: Record<string, unknown>[] = [];
+    let count = 0;
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        count += 1;
+        bodies.push(JSON.parse(raw) as Record<string, unknown>);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (count === 1) {
+          response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_router","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"router"}}]}}]}\n\n');
+          response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":".txt\\"}"}}]}}]}\n\n');
+          response.end('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n');
+          return;
+        }
+        response.write('data: {"choices":[{"delta":{"content":"OpenRouter tools."},"finish_reason":"stop"}]}\n\n');
+        response.end('data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3}}\n\ndata: [DONE]\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(chatProviderSettings(baseUrl, 'openrouter', 'deepseek/deepseek-chat')),
+      credentialPort('provider.openrouter', 'or-test-secret'),
+    );
+
+    const result = await runtime.run(runRequest(), projectRoot);
+
+    expect(result).toMatchObject({ status: 'completed', output: 'OpenRouter tools.' });
+    expect(bodies).toHaveLength(2);
+    const followUp = bodies[1].messages as Array<Record<string, unknown>>;
+    expect(followUp).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'assistant', tool_calls: [expect.objectContaining({ id: 'call_router' })] }),
+      expect.objectContaining({ role: 'tool', tool_call_id: 'call_router', content: expect.stringContaining('openrouter tool result') }),
+    ]));
+  });
+
   it('prepends collected project context to the provider input', async () => {
     let body: Record<string, unknown> | undefined;
     const server = http.createServer((request, response) => {
@@ -354,6 +497,17 @@ function enabledSettings(baseUrl: string, model: string): AppSettings {
   settings.directApi.enabled = true;
   settings.directApi.model = model;
   settings.directApi.baseUrl = baseUrl;
+  return settings;
+}
+
+function chatProviderSettings(
+  baseUrl: string,
+  provider: AppSettings['directApi']['provider'],
+  model: string,
+): AppSettings {
+  const settings = enabledSettings(baseUrl, model);
+  settings.directApi.provider = provider;
+  settings.directApi.credentialId = provider === 'openrouter' ? 'provider.openrouter' : 'provider.deepseek';
   return settings;
 }
 

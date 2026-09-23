@@ -47,6 +47,7 @@ import {
 import {
   agentIdSchema,
   autonomyModeSchema,
+  providerIdSchema,
   routeModeSchema,
   serviceKindSchema,
   serviceStateSchema,
@@ -128,7 +129,7 @@ export const ipcInputSchemas = {
       directApi: z
         .object({
           enabled: z.boolean().optional(),
-          provider: z.enum(['openai', 'anthropic', 'google', 'openai-compatible']).optional(),
+          provider: providerIdSchema.optional(),
           model: z.string().optional(),
           baseUrl: z.string().url().optional(),
           credentialId: z.string().min(1).optional(),

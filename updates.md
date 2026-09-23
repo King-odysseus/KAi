@@ -2,6 +2,21 @@
 
 ## 2026-09-23
 
+### Direct API provider catalog
+
+- **Desktop direct API settings now support OpenRouter and other popular
+  OpenAI-compatible providers.** The provider picker includes DeepSeek,
+  OpenRouter, Groq, Mistral, xAI, Together AI, Fireworks AI, and a custom
+  OpenAI-compatible endpoint alongside the existing OpenAI Responses API.
+- **OpenRouter can use any model ID exposed by OpenRouter.** The model field is
+  free text with suggestions for popular OpenAI, Anthropic, Google, DeepSeek,
+  xAI, Qwen, Meta, and Mistral model IDs. OpenRouter requests include KAI
+  attribution through `X-Title`.
+- **Chat Completions providers stream text, fragmented tool arguments, usage,
+  and errors through the same project, command, approval, and MCP tool loop.**
+  Retries, cancellation, measured token usage, multi-turn history, and the
+  existing project boundary rules are shared with direct API runs.
+
 ### Desktop project tools, approvals, and MCP
 
 - **Direct API runs now execute a bounded provider tool loop.** Up to eight model
@@ -54,7 +69,7 @@
   attempts, honor `Retry-After`, and persist each attempt as lifecycle evidence.
   Retries wrap only the provider request, so completed file, command, and MCP tool
   actions are not executed a second time.
-- **Verification:** 47 test files and 358 tests pass with one opt-in live test
+- **Verification:** 47 test files and 362 tests pass with one opt-in live test
   skipped by default. Tests cover streaming tool calls, argument validation,
   approval allow/deny paths, path escape and symlink escape attempts, vault-backed
   stdio and Streamable HTTP MCP credentials, read-only MCP policy, malformed

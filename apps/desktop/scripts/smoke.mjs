@@ -19,6 +19,10 @@ const { ELECTRON_RUN_AS_NODE: _runAsNode, ...launchEnvironment } = process.env;
 const realEngineSmoke = process.env.KAI_REAL_ENGINE_SMOKE === '1';
 const realAgentSmoke = process.env.KAI_REAL_AGENT_SMOKE === '1';
 const directApiSmoke = process.env.KAI_DIRECT_API_SMOKE === '1';
+const requestedDirectProvider = process.env.KAI_DIRECT_API_PROVIDER;
+const directApiProvider = requestedDirectProvider === 'openrouter' || requestedDirectProvider === 'deepseek'
+  ? requestedDirectProvider
+  : 'openai';
 const mcpSmoke = process.env.KAI_MCP_SMOKE === '1';
 const mcpTransport = process.env.KAI_MCP_TRANSPORT === 'http' ? 'http' : 'stdio';
 const commandSmoke = process.env.KAI_COMMAND_SMOKE === '1';
@@ -31,7 +35,7 @@ const enginePorts = realEngineSmoke
 const liveProjectPath = path.join(userDataDirectory, 'live-agent-project');
 const rendererErrors = [];
 const directApiFixture = directApiSmoke || mcpSmoke || commandSmoke
-  ? await startDirectApiFixture({ mcp: mcpSmoke, command: commandSmoke })
+  ? await startDirectApiFixture({ mcp: mcpSmoke, command: commandSmoke, provider: directApiProvider })
   : null;
 const mcpHttpFixture = mcpSmoke && mcpTransport === 'http' ? await startMcpHttpFixture() : null;
 let electronApp;
@@ -39,7 +43,7 @@ let electronApp;
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
 if (enginePorts) await writeEngineSettings(userDataDirectory, enginePorts);
-if (usesAgentProject) await writeAgentSettings(userDataDirectory, liveProjectPath, directApiFixture, mcpSmoke, mcpHttpFixture?.url);
+if (usesAgentProject) await writeAgentSettings(userDataDirectory, liveProjectPath, directApiFixture, mcpSmoke, mcpHttpFixture?.url, directApiProvider);
 
 try {
   electronApp = await electron.launch({
@@ -70,7 +74,7 @@ try {
   const agentCapabilities = await verifyAgentCapabilities(page);
   await verifyDirectApiCapability(page);
   if ((directApiSmoke || mcpSmoke || commandSmoke) && directApiFixture) {
-    await verifyDirectApiFlow(page, directApiFixture, mcpSmoke, Boolean(mcpHttpFixture), commandSmoke);
+    await verifyDirectApiFlow(page, directApiFixture, mcpSmoke, Boolean(mcpHttpFixture), commandSmoke, directApiProvider);
   }
   if (realAgentSmoke) await verifyLiveAgent(page);
 
@@ -118,6 +122,10 @@ try {
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('heading', { name: 'Settings' }).waitFor();
   await page.getByText('OS vault available').waitFor();
+  const providerOptions = await page.getByLabel('Provider').locator('option').allTextContents();
+  if (!providerOptions.includes('OpenRouter') || !providerOptions.includes('DeepSeek API')) {
+    throw new Error(`Direct API provider presets are incomplete: ${providerOptions.join(', ')}`);
+  }
   await page.getByRole('button', { name: 'Save settings' }).click();
   await page.waitForTimeout(250);
   await assertNoErrorBanner(page);
@@ -221,8 +229,16 @@ async function verifyDirectApiCapability(page) {
   }
 }
 
-async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false, usesCommand = false) {
-  const credential = await page.evaluate(() => window.kaiDesktop.setCredential('provider.openai', 'sk-local-smoke'));
+async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false, usesCommand = false, provider = 'openai') {
+  if (provider !== 'openai' && (usesMcp || usesCommand)) {
+    throw new Error('Chat Completions smoke currently covers the plain direct API flow.');
+  }
+  const credentialId = provider === 'openrouter'
+    ? 'provider.openrouter'
+    : provider === 'deepseek'
+      ? 'provider.deepseek'
+      : 'provider.openai';
+  const credential = await page.evaluate((id) => window.kaiDesktop.setCredential(id, 'sk-local-smoke'), credentialId);
   if (!credential.ok) throw new Error(credential.error.message);
   if (usesRemoteMcp) {
     const mcpCredential = await page.evaluate(({ id, value }) => window.kaiDesktop.setCredential(id, value), {
@@ -231,15 +247,15 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
     });
     if (!mcpCredential.ok) throw new Error(mcpCredential.error.message);
   }
-  const settings = await page.evaluate((baseUrl) => window.kaiDesktop.updateSettings({
+  const settings = await page.evaluate(({ baseUrl, provider, credentialId }) => window.kaiDesktop.updateSettings({
     directApi: {
       enabled: true,
-      provider: 'openai',
+      provider,
       model: 'smoke-api-model',
       baseUrl,
-      credentialId: 'provider.openai',
+      credentialId,
     },
-  }), fixture.baseUrl);
+  }), { baseUrl: fixture.baseUrl, provider, credentialId });
   if (!settings.ok) throw new Error(settings.error.message);
 
   await page.reload();
@@ -273,6 +289,12 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
   }
   if (request.body.model !== 'smoke-api-model' || request.body.stream !== true) {
     throw new Error(`The direct API request was malformed: ${JSON.stringify(request.body)}.`);
+  }
+  if (provider !== 'openai' && !Array.isArray(request.body.messages)) {
+    throw new Error(`The Chat Completions request did not include messages: ${JSON.stringify(request.body)}.`);
+  }
+  if (provider !== 'openai' && request.path !== '/v1/chat/completions') {
+    throw new Error(`The Chat Completions request used the wrong path: ${request.path}.`);
   }
   if (usesMcp) {
     const toolNames = Array.isArray(request.body.tools)
@@ -343,7 +365,14 @@ async function writeEngineSettings(directory, ports) {
   await writeFile(path.join(directory, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
 }
 
-async function writeAgentSettings(directory, projectPath, directApiFixture = null, includeMcp = false, remoteMcpUrl = null) {
+async function writeAgentSettings(
+  directory,
+  projectPath,
+  directApiFixture = null,
+  includeMcp = false,
+  remoteMcpUrl = null,
+  provider = 'openai',
+) {
   await mkdir(projectPath, { recursive: true });
   await writeFile(path.join(projectPath, 'AGENTS.md'), '# Smoke project rules\nKeep context estimates visible.\n', 'utf8');
   const now = new Date().toISOString();
@@ -367,10 +396,14 @@ async function writeAgentSettings(directory, projectPath, directApiFixture = nul
     diagnosticsEnabled: true,
     directApi: {
       enabled: Boolean(directApiFixture),
-      provider: 'openai',
+      provider,
       model: directApiFixture ? 'smoke-api-model' : '',
       baseUrl: directApiFixture?.baseUrl ?? 'https://api.openai.com/v1',
-      credentialId: 'provider.openai',
+      credentialId: provider === 'openrouter'
+        ? 'provider.openrouter'
+        : provider === 'deepseek'
+          ? 'provider.deepseek'
+          : 'provider.openai',
     },
     mcpServers: includeMcp ? [remoteMcpUrl ? {
       id: 'smoke',
@@ -466,7 +499,7 @@ async function readJsonBody(request) {
   return text ? JSON.parse(text) : undefined;
 }
 
-async function startDirectApiFixture({ mcp = false, command = false } = {}) {
+async function startDirectApiFixture({ mcp = false, command = false, provider = 'openai' } = {}) {
   const requests = [];
   let requestCount = 0;
   const server = http.createServer(async (request, response) => {
@@ -476,9 +509,16 @@ async function startDirectApiFixture({ mcp = false, command = false } = {}) {
     await new Promise((resolve) => request.on('end', resolve));
     requestCount += 1;
     requests.push({
+      path: request.url,
       authorization: request.headers.authorization,
       body: JSON.parse(raw),
     });
+    if (provider !== 'openai') {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write('data: {"choices":[{"delta":{"content":"KAI_API_"},"finish_reason":null}]}\n\n');
+      response.end('data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3}}\n\ndata: [DONE]\n\n');
+      return;
+    }
     if (mcp && requestCount === 1) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       response.end('event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-mcp-tool","output":[{"type":"function_call","id":"fc_mcp","call_id":"call_mcp","name":"mcp_smoke_echo","arguments":"{\\"text\\":\\"from-smoke\\"}"}]}}\n\n');

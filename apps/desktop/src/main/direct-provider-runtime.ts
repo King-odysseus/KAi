@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { directProviderPreset } from '@kai/contracts';
 import type {
   AppSettings,
   AgentRunRequest,
   DirectApiCapability,
   PersistedEvent,
-  ProviderId,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
 import {
@@ -14,12 +14,26 @@ import {
   type ProjectToolExecution,
 } from './project-tools';
 
-const PROVIDER_NAMES: Record<ProviderId, string> = {
-  openai: 'OpenAI Responses API',
-  anthropic: 'Anthropic API',
-  google: 'Google Gemini API',
-  'openai-compatible': 'OpenAI-compatible API',
-};
+export interface DirectApiHistoryTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content?: string | null;
+  tool_calls?: ChatToolCall[];
+  tool_call_id?: string;
+}
+
+interface ChatToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
 const MAX_PROVIDER_ROUNDS = 9;
 const MAX_TOOL_ROUNDS = 8;
 const MAX_APPROVAL_DETAIL = 4_000;
@@ -37,6 +51,10 @@ interface PendingToolCall {
   callId?: string;
   name?: string;
   argumentsText: string;
+}
+
+interface PendingChatToolCall extends PendingToolCall {
+  index: number;
 }
 
 export interface DirectApiApprovalRequest {
@@ -79,7 +97,8 @@ export class DesktopDirectProviderRuntime {
   async capability(): Promise<DirectApiCapability> {
     const settings = await this.settings.load();
     const directApi = settings.directApi;
-    const displayName = PROVIDER_NAMES[directApi.provider];
+    const preset = directProviderPreset(directApi.provider);
+    const displayName = preset.displayName;
     const credentialStored = await this.credentials.has(directApi.credentialId);
     const base = {
       enabled: directApi.enabled,
@@ -90,17 +109,17 @@ export class DesktopDirectProviderRuntime {
       credentialId: directApi.credentialId,
       credentialStored,
       supportsStreaming: true,
-      supportsTools: directApi.provider === 'openai',
+      supportsTools: preset.supportsTools,
     } satisfies Omit<DirectApiCapability, 'available'>;
 
     if (!directApi.enabled) {
       return { ...base, available: false, unavailableReason: 'Direct API mode is disabled in Settings.' };
     }
-    if (directApi.provider !== 'openai') {
+    if (preset.protocol === 'unsupported') {
       return {
         ...base,
         available: false,
-        unavailableReason: `${displayName} is not implemented yet. Select OpenAI for the first direct API adapter.`,
+        unavailableReason: `${displayName} does not use an OpenAI-compatible adapter. Choose OpenRouter to access the same model family through a supported API.`,
       };
     }
     if (!directApi.model.trim()) {
@@ -130,6 +149,7 @@ export class DesktopDirectProviderRuntime {
     onEvent?: (event: PersistedEvent) => void,
     approvals?: DirectApiApprovalPort,
     contextText?: string,
+    history?: readonly DirectApiHistoryTurn[],
   ): Promise<AgentExecutionResult> {
     const capability = await this.capability();
     if (!capability.available) {
@@ -139,6 +159,19 @@ export class DesktopDirectProviderRuntime {
     const apiKey = await this.credentials.get(capability.credentialId);
     if (!apiKey) {
       return immediateFailure(request, `Credential ${capability.credentialId} is not available.`);
+    }
+
+    if (directProviderPreset(capability.provider).protocol === 'chat-completions') {
+      return this.runChatCompletions(
+        request,
+        projectRoot,
+        capability,
+        apiKey,
+        onEvent,
+        approvals,
+        contextText,
+        history,
+      );
     }
 
     const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
@@ -323,11 +356,243 @@ export class DesktopDirectProviderRuntime {
     };
   }
 
+  private async runChatCompletions(
+    request: AgentRunRequest,
+    projectRoot: string,
+    capability: DirectApiCapability,
+    apiKey: string,
+    onEvent?: (event: PersistedEvent) => void,
+    approvals?: DirectApiApprovalPort,
+    contextText?: string,
+    history?: readonly DirectApiHistoryTurn[],
+  ): Promise<AgentExecutionResult> {
+    const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
+    let externalToolDefinitions: readonly unknown[] = [];
+    try {
+      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+    } catch {
+      // A broken optional tool provider must not prevent built-in project tools from running.
+    }
+    const events: PersistedEvent[] = [];
+    const emit = (event: PersistedEvent): void => {
+      events.push(event);
+      onEvent?.(event);
+    };
+    emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
+
+    const controller = new AbortController();
+    this.activeRuns.set(request.conversationId, controller);
+    const messages = chatMessages(request, contextText, history);
+    const outputParts: string[] = [];
+    const errors: string[] = [];
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let aborted = false;
+    let toolRounds = 0;
+
+    try {
+      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+        const pendingToolCalls = new Map<number, PendingChatToolCall>();
+        let roundText = '';
+        let roundProviderError: string | undefined;
+        const response = await this.requestChatCompletionsResponse(
+          request,
+          capability,
+          apiKey,
+          messages,
+          externalToolDefinitions,
+          controller.signal,
+          emit,
+        );
+        if (!response.body) throw new Error('The provider returned no streaming response body.');
+
+        for await (const streamEvent of readSseEvents(response.body)) {
+          if (streamEvent.data === '[DONE]') break;
+          let value: Record<string, unknown>;
+          try {
+            value = asRecord(JSON.parse(streamEvent.data)) ?? {};
+          } catch {
+            continue;
+          }
+          const streamError = providerEventError(value);
+          if (streamError) roundProviderError = streamError;
+          const usage = asRecord(value.usage);
+          const roundInputTokens = integerValue(usage?.prompt_tokens) ?? integerValue(usage?.input_tokens);
+          const roundOutputTokens = integerValue(usage?.completion_tokens) ?? integerValue(usage?.output_tokens);
+          if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens;
+          if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
+
+          const choice = firstRecord(value.choices);
+          const delta = asRecord(choice?.delta);
+          const deltaText = chatContentText(delta?.content);
+          if (deltaText) {
+            roundText += deltaText;
+            outputParts.push(deltaText);
+            onEvent?.(textEvent(request, deltaText));
+          }
+          for (const toolCall of chatToolDeltas(delta?.tool_calls)) {
+            rememberChatToolCall(pendingToolCalls, toolCall);
+          }
+          if (choice?.finish_reason === 'error') {
+            roundProviderError ||= `${capability.displayName} reported a failed response.`;
+          }
+        }
+
+        if (roundProviderError) {
+          errors.push(roundProviderError);
+          break;
+        }
+
+        const toolCalls = [...pendingToolCalls.values()]
+          .sort((left, right) => left.index - right.index)
+          .filter((call) => call.name);
+        if (toolCalls.length === 0) break;
+        if (toolRounds >= MAX_TOOL_ROUNDS) {
+          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+          break;
+        }
+        toolRounds += 1;
+        for (const call of toolCalls) call.callId ||= `call_${randomUUID()}`;
+        messages.push({
+          role: 'assistant',
+          content: roundText || null,
+          tool_calls: toolCalls.map((call) => ({
+            id: call.callId || `call_${randomUUID()}`,
+            type: 'function',
+            function: { name: call.name || 'unknown', arguments: call.argumentsText || '{}' },
+          })),
+        });
+        const toolResults = await executeToolCalls(
+          request,
+          toolRuntime,
+          toolCalls,
+          controller.signal,
+          approvals,
+          this.externalTools,
+          emit,
+          chatToolOutput,
+        );
+        messages.push(...toolResults as ChatMessage[]);
+      }
+    } catch (error) {
+      aborted = controller.signal.aborted;
+      if (!aborted) errors.push(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.activeRuns.delete(request.conversationId);
+    }
+
+    const output = outputParts.join('').trim();
+    const failed = !aborted && (errors.length > 0 || !output);
+    const error = aborted
+      ? `${capability.displayName} run cancelled.`
+      : failed
+        ? errors.at(-1) || `${capability.displayName} returned no output.`
+        : undefined;
+
+    if (output) events.push(textEvent(request, output));
+    if (inputTokens !== undefined || outputTokens !== undefined) {
+      emit({
+        schemaVersion: 1,
+        id: eventId(),
+        taskId: request.conversationId,
+        timestamp: nowIso(),
+        agent: request.agent,
+        type: 'cost.update',
+        inputTokens,
+        outputTokens,
+        estimateProvenance: 'measured',
+      });
+    }
+    if (error) {
+      emit({
+        schemaVersion: 1,
+        id: eventId(),
+        taskId: request.conversationId,
+        timestamp: nowIso(),
+        agent: request.agent,
+        type: 'error',
+        message: error,
+        recoverable: true,
+      });
+    }
+    emit(lifecycleEvent(
+      request,
+      failed || aborted ? 'failed' : 'completed',
+      failed || aborted ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
+    ));
+
+    return {
+      status: failed || aborted ? 'failed' : 'completed',
+      output,
+      outputAgent: request.agent,
+      events,
+      error,
+    };
+  }
+
   cancel(conversationId: string): boolean {
     const controller = this.activeRuns.get(conversationId);
     if (!controller) return false;
     controller.abort();
     return true;
+  }
+
+  private async requestChatCompletionsResponse(
+    request: AgentRunRequest,
+    capability: DirectApiCapability,
+    apiKey: string,
+    messages: readonly ChatMessage[],
+    externalToolDefinitions: readonly unknown[],
+    signal: AbortSignal,
+    emit: (event: PersistedEvent) => void,
+  ): Promise<Response> {
+    const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
+    const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response: Response;
+      try {
+        response = await fetch(chatCompletionsUrl(capability.baseUrl), {
+          method: 'POST',
+          headers: chatCompletionsHeaders(capability, apiKey),
+          body: JSON.stringify({
+            model: capability.model,
+            messages,
+            stream: true,
+            stream_options: { include_usage: true },
+            tools: chatToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]),
+            tool_choice: 'auto',
+          }),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+        if (attempt >= maxAttempts) throw error;
+        const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
+        emit(lifecycleEvent(
+          request,
+          'starting',
+          `${capability.displayName} connection failed. Retrying in ${formatDelay(delayMs)} (attempt ${attempt + 1}/${maxAttempts}).`,
+        ));
+        await delay(delayMs, signal);
+        continue;
+      }
+
+      if (response.ok) return response;
+
+      const detail = await response.text();
+      const message = providerErrorMessage(response.status, detail);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
+      emit(lifecycleEvent(
+        request,
+        'starting',
+        `${capability.displayName} returned ${response.status}. Retrying in ${formatDelay(delayMs)} (attempt ${attempt + 1}/${maxAttempts}).`,
+      ));
+      await delay(delayMs, signal);
+    }
+
+    throw new Error(`${capability.displayName} exhausted retry attempts.`);
   }
 
   private async requestProviderResponse(
@@ -402,6 +667,7 @@ async function executeToolCalls(
   approvals: DirectApiApprovalPort | undefined,
   externalTools: ExternalToolPort | undefined,
   emit: (event: PersistedEvent) => void,
+  formatOutput: (callId: string, output: unknown) => unknown = functionCallOutput,
 ): Promise<unknown[]> {
   const results: unknown[] = [];
   for (const call of calls) {
@@ -414,7 +680,7 @@ async function executeToolCalls(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       emit(toolCallEvent(request, name, 'failed', undefined, { error: message }));
-      results.push(functionCallOutput(callId, { error: message }));
+      results.push(formatOutput(callId, { error: message }));
       continue;
     }
 
@@ -422,7 +688,7 @@ async function executeToolCalls(
     const policy = externalTools?.policy(name, request.autonomy) ?? toolRuntime.policy(name, request.autonomy);
     if (policy.decision === 'deny') {
       emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }));
-      results.push(functionCallOutput(callId, { error: policy.reason }));
+      results.push(formatOutput(callId, { error: policy.reason }));
       continue;
     }
     if (policy.decision === 'ask') {
@@ -450,7 +716,7 @@ async function executeToolCalls(
       if (!approved) {
         const reason = 'The user denied this project change.';
         emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }));
-        results.push(functionCallOutput(callId, { error: reason }));
+        results.push(formatOutput(callId, { error: reason }));
         continue;
       }
     }
@@ -484,7 +750,7 @@ async function executeToolCalls(
         });
       }
     }
-    results.push(functionCallOutput(callId, execution.output));
+    results.push(formatOutput(callId, execution.output));
   }
   return results;
 }
@@ -558,6 +824,45 @@ function rememberToolArguments(
   toolCalls.set(key, existing);
 }
 
+function rememberChatToolCall(
+  toolCalls: Map<number, PendingChatToolCall>,
+  delta: Record<string, unknown>,
+): void {
+  const index = integerValue(delta.index) ?? 0;
+  const functionValue = asRecord(delta.function);
+  const existing = toolCalls.get(index) ?? { key: String(index), index, argumentsText: '' };
+  existing.callId = stringValue(delta.id) ?? existing.callId;
+  existing.name = stringValue(functionValue?.name) ?? existing.name;
+  const argumentDelta = stringValue(functionValue?.arguments);
+  if (argumentDelta) existing.argumentsText += argumentDelta;
+  toolCalls.set(index, existing);
+}
+
+function chatToolDeltas(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.map((item) => asRecord(item)).filter((item): item is Record<string, unknown> => Boolean(item)) : [];
+}
+
+function chatContentText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((part) => stringValue(asRecord(part)?.text))
+    .filter((part): part is string => Boolean(part))
+    .join('');
+}
+
+function chatToolOutput(callId: string, output: unknown): ChatMessage {
+  return {
+    role: 'tool',
+    tool_call_id: callId,
+    content: JSON.stringify(output),
+  };
+}
+
+function firstRecord(value: unknown): Record<string, unknown> | undefined {
+  return Array.isArray(value) ? asRecord(value[0]) : undefined;
+}
+
 function outputItems(output: unknown): Array<Record<string, unknown> | undefined> {
   return Array.isArray(output) ? output.map((item) => asRecord(item)) : [];
 }
@@ -582,6 +887,50 @@ function functionCallOutput(callId: string, output: unknown): Record<string, unk
 function responsesUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
   return /\/responses$/i.test(trimmed) ? trimmed : `${trimmed}/responses`;
+}
+
+function chatMessages(
+  request: AgentRunRequest,
+  contextText?: string,
+  history?: readonly DirectApiHistoryTurn[],
+): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+  if (contextText?.trim()) messages.push({ role: 'system', content: contextText.trim() });
+  const turns = history?.length ? history : [{ role: 'user' as const, text: request.prompt }];
+  for (const turn of turns) {
+    if (turn.text.trim()) messages.push({ role: turn.role, content: turn.text });
+  }
+  return messages;
+}
+
+function chatCompletionsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
+}
+
+function chatCompletionsHeaders(capability: DirectApiCapability, apiKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+    ...(capability.provider === 'openrouter' ? { 'X-Title': 'KAI Desktop' } : {}),
+  };
+}
+
+function chatToolDefinitions(definitions: readonly unknown[]): Array<Record<string, unknown>> {
+  return definitions.flatMap((definition) => {
+    const record = asRecord(definition);
+    const name = stringValue(record?.name);
+    if (!record || record.type !== 'function' || !name) return [];
+    return [{
+      type: 'function',
+      function: {
+        name,
+        description: stringValue(record.description) ?? '',
+        parameters: asRecord(record.parameters) ?? { type: 'object', properties: {} },
+      },
+    }];
+  });
 }
 
 function providerErrorMessage(status: number, detail: string): string {

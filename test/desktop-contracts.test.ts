@@ -26,6 +26,12 @@ describe('desktop contracts', () => {
     expect(parseIpcInput('projects:open', { id: 'project-1' })).toEqual({ id: 'project-1' });
     expect(parseIpcInput('agents:cancel', { conversationId: 'conv-1' })).toEqual({ conversationId: 'conv-1' });
     expect(parseIpcInput('agents:sign-in', { agent: 'codex' })).toEqual({ agent: 'codex' });
+    expect(parseIpcInput('settings:update', { directApi: { provider: 'openrouter' } })).toMatchObject({
+      directApi: { provider: 'openrouter' },
+    });
+    expect(parseIpcInput('settings:update', { directApi: { provider: 'deepseek' } })).toMatchObject({
+      directApi: { provider: 'deepseek' },
+    });
     expect(parseIpcInput('context:preview', { projectId: 'project-1' })).toEqual({ projectId: 'project-1' });
     expect(() => parseIpcInput('context:preview', { projectId: '' })).toThrow();
     expect(parseIpcInput('agents:run', {

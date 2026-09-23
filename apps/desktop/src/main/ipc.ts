@@ -241,7 +241,7 @@ async function runConversationAgent(
     ? (await buildConversationContext(context, project.path, project.name, conversation, request.prompt)).text
     : '';
   const execution = executionMode === 'api'
-    ? await context.directApi.run(request, project.path, resumeSessionId, emit, approvals, contextText)
+    ? await context.directApi.run(request, project.path, resumeSessionId, emit, approvals, contextText, conversation.turns)
     : await context.agents.run(request, project.path, resumeSessionId, emit);
   if (executionMode === 'api' && execution.status === 'failed') {
     const ended = await finishMemorySession(

@@ -1,6 +1,7 @@
 export * from './agents';
 export * from './brain';
 export * from './context';
+export * from './direct-providers';
 export * from './domain';
 export * from './events';
 export * from './host';

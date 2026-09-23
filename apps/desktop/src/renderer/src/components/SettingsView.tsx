@@ -1,5 +1,6 @@
 import { Check, Cloud, Cpu, Database, Gauge, KeyRound, Plug, Plus, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
 import type { AppSettings, CredentialStatus, DataLocation, LogEntry, SettingsUpdate } from '@kai/contracts';
 
 type McpServer = AppSettings['mcpServers'][number];
@@ -11,13 +12,29 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
+  const [directCredentialValue, setDirectCredentialValue] = useState('');
 
   useEffect(() => setDraft(settings), [settings]);
+  const directPreset = directProviderPreset(draft.directApi.provider);
   const updateMcpServer = (index: number, patch: McpServerPatch): void => {
     setDraft((current) => updateDraftMcpServer(current, index, patch));
   };
   const updateMcpServerTransport = (index: number, transport: McpServer['transport']): void => {
     setDraft((current) => updateDraftMcpServerTransport(current, index, transport));
+  };
+  const updateDirectProvider = (provider: AppSettings['directApi']['provider']): void => {
+    const preset = directProviderPreset(provider);
+    setCredentialId(preset.credentialId);
+    setDraft((current) => ({
+      ...current,
+      directApi: {
+        ...current.directApi,
+        provider,
+        baseUrl: preset.defaultBaseUrl,
+        model: preset.defaultModel,
+        credentialId: preset.credentialId,
+      },
+    }));
   };
 
   return (
@@ -50,12 +67,20 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           <div className="section-title"><Cloud size={17} /><span>Direct API</span></div>
           <label className="toggle-row"><span><strong>Enable direct API mode</strong><small>Uses a provider key from the OS vault</small></span><input type="checkbox" checked={draft.directApi.enabled} onChange={(event) => setDraft({ ...draft, directApi: { ...draft.directApi, enabled: event.target.checked } })} /></label>
           <div className="field-grid">
-            <SelectField label="Provider" value={draft.directApi.provider} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, provider: value as AppSettings['directApi']['provider'] } })} options={['openai']} />
-            <TextField label="Model" value={draft.directApi.model} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, model: value } })} />
+            <SelectField label="Provider" value={draft.directApi.provider} onChange={(value) => updateDirectProvider(value as AppSettings['directApi']['provider'])} options={DIRECT_PROVIDER_ORDER.map((id) => ({ value: id, label: directProviderPreset(id).displayName }))} />
+            <TextField label="Model" value={draft.directApi.model} list="direct-api-models" onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, model: value } })} />
             <TextField label="Base URL" value={draft.directApi.baseUrl} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, baseUrl: value } })} />
-            <SelectField label="Credential" value={draft.directApi.credentialId} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, credentialId: value } })} options={['provider.openai', 'provider.anthropic', 'provider.deepseek']} />
+            <TextField label="Credential ID" value={draft.directApi.credentialId} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, credentialId: value } })} />
           </div>
-          <p className="settings-note">The OpenAI Responses API adapter streams assistant text and can use built-in project tools plus enabled MCP servers. Project changes and MCP calls ask for approval unless the autonomy mode allows them.</p>
+          <datalist id="direct-api-models">{directPreset.models.map((model) => <option key={model} value={model} />)}</datalist>
+          <div className="credential-form">
+            <TextField label="API key" value={directCredentialValue} type="password" onChange={setDirectCredentialValue} />
+            <div className="button-row align-start">
+              <button type="button" className="secondary-button" disabled={!directCredentialValue.trim() || !credentialStatus.available || busy} onClick={() => { onSaveCredential(draft.directApi.credentialId, directCredentialValue); setDirectCredentialValue(''); }}><KeyRound size={15} /><span>Save API key</span></button>
+              <span className="settings-note">{credentialStatus.ids.includes(draft.directApi.credentialId) ? 'Credential stored in the OS vault.' : 'No credential stored for this ID.'}</span>
+            </div>
+          </div>
+          <p className="settings-note">{directPreset.protocol === 'responses' ? 'Uses the OpenAI Responses API. ' : 'Uses the OpenAI-compatible Chat Completions API. '}Assistant text streams into the workspace, and built-in project tools plus enabled MCP servers use the same approval rules.</p>
         </section>
 
         <section className="settings-section span-two">
@@ -128,7 +153,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
               </label>
               <div className="field-grid">
                 <NumberField label="Port" value={draft.proxy.port} min={1024} max={65535} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, port: value } })} />
-                <SelectField label="Credential" value={draft.proxy.credentialId} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, credentialId: value } })} options={['provider.openai', 'provider.anthropic', 'provider.deepseek', 'proxy.main']} />
+                <SelectField label="Credential" value={draft.proxy.credentialId} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, credentialId: value } })} options={[...new Set(DIRECT_PROVIDER_ORDER.map((id) => directProviderPreset(id).credentialId)), 'proxy.main']} />
                 <TextField label="Upstream URL" value={draft.proxy.targetBaseUrl} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, targetBaseUrl: value } })} />
                 <TextField label="Default model" value={draft.proxy.defaultModel} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, defaultModel: value } })} />
               </div>
@@ -157,12 +182,17 @@ function PageHeader({ title, detail }: { title: string; detail: string }): React
   return <header className="page-header"><div><h1>{title}</h1><p>{detail}</p></div></header>;
 }
 
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+type SelectOption = string | { value: string; label: string };
+
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }): ReactNode {
+  return <label className="field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => {
+    const item = typeof option === 'string' ? { value: option, label: option } : option;
+    return <option key={item.value} value={item.value}>{item.label}</option>;
+  })}</select></label>;
 }
 
-function TextField({ label, value, type = 'text', onChange }: { label: string; value: string; type?: string; onChange: (value: string) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+function TextField({ label, value, type = 'text', list, onChange }: { label: string; value: string; type?: string; list?: string; onChange: (value: string) => void }): ReactNode {
+  return <label className="field"><span>{label}</span><input type={type} list={list} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }): ReactNode {

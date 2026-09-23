@@ -3,7 +3,19 @@ import { z } from 'zod';
 export const schemaVersionSchema = z.literal(1);
 export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini']);
 export const executionModeSchema = z.enum(['cli', 'api']);
-export const providerIdSchema = z.enum(['openai', 'anthropic', 'google', 'openai-compatible']);
+export const providerIdSchema = z.enum([
+  'openai',
+  'anthropic',
+  'google',
+  'deepseek',
+  'openrouter',
+  'groq',
+  'mistral',
+  'xai',
+  'together',
+  'fireworks',
+  'openai-compatible',
+]);
 export const autonomyModeSchema = z.enum(['plan', 'ask', 'autoEdit', 'full', 'custom']);
 export const routeModeSchema = z.enum(['direct', 'proxy']);
 export const permissionKeySchema = z.enum([
