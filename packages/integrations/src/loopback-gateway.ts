@@ -86,6 +86,10 @@ export class AuthenticatedLoopbackGateway {
     headers.host = upstream.host;
 
     const forwarded = http.request({
+      // A managed daemon can close an idle keep-alive socket between requests.
+      // Reusing that socket surfaces as a spurious ECONNRESET to the app, so
+      // keep forwarding to the local engine single-use per request.
+      agent: false,
       protocol: upstream.protocol,
       hostname: upstream.hostname,
       port: portOf(upstream),

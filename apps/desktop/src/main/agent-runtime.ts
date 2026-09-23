@@ -184,6 +184,7 @@ export class DesktopAgentRuntime {
     resumeSessionId?: string,
     onEvent?: (event: PersistedEvent) => void,
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
+    model?: string,
   ): Promise<AgentExecutionResult> {
     const definition = AGENTS[request.agent];
     const capability = await this.capability(request.agent);
@@ -198,7 +199,7 @@ export class DesktopAgentRuntime {
       return this.immediateFailure(request, message);
     }
 
-    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions);
+    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model);
     const controller = new AbortController();
     this.activeRuns.set(request.conversationId, controller);
 
@@ -351,12 +352,16 @@ export function buildAgentArgs(
   cwd: string,
   resumeSessionId?: string,
   customPermissions?: Partial<Record<PermissionKey, boolean>>,
+  model?: string,
 ): string[] {
+  // Every supported CLI takes the model as `--model <name>`; without one the CLI keeps its own default.
+  const modelArgs = model ? ['--model', model] : [];
   if (request.agent === 'codex') {
-    if (resumeSessionId) return ['exec', 'resume', resumeSessionId, '--json', '-'];
+    if (resumeSessionId) return ['exec', 'resume', resumeSessionId, '--json', ...modelArgs, '-'];
     return [
       'exec',
       '--json',
+      ...modelArgs,
       '--sandbox',
       codexSandbox(request.autonomy, customPermissions),
       '--skip-git-repo-check',
@@ -370,12 +375,13 @@ export function buildAgentArgs(
     const permissionMode = claudePermission(request.autonomy, customPermissions);
     const args = ['-p', '--output-format', 'json', '--permission-mode', permissionMode];
     if (permissionMode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
+    args.push(...modelArgs);
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     return args;
   }
 
   if (request.agent === 'qwen') {
-    const args = ['--output-format', 'stream-json', '--approval-mode', qwenApproval(request.autonomy)];
+    const args = ['--output-format', 'stream-json', '--approval-mode', qwenApproval(request.autonomy), ...modelArgs];
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     args.push(request.prompt);
     return args;
@@ -389,6 +395,7 @@ export function buildAgentArgs(
     '--approval-mode',
     geminiApproval(request.autonomy),
     '--skip-trust',
+    ...modelArgs,
   ];
   if (resumeSessionId) args.push('--resume', resumeSessionId);
   return args;

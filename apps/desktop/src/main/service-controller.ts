@@ -5,6 +5,7 @@ import type { AppSettings, ServiceKind, ServiceState, SettingsUpdate } from '@ka
 import {
   AuthenticatedLoopbackGateway,
   EngineLocator,
+  RestartPolicy,
   ServiceManager,
   cognitive1Manifest,
   findAvailableLoopbackPort,
@@ -26,6 +27,7 @@ export interface ServiceControllerOptions {
   proxyLauncherPath: string;
   environment?: NodeJS.ProcessEnv;
   executablePath?: string;
+  restartPolicy?: import('@kai/integrations').RestartPolicyOptions;
 }
 
 export interface ServiceLoopbackAccess {
@@ -35,7 +37,11 @@ export interface ServiceLoopbackAccess {
 }
 
 export class DesktopServiceController {
-  private readonly manager = new ServiceManager();
+  private readonly manager = new ServiceManager(undefined, (kind, detail) => this.handleCrash(kind, detail));
+  private readonly restartPolicies = new Map<ServiceKind, RestartPolicy>();
+  private readonly exhausted = new Set<ServiceKind>();
+  private readonly restartTimers = new Map<ServiceKind, NodeJS.Timeout>();
+  private disposed = false;
   private readonly gateways = new Map<ServiceKind, AuthenticatedLoopbackGateway>();
   private readonly locator: EngineLocator;
   private readonly executablePath: string;
@@ -98,7 +104,49 @@ export class DesktopServiceController {
     return this.status();
   }
 
+  private policyFor(kind: ServiceKind): RestartPolicy {
+    let policy = this.restartPolicies.get(kind);
+    if (!policy) {
+      policy = new RestartPolicy(this.options.restartPolicy);
+      this.restartPolicies.set(kind, policy);
+    }
+    return policy;
+  }
+
+  private handleCrash(kind: ServiceKind, detail: string): void {
+    if (this.disposed) return;
+    const decision = this.policyFor(kind).onCrash(Date.now());
+    if (decision.action === 'give-up') {
+      this.exhausted.add(kind);
+      this.options.logger.error('service_error', `${kind} crashed ${decision.attempts} times; automatic restarts stopped`, detail);
+      return;
+    }
+    this.options.logger.warn('service_error', `${kind} crashed; restart ${decision.attempt} in ${decision.delayMs}ms`, detail);
+    const timer = setTimeout(() => {
+      this.restartTimers.delete(kind);
+      if (this.disposed) return;
+      void this.closeGateway(kind)
+        .then(() => this.options.settings.load())
+        .then((settings) => (serviceEnabled(settings, kind) ? this.start(kind, settings, false) : undefined))
+        .catch((error) => {
+          this.options.logger.error('service_error', `Automatic restart of ${kind} failed`, messageOf(error));
+          this.handleCrash(kind, messageOf(error));
+        });
+    }, decision.delayMs);
+    timer.unref();
+    this.restartTimers.set(kind, timer);
+  }
+
+  private clearRestartState(kind: ServiceKind): void {
+    const timer = this.restartTimers.get(kind);
+    if (timer) clearTimeout(timer);
+    this.restartTimers.delete(kind);
+    this.exhausted.delete(kind);
+    this.restartPolicies.get(kind)?.reset();
+  }
+
   async stop(kind: ServiceKind): Promise<ServiceState[]> {
+    this.clearRestartState(kind);
     try {
       await this.manager.stop(kind);
     } finally {
@@ -110,6 +158,7 @@ export class DesktopServiceController {
 
   async restart(kind: ServiceKind, suppliedSettings?: AppSettings): Promise<ServiceState[]> {
     const settings = suppliedSettings ?? (await this.options.settings.load());
+    this.clearRestartState(kind);
     await this.manager.stop(kind);
     await this.closeGateway(kind);
     return this.start(kind, settings, true);
@@ -147,6 +196,8 @@ export class DesktopServiceController {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
+    for (const kind of [...this.restartTimers.keys()]) this.clearRestartState(kind);
     try {
       await Promise.race([
         this.manager.stopAll(),
@@ -162,6 +213,10 @@ export class DesktopServiceController {
 
   getCognitive1Token(): string | null {
     return this.cognitive1ApiKey;
+  }
+
+  async engineInstallation(kind: ServiceKind): Promise<EngineInstallation> {
+    return this.locate(kind);
   }
 
   private async statusFor(kind: ServiceKind, settings: AppSettings): Promise<ServiceState> {
@@ -191,8 +246,13 @@ export class DesktopServiceController {
           };
     }
 
+    const restarts = this.restartPolicies.get(kind)?.restartCount(Date.now()) ?? 0;
+    const exhausted = this.exhausted.has(kind);
     return {
       ...state,
+      ...(exhausted ? { detail: `${state.detail} Automatic restarts stopped after ${restarts} crashes; restart it manually.` } : {}),
+      restarts,
+      restartsExhausted: exhausted,
       endpoint: endpointFor(kind, settings),
       authentication: 'loopback-token',
       tokenStored: await this.options.credentials.has(loopbackCredentialId(kind)),
@@ -209,6 +269,9 @@ export class DesktopServiceController {
     const dataPath = settings.cognitive1.dataPath ?? path.join(this.options.paths.root, 'engines', 'cognitive1');
     const projectsPath = path.join(dataPath, '.projects');
     await fs.mkdir(projectsPath, { recursive: true });
+    const overwatchApiKey = settings.cognitive1.overwatch.enabled
+      ? await this.credential(settings.cognitive1.overwatch.credentialId)
+      : '';
     this.cognitive1ApiKey = crypto.randomBytes(32).toString('base64url');
     const endpoint = `http://127.0.0.1:${await findAvailableLoopbackPort()}`;
     return {
@@ -230,7 +293,7 @@ export class DesktopServiceController {
         COGNITIVE1_HTTP_HOST: '127.0.0.1',
         COGNITIVE1_API_KEY: this.cognitive1ApiKey,
         COGNITIVE1_PROJECTS_DIR: projectsPath,
-        COGNITIVE1_OVERWATCH_ENABLED: 'false',
+        ...cognitive1OverwatchEnvironment(settings, overwatchApiKey),
         COGNITIVE1_AUTO_UPDATE: 'false',
         COGNITIVE1_AUTO_UPDATE_RESTART: 'false',
         COGNITIVE1_GIT_AUTO_LEARN: 'false',
@@ -242,48 +305,86 @@ export class DesktopServiceController {
 
   private async proxySpec(settings: AppSettings): Promise<ServiceLaunchSpec> {
     const installation = await this.locate(universalProxyManifest.kind);
-    const apiKey = this.options.credentials.isAvailable()
-      ? ((await this.options.credentials.get(settings.proxy.credentialId)) ?? '')
-      : '';
+    const proxy = settings.proxy;
+    const apiKey = await this.credential(proxy.credentialId);
     const port = await findAvailableLoopbackPort();
     const endpoint = `http://127.0.0.1:${port}`;
     const historyPath = path.join(this.options.paths.root, 'engines', 'proxy', 'history.jsonl');
     await fs.mkdir(path.dirname(historyPath), { recursive: true });
 
+    const providers = Object.fromEntries(await Promise.all(
+      Object.entries(proxy.providers).map(async ([name, provider]) => [
+        name,
+        {
+          baseUrl: provider.baseUrl,
+          apiKey: provider.credentialId ? await this.credential(provider.credentialId) : undefined,
+          format: provider.format,
+          defaultModel: provider.defaultModel,
+          modelMap: provider.modelMap,
+        },
+      ]),
+    ));
+    const fallbackProviders = await Promise.all(
+      proxy.fallbackProviders.map(async (provider) => ({
+        baseUrl: provider.baseUrl,
+        apiKey: provider.credentialId ? await this.credential(provider.credentialId) : undefined,
+        defaultModel: provider.defaultModel,
+        modelMap: provider.modelMap,
+      })),
+    );
+    const [kimiConfig, qwenConfig, codexConfig] = await Promise.all([
+      this.agentBackendConfig(proxy.kimiConfig),
+      this.agentBackendConfig(proxy.qwenConfig),
+      this.agentBackendConfig(proxy.codexConfig),
+    ]);
+
     const config = {
       port,
-      targetBaseUrl: settings.proxy.targetBaseUrl,
+      targetBaseUrl: proxy.targetBaseUrl,
       apiKey,
-      apiKeys: apiKey ? { [settings.proxy.targetBaseUrl]: apiKey } : {},
-      defaultModel: settings.proxy.defaultModel,
-      modelMap: {},
-      customHeaders: {},
-      fallbackProviders: [],
-      providers: {},
-      modelRoutes: [],
-      modelRouting: false,
-      agentRoutes: {},
-      dualApiEnabled: false,
-      kimiConfig: disabledAgentConfig(),
-      qwenConfig: disabledAgentConfig(),
-      codexConfig: disabledAgentConfig(),
-      rateLimit: { maxRequestsPerSecond: 0 },
-      concurrency: { maxConcurrentRequests: 0 },
-      logging: { enabled: false, directory: '', maxFileSizeMB: 10 },
-      tls: { enabled: false, certPath: '', keyPath: '' },
-      upstreamTimeoutMs: 3_600_000,
-      stallTimeoutMs: 120_000,
+      apiKeys: apiKey ? { [proxy.targetBaseUrl]: apiKey } : {},
+      defaultModel: proxy.defaultModel,
+      modelMap: proxy.modelMap,
+      customHeaders: proxy.customHeaders,
+      fallbackProviders,
+      providers,
+      modelRoutes: proxy.modelRoutes,
+      modelRouting: proxy.modelRouting,
+      agentRoutes: proxy.agentRoutes,
+      dualApiEnabled: proxy.dualApiEnabled,
+      kimiConfig,
+      qwenConfig,
+      codexConfig,
+      rateLimit: proxy.rateLimit,
+      concurrency: { maxConcurrentRequests: proxy.maxConcurrentRequests },
+      logging: {
+        ...proxy.logging,
+        directory: proxy.logging.directory || path.join(this.options.paths.root, 'engines', 'proxy', 'logs'),
+      },
+      tls: proxy.tls,
+      upstreamTimeoutMs: proxy.upstreamTimeoutMs,
+      stallTimeoutMs: proxy.stallTimeoutMs,
     };
     const runtime = {
+      errorThreshold: proxy.errorNotifyThreshold,
+      retryConfig: proxy.retryConfig,
       historyConfig: {
-        maxEntries: 500,
-        includePromptSnippet: false,
-        promptSnippetChars: 0,
+        maxEntries: proxy.historyConfig.maxEntries,
+        includePromptSnippet: proxy.historyConfig.includePromptSnippet,
+        promptSnippetChars: proxy.historyConfig.promptSnippetChars,
+        maxReplayEntries: proxy.historyConfig.maxReplayEntries,
         filePath: historyPath,
         persistedMaxEntries: 10_000,
       },
-      upstreamTimeout: config.upstreamTimeoutMs,
-      tls: config.tls,
+      budgetConfig: proxy.costBudget,
+      rateLimitMaxRPS: proxy.rateLimit.maxRequestsPerSecond,
+      maxConcurrent: proxy.maxConcurrentRequests,
+      logging: {
+        ...proxy.logging,
+        directory: proxy.logging.directory || path.join(this.options.paths.root, 'engines', 'proxy', 'logs'),
+      },
+      upstreamTimeout: proxy.upstreamTimeoutMs,
+      tls: proxy.tls,
     };
 
     return {
@@ -304,6 +405,21 @@ export class DesktopServiceController {
       },
       stdin: `${JSON.stringify({ config, runtime })}\n`,
       onLog: (stream, line) => this.logServiceLine('universalProxy', stream, line),
+    };
+  }
+
+  private async credential(id: string): Promise<string> {
+    if (!this.options.credentials.isAvailable()) return '';
+    return (await this.options.credentials.get(id)) ?? '';
+  }
+
+  private async agentBackendConfig(config: AppSettings['proxy']['kimiConfig']) {
+    return {
+      enabled: config.enabled,
+      baseUrl: config.baseUrl,
+      apiKey: config.credentialId ? await this.credential(config.credentialId) : '',
+      defaultModel: config.defaultModel,
+      configModel: config.configModel,
     };
   }
 
@@ -348,6 +464,11 @@ export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdat
     mcpServers: update.mcpServers ?? settings.mcpServers,
     cognitive1: { ...settings.cognitive1, ...update.cognitive1 },
     proxy: { ...settings.proxy, ...update.proxy },
+    usageBudget: { ...settings.usageBudget, ...update.usageBudget },
+    notifications: { ...settings.notifications, ...update.notifications },
+    updates: { ...settings.updates, ...update.updates },
+    // A model map replaces the old one, so clearing a field removes that agent's override.
+    agentModels: update.agentModels ?? settings.agentModels,
   };
 }
 
@@ -363,15 +484,6 @@ function versionFor(kind: ServiceKind): string {
   return kind === 'cognitive1' ? cognitive1Manifest.expectedVersion : universalProxyManifest.expectedVersion;
 }
 
-function disabledAgentConfig() {
-  return {
-    enabled: false,
-    baseUrl: '',
-    apiKey: '',
-    defaultModel: '',
-  };
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -382,4 +494,20 @@ function loopbackCredentialId(kind: ServiceKind): string {
 
 function newLoopbackToken(): string {
   return crypto.randomBytes(32).toString('base64url');
+}
+
+export function cognitive1OverwatchEnvironment(
+  settings: AppSettings,
+  apiKey: string,
+): Record<string, string> {
+  const overwatch = settings.cognitive1.overwatch;
+  const environment: Record<string, string> = {
+    COGNITIVE1_OVERWATCH_ENABLED: String(overwatch.enabled),
+    COGNITIVE1_OVERWATCH_PROVIDER: overwatch.provider,
+    COGNITIVE1_OVERWATCH_BASE_URL: overwatch.baseUrl,
+    COGNITIVE1_OVERWATCH_MODEL: overwatch.model,
+    COGNITIVE1_OVERWATCH_AUTO_REJECT_THRESHOLD: String(overwatch.autoRejectThreshold),
+  };
+  if (apiKey) environment.COGNITIVE1_OVERWATCH_API_KEY = apiKey;
+  return environment;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appSettingsV1Schema,
+  cognitive1McpTools,
   conversationRecordV1Schema,
   createDefaultSettings,
   directProviderPreset,
@@ -18,6 +19,14 @@ describe('desktop contracts', () => {
     expect(settings.defaultAutonomy).toBe('ask');
     expect(settings.theme).toBe('dark');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
+    expect(settings.cognitive1.overwatch).toEqual({
+      enabled: false,
+      provider: 'deepseek',
+      baseUrl: 'https://api.deepseek.com',
+      credentialId: 'cognitive1.overwatch',
+      model: 'deepseek-chat',
+      autoRejectThreshold: 0.85,
+    });
   });
 
   it('ships current provider model catalogs', () => {
@@ -26,8 +35,8 @@ describe('desktop contracts', () => {
       models: expect.arrayContaining(['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna']),
     });
     expect(directProviderPreset('deepseek')).toMatchObject({
-      defaultModel: 'deepseek-flash',
-      models: expect.arrayContaining(['deepseek-flash', 'deepseek-v4-pro']),
+      defaultModel: 'deepseek-chat',
+      models: expect.arrayContaining(['deepseek-chat', 'deepseek-reasoner']),
     });
     expect(directProviderPreset('openrouter')).toMatchObject({
       defaultModel: 'openai/gpt-6-astra',
@@ -68,6 +77,43 @@ describe('desktop contracts', () => {
       directApi: { provider: 'deepseek' },
     });
     expect(parseIpcInput('settings:update', { theme: 'light' })).toEqual({ theme: 'light' });
+    expect(parseIpcInput('settings:update', {
+      cognitive1: {
+        overwatch: {
+          enabled: true,
+          provider: 'deepseek',
+          baseUrl: 'https://api.deepseek.com',
+          credentialId: 'cognitive1.overwatch',
+          model: 'deepseek-chat',
+          autoRejectThreshold: 0.9,
+        },
+      },
+    })).toMatchObject({
+      cognitive1: {
+        overwatch: {
+          enabled: true,
+          autoRejectThreshold: 0.9,
+        },
+      },
+    });
+    expect(parseIpcInput('settings:update', {
+      cognitive1: {
+        overwatch: {
+          enabled: true,
+          provider: 'openai',
+          baseUrl: 'https://api.openai.com/v1',
+          credentialId: 'cognitive1.overwatch',
+          model: 'gpt-6-astra',
+          autoRejectThreshold: 0.9,
+        },
+      },
+    })).toMatchObject({
+      cognitive1: {
+        overwatch: {
+          provider: 'openai',
+        },
+      },
+    });
     expect(parseIpcInput('context:preview', { projectId: 'project-1' })).toEqual({ projectId: 'project-1' });
     expect(() => parseIpcInput('context:preview', { projectId: '' })).toThrow();
     expect(parseIpcInput('agents:run', {
@@ -78,6 +124,41 @@ describe('desktop contracts', () => {
       route: 'direct',
       autonomy: 'ask',
     })).toMatchObject({ execution: 'api' });
+    expect(parseIpcInput('conversations:compact', { conversationId: 'conv-1' })).toEqual({
+      conversationId: 'conv-1',
+    });
+    expect(() => parseIpcInput('conversations:compact', { conversationId: '' })).toThrow();
+  });
+
+  it('persists durable conversation compaction metadata', () => {
+    const now = new Date().toISOString();
+    const conversation = conversationRecordV1Schema.parse({
+      schemaVersion: 1,
+      id: 'conv-compacted',
+      projectId: 'project-1',
+      title: 'Compact this thread',
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+      unread: false,
+      activeAgent: 'codex',
+      route: 'direct',
+      autonomy: 'ask',
+      execution: 'api',
+      compaction: {
+        summary: 'Objective: finish the desktop feature.',
+        createdAt: now,
+        throughTurnIndex: 3,
+        originalTurns: 4,
+        originalCharacters: 1_200,
+      },
+      turns: [],
+      events: [],
+    });
+    expect(conversation.compaction).toMatchObject({
+      throughTurnIndex: 3,
+      originalTurns: 4,
+    });
   });
 
   it('validates and normalizes brain IPC requests', () => {
@@ -92,17 +173,53 @@ describe('desktop contracts', () => {
     });
     expect(() => parseIpcInput('brain:search', { maxResults: 0 })).toThrow();
     expect(() => parseIpcInput('brain:update-field', { title: 'entry', field: 'bad:field', value: 'x' })).toThrow();
+    expect(parseIpcInput('cognitive1:tool', { tool: 'brain_recall', arguments: { query: 'desktop' } })).toEqual({
+      tool: 'brain_recall',
+      arguments: { query: 'desktop' },
+    });
+    expect(parseIpcInput('cognitive1:tool', { tool: 'brain_status' })).toEqual({
+      tool: 'brain_status',
+      arguments: {},
+    });
+    expect(cognitive1McpTools).toEqual(expect.arrayContaining([
+      'brain_recall',
+      'session_start',
+      'project_init',
+      'context_pack',
+      'compaction_check',
+      'style_guide_extract',
+    ]));
+    expect(() => parseIpcInput('cognitive1:tool', { tool: 'arbitrary_tool' })).toThrow();
   });
 
   it('validates and normalizes proxy history requests', () => {
-    expect(parseIpcInput('proxy:history', { search: ' smoke ', status: '5xx' })).toMatchObject({
+    expect(parseIpcInput('proxy:history', { search: ' smoke ', agent: 'claude', status: '5xx' })).toMatchObject({
       search: 'smoke',
+      agent: 'claude',
       status: '5xx',
       page: 1,
       limit: 50,
     });
     expect(() => parseIpcInput('proxy:history', { limit: 0 })).toThrow();
+    expect(() => parseIpcInput('proxy:history', { agent: 'unknown' })).toThrow();
     expect(() => parseIpcInput('proxy:history-detail', { id: '' })).toThrow();
+  });
+
+  it('accepts opt-in timed routing without changing other route actions', () => {
+    expect(parseIpcInput('proxy:route-action', {
+      agent: 'claude',
+      action: 'route',
+      routeUntil: 1_800_000_000_000,
+    })).toEqual({
+      agent: 'claude',
+      action: 'route',
+      routeUntil: 1_800_000_000_000,
+    });
+    expect(parseIpcInput('proxy:route-action', { agent: 'codex', action: 'direct' })).toEqual({
+      agent: 'codex',
+      action: 'direct',
+    });
+    expect(() => parseIpcInput('proxy:route-action', { agent: 'claude', action: 'route', routeUntil: -1 })).toThrow();
   });
 
   it('rejects malformed persisted events', () => {
@@ -137,6 +254,27 @@ describe('desktop contracts', () => {
     expect(migrated.directApi.model).toBe('gpt-6-astra');
     expect(migrated.windowBounds).toBeNull();
     expect('proxyApiKey' in migrated).toBe(false);
+  });
+
+  it('adds Overwatch defaults without discarding an existing C1 configuration', () => {
+    const migrated = migrateSettings({
+      cognitive1: {
+        enabled: true,
+        endpoint: 'http://127.0.0.1:9999',
+        dataPath: 'C:\\KAI\\brain',
+      },
+    });
+
+    expect(migrated.cognitive1).toMatchObject({
+      enabled: true,
+      endpoint: 'http://127.0.0.1:9999',
+      dataPath: 'C:\\KAI\\brain',
+      overwatch: {
+        enabled: false,
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+      },
+    });
   });
 
   it('normalizes legacy stdio MCP settings and accepts remote HTTP MCP settings', () => {

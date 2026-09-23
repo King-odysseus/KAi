@@ -1,6 +1,65 @@
 # KAI Agent Workbench — Updates
 
+## 2026-09-24
+
+### Editor, Git, terminal, checks and themes
+
+- **A built-in code editor.** The Code page has a file tree that respects
+  `.gitignore` and hides binary and huge files, and a Monaco editor (the editor
+  from VS Code) that loads only when you open it. Saving keeps a file's line
+  endings and BOM, and KAI warns when the file changes on disk after you opened
+  it. Turn review can now reject one hunk of a change instead of a whole file.
+- **Git and GitHub.** Branches, staging, commit, fetch, fast-forward pull and
+  push, with a confirmation before anything is pushed. Pull requests open
+  through the GitHub CLI if you are signed in to it; KAI stores no tokens and
+  never force-pushes.
+- **A terminal panel.** Press Ctrl+` from any page. Run commands in the open
+  project with Command Prompt, PowerShell or Git Bash, watch the output and stop
+  them. It is a command runner, so programs that wait for typed input end.
+- **Publishing always asks.** When an API-mode agent runs `git push`,
+  `gh pr create`, `npm publish` and similar commands, KAI asks even in Full
+  control.
+- **Pick the model per conversation.** A Model menu sits next to Agent, Route and
+  Autonomy in the composer, and Settings sets a default model per CLI agent. KAI
+  passes it to claude, codex, qwen and gemini with `--model`.
+- **Two new themes.** Purple follows Shades of Purple (Super Dark) from VS Code.
+  Navy is a deeper blue variation. The title-bar button cycles Dark, Navy,
+  Purple and Light, and Settings sets one directly.
+- **Checks tied to file versions.** Run a test command (or let an agent run one)
+  and each changed file is marked verified, failed or stale. Editing a file makes
+  its result stale until the check runs again.
+- **Recovery, coordination and tasks.** Runs interrupted by a crash show up for
+  Resume, recap or Discard and are never resumed on their own. Services that
+  crash restart a few times with backoff. An urgent banner, an Active work tab
+  and a pre-run conflict warning use the C1 brain, and a Tasks page adds a board,
+  reviews, handoffs and a decision log.
+- **Search, Brain and diagnostics.** Ctrl+K also searches conversations and the
+  brain. Save any answer to the Brain, rate recalled entries, and apply the
+  age-based prune only after previewing it. Diagnostics shows service health and
+  copies a bug report with keys, tokens and your user name removed.
+- **Tray, notifications and updates.** Optional close-to-tray and notifications
+  for finished, failed, approval and budget events. Settings can check for new
+  releases, download them and install them; the configuration is backed up first
+  and nothing installs without you. The build is unsigned, so Windows shows a
+  SmartScreen prompt the first time.
+
 ## 2026-09-23
+
+### Usage page and budget guardrails
+
+- **A new Usage page shows estimated API spend.** It totals today, this month
+  and the open conversation, with a 30-day chart and breakdowns by provider,
+  model and conversation. Amounts are estimates from reported token counts and
+  known prices, and runs on a model with no known price are listed as unpriced
+  instead of guessed. Claude and Codex subscription runs are never counted.
+- **Budget limits can warn or block.** Set per-conversation, daily, monthly and
+  per-provider daily limits (0 turns a limit off). In warn mode the workspace
+  shows an amber banner at 80% and a red one at 100%. In block mode a paid API
+  run is refused at 100% before anything is saved or sent, with a message saying
+  which limit was reached.
+- **Existing settings keep working.** Settings saved before this change load
+  with budgets off. Spend is read from stored conversations, so deleting a
+  conversation also removes its spend from the totals.
 
 ### Composer controls and authoritative Cognitive1 rules
 
@@ -12,7 +71,26 @@
   of relying on the Windows popup theme.
 - **DeepSeek and other API providers are visible in the composer.** API mode
   shows the configured provider and model, including DeepSeek API and
-  OpenRouter, and links directly back to provider settings.
+  OpenRouter, and links directly back to provider settings. Saving a provider
+  API key now also persists the selected provider, base URL, and model. DeepSeek
+  uses the current `deepseek-chat` and `deepseek-reasoner` API model IDs.
+- **Desktop migrates the shared C1 brain without starting from scratch.** On
+  startup KAI checks the registered project paths and common sibling locations
+  for a Cognitive1 `brain` folder, then copies missing entries into the desktop
+  brain before C1 starts. Existing files are never overwritten.
+- **Conversation context can be compacted without deleting the transcript.** A
+  composer control and command-palette action summarize older turns, persist the
+  summary and compaction boundary, clear the stale agent session, and send the
+  summary plus only newer turns on subsequent CLI or direct API runs.
+- **AI Overwatch is configured inside the desktop app.** The C1 settings panel
+  can enable Overwatch, choose OpenAI, DeepSeek, or Claude, set the model, base URL,
+  credential ID, and auto-reject threshold, and store the provider key in the
+  OS vault. C1 restarts automatically when the configuration or Overwatch key
+  changes, and the System tab shows readiness, provider, model, and key state.
+- **History now uses the full page width.** The conversation search field,
+  archive control, and results table stay aligned across wide desktop and
+  minimum-width layouts instead of leaving the search box at its browser
+  default width.
 - **The complete Cognitive1 `Instruct.md` is bundled inside KAI.** The 57-rule
   authoritative document is copied into the app during engine staging and is
   injected before every CLI or direct API run. Project context follows it, and

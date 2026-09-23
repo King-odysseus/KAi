@@ -43,6 +43,26 @@ describe('desktop agent runtime', () => {
     });
   });
 
+  it('fails a run for a signed-out account instead of switching to another route or a paid API', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, { authenticated: false });
+    const runtime = new DesktopAgentRuntime({ gemini: command });
+    const events: string[] = [];
+
+    const result = await runtime.run(
+      { conversationId: 'c1', prompt: 'hello', agent: 'gemini', route: 'direct', autonomy: 'ask' },
+      root,
+      undefined,
+      (event) => events.push(event.type),
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/Gemini CLI is unavailable: .*not signed in/);
+    expect(result.output).toBe('');
+    // Nothing was sent anywhere: the failure is reported and the user decides what to do next.
+    expect(events).not.toContain('route.changed');
+  });
+
   it('reports a missing CLI separately from a sign-in problem', async () => {
     const root = await temporaryDirectory();
     const runtime = new DesktopAgentRuntime({ codex: path.join(root, 'missing-agent') });

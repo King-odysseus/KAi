@@ -78,6 +78,9 @@ export const costUpdateEventSchema = eventBaseSchema.extend({
   outputTokens: z.number().int().nonnegative().optional(),
   sessionId: z.string().optional(),
   estimateProvenance: z.enum(['measured', 'estimated', 'unknown']).optional(),
+  // Set only for paid API runs; subscription CLI events never carry a provider.
+  provider: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
 });
 
 export const memoryEventSchema = eventBaseSchema.extend({

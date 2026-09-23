@@ -12,6 +12,9 @@ import {
   timestampSchema,
   windowBoundsSchema,
 } from './primitives';
+import { notificationSettingsSchema } from './notifications';
+import { updateSettingsSchema } from './updates';
+import { usageBudgetSchema } from './usage';
 import {
   checkpointRecordSchema,
   turnFileChangeSchema,
@@ -30,11 +33,122 @@ export const projectRecordV1Schema = z
   })
   .strict();
 
+export const cognitive1OverwatchSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    provider: z.enum(['deepseek', 'claude', 'openai']).default('deepseek'),
+    baseUrl: z.string().url().default('https://api.deepseek.com'),
+    credentialId: z.string().min(1).default('cognitive1.overwatch'),
+    model: z.string().min(1).default('deepseek-chat'),
+    autoRejectThreshold: z.number().min(0).max(1).default(0.85),
+  })
+  .strict();
+
 export const cognitive1ServiceSettingsSchema = z
   .object({
     enabled: z.boolean(),
     endpoint: z.string().url(),
     dataPath: z.string().nullable(),
+    overwatch: cognitive1OverwatchSettingsSchema.default({
+      enabled: false,
+      provider: 'deepseek',
+      baseUrl: 'https://api.deepseek.com',
+      credentialId: 'cognitive1.overwatch',
+      model: 'deepseek-chat',
+      autoRejectThreshold: 0.85,
+    }),
+  })
+  .strict();
+
+export const proxyProviderEntrySchema = z
+  .object({
+    baseUrl: z.string().url(),
+    credentialId: z.string().min(1).optional(),
+    format: z.enum(['auto', 'anthropic', 'openai']).default('auto'),
+    defaultModel: z.string().optional(),
+    modelMap: z.record(z.string(), z.string()).default({}),
+  })
+  .strict();
+
+export const proxyFallbackProviderSchema = z
+  .object({
+    baseUrl: z.string().url(),
+    credentialId: z.string().min(1).optional(),
+    defaultModel: z.string().optional(),
+    modelMap: z.record(z.string(), z.string()).default({}),
+  })
+  .strict();
+
+export const proxyModelRouteSchema = z
+  .object({
+    match: z.string().min(1),
+    provider: z.string().min(1),
+  })
+  .strict();
+
+export const proxyAgentBackendSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    baseUrl: z.string().url(),
+    credentialId: z.string().min(1).optional(),
+    defaultModel: z.string().min(1),
+    configModel: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const proxyCostBudgetSchema = z
+  .object({
+    daily: z.number().nonnegative().default(0),
+    weekly: z.number().nonnegative().default(0),
+    monthly: z.number().nonnegative().default(0),
+    currency: z.string().min(1).default('USD'),
+    mode: z.enum(['warn', 'block']).default('warn'),
+  })
+  .strict();
+
+export const proxyHistorySettingsSchema = z
+  .object({
+    maxEntries: z.number().int().min(100).max(2000).default(500),
+    includePromptSnippet: z.boolean().default(true),
+    promptSnippetChars: z.number().int().min(100).max(2000).default(500),
+    maxReplayEntries: z.number().int().min(0).max(200).default(50),
+  })
+  .strict();
+
+export const proxyRetrySettingsSchema = z
+  .object({
+    maxRetries: z.number().int().min(0).max(10).default(3),
+    baseDelayMs: z.number().int().min(100).max(30_000).default(1_000),
+    maxDelayMs: z.number().int().min(1_000).max(120_000).default(30_000),
+  })
+  .strict();
+
+export const proxyErrorThresholdSchema = z
+  .object({
+    count: z.number().int().min(1).max(100).default(5),
+    windowMinutes: z.number().int().min(1).max(1_440).default(5),
+  })
+  .strict();
+
+export const proxyRateLimitSettingsSchema = z
+  .object({
+    maxRequestsPerSecond: z.number().min(0).default(0),
+  })
+  .strict();
+
+export const proxyLoggingSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    directory: z.string().default(''),
+    maxFileSizeMB: z.number().min(1).max(1_000).default(10),
+  })
+  .strict();
+
+export const proxyTlsSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    certPath: z.string().default(''),
+    keyPath: z.string().default(''),
   })
   .strict();
 
@@ -45,6 +159,51 @@ export const proxyServiceSettingsSchema = z
     targetBaseUrl: z.string().url(),
     defaultModel: z.string().min(1),
     credentialId: z.string().min(1),
+    routeClaudeCode: z.boolean().default(false),
+    routeClaudeCodeUntil: z.number().int().nonnegative().default(0),
+    routeCodex: z.boolean().default(false),
+    autoFallbackEnabled: z.boolean().default(false),
+    autoFallbackHours: z.number().min(1).max(24).default(5),
+    modelMap: z.record(z.string(), z.string()).default({}),
+    customHeaders: z.record(z.string(), z.string()).default({}),
+    providers: z.record(z.string(), proxyProviderEntrySchema).default({}),
+    modelRouting: z.boolean().default(true),
+    modelRoutes: z.array(proxyModelRouteSchema).default([]),
+    agentRoutes: z.record(z.string(), z.string()).default({}),
+    dualApiEnabled: z.boolean().default(false),
+    fallbackProviders: z.array(proxyFallbackProviderSchema).default([]),
+    kimiConfig: proxyAgentBackendSettingsSchema.default({
+      enabled: false,
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      defaultModel: 'kimi-for-coding',
+    }),
+    qwenConfig: proxyAgentBackendSettingsSchema.default({
+      enabled: false,
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      defaultModel: 'qwen-coder-plus',
+      configModel: 'qwen-proxy',
+    }),
+    codexConfig: proxyAgentBackendSettingsSchema.default({
+      enabled: false,
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-6-astra',
+      configModel: 'gpt-5.5',
+    }),
+    costBudget: proxyCostBudgetSchema.default({ daily: 0, weekly: 0, monthly: 0, currency: 'USD', mode: 'warn' }),
+    historyConfig: proxyHistorySettingsSchema.default({
+      maxEntries: 500,
+      includePromptSnippet: true,
+      promptSnippetChars: 500,
+      maxReplayEntries: 50,
+    }),
+    retryConfig: proxyRetrySettingsSchema.default({ maxRetries: 3, baseDelayMs: 1_000, maxDelayMs: 30_000 }),
+    errorNotifyThreshold: proxyErrorThresholdSchema.default({ count: 5, windowMinutes: 5 }),
+    upstreamTimeoutMs: z.number().int().min(10_000).max(3_600_000).default(3_600_000),
+    stallTimeoutMs: z.number().int().min(0).max(3_600_000).default(120_000),
+    rateLimit: proxyRateLimitSettingsSchema.default({ maxRequestsPerSecond: 0 }),
+    maxConcurrentRequests: z.number().int().min(0).default(0),
+    logging: proxyLoggingSettingsSchema.default({ enabled: false, directory: '', maxFileSizeMB: 10 }),
+    tls: proxyTlsSettingsSchema.default({ enabled: false, certPath: '', keyPath: '' }),
   })
   .strict();
 
@@ -63,6 +222,9 @@ const mcpServerBaseSchema = {
   name: z.string().min(1).max(100),
   enabled: z.boolean(),
 };
+
+export const PLAYWRIGHT_MCP_SERVER_ID = 'playwright-browser';
+export const PLAYWRIGHT_MCP_FEATURE_ID = 'mcp.playwright-browser.v1';
 
 export const mcpStdioServerSettingsSchema = z
   .object({
@@ -86,6 +248,12 @@ export const mcpHttpServerSettingsSchema = z
 
 export const mcpServerSettingsSchema = z.union([mcpStdioServerSettingsSchema, mcpHttpServerSettingsSchema]);
 
+// A model name is passed to a CLI as an argument, so it may not start with a dash or contain spaces or shell characters.
+export const cliModelNameSchema = z
+  .string()
+  .max(100)
+  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.5 or claude-sonnet-5.');
+
 export const appSettingsV1Schema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -98,10 +266,16 @@ export const appSettingsV1Schema = z
     windowBounds: windowBoundsSchema.nullable(),
     logRetentionEntries: z.number().int().min(100).max(100_000),
     diagnosticsEnabled: z.boolean(),
+    installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
     directApi: directApiSettingsSchema,
     mcpServers: z.array(mcpServerSettingsSchema),
     cognitive1: cognitive1ServiceSettingsSchema,
     proxy: proxyServiceSettingsSchema,
+    usageBudget: usageBudgetSchema.default({}),
+    notifications: notificationSettingsSchema.default({}),
+    updates: updateSettingsSchema.default({}),
+    // Model each CLI agent is asked to use. A missing entry means the CLI uses its own configured default.
+    agentModels: z.record(agentIdSchema, cliModelNameSchema).default({}),
   })
   .strict();
 
@@ -128,6 +302,16 @@ export const conversationTurnSchema = z
   })
   .strict();
 
+export const conversationCompactionSchema = z
+  .object({
+    summary: z.string().min(1).max(100_000),
+    createdAt: timestampSchema,
+    throughTurnIndex: z.number().int().nonnegative(),
+    originalTurns: z.number().int().nonnegative(),
+    originalCharacters: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const conversationRecordV1Schema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -145,6 +329,7 @@ export const conversationRecordV1Schema = z
     agentSessionId: z.string().min(1).optional(),
     goal: workbenchGoalSchema.nullable().optional(),
     workflow: workflowSchema.nullable().optional(),
+    compaction: conversationCompactionSchema.optional(),
     turns: z.array(conversationTurnSchema),
     events: z.array(persistedEventV1Schema),
   })
@@ -157,6 +342,7 @@ export type McpStdioServerSettings = z.infer<typeof mcpStdioServerSettingsSchema
 export type McpHttpServerSettings = z.infer<typeof mcpHttpServerSettingsSchema>;
 export type ProjectPreferences = z.infer<typeof projectPreferencesV1Schema>;
 export type ConversationTurn = z.infer<typeof conversationTurnSchema>;
+export type ConversationCompaction = z.infer<typeof conversationCompactionSchema>;
 export type ConversationRecord = z.infer<typeof conversationRecordV1Schema>;
 
 export function createDefaultSettings(): AppSettings {
@@ -171,6 +357,7 @@ export function createDefaultSettings(): AppSettings {
     windowBounds: null,
     logRetentionEntries: 2000,
     diagnosticsEnabled: true,
+    installedFeatures: [],
     directApi: {
       enabled: true,
       provider: 'openai',
@@ -178,17 +365,34 @@ export function createDefaultSettings(): AppSettings {
       baseUrl: 'https://api.openai.com/v1',
       credentialId: 'provider.openai',
     },
-    mcpServers: [],
+    mcpServers: [{
+      id: PLAYWRIGHT_MCP_SERVER_ID,
+      name: 'Playwright Browser',
+      enabled: true,
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@latest'],
+      cwd: null,
+      envCredentialIds: {},
+    }],
     cognitive1: {
       enabled: false,
       endpoint: 'http://127.0.0.1:9876',
       dataPath: null,
+      overwatch: {
+        enabled: false,
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        credentialId: 'cognitive1.overwatch',
+        model: 'deepseek-chat',
+        autoRejectThreshold: 0.85,
+      },
     },
     proxy: {
       enabled: false,
       port: 8082,
       targetBaseUrl: 'https://api.deepseek.com',
-      defaultModel: 'deepseek-flash',
+      defaultModel: 'deepseek-chat',
       credentialId: 'provider.deepseek',
     },
   });

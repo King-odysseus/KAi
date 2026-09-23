@@ -63,10 +63,10 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
     displayName: 'DeepSeek API',
     protocol: 'chat-completions',
     defaultBaseUrl: providerUrl('api.deepseek.com'),
-    defaultModel: 'deepseek-flash',
+    defaultModel: 'deepseek-chat',
     credentialId: 'provider.deepseek',
     supportsTools: true,
-    models: ['deepseek-flash', 'deepseek-v4-pro'],
+    models: ['deepseek-chat', 'deepseek-reasoner'],
   },
   openrouter: {
     id: 'openrouter',

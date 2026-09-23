@@ -1,6 +1,7 @@
 import {
   Archive,
   AtSign,
+  BookmarkPlus,
   ArrowRight,
   Braces,
   Brain,
@@ -20,6 +21,7 @@ import {
   Goal,
   History,
   LogIn,
+  Minimize2,
   ImagePlus,
   Paperclip,
   Pencil,
@@ -49,6 +51,7 @@ import type {
   ContextChip,
   ContextPreview,
   DirectApiCapability,
+  FileVerificationState,
   ExecutionMode,
   GoalInput,
   NormalizedGoalInput,
@@ -61,7 +64,12 @@ import type {
   SkillSummary,
   WorkbenchGoal,
 } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, directProviderPreset, estimateConversationTokens } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
+import { HunkReview, canReviewHunks } from './HunkReview';
+import { SaveToBrainDialog } from './SaveToBrain';
+import { VerificationBadge } from './VerificationPanel';
+import { UsageBanner } from './UsageView';
 
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
@@ -124,8 +132,14 @@ interface WorkspaceViewProps {
   onSignIn: (agent: AgentId) => void;
   onRefreshAgents: () => void;
   onOpenSettings: () => void;
+  onOpenUsage: () => void;
+  selectedModel: string;
+  onSelectModel: (model: string) => void;
+  interruptedRuns: number;
+  onOpenRecovery: () => void;
   onOpenRules: () => void;
   onOpenWorkflows: () => void;
+  onCompactConversation: () => void;
 }
 
 interface QueuedPrompt {
@@ -229,8 +243,14 @@ export function WorkspaceView({
   onSignIn,
   onRefreshAgents,
   onOpenSettings,
+  onOpenUsage,
+  selectedModel,
+  onSelectModel,
+  interruptedRuns,
+  onOpenRecovery,
   onOpenRules,
   onOpenWorkflows,
+  onCompactConversation,
 }: WorkspaceViewProps): ReactNode {
   const [prompt, setPrompt] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -252,12 +272,15 @@ export function WorkspaceView({
   const [compareResult, setCompareResult] = useState<CompareRun | null>(null);
   const [comparing, setComparing] = useState(false);
   const [checkpointReview, setCheckpointReview] = useState<CheckpointReview | null>(null);
+  const [brainDraft, setBrainDraft] = useState<string | null>(null);
+  const [fileChecks, setFileChecks] = useState<Record<string, FileVerificationState>>({});
   const [rawEventsOpen, setRawEventsOpen] = useState(false);
   const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
+  const brainReady = settings.cognitive1.enabled;
   const apiRun = executionMode === 'api';
   const ready = apiRun ? Boolean(directApiCapability?.available) : Boolean(selectedCapability?.available);
   const unavailableReason = apiRun
@@ -641,6 +664,28 @@ export function WorkspaceView({
     }
   }
 
+  // Show whether each reviewed file is covered by the latest passing check.
+  useEffect(() => {
+    if (!checkpointReview || !activeProject) return;
+    let cancelled = false;
+    void window.kaiDesktop.verificationOverview(activeProject.id).then((response) => {
+      if (cancelled || !response.ok) return;
+      setFileChecks(Object.fromEntries(response.data.files.map((file) => [file.path, file.status])));
+    });
+    return () => { cancelled = true; };
+  }, [checkpointReview, activeProject]);
+
+  async function rejectReviewedHunk(filePath: string, hunkId: number): Promise<void> {
+    if (!checkpointReview) return;
+    try {
+      unwrap(await window.kaiDesktop.rejectCheckpointHunks(checkpointReview.conversationId, checkpointReview.turnId, filePath, [hunkId]));
+      setCheckpointReview(await onReviewCheckpoint(checkpointReview.conversationId, checkpointReview.turnId));
+      setWorkbenchNotice(`Rejected one change in ${filePath}.`);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    }
+  }
+
   async function restoreTurnChanges(turnId: string): Promise<void> {
     if (!activeConversation) return;
     try {
@@ -724,6 +769,22 @@ export function WorkspaceView({
         </div>
       </div>
 
+      {interruptedRuns > 0 && !running && (
+        <div className="workbench-notice recovery-banner" role="status">
+          <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
+          <button type="button" className="secondary-button" onClick={onOpenRecovery}>Review</button>
+        </div>
+      )}
+
+      {activeConversation && !running && estimateConversationTokens(activeConversation) >= COMPACTION_WARNING_TOKENS && (
+        <div className="workbench-notice compaction-banner" role="status">
+          <span>This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.</span>
+          <button type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</button>
+        </div>
+      )}
+
+      <UsageBanner conversationId={activeConversation?.id} refreshToken={activeConversation?.events.length} onOpenUsage={onOpenUsage} />
+
       {workbenchNotice && (
         <div className="workbench-notice" role="status">
           <span>{workbenchNotice}</span>
@@ -797,6 +858,10 @@ export function WorkspaceView({
         </div>
       )}
 
+      {brainDraft !== null && activeProject && (
+        <SaveToBrainDialog text={brainDraft} project={activeProject.name} onClose={() => setBrainDraft(null)} onSaved={setWorkbenchNotice} />
+      )}
+
       {checkpointReview && (
         <div className="skills-overlay checkpoint-overlay" role="dialog" aria-modal="true" aria-label="Review turn changes">
           <div className="skills-panel checkpoint-panel">
@@ -812,10 +877,13 @@ export function WorkspaceView({
               {checkpointReview.files.map((file) => (
                 <article className="checkpoint-file" key={file.path}>
                   <div className="checkpoint-file-heading">
-                    <div><strong>{file.path}</strong><span><b className="diff-add">+{file.added}</b><b className="diff-remove">-{file.removed}</b>{file.binary ? ' · binary' : ''}</span></div>
+                    <div><strong>{file.path}</strong> <VerificationBadge status={fileChecks[file.path] ?? 'unverified'} /><span><b className="diff-add">+{file.added}</b><b className="diff-remove">-{file.removed}</b>{file.binary ? ' · binary' : ''}</span></div>
                     <button type="button" className="secondary-button" disabled={!checkpointReview.gitAvailable} onClick={() => void rejectReviewedFile(file.path)}><Undo2 size={13} /><span>Restore file</span></button>
                   </div>
-                  {!file.binary && (
+                  {!file.binary && checkpointReview.gitAvailable && canReviewHunks(file.before, file.after) && (
+                    <HunkReview before={file.before} after={file.after} disabled={false} onReject={(hunkId) => void rejectReviewedHunk(file.path, hunkId)} />
+                  )}
+                  {!file.binary && !(checkpointReview.gitAvailable && canReviewHunks(file.before, file.after)) && (
                     <div className="checkpoint-diff">
                       <div><span>Before</span><pre>{file.before || '(empty)'}</pre></div>
                       <div><span>After</span><pre>{file.after || '(empty)'}</pre></div>
@@ -833,7 +901,7 @@ export function WorkspaceView({
         {activeConversation?.turns.length || streamingText ? (
           <>
             {activeConversation?.turns.map((turn) => (
-              <article key={turn.id} className={`message ${turn.role}`}><div className="message-role">{turn.role === 'user' ? 'You' : 'KAI'}</div><div className="message-body">{turn.text}</div></article>
+              <article key={turn.id} className={`message ${turn.role}`}><div className="message-role">{turn.role === 'user' ? 'You' : 'KAI'}{turn.role === 'assistant' && brainReady && <button type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => setBrainDraft(turn.text)}><BookmarkPlus size={12} /><span>Save to Brain</span></button>}</div><div className="message-body">{turn.text}</div></article>
             ))}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
             {running && !streamingText && (
@@ -1063,6 +1131,23 @@ export function WorkspaceView({
                 />
               )}
               <SelectMenu
+                ariaLabel="Model"
+                className="control-select model-select"
+                disabled={busy}
+                icon={<Sparkles size={14} />}
+                onChange={(value) => {
+                  if (value !== CUSTOM_MODEL) {
+                    onSelectModel(value);
+                    return;
+                  }
+                  const typed = window.prompt('Model name to use for this agent (letters, numbers, . - _ / : only)', selectedModel)?.trim();
+                  if (typed !== undefined) onSelectModel(typed);
+                }}
+                options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)}
+                title={apiRun ? 'Model for this conversation. Default is the model set in Settings.' : 'Model the CLI is asked to use. Default lets the CLI choose its own.'}
+                value={selectedModel}
+              />
+              <SelectMenu
                 ariaLabel="Route"
                 className={`control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
                 disabled={busy || !apiRun}
@@ -1095,6 +1180,7 @@ export function WorkspaceView({
             <div className="composer-actions">
               <button type="button" className={`composer-icon-button ${compareMode ? 'active' : ''}`} onClick={() => setCompareMode((current) => !current)} title="Compare two agents" aria-pressed={compareMode}><GitCompare size={14} /></button>
               {compareMode && <select value={compareAgent} onChange={(event) => setCompareAgent(event.target.value as AgentId)} aria-label="Comparison agent">{agentCapabilities.filter((agent) => agent.id !== selectedAgent).map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</select>}
+              <button type="button" className="composer-icon-button" disabled={!activeConversation || activeConversation.turns.length < 2 || running || busy} onClick={onCompactConversation} title="Compact conversation context" aria-label="Compact conversation context"><Minimize2 size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>
               <button type="button" className={`composer-icon-button ${rawEventsOpen ? 'active' : ''}`} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw events"><Braces size={14} /></button>
@@ -1113,7 +1199,7 @@ export function WorkspaceView({
           </div>
         )}
         <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
-        <div className="composer-footer"><span>Enter to send · Ctrl+Enter to steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
+        <div className="composer-footer"><span>Enter to send · Ctrl+Enter to steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
   );
@@ -1290,6 +1376,27 @@ function escapeRegExp(value: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The operation failed.';
+}
+
+const CUSTOM_MODEL = '__custom__';
+
+function modelOptions(
+  apiRun: boolean,
+  agent: AgentId,
+  capability: DirectApiCapability | null,
+  selected: string,
+): SelectMenuOption<string>[] {
+  const suggestions = apiRun
+    ? directProviderPreset(capability?.provider ?? 'openai').models
+    : agent in CLI_MODEL_SUGGESTIONS ? CLI_MODEL_SUGGESTIONS[agent as keyof typeof CLI_MODEL_SUGGESTIONS] : [];
+  const known = new Set(suggestions);
+  const defaultLabel = apiRun && capability?.model ? `Default (${capability.model})` : 'Default';
+  return [
+    { value: '', label: defaultLabel },
+    ...suggestions.map((name) => ({ value: name, label: name })),
+    ...(selected && !known.has(selected) ? [{ value: selected, label: selected }] : []),
+    { value: CUSTOM_MODEL, label: 'Other model…' },
+  ];
 }
 
 interface SelectMenuOption<T extends string> {

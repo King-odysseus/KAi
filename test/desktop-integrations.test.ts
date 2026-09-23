@@ -137,14 +137,19 @@ describe('desktop engine integrations', () => {
     const upstreamPort = await availablePort();
     const publicPort = await availablePort();
     const token = 'test-loopback-access-token';
-    const observed: Array<{ authorization?: string; tokenHeader?: string }> = [];
+    const observed: Array<{ authorization?: string; tokenHeader?: string; connection?: string }> = [];
+    let upstreamConnections = 0;
     const upstream = http.createServer((request, response) => {
       observed.push({
         authorization: request.headers.authorization,
         tokenHeader: request.headers['x-kai-loopback-token'] as string | undefined,
+        connection: request.headers.connection,
       });
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ status: 'ok' }));
+    });
+    upstream.on('connection', () => {
+      upstreamConnections += 1;
     });
     await listen(upstream, upstreamPort);
 
@@ -164,7 +169,7 @@ describe('desktop engine integrations', () => {
       });
       expect(authorized.status).toBe(200);
       await expect(authorized.json()).resolves.toEqual({ status: 'ok' });
-      expect(observed).toEqual([{ authorization: undefined, tokenHeader: undefined }]);
+      expect(observed).toEqual([{ authorization: undefined, tokenHeader: undefined, connection: 'close' }]);
 
       const forwardedCredential = await fetch(`http://127.0.0.1:${publicPort}/health`, {
         headers: {
@@ -173,7 +178,12 @@ describe('desktop engine integrations', () => {
         },
       });
       expect(forwardedCredential.status).toBe(200);
-      expect(observed[1]).toEqual({ authorization: 'Bearer upstream-credential', tokenHeader: undefined });
+      expect(observed[1]).toEqual({
+        authorization: 'Bearer upstream-credential',
+        tokenHeader: undefined,
+        connection: 'close',
+      });
+      expect(upstreamConnections).toBe(2);
     } finally {
       await gateway.stop();
       await closeServer(upstream);

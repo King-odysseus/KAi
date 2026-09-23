@@ -22,11 +22,19 @@ import {
   brainImportResultSchema,
   brainOverviewSchema,
   brainSearchInputSchema,
+  cognitive1McpToolInputSchema,
+  cognitive1McpToolResultSchema,
+  cognitive1OperationInputSchema,
+  cognitive1OperationResultSchema,
   type BrainFieldUpdateInput,
   type BrainFieldUpdateResult,
   type BrainImportResult,
   type BrainOverview,
   type BrainSearchInput,
+  type Cognitive1McpToolInput,
+  type Cognitive1McpToolResult,
+  type Cognitive1OperationInput,
+  type Cognitive1OperationResult,
 } from './brain';
 import {
   contextChipSchema,
@@ -41,6 +49,7 @@ import {
   type GitDiffStatResult,
 } from './context';
 import {
+  cliModelNameSchema,
   cognitive1ServiceSettingsSchema,
   conversationRecordV1Schema,
   mcpServerSettingsSchema,
@@ -64,15 +73,51 @@ import {
   type ServiceState,
 } from './primitives';
 import {
+  proxyConnectionTestSchema,
+  proxyAgentIdSchema,
+  proxyAgentRouteSchema,
+  proxyConfigTransferResultSchema,
+  proxyCostsClearResultSchema,
+  proxyCostPeriodSchema,
+  proxyCostSummarySchema,
+  proxyDryRunResultSchema,
+  proxyEnvCopyResultSchema,
   proxyHistoryClearResultSchema,
   proxyHistoryDetailSchema,
   proxyHistoryQuerySchema,
   proxyHistorySummarySchema,
+  proxyLaunchResultSchema,
+  proxyLiveEventSchema,
+  proxyModelSchema,
   proxyOverviewSchema,
+  proxyPingResultSchema,
+  proxyReplayPreviewSchema,
+  proxyReplayResultSchema,
+  proxyRoutingActionSchema,
+  proxyRoutingResultSchema,
+  proxyClaudeResetResultSchema,
+  proxyClaudeSettingsResultSchema,
+  type ProxyAgentRoute,
+  type ProxyConnectionTest,
+  type ProxyConfigTransferResult,
+  type ProxyCostsClearResult,
+  type ProxyCostPeriod,
+  type ProxyCostSummary,
+  type ProxyDryRunResult,
+  type ProxyEnvCopyResult,
   type ProxyHistoryDetail,
   type ProxyHistoryQuery,
   type ProxyHistorySummary,
+  type ProxyLaunchResult,
+  type ProxyLiveEvent,
+  type ProxyModel,
   type ProxyOverview,
+  type ProxyPingResult,
+  type ProxyReplayPreview,
+  type ProxyReplayResult,
+  type ProxyRoutingResult,
+  type ProxyClaudeResetResult,
+  type ProxyClaudeSettingsResult,
 } from './proxy';
 import {
   executionRuleDocumentSchema,
@@ -80,6 +125,46 @@ import {
   type ExecutionRuleDocument,
   type ExecutionRuleSaveInput,
 } from './rules';
+import { coordinationOverviewSchema, preflightInputSchema, preflightResultSchema, type CoordinationOverview, type PreflightResult } from './coordination';
+import { globalSearchInputSchema, globalSearchResultSchema, type GlobalSearchResult } from './search';
+import { updateSettingsSchema, updateStateSchema, type UpdateState } from './updates';
+import { terminalEventSchema, terminalRunInputSchema, terminalRunResultSchema, terminalStopInputSchema, type TerminalEvent, type TerminalRunResult, type TerminalShell } from './terminal';
+import { gitActionResultSchema, gitCheckoutInputSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitOverview, type GitSyncAction } from './git';
+import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
+import { fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
+import {
+  codeFormatInputSchema,
+  codeFormatResultSchema,
+  gitFileInfoSchema,
+  learningEvaluationResultSchema,
+  learningLessonRecordInputSchema,
+  learningLessonRecordResultSchema,
+  learningPreferencesInputSchema,
+  learningProgressSchema,
+  learningTutorRequestSchema,
+  teachingDraftGenerateInputSchema,
+  teachingDraftSchema,
+  teachingLibraryEntryInputSchema,
+  teachingLibrarySaveInputSchema,
+  teachingLibrarySchema,
+  type CodeFormatInput,
+  type CodeFormatResult,
+  type GitFileInfo,
+  type LearningEvaluationResult,
+  type LearningLessonRecordInput,
+  type LearningLessonRecordResult,
+  type LearningPreferencesInput,
+  type LearningProgress,
+  type LearningTutorRequest,
+  type TeachingDraft,
+  type TeachingDraftGenerateInput,
+  type TeachingLibrary,
+  type TeachingLibraryEntryInput,
+  type TeachingLibrarySaveInput,
+} from './learning';
+import { recoveryRecapSchema, recoveryRecordSchema, recoveryResumeSchema, type RecoveryRecap, type RecoveryRecord, type RecoveryResume } from './recovery';
+import { notificationSettingsSchema, viewReportSchema, type OpenConversationEvent } from './notifications';
+import { usageBudgetSchema, usageSummarySchema, type UsageSummary } from './usage';
 import {
   checkpointRejectInputSchema,
   checkpointRestoreResultSchema,
@@ -123,11 +208,29 @@ export const ipcChannels = [
   'brain:search',
   'brain:update-field',
   'brain:import',
+  'cognitive1:tool',
+  'cognitive1:operation',
   'rules:get',
   'rules:save',
   'skills:list',
   'files:choose',
   'files:search',
+  'files:tree',
+  'files:read',
+  'files:write',
+  'files:changed',
+  'learning:progress',
+  'learning:update-preferences',
+  'learning:evaluate',
+  'learning:record-lesson',
+  'learning:teaching-library',
+  'learning:save-teaching-entry',
+  'learning:delete-teaching-entry',
+  'learning:reset-teaching-entry',
+  'learning:generate-teaching-draft',
+  'code:format',
+  'git:file-info',
+  'checkpoints:reject-hunks',
   'context:git-diff',
   'attachments:save',
   'workflows:list-templates',
@@ -137,6 +240,24 @@ export const ipcChannels = [
   'proxy:history',
   'proxy:history-detail',
   'proxy:clear-history',
+  'proxy:test-connection',
+  'proxy:ping-all',
+  'proxy:dry-run',
+  'proxy:clear-costs',
+  'proxy:cost-summary',
+  'proxy:replay-preview',
+  'proxy:replay',
+  'proxy:models',
+  'proxy:routes',
+  'proxy:route-action',
+  'proxy:export-config',
+  'proxy:import-config',
+  'proxy:copy-env',
+  'proxy:launch-agent',
+  'proxy:reset-claude',
+  'proxy:open-claude-settings',
+  'proxy:start-live-tail',
+  'proxy:stop-live-tail',
   'preferences:get',
   'preferences:update',
   'credentials:status',
@@ -145,6 +266,7 @@ export const ipcChannels = [
   'conversations:list',
   'conversations:get',
   'conversations:create',
+  'conversations:compact',
   'conversations:save',
   'conversations:delete',
   'checkpoints:review',
@@ -165,6 +287,32 @@ export const ipcChannels = [
   'agents:approval-response',
   'agents:api-capability',
   'context:preview',
+  'usage:summary',
+  'ui:report-view',
+  'coordination:overview',
+  'coordination:preflight',
+  'search:global',
+  'updates:state',
+  'updates:check',
+  'updates:download',
+  'updates:install',
+  'terminal:run',
+  'terminal:stop',
+  'git:overview',
+  'git:stage',
+  'git:commit',
+  'git:checkout',
+  'git:create-branch',
+  'git:sync',
+  'git:diff',
+  'git:pull-request',
+  'verification:overview',
+  'verification:run',
+  'recovery:list',
+  'recovery:recap',
+  'recovery:resume',
+  'recovery:discard',
+  'diagnostics:report',
   'diagnostics:data-locations',
   'diagnostics:recent-logs',
   'window:state',
@@ -201,6 +349,10 @@ export const ipcInputSchemas = {
         .optional(),
       cognitive1: cognitive1ServiceSettingsSchema.partial().strict().optional(),
       proxy: proxyServiceSettingsSchema.partial().strict().optional(),
+      usageBudget: usageBudgetSchema.partial().strict().optional(),
+      notifications: notificationSettingsSchema.partial().strict().optional(),
+      updates: updateSettingsSchema.partial().strict().optional(),
+      agentModels: z.record(agentIdSchema, cliModelNameSchema).optional(),
     })
     .strict(),
   'services:status': emptyInputSchema,
@@ -213,11 +365,29 @@ export const ipcInputSchemas = {
   'brain:search': brainSearchInputSchema,
   'brain:update-field': brainFieldUpdateInputSchema,
   'brain:import': emptyInputSchema,
+  'cognitive1:tool': cognitive1McpToolInputSchema,
+  'cognitive1:operation': cognitive1OperationInputSchema,
   'rules:get': emptyInputSchema,
   'rules:save': executionRuleSaveInputSchema,
   'skills:list': z.object({ projectId: z.string().min(1).optional() }).strict(),
   'files:choose': z.object({ projectId: z.string().min(1) }).strict(),
   'files:search': contextSearchInputSchema,
+  'files:tree': z.object({ projectId: z.string().min(1) }).strict(),
+  'files:read': fileReadInputSchema,
+  'files:write': fileWriteInputSchema,
+  'files:changed': fileChangedInputSchema,
+  'learning:progress': z.object({ projectId: z.string().min(1) }).strict(),
+  'learning:update-preferences': learningPreferencesInputSchema,
+  'learning:evaluate': learningTutorRequestSchema,
+  'learning:record-lesson': learningLessonRecordInputSchema,
+  'learning:teaching-library': emptyInputSchema,
+  'learning:save-teaching-entry': teachingLibrarySaveInputSchema,
+  'learning:delete-teaching-entry': teachingLibraryEntryInputSchema,
+  'learning:reset-teaching-entry': teachingLibraryEntryInputSchema,
+  'learning:generate-teaching-draft': teachingDraftGenerateInputSchema,
+  'code:format': codeFormatInputSchema,
+  'git:file-info': z.object({ projectId: z.string().min(1), path: z.string().min(1).max(1_000) }).strict(),
+  'checkpoints:reject-hunks': rejectHunksInputSchema,
   'context:git-diff': z.object({ projectId: z.string().min(1) }).strict(),
   'attachments:save': z
     .object({
@@ -232,6 +402,30 @@ export const ipcInputSchemas = {
   'proxy:history': proxyHistoryQuerySchema,
   'proxy:history-detail': z.object({ id: z.string().min(1) }).strict(),
   'proxy:clear-history': emptyInputSchema,
+  'proxy:test-connection': z.object({ agent: z.string().min(1).max(32).optional() }).strict(),
+  'proxy:ping-all': emptyInputSchema,
+  'proxy:dry-run': z.object({ body: z.unknown() }).strict(),
+  'proxy:clear-costs': emptyInputSchema,
+  'proxy:cost-summary': z.object({ period: proxyCostPeriodSchema.exclude(['session']) }).strict(),
+  'proxy:replay-preview': z.object({ id: z.string().min(1) }).strict(),
+  'proxy:replay': z.object({ id: z.string().min(1) }).strict(),
+  'proxy:models': emptyInputSchema,
+  'proxy:routes': emptyInputSchema,
+  'proxy:route-action': z
+    .object({
+      agent: proxyAgentIdSchema,
+      action: proxyRoutingActionSchema,
+      routeUntil: z.number().int().nonnegative().optional(),
+    })
+    .strict(),
+  'proxy:export-config': emptyInputSchema,
+  'proxy:import-config': emptyInputSchema,
+  'proxy:copy-env': z.object({ agent: proxyAgentIdSchema.optional() }).strict(),
+  'proxy:launch-agent': z.object({ agent: z.enum(['claude', 'codex']) }).strict(),
+  'proxy:reset-claude': emptyInputSchema,
+  'proxy:open-claude-settings': emptyInputSchema,
+  'proxy:start-live-tail': emptyInputSchema,
+  'proxy:stop-live-tail': emptyInputSchema,
   'preferences:get': z.object({ projectId: z.string().min(1) }).strict(),
   'preferences:update': projectPreferencesV1Schema,
   'credentials:status': emptyInputSchema,
@@ -240,6 +434,7 @@ export const ipcInputSchemas = {
   'conversations:list': emptyInputSchema,
   'conversations:get': z.object({ id: z.string().min(1) }).strict(),
   'conversations:create': z.object({ projectId: z.string().nullable(), firstPrompt: z.string().max(20_000) }).strict(),
+  'conversations:compact': z.object({ conversationId: z.string().min(1) }).strict(),
   'conversations:save': conversationRecordV1Schema,
   'conversations:delete': z.object({ id: z.string().min(1) }).strict(),
   'checkpoints:review': checkpointTurnInputSchema,
@@ -260,6 +455,32 @@ export const ipcInputSchemas = {
   'agents:approval-response': agentApprovalResponseInputSchema,
   'agents:api-capability': emptyInputSchema,
   'context:preview': contextPreviewInputSchema,
+  'usage:summary': z.object({ conversationId: z.string().min(1).optional() }).strict(),
+  'ui:report-view': viewReportSchema,
+  'coordination:overview': emptyInputSchema,
+  'coordination:preflight': preflightInputSchema,
+  'search:global': globalSearchInputSchema,
+  'updates:state': emptyInputSchema,
+  'updates:check': emptyInputSchema,
+  'updates:download': emptyInputSchema,
+  'updates:install': emptyInputSchema,
+  'terminal:run': terminalRunInputSchema,
+  'terminal:stop': terminalStopInputSchema,
+  'git:overview': z.object({ projectId: z.string().min(1) }).strict(),
+  'git:stage': gitStageInputSchema,
+  'git:commit': gitCommitInputSchema,
+  'git:checkout': gitCheckoutInputSchema,
+  'git:create-branch': gitCreateBranchInputSchema,
+  'git:sync': gitSyncInputSchema,
+  'git:diff': gitDiffInputSchema,
+  'git:pull-request': gitPullRequestInputSchema,
+  'verification:overview': z.object({ projectId: z.string().min(1) }).strict(),
+  'verification:run': verificationRunInputSchema,
+  'recovery:list': emptyInputSchema,
+  'recovery:recap': z.object({ conversationId: z.string().min(1) }).strict(),
+  'recovery:resume': z.object({ conversationId: z.string().min(1) }).strict(),
+  'recovery:discard': z.object({ conversationId: z.string().min(1) }).strict(),
+  'diagnostics:report': z.object({ copy: z.boolean() }).strict(),
   'diagnostics:data-locations': emptyInputSchema,
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
   'window:state': emptyInputSchema,
@@ -286,6 +507,8 @@ export const brainOverviewResponseSchema = brainOverviewSchema;
 export const brainSearchResponseSchema = z.array(brainOverviewSchema.shape.recentEntries.element);
 export const brainFieldUpdateResponseSchema = brainFieldUpdateResultSchema;
 export const brainImportResponseSchema = brainImportResultSchema;
+export const cognitive1McpToolResponseSchema = cognitive1McpToolResultSchema;
+export const cognitive1OperationResponseSchema = cognitive1OperationResultSchema;
 export const executionRuleDocumentResponseSchema = executionRuleDocumentSchema;
 export const skillSummaryListResponseSchema = z.array(skillSummarySchema);
 export const selectedFilesResponseSchema = z.array(z.string().min(1));
@@ -300,12 +523,54 @@ export const proxyOverviewResponseSchema = proxyOverviewSchema;
 export const proxyHistoryResponseSchema = z.array(proxyHistorySummarySchema);
 export const proxyHistoryDetailResponseSchema = proxyHistoryDetailSchema;
 export const proxyHistoryClearResponseSchema = proxyHistoryClearResultSchema;
+export const proxyConnectionTestResponseSchema = proxyConnectionTestSchema;
+export const proxyPingAllResponseSchema = z.array(proxyPingResultSchema);
+export const proxyDryRunResponseSchema = proxyDryRunResultSchema;
+export const proxyCostsClearResponseSchema = proxyCostsClearResultSchema;
+export const proxyCostSummaryResponseSchema = proxyCostSummarySchema;
+export const proxyReplayPreviewResponseSchema = proxyReplayPreviewSchema;
+export const proxyReplayResponseSchema = proxyReplayResultSchema;
+export const proxyModelsResponseSchema = z.array(proxyModelSchema);
+export const proxyRoutesResponseSchema = z.array(proxyAgentRouteSchema);
+export const proxyRoutingResultResponseSchema = proxyRoutingResultSchema;
+export const proxyConfigTransferResponseSchema = proxyConfigTransferResultSchema;
+export const proxyEnvCopyResponseSchema = proxyEnvCopyResultSchema;
+export const proxyLaunchResponseSchema = proxyLaunchResultSchema;
+export const proxyClaudeResetResponseSchema = proxyClaudeResetResultSchema;
+export const proxyClaudeSettingsResponseSchema = proxyClaudeSettingsResultSchema;
+export const proxyLiveEventResponseSchema = proxyLiveEventSchema;
 export const agentCapabilitiesResponseSchema = z.array(agentCapabilitySchema);
 export const agentRunResponseSchema = agentRunResultSchema;
 export const agentCancelResponseSchema = z.boolean();
 export const agentSignInResponseSchema = agentSignInResultSchema;
 export const directApiCapabilityResponseSchema = directApiCapabilitySchema;
 export const contextPreviewResponseSchema = contextPreviewSchema;
+export const usageSummaryResponseSchema = usageSummarySchema;
+export const projectFileTreeResponseSchema = projectFileTreeSchema;
+export const openedFileResponseSchema = openedFileSchema;
+export const writtenFileResponseSchema = writtenFileSchema;
+export const learningProgressResponseSchema = learningProgressSchema;
+export const learningEvaluationResponseSchema = learningEvaluationResultSchema;
+export const learningLessonRecordResponseSchema = learningLessonRecordResultSchema;
+export const teachingLibraryResponseSchema = teachingLibrarySchema;
+export const teachingDraftResponseSchema = teachingDraftSchema;
+export const codeFormatResponseSchema = codeFormatResultSchema;
+export const gitFileInfoResponseSchema = gitFileInfoSchema;
+export const coordinationOverviewResponseSchema = coordinationOverviewSchema;
+export const preflightResponseSchema = preflightResultSchema;
+export const globalSearchResponseSchema = globalSearchResultSchema;
+export const updateStateResponseSchema = updateStateSchema;
+export const terminalRunResponseSchema = terminalRunResultSchema;
+export const terminalEventResponseSchema = terminalEventSchema;
+export const gitOverviewResponseSchema = gitOverviewSchema;
+export const gitActionResponseSchema = gitActionResultSchema;
+export const gitPullRequestResponseSchema = gitPullRequestResultSchema;
+export const verificationOverviewResponseSchema = verificationOverviewSchema;
+export const verificationRunResponseSchema = verificationRunSchema;
+export const recoveryListResponseSchema = z.array(recoveryRecordSchema);
+export const recoveryRecapResponseSchema = recoveryRecapSchema;
+export const recoveryResumeResponseSchema = recoveryResumeSchema;
+export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 
 export function parseIpcInput<TChannel extends IpcChannel>(
   channel: TChannel,
@@ -344,6 +609,10 @@ export interface SettingsUpdate {
   directApi?: Partial<AppSettings['directApi']>;
   cognitive1?: Partial<AppSettings['cognitive1']>;
   proxy?: Partial<AppSettings['proxy']>;
+  usageBudget?: Partial<AppSettings['usageBudget']>;
+  notifications?: Partial<AppSettings['notifications']>;
+  updates?: Partial<AppSettings['updates']>;
+  agentModels?: AppSettings['agentModels'];
 }
 
 export interface CredentialStatus {
@@ -376,11 +645,29 @@ export interface KaiDesktopBridge {
   searchBrain(request: BrainSearchInput): Promise<IpcResponse<BrainOverview['recentEntries']>>;
   updateBrainField(request: BrainFieldUpdateInput): Promise<IpcResponse<BrainFieldUpdateResult>>;
   importBrain(): Promise<IpcResponse<BrainImportResult | null>>;
+  cognitive1Tool(request: Cognitive1McpToolInput): Promise<IpcResponse<Cognitive1McpToolResult>>;
+  cognitive1Operation(request: Cognitive1OperationInput): Promise<IpcResponse<Cognitive1OperationResult>>;
   getRules(): Promise<IpcResponse<ExecutionRuleDocument>>;
   saveRule(request: ExecutionRuleSaveInput): Promise<IpcResponse<ExecutionRuleDocument>>;
   listSkills(projectId?: string): Promise<IpcResponse<SkillSummary[]>>;
   chooseFiles(projectId: string): Promise<IpcResponse<string[]>>;
   searchFiles(request: ContextSearchInput): Promise<IpcResponse<string[]>>;
+  projectFileTree(projectId: string): Promise<IpcResponse<ProjectFileTree>>;
+  readProjectFile(projectId: string, path: string): Promise<IpcResponse<OpenedFile>>;
+  writeProjectFile(request: FileWriteInput): Promise<IpcResponse<WrittenFile>>;
+  projectFileChanged(projectId: string, path: string, expectedHash: string): Promise<IpcResponse<boolean>>;
+  learningProgress(projectId: string): Promise<IpcResponse<LearningProgress>>;
+  updateLearningPreferences(input: LearningPreferencesInput): Promise<IpcResponse<LearningProgress>>;
+  evaluateLearning(request: LearningTutorRequest): Promise<IpcResponse<LearningEvaluationResult>>;
+  recordLearningLesson(input: LearningLessonRecordInput): Promise<IpcResponse<LearningLessonRecordResult>>;
+  teachingLibrary(): Promise<IpcResponse<TeachingLibrary>>;
+  saveTeachingEntry(input: TeachingLibrarySaveInput): Promise<IpcResponse<TeachingLibrary>>;
+  deleteTeachingEntry(input: TeachingLibraryEntryInput): Promise<IpcResponse<TeachingLibrary>>;
+  resetTeachingEntry(input: TeachingLibraryEntryInput): Promise<IpcResponse<TeachingLibrary>>;
+  generateTeachingDraft(input: TeachingDraftGenerateInput): Promise<IpcResponse<TeachingDraft>>;
+  formatCode(input: CodeFormatInput): Promise<IpcResponse<CodeFormatResult>>;
+  gitFileInfo(projectId: string, path: string): Promise<IpcResponse<GitFileInfo>>;
+  rejectCheckpointHunks(conversationId: string, turnId: string, filePath: string, hunkIds: number[]): Promise<IpcResponse<CheckpointRestoreResult>>;
   gitDiffStat(projectId: string): Promise<IpcResponse<GitDiffStatResult>>;
   saveAttachment(name: string, dataUrl: string): Promise<IpcResponse<ContextChip>>;
   listWorkflowTemplates(projectId?: string): Promise<IpcResponse<WorkflowTemplate[]>>;
@@ -390,6 +677,25 @@ export interface KaiDesktopBridge {
   proxyHistory(request?: ProxyHistoryQuery): Promise<IpcResponse<ProxyHistorySummary[]>>;
   proxyHistoryDetail(id: string): Promise<IpcResponse<ProxyHistoryDetail>>;
   clearProxyHistory(): Promise<IpcResponse<{ cleared: number }>>;
+  testProxyConnection(agent?: string): Promise<IpcResponse<ProxyConnectionTest>>;
+  pingProxyProviders(): Promise<IpcResponse<ProxyPingResult[]>>;
+  dryRunProxy(body: unknown): Promise<IpcResponse<ProxyDryRunResult>>;
+  clearProxyCosts(): Promise<IpcResponse<ProxyCostsClearResult>>;
+  proxyCostSummary(period: Exclude<ProxyCostPeriod, 'session'>): Promise<IpcResponse<ProxyCostSummary>>;
+  previewProxyReplay(id: string): Promise<IpcResponse<ProxyReplayPreview>>;
+  replayProxyRequest(id: string): Promise<IpcResponse<ProxyReplayResult>>;
+  proxyModels(): Promise<IpcResponse<ProxyModel[]>>;
+  proxyRoutes(): Promise<IpcResponse<ProxyAgentRoute[]>>;
+  routeProxyAgent(agent: ProxyAgentRoute['agentId'], action: ProxyRoutingResult['action'], routeUntil?: number): Promise<IpcResponse<ProxyRoutingResult>>;
+  exportProxyConfig(): Promise<IpcResponse<ProxyConfigTransferResult>>;
+  importProxyConfig(): Promise<IpcResponse<ProxyConfigTransferResult>>;
+  copyProxyEnv(agent?: ProxyAgentRoute['agentId']): Promise<IpcResponse<ProxyEnvCopyResult>>;
+  launchProxyAgent(agent: 'claude' | 'codex'): Promise<IpcResponse<ProxyLaunchResult>>;
+  resetClaudeCode(): Promise<IpcResponse<ProxyClaudeResetResult>>;
+  openClaudeSettings(): Promise<IpcResponse<ProxyClaudeSettingsResult>>;
+  startProxyLiveTail(): Promise<IpcResponse<boolean>>;
+  stopProxyLiveTail(): Promise<IpcResponse<boolean>>;
+  onProxyLiveEvent(listener: (event: ProxyLiveEvent) => void): () => void;
   getPreferences(projectId: string): Promise<IpcResponse<ProjectPreferences | null>>;
   updatePreferences(preferences: ProjectPreferences): Promise<IpcResponse<ProjectPreferences>>;
   credentialStatus(): Promise<IpcResponse<CredentialStatus>>;
@@ -398,6 +704,7 @@ export interface KaiDesktopBridge {
   listConversations(): Promise<IpcResponse<ConversationRecord[]>>;
   getConversation(id: string): Promise<IpcResponse<ConversationRecord | null>>;
   createConversation(projectId: string | null, firstPrompt: string): Promise<IpcResponse<ConversationRecord>>;
+  compactConversation(conversationId: string): Promise<IpcResponse<ConversationRecord>>;
   saveConversation(conversation: ConversationRecord): Promise<IpcResponse<ConversationRecord>>;
   deleteConversation(id: string): Promise<IpcResponse<void>>;
   reviewCheckpoint(conversationId: string, turnId: string): Promise<IpcResponse<CheckpointReview>>;
@@ -419,6 +726,35 @@ export interface KaiDesktopBridge {
   signInAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;
   respondToApproval(request: AgentApprovalResponseInput): Promise<IpcResponse<boolean>>;
   onAgentEvent(listener: (payload: AgentRunEvent) => void): () => void;
+  usageSummary(conversationId?: string): Promise<IpcResponse<UsageSummary>>;
+  reportView(view: string, conversationId: string | null): Promise<IpcResponse<boolean>>;
+  coordinationOverview(): Promise<IpcResponse<CoordinationOverview>>;
+  coordinationPreflight(projectId: string, files: string[]): Promise<IpcResponse<PreflightResult>>;
+  globalSearch(query: string): Promise<IpcResponse<GlobalSearchResult>>;
+  updateState(): Promise<IpcResponse<UpdateState>>;
+  checkForUpdates(): Promise<IpcResponse<UpdateState>>;
+  downloadUpdate(): Promise<IpcResponse<UpdateState>>;
+  installUpdate(): Promise<IpcResponse<UpdateState>>;
+  onUpdateState(listener: (state: UpdateState) => void): () => void;
+  runTerminalCommand(projectId: string, command: string, shell: TerminalShell): Promise<IpcResponse<TerminalRunResult>>;
+  stopTerminalCommand(id: string): Promise<IpcResponse<boolean>>;
+  onTerminalEvent(listener: (event: TerminalEvent) => void): () => void;
+  gitOverview(projectId: string): Promise<IpcResponse<GitOverview>>;
+  gitStage(projectId: string, paths: string[], stage: boolean): Promise<IpcResponse<GitActionResult>>;
+  gitCommit(projectId: string, message: string): Promise<IpcResponse<GitActionResult>>;
+  gitCheckout(projectId: string, branch: string): Promise<IpcResponse<GitActionResult>>;
+  gitCreateBranch(projectId: string, name: string, checkout: boolean): Promise<IpcResponse<GitActionResult>>;
+  gitSync(projectId: string, action: GitSyncAction): Promise<IpcResponse<GitActionResult>>;
+  gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
+  gitPullRequest(projectId: string, title: string, body: string): Promise<IpcResponse<{ url: string }>>;
+  verificationOverview(projectId: string): Promise<IpcResponse<VerificationOverview>>;
+  runVerification(projectId: string, command: string): Promise<IpcResponse<VerificationRun>>;
+  listInterruptedRuns(): Promise<IpcResponse<RecoveryRecord[]>>;
+  interruptedRunRecap(conversationId: string): Promise<IpcResponse<RecoveryRecap>>;
+  resumeInterruptedRun(conversationId: string): Promise<IpcResponse<RecoveryResume>>;
+  discardInterruptedRun(conversationId: string): Promise<IpcResponse<boolean>>;
+  onOpenConversation(listener: (event: OpenConversationEvent) => void): () => void;
+  diagnosticsReport(copy: boolean): Promise<IpcResponse<{ text: string }>>;
   dataLocations(): Promise<IpcResponse<DataLocation[]>>;
   recentLogs(count?: number): Promise<IpcResponse<LogEntry[]>>;
   windowState(): Promise<IpcResponse<{ maximized: boolean }>>;

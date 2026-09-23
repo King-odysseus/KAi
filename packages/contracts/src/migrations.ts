@@ -50,7 +50,7 @@ export function migrateSettings(input: unknown): AppSettings {
     defaultAgent: migrateAgent(legacy.defaultAgent),
     defaultRoute: legacy.defaultRoute === 'proxy' ? 'proxy' : 'direct',
     defaultAutonomy: migrateAutonomy(legacy.defaultAutonomy),
-    theme: legacy.theme === 'light' ? 'light' : 'dark',
+    theme: legacy.theme === 'light' || legacy.theme === 'navy' || legacy.theme === 'purple' ? legacy.theme : 'dark',
     activeProjectId: legacy.activeProjectId ?? null,
     projectOrder: legacy.projectOrder ?? [],
     directApi: directApi.success ? directApi.data : defaults.directApi,

@@ -24,6 +24,7 @@ interface ManagedProcess {
   exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   stopping: boolean;
   exited: boolean;
+  ready: boolean;
 }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
@@ -33,7 +34,11 @@ export class ServiceManager {
   private readonly processes = new Map<ServiceKind, ManagedProcess>();
   private readonly states = new Map<ServiceKind, ServiceState>();
 
-  constructor(private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly now: () => Date = () => new Date(),
+    /** Called when a service that had become ready exits without being stopped. */
+    private readonly onUnexpectedExit?: (kind: ServiceKind, detail: string) => void,
+  ) {}
 
   getState(kind: ServiceKind): ServiceState {
     return (
@@ -72,6 +77,7 @@ export class ServiceManager {
 
     try {
       await this.waitUntilReady(record);
+      record.ready = true;
       this.setState(spec.kind, 'ready', `${spec.label} is ready.`, spec);
       return this.getState(spec.kind);
     } catch (error) {
@@ -122,6 +128,7 @@ export class ServiceManager {
       if (record.stopping) return;
       const detail = `Process exited${code === null ? '' : ` with code ${code}`}${signal ? ` (${signal})` : ''}.`;
       this.setState(record.spec.kind, 'failed', detail, record.spec);
+      if (record.ready) this.onUnexpectedExit?.(record.spec.kind, detail);
     });
     record.child.once('error', (error) => {
       record.exited = true;
@@ -170,7 +177,7 @@ function createManagedProcess(spec: ServiceLaunchSpec, child: ChildProcess): Man
     child.once('exit', settle);
     child.once('error', () => settle(null, null));
   });
-  return { spec, child, exitPromise, stopping: false, exited: false };
+  return { spec, child, exitPromise, stopping: false, exited: false, ready: false };
 }
 
 function pipeLines(stream: NodeJS.ReadableStream | null, onLine: (line: string) => void): void {

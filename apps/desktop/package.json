@@ -10,6 +10,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:workbench": "node scripts/smoke-workbench.mjs",
     "stage:engines": "node scripts/stage-engines.mjs",
     "package": "npm run stage:engines && npm run build && electron-builder --win --dir",
     "dist": "npm run stage:engines && npm run build && electron-builder --win nsis"
@@ -19,7 +20,10 @@
     "@kai/integrations": "0.1.0",
     "@kai/runtime": "0.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.47.0",
+    "monaco-editor": "^0.56.0",
+    "prettier": "^3.9.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^3.25.76"
@@ -40,6 +44,13 @@
     "appId": "ai.kai.desktop",
     "productName": "KAI",
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "King-odysseus",
+        "repo": "KAi"
+      }
+    ],
     "directories": {
       "output": "release"
     },

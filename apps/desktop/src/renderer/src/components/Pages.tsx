@@ -352,29 +352,56 @@ export function WorkflowsView({
       {error && <div className="rules-error"><span>{error}</span></div>}
       <div className="workflow-builder">
         <div className="workflow-builder-head">
-          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Workflow title" />
-          {templates.length > 0 && <select defaultValue="" onChange={(event) => {
-            const template = templates.find((item) => item.id === event.target.value);
-            if (!template) return;
-            setTitle(template.name);
-            setSteps(template.steps.map((step, index) => ({ id: `step_${crypto.randomUUID()}`, agent: step.agent, prompt: step.prompt, label: step.label ?? `Step ${index + 1}`, status: 'pending' })));
-            event.target.value = '';
-          }}><option value="">Load template</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select>}
+          <label className="workflow-field" htmlFor="workflow-title">
+            <span>Workflow name</span>
+            <input id="workflow-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Untitled workflow" />
+          </label>
+          <label className="workflow-field" htmlFor="workflow-template">
+            <span>Saved template</span>
+            <select
+              id="workflow-template"
+              defaultValue=""
+              disabled={templates.length === 0}
+              onChange={(event) => {
+                const template = templates.find((item) => item.id === event.target.value);
+                if (!template) return;
+                setTitle(template.name);
+                setSteps(template.steps.map((step, index) => ({ id: `step_${crypto.randomUUID()}`, agent: step.agent, prompt: step.prompt, label: step.label ?? `Step ${index + 1}`, status: 'pending' })));
+                event.target.value = '';
+              }}
+            >
+              <option value="">{templates.length > 0 ? 'Load a template' : 'No saved templates'}</option>
+              {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+            </select>
+          </label>
         </div>
         <div className="workflow-step-list">
           {steps.map((step, index) => (
             <div className="workflow-step" key={step.id}>
               <span className={`workflow-index ${step.status}`}>{index + 1}</span>
-              <select value={step.agent} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, agent: event.target.value as AgentId } : item))}>
-                {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.displayName}{agent.available ? '' : ' (unavailable)'}</option>)}
-              </select>
-              <textarea value={step.prompt} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, prompt: event.target.value } : item))} placeholder={`What should ${step.agent} do?`} rows={2} />
-              <div className="workflow-step-state"><span>{step.status}</span>{step.error && <small title={step.error}>{step.error}</small>}{step.output && <small>{step.output.slice(0, 100)}</small>}</div>
-              <button type="button" aria-label="Remove step" disabled={running || steps.length === 1} onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id))}><Trash2 size={13} /></button>
+              <label className="workflow-field workflow-agent-field">
+                <span>Agent</span>
+                <select aria-label={`Step ${index + 1} agent`} value={step.agent} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, agent: event.target.value as AgentId } : item))}>
+                  {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.displayName}{agent.available ? '' : ' (unavailable)'}</option>)}
+                </select>
+              </label>
+              <label className="workflow-field workflow-prompt-field">
+                <span>Prompt</span>
+                <textarea aria-label={`Step ${index + 1} prompt`} value={step.prompt} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, prompt: event.target.value } : item))} placeholder={`What should ${step.agent} do?`} rows={3} />
+              </label>
+              <div className="workflow-step-state">
+                <span className={`workflow-status ${step.status}`}>{step.status}</span>
+                {step.error && <small className="workflow-step-error" title={step.error}>{step.error}</small>}
+                {step.output && <small className="workflow-step-output" title={step.output}>{step.output.slice(0, 180)}</small>}
+              </div>
+              <button type="button" className="icon-button compact workflow-remove" aria-label={`Remove step ${index + 1}`} title="Remove step" disabled={running || steps.length === 1} onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id))}><Trash2 size={15} /></button>
             </div>
           ))}
         </div>
-        <button type="button" className="secondary-button" disabled={running} onClick={addStep}><Plus size={14} /><span>Add step</span></button>
+        <div className="workflow-builder-footer">
+          <span>{steps.length} {steps.length === 1 ? 'step' : 'steps'} in this workflow</span>
+          <button type="button" className="secondary-button" disabled={running} onClick={addStep}><Plus size={14} /><span>Add step</span></button>
+        </div>
       </div>
     </div>
   );

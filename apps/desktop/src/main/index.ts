@@ -1,23 +1,40 @@
 import * as path from 'node:path';
+import { stat } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
+import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { DesktopAgentRuntime } from './agent-runtime';
+import { preparePlaywrightMcpSettings } from './agent-mcp-config';
 import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
-import { closeCompareRuns, closeMemorySessions, registerIpc, type IpcContext } from './ipc';
+import { cancelConversationRun, closeCompareRuns, closeMemorySessions, importBrainFromDirectory, registerIpc, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { UniversalProxyClient } from './proxy-client';
+import { DesktopProxyRouting } from './proxy-routing';
 import { ProjectPreferenceStore } from './project-preference-store';
 import { ProjectStore } from './project-store';
 import { RotatingLogSink } from './rotating-log-sink';
+import { DesktopShell } from './desktop-shell';
+import { RecoveryStore } from './recovery-store';
+import { TerminalManager } from './terminal';
+import { UpdateController } from './updater';
+import { autoUpdater } from 'electron-updater';
+import { VerificationStore } from './verification';
+import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
 import { WorkflowTemplateStore } from './workflow-templates';
+import { LearningProgressStore } from './learning-progress';
+import { DesktopLearningTutor } from './learning-tutor';
+import { TeachingLibraryStore } from './teaching-library';
 
 app.setName('KAI');
+if (process.env.KAI_DESKTOP_USER_DATA) {
+  app.setPath('userData', path.resolve(process.env.KAI_DESKTOP_USER_DATA));
+}
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let mainWindow: BrowserWindow | null = null;
@@ -25,6 +42,7 @@ let ipcContext: IpcContext | null = null;
 let serviceController: DesktopServiceController | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
 let shutdownPromise: Promise<void> | null = null;
+let desktopShell: DesktopShell | null = null;
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -49,6 +67,7 @@ app.on('before-quit', (event) => {
   const activeContext = ipcContext;
   shutdownPromise = (activeContext ? closeMemorySessions(activeContext) : Promise.resolve())
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
+    .then(() => activeContext?.terminal.stopAll())
     .then(() => Promise.all([
       serviceController?.dispose() ?? Promise.resolve(),
       mcpRuntime?.dispose() ?? Promise.resolve(),
@@ -58,6 +77,7 @@ app.on('before-quit', (event) => {
     .finally(() => {
       serviceController = null;
       mcpRuntime = null;
+      desktopShell?.dispose();
       app.exit(0);
     });
 });
@@ -76,6 +96,20 @@ async function startApplication(): Promise<void> {
   const preferences = new ProjectPreferenceStore(paths.preferences, fileSystem);
   const conversations = new ConversationStore(paths.conversations, fileSystem);
   const credentials = new CredentialVault(paths.credentials, fileSystem);
+  await repairProviderSettings(settings, credentials);
+  const playwrightMcp = await preparePlaywrightMcpSettings(await settings.load());
+  for (const result of playwrightMcp.cliResults) {
+    if (result.error) {
+      logger.warn(
+        'internal',
+        `Playwright MCP could not be added to ${result.agent}`,
+        `${result.configPath}: ${result.error}`,
+      );
+    } else if (result.changed) {
+      logger.info('internal', `Playwright MCP added to ${result.agent}`, result.configPath);
+    }
+  }
+  if (playwrightMcp.changed) await settings.save(playwrightMcp.settings);
   const kaiRoot = app.isPackaged ? process.resourcesPath : path.resolve(app.getAppPath(), '..', '..');
   const proxyLauncherPath = app.isPackaged
     ? path.join(process.resourcesPath, 'integrations', 'start-proxy.cjs')
@@ -92,6 +126,12 @@ async function startApplication(): Promise<void> {
   });
   const cognitive1 = new Cognitive1Client({ access: serviceController });
   const proxy = new UniversalProxyClient({ access: serviceController });
+  const proxyRouting = new DesktopProxyRouting({
+    locateEngine: () => serviceController!.engineInstallation('universalProxy'),
+    loopbackAccess: () => serviceController!.loopbackAccess('universalProxy'),
+    loadSettings: () => settings.load(),
+    saveSettings: (next) => settings.save(next),
+  });
   const agents = new DesktopAgentRuntime();
   const bundledRulesPath = app.isPackaged
     ? path.join(process.resourcesPath, 'agent-rules', 'Cognitive1-Rules.md')
@@ -102,6 +142,18 @@ async function startApplication(): Promise<void> {
   );
   const workflowTemplates = new WorkflowTemplateStore(path.join(paths.root, 'workflows'));
   const backups = new DesktopConfigBackupStore(paths);
+  const learningProgress = new LearningProgressStore(paths.learning, fileSystem);
+  const teachingLibrary = new TeachingLibraryStore(path.join(paths.learning, 'teaching'), fileSystem);
+  const learningTutor = new DesktopLearningTutor(
+    settings,
+    credentials,
+    async (projectId) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('Project not found.');
+      return project.path;
+    },
+    teachingLibrary,
+  );
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
     resolveProxyRoute: async (request) => {
@@ -114,6 +166,20 @@ async function startApplication(): Promise<void> {
       };
     },
   });
+
+  const notifications = new NotificationCenter({
+    getSettings: async () => (await settings.load()).notifications,
+    isWindowFocused: () => mainWindow?.isFocused() ?? false,
+    show: (notification) => desktopShell?.show(notification),
+  });
+  const shell = new DesktopShell({
+    center: notifications,
+    getWindow: () => mainWindow,
+    stopRun: (conversationId) => {
+      if (ipcContext) cancelConversationRun(ipcContext, conversationId);
+    },
+  });
+  shell.apply((await settings.load()).notifications);
 
   ipcContext = {
     appName: 'KAI',
@@ -129,24 +195,138 @@ async function startApplication(): Promise<void> {
     services: serviceController,
     cognitive1,
     proxy,
+    proxyRouting,
+    proxyLiveTails: new Map(),
     agents,
     executionRules,
     directApi,
     mcp: mcpRuntime,
     workflowTemplates,
     backups,
+    learningProgress,
+    learningTutor,
+    teachingLibrary,
     compareRuns: new Map(),
     memorySessions: new Map(),
     pendingApprovals: new Map(),
+    notifications,
+    recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
+    verification: new VerificationStore(path.join(paths.root, 'verification')),
+    updater: new UpdateController(autoUpdater, {
+      currentVersion: app.getVersion(),
+      // Only an installed build has a release feed; development runs and the smoke tests stay offline.
+      enabled: app.isPackaged && process.env.KAI_DESKTOP_UPDATES !== 'off',
+      backup: async (name) => (await backups.create(name)).name,
+      onChange: (state) => {
+        const window = mainWindow;
+        if (window && !window.isDestroyed()) window.webContents.send('app:update-state', state);
+      },
+    }),
+    terminal: new TerminalManager((event) => {
+      const window = mainWindow;
+      if (window && !window.isDestroyed()) window.webContents.send('terminal:event', event);
+    }),
+    desktopShell: shell,
     getMainWindow: () => mainWindow,
   };
+  desktopShell = shell;
 
+  await importLocalCognitive1Brain(ipcContext, kaiRoot);
   registerIpc(ipcContext);
   installContentSecurityPolicy();
   await createMainWindow();
+  // Look for a new version shortly after startup and every few hours, if the user allows it. Checking is
+  // read-only; downloading and installing always wait for the user.
+  const checkForUpdates = (): void => {
+    void settings.load().then((current) => (current.updates.autoCheck ? ipcContext?.updater.check() : undefined)).catch(() => undefined);
+  };
+  setTimeout(checkForUpdates, 30_000).unref();
+  setInterval(checkForUpdates, 6 * 60 * 60_000).unref();
   void serviceController
     .startConfigured()
     .catch((error) => logger.error('service_error', 'Managed service startup failed', undefined, error));
+}
+
+const DEPRECATED_DEEPSEEK_MODELS = new Set(['deepseek-flash', 'deepseek-v4-pro']);
+
+async function repairProviderSettings(
+  settings: SettingsService,
+  credentials: CredentialVault,
+): Promise<void> {
+  const current = await settings.load();
+  const model = current.directApi.model.trim();
+  const currentPreset = directProviderPreset(current.directApi.provider);
+  const storedCredentials = new Set(await credentials.status());
+  const deprecatedDeepSeekModel = current.directApi.provider === 'deepseek'
+    && DEPRECATED_DEEPSEEK_MODELS.has(model);
+  let directApi = current.directApi;
+  let changed = false;
+
+  if (!model || deprecatedDeepSeekModel) {
+    if (storedCredentials.has(current.directApi.credentialId)) {
+      directApi = {
+        ...current.directApi,
+        model: currentPreset.defaultModel,
+        baseUrl: currentPreset.defaultBaseUrl,
+      };
+      changed = true;
+    } else {
+      const storedProvider = DIRECT_PROVIDER_ORDER.find((provider) => (
+        storedCredentials.has(directProviderPreset(provider).credentialId)
+      ));
+      if (storedProvider) {
+        const preset = directProviderPreset(storedProvider);
+        directApi = {
+          ...current.directApi,
+          provider: preset.id,
+          model: preset.defaultModel,
+          baseUrl: preset.defaultBaseUrl,
+          credentialId: preset.credentialId,
+        };
+        changed = true;
+      }
+    }
+  }
+
+  let proxy = current.proxy;
+  if (
+    current.proxy.credentialId === 'provider.deepseek'
+    && DEPRECATED_DEEPSEEK_MODELS.has(current.proxy.defaultModel.trim())
+  ) {
+    proxy = {
+      ...current.proxy,
+      defaultModel: directProviderPreset('deepseek').defaultModel,
+    };
+    changed = true;
+  }
+
+  if (changed) await settings.save({ ...current, directApi, proxy });
+}
+
+async function importLocalCognitive1Brain(context: IpcContext, kaiRoot: string): Promise<void> {
+  const projects = await context.projects.list();
+  const candidates = [...new Set([
+    path.resolve(kaiRoot, '..', 'cognitive1'),
+    path.join(app.getPath('documents'), 'WebDev Projects', 'cognitive1'),
+    ...projects.map((project) => project.path),
+  ])];
+
+  for (const candidate of candidates) {
+    try {
+      const info = await stat(path.join(candidate, 'brain'));
+      if (!info.isDirectory()) continue;
+      const result = await importBrainFromDirectory(context, candidate, false);
+      if (result.imported > 0) {
+        context.logger.info(
+          'internal',
+          `Imported ${result.imported} missing C1 brain files from ${result.sourcePath}`,
+        );
+      }
+      return;
+    } catch {
+      // Try the next known source; a missing source is expected on most machines.
+    }
+  }
 }
 
 async function createMainWindow(): Promise<void> {
@@ -179,8 +359,12 @@ async function createMainWindow(): Promise<void> {
 
   if (settings.windowBounds?.maximized) mainWindow.maximize();
   mainWindow.once('ready-to-show', () => mainWindow?.show());
-  mainWindow.on('close', () => {
+  mainWindow.on('close', (event) => {
     void persistWindowState();
+    if (desktopShell?.shouldHideOnClose()) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
   });
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -213,6 +397,7 @@ function installContentSecurityPolicy(): void {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
+    "worker-src 'self' blob:",
     `connect-src ${connectSources}`,
     "object-src 'none'",
     "base-uri 'none'",

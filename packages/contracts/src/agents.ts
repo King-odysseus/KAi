@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { conversationRecordV1Schema } from './domain';
+import { cliModelNameSchema, conversationRecordV1Schema } from './domain';
 import { contextChipSchema } from './context';
 import { persistedEventV1Schema } from './events';
 import { agentIdSchema, autonomyModeSchema, executionModeSchema, providerIdSchema, routeModeSchema } from './primitives';
@@ -33,8 +33,18 @@ export const agentRunRequestSchema = z
     skills: z.array(z.string().min(1).max(200)).max(50).optional(),
     selectedPaths: z.array(z.string().min(1).max(2_000)).max(50).optional(),
     contextChips: z.array(contextChipSchema).max(50).optional(),
+    // Model for this run only. Without it the run uses the model from Settings (or the CLI's own default).
+    model: cliModelNameSchema.optional(),
   })
   .strict();
+
+// Suggestions only; any model name the CLI accepts can be typed.
+export const CLI_MODEL_SUGGESTIONS: Record<'claude' | 'codex' | 'qwen' | 'gemini', readonly string[]> = {
+  claude: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'opus', 'sonnet', 'haiku'],
+  codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
+  qwen: ['qwen3-coder-plus', 'qwen-coder-plus'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+};
 
 export const agentRunResultSchema = z
   .object({

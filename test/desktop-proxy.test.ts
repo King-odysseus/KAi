@@ -153,7 +153,7 @@ describe('desktop Universal Agent Proxy client', () => {
       models: [{ model: 'smoke-model', calls: 4, costUsd: 0.0142 }],
     });
 
-    await expect(client.history({ search: ' smoke ', status: '5xx', page: 2, limit: 10 })).resolves.toEqual([
+    await expect(client.history({ search: ' smoke ', agent: 'claude', status: '5xx', page: 2, limit: 10 })).resolves.toEqual([
       {
         id: 'request-1',
         ts: '2026-09-23T10:00:00.000Z',
@@ -170,6 +170,7 @@ describe('desktop Universal Agent Proxy client', () => {
     ]);
     const historyRequest = requestedUrls.find((url) => url.startsWith('/v1/history?'));
     expect(historyRequest).toContain('search=smoke');
+    expect(historyRequest).toContain('agent=claude');
     expect(historyRequest).toContain('status=5xx');
     expect(historyRequest).toContain('page=2');
     expect(historyRequest).toContain('limit=10');

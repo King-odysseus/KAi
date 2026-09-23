@@ -410,6 +410,7 @@
     "desktop:typecheck": "npm run typecheck --workspace @kai/desktop",
     "desktop:test": "npm run test --workspace @kai/desktop",
     "desktop:smoke": "npm run smoke --workspace @kai/desktop",
+    "desktop:smoke:workbench": "npm run smoke:workbench --workspace @kai/desktop",
     "desktop:package": "npm run package --workspace @kai/desktop",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",

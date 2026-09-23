@@ -12,8 +12,24 @@ import {
   DesktopProjectToolRuntime,
   projectToolDefinitions,
   type ExternalToolPort,
+  isPublishingCommand,
   type ProjectToolExecution,
 } from './project-tools';
+import { estimateCostUsd } from './usage-budget';
+
+function costFields(
+  provider: string,
+  model: string,
+  inputTokens: number | undefined,
+  outputTokens: number | undefined,
+): { provider: string; model?: string; amountUsd?: number } {
+  const amountUsd = model ? estimateCostUsd(model, inputTokens, outputTokens) : null;
+  return {
+    provider,
+    ...(model ? { model } : {}),
+    ...(amountUsd === null ? {} : { amountUsd }),
+  };
+}
 
 export interface DirectApiHistoryTurn {
   role: 'user' | 'assistant';
@@ -160,6 +176,8 @@ export class DesktopDirectProviderRuntime {
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
     let capability = await this.capability();
+    // A model chosen in the composer applies to this run only.
+    if (request.model) capability = { ...capability, model: request.model };
     let apiKey: string;
     if (request.route === 'proxy') {
       const preset = directProviderPreset(capability.provider);
@@ -360,6 +378,7 @@ export class DesktopDirectProviderRuntime {
         outputTokens,
         sessionId: previousResponseId,
         estimateProvenance: 'measured',
+        ...costFields(capability.provider, capability.model, inputTokens, outputTokens),
       });
     }
     if (error) {
@@ -538,6 +557,7 @@ export class DesktopDirectProviderRuntime {
         inputTokens,
         outputTokens,
         estimateProvenance: 'measured',
+        ...costFields(capability.provider, capability.model, inputTokens, outputTokens),
       });
     }
     if (error) {
@@ -722,7 +742,20 @@ async function executeToolCalls(
     }
 
     emit(toolCallEvent(request, name, 'started', argumentsValue));
-    const policy = externalTools?.policy(name, request.autonomy) ?? toolRuntime.policy(name, request.autonomy);
+    let policy = externalTools?.policy(name, request.autonomy) ?? toolRuntime.policy(name, request.autonomy);
+    // Pushing or publishing leaves this machine, so it asks even in Full control.
+    if (
+      policy.decision === 'allow'
+      && name === 'run_command'
+      && isPublishingCommand(String((argumentsValue as { command?: unknown } | null)?.command ?? ''))
+    ) {
+      policy = {
+        decision: 'ask',
+        title: 'Publish work off this machine?',
+        detail: 'This command pushes commits or changes a shared service such as GitHub or a package registry. It asks every time, even in Full control.',
+        risk: 'high',
+      };
+    }
     if (policy.decision === 'deny') {
       emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }));
       results.push(formatOutput(callId, { error: policy.reason }));

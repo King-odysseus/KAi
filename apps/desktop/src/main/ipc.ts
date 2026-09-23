@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { BrowserWindow, clipboard, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron';
@@ -8,6 +9,7 @@ import {
   type AgentId,
   type AgentRunRequest,
   type AgentRunResult,
+  type AppSettings,
   type BrainEntry,
   type ConversationRecord,
   type ContextChip,
@@ -23,17 +25,31 @@ import {
   type KaiDesktopBridge,
   type LogEntry,
   type PersistedEvent,
+  type ProxyAgentId,
+  type ProxyConfigTransferResult,
+  type ProxyEnvCopyResult,
+  type ProxyLaunchResult,
+  type ProxyLiveEvent,
+  type ProxyRoutingAction,
   type ProjectRecord,
   type SkillSummary,
   type ServiceTokenCopyResult,
   type ServiceState,
   type WorkflowTemplate,
   type WorkflowTemplateSaveInput,
+  type CodeFormatResult,
+  type GitFileInfo,
+  type LearningEvaluationResult,
+  type LearningLessonRecordResult,
+  type LearningProgress,
   parseIpcInput,
+  parseTestCounts,
+  revertHunks,
+  proxyServiceSettingsSchema,
 } from '@kai/contracts';
 import type { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import type { CredentialVault } from './credential-vault';
-import type { DesktopAgentRuntime } from './agent-runtime';
+import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
@@ -42,12 +58,31 @@ import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
 import { dataLocations, type DesktopPaths } from './paths';
 import type { UniversalProxyClient } from './proxy-client';
+import type { DesktopProxyRouting } from './proxy-routing';
+import { proxyAgentBaseUrl } from './proxy-routing';
+import { ensureClaudeSettingsFile, resetClaudeCodeConfig } from './claude-maintenance';
 import { mergeSettingsUpdate, type DesktopServiceController } from './service-controller';
 import type { ProjectPreferenceStore } from './project-preference-store';
 import type { ProjectStore } from './project-store';
 import { buildSkillPrompt, discoverDesktopSkills, skillSummaries } from './skills';
+import type { DesktopShell } from './desktop-shell';
+import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUrgentNotes } from './coordination';
+import type { TerminalManager } from './terminal';
+import type { UpdateController } from './updater';
+import { buildDiagnosticsReport } from './diagnostics-report';
+import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffFile, gitOverview, gitStage, gitSync } from './git-tools';
+import { agentChecksFromEvents, recordVerification, runCheckCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
+import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
+import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
+import type { NotificationCenter } from './notification-rules';
+import { summarizeUsage } from './usage-budget';
 import type { WorkflowTemplateStore } from './workflow-templates';
 import type { DesktopConfigBackupStore } from './backups';
+import type { LearningProgressStore } from './learning-progress';
+import type { DesktopLearningTutor } from './learning-tutor';
+import type { TeachingLibraryStore } from './teaching-library';
+import { recordLearningLesson } from './learning-records';
+import { formatProjectCode, projectGitFileInfo } from './code-tools';
 import {
   createCheckpoint,
   diffFromCheckpoint,
@@ -79,15 +114,26 @@ export interface IpcContext {
   services: DesktopServiceController;
   cognitive1: Cognitive1Client;
   proxy: UniversalProxyClient;
+  proxyRouting: DesktopProxyRouting;
+  proxyLiveTails: Map<number, AbortController>;
   agents: DesktopAgentRuntime;
   executionRules: DesktopExecutionRules;
   directApi: DesktopDirectProviderRuntime;
   mcp: DesktopMcpRuntime;
   workflowTemplates: WorkflowTemplateStore;
   backups: DesktopConfigBackupStore;
+  learningProgress: LearningProgressStore;
+  learningTutor: DesktopLearningTutor;
+  teachingLibrary: TeachingLibraryStore;
   compareRuns: Map<string, ActiveCompareRun>;
   memorySessions: Map<string, ActiveMemorySession>;
   pendingApprovals: Map<string, { conversationId: string; resolve: (approved: boolean) => void }>;
+  notifications: NotificationCenter;
+  recovery: RecoveryStore;
+  verification: VerificationStore;
+  terminal: TerminalManager;
+  updater: UpdateController;
+  desktopShell: DesktopShell;
   getMainWindow: () => BrowserWindow | null;
 }
 
@@ -117,8 +163,22 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'settings:update', async (update) => {
     const settings = await context.settings.load();
     const merged = mergeSettingsUpdate(settings, update);
+    const proxyChanged = update.proxy !== undefined && JSON.stringify(merged.proxy) !== JSON.stringify(settings.proxy);
+    const cognitive1Changed = update.cognitive1 !== undefined && JSON.stringify(merged.cognitive1) !== JSON.stringify(settings.cognitive1);
+    const services = await context.services.status();
+    const proxyWasReady = services.some((service) => service.kind === 'universalProxy' && service.status === 'ready');
+    const cognitive1WasReady = services.some((service) => service.kind === 'cognitive1' && service.status === 'ready');
     await context.settings.save(merged);
+    context.desktopShell.apply(merged.notifications);
     context.mcp.invalidate();
+    if (proxyChanged && proxyWasReady) {
+      if (merged.proxy.enabled) await context.services.restart('universalProxy', merged);
+      else await context.services.stop('universalProxy');
+    }
+    if (cognitive1Changed && cognitive1WasReady) {
+      if (merged.cognitive1.enabled) await context.services.restart('cognitive1', merged);
+      else await context.services.stop('cognitive1');
+    }
     await context.services.syncFromSettings(merged);
     return context.settings.load();
   });
@@ -142,6 +202,8 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'brain:search', async (query) => context.cognitive1.search(query));
   handle(context, 'brain:update-field', async (update) => context.cognitive1.updateField(update));
   handle(context, 'brain:import', async () => importBrain(context));
+  handle(context, 'cognitive1:tool', async (request) => context.cognitive1.tool(request));
+  handle(context, 'cognitive1:operation', async (request) => context.cognitive1.operation(request));
   handle(context, 'rules:get', async () => context.executionRules.document());
   handle(context, 'rules:save', async (rule) => context.executionRules.save(rule));
   handle(context, 'skills:list', async ({ projectId }) => listSkills(context, projectId));
@@ -156,6 +218,33 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'proxy:history', async (query) => context.proxy.history(query));
   handle(context, 'proxy:history-detail', async ({ id }) => context.proxy.historyDetail(id));
   handle(context, 'proxy:clear-history', async () => context.proxy.clearHistory());
+  handle(context, 'proxy:test-connection', async ({ agent }) => context.proxy.testConnection(agent));
+  handle(context, 'proxy:ping-all', async () => context.proxy.pingAll());
+  handle(context, 'proxy:dry-run', async ({ body }) => context.proxy.dryRun(body));
+  handle(context, 'proxy:clear-costs', async () => context.proxy.clearCosts());
+  handle(context, 'proxy:cost-summary', async ({ period }) => context.cognitive1.costSummary(period));
+  handle(context, 'proxy:replay-preview', async ({ id }) => context.proxy.replayPreview(id));
+  handle(context, 'proxy:replay', async ({ id }) => context.proxy.replay(id));
+  handle(context, 'proxy:models', async () => context.proxy.models());
+  handle(context, 'proxy:routes', async () => context.proxyRouting.routes());
+  handle(context, 'proxy:route-action', async ({ agent, action, routeUntil }) =>
+    context.proxyRouting.action(agent, action, routeUntil));
+  handle(context, 'proxy:export-config', async () => exportProxyConfig(context));
+  handle(context, 'proxy:import-config', async () => importProxyConfig(context));
+  handle(context, 'proxy:copy-env', async ({ agent }) => copyProxyEnv(context, agent ?? 'claude'));
+  handle(context, 'proxy:launch-agent', async ({ agent }) => launchProxyAgent(context, agent));
+  handle(context, 'proxy:reset-claude', async () => resetClaudeCodeConfig());
+  handle(context, 'proxy:open-claude-settings', async () => {
+    const settingsPath = await ensureClaudeSettingsFile();
+    const error = await shell.openPath(settingsPath);
+    return {
+      opened: !error,
+      path: settingsPath,
+      detail: error || `Opened ${settingsPath}.`,
+    };
+  });
+  handle(context, 'proxy:start-live-tail', async () => startProxyLiveTail(context));
+  handle(context, 'proxy:stop-live-tail', async () => stopProxyLiveTail(context));
   handle(context, 'preferences:get', async ({ projectId }) => context.preferences.get(projectId));
   handle(context, 'preferences:update', async (preferences) => {
     await context.preferences.upsert(preferences);
@@ -165,11 +254,13 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'credentials:set', async ({ id, value }) => {
     await context.credentials.set(id, value);
     context.mcp.invalidate();
+    await restartCognitive1ForOverwatchCredential(context, id);
     return credentialStatus(context);
   });
   handle(context, 'credentials:clear', async ({ id }) => {
     await context.credentials.delete(id);
     context.mcp.invalidate();
+    await restartCognitive1ForOverwatchCredential(context, id);
     return credentialStatus(context);
   });
   handle(context, 'conversations:list', async () => context.conversations.list());
@@ -194,6 +285,7 @@ export function registerIpc(context: IpcContext): void {
     await context.conversations.save(conversation);
     return conversation;
   });
+  handle(context, 'conversations:compact', async ({ conversationId }) => compactConversation(context, conversationId));
   handle(context, 'conversations:save', async (conversation) => {
     await context.conversations.save(conversation);
     return conversation;
@@ -246,9 +338,136 @@ export function registerIpc(context: IpcContext): void {
     pending.resolve(approved);
     return true;
   });
+  handle(context, 'usage:summary', async ({ conversationId }) =>
+    summarizeUsage(await context.conversations.list(), (await context.settings.load()).usageBudget, new Date(), conversationId));
+  handle(context, 'ui:report-view', async ({ view, conversationId }) => {
+    context.notifications.setViewing(view, conversationId);
+    return true;
+  });
+  handle(context, 'files:tree', async ({ projectId }) => listProjectFiles((await resolveProject(context, projectId, true)).path));
+  handle(context, 'files:read', async ({ projectId, path: filePath }) => readProjectFile((await resolveProject(context, projectId, true)).path, filePath));
+  handle(context, 'files:write', async ({ projectId, path: filePath, content, expectedHash, eol, bom }) => {
+    try {
+      return await writeProjectFile((await resolveProject(context, projectId, true)).path, filePath, content, { expectedHash, eol, bom });
+    } catch (error) {
+      if (error instanceof FileConflictError) throw new ConflictError(error.message);
+      throw error;
+    }
+  });
+  handle(context, 'files:changed', async ({ projectId, path: filePath, expectedHash }) =>
+    fileChangedOnDisk((await resolveProject(context, projectId, true)).path, filePath, expectedHash));
+  handle(context, 'learning:progress', async ({ projectId }): Promise<LearningProgress> => {
+    await resolveProject(context, projectId, true);
+    return context.learningProgress.get(projectId);
+  });
+  handle(context, 'learning:update-preferences', async (input): Promise<LearningProgress> => {
+    await resolveProject(context, input.projectId, true);
+    return context.learningProgress.updatePreferences(input);
+  });
+  handle(context, 'learning:evaluate', async (request): Promise<LearningEvaluationResult> => {
+    await resolveProject(context, request.projectId, true);
+    const response = await context.learningTutor.evaluate(request);
+    const progress = await context.learningProgress.recordEvaluation(request, response);
+    return { response, progress };
+  });
+  handle(context, 'learning:record-lesson', async (input): Promise<LearningLessonRecordResult> => {
+    const project = await resolveProject(context, input.projectId, true);
+    return recordLearningLesson(project.path, input);
+  });
+  handle(context, 'learning:teaching-library', async () => context.teachingLibrary.get());
+  handle(context, 'learning:save-teaching-entry', async (input) => context.teachingLibrary.save(input));
+  handle(context, 'learning:delete-teaching-entry', async ({ kind, id }) => context.teachingLibrary.remove(kind, id));
+  handle(context, 'learning:reset-teaching-entry', async ({ kind, id }) => context.teachingLibrary.reset(kind, id));
+  handle(context, 'learning:generate-teaching-draft', async (input) => context.learningTutor.generateTeachingDraft(input));
+  handle(context, 'code:format', async ({ projectId, filePath, content }): Promise<CodeFormatResult> => {
+    const project = await resolveProject(context, projectId, true);
+    return formatProjectCode(project.path, filePath, content);
+  });
+  handle(context, 'git:file-info', async ({ projectId, path: filePath }): Promise<GitFileInfo> => {
+    const project = await resolveProject(context, projectId, true);
+    return projectGitFileInfo(project.path, filePath);
+  });
+  handle(context, 'checkpoints:reject-hunks', async ({ conversationId, turnId, filePath, hunkIds }) =>
+    rejectCheckpointHunks(context, conversationId, turnId, filePath, hunkIds));
+  handle(context, 'coordination:overview', async () => coordinationOverview(context));
+  handle(context, 'coordination:preflight', async ({ projectId, files }) => coordinationPreflight(context, projectId, files));
+  handle(context, 'search:global', async ({ query }) => globalSearch(context, query));
+  const projectPath = async (projectId: string): Promise<string> => (await resolveProject(context, projectId, true)).path;
+  handle(context, 'updates:state', async () => context.updater.getState());
+  handle(context, 'updates:check', async () => context.updater.check());
+  handle(context, 'updates:download', async () => context.updater.download());
+  // Installing restarts the app; the controller backs up the configuration first and refuses if that fails.
+  handle(context, 'updates:install', async () => context.updater.installAndRestart());
+  handle(context, 'terminal:run', async ({ projectId, command, shell }) => ({
+    id: context.terminal.start(projectId, await projectPath(projectId), command, shell),
+  }));
+  handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
+  handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
+  handle(context, 'git:stage', async ({ projectId, paths, stage }) => gitStage(await projectPath(projectId), paths, stage));
+  handle(context, 'git:commit', async ({ projectId, message }) => gitCommit(await projectPath(projectId), message));
+  handle(context, 'git:checkout', async ({ projectId, branch }) => gitCheckout(await projectPath(projectId), branch));
+  handle(context, 'git:create-branch', async ({ projectId, name, checkout }) => gitCreateBranch(await projectPath(projectId), name, checkout));
+  // Pushing sends work off this machine, so the renderer confirms it with the user before calling this.
+  handle(context, 'git:sync', async ({ projectId, action }) => gitSync(await projectPath(projectId), action));
+  handle(context, 'git:diff', async ({ projectId, path: filePath, staged }) => gitDiffFile(await projectPath(projectId), filePath, staged));
+  handle(context, 'git:pull-request', async ({ projectId, title, body }) => gitCreatePullRequest(await projectPath(projectId), title, body));
+  handle(context, 'verification:overview', async ({ projectId }) => {
+    const project = await resolveProject(context, projectId, true);
+    return verificationOverview(context.verification, project.id, project.path);
+  });
+  handle(context, 'verification:run', async ({ projectId, command }) => {
+    // The renderer asks the user to confirm before this channel is called; the command runs with their permissions.
+    const project = await resolveProject(context, projectId, true);
+    const check = await runCheckCommand(project.path, command);
+    const run = await recordVerification(context.verification, project.id, project.path, check);
+    await logRegression(context, project.path, project.name, check);
+    return run;
+  });
+  handle(context, 'recovery:list', async () => context.recovery.list());
+  handle(context, 'recovery:recap', async ({ conversationId }) => interruptedRunRecap(context, conversationId));
+  handle(context, 'recovery:resume', async ({ conversationId }) => {
+    const record = await context.recovery.read(conversationId);
+    if (!record) throw new NotFoundError('That interrupted run is no longer available.');
+    // Resuming is always a user action; the record is cleared here and a fresh one is written when the run starts.
+    await context.recovery.end(conversationId);
+    await releaseAgentClaim(context, record.agent);
+    return buildResume(record);
+  });
+  handle(context, 'recovery:discard', async ({ conversationId }) => {
+    const record = await context.recovery.read(conversationId);
+    await context.recovery.end(conversationId);
+    if (record) await releaseAgentClaim(context, record.agent);
+    return true;
+  });
+  handle(context, 'diagnostics:report', async ({ copy }) => {
+    const [settings, services, agents] = await Promise.all([context.settings.load(), context.services.status(), context.agents.capabilities().catch(() => [])]);
+    const text = buildDiagnosticsReport({
+      generatedAt: new Date(),
+      appName: context.appName,
+      version: context.version,
+      platform: process.platform,
+      arch: process.arch,
+      versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      settings,
+      services,
+      agents: agents.map((agent) => ({ id: agent.id, available: agent.available, version: agent.version, detail: agent.unavailableReason })),
+      logs: context.logger.recent(200),
+    });
+    if (copy) clipboard.writeText(text);
+    return { text };
+  });
   handle(context, 'diagnostics:data-locations', async () => dataLocations(context.paths));
   handle(context, 'diagnostics:recent-logs', async ({ count }) => context.logger.recent(count));
   handle(context, 'window:state', async () => ({ maximized: context.getMainWindow()?.isMaximized() ?? false }));
+}
+
+async function restartCognitive1ForOverwatchCredential(context: IpcContext, credentialId: string): Promise<void> {
+  const settings = await context.settings.load();
+  if (!settings.cognitive1.overwatch.enabled || credentialId !== settings.cognitive1.overwatch.credentialId) return;
+  const cognitive1Ready = (await context.services.status()).some(
+    (service) => service.kind === 'cognitive1' && service.status === 'ready',
+  );
+  if (cognitive1Ready) await context.services.restart('cognitive1', settings);
 }
 
 async function runConversationAgent(
@@ -274,6 +493,14 @@ async function runConversationAgent(
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
   const executionMode = request.execution ?? 'cli';
+  if (executionMode === 'api') {
+    // Block mode refuses before anything is saved or sent, so the run never reaches the provider.
+    const usage = summarizeUsage(await context.conversations.list(), settings.usageBudget, new Date(), conversation.id);
+    if (usage.blockedReason) {
+      context.logger.info('internal', 'Direct API run blocked by usage budget', usage.blockedReason);
+      return { conversation, status: 'failed', output: '', error: `${usage.blockedReason} Raise the limit or switch to warn mode in Settings to continue.` };
+    }
+  }
   const preferences = await context.preferences.get(project.id);
   const chipPaths = (request.contextChips ?? [])
     .filter((chip): chip is Extract<ContextChip, { type: 'file' }> => chip.type === 'file')
@@ -315,8 +542,24 @@ async function runConversationAgent(
   };
   conversation.turns.push(userTurn);
 
-  const resumeSessionId = canResume ? conversation.agentSessionId : undefined;
+  const resumeSessionId = canResume && !conversation.compaction ? conversation.agentSessionId : undefined;
+  if (!resumeSessionId && conversation.compaction) delete conversation.agentSessionId;
   await context.conversations.save(conversation);
+  await context.recovery.begin({
+    conversationId: conversation.id,
+    projectId: project.id,
+    title: conversation.title,
+    agent: request.agent,
+    execution: executionMode,
+    route: request.route,
+    autonomy: request.autonomy,
+    prompt: request.prompt,
+    goal: activeGoal?.outcome ?? null,
+    startedAt: now,
+    updatedAt: now,
+    eventCount: 0,
+    checkpoint: checkpoint ?? null,
+  }).catch((error) => context.logger.warn('internal', 'Could not write recovery checkpoint', messageOf(error)));
 
   const memoryEvents: PersistedEvent[] = [];
   if (executionMode === 'api') {
@@ -334,6 +577,11 @@ async function runConversationAgent(
   }
 
   const emit = (event: AgentRunEvent['event']): void => {
+    const activity = describeEvent(event);
+    if (activity) void context.recovery.touch(conversation.id, activity).catch(() => undefined);
+    if (event.type === 'approval.request') {
+      void context.notifications.notifyApproval(conversation.id, conversation.title, event.title);
+    }
     const window = context.getMainWindow();
     if (!window || window.isDestroyed()) return;
     window.webContents.send('agents:event', { conversationId: conversation.id, event } satisfies AgentRunEvent);
@@ -352,6 +600,7 @@ async function runConversationAgent(
         request.prompt,
         authoritativeRules,
         selectedPaths,
+        conversation.compaction,
       )).text
     : (await buildConversationContext(
         context,
@@ -361,6 +610,7 @@ async function runConversationAgent(
         request.prompt,
         undefined,
         selectedPaths,
+        conversation.compaction,
       )).text;
   let effectivePrompt = buildSkillPrompt(selectedSkills, request.prompt);
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
@@ -372,24 +622,46 @@ async function runConversationAgent(
   const executionRequest = executionMode === 'cli'
     ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
     : preparedRequest;
-  const apiHistory = executionMode === 'api' && conversation.turns.length > 0
+  const historyTurns = conversation.compaction
+    ? conversation.turns.slice(conversation.compaction.throughTurnIndex + 1)
+    : conversation.turns;
+  const apiHistory = executionMode === 'api' && historyTurns.length > 0
     ? [
-        ...conversation.turns.slice(0, -1),
-        { ...conversation.turns[conversation.turns.length - 1], text: effectivePrompt },
+        ...historyTurns.slice(0, -1),
+        { ...historyTurns[historyTurns.length - 1], text: effectivePrompt },
       ]
     : undefined;
-  const execution = executionMode === 'api'
-    ? await context.directApi.run(
-        executionRequest,
-        project.path,
-        resumeSessionId,
-        emit,
-        approvals,
-        contextText,
-        apiHistory,
-        preferences?.customPermissions,
-      )
-    : await context.agents.run(executionRequest, project.path, resumeSessionId, emit, preferences?.customPermissions);
+  let execution: AgentExecutionResult;
+  // CLI runs claim the project so other agents see the work; API runs are claimed by their memory session.
+  const claimedProject = executionMode === 'cli' && (await cognitive1Ready(context))
+    ? await memoryProjectName(project.path, project.name)
+    : null;
+  if (claimedProject) {
+    await context.cognitive1.operation({
+      operation: 'active-claim',
+      payload: { agent: request.agent, project: claimedProject, what: conversation.title, files: selectedPaths.join(',') },
+    }).catch(() => undefined);
+  }
+  context.notifications.runStarted(conversation.id);
+  try {
+    execution = executionMode === 'api'
+      ? await context.directApi.run(
+          executionRequest,
+          project.path,
+          resumeSessionId,
+          emit,
+          approvals,
+          contextText,
+          apiHistory,
+          preferences?.customPermissions,
+        )
+      : await context.agents.run(executionRequest, project.path, resumeSessionId, emit, preferences?.customPermissions, request.model ?? settings.agentModels[request.agent]);
+  } finally {
+    context.notifications.runEnded(conversation.id);
+    await context.recovery.end(conversation.id).catch(() => undefined);
+    // Released on every exit path: completion, failure, cancellation and thrown errors.
+    if (claimedProject) await releaseAgentClaim(context, request.agent);
+  }
   if (executionMode === 'api' && execution.status === 'failed') {
     const ended = await finishMemorySession(
       context,
@@ -400,6 +672,10 @@ async function runConversationAgent(
   }
   execution.events.unshift(...memoryEvents);
   resolvePendingApprovals(context, conversation.id, false);
+  for (const check of agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)) {
+    await recordVerification(context.verification, project.id, project.path, check).catch(() => undefined);
+    await logRegression(context, project.path, project.name, check);
+  }
   conversation.updatedAt = new Date().toISOString();
   if (checkpoint) {
     const files = await diffFromCheckpoint(project.path, checkpoint).catch(() => []);
@@ -428,6 +704,18 @@ async function runConversationAgent(
   conversation.agentSessionId = execution.sessionId;
   await context.conversations.save(conversation);
 
+  const cancelled = execution.status === 'failed' && /cancel/i.test(execution.error ?? '');
+  void context.notifications.notifyRunFinished(
+    conversation.id,
+    conversation.title,
+    cancelled ? 'cancelled' : execution.status,
+    execution.error,
+  );
+  if (executionMode === 'api') {
+    const usage = summarizeUsage(await context.conversations.list(), settings.usageBudget, new Date(), conversation.id);
+    void context.notifications.notifyBudget(conversation.id, usage.limits);
+  }
+
   if (execution.error) {
     context.logger.error('agent_crash', `Agent ${request.agent} (${executionMode}) failed`, execution.error);
   } else {
@@ -440,6 +728,90 @@ async function runConversationAgent(
     output: execution.output,
     error: execution.error,
   };
+}
+
+/** Send test totals to Cognitive1's regression history when the runner's summary could be read. */
+async function logRegression(context: IpcContext, projectPath: string, projectName: string, check: RecordedCheck): Promise<void> {
+  const counts = parseTestCounts(check.output);
+  if (counts.passed === null || !(await cognitive1Ready(context))) return;
+  await context.cognitive1.tool({
+    tool: 'regression_log',
+    arguments: { project: await memoryProjectName(projectPath, projectName), passed: counts.passed, failed: counts.failed ?? 0, notes: `${check.source}: ${check.command}`.slice(0, 300), agent: 'kai-desktop' },
+  }).catch(() => undefined);
+}
+
+async function releaseAgentClaim(context: IpcContext, agent: string): Promise<void> {
+  if (!(await cognitive1Ready(context))) return;
+  await context.cognitive1.operation({ operation: 'active-release', payload: { agent } }).catch(() => undefined);
+}
+
+async function coordinationOverview(context: IpcContext) {
+  if (!(await cognitive1Ready(context))) return { available: false, claims: [], urgent: [] };
+  const [status, urgent] = await Promise.all([
+    context.cognitive1.operation({ operation: 'status' }).catch(() => null),
+    context.cognitive1.operation({ operation: 'urgent-list' }).catch(() => null),
+  ]);
+  return { available: true, claims: parseActiveClaims(status), urgent: parseUrgentNotes(urgent) };
+}
+
+/** Warn-only: asks Cognitive1 whether another agent has claimed any of these files. */
+async function coordinationPreflight(context: IpcContext, projectId: string, files: readonly string[]) {
+  if (files.length === 0 || !(await cognitive1Ready(context))) return { checked: false, conflicts: [] };
+  const project = await resolveProject(context, projectId, true);
+  try {
+    const result = await context.cognitive1.tool({
+      tool: 'conflict_check',
+      arguments: { files: files.join(','), project: await memoryProjectName(project.path, project.name) },
+    });
+    return { checked: true, conflicts: parseConflictText(mcpText(result)) };
+  } catch {
+    return { checked: false, conflicts: [] };
+  }
+}
+
+async function globalSearch(context: IpcContext, query: string) {
+  const needle = query.toLowerCase();
+  const hits: import('@kai/contracts').GlobalSearchHit[] = [];
+  for (const conversation of await context.conversations.list()) {
+    if (hits.length >= 8) break;
+    const inTitle = conversation.title.toLowerCase().includes(needle);
+    const turn = inTitle ? undefined : conversation.turns.find((item) => item.text.toLowerCase().includes(needle));
+    if (!inTitle && !turn) continue;
+    hits.push({
+      source: 'conversation',
+      label: conversation.title || 'Untitled conversation',
+      detail: turn ? turn.text.replace(/\s+/g, ' ').slice(0, 120) : conversation.updatedAt,
+      conversationId: conversation.id,
+    });
+  }
+  const brainSearched = await cognitive1Ready(context);
+  if (brainSearched) {
+    try {
+      const result = await context.cognitive1.tool({ tool: 'recall', arguments: { query, scope: 'all', max_results: 8 } });
+      for (const hit of parseRecallText(mcpText(result))) hits.push(hit);
+    } catch {
+      // Brain search is best effort; conversation matches are still returned.
+    }
+  }
+  return { query, brainSearched, hits };
+}
+
+async function interruptedRunRecap(context: IpcContext, conversationId: string) {
+  const record = await context.recovery.read(conversationId);
+  if (!record) throw new NotFoundError('That interrupted run is no longer available.');
+  const project = record.projectId ? (await context.projects.list()).find((item) => item.id === record.projectId) : undefined;
+  const changedFiles = record.checkpoint && project
+    ? (await diffFromCheckpoint(project.path, record.checkpoint).catch(() => [])).map((file) => file.path)
+    : [];
+  let brainRecap: string | null = null;
+  if (await cognitive1Ready(context)) {
+    try {
+      brainRecap = JSON.stringify(await context.cognitive1.operation({ operation: 'recover', payload: { project: project?.name ?? '' } }), null, 2).slice(0, 4_000);
+    } catch {
+      brainRecap = null;
+    }
+  }
+  return { conversationId, recap: buildRecap(record, changedFiles), brainRecap };
 }
 
 async function prepareMemorySession(
@@ -516,13 +888,19 @@ async function buildConversationContext(
   prompt: string,
   authoritativeRules?: string,
   selectedPaths: readonly string[] = [],
+  compaction?: ConversationRecord['compaction'],
 ) {
   const memories = await recallScopedMemories(context, projectPath, projectName, prompt);
-  return buildProjectContext(projectPath, {
+  const projectContext = await buildProjectContext(projectPath, {
     selectedPaths: [...new Set([...changedFilePaths(conversation), ...selectedPaths])].slice(-12),
     memories,
     authoritativeRules,
   });
+  if (!compaction) return projectContext;
+  return {
+    ...projectContext,
+    text: `${renderCompactionContext(compaction)}\n\n${projectContext.text}`,
+  };
 }
 
 async function renderContextChips(
@@ -725,6 +1103,31 @@ async function rejectCheckpointFile(
   conversation.updatedAt = new Date().toISOString();
   await context.conversations.save(conversation);
   return result;
+}
+
+async function rejectCheckpointHunks(
+  context: IpcContext,
+  conversationId: string,
+  turnId: string,
+  filePath: string,
+  hunkIds: readonly number[],
+): Promise<CheckpointRestoreResult> {
+  const { conversation, turn, project } = await checkpointContext(context, conversationId, turnId);
+  if (!turn.checkpoint) throw new Error('This turn has no Git checkpoint.');
+  const before = await readFileAtCheckpoint(project.path, turn.checkpoint, filePath).catch(() => '');
+  let current = { content: '', hash: null as string | null, eol: 'lf' as 'lf' | 'crlf', bom: false };
+  try {
+    const opened = await readProjectFile(project.path, filePath);
+    current = { content: opened.content, hash: opened.hash, eol: opened.eol, bom: opened.bom };
+  } catch {
+    // The agent deleted the file; rejecting a hunk recreates it from the checkpoint.
+  }
+  const reverted = revertHunks(before, current.content, hunkIds);
+  await writeProjectFile(project.path, filePath, reverted, { expectedHash: current.hash, eol: current.eol, bom: current.bom });
+  turn.fileChanges = await diffFromCheckpoint(project.path, turn.checkpoint).catch(() => turn.fileChanges ?? []);
+  conversation.updatedAt = new Date().toISOString();
+  await context.conversations.save(conversation);
+  return { restored: [filePath], deleted: [] };
 }
 
 async function restoreConversationCheckpoint(
@@ -1094,6 +1497,10 @@ function changedFilePaths(conversation: ConversationRecord | null): string[] {
   return paths.slice(-12);
 }
 
+export function cancelConversationRun(context: IpcContext, conversationId: string): boolean {
+  return cancelAgent(context, conversationId);
+}
+
 function cancelAgent(context: IpcContext, conversationId: string): boolean {
   resolvePendingApprovals(context, conversationId, false);
   return context.agents.cancel(conversationId) || context.directApi.cancel(conversationId);
@@ -1213,6 +1620,7 @@ function assertTrustedSender(url: string): void {
 
 function failureFor(error: unknown): IpcFailure {
   if (error instanceof NotFoundError) return { ok: false, error: { code: 'NOT_FOUND', message: error.message } };
+  if (error instanceof ConflictError) return { ok: false, error: { code: 'CONFLICT', message: error.message } };
   if (error && typeof error === 'object' && 'name' in error && error.name === 'ZodError') {
     return { ok: false, error: { code: 'INVALID_REQUEST', message: 'Request validation failed.' } };
   }
@@ -1223,10 +1631,149 @@ function failureFor(error: unknown): IpcFailure {
 }
 
 class NotFoundError extends Error {}
+class ConflictError extends Error {}
 
 function titleFromPrompt(prompt: string): string {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 64);
   return title || 'New conversation';
+}
+
+const MAX_COMPACTION_TRANSCRIPT_CHARS = 140_000;
+const MAX_COMPACTION_SUMMARY_CHARS = 30_000;
+
+async function compactConversation(
+  context: IpcContext,
+  conversationId: string,
+): Promise<ConversationRecord> {
+  const conversation = await context.conversations.get(conversationId);
+  if (!conversation) throw new NotFoundError('Conversation not found.');
+  if (conversation.turns.length === 0) throw new Error('There are no turns to compact yet.');
+  const project = conversation.projectId
+    ? (await context.projects.list()).find((candidate) => candidate.id === conversation.projectId)
+    : null;
+  if (!project) throw new Error('Open a project before compacting conversation context.');
+
+  const transcript = compactionTranscript(conversation);
+  const summary = await generateCompactionSummary(context, conversation, project.path, transcript);
+  const now = new Date().toISOString();
+  conversation.compaction = {
+    summary,
+    createdAt: now,
+    throughTurnIndex: conversation.turns.length - 1,
+    originalTurns: conversation.turns.length,
+    originalCharacters: transcript.length,
+  };
+  delete conversation.agentSessionId;
+  conversation.updatedAt = now;
+  await context.conversations.save(conversation);
+  return conversation;
+}
+
+async function generateCompactionSummary(
+  context: IpcContext,
+  conversation: ConversationRecord,
+  projectPath: string,
+  transcript: string,
+): Promise<string> {
+  const settings = await context.settings.load();
+  const agent = conversation.activeAgent ?? settings.defaultAgent;
+  const execution = conversation.execution ?? 'cli';
+  const route = conversation.route ?? 'direct';
+  const request: AgentRunRequest = {
+    conversationId: `compact_${crypto.randomUUID()}`,
+    prompt: compactionPrompt(transcript),
+    agent,
+    execution,
+    route,
+    autonomy: 'plan',
+  };
+
+  try {
+    if (execution === 'api' && (await context.directApi.capability()).available) {
+      const result = await context.directApi.run(request, projectPath);
+      if (result.status === 'completed' && result.output.trim()) {
+        return limitText(result.output.trim(), MAX_COMPACTION_SUMMARY_CHARS, 'summary');
+      }
+    } else if (execution === 'cli') {
+      const result = await context.agents.run(request, projectPath);
+      if (result.status === 'completed' && result.output.trim()) {
+        return limitText(result.output.trim(), MAX_COMPACTION_SUMMARY_CHARS, 'summary');
+      }
+    }
+  } catch (error) {
+    context.logger.error('agent_crash', 'Context compaction model call failed', undefined, error);
+  }
+
+  return deterministicCompactionSummary(conversation, transcript);
+}
+
+function compactionPrompt(transcript: string): string {
+  return [
+    'Compact the conversation below for continued software work.',
+    'Return a concise Markdown briefing with these sections: Objective, Decisions, Current state, Files and changes, Constraints, Open questions, Next action.',
+    'Preserve exact file paths, commands, errors, decisions, and user constraints. Do not call tools. Do not include a preamble or repeat the transcript.',
+    '',
+    'Conversation:',
+    transcript,
+  ].join('\n');
+}
+
+function compactionTranscript(conversation: ConversationRecord): string {
+  const parts: string[] = [];
+  if (conversation.compaction) {
+    parts.push(`Previous compaction summary:\n${conversation.compaction.summary}`);
+  }
+  const startIndex = conversation.compaction ? conversation.compaction.throughTurnIndex + 1 : 0;
+  for (const turn of conversation.turns.slice(startIndex)) {
+    const label = turn.role === 'user' ? 'User' : 'Assistant';
+    parts.push(`${label}:\n${turn.text.trim()}`);
+  }
+  return limitText(parts.join('\n\n'), MAX_COMPACTION_TRANSCRIPT_CHARS, 'older conversation context');
+}
+
+function deterministicCompactionSummary(conversation: ConversationRecord, transcript: string): string {
+  const userTurns = conversation.turns.filter((turn) => turn.role === 'user').slice(-12);
+  const assistantTurns = conversation.turns.filter((turn) => turn.role === 'assistant').slice(-8);
+  const files = changedFilePaths(conversation).slice(-30);
+  const objective = userTurns.at(-1)?.text ?? conversation.title;
+  const currentState = assistantTurns.at(-1)?.text ?? 'No assistant result has been recorded yet.';
+  return [
+    '## Objective',
+    limitText(objective, 2_000, 'objective'),
+    '',
+    '## Decisions and requests',
+    ...userTurns.map((turn) => `- ${limitText(turn.text.replace(/\s+/g, ' '), 500, 'request')}`),
+    '',
+    '## Current state',
+    limitText(currentState, 4_000, 'current state'),
+    '',
+    '## Files and changes',
+    ...(files.length > 0 ? files.map((file) => `- ${file}`) : ['- No tracked file changes recorded.']),
+    '',
+    '## Open questions',
+    '- Are there unresolved errors or decisions that still require confirmation?',
+    '',
+    '## Next action',
+    'Continue from the current state and verify the next change against the objective above.',
+    '',
+    `_Compacted ${transcript.length.toLocaleString()} transcript characters._`,
+  ].join('\n');
+}
+
+function renderCompactionContext(compaction: NonNullable<ConversationRecord['compaction']>): string {
+  return [
+    '## Compacted conversation context',
+    'This summary replaces older turns from the active conversation. The full transcript remains stored locally for audit and review.',
+    `Compacted at: ${compaction.createdAt}`,
+    '',
+    compaction.summary,
+  ].join('\n');
+}
+
+function limitText(value: string, maxCharacters: number, label: string): string {
+  if (value.length <= maxCharacters) return value;
+  const suffix = `\n\n[${label} truncated by KAI compaction]`;
+  return `${value.slice(0, Math.max(0, maxCharacters - suffix.length)).trimEnd()}${suffix}`;
 }
 
 async function importBrain(context: IpcContext) {
@@ -1241,7 +1788,15 @@ async function importBrain(context: IpcContext) {
     : await dialog.showOpenDialog(options);
   if (selection.canceled || !selection.filePaths[0]) return null;
 
-  const selectedRoot = path.resolve(selection.filePaths[0]);
+  return importBrainFromDirectory(context, selection.filePaths[0]);
+}
+
+export async function importBrainFromDirectory(
+  context: IpcContext,
+  selectedDirectory: string,
+  restartService = true,
+) {
+  const selectedRoot = path.resolve(selectedDirectory);
   const nestedBrain = path.join(selectedRoot, 'brain');
   const sourcePath = await directoryExists(nestedBrain) ? nestedBrain : selectedRoot;
   const settings = await context.settings.load();
@@ -1252,7 +1807,7 @@ async function importBrain(context: IpcContext) {
   }
 
   const result = await copyMissingFiles(sourcePath, targetPath);
-  if (settings.cognitive1.enabled) {
+  if (restartService && settings.cognitive1.enabled) {
     await context.services.restart('cognitive1');
   }
   return { sourcePath, targetPath, ...result };
@@ -1297,6 +1852,167 @@ async function copyMissingFiles(sourcePath: string, targetPath: string): Promise
     }
   }
   return result;
+}
+
+async function exportProxyConfig(context: IpcContext): Promise<ProxyConfigTransferResult> {
+  const owner = context.getMainWindow();
+  const options = {
+    title: 'Export Universal Proxy configuration',
+    buttonLabel: 'Export',
+    defaultPath: 'kai-universal-proxy-config.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  };
+  const selection = owner
+    ? await dialog.showSaveDialog(owner, options)
+    : await dialog.showSaveDialog(options);
+  if (selection.canceled || !selection.filePath) return { canceled: true };
+
+  const settings = await context.settings.load();
+  const payload = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    proxy: settings.proxy,
+  };
+  await fs.writeFile(selection.filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  context.logger.info('internal', 'Universal Proxy configuration exported', selection.filePath);
+  return { canceled: false, path: selection.filePath, imported: false };
+}
+
+async function importProxyConfig(context: IpcContext): Promise<ProxyConfigTransferResult> {
+  const owner = context.getMainWindow();
+  const options: OpenDialogOptions = {
+    title: 'Import Universal Proxy configuration',
+    buttonLabel: 'Import',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  };
+  const selection = owner
+    ? await dialog.showOpenDialog(owner, options)
+    : await dialog.showOpenDialog(options);
+  if (selection.canceled || !selection.filePaths[0]) return { canceled: true };
+
+  const filePath = selection.filePaths[0];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown;
+  } catch {
+    throw new Error('The selected Universal Proxy configuration is not valid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('The selected file does not contain Universal Proxy configuration.');
+  }
+  const record = parsed as Record<string, unknown>;
+  const rawProxy = record.proxy ?? record;
+  const imported = proxyServiceSettingsSchema.parse(rawProxy);
+  const settings = await context.settings.load();
+  const proxyWasReady = (await context.services.status()).some(
+    (service) => service.kind === 'universalProxy' && service.status === 'ready',
+  );
+  const merged = { ...settings, proxy: { ...settings.proxy, ...imported } };
+  await context.settings.save(merged);
+  if (proxyWasReady && merged.proxy.enabled) await context.services.restart('universalProxy', merged);
+  else await context.services.syncFromSettings(merged);
+  context.logger.info('internal', 'Universal Proxy configuration imported', filePath);
+  return { canceled: false, path: filePath, imported: true };
+}
+
+async function copyProxyEnv(context: IpcContext, agent: ProxyAgentId): Promise<ProxyEnvCopyResult> {
+  const settings = await context.settings.load();
+  const value = proxyEnvironmentVariable(settings, agent);
+  clipboard.writeText(value);
+  return { copied: true, value };
+}
+
+async function launchProxyAgent(
+  context: IpcContext,
+  agent: 'claude' | 'codex',
+): Promise<ProxyLaunchResult> {
+  const settings = await context.settings.load();
+  if (!settings.proxy.enabled) throw new Error('Enable the Universal Proxy before launching a routed agent.');
+  const routes = await context.proxyRouting.routes();
+  const current = routes.find((route) => route.agentId === agent);
+  if (!current || current.route !== 'proxy') {
+    const result = await context.proxyRouting.action(agent, 'route');
+    if (!result.success) throw new Error(result.error || `Could not route ${agent} through the proxy.`);
+  }
+
+  const command = agent;
+  const environment = {
+    ...process.env,
+    ...(agent === 'claude'
+      ? { ANTHROPIC_BASE_URL: proxyAgentBaseUrl(settings, 'claude') }
+      : { OPENAI_BASE_URL: proxyAgentBaseUrl(settings, 'codex') }),
+  };
+  const project = settings.activeProjectId
+    ? (await context.projects.list()).find((candidate) => candidate.id === settings.activeProjectId)
+    : null;
+  launchTerminal(command, environment, project?.path);
+  return {
+    launched: true,
+    agent,
+    command,
+    detail: `Opened ${agent} in a terminal with the Universal Proxy route applied.`,
+  };
+}
+
+function launchTerminal(command: string, environment: NodeJS.ProcessEnv, cwd?: string): void {
+  if (process.platform === 'win32') {
+    const child = spawn('cmd.exe', ['/c', 'start', '', 'cmd.exe', '/k', command], {
+      cwd,
+      env: environment,
+      detached: true,
+      windowsHide: false,
+      stdio: 'ignore',
+    });
+    child.unref();
+    return;
+  }
+  const terminal = process.platform === 'darwin'
+    ? spawn('open', ['-a', 'Terminal', command], { cwd, env: environment, detached: true, stdio: 'ignore' })
+    : spawn('x-terminal-emulator', ['-e', command], { cwd, env: environment, detached: true, stdio: 'ignore' });
+  terminal.unref();
+}
+
+function proxyEnvironmentVariable(settings: AppSettings, agent: ProxyAgentId): string {
+  const name = agent === 'claude'
+    ? 'ANTHROPIC_BASE_URL'
+    : agent === 'codex'
+      ? 'OPENAI_BASE_URL'
+      : agent === 'qwen'
+        ? 'QWEN_BASE_URL'
+        : 'KIMI_BASE_URL';
+  return `${name}=${proxyAgentBaseUrl(settings, agent)}`;
+}
+
+async function startProxyLiveTail(context: IpcContext): Promise<boolean> {
+  stopProxyLiveTail(context);
+  const owner = context.getMainWindow();
+  if (!owner) throw new Error('The KAI window is not available.');
+  const controller = new AbortController();
+  context.proxyLiveTails.set(owner.webContents.id, controller);
+  void context.proxy.watchLive((event) => {
+    if (!owner.isDestroyed()) owner.webContents.send('proxy:live-event', event satisfies ProxyLiveEvent);
+  }, controller.signal).catch((error) => {
+    context.proxyLiveTails.delete(owner.webContents.id);
+    if (!controller.signal.aborted) {
+      context.logger.warn('proxy_error', 'Universal Proxy live tail stopped', messageOf(error));
+    }
+  });
+  return true;
+}
+
+function stopProxyLiveTail(context: IpcContext): boolean {
+  let stopped = false;
+  for (const controller of context.proxyLiveTails.values()) {
+    controller.abort();
+    stopped = true;
+  }
+  context.proxyLiveTails.clear();
+  return stopped;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export type DesktopBridge = KaiDesktopBridge;

@@ -1,6 +1,10 @@
 import * as http from 'node:http';
 import * as net from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { z } from 'zod';
 import { Cognitive1Client } from '../apps/desktop/src/main/cognitive1-client';
 import { AuthenticatedLoopbackGateway } from '../packages/integrations/src';
 
@@ -13,6 +17,150 @@ afterEach(async () => {
 });
 
 describe('desktop Cognitive1 brain client', () => {
+  it('routes allowlisted operations and normalizes cost summaries', async () => {
+    const token = 'brain-operation-test-token';
+    const received: Array<{ method: string | undefined; url: string | undefined; body: unknown }> = [];
+    const upstream = http.createServer(async (request, response) => {
+      const body = await readBody(request);
+      received.push({ method: request.method, url: request.url, body });
+      if (request.url?.startsWith('/api/brain/export')) {
+        return json(response, { exported: '2026-09-23', totalEntries: 1, entries: [] });
+      }
+      if (request.url === '/api/costs' && request.method === 'POST') {
+        return json(response, { ok: true, added: 1 });
+      }
+      if (request.url === '/api/costs' && request.method === 'DELETE') {
+        return json(response, { ok: true, cleared: true });
+      }
+      if (request.url?.startsWith('/api/costs')) {
+        return json(response, {
+          days: 90,
+          totalUsd: 1.2345,
+          totalCalls: 2,
+          totalInputTokens: 12,
+          totalOutputTokens: 8,
+          byModel: {
+            'model-b': { usd: 0.4, calls: 1, inputTokens: 4, outputTokens: 2 },
+            'model-a': { usd: 0.8, calls: 1, inputTokens: 8, outputTokens: 6 },
+          },
+          breakdown: [
+            { period: '2026-W37', usd: 0.4, calls: 1, inputTokens: 4, outputTokens: 2 },
+            { period: '2026-W38', usd: 0.8, calls: 1, inputTokens: 8, outputTokens: 6 },
+          ],
+        });
+      }
+      json(response, { error: 'Not found' }, 404);
+    });
+    await listen(upstream, 0);
+    servers.push(upstream);
+    const publicPort = await availablePort();
+    const gateway = new AuthenticatedLoopbackGateway({
+      listenEndpoint: `http://127.0.0.1:${publicPort}`,
+      upstreamEndpoint: `http://127.0.0.1:${addressOf(upstream).port}`,
+      token,
+    });
+    gateways.push(gateway);
+    await gateway.start();
+    const client = new Cognitive1Client({
+      access: {
+        loopbackAccess: async () => ({ endpoint: `http://127.0.0.1:${publicPort}`, token }),
+      },
+    });
+
+    await expect(client.operation({ operation: 'brain-export', payload: { format: 'md' } })).resolves.toMatchObject({
+      totalEntries: 1,
+    });
+    expect(received.at(-1)).toEqual({
+      method: 'GET',
+      url: '/api/brain/export?format=md',
+      body: undefined,
+    });
+
+    await expect(client.operation({ operation: 'cost-log', payload: { model: 'deepseek-chat' } })).resolves.toEqual({
+      ok: true,
+      added: 1,
+    });
+    expect(received.at(-1)).toMatchObject({ method: 'POST', url: '/api/costs', body: { model: 'deepseek-chat' } });
+
+    await expect(client.operation({ operation: 'cost-clear' })).resolves.toEqual({ ok: true, cleared: true });
+    expect(received.at(-1)).toEqual({ method: 'DELETE', url: '/api/costs', body: undefined });
+
+    await expect(client.costSummary('weekly')).resolves.toMatchObject({
+      period: 'weekly',
+      days: 90,
+      totalCostUsd: 1.2345,
+      models: [
+        { model: 'model-a', costUsd: 0.8 },
+        { model: 'model-b', costUsd: 0.4 },
+      ],
+      breakdown: [
+        { period: '2026-W38', costUsd: 0.8 },
+        { period: '2026-W37', costUsd: 0.4 },
+      ],
+    });
+    expect(received.at(-1)?.url).toBe('/api/costs?days=90&breakdown=weekly');
+  });
+
+  it('invokes an authenticated allowlisted Cognitive1 MCP tool', async () => {
+    const token = 'brain-mcp-test-token';
+    const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
+    const upstream = http.createServer(async (request, response) => {
+      if (!request.url?.startsWith('/mcp')) return json(response, { error: 'Not found' }, 404);
+      const body = request.method === 'POST' ? await readBody(request) : undefined;
+      const sessionId = typeof request.headers['mcp-session-id'] === 'string'
+        ? request.headers['mcp-session-id']
+        : undefined;
+      if (sessionId && sessions.has(sessionId)) {
+        await sessions.get(sessionId)!.transport.handleRequest(request, response, body);
+        return;
+      }
+      const server = new McpServer({ name: 'cognitive1-test', version: '1.0.0' });
+      server.registerTool(
+        'brain_status',
+        {
+          description: 'Test status tool.',
+          inputSchema: { project: z.string().optional() },
+          annotations: { readOnlyHint: true },
+        },
+        async ({ project }) => ({
+          content: [{ type: 'text', text: JSON.stringify({ project: project ?? 'global', status: 'ok' }) }],
+          structuredContent: { project: project ?? 'global', status: 'ok' },
+        }),
+      );
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => sessions.set(id, { server, transport }),
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) sessions.delete(transport.sessionId);
+      };
+      await server.connect(transport);
+      await transport.handleRequest(request, response, body);
+    });
+    await listen(upstream, 0);
+    servers.push(upstream);
+    const publicPort = await availablePort();
+    const gateway = new AuthenticatedLoopbackGateway({
+      listenEndpoint: `http://127.0.0.1:${publicPort}`,
+      upstreamEndpoint: `http://127.0.0.1:${addressOf(upstream).port}`,
+      token,
+    });
+    gateways.push(gateway);
+    await gateway.start();
+    const client = new Cognitive1Client({
+      access: {
+        loopbackAccess: async () => ({ endpoint: `http://127.0.0.1:${publicPort}`, token }),
+      },
+    });
+
+    await expect(client.tool({ tool: 'brain_status', arguments: { project: 'KAI' } })).resolves.toMatchObject({
+      content: [{ type: 'text', text: JSON.stringify({ project: 'KAI', status: 'ok' }) }],
+      structuredContent: { project: 'KAI', status: 'ok' },
+    });
+    await expect(client.tool({ tool: 'not_allowed' as never })).rejects.toThrow();
+    await client.dispose();
+  });
+
   it('normalizes overview and recall data without exposing the gateway token upstream', async () => {
     const token = 'brain-client-test-token';
     const observedAuthorization: Array<string | undefined> = [];

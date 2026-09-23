@@ -1,5 +1,9 @@
 import {
+  Activity,
   Brain,
+  Code2,
+  GitBranch,
+  Kanban,
   Check,
   ChevronDown,
   Clock3,
@@ -8,21 +12,24 @@ import {
   History,
   Layers3,
   ListChecks,
-  Moon,
+  Palette,
   PanelLeftClose,
   PanelRightClose,
   Plus,
   Route,
   Search,
   Settings,
-  Sun,
   Trash2,
+  Wallet,
   Workflow,
 } from 'lucide-react';
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import type { ConversationRecord, ProjectRecord } from '@kai/contracts';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { THEME_MODES, type ConversationRecord, type ProjectRecord, type ThemeMode } from '@kai/contracts';
 import type { ViewId } from '../types';
 import { relativeTime } from '../types';
+
+const themeLabel = (theme: ThemeMode): string => THEME_MODES.find((item) => item.id === theme)?.label ?? theme;
+const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.findIndex((item) => item.id === theme) + 1) % THEME_MODES.length]!.id;
 
 export const navigation: Array<{ id: ViewId; label: string; icon: typeof Brain }> = [
   { id: 'workspace', label: 'Workspace', icon: Layers3 },
@@ -32,6 +39,11 @@ export const navigation: Array<{ id: ViewId; label: string; icon: typeof Brain }
   { id: 'proxy', label: 'Universal Proxy', icon: Route },
   { id: 'workflows', label: 'Workflows', icon: Workflow },
   { id: 'history', label: 'History', icon: History },
+  { id: 'code', label: 'Code', icon: Code2 },
+  { id: 'tasks', label: 'Tasks', icon: Kanban },
+  { id: 'git', label: 'Git', icon: GitBranch },
+  { id: 'usage', label: 'Usage', icon: Wallet },
+  { id: 'operations', label: 'Operations', icon: Activity },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -40,6 +52,8 @@ export interface CommandPaletteItem {
   label: string;
   description: string;
   shortcut?: string;
+  /** Heading shown above the first item of each group (used for search results). */
+  group?: string;
   run: () => void | Promise<void>;
 }
 
@@ -70,15 +84,15 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onToggleTheme, onOpenSearch, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: 'dark' | 'light'; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onToggleTheme, onOpenSearch, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleContext: () => void }): ReactNode {
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
         <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} />
       </div>
       <div className="titlebar-actions">
-        <button type="button" className="icon-button" title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} onClick={onToggleTheme}>
-          {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        <button type="button" className="icon-button" title={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} aria-label={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} onClick={onToggleTheme}>
+          <Palette size={17} />
         </button>
         <button type="button" className="icon-button" title="Command palette (Ctrl+K)" aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
         <button type="button" className="icon-button" title={rightOpen ? 'Hide context panel (Ctrl+B)' : 'Show context panel (Ctrl+B)'} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
@@ -89,11 +103,38 @@ export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, 
   );
 }
 
-export function CommandPalette({ items, onClose }: { items: CommandPaletteItem[]; onClose: () => void }): ReactNode {
+export function CommandPalette({ items, onClose, onSearch }: { items: CommandPaletteItem[]; onClose: () => void; onSearch?: (query: string) => Promise<CommandPaletteItem[]> }): ReactNode {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [found, setFound] = useState<CommandPaletteItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchRef = useRef(onSearch);
+  searchRef.current = onSearch;
   const normalized = query.trim().toLowerCase();
-  const visible = items.filter((item) => !normalized || `${item.label} ${item.description}`.toLowerCase().includes(normalized));
+  const commands = items.filter((item) => !normalized || `${item.label} ${item.description}`.toLowerCase().includes(normalized));
+  const visible = [...commands, ...(normalized.length >= 2 ? found : [])];
+
+  // Search conversations and the C1 brain as the user types; commands stay instant.
+  useEffect(() => {
+    const search = searchRef.current;
+    if (!search || normalized.length < 2) {
+      setFound([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      search(normalized)
+        .then((results) => { if (!cancelled) setFound(results); })
+        .catch(() => { if (!cancelled) setFound([]); })
+        .finally(() => { if (!cancelled) setSearching(false); });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [normalized]);
   const selectedIndex = Math.min(activeIndex, Math.max(0, visible.length - 1));
 
   useEffect(() => {
@@ -138,15 +179,16 @@ export function CommandPalette({ items, onClose }: { items: CommandPaletteItem[]
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Type a command"
+            placeholder={onSearch ? 'Type a command, or search conversations and the brain' : 'Type a command'}
             aria-label="Search commands"
           />
           <kbd>Esc</kbd>
         </label>
         <div className="command-palette-list" role="listbox" aria-label="Commands">
           {visible.map((item, index) => (
+            <Fragment key={item.id}>
+            {item.group && item.group !== visible[index - 1]?.group && <div className="command-palette-group">{item.group}</div>}
             <button
-              key={item.id}
               type="button"
               role="option"
               aria-selected={index === selectedIndex}
@@ -157,8 +199,10 @@ export function CommandPalette({ items, onClose }: { items: CommandPaletteItem[]
               <span><strong>{item.label}</strong><small>{item.description}</small></span>
               {item.shortcut && <kbd>{item.shortcut}</kbd>}
             </button>
+            </Fragment>
           ))}
-          {visible.length === 0 && <div className="command-palette-empty">No matching commands</div>}
+          {searching && <div className="command-palette-empty">Searching…</div>}
+          {!searching && visible.length === 0 && <div className="command-palette-empty">No matching commands</div>}
         </div>
       </section>
     </div>

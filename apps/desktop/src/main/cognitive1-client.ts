@@ -1,10 +1,14 @@
 import { z } from 'zod';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
   brainEntrySchema,
   brainFieldUpdateInputSchema,
   brainFieldUpdateResultSchema,
   brainOverviewSchema,
   brainSearchInputSchema,
+  cognitive1McpToolInputSchema,
+  cognitive1OperationInputSchema,
   type AgentId,
   type BrainEntry,
   type BrainEntryType,
@@ -12,6 +16,13 @@ import {
   type BrainFieldUpdateResult,
   type BrainOverview,
   type BrainSearchInput,
+  type Cognitive1Operation,
+  type Cognitive1OperationInput,
+  type Cognitive1OperationResult,
+  type Cognitive1McpToolInput,
+  type Cognitive1McpToolResult,
+  type ProxyCostPeriod,
+  type ProxyCostSummary,
 } from '@kai/contracts';
 import type { ServiceKind } from '@kai/contracts';
 
@@ -79,6 +90,36 @@ const rawFieldUpdateResponseSchema = z.object({
   title: z.string().min(1),
   field: z.string().min(1),
   value: z.string(),
+});
+
+const rawCostSummarySchema = z.object({
+  days: z.number().int().nonnegative().default(0),
+  totalUsd: z.number().nonnegative().default(0),
+  totalCalls: z.number().int().nonnegative().default(0),
+  totalInputTokens: z.number().int().nonnegative().default(0),
+  totalOutputTokens: z.number().int().nonnegative().default(0),
+  byModel: z
+    .record(
+      z.string(),
+      z.object({
+        usd: z.number().nonnegative().default(0),
+        calls: z.number().int().nonnegative().default(0),
+        inputTokens: z.number().int().nonnegative().default(0),
+        outputTokens: z.number().int().nonnegative().default(0),
+      }),
+    )
+    .default({}),
+  breakdown: z
+    .array(
+      z.object({
+        period: z.string(),
+        usd: z.number().nonnegative().default(0),
+        calls: z.number().int().nonnegative().default(0),
+        inputTokens: z.number().int().nonnegative().default(0),
+        outputTokens: z.number().int().nonnegative().default(0),
+      }),
+    )
+    .default([]),
 });
 
 const rawSessionStartResponseSchema = z.object({
@@ -161,16 +202,20 @@ export interface Cognitive1HandoffResult {
 
 export class Cognitive1Client {
   private readonly timeoutMs: number;
+  private mcpConnection: { fingerprint: string; client: Client } | undefined;
 
   constructor(private readonly options: Cognitive1ClientOptions) {
-    this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
   async overview(): Promise<BrainOverview> {
-    const [status, quality] = await Promise.all([
-      this.requestJson('/api/status', undefined, rawStatusSchema),
-      this.requestJson('/api/brain/quality', undefined, rawQualitySchema),
-    ]);
+    const status = await this.requestJson('/api/status', undefined, rawStatusSchema);
+    // Cognitive1's quality scan compares every entry title with every other one.
+    // On a mature brain that blocks the daemon event loop long enough to stall
+    // search and edits, so only run it eagerly while the index is small.
+    const quality = status.totalEntries <= 300
+      ? await this.requestJson('/api/brain/quality', undefined, rawQualitySchema)
+      : null;
 
     const typeCounts: Record<BrainEntryType, number> = {
       bugs: 0,
@@ -226,6 +271,68 @@ export class Cognitive1Client {
       field: response.field,
       value: response.value,
     });
+  }
+
+  async costSummary(period: Exclude<ProxyCostPeriod, 'session'>): Promise<ProxyCostSummary> {
+    const days = period === 'daily' ? 30 : period === 'weekly' ? 90 : 365;
+    const response = await this.requestJson(
+      `/api/costs?days=${days}&breakdown=${period}`,
+      undefined,
+      rawCostSummarySchema,
+    );
+    return {
+      period,
+      days: response.days,
+      totalCostUsd: nonNegative(response.totalUsd),
+      totalCalls: nonNegativeInteger(response.totalCalls),
+      totalInputTokens: nonNegativeInteger(response.totalInputTokens),
+      totalOutputTokens: nonNegativeInteger(response.totalOutputTokens),
+      models: Object.entries(response.byModel)
+        .map(([model, usage]) => ({
+          model,
+          costUsd: nonNegative(usage.usd),
+          calls: nonNegativeInteger(usage.calls),
+          inputTokens: nonNegativeInteger(usage.inputTokens),
+          outputTokens: nonNegativeInteger(usage.outputTokens),
+        }))
+        .sort((left, right) => right.costUsd - left.costUsd || left.model.localeCompare(right.model)),
+      breakdown: response.breakdown
+        .map((row) => ({
+          period: row.period,
+          costUsd: nonNegative(row.usd),
+          calls: nonNegativeInteger(row.calls),
+          inputTokens: nonNegativeInteger(row.inputTokens),
+          outputTokens: nonNegativeInteger(row.outputTokens),
+        }))
+        .sort((left, right) => right.period.localeCompare(left.period)),
+    };
+  }
+
+  async operation(input: Cognitive1OperationInput): Promise<Cognitive1OperationResult> {
+    const request = cognitive1OperationInputSchema.parse(input);
+    const route = operationRoute(request.operation, request.payload);
+    return this.requestJson(route.path, { method: route.method, body: route.body }, z.unknown());
+  }
+
+  async tool(input: Cognitive1McpToolInput): Promise<Cognitive1McpToolResult> {
+    const request = cognitive1McpToolInputSchema.parse(input);
+    const client = await this.mcpClient();
+    const result = await client.callTool(
+      { name: request.tool, arguments: request.arguments },
+      undefined,
+      { timeout: this.timeoutMs },
+    );
+    return {
+      content: result.content,
+      ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+      ...(result.isError === undefined ? {} : { isError: result.isError }),
+    };
+  }
+
+  async dispose(): Promise<void> {
+    const connection = this.mcpConnection;
+    this.mcpConnection = undefined;
+    await connection?.client.close().catch(() => undefined);
   }
 
   async startSession(input: Cognitive1SessionStartInput): Promise<Cognitive1SessionStartResult> {
@@ -331,6 +438,39 @@ export class Cognitive1Client {
       clearTimeout(timeout);
     }
   }
+
+  private async mcpClient(): Promise<Client> {
+    const access = await this.options.access.loopbackAccess('cognitive1');
+    const fingerprint = `${access.endpoint}\n${access.token}`;
+    if (this.mcpConnection?.fingerprint === fingerprint) return this.mcpConnection.client;
+
+    const previous = this.mcpConnection;
+    this.mcpConnection = undefined;
+    if (previous) await previous.client.close().catch(() => undefined);
+
+    const transport = new StreamableHTTPClientTransport(new URL('/mcp', access.endpoint), {
+      requestInit: {
+        headers: {
+          Authorization: `Bearer ${access.token}`,
+        },
+      },
+      reconnectionOptions: {
+        maxReconnectionDelay: 5_000,
+        initialReconnectionDelay: 250,
+        reconnectionDelayGrowFactor: 1.5,
+        maxRetries: 1,
+      },
+    });
+    const client = new Client({ name: 'KAI Desktop', version: '0.1.0' });
+    try {
+      await client.connect(transport, { timeout: this.timeoutMs });
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      throw error;
+    }
+    this.mcpConnection = { fingerprint, client };
+    return client;
+  }
 }
 
 function toBrainEntry(raw: z.infer<typeof rawRecallEntrySchema>): BrainEntry {
@@ -349,6 +489,108 @@ function toBrainEntry(raw: z.infer<typeof rawRecallEntrySchema>): BrainEntry {
 
 function isBrainEntryType(value: string): value is BrainEntryType {
   return value === 'bugs' || value === 'decisions' || value === 'gotchas' || value === 'patterns';
+}
+
+function nonNegative(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function nonNegativeInteger(value: number): number {
+  return Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+}
+
+function operationRoute(
+  operation: Cognitive1Operation,
+  payload: Record<string, unknown>,
+): { path: string; method: string; body?: Record<string, unknown> } {
+  const get = (path: string, query: Record<string, unknown> = payload): { path: string; method: string } => ({
+    path: withQuery(path, query),
+    method: 'GET',
+  });
+  const post = (path: string, body: Record<string, unknown> = payload): { path: string; method: string; body: Record<string, unknown> } => ({
+    path,
+    method: 'POST',
+    body,
+  });
+
+  switch (operation) {
+    case 'status': return get('/api/status', {});
+    case 'metrics': return get('/api/metrics', {});
+    case 'self-review': return post('/api/self-review', {});
+    case 'brain-learn': return post('/api/brain/learn');
+    case 'brain-auto-learn': return post('/api/brain/auto-learn');
+    case 'brain-prune': return post('/api/brain/prune');
+    case 'brain-ping': return get('/api/brain/ping', {});
+    case 'brain-export': return get('/api/brain/export', { format: payload.format ?? 'json' });
+    case 'brain-drafts': return get('/api/brain/drafts', {});
+    case 'brain-draft-approve': return post('/api/brain/drafts/approve');
+    case 'brain-draft-approve-all': return post('/api/brain/drafts/approve-all', {});
+    case 'brain-draft-reject': return post('/api/brain/drafts/reject');
+    case 'brain-draft-type': return post('/api/brain/drafts/type');
+    case 'brain-recall-feedback': return post('/api/brain/recall-feedback');
+    case 'active-claim': return post('/api/active/claim');
+    case 'active-release': return post('/api/active/release');
+    case 'active-release-all': return post('/api/active/release-all');
+    case 'handoffs': return get('/api/handoffs');
+    case 'handoff-claim': return post('/api/handoff/claim');
+    case 'handoff-suggest': return get('/api/brain/handoff/suggest');
+    case 'urgent-list': return get('/api/urgent', {});
+    case 'urgent-set': return post('/api/urgent');
+    case 'urgent-clear': return post('/api/urgent/clear');
+    case 'todo-projects': return get('/api/todo-projects', {});
+    case 'todo-project-create': return post('/api/todo-projects');
+    case 'task-create': return post('/api/task/create');
+    case 'tasks': return get('/api/tasks');
+    case 'task-claim': return post('/api/task/claim');
+    case 'task-complete': return post('/api/task/complete');
+    case 'reviews': return get('/api/reviews');
+    case 'regressions': return get('/api/regressions');
+    case 'costs': return get('/api/costs');
+    case 'cost-log': return post('/api/costs');
+    case 'cost-clear': return { path: '/api/costs', method: 'DELETE' };
+    case 'recap-check': return get('/api/recap-check');
+    case 'recap-check-log': return post('/api/recap-check');
+    case 'graph': return get('/api/graph');
+    case 'skills': return get('/api/skills', {});
+    case 'skill-content': return get('/api/skill/content');
+    case 'skill-save': return post('/api/skill/save');
+    case 'overwatch-status': return get('/api/overwatch/status', {});
+    case 'overwatch-config': return post('/api/overwatch/config');
+    case 'overwatch-insights': return get('/api/overwatch/insights', {});
+    case 'overwatch-run': return post('/api/overwatch/run', {});
+    case 'overwatch-audit': return post('/api/overwatch/audit', {});
+    case 'overwatch-resolve-preview': return post('/api/overwatch/resolve-preview', {});
+    case 'overwatch-resolve': return post('/api/overwatch/resolve', {});
+    case 'overwatch-triage-recovery': return post('/api/overwatch/triage-recovery', {});
+    case 'overwatch-release-stale': return post('/api/overwatch/release-stale', {});
+    case 'overwatch-release-one': return post('/api/overwatch/release-one');
+    case 'overwatch-semantic-dupes': return post('/api/overwatch/semantic-dupes', {});
+    case 'overwatch-auto-fix': return post('/api/overwatch/auto-fix');
+    case 'overwatch-cross-ref-bugs': return post('/api/overwatch/cross-ref-bugs', {});
+    case 'overwatch-heuristic-clean': return post('/api/overwatch/heuristic-clean', {});
+    case 'overwatch-distill-kernels': return post('/api/overwatch/distill-kernels', {});
+    case 'overwatch-push-to-memory': return post('/api/overwatch/push-to-memory', {});
+    case 'integration-status': return get('/api/projects/integration-status', {});
+    case 'deploy-c1': return post('/api/projects/deploy-c1', {});
+    case 'project-update': return post('/api/project/update');
+    case 'git-status': return get('/api/git-status', {});
+    case 'checkpoint': return post('/api/checkpoint');
+    case 'recover': return get('/api/recover');
+    case 'suggest': return get('/api/suggest');
+    case 'theme': return get('/api/theme', {});
+    case 'theme-save': return post('/api/theme');
+  }
+}
+
+function withQuery(path: string, query: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) params.set(key, value.map(String).join(','));
+    else if (typeof value !== 'object') params.set(key, String(value));
+  }
+  const suffix = params.toString();
+  return suffix ? `${path}?${suffix}` : path;
 }
 
 async function readJson(response: Response): Promise<unknown> {

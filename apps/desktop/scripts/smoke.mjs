@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import net from 'node:net';
@@ -54,6 +54,7 @@ try {
       ...launchEnvironment,
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       KAI_DESKTOP_USER_DATA: userDataDirectory,
+      KAI_DESKTOP_NOTIFICATIONS: 'off',
     },
     timeout: 30_000,
   });
@@ -91,7 +92,12 @@ try {
     if (services.find((service) => service.kind === 'universalProxy')?.status !== 'ready') {
       throw new Error('Universal Agent Proxy did not reach ready state in the desktop host.');
     }
+    const repairedSettings = JSON.parse(await readFile(path.join(userDataDirectory, 'settings.json'), 'utf8'));
+    if (repairedSettings.proxy?.defaultModel !== 'deepseek-chat') {
+      throw new Error(`Deprecated proxy model was not repaired: ${JSON.stringify(repairedSettings.proxy)}`);
+    }
     const proxyAccess = await verifyAuthenticatedLoopback(electronApp, page, enginePorts);
+    await verifyOverwatchFlow(electronApp, page, enginePorts.cognitive1);
     await page.screenshot({ path: path.join(outputDirectory, 'services-ready.png') });
     await verifyBrainFlow(electronApp, page, enginePorts.cognitive1);
     await assertPageContentFillsWidth(page, '.brain-panel');
@@ -104,18 +110,26 @@ try {
     await resizeWindow(electronApp, 1440, 920);
     await verifyProxyFlow(page, proxyAccess, enginePorts.universalProxy);
     await page.getByRole('button', { name: 'Universal Proxy' }).click();
-    await page.getByRole('heading', { name: 'Ready' }).waitFor();
-    await page.getByRole('heading', { name: 'Proxy activity' }).waitFor();
+    const proxyPanel = page.locator('.proxy-control-centre');
+    await proxyPanel.getByRole('heading', { name: 'Proxy control centre' }).waitFor();
+    await proxyPanel.getByRole('button', { name: 'History and replay' }).click();
+    await page.locator('.proxy-request-row').first().waitFor();
     await page.getByText('smoke-model').first().waitFor();
     await page.locator('.proxy-request-row').first().click();
     await page.getByText('Request detail').waitFor();
     await page.getByText('Upstream model').waitFor();
-    await assertPageContentFillsWidth(page, '.proxy-panel');
+    await proxyPanel.getByRole('button', { name: 'Agent routing' }).click();
+    await proxyPanel.getByRole('heading', { name: 'Agent routing' }).waitFor();
+    await proxyPanel.getByRole('button', { name: 'Diagnostics' }).click();
+    await proxyPanel.getByRole('heading', { name: 'Diagnostics' }).waitFor();
+    await proxyPanel.getByRole('button', { name: 'Settings' }).click();
+    await proxyPanel.getByText('Provider preset').waitFor();
+    await assertPageContentFillsWidth(page, '.proxy-control-centre');
     await page.screenshot({ path: path.join(outputDirectory, 'proxy-ready.png') });
     const proxyMinimumSize = await resizeWindow(electronApp, 960, 640);
     assertSize(proxyMinimumSize, 960, 640);
     await assertNoHorizontalOverflow(page);
-    await assertPageContentFillsWidth(page, '.proxy-panel');
+    await assertPageContentFillsWidth(page, '.proxy-control-centre');
     await page.screenshot({ path: path.join(outputDirectory, 'proxy-960x640.png') });
     await resizeWindow(electronApp, 1440, 920);
   }
@@ -123,11 +137,29 @@ try {
   const desktopSize = await resizeWindow(electronApp, 1440, 920);
   assertSize(desktopSize, 1440, 920);
   await page.screenshot({ path: path.join(outputDirectory, 'workspace-1440x920.png') });
+  if (usesAgentProject) await verifyCodeLearningWorkspace(electronApp, page);
+
+  await page.getByRole('button', { name: 'Usage' }).click();
+  await page.getByRole('heading', { name: 'Usage', level: 1 }).waitFor();
+  await page.getByText('Budget limits').waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'usage-1440x920.png') });
+  const usageMinimumSize = await resizeWindow(electronApp, 960, 640);
+  assertSize(usageMinimumSize, 960, 640);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'usage-960x640.png') });
+  await resizeWindow(electronApp, 1440, 920);
 
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('heading', { name: 'Settings' }).waitFor();
   await page.getByText('OS vault available').waitFor();
-  const providerSelect = page.locator('label.field:has(span:text-is("Provider")) > select');
+  const overwatchHeading = page.getByText('AI Overwatch', { exact: true });
+  await overwatchHeading.waitFor();
+  await page.getByRole('checkbox', { name: /Enable Overwatch/ }).waitFor();
+  await overwatchHeading.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(outputDirectory, 'settings-overwatch-1440x920.png') });
+  const directApiSection = page.locator('section.settings-section').filter({ has: page.getByText('Direct API', { exact: true }) });
+  const providerSelect = directApiSection.locator('label.field:has(span:text-is("Provider")) > select');
   const providerOptions = await providerSelect.locator('option').allTextContents();
   if (!providerOptions.includes('OpenRouter') || !providerOptions.includes('DeepSeek API')) {
     throw new Error(`Direct API provider presets are incomplete: ${providerOptions.join(', ')}`);
@@ -139,8 +171,41 @@ try {
   await assertPageContentFillsWidth(page, '.settings-grid');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
+  await page.getByRole('button', { name: 'Workflows' }).click();
+  await page.getByRole('heading', { name: 'Workflows', level: 1 }).waitFor();
+  await page.getByLabel('Step 1 agent').waitFor();
+  await page.getByLabel('Step 1 prompt').waitFor();
+  await assertNoHorizontalOverflow(page);
+  await assertPageContentFillsWidth(page, '.workflow-builder');
+  await page.screenshot({ path: path.join(outputDirectory, 'workflows-1440x920.png') });
+
+  await page.getByRole('button', { name: 'Add step' }).click();
+  await page.getByLabel('Step 2 prompt').waitFor();
+  await page.getByRole('button', { name: 'Remove step 2' }).click();
+  await page.getByLabel('Step 2 prompt').waitFor({ state: 'detached' });
+
+  await page.getByRole('button', { name: 'History' }).click();
+  await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
+  await assertPageContentFillsWidth(page, '.history-search');
+  await assertPageContentFillsWidth(page, '.history-table');
+  await page.screenshot({ path: path.join(outputDirectory, 'history-1440x920.png') });
+
   const settingsMinimumSize = await resizeWindow(electronApp, 960, 640);
   assertSize(settingsMinimumSize, 960, 640);
+  await page.getByRole('button', { name: 'Workflows' }).click();
+  await page.getByRole('heading', { name: 'Workflows', level: 1 }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await assertPageContentFillsWidth(page, '.workflow-builder');
+  await page.screenshot({ path: path.join(outputDirectory, 'workflows-960x640.png') });
+
+  await page.getByRole('button', { name: 'History' }).click();
+  await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
+  await assertPageContentFillsWidth(page, '.history-search');
+  await assertPageContentFillsWidth(page, '.history-table');
+  await page.screenshot({ path: path.join(outputDirectory, 'history-960x640.png') });
+
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
   await assertPageContentFillsWidth(page, '.settings-grid');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-960x640.png') });
@@ -168,7 +233,11 @@ try {
   await electronApp?.close();
   await directApiFixture?.close();
   await mcpHttpFixture?.close();
-  await rm(userDataDirectory, { recursive: true, force: true });
+  if (process.env.KAI_SMOKE_KEEP_USER_DATA === '1') {
+    console.log(`KAI smoke user data preserved at ${userDataDirectory}`);
+  } else {
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
 }
 
 async function verifyLiveAgent(page) {
@@ -277,8 +346,14 @@ async function verifyThemeToggle(page) {
   const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
   if (initialTheme !== 'dark') throw new Error(`The workspace should begin in dark mode, received ${initialTheme}.`);
 
-  await page.getByRole('button', { name: 'Switch to light mode', exact: true }).click({ force: true });
-  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await page.evaluate(() => document.documentElement.dataset.theme === 'light')) break;
+    await page.getByRole('button', { name: /^Theme:/ }).click({ force: true });
+    await page.waitForTimeout(150);
+  }
+  if (!await page.evaluate(() => document.documentElement.dataset.theme === 'light')) {
+    throw new Error('The title-bar theme control did not cycle to light mode.');
+  }
   await page.waitForFunction(async () => {
     const response = await window.kaiDesktop.getSettings();
     return response.ok && response.data.theme === 'light';
@@ -287,8 +362,44 @@ async function verifyThemeToggle(page) {
   await verifyMenuContrast(page, 'Agent');
   await page.screenshot({ path: path.join(outputDirectory, 'theme-light.png') });
 
-  await page.getByRole('button', { name: 'Switch to dark mode', exact: true }).click({ force: true });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark')) break;
+    await page.getByRole('button', { name: /^Theme:/ }).click({ force: true });
+    await page.waitForTimeout(150);
+  }
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+}
+
+async function verifyCodeLearningWorkspace(application, page) {
+  await page.getByRole('button', { name: 'Code' }).click();
+  await page.locator('.code-view').waitFor();
+  await page.getByRole('button', { name: 'AGENTS.md' }).click();
+  await page.locator('.learning-panel').waitFor();
+  const explain = page.getByRole('button', { name: 'Explain file', exact: true });
+  await explain.click();
+  await page.getByRole('heading', { name: 'KAI Learning Mode response', level: 2 }).waitFor({ timeout: 20_000 });
+  await page.getByText('Variables hold changing values.').waitFor();
+  await page.getByRole('tab', { name: 'Progress' }).click();
+  await page.getByText('Variables', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: 'Teaching' }).click();
+  await page.getByText('KAI Guided Discovery', { exact: true }).first().waitFor();
+  await page.getByText(/KAI-owned Markdown:/).waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'teaching-library-1440x920.png') });
+  await page.getByRole('tab', { name: 'Git' }).click();
+  await page.getByText(/Working tree:|not a Git repository/).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'code-learning-1440x920.png') });
+
+  await resizeWindow(application, 960, 640);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'code-learning-960x640.png') });
+  await page.getByRole('tab', { name: 'Teaching' }).click();
+  await page.getByText('KAI Guided Discovery', { exact: true }).first().waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'teaching-library-960x640.png') });
+  await page.getByRole('tab', { name: 'Tutor' }).click();
+  await assertNoHorizontalOverflow(page);
+  await resizeWindow(application, 1440, 920);
 }
 
 async function verifyCommandPalette(page) {
@@ -339,8 +450,16 @@ async function openSelectMenu(page, label) {
     const button = Array.from(document.querySelectorAll('button')).find((element) => element.getAttribute('aria-label') === name);
     return button instanceof HTMLButtonElement && !button.disabled;
   }, label);
-  await trigger.click({ force: true });
-  await page.getByRole('listbox', { name: label, exact: true }).waitFor({ state: 'visible' });
+  const listbox = page.getByRole('listbox', { name: label, exact: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await trigger.click({ force: true });
+    try {
+      await listbox.waitFor({ state: 'visible', timeout: attempt === 0 ? 5_000 : 15_000 });
+      return;
+    } catch (error) {
+      if (attempt === 1) throw error;
+    }
+  }
 }
 
 async function verifySelectContrast(select, label) {
@@ -534,8 +653,8 @@ async function writeEngineSettings(directory, ports) {
       enabled: true,
       port: ports.universalProxy,
       targetBaseUrl: 'http://127.0.0.1:19999/v1',
-      defaultModel: 'smoke-model',
-      credentialId: 'provider.smoke',
+      defaultModel: 'deepseek-flash',
+      credentialId: 'provider.deepseek',
     },
   };
   await writeFile(path.join(directory, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
@@ -685,11 +804,17 @@ async function startDirectApiFixture({ mcp = false, command = false, provider = 
     request.on('data', (chunk) => { raw += chunk; });
     await new Promise((resolve) => request.on('end', resolve));
     requestCount += 1;
+    const body = JSON.parse(raw);
     requests.push({
       path: request.url,
       authorization: request.headers.authorization,
-      body: JSON.parse(raw),
+      body,
     });
+    if (body?.text?.format?.name === 'kai_learning_tutor_response') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ output_text: JSON.stringify(learningTutorFixture()) }));
+      return;
+    }
     if (provider !== 'openai') {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       response.write('data: {"choices":[{"delta":{"content":"KAI_API_"},"finish_reason":null}]}\n\n');
@@ -737,6 +862,43 @@ async function startDirectApiFixture({ mcp = false, command = false, provider = 
   };
 }
 
+function learningTutorFixture() {
+  return {
+    title: 'KAI Learning Mode response',
+    recap: 'The file tree and editor are already available. This block explains the project rules file.',
+    purpose: 'Connect the visible Markdown guidance to the way an agent receives project instructions.',
+    analogy: {
+      title: 'A project welcome board',
+      explanation: 'A welcome board states the shared rules before people begin work.',
+      mappings: [{
+        analogyPart: 'Welcome board',
+        codePart: 'AGENTS.md',
+        explanation: 'The file is read as shared instruction context before work begins.',
+      }],
+      limits: 'A board cannot enforce behaviour by itself, and neither can a rules file without host enforcement.',
+    },
+    steps: [{
+      title: 'Read the instructions',
+      explanation: 'The desktop host includes the project rules before asking a provider to act.',
+    }],
+    concepts: [{
+      name: 'Variables',
+      category: 'Documentation',
+      mastery: 'introduced',
+      evidence: 'The learner opened a rules file and requested an explanation.',
+    }],
+    codePreview: '# Smoke project rules',
+    lineByLine: [{
+      line: '# Smoke project rules',
+      explanation: 'The heading names the purpose of this instruction file.',
+    }],
+    checks: ['Where should a project-wide instruction be recorded so the host can load it?'],
+    sourceNotes: [{ label: 'Project convention', url: null }],
+    followUpQuestion: 'Variables hold changing values. Which file did you just inspect?',
+    suggestion: null,
+  };
+}
+
 async function verifyAuthenticatedLoopback(application, page, ports) {
   const cognitive1Token = await copyAccessToken(application, page, 'cognitive1');
   await expectStatus(`http://127.0.0.1:${ports.cognitive1}/health`, undefined, 401);
@@ -754,6 +916,57 @@ async function verifyAuthenticatedLoopback(application, page, ports) {
   await expectStatus(`http://127.0.0.1:${ports.universalProxy}/health`, originalProxyToken, 401);
   await expectStatus(`http://127.0.0.1:${ports.universalProxy}/health`, rotatedProxyToken, 200);
   return rotatedProxyToken;
+}
+
+async function verifyOverwatchFlow(application, page, cognitive1Port) {
+  const credential = await page.evaluate(() => window.kaiDesktop.setCredential('cognitive1.overwatch', 'smoke-overwatch-key'));
+  if (!credential.ok) throw new Error(credential.error.message);
+
+  const settings = await page.evaluate(() => window.kaiDesktop.updateSettings({
+    cognitive1: {
+      overwatch: {
+        enabled: true,
+        provider: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        credentialId: 'cognitive1.overwatch',
+        model: 'gpt-6-astra',
+        autoRejectThreshold: 0.85,
+      },
+    },
+  }));
+  if (!settings.ok) throw new Error(settings.error.message);
+
+  await waitForReadyServices(page, 30_000);
+  const token = await copyAccessToken(application, page, 'cognitive1');
+  const response = await fetch(`http://127.0.0.1:${cognitive1Port}/api/overwatch/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const status = await response.json();
+  if (
+    !response.ok ||
+    status.enabled !== true ||
+    status.ready !== true ||
+    status.hasKey !== true ||
+    status.provider !== 'openai' ||
+    status.model !== 'gpt-6-astra'
+  ) {
+    throw new Error(`AI Overwatch was not ready in C1 after desktop configuration: ${JSON.stringify(status)}`);
+  }
+
+  const disabled = await page.evaluate(() => window.kaiDesktop.updateSettings({
+    cognitive1: {
+      overwatch: {
+        enabled: false,
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com',
+        credentialId: 'cognitive1.overwatch',
+        model: 'deepseek-chat',
+        autoRejectThreshold: 0.85,
+      },
+    },
+  }));
+  if (!disabled.ok) throw new Error(disabled.error.message);
+  await waitForReadyServices(page, 30_000);
 }
 
 async function verifyBrainFlow(application, page, cognitive1Port) {
@@ -791,13 +1004,28 @@ async function verifyBrainFlow(application, page, cognitive1Port) {
 
   await page.getByRole('button', { name: 'C1 Brain' }).click();
   await page.getByRole('heading', { name: 'Ready' }).waitFor();
+  await page.getByRole('heading', { name: 'Brain operations' }).waitFor();
   await page.getByRole('heading', { name: 'Brain overview' }).waitFor();
+  await page.getByPlaceholder('Title, field, agent, or project').fill(marker);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText(marker).waitFor();
+  await page.getByRole('button', { name: 'Advanced' }).click();
+  await page.getByText('Run any Cognitive1 tool').waitFor();
+
+  const toolResponse = await page.evaluate(() => window.kaiDesktop.cognitive1Tool({
+    tool: 'brain_status',
+    arguments: {},
+  }));
+  if (!toolResponse.ok || !Array.isArray(toolResponse.data?.content)) {
+    throw new Error(`The authenticated Cognitive1 MCP tool bridge failed: ${JSON.stringify(toolResponse)}`);
+  }
+  await page.getByRole('button', { name: 'Memory' }).click();
+  await page.getByRole('heading', { name: 'Brain overview' }).waitFor();
 
   const updateResponse = await page.evaluate((title) =>
     window.kaiDesktop.updateBrainField({ title, field: 'note', value: 'Updated by the isolated desktop smoke.' }), marker);
   if (!updateResponse.ok) throw new Error(updateResponse.error.message);
-  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.getByText('Updated by the isolated desktop smoke.').waitFor();
 }
 
@@ -887,7 +1115,7 @@ function assertSize(actual, width, height) {
 }
 
 async function assertNoErrorBanner(page) {
-  const alerts = await page.getByRole('alert').allTextContents();
+  const alerts = (await page.getByRole('alert').allTextContents()).map((value) => value.trim()).filter(Boolean);
   if (alerts.length > 0) throw new Error(`KAI displayed an error: ${alerts.join(' | ')}`);
 }
 

@@ -3,7 +3,15 @@ import { z } from 'zod';
 export const schemaVersionSchema = z.literal(1);
 export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini']);
 export const executionModeSchema = z.enum(['cli', 'api']);
-export const themeModeSchema = z.enum(['dark', 'light']);
+export const themeModeSchema = z.enum(['dark', 'navy', 'purple', 'light']);
+
+/** Themes in the order the title-bar button cycles through them. */
+export const THEME_MODES: ReadonlyArray<{ id: z.infer<typeof themeModeSchema>; label: string }> = [
+  { id: 'dark', label: 'Dark' },
+  { id: 'navy', label: 'Navy' },
+  { id: 'purple', label: 'Purple' },
+  { id: 'light', label: 'Light' },
+];
 export const providerIdSchema = z.enum([
   'openai',
   'anthropic',
@@ -62,6 +70,9 @@ export const serviceStateSchema = z
     version: z.string().nullable(),
     authentication: z.literal('loopback-token').optional(),
     tokenStored: z.boolean().optional(),
+    // Automatic restarts after a crash, and whether KAI has stopped trying.
+    restarts: z.number().int().nonnegative().optional(),
+    restartsExhausted: z.boolean().optional(),
     updatedAt: timestampSchema,
   })
   .strict();

@@ -15,15 +15,25 @@ import type {
   ExecutionMode,
   LogEntry,
   ProjectPreferences,
+  RecoveryResume,
   RouteMode,
   SettingsUpdate,
 } from '@kai/contracts';
+import { THEME_MODES } from '@kai/contracts';
 import { CommandPalette, ConversationSidebar, NavigationRail, navigation, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
-import { BrainPanel } from './components/BrainView';
+import { Cognitive1Panel } from './components/Cognitive1Panel';
 import { ProxyPanel } from './components/ProxyView';
 import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
+import { CodeView } from './components/CodeView';
+import { GitView } from './components/GitView';
+import { TasksView } from './components/TasksView';
+import { TerminalView } from './components/TerminalView';
+import { UrgentBanner } from './components/CoordinationPanel';
+import { UpdateBanner } from './components/UpdatesPanel';
+import { OperationsView } from './components/OperationsView';
+import { UsageView } from './components/UsageView';
 import {
   ContextPanel,
   WorkspaceView,
@@ -60,6 +70,16 @@ export function App(): ReactNode {
   const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
   const [view, setView] = useState<ViewId>('workspace');
+  const [interruptedRuns, setInterruptedRuns] = useState(0);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(() => {
+    try {
+      return clamp(Number(window.localStorage.getItem('kai.terminalHeight')) || 260, 140, 700);
+    } catch {
+      return 260;
+    }
+  });
+  const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
   const [contextOpen, setContextOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(248);
   const [contextWidth, setContextWidth] = useState(286);
@@ -85,12 +105,21 @@ export function App(): ReactNode {
     { id: 'selection', label: 'Add Selection to Chat', description: 'Attach a referenced file and line range as context', run: () => openWorkspaceCommand('context') },
     { id: 'checkpoint', label: 'Review Latest Turn Changes', description: 'Open the checkpoint viewer for the newest captured turn', run: () => openWorkspaceCommand('checkpoint') },
     { id: 'raw', label: 'Inspect Raw Fallback Events', description: 'Review and copy raw diagnostic payloads', run: () => openWorkspaceCommand('raw') },
+    { id: 'compact-context', label: 'Compact Conversation Context', description: 'Summarize older turns and keep only the active tail in model context', run: () => void compactActiveConversation() },
     { id: 'handoff', label: 'Handoff to Another Agent', description: 'Start a handoff prompt in the active conversation', run: () => openWorkspaceCommand('handoff') },
     { id: 'rules', label: 'View and Edit Execution Rules', description: 'Manage the authoritative rules injected into agent runs', run: () => setView('rules') },
     { id: 'brain', label: 'Open C1 Brain', description: 'Search, inspect, and maintain the shared brain', run: () => setView('brain') },
     { id: 'proxy', label: 'Open Universal Proxy', description: 'Show proxy status, activity, health, history, and costs', run: () => setView('proxy') },
     { id: 'workflows', label: 'Open Workflows', description: 'Build, save, and run sequential agent work', run: () => setView('workflows') },
     { id: 'history', label: 'Open Conversation History', description: 'Search, rename, archive, fork, and reopen threads', run: () => setView('history') },
+    { id: 'usage', label: 'Open Usage and Budgets', description: 'See estimated API spend and set warn or block limits', run: () => setView('usage') },
+    { id: 'operations-recovery', label: 'Open Recovery (interrupted runs)', description: 'Resume or discard runs interrupted by a crash or close', run: () => setView('operations') },
+    { id: 'code', label: 'Open Code Editor', description: 'Browse and edit project files with the built-in editor', run: () => setView('code') },
+    { id: 'tasks', label: 'Open Tasks, Reviews and Handoffs', description: 'Shared task board, review queue, handoff inbox and decision log', run: () => setView('tasks') },
+    { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => setView('operations') },
+    { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
+    { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: 'Ctrl+`', run: () => setTerminalOpen((open) => !open) },
+    { id: 'diagnostics', label: 'Open Diagnostics', description: 'Service health, engine checks and a copyable bug report', run: () => setView('operations') },
     { id: 'settings', label: 'Open Settings', description: 'Configure agents, routes, API providers, services, and MCP', run: () => setView('settings') },
     { id: 'backups', label: 'Open Configuration Backups', description: 'Create, restore, or delete app-owned configuration backups', run: () => setView('settings') },
     { id: 'restart-proxy', label: 'Restart Universal Proxy', description: 'Stop and start the managed proxy service', run: () => controlService('universalProxy', 'restart') },
@@ -189,6 +218,40 @@ export function App(): ReactNode {
     }
   }
 
+  async function searchEverything(query: string): Promise<CommandPaletteItem[]> {
+    const result = unwrap(await window.kaiDesktop.globalSearch(query));
+    const groups = { conversation: 'Conversations', entry: 'Brain entries', handoff: 'Handoffs', daily: 'Daily logs', knowledge: 'Knowledge files' } as const;
+    return result.hits.map((hit, index) => ({
+      id: `search-${hit.source}-${index}`,
+      label: hit.label,
+      description: hit.detail,
+      group: groups[hit.source],
+      run: () => (hit.conversationId ? openConversation(hit.conversationId) : setView('brain')),
+    }));
+  }
+
+  async function refreshInterrupted(): Promise<void> {
+    try {
+      setInterruptedRuns(unwrap(await window.kaiDesktop.listInterruptedRuns()).length);
+    } catch {
+      setInterruptedRuns(0);
+    }
+  }
+
+  async function resumeInterruptedRun(resume: RecoveryResume): Promise<void> {
+    const conversation = conversations.find((item) => item.id === resume.conversationId)
+      ?? unwrap(await window.kaiDesktop.getConversation(resume.conversationId));
+    if (!conversation) throw new Error('The conversation for this run no longer exists.');
+    setActiveConversationId(conversation.id);
+    setView('workspace');
+    await runConversation(conversation, resume.prompt, {
+      agent: resume.agent,
+      execution: resume.execution,
+      route: resume.route,
+      autonomy: resume.autonomy,
+    });
+  }
+
   async function loadApplication(): Promise<void> {
     setBusy('Starting KAI');
     try {
@@ -220,6 +283,7 @@ export function App(): ReactNode {
       setSelectedAutonomy(nextBootstrap.settings.defaultAutonomy);
       setAgentNotice(null);
       setError(null);
+      void refreshInterrupted();
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -278,7 +342,22 @@ export function App(): ReactNode {
   }, [runningConversationId]);
 
   useEffect(() => {
+    void window.kaiDesktop.reportView(view, activeConversationId).catch(() => undefined);
+  }, [view, activeConversationId]);
+
+  const openConversationRef = useRef(openConversation);
+  openConversationRef.current = openConversation;
+  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId }) => {
+    void openConversationRef.current(conversationId);
+  }), []);
+
+  useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      if ((event.ctrlKey || event.metaKey) && event.key === '`') {
+        event.preventDefault();
+        setTerminalOpen((open) => !open);
+        return;
+      }
       if (!event.ctrlKey || event.altKey || event.metaKey) return;
       if (event.key.toLowerCase() === 'k') {
         event.preventDefault();
@@ -388,6 +467,20 @@ export function App(): ReactNode {
       return;
     }
 
+    // Warn (never block) when another agent has claimed a file this run will touch.
+    const projectForCheck = conversation.projectId ?? activeProject?.id;
+    if (projectForCheck && options.selectedPaths?.length) {
+      try {
+        const check = unwrap(await window.kaiDesktop.coordinationPreflight(projectForCheck, options.selectedPaths));
+        if (check.conflicts.length > 0) {
+          const detail = check.conflicts.map((conflict) => `${conflict.agent} (${conflict.project}): ${conflict.overlap.join(', ')}`).join('\n');
+          if (!window.confirm(`Another agent is working on files you selected:\n\n${detail}\n\nRun anyway?`)) return;
+        }
+      } catch {
+        // The check is advisory; a failure must not stop the run.
+      }
+    }
+
     setAgentNotice(null);
     setStreamingText('');
     setPendingApproval(null);
@@ -401,6 +494,7 @@ export function App(): ReactNode {
           execution: runExecution,
           route: apiRun ? runRoute : 'direct',
           autonomy: runAutonomy,
+          ...(modelChoices[`${runExecution}:${runAgentId}`] ? { model: modelChoices[`${runExecution}:${runAgentId}`] } : {}),
           ...(options.goal ? { goal: options.goal } : {}),
           ...(options.skills?.length ? { skills: options.skills } : {}),
           ...(options.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
@@ -635,6 +729,20 @@ export function App(): ReactNode {
     setConversations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
   }
 
+  async function compactActiveConversation(): Promise<void> {
+    if (!activeConversation) {
+      setError('Open a conversation before compacting context.');
+      return;
+    }
+    const compacted = await perform(
+      () => window.kaiDesktop.compactConversation(activeConversation.id).then(unwrap),
+      'Compacting conversation context',
+    );
+    if (!compacted) return;
+    setConversations((current) => current.map((item) => item.id === compacted.id ? compacted : item));
+    setAgentNotice(`Compacted ${compacted.compaction?.originalTurns ?? 0} conversation turns into a reusable context briefing.`);
+  }
+
   async function importBrain(): Promise<void> {
     const result = await perform(
       () => window.kaiDesktop.importBrain().then(unwrap),
@@ -653,7 +761,7 @@ export function App(): ReactNode {
   function toggleTheme(): void {
     if (!bootstrap) return;
     const previous = bootstrap.settings.theme;
-    const theme = previous === 'light' ? 'dark' : 'light';
+    const theme = THEME_MODES[(THEME_MODES.findIndex((item) => item.id === previous) + 1) % THEME_MODES.length]!.id;
     setBootstrap((current) => current ? { ...current, settings: { ...current.settings, theme } } : current);
     void window.kaiDesktop
       .updateSettings({ theme })
@@ -767,7 +875,7 @@ export function App(): ReactNode {
             onCopyToken={() => void copyServiceToken('cognitive1')}
             onRotateToken={() => void rotateServiceToken('cognitive1')}
           >
-            <BrainPanel service={serviceFor(bootstrap, 'cognitive1')} />
+            <Cognitive1Panel service={serviceFor(bootstrap, 'cognitive1')} projects={bootstrap.projects} />
           </ServiceView>
         );
       case 'rules':
@@ -785,7 +893,17 @@ export function App(): ReactNode {
             onCopyToken={() => void copyServiceToken('universalProxy')}
             onRotateToken={() => void rotateServiceToken('universalProxy')}
           >
-            <ProxyPanel service={serviceFor(bootstrap, 'universalProxy')} />
+            <ProxyPanel
+              service={serviceFor(bootstrap, 'universalProxy')}
+              settings={bootstrap.settings}
+              busy={Boolean(busy)}
+              logs={logs}
+              credentialStatus={credentials}
+              onSave={(update) => saveSettings(update)}
+              onSaveCredential={(id, value) => saveCredential(id, value)}
+              onClearCredential={(id) => clearCredential(id)}
+              onReload={loadApplication}
+            />
           </ServiceView>
         );
       case 'workflows':
@@ -810,6 +928,16 @@ export function App(): ReactNode {
             onDelete={(id) => void deleteConversation(id)}
           />
         );
+      case 'usage':
+        return <UsageView settings={bootstrap.settings} activeConversationId={activeConversationId} busy={Boolean(busy)} onSave={(update) => void saveSettings(update)} />;
+      case 'git':
+        return <GitView activeProject={activeProject} />;
+      case 'tasks':
+        return <TasksView activeProject={activeProject} cognitive1Ready={serviceFor(bootstrap, 'cognitive1').status === 'ready'} onStartTask={async (prompt) => { setView('workspace'); await createConversation(prompt); }} />;
+      case 'code':
+        return <CodeView activeProject={activeProject} />;
+      case 'operations':
+        return <OperationsView activeProject={activeProject} onResume={resumeInterruptedRun} onRecoveryChanged={() => void refreshInterrupted()} />;
       case 'settings':
         return (
           <SettingsView
@@ -884,8 +1012,14 @@ export function App(): ReactNode {
             onSignIn={(agent) => void signInAgent(agent)}
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
+            onOpenUsage={() => setView('usage')}
+            selectedModel={modelChoices[`${executionMode}:${selectedAgent}`] ?? ''}
+            onSelectModel={(model) => setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }))}
+            interruptedRuns={interruptedRuns}
+            onOpenRecovery={() => setView('operations')}
             onOpenRules={() => setView('rules')}
             onOpenWorkflows={() => setView('workflows')}
+            onCompactConversation={() => void compactActiveConversation()}
           />
         );
     }
@@ -923,7 +1057,9 @@ export function App(): ReactNode {
         onOpenSearch={() => setCommandPaletteOpen(true)}
         onToggleContext={() => setContextOpen((open) => !open)}
       />
-      {commandPaletteOpen && <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} />}
+      <UrgentBanner />
+      <UpdateBanner onOpen={() => setView('settings')} />
+      {commandPaletteOpen && <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} onSearch={searchEverything} />}
       {error && (
         <div className="error-banner" role="alert">
           <AlertTriangle size={16} />
@@ -974,7 +1110,36 @@ export function App(): ReactNode {
             />
           </>
         )}
-        <main className={`app-main view-${view}`}>{renderCurrentView()}</main>
+        <div className="main-column">
+          <main className={`app-main view-${view}`}>{renderCurrentView()}</main>
+          <TerminalView
+            activeProject={activeProject}
+            open={terminalOpen}
+            height={terminalHeight}
+            onClose={() => setTerminalOpen(false)}
+            onResizeStart={(event) => {
+              event.preventDefault();
+              const startY = event.clientY;
+              const startHeight = terminalHeight;
+              let latest = startHeight;
+              const move = (moveEvent: globalThis.PointerEvent): void => {
+                latest = clamp(startHeight + (startY - moveEvent.clientY), 140, Math.round(window.innerHeight * 0.75));
+                setTerminalHeight(latest);
+              };
+              const up = (): void => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+                try {
+                  window.localStorage.setItem('kai.terminalHeight', String(latest));
+                } catch {
+                  // A remembered height is a convenience only.
+                }
+              };
+              window.addEventListener('pointermove', move);
+              window.addEventListener('pointerup', up);
+            }}
+          />
+        </div>
         {showContext && (
           <>
             <div

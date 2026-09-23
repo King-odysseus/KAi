@@ -7,9 +7,11 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  ThumbsDown,
+  ThumbsUp,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { BrainEntry, BrainEntryType, BrainOverview, ServiceState } from '@kai/contracts';
 import { unwrap } from '../types';
 
@@ -44,6 +46,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<FieldEditor | null>(null);
   const [savingField, setSavingField] = useState<string | null>(null);
+  const latestRequest = useRef(0);
 
   useEffect(() => {
     if (service.status !== 'ready') {
@@ -55,6 +58,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
     }
 
     let active = true;
+    const requestId = ++latestRequest.current;
     setLoading(true);
     setError(null);
     void Promise.all([
@@ -62,15 +66,15 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
       window.kaiDesktop.searchBrain(searchRequest(initialFilters)).then(unwrap),
     ])
       .then(([nextOverview, nextResults]) => {
-        if (!active) return;
+        if (!active || requestId !== latestRequest.current) return;
         setOverview(nextOverview);
         setResults(nextResults);
       })
       .catch((caught) => {
-        if (active) setError(messageOf(caught));
+        if (active && requestId === latestRequest.current) setError(messageOf(caught));
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (active && requestId === latestRequest.current) setLoading(false);
       });
 
     return () => {
@@ -79,37 +83,46 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
   }, [service.status, service.updatedAt]);
 
   async function runSearch(nextFilters: SearchFilters): Promise<void> {
+    const requestId = ++latestRequest.current;
     setSearching(true);
     setEditor(null);
     try {
       const nextResults = await window.kaiDesktop
         .searchBrain(searchRequest(nextFilters, 50))
         .then(unwrap);
-      setResults(nextResults);
-      setError(null);
+      if (requestId === latestRequest.current) {
+        setResults(nextResults);
+        setError(null);
+      }
     } catch (caught) {
-      setError(messageOf(caught));
+      if (requestId === latestRequest.current) setError(messageOf(caught));
     } finally {
-      setSearching(false);
+      if (requestId === latestRequest.current) setSearching(false);
     }
   }
 
   async function refresh(): Promise<void> {
+    const requestId = ++latestRequest.current;
     setLoading(true);
     try {
-      const [nextOverview, nextResults] = await Promise.all([
+      const [overviewResult, resultsResult] = await Promise.allSettled([
         window.kaiDesktop.brainOverview().then(unwrap),
         window.kaiDesktop
           .searchBrain(searchRequest(filters, 50))
           .then(unwrap),
       ]);
-      setOverview(nextOverview);
-      setResults(nextResults);
-      setError(null);
+      if (requestId === latestRequest.current) {
+        if (overviewResult.status === 'fulfilled') setOverview(overviewResult.value);
+        if (resultsResult.status === 'fulfilled') setResults(resultsResult.value);
+        const failure = [overviewResult, resultsResult].find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        );
+        setError(failure ? messageOf(failure.reason) : null);
+      }
     } catch (caught) {
-      setError(messageOf(caught));
+      if (requestId === latestRequest.current) setError(messageOf(caught));
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   }
 
@@ -119,7 +132,14 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
     const key = fieldKey(editor);
     setSavingField(key);
     try {
-      await window.kaiDesktop.updateBrainField(editor).then(unwrap);
+      const updated = await window.kaiDesktop.updateBrainField(editor).then(unwrap);
+      setResults((current) => current.map((entry) => entry.title === updated.title
+        ? {
+            ...entry,
+            fields: { ...entry.fields, [updated.field]: updated.value },
+            status: updated.field.toLowerCase() === 'status' ? updated.value : entry.status,
+          }
+        : entry));
       setEditor(null);
       await refresh();
     } catch (caught) {
@@ -157,13 +177,21 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
       {overview ? (
         <div className="brain-metrics">
           <BrainMetric label="Entries" value={String(overview.totalEntries)} />
-          <BrainMetric label="Signal" value={`${overview.quality.signalRatio}%`} tone={overview.quality.signalRatio >= 80 ? 'good' : 'warn'} />
-          <BrainMetric label="Duplicates" value={String(overview.quality.duplicateCount)} tone={overview.quality.duplicateCount ? 'warn' : 'good'} />
-          <BrainMetric label="Untagged" value={String(overview.quality.untaggedTotal)} />
           <BrainMetric label="Active agents" value={String(overview.activeAgents)} />
           <BrainMetric label="Projects" value={String(overview.projectCount)} />
           <BrainMetric label="Hunger" value={titleCase(overview.hunger.level)} tone={overview.hunger.level === 'satisfied' ? 'good' : 'warn'} />
-          <BrainMetric label="Noise" value={`${overview.quality.noiseScore}%`} tone={overview.quality.noiseScore <= 10 ? 'good' : 'warn'} />
+          {overview.quality ? (
+            <>
+              <BrainMetric label="Signal" value={`${overview.quality.signalRatio}%`} tone={overview.quality.signalRatio >= 80 ? 'good' : 'warn'} />
+              <BrainMetric label="Duplicates" value={String(overview.quality.duplicateCount)} tone={overview.quality.duplicateCount ? 'warn' : 'good'} />
+              <BrainMetric label="Untagged" value={String(overview.quality.untaggedTotal)} />
+              <BrainMetric label="Noise" value={`${overview.quality.noiseScore}%`} tone={overview.quality.noiseScore <= 10 ? 'good' : 'warn'} />
+            </>
+          ) : (
+            <div className="brain-quality-deferred">
+              <small>Quality audit deferred for this large brain to keep Cognitive1 responsive.</small>
+            </div>
+          )}
         </div>
       ) : (
         <div className="brain-loading-row">
@@ -311,6 +339,7 @@ function BrainEntryCard({
     <article className="brain-entry">
       <div className="brain-entry-heading">
         <span className={`brain-type type-${entry.type}`}>{entry.type.slice(0, -1)}</span>
+        <RecallFeedback entry={entry} />
         <div>
           <h3>{entry.title}</h3>
           <div className="brain-entry-meta">
@@ -398,4 +427,31 @@ function titleCase(value: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The brain request failed.';
+}
+
+/** Thumbs on a recalled entry. Useful entries rank higher in later searches; unhelpful ones rank lower. */
+function RecallFeedback({ entry }: { entry: BrainEntry }): ReactNode {
+  const [sent, setSent] = useState<'up' | 'down' | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  async function send(useful: boolean): Promise<void> {
+    try {
+      unwrap(await window.kaiDesktop.cognitive1Operation({
+        operation: 'brain-recall-feedback',
+        payload: { title: entry.title, type: entry.type, date: entry.date, useful },
+      }));
+      setSent(useful ? 'up' : 'down');
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
+  }
+
+  return (
+    <span className="recall-feedback" role="group" aria-label={`Was "${entry.title}" useful?`}>
+      <button type="button" className={`icon-button compact ${sent === 'up' ? 'active' : ''}`} aria-pressed={sent === 'up'} title="Useful: rank this higher" aria-label="Useful" onClick={() => void send(true)}><ThumbsUp size={13} /></button>
+      <button type="button" className={`icon-button compact ${sent === 'down' ? 'active' : ''}`} aria-pressed={sent === 'down'} title="Not useful: rank this lower" aria-label="Not useful" onClick={() => void send(false)}><ThumbsDown size={13} /></button>
+      {failed && <small role="alert">Could not send</small>}
+    </span>
+  );
 }

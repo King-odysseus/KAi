@@ -174,6 +174,13 @@ export interface ExternalToolPort {
   execute(name: string, input: unknown, signal?: AbortSignal): Promise<ProjectToolExecution | undefined>;
 }
 
+// Commands that send work off this machine or change a shared service. They always need a human decision.
+const PUBLISHING_COMMAND = /\b(?:git\s+(?:(?:-[Cc]\s+\S+|-{1,2}[\w-]+(?:=\S+)?)\s+)*push|gh\s+(?:pr\s+(?:create|merge|close|ready)|repo\s+(?:create|delete|edit)|release\s+(?:create|delete)|workflow\s+run)|npm\s+publish|pnpm\s+publish|yarn\s+publish|cargo\s+publish|docker\s+push)\b/i;
+
+export function isPublishingCommand(command: string): boolean {
+  return PUBLISHING_COMMAND.test(command);
+}
+
 export class DesktopProjectToolRuntime {
   private resolvedRoot: Promise<string> | undefined;
 
@@ -484,7 +491,7 @@ function assertInside(root: string, candidate: string, requestedPath: string): v
   throw new Error(`Path escapes the active project: ${requestedPath}.`);
 }
 
-async function terminateProcessTree(child: ChildProcess): Promise<void> {
+export async function terminateProcessTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null) return;
   if (process.platform === 'win32') {
     await new Promise<void>((resolve) => {

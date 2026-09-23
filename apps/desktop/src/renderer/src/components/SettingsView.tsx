@@ -1,6 +1,7 @@
 import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, KeyRound, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
+import { UpdatesPanel } from './UpdatesPanel';
+import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
 import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, SettingsUpdate } from '@kai/contracts';
 
 type McpServer = AppSettings['mcpServers'][number];
@@ -13,6 +14,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
   const [directCredentialValue, setDirectCredentialValue] = useState('');
+  const [overwatchCredentialValue, setOverwatchCredentialValue] = useState('');
   const [backups, setBackups] = useState<ConfigBackup[]>([]);
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
@@ -23,6 +25,15 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     void refreshBackups();
   }, []);
   const directPreset = directProviderPreset(draft.directApi.provider);
+  const overwatchCredentialReady = credentialStatus.ids.includes(draft.cognitive1.overwatch.credentialId);
+  const setAgentModel = (agent: 'claude' | 'codex' | 'qwen' | 'gemini', value: string): void => {
+    setDraft((current) => {
+      const next = { ...current.agentModels };
+      if (value.trim()) next[agent] = value.trim();
+      else delete next[agent];
+      return { ...current, agentModels: next };
+    });
+  };
   const updateMcpServer = (index: number, patch: McpServerPatch): void => {
     setDraft((current) => updateDraftMcpServer(current, index, patch));
   };
@@ -40,6 +51,21 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
         baseUrl: preset.defaultBaseUrl,
         model: preset.defaultModel,
         credentialId: preset.credentialId,
+      },
+    }));
+  };
+  const updateOverwatchProvider = (provider: AppSettings['cognitive1']['overwatch']['provider']): void => {
+    const preset = overwatchProviderPreset(provider);
+    setDraft((current) => ({
+      ...current,
+      cognitive1: {
+        ...current.cognitive1,
+        overwatch: {
+          ...current.cognitive1.overwatch,
+          provider,
+          baseUrl: preset.baseUrl,
+          model: preset.model,
+        },
       },
     }));
   };
@@ -98,10 +124,27 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <SelectField label="Agent" value={draft.defaultAgent} onChange={(value) => setDraft({ ...draft, defaultAgent: value as AppSettings['defaultAgent'] })} options={['codex', 'claude', 'qwen', 'gemini']} />
             <SelectField label="Route" value={draft.defaultRoute} onChange={(value) => setDraft({ ...draft, defaultRoute: value as AppSettings['defaultRoute'] })} options={['direct', 'proxy']} />
             <SelectField label="Autonomy" value={draft.defaultAutonomy} onChange={(value) => setDraft({ ...draft, defaultAutonomy: value as AppSettings['defaultAutonomy'] })} options={['plan', 'ask', 'autoEdit', 'full', 'custom']} />
-            <SelectField label="Theme" value={draft.theme} onChange={(value) => setDraft({ ...draft, theme: value as AppSettings['theme'] })} options={['dark', 'light']} />
+            <SelectField label="Theme" value={draft.theme} onChange={(value) => setDraft({ ...draft, theme: value as AppSettings['theme'] })} options={THEME_MODES.map((item) => ({ value: item.id, label: item.label }))} />
             <NumberField label="Log entries" value={draft.logRetentionEntries} min={100} max={100000} onChange={(value) => setDraft({ ...draft, logRetentionEntries: value })} />
           </div>
           <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><input type="checkbox" checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
+          <div className="settings-subsection">
+            <div className="settings-subsection-title"><span>CLI models</span></div>
+            <p className="settings-note">The model each CLI agent is asked to use. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>
+            <div className="field-grid">
+              {(['claude', 'codex', 'qwen', 'gemini'] as const).map((agent) => (
+                <label key={agent} className="field"><span>{agent} model</span><input value={draft.agentModels[agent] ?? ''} placeholder="CLI default" list={`cli-models-${agent}`} onChange={(event) => setAgentModel(agent, event.target.value)} /><datalist id={`cli-models-${agent}`}>{CLI_MODEL_SUGGESTIONS[agent].map((name) => <option key={name} value={name} />)}</datalist></label>
+              ))}
+            </div>
+          </div>
+          <div className="settings-subsection">
+            <div className="settings-subsection-title"><span>Tray and notifications</span></div>
+            <NotificationToggle label="Hide to system tray on close" hint="Keeps KAI and running agents alive in the tray. Off by default." checked={draft.notifications.trayEnabled} onChange={(trayEnabled) => setDraft({ ...draft, notifications: { ...draft.notifications, trayEnabled } })} />
+            <NotificationToggle label="Notify when a run finishes" hint="Skipped when that conversation is already on screen" checked={draft.notifications.onComplete} onChange={(onComplete) => setDraft({ ...draft, notifications: { ...draft.notifications, onComplete } })} />
+            <NotificationToggle label="Notify when a run fails" hint="Includes the first line of the error" checked={draft.notifications.onFailure} onChange={(onFailure) => setDraft({ ...draft, notifications: { ...draft.notifications, onFailure } })} />
+            <NotificationToggle label="Notify when approval is needed" hint="A tool is waiting for your decision" checked={draft.notifications.onApproval} onChange={(onApproval) => setDraft({ ...draft, notifications: { ...draft.notifications, onApproval } })} />
+            <NotificationToggle label="Notify on budget warnings" hint="When a usage limit reaches 80% or 100%" checked={draft.notifications.onBudget} onChange={(onBudget) => setDraft({ ...draft, notifications: { ...draft.notifications, onBudget } })} />
+          </div>
           <button type="button" className="primary-button align-end" disabled={busy} onClick={() => onSave({
             defaultAgent: draft.defaultAgent,
             defaultRoute: draft.defaultRoute,
@@ -109,12 +152,16 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             theme: draft.theme,
             logRetentionEntries: draft.logRetentionEntries,
             diagnosticsEnabled: draft.diagnosticsEnabled,
+            notifications: draft.notifications,
+            agentModels: draft.agentModels,
             directApi: draft.directApi,
             mcpServers: draft.mcpServers,
             cognitive1: draft.cognitive1,
             proxy: draft.proxy,
           })}><Check size={16} /><span>Save settings</span></button>
         </section>
+
+        <UpdatesPanel settings={settings} />
 
         <section className="settings-section">
           <div className="section-title"><Cloud size={17} /><span>Direct API</span></div>
@@ -129,7 +176,19 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           <div className="credential-form">
             <TextField label="API key" value={directCredentialValue} type="password" onChange={setDirectCredentialValue} />
             <div className="button-row align-start">
-              <button type="button" className="secondary-button" disabled={!directCredentialValue.trim() || !credentialStatus.available || busy} onClick={() => { onSaveCredential(draft.directApi.credentialId, directCredentialValue); setDirectCredentialValue(''); }}><KeyRound size={15} /><span>Save API key</span></button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!directCredentialValue.trim() || !credentialStatus.available || busy}
+                onClick={() => {
+                  onSave({ directApi: draft.directApi });
+                  onSaveCredential(draft.directApi.credentialId, directCredentialValue);
+                  setDirectCredentialValue('');
+                }}
+              >
+                <KeyRound size={15} />
+                <span>Save key and use provider</span>
+              </button>
               <span className="settings-note">{credentialStatus.ids.includes(draft.directApi.credentialId) ? 'Credential stored in the OS vault.' : 'No credential stored for this ID.'}</span>
             </div>
           </div>
@@ -197,6 +256,89 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
               <div className="field-grid">
                 <TextField label="Endpoint" value={draft.cognitive1.endpoint} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, endpoint: value } })} />
                 <TextField label="Brain data path" value={draft.cognitive1.dataPath ?? ''} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, dataPath: value || null } })} />
+              </div>
+              <div className="settings-subsection">
+                <div className="settings-subsection-title"><ShieldCheck size={14} /><span>AI Overwatch</span></div>
+                <label className="toggle-row">
+                  <span><strong>Enable Overwatch</strong><small>Runs brain quality audits, draft classification, duplicate detection, and kernel distillation</small></span>
+                  <input
+                    type="checkbox"
+                    checked={draft.cognitive1.overwatch.enabled}
+                    onChange={(event) => setDraft({
+                      ...draft,
+                      cognitive1: {
+                        ...draft.cognitive1,
+                        overwatch: { ...draft.cognitive1.overwatch, enabled: event.target.checked },
+                      },
+                    })}
+                  />
+                </label>
+                <div className="field-grid">
+                  <SelectField
+                    label="Provider"
+                    value={draft.cognitive1.overwatch.provider}
+                    options={[
+                      { value: 'deepseek', label: 'DeepSeek' },
+                      { value: 'claude', label: 'Claude' },
+                      { value: 'openai', label: 'OpenAI API' },
+                    ]}
+                    onChange={(value) => updateOverwatchProvider(value as AppSettings['cognitive1']['overwatch']['provider'])}
+                  />
+                  <TextField
+                    label="Model"
+                    value={draft.cognitive1.overwatch.model}
+                    onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, overwatch: { ...draft.cognitive1.overwatch, model: value } } })}
+                  />
+                  <TextField
+                    label="Base URL"
+                    value={draft.cognitive1.overwatch.baseUrl}
+                    onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, overwatch: { ...draft.cognitive1.overwatch, baseUrl: value } } })}
+                  />
+                  <TextField
+                    label="Credential ID"
+                    value={draft.cognitive1.overwatch.credentialId}
+                    onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, overwatch: { ...draft.cognitive1.overwatch, credentialId: value } } })}
+                  />
+                  <NumberField
+                    label="Auto-reject threshold"
+                    value={draft.cognitive1.overwatch.autoRejectThreshold}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, overwatch: { ...draft.cognitive1.overwatch, autoRejectThreshold: value } } })}
+                  />
+                </div>
+                <div className="credential-form">
+                  <TextField label="Overwatch API key" value={overwatchCredentialValue} type="password" onChange={setOverwatchCredentialValue} />
+                  <div className="button-row align-start">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={!overwatchCredentialValue.trim() || !credentialStatus.available || busy}
+                      onClick={() => {
+                        onSaveCredential(draft.cognitive1.overwatch.credentialId, overwatchCredentialValue);
+                        setOverwatchCredentialValue('');
+                      }}
+                    >
+                      <KeyRound size={15} />
+                      <span>Save Overwatch key</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy || !overwatchCredentialReady}
+                      onClick={() => onClearCredential(draft.cognitive1.overwatch.credentialId)}
+                    >
+                      <Trash2 size={15} />
+                      <span>Remove key</span>
+                    </button>
+                  </div>
+                </div>
+                <p className={`settings-note ${overwatchCredentialReady ? 'ready' : ''}`}>
+                  {overwatchCredentialReady
+                    ? 'Credential stored in the OS vault. Save settings to restart C1 with this Overwatch configuration.'
+                    : 'No credential stored for this ID. Save a key and enable Overwatch to make it ready.'}
+                </p>
               </div>
               <div className="button-row align-start">
                 <button type="button" className="secondary-button" disabled={busy} onClick={onImportBrain}>
@@ -271,6 +413,10 @@ function PageHeader({ title, detail }: { title: string; detail: string }): React
 
 type SelectOption = string | { value: string; label: string };
 
+function NotificationToggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (value: boolean) => void }): ReactNode {
+  return <label className="toggle-row"><span><strong>{label}</strong><small>{hint}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
+}
+
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }): ReactNode {
   return <label className="field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => {
     const item = typeof option === 'string' ? { value: option, label: option } : option;
@@ -282,8 +428,8 @@ function TextField({ label, value, type = 'text', list, onChange }: { label: str
   return <label className="field"><span>{label}</span><input type={type} list={list} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
-function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><input type="number" value={value} min={min} max={max} onChange={(event) => onChange(Number(event.target.value))} /></label>;
+function NumberField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }): ReactNode {
+  return <label className="field"><span>{label}</span><input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} /></label>;
 }
 
 function TextAreaField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }): ReactNode {
@@ -322,6 +468,15 @@ function newMcpServer(transport: McpServer['transport']): McpServer {
     cwd: null,
     envCredentialIds: {},
   };
+}
+
+function overwatchProviderPreset(provider: AppSettings['cognitive1']['overwatch']['provider']): {
+  baseUrl: string;
+  model: string;
+} {
+  if (provider === 'claude') return { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-5' };
+  if (provider === 'openai') return { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-astra' };
+  return { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' };
 }
 
 function formatCredentialRefs(values: Record<string, string>): string {

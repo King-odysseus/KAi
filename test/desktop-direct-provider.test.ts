@@ -124,6 +124,10 @@ describe('desktop direct provider runtime', () => {
         expect.objectContaining({ type: 'cost.update', inputTokens: 12, outputTokens: 4, estimateProvenance: 'measured' }),
       ]),
     );
+    // A model with no known price is tagged as a paid run but gets no invented dollar amount.
+    const cost = result.events.find((event) => event.type === 'cost.update');
+    expect(cost).toMatchObject({ model: 'test-model', provider: expect.any(String) });
+    expect(cost).not.toHaveProperty('amountUsd');
   });
 
   it('streams OpenRouter Chat Completions with attribution and measured usage', async () => {
@@ -179,8 +183,10 @@ describe('desktop direct provider runtime', () => {
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'read_file' }) }),
     ]));
     expect(result.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'cost.update', inputTokens: 9, outputTokens: 2 }),
+      expect.objectContaining({ type: 'cost.update', inputTokens: 9, outputTokens: 2, provider: 'openrouter', model: 'anthropic/claude-3.7-sonnet' }),
     ]));
+    const cost = result.events.find((event) => event.type === 'cost.update');
+    expect(cost).toMatchObject({ amountUsd: (9 * 5 + 2 * 25) / 1_000_000 });
   });
 
   it('supports DeepSeek Chat Completions and ignores reasoning deltas', async () => {
@@ -494,6 +500,61 @@ describe('desktop direct provider runtime', () => {
     expect(approvals).toEqual(['run_command']);
     expect(bodies).toHaveLength(2);
     expect(JSON.stringify(bodies[1].input)).toContain('command-ok');
+  });
+
+  describe('publishing commands in Full control', () => {
+    async function runFullControl(command: string, approve: boolean) {
+      const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-direct-publish-'));
+      temporaryDirectories.push(projectRoot);
+      const bodies: Record<string, unknown>[] = [];
+      let requestCount = 0;
+      const server = http.createServer((request, response) => {
+        let raw = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => { raw += chunk; });
+        request.on('end', () => {
+          requestCount += 1;
+          bodies.push(JSON.parse(raw) as Record<string, unknown>);
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (requestCount === 1) {
+            const call = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'run_command', arguments: JSON.stringify({ command }) };
+            response.end(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { id: 'r1', output: [call] } })}\n\n`);
+            return;
+          }
+          response.end('event: response.completed\ndata: {"type":"response.completed","response":{"id":"r2","output":[{"type":"message","content":[{"type":"output_text","text":"Done."}]}]}}\n\n');
+        });
+      });
+      const baseUrl = await listen(server);
+      const runtime = new DesktopDirectProviderRuntime(
+        settingsPort(enabledSettings(baseUrl, 'test-model')),
+        credentialPort('provider.openai', 'sk-test-secret'),
+      );
+      const asked: Array<{ tool: string; title: string }> = [];
+      await runtime.run({ ...runRequest(), autonomy: 'full' }, projectRoot, undefined, undefined, {
+        request: async (approval) => {
+          asked.push({ tool: approval.tool, title: approval.title });
+          return approve;
+        },
+      });
+      return { asked, followUp: JSON.stringify(bodies[1]?.input) };
+    }
+
+    it('runs an ordinary command without asking', async () => {
+      const { asked, followUp } = await runFullControl(nodeCommand("process.stdout.write('plain-ok')"), true);
+      expect(asked).toEqual([]);
+      expect(followUp).toContain('plain-ok');
+    });
+
+    it.each([
+      'git push origin main',
+      'git -C repo push --force-with-lease',
+      'gh pr create --title x --body y',
+      'npm publish',
+    ])('still asks before "%s" and does not run it when denied', async (command) => {
+      const { asked, followUp } = await runFullControl(command, false);
+      expect(asked).toEqual([{ tool: 'run_command', title: 'Publish work off this machine?' }]);
+      expect(followUp).toContain('The user denied this project change.');
+    });
   });
 
   it('cancels an in-flight provider stream', async () => {

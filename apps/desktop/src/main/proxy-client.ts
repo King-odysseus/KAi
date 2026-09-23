@@ -1,15 +1,29 @@
 import { z } from 'zod';
 import {
+  proxyConnectionTestSchema,
+  proxyCostsClearResultSchema,
+  proxyDryRunResultSchema,
   proxyHistoryClearResultSchema,
   proxyHistoryDetailSchema,
   proxyHistoryQuerySchema,
   proxyHistorySummarySchema,
   proxyOverviewSchema,
+  proxyPingResultSchema,
+  proxyReplayPreviewSchema,
+  proxyReplayResultSchema,
+  type ProxyLiveEvent,
+  type ProxyModel,
+  type ProxyConnectionTest,
+  type ProxyCostsClearResult,
+  type ProxyDryRunResult,
   type ProxyHistoryClearResult,
   type ProxyHistoryDetail,
   type ProxyHistoryQuery,
   type ProxyHistorySummary,
   type ProxyOverview,
+  type ProxyPingResult,
+  type ProxyReplayPreview,
+  type ProxyReplayResult,
 } from '@kai/contracts';
 import type { ServiceKind } from '@kai/contracts';
 
@@ -78,6 +92,33 @@ const cacheStatsResponseSchema = z.object({
   hitRate: z.number(),
   calls: z.number(),
 });
+
+const modelsResponseSchema = z
+  .object({
+    data: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            name: z.string().optional(),
+            label: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    models: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            name: z.string().optional(),
+            label: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
 
 const historyDetailResponseSchema = z.object({
   id: z.string().min(1),
@@ -187,6 +228,7 @@ export class UniversalProxyClient {
       page: String(query.page),
     });
     if (query.search) search.set('search', query.search);
+    if (query.agent) search.set('agent', query.agent);
     if (query.status) search.set('status', query.status);
     if (query.from) search.set('from', query.from);
     if (query.to) search.set('to', query.to);
@@ -239,30 +281,137 @@ export class UniversalProxyClient {
     return result;
   }
 
+  async testConnection(agent?: string): Promise<ProxyConnectionTest> {
+    const path = agent ? `/a/${encodeURIComponent(agent)}/v1/test` : '/v1/test';
+    return this.withResponse(path, undefined, async (response) => {
+      const payload = await readJson(response).catch(() => ({}));
+      return proxyConnectionTestSchema.parse({
+        ...(payload && typeof payload === 'object' ? payload : {}),
+        ok: response.ok && (!payload || typeof payload !== 'object' || !('ok' in payload) || payload.ok !== false),
+        status: response.status,
+      });
+    });
+  }
+
+  async pingAll(): Promise<ProxyPingResult[]> {
+    return this.requestJson('/v1/ping-all', undefined, z.array(proxyPingResultSchema));
+  }
+
+  async dryRun(body: unknown): Promise<ProxyDryRunResult> {
+    return this.requestJson('/v1/dry-run', { method: 'POST', body }, proxyDryRunResultSchema);
+  }
+
+  async clearCosts(): Promise<ProxyCostsClearResult> {
+    return this.requestJson('/v1/costs/clear', { method: 'POST' }, proxyCostsClearResultSchema);
+  }
+
+  async replayPreview(id: string): Promise<ProxyReplayPreview> {
+    return this.requestJson(
+      `/v1/history/replay/${encodeURIComponent(id)}`,
+      undefined,
+      proxyReplayPreviewSchema,
+    );
+  }
+
+  async replay(id: string): Promise<ProxyReplayResult> {
+    return this.withResponse('/v1/history/replay', {
+      method: 'POST',
+      body: { id, confirm: true },
+    }, async (response) => {
+      const fullBody = await response.text();
+      const maxCharacters = 512_000;
+      return proxyReplayResultSchema.parse({
+        statusCode: response.status,
+        contentType: response.headers.get('content-type'),
+        body: fullBody.slice(0, maxCharacters),
+        truncated: fullBody.length > maxCharacters,
+      });
+    });
+  }
+
+  async models(): Promise<ProxyModel[]> {
+    const response = await this.requestJson('/v1/models', undefined, modelsResponseSchema);
+    const models = response.data.length > 0 ? response.data : response.models ?? [];
+    return [...new Map(models.map((model) => [model.id, {
+      id: model.id,
+      ...(model.label || model.name ? { label: model.label ?? model.name } : {}),
+    }])).values()].sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  async watchLive(
+    listener: (event: ProxyLiveEvent) => void,
+    signal: AbortSignal,
+    agent?: string,
+  ): Promise<void> {
+    const access = await this.options.access.loopbackAccess('universalProxy');
+    const path = agent
+      ? `/v1/history/live?agent=${encodeURIComponent(agent)}`
+      : '/v1/history/live';
+    const response = await fetch(new URL(path, access.endpoint), {
+      headers: {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${access.token}`,
+      },
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Universal Agent Proxy live tail failed with status ${response.status}.`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let eventName: ProxyLiveEvent['event'] = 'response';
+    let dataLines: string[] = [];
+
+    const flush = () => {
+      if (dataLines.length === 0) return;
+      const raw = dataLines.join('\n');
+      dataLines = [];
+      let payload: unknown = raw;
+      try {
+        payload = JSON.parse(raw) as unknown;
+      } catch {
+        // Keep the raw SSE data when an engine event is not JSON.
+      }
+      listener({ event: eventName, payload });
+      eventName = 'response';
+    };
+
+    while (!signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line) {
+          flush();
+          continue;
+        }
+        if (line.startsWith(':')) continue;
+        if (line.startsWith('event:')) {
+          const candidate = line.slice(6).trim();
+          if (candidate === 'start' || candidate === 'response' || candidate === 'error') eventName = candidate;
+          continue;
+        }
+        if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    flush();
+  }
+
   private async requestJson<TSchema extends z.ZodTypeAny>(
     path: string,
     options: { method?: string; body?: unknown } | undefined,
     schema: TSchema,
   ): Promise<z.infer<TSchema>> {
-    const access = await this.options.access.loopbackAccess('universalProxy');
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    timeout.unref?.();
-
     try {
-      const response = await fetch(new URL(path, access.endpoint), {
-        method: options?.method ?? 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${access.token}`,
-          ...(options?.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        },
-        body: options?.body === undefined ? undefined : JSON.stringify(options.body),
-        signal: controller.signal,
+      return await this.withResponse(path, options, async (response) => {
+        const payload = await readJson(response);
+        if (!response.ok) throw new Error(errorMessage(payload, response.status));
+        return schema.parse(payload);
       });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(errorMessage(payload, response.status));
-      return schema.parse(payload);
     } catch (error) {
       if (error instanceof z.ZodError) {
         const fields = error.issues.map((issue) => issue.path.join('.') || 'response').join(', ');
@@ -272,6 +421,30 @@ export class UniversalProxyClient {
         throw new Error('Universal Agent Proxy did not respond before the request timed out.');
       }
       throw error;
+    }
+  }
+
+  private async withResponse<T>(
+    path: string,
+    options: { method?: string; body?: unknown } = {},
+    consume: (response: Response) => Promise<T>,
+  ): Promise<T> {
+    const access = await this.options.access.loopbackAccess('universalProxy');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    timeout.unref?.();
+    try {
+      const response = await fetch(new URL(path, access.endpoint), {
+        method: options.method ?? 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${access.token}`,
+          ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal: controller.signal,
+      });
+      return await consume(response);
     } finally {
       clearTimeout(timeout);
     }

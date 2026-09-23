@@ -5,6 +5,150 @@ export const brainSearchModeSchema = z.enum(['lexical', 'semantic']);
 export const brainPresenceSchema = z.enum(['active', 'idle', 'offline']);
 export const brainHungerLevelSchema = z.enum(['satisfied', 'peckish', 'hungry', 'starving']);
 
+export const cognitive1Operations = [
+  'status',
+  'metrics',
+  'self-review',
+  'brain-learn',
+  'brain-auto-learn',
+  'brain-prune',
+  'brain-ping',
+  'brain-export',
+  'brain-drafts',
+  'brain-draft-approve',
+  'brain-draft-approve-all',
+  'brain-draft-reject',
+  'brain-draft-type',
+  'brain-recall-feedback',
+  'active-claim',
+  'active-release',
+  'active-release-all',
+  'handoffs',
+  'handoff-claim',
+  'handoff-suggest',
+  'urgent-list',
+  'urgent-set',
+  'urgent-clear',
+  'todo-projects',
+  'todo-project-create',
+  'task-create',
+  'tasks',
+  'task-claim',
+  'task-complete',
+  'reviews',
+  'regressions',
+  'costs',
+  'cost-log',
+  'cost-clear',
+  'recap-check',
+  'recap-check-log',
+  'graph',
+  'skills',
+  'skill-content',
+  'skill-save',
+  'overwatch-status',
+  'overwatch-config',
+  'overwatch-insights',
+  'overwatch-run',
+  'overwatch-audit',
+  'overwatch-resolve-preview',
+  'overwatch-resolve',
+  'overwatch-triage-recovery',
+  'overwatch-release-stale',
+  'overwatch-release-one',
+  'overwatch-semantic-dupes',
+  'overwatch-auto-fix',
+  'overwatch-cross-ref-bugs',
+  'overwatch-heuristic-clean',
+  'overwatch-distill-kernels',
+  'overwatch-push-to-memory',
+  'integration-status',
+  'deploy-c1',
+  'project-update',
+  'git-status',
+  'checkpoint',
+  'recover',
+  'suggest',
+  'theme',
+  'theme-save',
+] as const;
+
+export const cognitive1OperationSchema = z.enum(cognitive1Operations);
+
+export const cognitive1OperationInputSchema = z
+  .object({
+    operation: cognitive1OperationSchema,
+    payload: z.record(z.string(), z.unknown()).optional().default({}),
+  })
+  .strict();
+
+export const cognitive1OperationResultSchema = z.unknown();
+
+export const cognitive1McpTools = [
+  'active_claim',
+  'active_list',
+  'active_release',
+  'brain_export',
+  'brain_handoff',
+  'brain_learn',
+  'brain_ping',
+  'brain_prune',
+  'brain_recall',
+  'brain_recall_feedback',
+  'brain_review_suggestions',
+  'brain_stats',
+  'brain_status',
+  'checkpoint',
+  'compaction_check',
+  'compliance_audit',
+  'config_get',
+  'config_set',
+  'conflict_check',
+  'context_pack',
+  'cost_log',
+  'cost_report',
+  'crossref_bugs',
+  'decision_log',
+  'doctor',
+  'git_status',
+  'handoff_claim',
+  'notify',
+  'project_init',
+  'recall',
+  'recap_check',
+  'recover',
+  'regression_log',
+  'regression_report',
+  'review_list',
+  'review_request',
+  'session_end',
+  'session_start',
+  'style_guide_extract',
+  'suggest',
+  'task_claim',
+  'task_complete',
+  'task_create',
+  'task_list',
+  'task_route',
+  'todo_project_create',
+  'todo_project_list',
+  'urgent_clear',
+  'urgent_list',
+  'urgent_set',
+  'wiki_status',
+] as const;
+
+export const cognitive1McpToolSchema = z.enum(cognitive1McpTools);
+
+export const cognitive1McpToolInputSchema = z
+  .object({
+    tool: cognitive1McpToolSchema,
+    arguments: z.record(z.string(), z.unknown()).optional().default({}),
+  })
+  .strict();
+
+export const cognitive1McpToolResultSchema = z.unknown();
+
 export const brainEntrySchema = z
   .object({
     date: z.string().min(1),
@@ -41,7 +185,8 @@ export const brainOverviewSchema = z
         untaggedTotal: z.number().int().nonnegative(),
         deadWeightCount: z.number().int().nonnegative(),
       })
-      .strict(),
+      .strict()
+      .nullable(),
   })
   .strict();
 
@@ -97,3 +242,11 @@ export type BrainFieldUpdateInput = z.input<typeof brainFieldUpdateInputSchema>;
 export type BrainFieldUpdate = z.output<typeof brainFieldUpdateInputSchema>;
 export type BrainFieldUpdateResult = z.infer<typeof brainFieldUpdateResultSchema>;
 export type BrainImportResult = z.infer<typeof brainImportResultSchema>;
+export type Cognitive1Operation = z.infer<typeof cognitive1OperationSchema>;
+export type Cognitive1OperationInput = z.input<typeof cognitive1OperationInputSchema>;
+export type NormalizedCognitive1OperationInput = z.output<typeof cognitive1OperationInputSchema>;
+export type Cognitive1OperationResult = z.infer<typeof cognitive1OperationResultSchema>;
+export type Cognitive1McpTool = z.infer<typeof cognitive1McpToolSchema>;
+export type Cognitive1McpToolInput = z.input<typeof cognitive1McpToolInputSchema>;
+export type NormalizedCognitive1McpToolInput = z.output<typeof cognitive1McpToolInputSchema>;
+export type Cognitive1McpToolResult = z.infer<typeof cognitive1McpToolResultSchema>;

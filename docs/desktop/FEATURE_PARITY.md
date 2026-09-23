@@ -1,6 +1,6 @@
 # KAI Desktop Feature Parity Register
 
-Updated: 2026-09-23
+Updated: 2026-09-24
 
 ## Source identity
 
@@ -95,8 +95,8 @@ The tool list is created in `src/mcp/tools/index.ts:172-223`. Each row is a requ
 | Prune check | `src/scheduler/jobs/prune-check.ts` | Preserve dry-run behavior | Brain maintenance | BrainEngine | No direct source test | Not started |
 | Auto-tag job | `src/scheduler/jobs/auto-tag.ts` | Preserve service behavior | Brain maintenance | BrainEngine | No direct source test | Not started |
 | Self-dev quality review | `src/scheduler/self-dev.ts` | Explicit settings and audit | Brain quality | BrainEngine | No direct source test | Not started |
-| Overwatch classification/audit | `src/llm/overwatch.ts` | Optional provider credentials | Brain quality | Claude/DeepSeek API | DeepSeek adapter tests | Not started |
-| Kernel distillation | `overwatch.ts` | Preserve source output path policy | Brain export | LLM, filesystem | No direct source test | Not started |
+| Overwatch classification/audit | `src/llm/overwatch.ts` | App-owned provider settings, vault-backed key, managed daemon environment, restart on change | Settings controls and C1 System status/actions | OpenAI Responses API, Claude Messages API, DeepSeek API | Contract/environment/adapter tests; desktop smoke | Desktop ready; provider key required |
+| Kernel distillation | `overwatch.ts` | Preserve source output path policy | Brain export | LLM, filesystem | No direct source test | In progress |
 | Style guide crawler/extractor | `src/style-guide/` | Expose with explicit target and approval | Design tools | Playwright, network | No direct source test | Not started |
 | MCP stdio transport | `src/mcp/entry.ts`, `server.ts` | Managed child endpoint for agents | Integrations | MCP SDK | `tools.test.ts` | Not started |
 | MCP streamable HTTP transport | `src/mcp/http-entry.ts`, `src/http/server.ts` | Authenticated loopback endpoint | Integrations | MCP SDK, HTTP | No direct source test | Not started |
@@ -104,7 +104,7 @@ The tool list is created in `src/mcp/tools/index.ts:172-223`. Each row is a requ
 | Legacy dashboard | `dashboard/` | Not required in Electron UI; preserve API compatibility | Optional external client | Static web assets | None | Not started |
 | Standalone React client | `standalone/` | Reuse screens/components selectively | Brain/system UI | React, Vite, daemon API | Isolated Brain client test; packaged real-engine smoke | In progress |
 | Cognitive1 desktop shell | `desktop/main.cjs` | Reference implementation for service startup only | Not a KAI feature | Electron | No tests | Not started |
-| Runtime configuration and env overrides | `src/config.ts` | Remap to app-owned settings while retaining service env contract | Settings/diagnostics | Filesystem, environment | No config tests | Not started |
+| Runtime configuration and env overrides | `src/config.ts` | App-owned Overwatch settings mapped to the service environment; broader config parity remains open | Settings/diagnostics | Filesystem, environment | Contract/environment tests | In progress |
 
 ## Universal Agent Proxy feature surface
 
@@ -184,6 +184,7 @@ Execution Rules, navigating to the Rules view, and returning to the Workbench.
 | Restart Proxy | Universal Proxy Restart and command palette action | Service control tests and real-engine smoke | Integrated |
 | List/Restore Configuration Backups | Settings backup list, create, restore, and delete actions | Desktop backup tests and packaged UI smoke | Verified |
 | Inspect Raw Events | Raw status button and command palette inspector, bounded to the latest 50 events | Focused UI implementation | Integrated |
+| Compact Conversation Context | Composer button and command palette; persists a summary and retains the full local transcript | Desktop contracts and focused runtime tests | Integrated |
 | Add Selection to Chat | Context picker selection chip and palette action | Focused UI implementation | Integrated |
 | Reject Checkpoint File | Checkpoint review per-file Restore action | Desktop checkpoint flow and focused tests | Integrated |
 | Open in Browser | Not applicable to the native Electron shell; VS Code's local `serve-web` session is host-specific. Desktop exposes service endpoints, tokens, diagnostics, and controls in-app. | Architecture decision documented | Not applicable |
@@ -200,21 +201,36 @@ These are explicit product additions. They must not be presented as parity work.
 | Addition | Required evidence | Status |
 | --- | --- | --- |
 | Direct API agent without a CLI | Streamed tool loop, cancellation, provider-error tests | In progress: OpenAI Responses API, bounded project tools, approvals, stdio/Streamable HTTP MCP, scoped C1 recall, session/handoff recording, context estimates, and bounded retry/rate-limit recovery are implemented; additional providers remain open |
-| Codex App Server account sign-in | Official runtime integration, mocked auth states, live opt-in smoke test | Not started |
-| Claude Code account sign-in | Official runtime flow, credential separation, mocked and live tests | Not started |
-| Native file/code/diff workspace | Project-boundary, CRLF, binary, symlink, dirty-file tests | Not started |
-| Verification attached to file revision | Stale-check fixtures and passing repair rerun | Not started |
-| Desktop workflows/budgets/recovery | Restart, interruption, pause/resume, budget-boundary tests | Not started |
-| Windows installer and signed release | Clean-machine install and update/restore evidence | Not started |
+| Import the existing C1 brain | Startup migration discovers registered project paths and common Cognitive1 locations; missing files only | Desktop startup migration and C1 client flow | Integrated |
+| Compact long conversation context | Persist summary, retain full transcript, resume without stale agent session | Conversation contracts and focused tests | Integrated |
+| Codex account sign-in | Official CLI login flow, signed-out state, no silent fallback | Integrated: `codex login` launched through the desktop host without embedding credentials; a signed-out agent shows "(sign-in required)" and a run fails with a clear message instead of switching route or paid API (`test/desktop-agents.test.ts`). The Codex App Server protocol is not used. |
+| Claude Code account sign-in | Official CLI login flow, credential separation | Integrated: same flow through `claude auth login`; subscription runs are never counted as API spend and never fall back to an API key. No live opt-in smoke test exists. |
+| Native file/code/diff workspace | Project-boundary, CRLF, binary, symlink, dirty-file tests | Integrated: Monaco editor (lazy loaded), file tree that respects .gitignore, per-hunk reject in checkpoint review. `test/desktop-project-files.test.ts` covers `..`/absolute paths, junction escapes, CRLF and BOM preservation, binary and oversize files, edits made on disk, and per-hunk revert; the workbench smoke edits, saves and detects an outside change. Accepting a hunk is implicit (keep it). |
+| Verification attached to file revision | Stale-check fixtures and passing repair rerun | Integrated: each check records SHA-256 hashes of every changed file; status is verified, failed, stale or unverified per file (`test/desktop-verification.test.ts`, including repair then re-run). Agent-run test commands are recorded from tool events; totals go to C1 `regression_log` when the runner summary is recognised. Needs a Git repository. |
+| Desktop workflows/budgets/recovery | Restart, interruption, pause/resume, budget-boundary tests | Integrated: usage budgets (see below), interrupted-run recovery with resume/recap/discard and a bounded service restart policy. There is no pause/resume of a live run; Stop and Resume-from-recovery are provided instead. |
+| Windows installer and auto-update | Clean-machine install and update/restore evidence | In progress: NSIS installer and `electron-updater` against GitHub Releases are wired (check, download, install each user-initiated; config backup before install, install refused if the backup fails; `test/desktop-updater.test.ts`). The build is deliberately unsigned (noncommercial use). No clean-machine install or real update has been exercised yet; see `docs/desktop/INSTALL_AND_UPDATE.md`. |
+| Usage budgets and cost guardrails | Per-conversation, daily, monthly and per-provider limits; warn at 80%, block at 100% before the request is sent; subscription CLI usage never counted; estimates labelled | Integrated: pure budget module and contracts tests, direct-runtime cost tagging test, Usage page and workspace banner in packaged smoke. Blocking is enforced in the run handler; the handler itself has no isolated test (it needs Electron) |
+| Tray icon and native notifications | Notification rules, tray off by default | Integrated: close-to-tray is opt-in; toasts for finished, failed, approval and budget events, skipped when that conversation is already on screen (`test/desktop-notifications.test.ts`). There is no pause command in the tray menu (Stop only). Toast delivery itself is not exercised in tests. |
+| Coordination: urgent warnings, active work, conflicts | Claim released on every path; conflicts warn, not block | Integrated: CLI runs claim the project and release it in a `finally`, urgent banner across the app, Active work tab, pre-run conflict warning the user can override (`test/desktop-coordination.test.ts` for the parsers). API runs are claimed by their C1 session as before. |
+| Global search and Brain maintenance | Dry-run prune, no overwrite on import | Integrated: Ctrl+K searches conversations and the C1 brain; age-based prune only applies after a preview and a confirmation. Brain Git sync has no C1 operation and is not included. |
+| Brain learning and review | Save to Brain, review queue, recall feedback | Integrated: Save to Brain on answers and completed tasks, thumbs on recalled entries, draft review queue already existed. C1 has no dry-run for learning, so the quality and duplicate result is shown after the save attempt, with Save anyway. |
+| Tasks, reviews, handoffs and decisions | Board state transitions | Integrated: To do / In progress / Done board (a Review column is not separate; reviews have their own tab), Start-as-conversation, agent suggestion via `task_route`, handoff inbox, decision log (`test/desktop-tasks.test.ts` for the parsers). |
+| Diagnostics page and bug report | No secrets in the bundle | Integrated: service states with restart counts, C1 doctor / compliance / git / wiki checks (read-only), validated `config_set`, and a redacted copyable report (`test/desktop-diagnostics.test.ts`). |
+| Git and GitHub | Branch, stage, commit, push, pull request without storing tokens | Integrated: branches, staging, commit (hooks run), fetch, fast-forward pull, push with confirmation, pull requests through the signed-in `gh` CLI; no force push, no tokens stored (`test/desktop-git-tools.test.ts` against real repositories and a local remote). GitHub calls themselves were not exercised in tests. |
+| Terminal panel | Run, stream, stop, no hanging prompts | Integrated: bottom panel (Ctrl+`) with Command Prompt, PowerShell and Git Bash; commands stream output and can be stopped; stdin is closed so prompts end. It is a command runner, not an interactive terminal. |
+| Publishing commands need approval | Full control still asks before push/publish | Integrated for API-mode agents (`git push`, `gh pr create/merge`, `npm publish` and similar ask even in Full control). CLI agents run their own tools and are governed by their own permission mode. |
+| Themes: Dark, Navy, Purple, Light | Contrast and coverage | Integrated: Purple follows Shades of Purple (Super Dark); Navy is a bluer variation. Component overrides are generated by `apps/desktop/scripts/generate-themes.mjs`. Contrast was checked by eye in screenshots only. |
+| CLI model selection | Per-agent default and per-conversation override | Integrated: `--model` passed to claude, codex, qwen and gemini from Settings or the composer; names are validated so they cannot inject arguments (`test/desktop-cli-models.test.ts`). |
 | Authenticated loopback access and token rotation | Vault-backed token, 401/200 tests, old-token rejection after rotation | Verified |
 | Native Brain search, inspection, and field editing | Typed IPC/client tests, real-engine smoke, responsive UI screenshots | Verified |
+| Playwright browser for KAI API and every CLI agent | Desktop stdio MCP plus idempotent user-level registration for Claude Code, Codex, Qwen Code, and Gemini CLI; preserve unrelated config and create timestamped backups before changes | Integrated: KAI discovers 25 Playwright tools; CLI health checks report the server configured. Live folder-trust and tool-approval rules remain enforced by each CLI |
 
 ## Release blockers and unresolved decisions
 
 1. Phase 3 must exercise every source row through the packaged desktop services. Source tests alone do not close parity rows.
-2. The optional embedding model download and Playwright browser runtime need explicit packaging/on-demand decisions.
+2. The optional embedding model download remains an explicit packaging decision. Playwright Chromium is installed on demand and is not bundled in the installer.
 3. Existing KAI localStorage, VS Code storage, and engine files must be imported only through explicit user actions.
-4. Agent route writers must remain opt-in. KAI must not modify `~/.codex`, `~/.claude`, or other agent configuration during normal desktop startup.
+4. Proxy route writers remain opt-in. The explicit KAI Playwright feature may register its MCP server in user-level Claude, Codex, Qwen, and Gemini configuration on first run; it backs up each changed file and never changes model or provider routing.
 5. Subscriptions and billable API/proxy routes remain separate. No silent cross-route fallback is permitted.
 6. PolyForm Noncommercial 1.0.0 now applies to KAI and both engines. Third-party dependency notices and any future public installer terms still require release review.
 7. Crash restart policy, occupied-port recovery beyond clear failure, Brain import/export and remaining maintenance controls, remaining proxy configuration/activity parity, and the remaining parity rows are still Phase 3 release blockers.

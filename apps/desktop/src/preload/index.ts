@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentRunEvent, KaiDesktopBridge } from '@kai/contracts';
+import type { AgentRunEvent, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, TerminalEvent, UpdateState } from '@kai/contracts';
 
 const bridge: KaiDesktopBridge = {
   bootstrap: () => ipcRenderer.invoke('app:get-bootstrap', {}),
@@ -18,11 +18,29 @@ const bridge: KaiDesktopBridge = {
   searchBrain: (request) => ipcRenderer.invoke('brain:search', request),
   updateBrainField: (request) => ipcRenderer.invoke('brain:update-field', request),
   importBrain: () => ipcRenderer.invoke('brain:import', {}),
+  cognitive1Tool: (request) => ipcRenderer.invoke('cognitive1:tool', request),
+  cognitive1Operation: (request) => ipcRenderer.invoke('cognitive1:operation', request),
   getRules: () => ipcRenderer.invoke('rules:get', {}),
   saveRule: (request) => ipcRenderer.invoke('rules:save', request),
   listSkills: (projectId) => ipcRenderer.invoke('skills:list', projectId ? { projectId } : {}),
   chooseFiles: (projectId) => ipcRenderer.invoke('files:choose', { projectId }),
   searchFiles: (request) => ipcRenderer.invoke('files:search', request),
+  projectFileTree: (projectId) => ipcRenderer.invoke('files:tree', { projectId }),
+  readProjectFile: (projectId, path) => ipcRenderer.invoke('files:read', { projectId, path }),
+  writeProjectFile: (request) => ipcRenderer.invoke('files:write', request),
+  projectFileChanged: (projectId, path, expectedHash) => ipcRenderer.invoke('files:changed', { projectId, path, expectedHash }),
+  learningProgress: (projectId) => ipcRenderer.invoke('learning:progress', { projectId }),
+  updateLearningPreferences: (input) => ipcRenderer.invoke('learning:update-preferences', input),
+  evaluateLearning: (request) => ipcRenderer.invoke('learning:evaluate', request),
+  recordLearningLesson: (input) => ipcRenderer.invoke('learning:record-lesson', input),
+  teachingLibrary: () => ipcRenderer.invoke('learning:teaching-library', {}),
+  saveTeachingEntry: (input) => ipcRenderer.invoke('learning:save-teaching-entry', input),
+  deleteTeachingEntry: (input) => ipcRenderer.invoke('learning:delete-teaching-entry', input),
+  resetTeachingEntry: (input) => ipcRenderer.invoke('learning:reset-teaching-entry', input),
+  generateTeachingDraft: (input) => ipcRenderer.invoke('learning:generate-teaching-draft', input),
+  formatCode: (input) => ipcRenderer.invoke('code:format', input),
+  gitFileInfo: (projectId, path) => ipcRenderer.invoke('git:file-info', { projectId, path }),
+  rejectCheckpointHunks: (conversationId, turnId, filePath, hunkIds) => ipcRenderer.invoke('checkpoints:reject-hunks', { conversationId, turnId, filePath, hunkIds }),
   gitDiffStat: (projectId) => ipcRenderer.invoke('context:git-diff', { projectId }),
   saveAttachment: (name, dataUrl) => ipcRenderer.invoke('attachments:save', { name, dataUrl }),
   listWorkflowTemplates: (projectId) => ipcRenderer.invoke('workflows:list-templates', projectId ? { projectId } : {}),
@@ -32,6 +50,33 @@ const bridge: KaiDesktopBridge = {
   proxyHistory: (request) => ipcRenderer.invoke('proxy:history', request ?? {}),
   proxyHistoryDetail: (id) => ipcRenderer.invoke('proxy:history-detail', { id }),
   clearProxyHistory: () => ipcRenderer.invoke('proxy:clear-history', {}),
+  testProxyConnection: (agent) => ipcRenderer.invoke('proxy:test-connection', agent ? { agent } : {}),
+  pingProxyProviders: () => ipcRenderer.invoke('proxy:ping-all', {}),
+  dryRunProxy: (body) => ipcRenderer.invoke('proxy:dry-run', { body }),
+  clearProxyCosts: () => ipcRenderer.invoke('proxy:clear-costs', {}),
+  proxyCostSummary: (period) => ipcRenderer.invoke('proxy:cost-summary', { period }),
+  previewProxyReplay: (id) => ipcRenderer.invoke('proxy:replay-preview', { id }),
+  replayProxyRequest: (id) => ipcRenderer.invoke('proxy:replay', { id }),
+  proxyModels: () => ipcRenderer.invoke('proxy:models', {}),
+  proxyRoutes: () => ipcRenderer.invoke('proxy:routes', {}),
+  routeProxyAgent: (agent, action, routeUntil) => ipcRenderer.invoke('proxy:route-action', {
+    agent,
+    action,
+    ...(routeUntil === undefined ? {} : { routeUntil }),
+  }),
+  exportProxyConfig: () => ipcRenderer.invoke('proxy:export-config', {}),
+  importProxyConfig: () => ipcRenderer.invoke('proxy:import-config', {}),
+  copyProxyEnv: (agent) => ipcRenderer.invoke('proxy:copy-env', agent ? { agent } : {}),
+  launchProxyAgent: (agent) => ipcRenderer.invoke('proxy:launch-agent', { agent }),
+  resetClaudeCode: () => ipcRenderer.invoke('proxy:reset-claude', {}),
+  openClaudeSettings: () => ipcRenderer.invoke('proxy:open-claude-settings', {}),
+  startProxyLiveTail: () => ipcRenderer.invoke('proxy:start-live-tail', {}),
+  stopProxyLiveTail: () => ipcRenderer.invoke('proxy:stop-live-tail', {}),
+  onProxyLiveEvent: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: ProxyLiveEvent): void => listener(payload);
+    ipcRenderer.on('proxy:live-event', handler);
+    return () => ipcRenderer.removeListener('proxy:live-event', handler);
+  },
   getPreferences: (projectId) => ipcRenderer.invoke('preferences:get', { projectId }),
   updatePreferences: (preferences) => ipcRenderer.invoke('preferences:update', preferences),
   credentialStatus: () => ipcRenderer.invoke('credentials:status', {}),
@@ -41,6 +86,7 @@ const bridge: KaiDesktopBridge = {
   getConversation: (id) => ipcRenderer.invoke('conversations:get', { id }),
   createConversation: (projectId, firstPrompt) =>
     ipcRenderer.invoke('conversations:create', { projectId, firstPrompt }),
+  compactConversation: (conversationId) => ipcRenderer.invoke('conversations:compact', { conversationId }),
   saveConversation: (conversation) => ipcRenderer.invoke('conversations:save', conversation),
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', { id }),
   reviewCheckpoint: (conversationId, turnId) => ipcRenderer.invoke('checkpoints:review', { conversationId, turnId }),
@@ -66,6 +112,47 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('agents:event', handler);
     return () => ipcRenderer.removeListener('agents:event', handler);
   },
+  usageSummary: (conversationId) => ipcRenderer.invoke('usage:summary', conversationId ? { conversationId } : {}),
+  reportView: (view, conversationId) => ipcRenderer.invoke('ui:report-view', { view, conversationId }),
+  coordinationOverview: () => ipcRenderer.invoke('coordination:overview', {}),
+  coordinationPreflight: (projectId, files) => ipcRenderer.invoke('coordination:preflight', { projectId, files }),
+  globalSearch: (query) => ipcRenderer.invoke('search:global', { query }),
+  updateState: () => ipcRenderer.invoke('updates:state', {}),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check', {}),
+  downloadUpdate: () => ipcRenderer.invoke('updates:download', {}),
+  installUpdate: () => ipcRenderer.invoke('updates:install', {}),
+  onUpdateState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: UpdateState): void => listener(payload);
+    ipcRenderer.on('app:update-state', handler);
+    return () => ipcRenderer.removeListener('app:update-state', handler);
+  },
+  runTerminalCommand: (projectId, command, shell) => ipcRenderer.invoke('terminal:run', { projectId, command, shell }),
+  stopTerminalCommand: (id) => ipcRenderer.invoke('terminal:stop', { id }),
+  onTerminalEvent: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: TerminalEvent): void => listener(payload);
+    ipcRenderer.on('terminal:event', handler);
+    return () => ipcRenderer.removeListener('terminal:event', handler);
+  },
+  gitOverview: (projectId) => ipcRenderer.invoke('git:overview', { projectId }),
+  gitStage: (projectId, paths, stage) => ipcRenderer.invoke('git:stage', { projectId, paths, stage }),
+  gitCommit: (projectId, message) => ipcRenderer.invoke('git:commit', { projectId, message }),
+  gitCheckout: (projectId, branch) => ipcRenderer.invoke('git:checkout', { projectId, branch }),
+  gitCreateBranch: (projectId, name, checkout) => ipcRenderer.invoke('git:create-branch', { projectId, name, checkout }),
+  gitSync: (projectId, action) => ipcRenderer.invoke('git:sync', { projectId, action }),
+  gitDiff: (projectId, path, staged) => ipcRenderer.invoke('git:diff', { projectId, path, staged }),
+  gitPullRequest: (projectId, title, body) => ipcRenderer.invoke('git:pull-request', { projectId, title, body }),
+  verificationOverview: (projectId) => ipcRenderer.invoke('verification:overview', { projectId }),
+  runVerification: (projectId, command) => ipcRenderer.invoke('verification:run', { projectId, command }),
+  listInterruptedRuns: () => ipcRenderer.invoke('recovery:list', {}),
+  interruptedRunRecap: (conversationId) => ipcRenderer.invoke('recovery:recap', { conversationId }),
+  resumeInterruptedRun: (conversationId) => ipcRenderer.invoke('recovery:resume', { conversationId }),
+  discardInterruptedRun: (conversationId) => ipcRenderer.invoke('recovery:discard', { conversationId }),
+  onOpenConversation: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: OpenConversationEvent): void => listener(payload);
+    ipcRenderer.on('app:open-conversation', handler);
+    return () => ipcRenderer.removeListener('app:open-conversation', handler);
+  },
+  diagnosticsReport: (copy) => ipcRenderer.invoke('diagnostics:report', { copy }),
   dataLocations: () => ipcRenderer.invoke('diagnostics:data-locations', {}),
   recentLogs: (count) => ipcRenderer.invoke('diagnostics:recent-logs', { count }),
   windowState: () => ipcRenderer.invoke('window:state', {}),

@@ -1,0 +1,58 @@
+/*
+ * Purple and Navy colour themes. These set the design tokens by hand; rules in styles.css that
+ * hard-code colours are re-mapped by themes.generated.css (see scripts/generate-themes.mjs).
+ */
+
+/* Purple: follows the "Shades of Purple (Super Dark)" palette used in VS Code. */
+:root[data-theme="purple"] {
+  color-scheme: dark;
+  color: #f1efff;
+  background: #100f22;
+  --bg-deep: #100f22;
+  --bg-shell: #131327;
+  --bg-panel: #15152b;
+  --bg-raised: #191830;
+  --bg-inset: #0f0f20;
+  --bg-input: #191830;
+  --bg-subtle: #141429;
+  --bg-hover: #26244f;
+  --border: #35326a;
+  --border-soft: #23214a;
+  --text: #f1efff;
+  --text-muted: #a599e9;
+  --text-dim: #8a80d2;
+  --mint: #fad000;
+  --mint-strong: #e6be00;
+  --mint-soft: rgba(250, 208, 0, 0.13);
+  --lavender: #b362ff;
+  --lavender-soft: rgba(179, 98, 255, 0.18);
+  --amber: #ff9d00;
+  --red: #ff628c;
+}
+
+/* Navy: a deeper, bluer variation of the default dark theme with a sky-blue accent. */
+:root[data-theme="navy"] {
+  color-scheme: dark;
+  color: #e6edff;
+  background: #0a1128;
+  --bg-deep: #0a1128;
+  --bg-shell: #0d1633;
+  --bg-panel: #101b3d;
+  --bg-raised: #15224b;
+  --bg-inset: #08102a;
+  --bg-input: #0c1738;
+  --bg-subtle: #0e1836;
+  --bg-hover: #1b2b5e;
+  --border: #2b3f7a;
+  --border-soft: #1c2c5c;
+  --text: #e6edff;
+  --text-muted: #94a8d8;
+  --text-dim: #7186bd;
+  --mint: #6cb6ff;
+  --mint-strong: #4a9cf0;
+  --mint-soft: rgba(108, 182, 255, 0.14);
+  --lavender: #a9a4ff;
+  --lavender-soft: rgba(169, 164, 255, 0.15);
+  --amber: #f2bd68;
+  --red: #f27d87;
+}
