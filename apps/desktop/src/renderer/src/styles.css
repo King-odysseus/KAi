@@ -58,6 +58,22 @@ button {
   color: inherit;
 }
 
+select {
+  color-scheme: dark;
+  color: var(--text);
+  background-color: #0e1b2d;
+}
+
+select option,
+select optgroup {
+  color: #dce6f3;
+  background: #0e1b2d;
+}
+
+select option:disabled {
+  color: #66758b;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -971,15 +987,45 @@ button:disabled {
   padding: 0 1px;
   border: 0;
   outline: 0;
-  color: inherit;
+  color: #dce6f3;
   background: transparent;
   appearance: none;
   cursor: pointer;
   font: inherit;
 }
 
+.control-select select {
+  max-width: 116px;
+  padding: 0 1px;
+  border: 0;
+  outline: 0;
+  color: #dce6f3;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.control-select select:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.api-provider-chip {
+  max-width: 250px;
+}
+
+.api-provider-chip .truncate {
+  max-width: 205px;
+}
+
 .agent-select.unavailable {
   border-color: rgba(246, 174, 95, 0.3);
+  color: var(--amber, #f6ae5f);
+}
+
+.agent-select.unavailable select {
   color: var(--amber, #f6ae5f);
 }
 

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import type {
   AgentCapability,
   AgentId,
+  AutonomyMode,
   BootstrapPayload,
   ConversationRecord,
   ContextPreview,
@@ -10,6 +11,7 @@ import type {
   DirectApiCapability,
   ExecutionMode,
   LogEntry,
+  RouteMode,
   SettingsUpdate,
 } from '@kai/contracts';
 import { ConversationSidebar, NavigationRail, navigation, TitleBar } from './components/Chrome';
@@ -43,6 +45,8 @@ export function App(): ReactNode {
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('cli');
+  const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
+  const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
   const [view, setView] = useState<ViewId>('workspace');
   const [contextOpen, setContextOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(248);
@@ -129,6 +133,8 @@ export function App(): ReactNode {
       setDirectApiCapability(nextDirectApiCapability);
       setSelectedAgent(nextBootstrap.settings.defaultAgent);
       setExecutionMode('cli');
+      setSelectedRoute('direct');
+      setSelectedAutonomy(nextBootstrap.settings.defaultAutonomy);
       setAgentNotice(null);
       setError(null);
     } catch (caught) {
@@ -226,7 +232,10 @@ export function App(): ReactNode {
     if (existing) {
       setActiveConversationId(id);
       setSelectedAgent(existing.activeAgent ?? bootstrap?.settings.defaultAgent ?? 'codex');
-      setExecutionMode(existing.execution ?? 'cli');
+      const mode = existing.execution ?? 'cli';
+      setExecutionMode(mode);
+      setSelectedRoute(mode === 'api' ? existing.route ?? bootstrap?.settings.defaultRoute ?? 'direct' : 'direct');
+      setSelectedAutonomy(existing.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
       setView('workspace');
       return;
     }
@@ -238,7 +247,10 @@ export function App(): ReactNode {
     setConversations((current) => [conversation, ...current.filter((item) => item.id !== id)]);
     setActiveConversationId(id);
     setSelectedAgent(conversation.activeAgent ?? bootstrap?.settings.defaultAgent ?? 'codex');
-    setExecutionMode(conversation.execution ?? 'cli');
+    const mode = conversation.execution ?? 'cli';
+    setExecutionMode(mode);
+    setSelectedRoute(mode === 'api' ? conversation.route ?? bootstrap?.settings.defaultRoute ?? 'direct' : 'direct');
+    setSelectedAutonomy(conversation.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
     setView('workspace');
   }
 
@@ -287,8 +299,8 @@ export function App(): ReactNode {
           prompt,
           agent: selectedAgent,
           execution: executionMode,
-          route: apiRun ? 'direct' : conversation.route ?? bootstrap.settings.defaultRoute,
-          autonomy: conversation.autonomy ?? bootstrap.settings.defaultAutonomy,
+          route: apiRun ? selectedRoute : 'direct',
+          autonomy: selectedAutonomy,
         }).then(unwrap),
         apiRun
           ? `${directApiCapability?.displayName} is working`
@@ -541,16 +553,28 @@ export function App(): ReactNode {
             directApiCapability={directApiCapability}
             selectedAgent={selectedAgent}
             executionMode={executionMode}
+            selectedRoute={selectedRoute}
+            selectedAutonomy={selectedAutonomy}
+            proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
             streamingText={streamingText}
             pendingApproval={pendingApproval}
             running={runningConversationId === activeConversation?.id}
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
+              if (mode === 'cli') setSelectedRoute('direct');
               setAgentNotice(null);
             }}
             onSelectAgent={(agent) => {
               setSelectedAgent(agent);
+              setAgentNotice(null);
+            }}
+            onSelectRoute={(route) => {
+              setSelectedRoute(route);
+              setAgentNotice(null);
+            }}
+            onSelectAutonomy={(autonomy) => {
+              setSelectedAutonomy(autonomy);
               setAgentNotice(null);
             }}
             onChooseProject={() => void chooseProject()}

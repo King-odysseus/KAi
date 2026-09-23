@@ -2,6 +2,24 @@
 
 ## 2026-09-23
 
+### Composer controls and authoritative Cognitive1 rules
+
+- **Agent, route, and autonomy controls are now functional and readable.** The
+  workspace can switch agent harnesses, select Direct or the authenticated
+  Universal Proxy route in API mode, and choose Plan, Ask, Auto-edit, Full
+  control, or Custom permissions. Dark native select options now use explicit
+  contrast instead of relying on the Windows popup theme.
+- **DeepSeek and other API providers are visible in the composer.** API mode
+  shows the configured provider and model, including DeepSeek API and
+  OpenRouter, and links directly back to provider settings.
+- **The complete Cognitive1 `Instruct.md` is bundled inside KAI.** The 57-rule
+  authoritative document is copied into the app during engine staging and is
+  injected before every CLI or direct API run. Project context follows it, and
+  the context preview records the bundled source explicitly.
+- **Universal Proxy routing now has a real direct API path.** Selecting Proxy in
+  API mode sends the request through KAI's authenticated loopback proxy using
+  the proxy access token, not the provider credential.
+
 ### Direct API provider catalog
 
 - **Desktop direct API settings now support OpenRouter and other popular
@@ -69,7 +87,7 @@
   attempts, honor `Retry-After`, and persist each attempt as lifecycle evidence.
   Retries wrap only the provider request, so completed file, command, and MCP tool
   actions are not executed a second time.
-- **Verification:** 47 test files and 362 tests pass with one opt-in live test
+- **Verification:** 48 test files and 366 tests pass with one opt-in live test
   skipped by default. Tests cover streaming tool calls, argument validation,
   approval allow/deny paths, path escape and symlink escape attempts, vault-backed
   stdio and Streamable HTTP MCP credentials, read-only MCP policy, malformed
@@ -82,7 +100,7 @@
   smoke also verifies the approval dialog, process execution, stdout capture, and
   provider follow-up. The same installed smoke verifies a populated context
   preview and the context meter. Installer SHA-256:
-  `9C3D2925208596E5476BF4F1DF60BCCAB0C2CFC9D8D9572E3B581312DBCEEDF4`.
+  `B6074C581265EC255EAD918522659385F4F6FE41D53044A211C797D5F7088210`.
 
 **Files:** `apps/desktop/src/main/project-tools.ts`,
 `apps/desktop/src/main/mcp-runtime.ts`,

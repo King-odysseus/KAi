@@ -28,6 +28,44 @@ describe('desktop direct provider runtime', () => {
     });
   });
 
+  it('routes direct API runs through the authenticated Universal Proxy without reading the provider key', async () => {
+    const requests: Array<{ path?: string; authorization?: string; body: Record<string, unknown> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push({
+          path: request.url,
+          authorization: request.headers.authorization,
+          body: JSON.parse(raw) as Record<string, unknown>,
+        });
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.end('event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-proxy","output":[{"type":"message","content":[{"type":"output_text","text":"Proxy ready."}]}]}}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = enabledSettings('https://api.openai.com/v1', 'test-model');
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(settings),
+      credentialPort(),
+      undefined,
+      {
+        resolveProxyRoute: async () => ({ baseUrl, apiKey: 'loopback-token' }),
+      },
+    );
+
+    const result = await runtime.run({ ...runRequest(), route: 'proxy' }, process.cwd());
+
+    expect(result).toMatchObject({ status: 'completed', output: 'Proxy ready.', sessionId: 'resp-proxy' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      path: '/v1/responses',
+      authorization: 'Bearer loopback-token',
+      body: { model: 'test-model', stream: true },
+    });
+  });
+
   it('streams Responses API text and records measured usage', async () => {
     const requests: Array<{ authorization?: string; body: Record<string, unknown> }> = [];
     const server = http.createServer((request, response) => {

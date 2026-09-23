@@ -69,6 +69,11 @@ export interface DirectApiApprovalPort {
   request(approval: DirectApiApprovalRequest): Promise<boolean>;
 }
 
+export interface DirectApiProxyRoute {
+  baseUrl: string;
+  apiKey: string;
+}
+
 interface DirectApiSettingsPort {
   load(): Promise<AppSettings>;
 }
@@ -82,6 +87,7 @@ interface DirectApiCredentialPort {
 export interface DirectProviderRuntimeOptions {
   maxProviderAttempts?: number;
   retryBaseDelayMs?: number;
+  resolveProxyRoute?: (request: AgentRunRequest) => Promise<DirectApiProxyRoute>;
 }
 
 export class DesktopDirectProviderRuntime {
@@ -151,14 +157,41 @@ export class DesktopDirectProviderRuntime {
     contextText?: string,
     history?: readonly DirectApiHistoryTurn[],
   ): Promise<AgentExecutionResult> {
-    const capability = await this.capability();
-    if (!capability.available) {
-      return immediateFailure(request, capability.unavailableReason || 'Direct API mode is unavailable.');
-    }
-
-    const apiKey = await this.credentials.get(capability.credentialId);
-    if (!apiKey) {
-      return immediateFailure(request, `Credential ${capability.credentialId} is not available.`);
+    let capability = await this.capability();
+    let apiKey: string;
+    if (request.route === 'proxy') {
+      const preset = directProviderPreset(capability.provider);
+      if (!capability.enabled) {
+        return immediateFailure(request, 'Direct API mode is disabled in Settings.');
+      }
+      if (preset.protocol === 'unsupported') {
+        return immediateFailure(request, `${capability.displayName} cannot be routed through the Universal Proxy adapter.`);
+      }
+      if (!capability.model.trim()) {
+        return immediateFailure(request, 'Set a direct API model in Settings before using the proxy route.');
+      }
+      if (!this.options.resolveProxyRoute) {
+        return immediateFailure(request, 'Universal Proxy routing is not available in this KAI build.');
+      }
+      try {
+        const proxyRoute = await this.options.resolveProxyRoute(request);
+        capability = { ...capability, baseUrl: proxyRoute.baseUrl };
+        apiKey = proxyRoute.apiKey;
+      } catch (error) {
+        return immediateFailure(
+          request,
+          `Universal Proxy route is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } else {
+      if (!capability.available) {
+        return immediateFailure(request, capability.unavailableReason || 'Direct API mode is unavailable.');
+      }
+      const directApiKey = await this.credentials.get(capability.credentialId);
+      if (!directApiKey) {
+        return immediateFailure(request, `Credential ${capability.credentialId} is not available.`);
+      }
+      apiKey = directApiKey;
     }
 
     if (directProviderPreset(capability.provider).protocol === 'chat-completions') {

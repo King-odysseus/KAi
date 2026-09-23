@@ -27,6 +27,8 @@ import type { CredentialVault } from './credential-vault';
 import type { DesktopAgentRuntime } from './agent-runtime';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
+import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
 import { dataLocations, type DesktopPaths } from './paths';
@@ -50,6 +52,7 @@ export interface IpcContext {
   cognitive1: Cognitive1Client;
   proxy: UniversalProxyClient;
   agents: DesktopAgentRuntime;
+  executionRules: DesktopExecutionRules;
   directApi: DesktopDirectProviderRuntime;
   mcp: DesktopMcpRuntime;
   memorySessions: Map<string, ActiveMemorySession>;
@@ -189,6 +192,16 @@ async function runConversationAgent(
   const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
   if (!project) throw new NotFoundError('Open a project before sending a message.');
 
+  let authoritativeRules: string;
+  try {
+    authoritativeRules = await context.executionRules.read();
+  } catch (error) {
+    throw new Error(
+      `KAI could not load the bundled Cognitive1 standing instructions: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
+
   const executionMode = request.execution ?? 'cli';
   const previousAgent = conversation.activeAgent;
   const previousExecution = conversation.execution ?? 'cli';
@@ -238,11 +251,14 @@ async function runConversationAgent(
     }),
   };
   const contextText = executionMode === 'api'
-    ? (await buildConversationContext(context, project.path, project.name, conversation, request.prompt)).text
+    ? (await buildConversationContext(context, project.path, project.name, conversation, request.prompt, authoritativeRules)).text
     : '';
+  const executionRequest = executionMode === 'cli'
+    ? applyExecutionRulesToRequest(request, rulesBriefing)
+    : request;
   const execution = executionMode === 'api'
     ? await context.directApi.run(request, project.path, resumeSessionId, emit, approvals, contextText, conversation.turns)
-    : await context.agents.run(request, project.path, resumeSessionId, emit);
+    : await context.agents.run(executionRequest, project.path, resumeSessionId, emit);
   if (executionMode === 'api' && execution.status === 'failed') {
     const ended = await finishMemorySession(
       context,
@@ -352,11 +368,13 @@ async function buildConversationContext(
   projectName: string,
   conversation: ConversationRecord | null,
   prompt: string,
+  authoritativeRules?: string,
 ) {
   const memories = await recallScopedMemories(context, projectPath, projectName, prompt);
   return buildProjectContext(projectPath, {
     selectedPaths: changedFilePaths(conversation),
     memories,
+    authoritativeRules,
   });
 }
 

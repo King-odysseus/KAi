@@ -55,6 +55,10 @@
       {
         "from": "resources/engines",
         "to": "engines"
+      },
+      {
+        "from": "resources/agent-rules",
+        "to": "agent-rules"
       }
     ],
     "win": {

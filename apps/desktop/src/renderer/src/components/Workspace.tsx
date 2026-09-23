@@ -20,16 +20,18 @@ import type {
   AgentCapability,
   AgentId,
   AppSettings,
+  AutonomyMode,
   ConversationRecord,
   ContextPreview,
   DirectApiCapability,
   ExecutionMode,
   ProjectRecord,
+  RouteMode,
   ServiceState,
 } from '@kai/contracts';
 import { relativeTime, statusLabel } from '../types';
 
-export function WorkspaceView({ activeProject, activeConversation, settings, busy, running, notice, streamingText, pendingApproval, agentCapabilities, directApiCapability, selectedAgent, executionMode, onSelectExecution, onSelectAgent, onChooseProject, onCreateConversation, onSend, onCancel, onApprovalResponse, onSignIn, onRefreshAgents, onOpenSettings }: {
+export function WorkspaceView({ activeProject, activeConversation, settings, busy, running, notice, streamingText, pendingApproval, agentCapabilities, directApiCapability, selectedAgent, executionMode, selectedRoute, selectedAutonomy, proxyReady, onSelectExecution, onSelectAgent, onSelectRoute, onSelectAutonomy, onChooseProject, onCreateConversation, onSend, onCancel, onApprovalResponse, onSignIn, onRefreshAgents, onOpenSettings }: {
   activeProject: ProjectRecord | null;
   activeConversation: ConversationRecord | null;
   settings: AppSettings;
@@ -48,8 +50,13 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
   directApiCapability: DirectApiCapability | null;
   selectedAgent: AgentId;
   executionMode: ExecutionMode;
+  selectedRoute: RouteMode;
+  selectedAutonomy: AutonomyMode;
+  proxyReady: boolean;
   onSelectExecution: (mode: ExecutionMode) => void;
   onSelectAgent: (agent: AgentId) => void;
+  onSelectRoute: (route: RouteMode) => void;
+  onSelectAutonomy: (autonomy: AutonomyMode) => void;
   onChooseProject: () => void;
   onCreateConversation: (prompt: string) => void;
   onSend: (prompt: string) => void;
@@ -159,18 +166,40 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
               <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
             </div>
             {apiRun ? (
-              <span className="chip-button" title={directApiCapability?.unavailableReason}><Cloud size={14} /><span>{directApiCapability?.model || directApiCapability?.displayName || 'Direct API'}</span></span>
+              <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}>
+                <Cloud size={14} />
+                <span className="truncate">{selectedRoute === 'proxy'
+                  ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}`
+                  : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span>
+              </button>
             ) : (
               <label className={`chip-button agent-select ${ready ? '' : 'unavailable'}`} title={selectedCapability?.unavailableReason}>
                 <Cpu size={14} />
-                <select value={selectedAgent} onChange={(event) => onSelectAgent(event.target.value as AgentId)} disabled={busy}>
+                <select aria-label="Agent" value={selectedAgent} onChange={(event) => onSelectAgent(event.target.value as AgentId)} disabled={busy}>
                   {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}{setupSuffix(agent)}</option>)}
                 </select>
                 <ChevronDown size={12} />
               </label>
             )}
-            {!apiRun && <button type="button" className="chip-button" disabled><Route size={14} /><span>{settings.defaultRoute}</span><ChevronDown size={12} /></button>}
-            <button type="button" className="chip-button" disabled><ShieldCheck size={14} /><span>{settings.defaultAutonomy}</span></button>
+            <label className={`chip-button control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} title={apiRun ? proxyReady ? 'Choose the direct provider route or KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route' : 'CLI agents currently use direct routing'}>
+              <Route size={14} />
+              <select aria-label="Route" value={apiRun ? selectedRoute : 'direct'} onChange={(event) => onSelectRoute(event.target.value as RouteMode)} disabled={busy || !apiRun}>
+                <option value="direct">Direct</option>
+                <option value="proxy" disabled={!apiRun || !proxyReady}>{proxyReady ? 'Proxy' : 'Proxy (not ready)'}</option>
+              </select>
+              <ChevronDown size={12} />
+            </label>
+            <label className="chip-button control-select autonomy-select" title="Choose how much project access the active run has">
+              <ShieldCheck size={14} />
+              <select aria-label="Autonomy" value={selectedAutonomy} onChange={(event) => onSelectAutonomy(event.target.value as AutonomyMode)} disabled={busy}>
+                <option value="plan">Plan</option>
+                <option value="ask">Ask</option>
+                <option value="autoEdit">Auto-edit</option>
+                <option value="full">Full control</option>
+                <option value="custom">Custom</option>
+              </select>
+              <ChevronDown size={12} />
+            </label>
           </div>
           {running ? (
             <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>

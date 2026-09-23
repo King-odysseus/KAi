@@ -8,6 +8,7 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const projectRoot = path.resolve(appRoot, '..', '..');
 const workspaceRoot = path.resolve(projectRoot, '..');
 const resourcesRoot = path.join(appRoot, 'resources', 'engines');
+const agentRulesRoot = path.join(appRoot, 'resources', 'agent-rules');
 const engines = [
   {
     name: 'cognitive1',
@@ -58,6 +59,11 @@ for (const engine of engines) {
   );
   process.stdout.write(`Staged ${engine.packageName} ${engine.version} from ${sourceRoot}\n`);
 }
+
+const cognitive1Root = await findEngineRoot(engines[0]);
+await mkdir(agentRulesRoot, { recursive: true });
+await cp(path.join(cognitive1Root, 'Instruct.md'), path.join(agentRulesRoot, 'Cognitive1-Rules.md'), { force: true });
+process.stdout.write(`Staged authoritative Cognitive1 rules from ${cognitive1Root}\n`);
 
 async function findEngineRoot(engine) {
   const candidates = [];

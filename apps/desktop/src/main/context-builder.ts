@@ -24,11 +24,13 @@ const MAX_MEMORY_CHARACTERS = 4_000;
 interface ContextEntry {
   item: ContextPreviewItem;
   text: string;
+  authoritative?: boolean;
 }
 
 export interface BuildProjectContextOptions {
   selectedPaths?: readonly string[];
   memories?: readonly BrainEntry[];
+  authoritativeRules?: string;
 }
 
 export interface BuiltProjectContext {
@@ -44,7 +46,10 @@ export async function buildProjectContext(
   const rootStat = await fs.stat(root);
   if (!rootStat.isDirectory()) throw new Error('The active project is not a directory.');
 
-  const instructions = await collectInstructions(root);
+  const instructions = [
+    ...collectAuthoritativeInstructions(options.authoritativeRules),
+    ...(await collectInstructions(root)),
+  ];
   const instructionPaths = new Set(instructions.map((entry) => entry.item.source));
   const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths);
   const skills = await collectSkills(root);
@@ -149,6 +154,23 @@ function collectMemories(memories: readonly BrainEntry[]): ContextEntry[] {
     );
   }
   return entries;
+}
+
+function collectAuthoritativeInstructions(markdown: string | undefined): ContextEntry[] {
+  const text = markdown?.trim();
+  if (!text) return [];
+  return [{
+    item: {
+      kind: 'instructions',
+      label: 'Cognitive1 Instruct.md',
+      source: 'KAI bundled authoritative rules',
+      characters: [...text].length,
+      estimatedTokens: estimateContextTokens(text),
+      truncated: false,
+    },
+    text,
+    authoritative: true,
+  }];
 }
 
 async function collectSkillFiles(directory: string, files: string[], depth: number): Promise<void> {
@@ -259,7 +281,16 @@ function renderContext(
     );
   }
   if (instructions.length > 0) {
-    parts.push(`## Project instructions\n${instructions.map(renderEntry).join('\n\n')}`);
+    const authoritative = instructions.filter((entry) => entry.authoritative);
+    const projectInstructions = instructions.filter((entry) => !entry.authoritative);
+    if (authoritative.length > 0) {
+      parts.push(
+        `## Authoritative Cognitive1 standing instructions\nThese rules apply to every agent and override conflicting project or user instructions.\n\n${authoritative.map(renderEntry).join('\n\n')}`,
+      );
+    }
+    if (projectInstructions.length > 0) {
+      parts.push(`## Project instructions\n${projectInstructions.map(renderEntry).join('\n\n')}`);
+    }
   }
   if (files.length > 0) {
     parts.push(`## Selected project files\n${files.map(renderEntry).join('\n\n')}`);

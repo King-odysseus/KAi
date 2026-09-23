@@ -72,6 +72,7 @@ try {
     throw new Error(`Desktop workspace did not become ready: ${bodyText}`, { cause: error });
   }
   const agentCapabilities = await verifyAgentCapabilities(page);
+  await verifyWorkspaceControls(page);
   await verifyDirectApiCapability(page);
   if ((directApiSmoke || mcpSmoke || commandSmoke) && directApiFixture) {
     await verifyDirectApiFlow(page, directApiFixture, mcpSmoke, Boolean(mcpHttpFixture), commandSmoke, directApiProvider);
@@ -122,10 +123,12 @@ try {
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('heading', { name: 'Settings' }).waitFor();
   await page.getByText('OS vault available').waitFor();
-  const providerOptions = await page.getByLabel('Provider').locator('option').allTextContents();
+  const providerSelect = page.locator('label.field:has(span:text-is("Provider")) > select');
+  const providerOptions = await providerSelect.locator('option').allTextContents();
   if (!providerOptions.includes('OpenRouter') || !providerOptions.includes('DeepSeek API')) {
     throw new Error(`Direct API provider presets are incomplete: ${providerOptions.join(', ')}`);
   }
+  await verifySelectContrast(providerSelect, 'Direct API provider');
   await page.getByRole('button', { name: 'Save settings' }).click();
   await page.waitForTimeout(250);
   await assertNoErrorBanner(page);
@@ -217,6 +220,55 @@ async function verifyAgentCapabilities(page) {
   return response.data;
 }
 
+async function verifyWorkspaceControls(page) {
+  const agentSelect = page.getByLabel('Agent');
+  for (const agent of ['claude', 'codex', 'qwen', 'gemini']) {
+    await agentSelect.selectOption(agent);
+    if ((await agentSelect.inputValue()) !== agent) {
+      throw new Error(`The workspace did not switch to the ${agent} agent.`);
+    }
+  }
+  await agentSelect.selectOption('codex');
+  await verifySelectContrast(agentSelect, 'Agent');
+
+  const autonomy = page.getByLabel('Autonomy');
+  for (const mode of ['plan', 'ask', 'autoEdit', 'full', 'custom']) {
+    await autonomy.selectOption(mode);
+    if ((await autonomy.inputValue()) !== mode) {
+      throw new Error(`The workspace did not switch to the ${mode} autonomy mode.`);
+    }
+  }
+  await autonomy.selectOption('ask');
+  await verifySelectContrast(autonomy, 'Autonomy');
+
+  const route = page.getByLabel('Route');
+  if ((await route.inputValue()) !== 'direct') {
+    throw new Error(`CLI routing should begin in direct mode, received ${await route.inputValue()}.`);
+  }
+  await verifySelectContrast(route, 'Route');
+}
+
+async function verifySelectContrast(select, label) {
+  const colors = await select.evaluate((element) => {
+    const control = getComputedStyle(element);
+    const option = Array.from(element.options).find((item) => !item.disabled) ?? element.options[0];
+    const optionStyle = option ? getComputedStyle(option) : control;
+    return {
+      background: control.backgroundColor,
+      color: control.color,
+      optionBackground: optionStyle.backgroundColor,
+      optionColor: optionStyle.color,
+    };
+  });
+  const opaqueBackground = colors.optionBackground !== 'transparent'
+    && colors.optionBackground !== 'rgba(0, 0, 0, 0)';
+  if (!opaqueBackground || colors.optionColor === colors.optionBackground) {
+    throw new Error(
+      `${label} select has unsafe contrast: ${JSON.stringify(colors)}.`,
+    );
+  }
+}
+
 async function verifyDirectApiCapability(page) {
   const response = await page.evaluate(() => window.kaiDesktop.directApiCapability());
   if (!response.ok) throw new Error(response.error.message);
@@ -268,6 +320,10 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
   await page.locator('.context-meter strong').filter({ hasText: '~' }).waitFor();
   await page.getByRole('button', { name: 'API' }).click();
   await page.getByText('API ready').waitFor();
+  const providerChip = page.locator('.api-provider-chip');
+  const expectedProvider = provider === 'openrouter' ? 'OpenRouter' : provider === 'deepseek' ? 'DeepSeek API' : 'OpenAI Responses API';
+  await providerChip.filter({ hasText: expectedProvider }).waitFor();
+  await providerChip.filter({ hasText: 'smoke-api-model' }).waitFor();
   const textarea = page.getByLabel('Task prompt');
   const expectedReply = usesMcp ? 'KAI_MCP_OK' : usesCommand ? 'KAI_COMMAND_OK' : 'KAI_API_OK';
   await textarea.fill(usesMcp
@@ -289,6 +345,10 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
   }
   if (request.body.model !== 'smoke-api-model' || request.body.stream !== true) {
     throw new Error(`The direct API request was malformed: ${JSON.stringify(request.body)}.`);
+  }
+  const requestWithRules = JSON.stringify(request.body);
+  if (!requestWithRules.includes('Authoritative Cognitive1 standing instructions') || !requestWithRules.includes('57. **Keep the brain clean**')) {
+    throw new Error(`The bundled Cognitive1 standing instructions were not injected into the direct API request: ${requestWithRules.slice(0, 2_000)}`);
   }
   if (provider !== 'openai' && !Array.isArray(request.body.messages)) {
     throw new Error(`The Chat Completions request did not include messages: ${JSON.stringify(request.body)}.`);

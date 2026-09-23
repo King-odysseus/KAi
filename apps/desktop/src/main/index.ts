@@ -5,6 +5,7 @@ import { Cognitive1Client } from './cognitive1-client';
 import { DesktopAgentRuntime } from './agent-runtime';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
+import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
 import { closeMemorySessions, registerIpc, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
@@ -89,8 +90,23 @@ async function startApplication(): Promise<void> {
   const cognitive1 = new Cognitive1Client({ access: serviceController });
   const proxy = new UniversalProxyClient({ access: serviceController });
   const agents = new DesktopAgentRuntime();
+  const executionRules = new DesktopExecutionRules(
+    app.isPackaged
+      ? path.join(process.resourcesPath, 'agent-rules', 'Cognitive1-Rules.md')
+      : path.join(kaiRoot, 'apps', 'desktop', 'resources', 'agent-rules', 'Cognitive1-Rules.md'),
+  );
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
-  const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime);
+  const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
+    resolveProxyRoute: async (request) => {
+      const controller = serviceController;
+      if (!controller) throw new Error('The managed service controller is unavailable.');
+      const access = await controller.loopbackAccess('universalProxy');
+      return {
+        baseUrl: `${access.endpoint}/a/${request.agent}/v1`,
+        apiKey: access.token,
+      };
+    },
+  });
 
   ipcContext = {
     appName: 'KAI',
@@ -107,6 +123,7 @@ async function startApplication(): Promise<void> {
     cognitive1,
     proxy,
     agents,
+    executionRules,
     directApi,
     mcp: mcpRuntime,
     memorySessions: new Map(),
