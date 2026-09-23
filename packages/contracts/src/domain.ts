@@ -8,6 +8,7 @@ import {
   providerIdSchema,
   routeModeSchema,
   schemaVersionSchema,
+  themeModeSchema,
   timestampSchema,
   windowBoundsSchema,
 } from './primitives';
@@ -85,6 +86,7 @@ export const appSettingsV1Schema = z
     defaultAgent: agentIdSchema,
     defaultRoute: routeModeSchema,
     defaultAutonomy: autonomyModeSchema,
+    theme: themeModeSchema,
     activeProjectId: z.string().nullable(),
     projectOrder: z.array(z.string()),
     windowBounds: windowBoundsSchema.nullable(),
@@ -153,6 +155,7 @@ export function createDefaultSettings(): AppSettings {
     defaultAgent: 'codex',
     defaultRoute: 'direct',
     defaultAutonomy: 'ask',
+    theme: 'dark',
     activeProjectId: null,
     projectOrder: [],
     windowBounds: null,

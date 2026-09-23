@@ -49,6 +49,7 @@ import {
   autonomyModeSchema,
   providerIdSchema,
   routeModeSchema,
+  themeModeSchema,
   serviceKindSchema,
   serviceStateSchema,
   type LogEntry,
@@ -123,6 +124,7 @@ export const ipcInputSchemas = {
       defaultAgent: agentIdSchema.optional(),
       defaultRoute: routeModeSchema.optional(),
       defaultAutonomy: autonomyModeSchema.optional(),
+      theme: themeModeSchema.optional(),
       logRetentionEntries: z.number().int().min(100).max(100_000).optional(),
       diagnosticsEnabled: z.boolean().optional(),
       mcpServers: z.array(mcpServerSettingsSchema).optional(),
@@ -236,6 +238,7 @@ export interface SettingsUpdate {
   defaultAgent?: AppSettings['defaultAgent'];
   defaultRoute?: AppSettings['defaultRoute'];
   defaultAutonomy?: AppSettings['defaultAutonomy'];
+  theme?: AppSettings['theme'];
   logRetentionEntries?: number;
   diagnosticsEnabled?: boolean;
   mcpServers?: AppSettings['mcpServers'];

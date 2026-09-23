@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const schemaVersionSchema = z.literal(1);
 export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini']);
 export const executionModeSchema = z.enum(['cli', 'api']);
+export const themeModeSchema = z.enum(['dark', 'light']);
 export const providerIdSchema = z.enum([
   'openai',
   'anthropic',
@@ -96,6 +97,7 @@ export const logEntrySchema = z
 
 export type AgentId = z.infer<typeof agentIdSchema>;
 export type ExecutionMode = z.infer<typeof executionModeSchema>;
+export type ThemeMode = z.infer<typeof themeModeSchema>;
 export type ProviderId = z.infer<typeof providerIdSchema>;
 export type AutonomyMode = z.infer<typeof autonomyModeSchema>;
 export type RouteMode = z.infer<typeof routeModeSchema>;

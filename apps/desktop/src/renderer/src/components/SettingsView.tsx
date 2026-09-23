@@ -47,6 +47,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <SelectField label="Agent" value={draft.defaultAgent} onChange={(value) => setDraft({ ...draft, defaultAgent: value as AppSettings['defaultAgent'] })} options={['codex', 'claude', 'qwen', 'gemini']} />
             <SelectField label="Route" value={draft.defaultRoute} onChange={(value) => setDraft({ ...draft, defaultRoute: value as AppSettings['defaultRoute'] })} options={['direct', 'proxy']} />
             <SelectField label="Autonomy" value={draft.defaultAutonomy} onChange={(value) => setDraft({ ...draft, defaultAutonomy: value as AppSettings['defaultAutonomy'] })} options={['plan', 'ask', 'autoEdit', 'full', 'custom']} />
+            <SelectField label="Theme" value={draft.theme} onChange={(value) => setDraft({ ...draft, theme: value as AppSettings['theme'] })} options={['dark', 'light']} />
             <NumberField label="Log entries" value={draft.logRetentionEntries} min={100} max={100000} onChange={(value) => setDraft({ ...draft, logRetentionEntries: value })} />
           </div>
           <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><input type="checkbox" checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
@@ -54,6 +55,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             defaultAgent: draft.defaultAgent,
             defaultRoute: draft.defaultRoute,
             defaultAutonomy: draft.defaultAutonomy,
+            theme: draft.theme,
             logRetentionEntries: draft.logRetentionEntries,
             diagnosticsEnabled: draft.diagnosticsEnabled,
             directApi: draft.directApi,

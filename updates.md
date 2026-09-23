@@ -20,6 +20,11 @@
 - **Universal Proxy routing now has a real direct API path.** Selecting Proxy in
   API mode sends the request through KAI's authenticated loopback proxy using
   the proxy access token, not the provider credential.
+- **Dark and Light themes are both available and persisted.** A title-bar
+  toggle switches the full desktop interface immediately, and the Settings page
+  includes the theme as an explicit saved preference. Light mode applies across
+  the workspace, menus, settings, context, Brain, Proxy, dialogs, and data
+  tables while preserving contrast and full-width layouts.
 
 ### Direct API provider catalog
 
@@ -101,7 +106,7 @@
   smoke also verifies the approval dialog, process execution, stdout capture, and
   provider follow-up. The same installed smoke verifies a populated context
   preview and the context meter. Installer SHA-256:
-  `4386810FED417BC136392C02B893296460B1673FBBE45A52DFEBEAA9A523373E`.
+  `C516DFF9C99A9B6E91EE2D97F8C1667EE3DBA974C6987701920A971D834FD418`.
 
 **Files:** `apps/desktop/src/main/project-tools.ts`,
 `apps/desktop/src/main/mcp-runtime.ts`,

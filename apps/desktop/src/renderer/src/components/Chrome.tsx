@@ -7,12 +7,14 @@ import {
   FolderOpen,
   History,
   Layers3,
+  Moon,
   PanelLeftClose,
   PanelRightClose,
   Plus,
   Route,
   Search,
   Settings,
+  Sun,
   Trash2,
   Workflow,
 } from 'lucide-react';
@@ -58,13 +60,16 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
   );
 }
 
-export function TitleBar({ projects, activeProject, rightOpen, onChoose, onOpenProject, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onToggleTheme, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: 'dark' | 'light'; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleTheme: () => void; onToggleContext: () => void }): ReactNode {
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
         <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} />
       </div>
       <div className="titlebar-actions">
+        <button type="button" className="icon-button" title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} onClick={onToggleTheme}>
+          {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        </button>
         <button type="button" className="icon-button" title="Search" aria-label="Search"><Search size={17} /></button>
         <button type="button" className="icon-button" title={rightOpen ? 'Hide context panel (Ctrl+B)' : 'Show context panel (Ctrl+B)'} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
           {rightOpen ? <PanelRightClose size={17} /> : <PanelLeftClose size={17} />}

@@ -261,6 +261,26 @@ async function verifyWorkspaceControls(page) {
   if (!(await route.innerText()).includes('Direct')) {
     throw new Error(`CLI routing should begin in direct mode, received ${await route.innerText()}.`);
   }
+
+  await verifyThemeToggle(page);
+}
+
+async function verifyThemeToggle(page) {
+  const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  if (initialTheme !== 'dark') throw new Error(`The workspace should begin in dark mode, received ${initialTheme}.`);
+
+  await page.getByRole('button', { name: 'Switch to light mode', exact: true }).click({ force: true });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  await page.waitForFunction(async () => {
+    const response = await window.kaiDesktop.getSettings();
+    return response.ok && response.data.theme === 'light';
+  });
+  await assertNoHorizontalOverflow(page);
+  await verifyMenuContrast(page, 'Agent');
+  await page.screenshot({ path: path.join(outputDirectory, 'theme-light.png') });
+
+  await page.getByRole('button', { name: 'Switch to dark mode', exact: true }).click({ force: true });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 }
 
 async function selectMenuOption(page, triggerLabel, optionName) {
@@ -291,8 +311,7 @@ async function verifyMenuContrast(page, label) {
 
 async function openSelectMenu(page, label) {
   const trigger = page.getByRole('button', { name: label, exact: true });
-  await trigger.focus();
-  await page.keyboard.press('Enter');
+  await trigger.click({ force: true });
   await page.getByRole('listbox', { name: label, exact: true }).waitFor({ state: 'visible' });
 }
 
@@ -472,6 +491,7 @@ async function writeEngineSettings(directory, ports) {
     defaultAgent: 'codex',
     defaultRoute: 'direct',
     defaultAutonomy: 'ask',
+    theme: 'dark',
     activeProjectId: null,
     projectOrder: [],
     windowBounds: null,
@@ -517,6 +537,7 @@ async function writeAgentSettings(
     defaultAgent: 'codex',
     defaultRoute: 'direct',
     defaultAutonomy: 'ask',
+    theme: 'dark',
     activeProjectId: project.id,
     projectOrder: [project.id],
     windowBounds: null,

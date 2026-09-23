@@ -3043,6 +3043,217 @@ code {
   font-size: 12px;
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+  color: #17283c;
+  background: #edf3f8;
+  --bg-deep: #edf3f8;
+  --bg-shell: #f8fafc;
+  --bg-panel: #ffffff;
+  --bg-raised: #f0f5fa;
+  --bg-hover: #e5edf5;
+  --bg-inset: #f4f7fb;
+  --bg-input: #ffffff;
+  --bg-subtle: #f7fafc;
+  --border: #c7d5e3;
+  --border-soft: #dce6ef;
+  --text: #17283c;
+  --text-muted: #52657a;
+  --text-dim: #73869a;
+  --mint: #45cfaa;
+  --mint-strong: #118563;
+  --mint-soft: rgba(17, 133, 99, 0.1);
+  --lavender: #6f54d9;
+  --lavender-soft: rgba(111, 84, 217, 0.1);
+  --amber: #a96800;
+  --red: #bd3f4d;
+}
+
+:root[data-theme="light"] select {
+  color-scheme: light;
+  color: var(--text);
+  background-color: var(--bg-input);
+}
+
+:root[data-theme="light"] select option,
+:root[data-theme="light"] select optgroup {
+  color: var(--text);
+  background: var(--bg-input);
+}
+
+:root[data-theme="light"] select option:disabled {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #aebdcc;
+  background-clip: padding-box;
+}
+
+:root[data-theme="light"] .nav-rail,
+:root[data-theme="light"] .conversation-sidebar,
+:root[data-theme="light"] .composer,
+:root[data-theme="light"] .context-panel {
+  background: var(--bg-inset);
+}
+
+:root[data-theme="light"] .nav-button {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .popover,
+:root[data-theme="light"] .select-menu-popover,
+:root[data-theme="light"] .approval-dialog,
+:root[data-theme="light"] .busy-indicator {
+  border-color: var(--border);
+  background: var(--bg-panel);
+  box-shadow: 0 16px 38px rgba(38, 62, 87, 0.16);
+}
+
+:root[data-theme="light"] .select-menu-option {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .select-menu-option:hover,
+:root[data-theme="light"] .select-menu-option:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+:root[data-theme="light"] .select-menu-option.selected {
+  color: #06251c;
+  background: var(--mint);
+}
+
+:root[data-theme="light"] .select-menu-option.selected:hover,
+:root[data-theme="light"] .select-menu-option.selected:focus-visible {
+  color: #06251c;
+  background: #6ddfbd;
+}
+
+:root[data-theme="light"] .select-menu-option:disabled {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .select-menu:hover:not(.disabled),
+:root[data-theme="light"] .secondary-button:hover,
+:root[data-theme="light"] .chip-button:hover:not(:disabled) {
+  border-color: #9fb4c8;
+}
+
+:root[data-theme="light"] .approval-overlay {
+  background: rgba(37, 55, 75, 0.28);
+}
+
+:root[data-theme="light"] .approval-dialog-head h2,
+:root[data-theme="light"] .workspace-header h1,
+:root[data-theme="light"] .page-header h1,
+:root[data-theme="light"] .project-card-copy strong,
+:root[data-theme="light"] .brain-section-heading h2,
+:root[data-theme="light"] .brain-results-heading h2,
+:root[data-theme="light"] .proxy-section-heading h2,
+:root[data-theme="light"] .proxy-history-heading h2,
+:root[data-theme="light"] .proxy-data-heading h3,
+:root[data-theme="light"] .proxy-detail-heading h3,
+:root[data-theme="light"] .brain-entry-heading h3,
+:root[data-theme="light"] .section-title,
+:root[data-theme="light"] .context-heading h2,
+:root[data-theme="light"] .boot-screen h1 {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .message-body,
+:root[data-theme="light"] .approval-detail,
+:root[data-theme="light"] .context-item,
+:root[data-theme="light"] .service-row,
+:root[data-theme="light"] .brain-field dd,
+:root[data-theme="light"] .proxy-detail-fields dd,
+:root[data-theme="light"] .proxy-table-row,
+:root[data-theme="light"] .location-row code,
+:root[data-theme="light"] .log-row p {
+  color: var(--text-muted);
+}
+
+:root[data-theme="light"] .brain-metric strong,
+:root[data-theme="light"] .proxy-metric strong,
+:root[data-theme="light"] .proxy-table-row strong,
+:root[data-theme="light"] .proxy-model-row strong,
+:root[data-theme="light"] .proxy-request-copy strong,
+:root[data-theme="light"] .metric strong,
+:root[data-theme="light"] .history-row {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .composer textarea,
+:root[data-theme="light"] .field input,
+:root[data-theme="light"] .field textarea,
+:root[data-theme="light"] .field select,
+:root[data-theme="light"] .brain-search-form input:not([type="checkbox"]),
+:root[data-theme="light"] .brain-search-form select,
+:root[data-theme="light"] .brain-field-form textarea,
+:root[data-theme="light"] .proxy-search-form input,
+:root[data-theme="light"] .proxy-search-form select {
+  border-color: var(--border);
+  background: var(--bg-input);
+}
+
+:root[data-theme="light"] .composer textarea::placeholder,
+:root[data-theme="light"] .field input::placeholder,
+:root[data-theme="light"] .field textarea::placeholder {
+  color: #8394a7;
+}
+
+:root[data-theme="light"] .status-pill,
+:root[data-theme="light"] .message.user .message-body,
+:root[data-theme="light"] .metric-strip,
+:root[data-theme="light"] .brain-metrics,
+:root[data-theme="light"] .proxy-metrics {
+  background: var(--bg-panel);
+}
+
+:root[data-theme="light"] .proxy-table-head,
+:root[data-theme="light"] .history-head,
+:root[data-theme="light"] .toggle-row,
+:root[data-theme="light"] .mcp-server-row,
+:root[data-theme="light"] .service-setting,
+:root[data-theme="light"] .proxy-model-row,
+:root[data-theme="light"] .proxy-latency-grid > div,
+:root[data-theme="light"] .proxy-prompt-snippet,
+:root[data-theme="light"] .approval-tool,
+:root[data-theme="light"] .approval-detail {
+  background: var(--bg-subtle);
+}
+
+:root[data-theme="light"] .blank-panel,
+:root[data-theme="light"] .brain-empty,
+:root[data-theme="light"] .brain-unavailable,
+:root[data-theme="light"] .proxy-empty,
+:root[data-theme="light"] .proxy-unavailable,
+:root[data-theme="light"] .workflow-line span {
+  border-color: var(--border);
+}
+
+:root[data-theme="light"] .workflow-line div {
+  background: var(--border);
+}
+
+:root[data-theme="light"] .brain-error,
+:root[data-theme="light"] .proxy-error,
+:root[data-theme="light"] .danger-button {
+  color: var(--red);
+}
+
+:root[data-theme="light"] .proxy-detail-error span {
+  color: #8f2e3a;
+}
+
+:root[data-theme="light"] .error-banner {
+  border-color: rgba(189, 63, 77, 0.34);
+  color: #802935;
+  background: #fff1f3;
+  box-shadow: 0 12px 30px rgba(87, 40, 47, 0.14);
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

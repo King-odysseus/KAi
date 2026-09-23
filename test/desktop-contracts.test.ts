@@ -15,6 +15,7 @@ describe('desktop contracts', () => {
     expect(appSettingsV1Schema.parse(settings)).toEqual(settings);
     expect(settings.defaultAgent).toBe('codex');
     expect(settings.defaultAutonomy).toBe('ask');
+    expect(settings.theme).toBe('dark');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: '' });
   });
 
@@ -32,6 +33,7 @@ describe('desktop contracts', () => {
     expect(parseIpcInput('settings:update', { directApi: { provider: 'deepseek' } })).toMatchObject({
       directApi: { provider: 'deepseek' },
     });
+    expect(parseIpcInput('settings:update', { theme: 'light' })).toEqual({ theme: 'light' });
     expect(parseIpcInput('context:preview', { projectId: 'project-1' })).toEqual({ projectId: 'project-1' });
     expect(() => parseIpcInput('context:preview', { projectId: '' })).toThrow();
     expect(parseIpcInput('agents:run', {
@@ -96,6 +98,7 @@ describe('desktop contracts', () => {
     expect(migrated.defaultAgent).toBe('claude');
     expect(migrated.defaultRoute).toBe('proxy');
     expect(migrated.defaultAutonomy).toBe('ask');
+    expect(migrated.theme).toBe('dark');
     expect(migrated.directApi.provider).toBe('openai');
     expect(migrated.directApi.model).toBe('');
     expect(migrated.windowBounds).toBeNull();

@@ -150,6 +150,10 @@ export function App(): ReactNode {
     void loadApplication();
   }, []);
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = bootstrap?.settings.theme ?? 'dark';
+  }, [bootstrap?.settings.theme]);
+
   const servicesStarting = Boolean(
     bootstrap &&
     ((bootstrap.settings.cognitive1.enabled && serviceNeedsPolling(serviceFor(bootstrap, 'cognitive1').status)) ||
@@ -397,6 +401,21 @@ export function App(): ReactNode {
     }
   }
 
+  function toggleTheme(): void {
+    if (!bootstrap) return;
+    const previous = bootstrap.settings.theme;
+    const theme = previous === 'light' ? 'dark' : 'light';
+    setBootstrap((current) => current ? { ...current, settings: { ...current.settings, theme } } : current);
+    void window.kaiDesktop
+      .updateSettings({ theme })
+      .then(unwrap)
+      .then((settings) => setBootstrap((current) => current ? { ...current, settings } : current))
+      .catch((caught) => {
+        setBootstrap((current) => current ? { ...current, settings: { ...current.settings, theme: previous } } : current);
+        setError(messageOf(caught));
+      });
+  }
+
   async function refreshDirectApiStatus(): Promise<void> {
     try {
       setDirectApiCapability(await window.kaiDesktop.directApiCapability().then(unwrap));
@@ -614,9 +633,11 @@ export function App(): ReactNode {
       <TitleBar
         projects={bootstrap.projects}
         activeProject={activeProject}
+        theme={bootstrap.settings.theme}
         rightOpen={contextOpen}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
+        onToggleTheme={toggleTheme}
         onToggleContext={() => setContextOpen((open) => !open)}
       />
       {error && (
