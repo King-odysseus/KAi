@@ -1,0 +1,63 @@
+import * as path from 'node:path';
+import {
+  conversationRecordV1Schema,
+  type ConversationRecord,
+  type ConversationStorePort,
+} from '@kai/contracts';
+import { AtomicJsonStore } from './atomic-json-store';
+import { NodeFileSystem } from './node-file-system';
+
+export class ConversationStore implements ConversationStorePort {
+  private readonly fileSystem: NodeFileSystem;
+
+  constructor(private readonly directory: string, fileSystem: NodeFileSystem = new NodeFileSystem()) {
+    this.fileSystem = fileSystem;
+  }
+
+  async list(): Promise<ConversationRecord[]> {
+    const entries = await this.fileSystem.list(this.directory).catch(() => []);
+    const conversations = await Promise.all(
+      entries
+        .filter((entry) => entry.endsWith('.json'))
+        .map((entry) => this.get(path.basename(entry, '.json'))),
+    );
+    return conversations
+      .filter((conversation): conversation is ConversationRecord => conversation !== null)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async get(id: string): Promise<ConversationRecord | null> {
+    const store = this.storeFor(id);
+    try {
+      return await store.load();
+    } catch (error) {
+      if (!(await this.fileSystem.exists(storePath(this.directory, id)))) return null;
+      throw error;
+    }
+  }
+
+  async save(conversation: ConversationRecord): Promise<void> {
+    await this.storeFor(conversation.id).save(conversation);
+  }
+
+  async remove(id: string): Promise<void> {
+    const target = storePath(this.directory, id);
+    if (await this.fileSystem.exists(target)) await this.fileSystem.remove(target);
+  }
+
+  private storeFor(id: string): AtomicJsonStore<ConversationRecord> {
+    return new AtomicJsonStore({
+      filePath: storePath(this.directory, id),
+      fileSystem: this.fileSystem,
+      schema: conversationRecordV1Schema,
+      defaultValue: () => {
+        throw new Error(`Conversation ${id} does not exist.`);
+      },
+    });
+  }
+}
+
+function storePath(directory: string, id: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw new Error('Invalid conversation id.');
+  return path.join(directory, `${id}.json`);
+}

@@ -3,8 +3,9 @@
   "displayName": "KAI Agent Workbench",
   "description": "A multi-agent coding workbench with route control and durable Cognitive1 memory.",
   "version": "0.3.0",
+  "private": true,
   "publisher": "kai",
-  "license": "UNLICENSED",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "icon": "resources/kai-icon.png",
   "engines": {
     "vscode": "^1.96.0"
@@ -403,6 +404,13 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "vitest run",
+    "typecheck:portable": "tsc -p tsconfig.portable.json --noEmit",
+    "desktop:dev": "npm run dev --workspace @kai/desktop",
+    "desktop:build": "npm run build --workspace @kai/desktop",
+    "desktop:typecheck": "npm run typecheck --workspace @kai/desktop",
+    "desktop:test": "npm run test --workspace @kai/desktop",
+    "desktop:smoke": "npm run smoke --workspace @kai/desktop",
+    "desktop:package": "npm run package --workspace @kai/desktop",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "lint": "eslint src/ test/ --ext .ts",
@@ -411,6 +419,10 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "package": "npm run compile && vsce package --allow-missing-repository"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.96.0",

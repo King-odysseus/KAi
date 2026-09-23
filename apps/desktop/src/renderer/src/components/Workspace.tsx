@@ -1,0 +1,246 @@
+import {
+  ChevronDown,
+  Circle,
+  Cloud,
+  Cpu,
+  ExternalLink,
+  FileDiff,
+  FolderOpen,
+  LogIn,
+  RefreshCw,
+  Route,
+  Send,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Square,
+} from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import type {
+  AgentCapability,
+  AgentId,
+  AppSettings,
+  ConversationRecord,
+  ContextPreview,
+  DirectApiCapability,
+  ExecutionMode,
+  ProjectRecord,
+  ServiceState,
+} from '@kai/contracts';
+import { relativeTime, statusLabel } from '../types';
+
+export function WorkspaceView({ activeProject, activeConversation, settings, busy, running, notice, streamingText, pendingApproval, agentCapabilities, directApiCapability, selectedAgent, executionMode, onSelectExecution, onSelectAgent, onChooseProject, onCreateConversation, onSend, onCancel, onApprovalResponse, onSignIn, onRefreshAgents, onOpenSettings }: {
+  activeProject: ProjectRecord | null;
+  activeConversation: ConversationRecord | null;
+  settings: AppSettings;
+  busy: boolean;
+  running: boolean;
+  notice: string | null;
+  streamingText: string;
+  pendingApproval: {
+    requestId: string;
+    title: string;
+    detail: string;
+    risk: 'low' | 'medium' | 'high';
+    tool?: string;
+  } | null;
+  agentCapabilities: AgentCapability[];
+  directApiCapability: DirectApiCapability | null;
+  selectedAgent: AgentId;
+  executionMode: ExecutionMode;
+  onSelectExecution: (mode: ExecutionMode) => void;
+  onSelectAgent: (agent: AgentId) => void;
+  onChooseProject: () => void;
+  onCreateConversation: (prompt: string) => void;
+  onSend: (prompt: string) => void;
+  onCancel: () => void;
+  onApprovalResponse: (approved: boolean) => void;
+  onSignIn: (agent: AgentId) => void;
+  onRefreshAgents: () => void;
+  onOpenSettings: () => void;
+}): ReactNode {
+  const [prompt, setPrompt] = useState('');
+  const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
+  const apiRun = executionMode === 'api';
+  const ready = apiRun ? Boolean(directApiCapability?.available) : Boolean(selectedCapability?.available);
+  const unavailableReason = apiRun
+    ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
+    : selectedCapability?.unavailableReason ?? 'No agent CLI is available.';
+  const send = (): void => {
+    const text = prompt.trim();
+    if (!text || !activeProject || busy || !ready) return;
+    setPrompt('');
+    if (activeConversation) onSend(text);
+    else onCreateConversation(text);
+  };
+  return (
+    <div className="workspace-view">
+      <div className="workspace-header">
+        <div><span className="eyebrow">{activeConversation ? 'Conversation' : 'Workspace'}</span><h1>{activeConversation?.title ?? activeProject?.name ?? 'Open a project'}</h1></div>
+        <div className="workspace-status">
+          <span className={`status-pill ${ready ? 'ready' : 'unavailable'}`}><Circle size={7} fill="currentColor" /> {apiRun ? 'API' : 'CLI'} {ready ? 'ready' : 'unavailable'}</span>
+          <span className="status-pill lavender"><Sparkles size={13} /> {apiRun ? directApiCapability?.model || directApiCapability?.displayName || 'Direct API' : selectedCapability?.version ?? selectedCapability?.displayName ?? selectedAgent}</span>
+        </div>
+      </div>
+
+      {pendingApproval && (
+        <div className="approval-overlay">
+          <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+            <div className="approval-dialog-head">
+              <ShieldCheck size={20} />
+              <div><span className="eyebrow">Project approval</span><h2 id="approval-title">{pendingApproval.title}</h2></div>
+              <span className={`risk-badge ${pendingApproval.risk}`}>{pendingApproval.risk} risk</span>
+            </div>
+            {pendingApproval.tool && <code className="approval-tool">{pendingApproval.tool}</code>}
+            <pre className="approval-detail">{pendingApproval.detail}</pre>
+            <div className="approval-dialog-actions">
+              <button type="button" className="secondary-button" onClick={() => onApprovalResponse(false)}>Deny</button>
+              <button type="button" className="primary-button" onClick={() => onApprovalResponse(true)}>Allow once</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      <div className="conversation-canvas">
+        {activeConversation?.turns.length || streamingText ? (
+          <>
+            {activeConversation?.turns.map((turn) => (
+              <article key={turn.id} className={`message ${turn.role}`}><div className="message-role">{turn.role === 'user' ? 'You' : 'KAI'}</div><div className="message-body">{turn.text}</div></article>
+            ))}
+            {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
+          </>
+        ) : (
+          <div className="workspace-empty">
+            <div className="empty-symbol">{apiRun ? <Cloud size={26} /> : <Cpu size={26} />}</div>
+            <h2>{activeProject ? 'Start with a concrete task' : 'Choose a project to begin'}</h2>
+            <p>{activeProject ? ready ? apiRun ? 'Ask the direct API model to inspect or change the project. File changes require approval.' : 'Ask KAI to inspect, change, or explain the project.' : unavailableReason : 'KAI keeps project files and local state on this machine.'}</p>
+            {!activeProject && <button type="button" className="primary-button" onClick={onChooseProject}><FolderOpen size={16} /><span>Open project</span></button>}
+          </div>
+        )}
+      </div>
+
+      <div className="composer">
+        {activeProject && !ready && (apiRun ? directApiCapability : selectedCapability) && (
+          <div className="agent-setup-banner" role="status">
+            <div className="agent-setup-copy">
+              <strong>{apiRun ? 'API setup required' : setupTitle(selectedCapability!)}</strong>
+              <span>{notice ?? unavailableReason}</span>
+            </div>
+            <div className="agent-setup-actions">
+              {!apiRun && selectedCapability?.state === 'signed_out' && (
+                <button type="button" className="secondary-button" onClick={() => onSignIn(selectedAgent)} disabled={busy}>
+                  <LogIn size={14} />
+                  <span>Sign in</span>
+                </button>
+              )}
+              {apiRun ? (
+                <button type="button" className="secondary-button" onClick={onOpenSettings} disabled={busy}>
+                  <Settings2 size={14} />
+                  <span>Configure API</span>
+                </button>
+              ) : (
+                <a className="secondary-button" href={selectedCapability!.installUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink size={14} />
+                  <span>Install guide</span>
+                </a>
+              )}
+              <button type="button" className="secondary-button" onClick={onRefreshAgents} disabled={busy}>
+                <RefreshCw size={14} />
+                <span>Refresh status</span>
+              </button>
+            </div>
+          </div>
+        )}
+        <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder={ready ? apiRun ? 'Ask the configured API model' : 'Ask KAI to inspect, change, or explain code' : unavailableReason} aria-label="Task prompt" disabled={!activeProject || busy || !ready} />
+        <div className="composer-toolbar">
+          <div className="composer-controls">
+            <div className="mode-toggle" role="group" aria-label="Execution mode">
+              <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
+              <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
+            </div>
+            {apiRun ? (
+              <span className="chip-button" title={directApiCapability?.unavailableReason}><Cloud size={14} /><span>{directApiCapability?.model || directApiCapability?.displayName || 'Direct API'}</span></span>
+            ) : (
+              <label className={`chip-button agent-select ${ready ? '' : 'unavailable'}`} title={selectedCapability?.unavailableReason}>
+                <Cpu size={14} />
+                <select value={selectedAgent} onChange={(event) => onSelectAgent(event.target.value as AgentId)} disabled={busy}>
+                  {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}{setupSuffix(agent)}</option>)}
+                </select>
+                <ChevronDown size={12} />
+              </label>
+            )}
+            {!apiRun && <button type="button" className="chip-button" disabled><Route size={14} /><span>{settings.defaultRoute}</span><ChevronDown size={12} /></button>}
+            <button type="button" className="chip-button" disabled><ShieldCheck size={14} /><span>{settings.defaultAutonomy}</span></button>
+          </div>
+          {running ? (
+            <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
+          ) : (
+            <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function setupTitle(capability: AgentCapability): string {
+  if (capability.state === 'signed_out') return 'Sign in required';
+  if (capability.state === 'not_installed') return 'Install required';
+  return 'Agent unavailable';
+}
+
+function setupSuffix(capability: AgentCapability): string {
+  if (capability.available) return '';
+  if (capability.state === 'signed_out') return ' (sign-in required)';
+  if (capability.state === 'not_installed') return ' (not installed)';
+  return ' (unavailable)';
+}
+
+export function ContextPanel({ activeProject, conversation, services, contextPreview, contextPreviewLoading }: { activeProject: ProjectRecord | null; conversation: ConversationRecord | null; services: ServiceState[]; contextPreview: ContextPreview | null; contextPreviewLoading: boolean }): ReactNode {
+  return (
+    <aside className="context-panel">
+      <div className="context-heading"><div><span className="eyebrow">Context</span><h2>{activeProject?.name ?? 'No project'}</h2></div><FileDiff size={17} /></div>
+      <div className="context-meter">
+        <span>Estimated direct API context</span>
+        <strong>{contextPreviewLoading ? 'Calculating...' : contextPreview ? `~${formatCompact(contextPreview.estimatedTokens)} tokens` : 'Unavailable'}</strong>
+        <small>{contextPreview ? `${formatCompact(contextPreview.totalCharacters)} characters across ${contextPreview.sections.reduce((sum, section) => sum + section.items.length, 0)} item(s)` : 'Open a project to preview context.'}</small>
+      </div>
+      {(contextPreview?.sections ?? []).map((section) => (
+        <div className="context-section" key={section.kind}>
+          <div className="context-label">{contextSectionIcon(section.kind)}<span>{section.label}</span><small>~{formatCompact(section.estimatedTokens)}</small></div>
+          {section.items.length > 0 ? (
+            <div className="context-item-list">
+              {section.items.map((item) => (
+                <div className="context-item" key={`${item.kind}:${item.source ?? item.label}`} title={item.source}>
+                  <span>{item.label}</span>
+                  <small>~{formatCompact(item.estimatedTokens)} tok{item.truncated ? ' / partial' : ''}</small>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="context-empty">None</div>
+          )}
+        </div>
+      ))}
+      <div className="context-section">
+        <div className="context-label"><Cpu size={14} /><span>Services</span></div>
+        {services.map((service) => <div key={service.kind} className="service-row"><span className={`status-dot ${service.status}`} /><span>{service.kind === 'cognitive1' ? 'C1 Brain' : 'Universal Proxy'}</span><small>{statusLabel(service.status)}</small></div>)}
+      </div>
+      <div className="context-section context-foot"><span>Updated</span><strong>{conversation ? relativeTime(conversation.updatedAt) : 'Not active'}</strong></div>
+    </aside>
+  );
+}
+
+function contextSectionIcon(kind: ContextPreview['sections'][number]['kind']): ReactNode {
+  if (kind === 'memories') return <BrainIcon />;
+  if (kind === 'skills') return <Sparkles size={14} />;
+  return <FileDiff size={14} />;
+}
+
+function formatCompact(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+function BrainIcon(): ReactNode {
+  return <span className="brain-dot" aria-hidden="true" />;
+}

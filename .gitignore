@@ -1,8 +1,11 @@
 node_modules/
 out/
 coverage/
+*.tsbuildinfo
 *.vsix
 .vscode-test/
+apps/desktop/release/
+apps/desktop/resources/engines/
+apps/desktop/test-results/
 .env
 .env.*
-

@@ -1,0 +1,74 @@
+{
+  "name": "@kai/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "KAI standalone desktop workbench",
+  "main": "out/main/index.cjs",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "smoke": "node scripts/smoke.mjs",
+    "stage:engines": "node scripts/stage-engines.mjs",
+    "package": "npm run stage:engines && npm run build && electron-builder --win --dir",
+    "dist": "npm run stage:engines && npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@kai/contracts": "0.1.0",
+    "@kai/integrations": "0.1.0",
+    "@kai/runtime": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "lucide-react": "^1.47.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "36.9.5",
+    "electron-builder": "^26.16.1",
+    "electron-vite": "^3.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.4.3"
+  },
+  "build": {
+    "appId": "ai.kai.desktop",
+    "productName": "KAI",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../packages/integrations/launchers/start-proxy.cjs",
+        "to": "integrations/start-proxy.cjs"
+      },
+      {
+        "from": "resources/engines",
+        "to": "engines"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

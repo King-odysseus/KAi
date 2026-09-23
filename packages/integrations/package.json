@@ -1,0 +1,14 @@
+{
+  "name": "@kai/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./proxy-launcher": "./launchers/start-proxy.cjs"
+  },
+  "dependencies": {
+    "@kai/contracts": "0.1.0"
+  }
+}

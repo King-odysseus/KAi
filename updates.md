@@ -1,5 +1,279 @@
 # KAI Agent Workbench — Updates
 
+## 2026-09-23
+
+### Desktop project tools, approvals, and MCP
+
+- **Direct API runs now execute a bounded provider tool loop.** Up to eight model
+  tool rounds can read, search, create, or edit files inside the active project,
+  and every result is returned to the model and persisted with the conversation.
+  The provider session ID is retained across tool follow-ups and usage is summed
+  across rounds.
+- **Project boundaries are enforced in the main process.** Paths are resolved
+  against the selected project, existing symlinks are resolved before access,
+  path escapes are rejected, file reads/searches are size-limited, and create
+  operations never overwrite an existing file.
+- **File changes use explicit approval.** The desktop shows an in-app approval
+  card with the tool and exact arguments. Plan mode denies writes, Ask mode waits
+  for approval, Auto-edit and Full allow them, and Stop resolves pending
+  approvals without leaving the run hanging.
+- **MCP servers are now first-class direct API tools.** KAI uses the official
+  Model Context Protocol TypeScript SDK, discovers server tool schemas,
+  namespaces tool names by server, applies the autonomy/approval policy, and
+  returns MCP results through the same bounded loop. Both local stdio servers
+  and remote Streamable HTTP servers are supported. Credential environment
+  variables and HTTP headers reference OS-vault IDs, so MCP secrets do not enter
+  the renderer or settings file. Server processes close when configuration is
+  replaced or the app exits.
+- **Settings can configure local and remote MCP servers.** Local servers have a
+  command, arguments, optional working directory, enabled state, and an
+  `ENVIRONMENT_VARIABLE=credential.id` mapping. Remote servers have a URL,
+  credential-backed header mapping, and the same enabled state. Disabled and
+  failed servers do not prevent built-in project tools from running.
+- **Shell commands now run through a high-risk approval gate.** Plan mode denies
+  commands, Ask/Auto-edit/Custom require approval, and Full mode may run them.
+  Commands start inside a validated project-relative directory, have a maximum
+  runtime, cap captured output, report exit status and duration, and terminate
+  the process tree on timeout or Stop.
+- **Direct API runs now include a visible, bounded project context.** The context
+  panel estimates instruction, recently changed file, skill metadata, and memory
+  tokens. Instruction files and selected files are read only from inside the
+  project, large files are truncated, path escapes are ignored, and skill
+  metadata is indexed without loading full skill instructions into every run.
+- **Scoped Cognitive1 recall is reference data, not instructions.** Recall is
+  filtered to the active project identity, capped and truncated, and the
+  provider-facing context explicitly says remembered content cannot override the
+  user request, project instructions, or tool policy.
+- **C1 session and handoff state now follows the conversation.** A direct API
+  conversation starts a Brain session lazily, records a structured handoff when
+  the agent changes, closes the session after a failed run for recovery, and
+  closes any remaining active sessions before KAI stops the managed engine.
+  These lifecycle events persist with the conversation.
+- **Transient provider failures now retry without replaying tools.** Connection
+  failures and retryable HTTP statuses use up to three bounded exponential-backoff
+  attempts, honor `Retry-After`, and persist each attempt as lifecycle evidence.
+  Retries wrap only the provider request, so completed file, command, and MCP tool
+  actions are not executed a second time.
+- **Verification:** 47 test files and 358 tests pass with one opt-in live test
+  skipped by default. Tests cover streaming tool calls, argument validation,
+  approval allow/deny paths, path escape and symlink escape attempts, vault-backed
+  stdio and Streamable HTTP MCP credentials, read-only MCP policy, malformed
+  edits, cancellation, scoped untrusted memory context, session lifecycle,
+  handoff normalization, and retry/rate-limit recovery. The rebuilt packaged app
+  and the installed `KAI.exe`
+  both pass end-to-end smokes where the model calls `mcp_smoke_echo`, KAI invokes
+  the configured local stdio and remote Streamable HTTP MCP servers, returns each
+  result to the provider, and persists the final reply. The installed command
+  smoke also verifies the approval dialog, process execution, stdout capture, and
+  provider follow-up. The same installed smoke verifies a populated context
+  preview and the context meter. Installer SHA-256:
+  `9C3D2925208596E5476BF4F1DF60BCCAB0C2CFC9D8D9572E3B581312DBCEEDF4`.
+
+**Files:** `apps/desktop/src/main/project-tools.ts`,
+`apps/desktop/src/main/mcp-runtime.ts`,
+`apps/desktop/src/main/direct-provider-runtime.ts`, `apps/desktop/src/main/ipc.ts`,
+`apps/desktop/src/main/context-builder.ts`,
+`apps/desktop/src/main/cognitive1-client.ts`,
+`apps/desktop/src/renderer/src/components/SettingsView.tsx`,
+`apps/desktop/src/renderer/src/components/Workspace.tsx`,
+`packages/contracts/src/domain.ts`, `packages/runtime/src/atomic-json-store.ts`,
+`test/desktop-project-tools.test.ts`, `test/desktop-mcp.test.ts`,
+`test/desktop-context.test.ts`, `test/desktop-brain.test.ts`,
+`test/desktop-direct-provider.test.ts`,
+`apps/desktop/scripts/smoke.mjs`
+
+**Next:** add the remaining provider adapters.
+
+### Desktop direct provider API
+
+- **CLI and API execution are now explicit, separate routes.** The composer has a
+  `CLI / API` selector. API runs never silently fall back to an official CLI or
+  subscription account, and CLI sessions keep their existing native session IDs.
+- **The first direct provider adapter uses the OpenAI Responses API.** It streams
+  SSE text into the active turn, records measured input/output token usage,
+  resumes follow-up messages with `previous_response_id`, reports provider
+  failures, and supports cancellation without deleting persisted turns.
+- **Direct API credentials stay in the OS vault.** The Electron main process
+  reads the selected credential and sends it only on the provider request; the
+  renderer receives capability and status data, never the key or authorization
+  header.
+- **Settings now configure direct API mode.** Provider, model, base URL, and vault
+  credential are validated before a run, and incomplete or unsupported setups
+  remain visible instead of falling back to another route. OpenAI is implemented;
+  Anthropic, Google, and OpenAI-compatible provider selections are placeholders
+  until their adapters are implemented.
+- **This first direct-API milestone was text-only.** The project tool loop,
+  approvals, and MCP support above now supersede that initial boundary.
+- **Verification:** 44 test files and 341 tests pass with one opt-in live test
+  skipped by default. The direct-provider fixture verifies streaming,
+  credential use, continuation, provider errors, usage, and cancellation. The
+  desktop production build and direct API Playwright smoke pass with a local
+  OpenAI-compatible SSE fixture; no user API key was required.
+
+**Files:** `apps/desktop/src/main/direct-provider-runtime.ts`,
+`apps/desktop/src/main/ipc.ts`, `apps/desktop/src/preload/index.ts`,
+`apps/desktop/src/renderer/src/App.tsx`,
+`apps/desktop/src/renderer/src/components/Workspace.tsx`,
+`apps/desktop/src/renderer/src/components/SettingsView.tsx`,
+`packages/contracts/src/agents.ts`, `packages/contracts/src/domain.ts`,
+`test/desktop-direct-provider.test.ts`, `apps/desktop/scripts/smoke.mjs`
+
+**Follow-up:** the command tool, Streamable HTTP MCP, context estimates, C1
+recall/session recording, and provider retry handling are recorded in the newer
+entries above.
+
+### Desktop CLI agents and working direct chat
+
+- **Agent runs can now be stopped from the composer.** While a CLI is working,
+  the Send control becomes a Stop control and routes through typed cancellation
+  IPC to terminate the active process without deleting the persisted turns.
+- **Unavailable agents now show the real setup state.** The selector
+  distinguishes sign-in-required from not-installed agents, keeps unavailable
+  choices selectable so their guidance is reachable, and offers a refresh action
+  after setup changes.
+- **KAI can launch the official account flow for an installed CLI.** Claude,
+  Codex, Qwen, and Gemini sign-in open in a separate interactive console using
+  each vendor's own authentication command. KAI does not collect the account
+  credentials; installation remains an external prerequisite with an in-app
+  vendor guide link.
+- **The desktop composer now runs the selected agent CLI instead of only saving
+  the prompt.** New and existing conversations execute through the main process,
+  persist the user and assistant turns, keep native session IDs for follow-up
+  messages, and surface launch, authentication, or process failures in the UI.
+- **All four supported CLIs are detected from the packaged app.** Capability
+  reporting checks both the executable version and each CLI's own sign-in status,
+  so an installed but unauthenticated agent is shown as unavailable with an
+  actionable sign-in hint instead of appearing ready.
+- **Direct routes do not modify global CLI configuration.** The desktop runtime
+  uses each official CLI's existing account and permissions, runs in the selected
+  project directory, and keeps `ask`/`plan` autonomy read-only until explicit
+  approval plumbing exists. Proxy routing remains rejected with a clear message
+  until that integration is implemented.
+- **Verification:** 43 test files and 337 tests pass with one opt-in live test
+  skipped by default. The live Codex test passes when enabled. The rebuilt
+  installed app detected `claude=ready`, `codex=ready`, `qwen=ready`, and
+  `gemini=unavailable` (not signed in), then completed a real installed-app
+  conversation through Codex, rendered `KAI_CLI_OK`, and persisted both turns.
+
+**Files:** `apps/desktop/src/main/agent-runtime.ts`, `apps/desktop/src/main/ipc.ts`,
+`apps/desktop/src/preload/index.ts`, `apps/desktop/src/renderer/src/App.tsx`,
+`apps/desktop/src/renderer/src/components/Workspace.tsx`,
+`packages/contracts/src/agents.ts`, `test/desktop-agents.test.ts`,
+`test/desktop-agents-live.test.ts`
+
+**Next:** add desktop-driven sign-in and install guidance, then complete the
+provider tool loop, approvals, and project tools for Phase 4.
+
+### Standalone desktop foundation
+
+- **A standalone Electron shell now runs independently of VS Code.** The app has
+  a sandboxed React renderer, a narrow typed preload bridge, validated IPC, and
+  separate main/preload/renderer builds.
+- **Projects, settings, conversations, and project preferences persist below
+  the app's user-data directory** using versioned schemas and atomic JSON
+  replacement. Existing extension data is not imported automatically.
+- **Credentials use Electron `safeStorage` only.** KAI reports when OS-backed
+  encryption is unavailable and never falls back to plaintext credential files.
+- **The desktop workbench includes** navigation, a project picker, resizable
+  conversation/context panels, workspace and history views, service status
+  shells, settings, redacted diagnostics, and a data-location screen.
+- **Verification:** portable and desktop typechecks pass, the production
+  Electron build succeeds, all 39 extension/desktop test files pass (319
+  tests), and the Playwright Electron smoke test passes at 1440x920 and
+  960x640.
+
+**Files:** `apps/desktop/`, `packages/contracts/`, `packages/runtime/`,
+`docs/desktop/`, `test/desktop-contracts.test.ts`,
+`test/desktop-runtime.test.ts`
+
+**Next:** Phase 3 integrates the pinned full Cognitive1 and Universal Agent
+Proxy engines and verifies every parity-register row through packaged
+service/API tests.
+
+### Packaged Cognitive1 and Universal Agent Proxy services
+
+- **KAI now packages both pinned engines and their production dependencies.**
+  The unpacked Windows app contains Cognitive1 1.0.0, Universal Agent Proxy
+  1.9.0, and the KAI-owned proxy launcher. Engine payloads stay outside the
+  application source and are written below the app data directory at runtime.
+- **Managed services start in isolated child processes.** Start, stop, restart,
+  readiness checks, version reporting, log redaction, and bounded forced
+  shutdown are handled outside the renderer and use Electron's embedded Node
+  runtime instead of a system Node installation.
+- **Loopback access is authenticated.** Each service binds a private ephemeral
+  port and exposes only a token-protected loopback gateway. Tokens are stored in
+  the OS vault, copied through a main-process clipboard action, and can be
+  rotated; rotation immediately invalidates the previous token. Vault writes are
+  serialized to prevent concurrent startup from losing either service token.
+- **C1 Brain and Universal Proxy pages show live state** with version, endpoint,
+  authentication status, start/stop/restart controls, and access-token actions.
+- **Verification:** 40 test files and 323 tests pass; compile, portable and
+  desktop typechecks, production build, `npm audit --omit=dev`, development
+  real-engine smoke, and packaged real-engine smoke pass. The packaged smoke
+  proves 401 without a token, 200 with a token, rotation rejects the old token,
+  and both engines shut down cleanly.
+
+**Files:** `apps/desktop/`, `packages/integrations/`,
+`packages/contracts/src/ipc.ts`, `packages/contracts/src/primitives.ts`,
+`docs/desktop/`, `test/desktop-integrations.test.ts`
+
+**Next:** implement brain search/management and proxy activity screens, then
+close the remaining parity-register rows with service/API tests.
+
+### Native Cognitive1 Brain search and inspection
+
+- **The C1 Brain page now reads live Brain state through the authenticated
+  managed-engine gateway.** It shows entry totals, type counts, active agents,
+  project count, hunger, signal ratio, noise, duplicates, untagged entries, and
+  dead-weight counts without exposing the loopback token to the renderer.
+- **Memory can be searched by query, type, tag, and project.** Results show the
+  Brain type, title, project, agent, date, tags, status, and structured fields.
+  Superseded entries remain hidden according to Cognitive1 recall behavior.
+- **Structured fields can be edited in place.** Updates go through typed IPC and
+  the main-process client to Cognitive1's `/api/brain/edit-field` endpoint, then
+  refresh the visible overview and search results.
+- **Verification:** the isolated authenticated-gateway client test passes; the
+  full suite passes 41 files and 325 tests; the development and packaged
+  real-engine smokes seed a temporary brain entry, search it through IPC, render
+  it at 1440x920 and 960x640, update a field, and verify the refreshed value.
+  Brain import/export, pin/exclude/delete controls, and proxy activity history
+  remain open.
+
+**Files:** `apps/desktop/src/main/cognitive1-client.ts`,
+`apps/desktop/src/main/ipc.ts`, `apps/desktop/src/renderer/src/components/BrainView.tsx`,
+`packages/contracts/src/brain.ts`, `test/desktop-brain.test.ts`
+
+**Next:** implement proxy activity/history and the remaining Brain
+maintenance/import-export controls, then continue closing parity-register rows.
+
+### Native Universal Agent Proxy activity and history
+
+- **The Universal Proxy page now reads live cost, cache, latency, provider, and
+  model data through the authenticated managed-engine gateway.** Provider rows
+  show circuit state, reachability, success rate, call count, and P95 latency;
+  model rows show call, token, and measured-cost totals.
+- **Request history is searchable and paginated.** Each record shows status,
+  agent, provider, model, latency, and time. Selecting a request opens routing,
+  endpoint, retry, fallback, latency-stage, token, cost, and redacted error
+  detail. History can be cleared only through an explicit confirmation action.
+- **The renderer never receives the loopback token.** Typed IPC and the
+  main-process client validate every response before data reaches React, and the
+  authenticated gateway strips its token before forwarding to the engine.
+- **Verification:** the isolated authenticated-gateway proxy client test passes;
+  the full suite passes 42 files and 327 tests; the packaged real-engine smoke
+  creates a failed request through the proxy, verifies history and detail
+  through IPC, and renders the activity screen with its detail inspector at
+  1440x920 and 960x640. The packaged smoke also verifies that Brain, Proxy, and
+  Settings content remain full-width at both sizes. Live SSE, replay, broader
+  proxy configuration, and the remaining parity rows stay open.
+
+**Files:** `apps/desktop/src/main/proxy-client.ts`,
+`apps/desktop/src/renderer/src/components/ProxyView.tsx`,
+`packages/contracts/src/proxy.ts`, `test/desktop-proxy.test.ts`
+
+**Next:** continue the remaining proxy configuration/activity parity and Brain
+maintenance/import-export controls, then close the remaining Phase 3 rows.
+
 ## 2026-09-12
 
 ### Cognitive1 execution rules

@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": [
+    "packages/**/*.ts",
+    "test/desktop-brain.test.ts",
+    "test/desktop-agents.test.ts",
+    "test/desktop-agents-live.test.ts",
+    "test/desktop-contracts.test.ts",
+    "test/desktop-direct-provider.test.ts",
+    "test/desktop-proxy.test.ts",
+    "test/desktop-runtime.test.ts"
+  ]
+}
