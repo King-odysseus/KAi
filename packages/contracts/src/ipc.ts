@@ -19,18 +19,26 @@ import {
 import {
   brainFieldUpdateInputSchema,
   brainFieldUpdateResultSchema,
+  brainImportResultSchema,
   brainOverviewSchema,
   brainSearchInputSchema,
   type BrainFieldUpdateInput,
   type BrainFieldUpdateResult,
+  type BrainImportResult,
   type BrainOverview,
   type BrainSearchInput,
 } from './brain';
 import {
+  contextChipSchema,
+  contextSearchInputSchema,
   contextPreviewInputSchema,
   contextPreviewSchema,
+  gitDiffStatResultSchema,
+  type ContextChip,
   type ContextPreview,
   type ContextPreviewInput,
+  type ContextSearchInput,
+  type GitDiffStatResult,
 } from './context';
 import {
   cognitive1ServiceSettingsSchema,
@@ -66,6 +74,37 @@ import {
   type ProxyHistorySummary,
   type ProxyOverview,
 } from './proxy';
+import {
+  executionRuleDocumentSchema,
+  executionRuleSaveInputSchema,
+  type ExecutionRuleDocument,
+  type ExecutionRuleSaveInput,
+} from './rules';
+import {
+  checkpointRejectInputSchema,
+  checkpointRestoreResultSchema,
+  checkpointReviewSchema,
+  checkpointTurnInputSchema,
+  compareOpenInputSchema,
+  comparePickInputSchema,
+  compareRunSchema,
+  compareStartInputSchema,
+  configBackupCreateInputSchema,
+  configBackupRestoreInputSchema,
+  configBackupSchema,
+  skillSummarySchema,
+  workflowTemplateSaveInputSchema,
+  workflowTemplateSchema,
+  type CheckpointRestoreResult,
+  type CheckpointReview,
+  type ComparePickInput,
+  type CompareRun,
+  type CompareStartInput,
+  type ConfigBackup,
+  type SkillSummary,
+  type WorkflowTemplate,
+  type WorkflowTemplateSaveInput,
+} from './workbench';
 
 export const ipcChannels = [
   'app:get-bootstrap',
@@ -83,6 +122,17 @@ export const ipcChannels = [
   'brain:overview',
   'brain:search',
   'brain:update-field',
+  'brain:import',
+  'rules:get',
+  'rules:save',
+  'skills:list',
+  'files:choose',
+  'files:search',
+  'context:git-diff',
+  'attachments:save',
+  'workflows:list-templates',
+  'workflows:save-template',
+  'workflows:delete-template',
   'proxy:overview',
   'proxy:history',
   'proxy:history-detail',
@@ -97,6 +147,17 @@ export const ipcChannels = [
   'conversations:create',
   'conversations:save',
   'conversations:delete',
+  'checkpoints:review',
+  'checkpoints:reject',
+  'checkpoints:restore',
+  'compare:start',
+  'compare:pick',
+  'compare:discard',
+  'compare:open',
+  'backups:list',
+  'backups:create',
+  'backups:restore',
+  'backups:delete',
   'agents:capabilities',
   'agents:run',
   'agents:cancel',
@@ -151,6 +212,22 @@ export const ipcInputSchemas = {
   'brain:overview': emptyInputSchema,
   'brain:search': brainSearchInputSchema,
   'brain:update-field': brainFieldUpdateInputSchema,
+  'brain:import': emptyInputSchema,
+  'rules:get': emptyInputSchema,
+  'rules:save': executionRuleSaveInputSchema,
+  'skills:list': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'files:choose': z.object({ projectId: z.string().min(1) }).strict(),
+  'files:search': contextSearchInputSchema,
+  'context:git-diff': z.object({ projectId: z.string().min(1) }).strict(),
+  'attachments:save': z
+    .object({
+      name: z.string().trim().min(1).max(500),
+      dataUrl: z.string().min(1).max(30_000_000),
+    })
+    .strict(),
+  'workflows:list-templates': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'workflows:save-template': workflowTemplateSaveInputSchema,
+  'workflows:delete-template': z.object({ id: z.string().min(1) }).strict(),
   'proxy:overview': emptyInputSchema,
   'proxy:history': proxyHistoryQuerySchema,
   'proxy:history-detail': z.object({ id: z.string().min(1) }).strict(),
@@ -165,6 +242,17 @@ export const ipcInputSchemas = {
   'conversations:create': z.object({ projectId: z.string().nullable(), firstPrompt: z.string().max(20_000) }).strict(),
   'conversations:save': conversationRecordV1Schema,
   'conversations:delete': z.object({ id: z.string().min(1) }).strict(),
+  'checkpoints:review': checkpointTurnInputSchema,
+  'checkpoints:reject': checkpointRejectInputSchema,
+  'checkpoints:restore': checkpointTurnInputSchema,
+  'compare:start': compareStartInputSchema,
+  'compare:pick': comparePickInputSchema,
+  'compare:discard': z.object({ id: z.string().min(1) }).strict(),
+  'compare:open': compareOpenInputSchema,
+  'backups:list': emptyInputSchema,
+  'backups:create': configBackupCreateInputSchema,
+  'backups:restore': configBackupRestoreInputSchema,
+  'backups:delete': configBackupRestoreInputSchema,
   'agents:capabilities': emptyInputSchema,
   'agents:run': agentRunRequestSchema,
   'agents:cancel': agentCancelInputSchema,
@@ -197,6 +285,17 @@ export const serviceStatesSchema = z.array(serviceStateSchema);
 export const brainOverviewResponseSchema = brainOverviewSchema;
 export const brainSearchResponseSchema = z.array(brainOverviewSchema.shape.recentEntries.element);
 export const brainFieldUpdateResponseSchema = brainFieldUpdateResultSchema;
+export const brainImportResponseSchema = brainImportResultSchema;
+export const executionRuleDocumentResponseSchema = executionRuleDocumentSchema;
+export const skillSummaryListResponseSchema = z.array(skillSummarySchema);
+export const selectedFilesResponseSchema = z.array(z.string().min(1));
+export const gitDiffStatResponseSchema = gitDiffStatResultSchema;
+export const attachmentResultSchema = contextChipSchema;
+export const workflowTemplateListResponseSchema = z.array(workflowTemplateSchema);
+export const checkpointReviewResponseSchema = checkpointReviewSchema;
+export const checkpointRestoreResponseSchema = checkpointRestoreResultSchema;
+export const compareRunResponseSchema = compareRunSchema;
+export const configBackupListResponseSchema = z.array(configBackupSchema);
 export const proxyOverviewResponseSchema = proxyOverviewSchema;
 export const proxyHistoryResponseSchema = z.array(proxyHistorySummarySchema);
 export const proxyHistoryDetailResponseSchema = proxyHistoryDetailSchema;
@@ -276,6 +375,17 @@ export interface KaiDesktopBridge {
   brainOverview(): Promise<IpcResponse<BrainOverview>>;
   searchBrain(request: BrainSearchInput): Promise<IpcResponse<BrainOverview['recentEntries']>>;
   updateBrainField(request: BrainFieldUpdateInput): Promise<IpcResponse<BrainFieldUpdateResult>>;
+  importBrain(): Promise<IpcResponse<BrainImportResult | null>>;
+  getRules(): Promise<IpcResponse<ExecutionRuleDocument>>;
+  saveRule(request: ExecutionRuleSaveInput): Promise<IpcResponse<ExecutionRuleDocument>>;
+  listSkills(projectId?: string): Promise<IpcResponse<SkillSummary[]>>;
+  chooseFiles(projectId: string): Promise<IpcResponse<string[]>>;
+  searchFiles(request: ContextSearchInput): Promise<IpcResponse<string[]>>;
+  gitDiffStat(projectId: string): Promise<IpcResponse<GitDiffStatResult>>;
+  saveAttachment(name: string, dataUrl: string): Promise<IpcResponse<ContextChip>>;
+  listWorkflowTemplates(projectId?: string): Promise<IpcResponse<WorkflowTemplate[]>>;
+  saveWorkflowTemplate(request: WorkflowTemplateSaveInput): Promise<IpcResponse<WorkflowTemplate>>;
+  deleteWorkflowTemplate(id: string): Promise<IpcResponse<{ deleted: boolean }>>;
   proxyOverview(): Promise<IpcResponse<ProxyOverview>>;
   proxyHistory(request?: ProxyHistoryQuery): Promise<IpcResponse<ProxyHistorySummary[]>>;
   proxyHistoryDetail(id: string): Promise<IpcResponse<ProxyHistoryDetail>>;
@@ -290,6 +400,17 @@ export interface KaiDesktopBridge {
   createConversation(projectId: string | null, firstPrompt: string): Promise<IpcResponse<ConversationRecord>>;
   saveConversation(conversation: ConversationRecord): Promise<IpcResponse<ConversationRecord>>;
   deleteConversation(id: string): Promise<IpcResponse<void>>;
+  reviewCheckpoint(conversationId: string, turnId: string): Promise<IpcResponse<CheckpointReview>>;
+  rejectCheckpointFile(conversationId: string, turnId: string, filePath: string): Promise<IpcResponse<CheckpointRestoreResult>>;
+  restoreCheckpoint(conversationId: string, turnId: string): Promise<IpcResponse<CheckpointRestoreResult>>;
+  startCompare(request: CompareStartInput): Promise<IpcResponse<CompareRun>>;
+  pickCompareWinner(id: string, side: 'left' | 'right'): Promise<IpcResponse<{ applied: boolean }>>;
+  discardCompare(id: string): Promise<IpcResponse<{ discarded: boolean }>>;
+  openCompareWorktree(id: string, side: 'left' | 'right'): Promise<IpcResponse<{ opened: boolean }>>;
+  listBackups(): Promise<IpcResponse<ConfigBackup[]>>;
+  createBackup(name?: string): Promise<IpcResponse<ConfigBackup>>;
+  restoreBackup(id: string): Promise<IpcResponse<{ restored: boolean }>>;
+  deleteBackup(id: string): Promise<IpcResponse<{ deleted: boolean }>>;
   agentCapabilities(): Promise<IpcResponse<AgentCapability[]>>;
   directApiCapability(): Promise<IpcResponse<DirectApiCapability>>;
   previewContext(request: ContextPreviewInput): Promise<IpcResponse<ContextPreview>>;

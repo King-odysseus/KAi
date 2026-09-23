@@ -78,6 +78,15 @@ export const brainFieldUpdateResultSchema = z
   })
   .strict();
 
+export const brainImportResultSchema = z
+  .object({
+    sourcePath: z.string().min(1),
+    targetPath: z.string().min(1),
+    imported: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export type BrainEntry = z.infer<typeof brainEntrySchema>;
 export type BrainEntryType = z.infer<typeof brainEntryTypeSchema>;
 export type BrainHungerLevel = z.infer<typeof brainHungerLevelSchema>;
@@ -87,3 +96,4 @@ export type BrainSearchQuery = z.output<typeof brainSearchInputSchema>;
 export type BrainFieldUpdateInput = z.input<typeof brainFieldUpdateInputSchema>;
 export type BrainFieldUpdate = z.output<typeof brainFieldUpdateInputSchema>;
 export type BrainFieldUpdateResult = z.infer<typeof brainFieldUpdateResultSchema>;
+export type BrainImportResult = z.infer<typeof brainImportResultSchema>;

@@ -4,6 +4,7 @@ import type {
   AppSettings,
   AgentRunRequest,
   DirectApiCapability,
+  PermissionKey,
   PersistedEvent,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
@@ -156,6 +157,7 @@ export class DesktopDirectProviderRuntime {
     approvals?: DirectApiApprovalPort,
     contextText?: string,
     history?: readonly DirectApiHistoryTurn[],
+    customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
     let capability = await this.capability();
     let apiKey: string;
@@ -204,10 +206,11 @@ export class DesktopDirectProviderRuntime {
         approvals,
         contextText,
         history,
+        customPermissions,
       );
     }
 
-    const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
+    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalTools?.definitions() ?? [];
@@ -398,8 +401,9 @@ export class DesktopDirectProviderRuntime {
     approvals?: DirectApiApprovalPort,
     contextText?: string,
     history?: readonly DirectApiHistoryTurn[],
+    customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
+    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalTools?.definitions() ?? [];

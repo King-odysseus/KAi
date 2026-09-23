@@ -63,16 +63,20 @@ try {
   try {
     await page
       .getByRole('heading', {
-        name: usesAgentProject ? 'KAI Live Agent Smoke' : 'Choose a project to begin',
+        name: usesAgentProject ? 'KAI Live Agent Smoke' : 'No project',
         level: usesAgentProject ? 1 : 2,
       })
       .waitFor({ timeout: 20_000 });
+    if (!usesAgentProject) {
+      await page.getByText('Open a local repository').waitFor({ timeout: 5_000 });
+    }
   } catch (error) {
     const bodyText = await page.locator('body').innerText().catch(() => '<body unavailable>');
     throw new Error(`Desktop workspace did not become ready: ${bodyText}`, { cause: error });
   }
   const agentCapabilities = await verifyAgentCapabilities(page);
   await verifyWorkspaceControls(page);
+  await verifyCommandPalette(page);
   await verifyDirectApiCapability(page);
   if ((directApiSmoke || mcpSmoke || commandSmoke) && directApiFixture) {
     await verifyDirectApiFlow(page, directApiFixture, mcpSmoke, Boolean(mcpHttpFixture), commandSmoke, directApiProvider);
@@ -222,16 +226,20 @@ async function verifyAgentCapabilities(page) {
 
 async function verifyWorkspaceControls(page) {
   const agents = [
-    ['claude', /^Claude$/],
-    ['codex', /^Codex$/],
-    ['qwen', /^Qwen Code$/],
-    ['gemini', /^Gemini CLI/],
+    ['claude', 'Claude'],
+    ['codex', 'Codex'],
+    ['qwen', 'Qwen Code'],
+    ['gemini', 'Gemini CLI'],
   ];
   for (const [agent, label] of agents) {
     await selectMenuOption(page, 'Agent', label);
+    await page.waitForFunction((expected) => {
+      const trigger = document.querySelector('button[aria-label="Agent"]');
+      return trigger?.textContent?.includes(expected) ?? false;
+    }, label);
     const selected = await page.getByRole('button', { name: 'Agent', exact: true }).innerText();
-    if (!label.test(selected)) {
-      throw new Error(`The workspace did not switch to the ${agent} agent.`);
+    if (!selected.includes(label)) {
+      throw new Error(`The workspace did not switch to the ${agent} agent; selected value was ${JSON.stringify(selected)}.`);
     }
   }
   await selectMenuOption(page, 'Agent', /^Codex$/);
@@ -283,6 +291,22 @@ async function verifyThemeToggle(page) {
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 }
 
+async function verifyCommandPalette(page) {
+  await page.getByRole('button', { name: 'Open command palette' }).click({ force: true });
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await palette.waitFor();
+  await palette.getByLabel('Search commands').fill('Execution Rules');
+  await page.screenshot({ path: path.join(outputDirectory, 'command-palette.png') });
+  await palette.getByRole('option', { name: /View and Edit Execution Rules/ }).click();
+  await page.getByRole('heading', { name: 'Execution Rules', level: 1 }).waitFor();
+
+  await page.keyboard.press('Control+K');
+  await palette.waitFor();
+  await palette.getByLabel('Search commands').fill('Open Agent Workbench');
+  await palette.getByRole('option', { name: /Open Agent Workbench/ }).click();
+  await page.getByLabel('Task prompt').waitFor();
+}
+
 async function selectMenuOption(page, triggerLabel, optionName) {
   await openSelectMenu(page, triggerLabel);
   const option = page.getByRole('option', { name: optionName });
@@ -311,6 +335,10 @@ async function verifyMenuContrast(page, label) {
 
 async function openSelectMenu(page, label) {
   const trigger = page.getByRole('button', { name: label, exact: true });
+  await page.waitForFunction((name) => {
+    const button = Array.from(document.querySelectorAll('button')).find((element) => element.getAttribute('aria-label') === name);
+    return button instanceof HTMLButtonElement && !button.disabled;
+  }, label);
   await trigger.click({ force: true });
   await page.getByRole('listbox', { name: label, exact: true }).waitFor({ state: 'visible' });
 }

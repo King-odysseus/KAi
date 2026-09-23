@@ -7,6 +7,7 @@ import type {
   AgentRunRequest,
   AgentSignInResult,
   AutonomyMode,
+  PermissionKey,
   PersistedEvent,
 } from '@kai/contracts';
 
@@ -182,6 +183,7 @@ export class DesktopAgentRuntime {
     cwd: string,
     resumeSessionId?: string,
     onEvent?: (event: PersistedEvent) => void,
+    customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
     const definition = AGENTS[request.agent];
     const capability = await this.capability(request.agent);
@@ -196,7 +198,7 @@ export class DesktopAgentRuntime {
       return this.immediateFailure(request, message);
     }
 
-    const args = buildAgentArgs(request, cwd, resumeSessionId);
+    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions);
     const controller = new AbortController();
     this.activeRuns.set(request.conversationId, controller);
 
@@ -348,6 +350,7 @@ export function buildAgentArgs(
   request: Pick<AgentRunRequest, 'agent' | 'prompt' | 'autonomy'>,
   cwd: string,
   resumeSessionId?: string,
+  customPermissions?: Partial<Record<PermissionKey, boolean>>,
 ): string[] {
   if (request.agent === 'codex') {
     if (resumeSessionId) return ['exec', 'resume', resumeSessionId, '--json', '-'];
@@ -355,7 +358,7 @@ export function buildAgentArgs(
       'exec',
       '--json',
       '--sandbox',
-      codexSandbox(request.autonomy),
+      codexSandbox(request.autonomy, customPermissions),
       '--skip-git-repo-check',
       '--cd',
       cwd,
@@ -364,7 +367,7 @@ export function buildAgentArgs(
   }
 
   if (request.agent === 'claude') {
-    const permissionMode = claudePermission(request.autonomy);
+    const permissionMode = claudePermission(request.autonomy, customPermissions);
     const args = ['-p', '--output-format', 'json', '--permission-mode', permissionMode];
     if (permissionMode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
     if (resumeSessionId) args.push('--resume', resumeSessionId);
@@ -395,25 +398,35 @@ function inputFor(request: Pick<AgentRunRequest, 'agent' | 'prompt'>): string | 
   return request.agent === 'codex' || request.agent === 'claude' ? request.prompt : undefined;
 }
 
-function codexSandbox(autonomy: AutonomyMode): 'read-only' | 'workspace-write' | 'danger-full-access' {
+function codexSandbox(
+  autonomy: AutonomyMode,
+  customPermissions?: Partial<Record<PermissionKey, boolean>>,
+): 'read-only' | 'workspace-write' | 'danger-full-access' {
   if (autonomy === 'autoEdit') return 'workspace-write';
   if (autonomy === 'full') return 'danger-full-access';
+  if (autonomy === 'custom' && customPermissions?.workspaceEdit) return 'workspace-write';
   return 'read-only';
 }
 
-function claudePermission(autonomy: AutonomyMode): 'plan' | 'acceptEdits' | 'bypassPermissions' {
+function claudePermission(
+  autonomy: AutonomyMode,
+  customPermissions?: Partial<Record<PermissionKey, boolean>>,
+): 'plan' | 'acceptEdits' | 'bypassPermissions' | 'default' {
+  if (autonomy === 'custom') return customPermissions?.workspaceEdit ? 'acceptEdits' : 'default';
   if (autonomy === 'autoEdit') return 'acceptEdits';
   if (autonomy === 'full') return 'bypassPermissions';
   return 'plan';
 }
 
 function qwenApproval(autonomy: AutonomyMode): 'plan' | 'auto-edit' | 'yolo' {
+  if (autonomy === 'custom') return 'auto-edit';
   if (autonomy === 'autoEdit') return 'auto-edit';
   if (autonomy === 'full') return 'yolo';
   return 'plan';
 }
 
 function geminiApproval(autonomy: AutonomyMode): 'plan' | 'auto_edit' | 'yolo' {
+  if (autonomy === 'custom') return 'auto_edit';
   if (autonomy === 'autoEdit') return 'auto_edit';
   if (autonomy === 'full') return 'yolo';
   return 'plan';

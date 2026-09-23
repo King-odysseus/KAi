@@ -111,6 +111,7 @@ export const planUpdateEventSchema = eventBaseSchema.extend({
 
 export const turnChangesEventSchema = eventBaseSchema.extend({
   type: z.literal('turn.changes'),
+  turnId: z.string().min(1).optional(),
   files: z.array(
     z.object({
       path: z.string().min(1),

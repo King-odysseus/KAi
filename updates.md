@@ -26,8 +26,37 @@
   the workspace, menus, settings, context, Brain, Proxy, dialogs, and data
   tables while preserving contrast and full-width layouts.
 
+### VS Code extension workbench parity in Desktop
+
+- **The title-bar Search button and `Ctrl+K` now open a native command palette.**
+  It exposes the extension command surface directly in Desktop: Workbench,
+  Settings, Brain, Proxy, Rules, Workflows, History, Goal, Skills, handoff,
+  checkpoint review, raw events, selection context, backups, agent/route/autonomy
+  changes, and proxy restart.
+- **Composer context matches the extension's `@` workflow.** Desktop supports
+  project file search, explicit file and line-range selection chips, Git diff
+  context, Brain memory lookup, skills, slash commands, pasted or uploaded
+  images, queued prompts, `Ctrl+Enter` steering, and `Shift+Tab` autonomy cycling.
+- **Turn checkpoints and raw diagnostics are reviewable in-app.** Each agent
+  turn records a Git checkpoint and a `turn.changes` event. Users can review the
+  before/after content, restore one file, undo the whole turn, or inspect and copy
+  the latest 50 raw fallback events.
+- **Agent comparison uses isolated Git worktrees.** Two agents can run on the
+  same prompt without touching the live project; the user can open either
+  worktree, pick one patch to apply, or discard both.
+- **Configuration backup and restore parity is available in Settings.** Backups
+  can be created, listed, restored, refreshed, and deleted through typed IPC.
+- **Menus no longer lose mouse clicks.** The Agent, Route, and Autonomy popovers
+  previously lived inside a horizontally scrolling toolbar that clipped their
+  hit area. The toolbar now wraps with visible overflow, so real pointer
+  selection works at wide and 960x640 layouts.
+
 ### Direct API provider catalog
 
+- **Provider model presets are refreshed to current API families.** OpenAI now
+  defaults to `gpt-6-astra` with the current GPT-6 and GPT-5.6 families, while
+  DeepSeek, OpenRouter, xAI, Together AI, and Fireworks presets include the
+  current flagship, coding, and cost-efficient model IDs.
 - **Desktop direct API settings now support OpenRouter and other popular
   OpenAI-compatible providers.** The provider picker includes DeepSeek,
   OpenRouter, Groq, Mistral, xAI, Together AI, Fireworks AI, and a custom

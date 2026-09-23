@@ -3,17 +3,19 @@ import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { DesktopAgentRuntime } from './agent-runtime';
+import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
-import { closeMemorySessions, registerIpc, type IpcContext } from './ipc';
+import { closeCompareRuns, closeMemorySessions, registerIpc, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { UniversalProxyClient } from './proxy-client';
 import { ProjectPreferenceStore } from './project-preference-store';
 import { ProjectStore } from './project-store';
 import { RotatingLogSink } from './rotating-log-sink';
 import { DesktopServiceController } from './service-controller';
+import { WorkflowTemplateStore } from './workflow-templates';
 
 app.setName('KAI');
 
@@ -46,6 +48,7 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   const activeContext = ipcContext;
   shutdownPromise = (activeContext ? closeMemorySessions(activeContext) : Promise.resolve())
+    .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
     .then(() => Promise.all([
       serviceController?.dispose() ?? Promise.resolve(),
       mcpRuntime?.dispose() ?? Promise.resolve(),
@@ -90,11 +93,15 @@ async function startApplication(): Promise<void> {
   const cognitive1 = new Cognitive1Client({ access: serviceController });
   const proxy = new UniversalProxyClient({ access: serviceController });
   const agents = new DesktopAgentRuntime();
+  const bundledRulesPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'agent-rules', 'Cognitive1-Rules.md')
+    : path.join(kaiRoot, 'apps', 'desktop', 'resources', 'agent-rules', 'Cognitive1-Rules.md');
   const executionRules = new DesktopExecutionRules(
-    app.isPackaged
-      ? path.join(process.resourcesPath, 'agent-rules', 'Cognitive1-Rules.md')
-      : path.join(kaiRoot, 'apps', 'desktop', 'resources', 'agent-rules', 'Cognitive1-Rules.md'),
+    bundledRulesPath,
+    path.join(paths.root, 'agent-rules', 'Cognitive1-Rules.md'),
   );
+  const workflowTemplates = new WorkflowTemplateStore(path.join(paths.root, 'workflows'));
+  const backups = new DesktopConfigBackupStore(paths);
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
     resolveProxyRoute: async (request) => {
@@ -126,6 +133,9 @@ async function startApplication(): Promise<void> {
     executionRules,
     directApi,
     mcp: mcpRuntime,
+    workflowTemplates,
+    backups,
+    compareRuns: new Map(),
     memorySessions: new Map(),
     pendingApprovals: new Map(),
     getMainWindow: () => mainWindow,

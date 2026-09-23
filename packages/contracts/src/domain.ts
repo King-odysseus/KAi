@@ -12,6 +12,12 @@ import {
   timestampSchema,
   windowBoundsSchema,
 } from './primitives';
+import {
+  checkpointRecordSchema,
+  turnFileChangeSchema,
+  workbenchGoalSchema,
+  workflowSchema,
+} from './workbench';
 
 export const projectRecordV1Schema = z
   .object({
@@ -117,6 +123,8 @@ export const conversationTurnSchema = z
     role: z.enum(['user', 'assistant']),
     text: z.string(),
     createdAt: timestampSchema,
+    checkpoint: checkpointRecordSchema.nullable().optional(),
+    fileChanges: z.array(turnFileChangeSchema).optional(),
   })
   .strict();
 
@@ -135,6 +143,8 @@ export const conversationRecordV1Schema = z
     autonomy: autonomyModeSchema.nullable(),
     execution: executionModeSchema.optional(),
     agentSessionId: z.string().min(1).optional(),
+    goal: workbenchGoalSchema.nullable().optional(),
+    workflow: workflowSchema.nullable().optional(),
     turns: z.array(conversationTurnSchema),
     events: z.array(persistedEventV1Schema),
   })
@@ -164,7 +174,7 @@ export function createDefaultSettings(): AppSettings {
     directApi: {
       enabled: true,
       provider: 'openai',
-      model: '',
+      model: 'gpt-6-astra',
       baseUrl: 'https://api.openai.com/v1',
       credentialId: 'provider.openai',
     },

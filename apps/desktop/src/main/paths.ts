@@ -9,6 +9,8 @@ export interface DesktopPaths {
   conversations: string;
   logs: string;
   credentials: string;
+  attachments: string;
+  backups: string;
 }
 
 export function createDesktopPaths(root: string): DesktopPaths {
@@ -21,6 +23,8 @@ export function createDesktopPaths(root: string): DesktopPaths {
     conversations: path.join(resolved, 'conversations'),
     logs: path.join(resolved, 'logs'),
     credentials: path.join(resolved, 'credentials.vault.json'),
+    attachments: path.join(resolved, 'attachments'),
+    backups: path.join(resolved, 'backups'),
   };
 }
 
@@ -33,5 +37,7 @@ export function dataLocations(paths: DesktopPaths): DataLocation[] {
     { label: 'Credentials', path: paths.credentials, kind: 'credentials' },
     { label: 'Diagnostics', path: paths.logs, kind: 'logs' },
     { label: 'Managed engines', path: path.join(paths.root, 'engines'), kind: 'runtime' },
+    { label: 'Attachments', path: paths.attachments, kind: 'runtime' },
+    { label: 'Configuration backups', path: paths.backups, kind: 'settings' },
   ];
 }

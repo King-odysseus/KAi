@@ -1,20 +1,27 @@
-import { Check, Cloud, Cpu, Database, Gauge, KeyRound, Plug, Plus, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, KeyRound, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
-import type { AppSettings, CredentialStatus, DataLocation, LogEntry, SettingsUpdate } from '@kai/contracts';
+import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, SettingsUpdate } from '@kai/contracts';
 
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
 type StdioMcpServer = Extract<McpServer, { transport: 'stdio' }>;
 type McpServerPatch = Partial<HttpMcpServer> | Partial<StdioMcpServer>;
 
-export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, onSave, onSaveCredential, onClearCredential }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; onSave: (update: SettingsUpdate) => void; onSaveCredential: (id: string, value: string) => void; onClearCredential: (id: string) => void }): ReactNode {
+export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, onSave, onImportBrain, onSaveCredential, onClearCredential, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; onSave: (update: SettingsUpdate) => void; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => void; onClearCredential: (id: string) => void; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void> }): ReactNode {
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
   const [directCredentialValue, setDirectCredentialValue] = useState('');
+  const [backups, setBackups] = useState<ConfigBackup[]>([]);
+  const [backupName, setBackupName] = useState('');
+  const [backupsLoading, setBackupsLoading] = useState(true);
+  const [backupError, setBackupError] = useState<string | null>(null);
 
   useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => {
+    void refreshBackups();
+  }, []);
   const directPreset = directProviderPreset(draft.directApi.provider);
   const updateMcpServer = (index: number, patch: McpServerPatch): void => {
     setDraft((current) => updateDraftMcpServer(current, index, patch));
@@ -36,6 +43,50 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
       },
     }));
   };
+
+  async function refreshBackups(): Promise<void> {
+    setBackupsLoading(true);
+    try {
+      setBackups(await onListBackups());
+      setBackupError(null);
+    } catch (caught) {
+      setBackupError(messageOf(caught));
+    } finally {
+      setBackupsLoading(false);
+    }
+  }
+
+  async function createBackup(): Promise<void> {
+    try {
+      const backup = await onCreateBackup(backupName.trim() || undefined);
+      setBackupName('');
+      setBackups((current) => [backup, ...current.filter((item) => item.id !== backup.id)]);
+      setBackupError(null);
+    } catch (caught) {
+      setBackupError(messageOf(caught));
+    }
+  }
+
+  async function restoreBackup(backup: ConfigBackup): Promise<void> {
+    if (!window.confirm(`Restore "${backup.name}"? Current settings will be replaced.`)) return;
+    try {
+      await onRestoreBackup(backup.id);
+      setBackupError(null);
+    } catch (caught) {
+      setBackupError(messageOf(caught));
+    }
+  }
+
+  async function deleteBackup(backup: ConfigBackup): Promise<void> {
+    if (!window.confirm(`Delete "${backup.name}"?`)) return;
+    try {
+      await onDeleteBackup(backup.id);
+      setBackups((current) => current.filter((item) => item.id !== backup.id));
+      setBackupError(null);
+    } catch (caught) {
+      setBackupError(messageOf(caught));
+    }
+  }
 
   return (
     <div className="page-view settings-view">
@@ -147,6 +198,13 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
                 <TextField label="Endpoint" value={draft.cognitive1.endpoint} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, endpoint: value } })} />
                 <TextField label="Brain data path" value={draft.cognitive1.dataPath ?? ''} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, dataPath: value || null } })} />
               </div>
+              <div className="button-row align-start">
+                <button type="button" className="secondary-button" disabled={busy} onClick={onImportBrain}>
+                  <FolderInput size={15} />
+                  <span>Import existing brain</span>
+                </button>
+                <span className="settings-note">Copies missing brain entries from another Cognitive1 folder and reloads C1.</span>
+              </div>
             </div>
             <div className="service-setting">
               <label className="toggle-row">
@@ -166,6 +224,33 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
         <section className="settings-section span-two">
           <div className="section-title"><Database size={17} /><span>Data locations</span></div>
           <div className="location-list">{dataLocations.map((location) => <div key={location.kind} className="location-row"><span>{location.label}</span><code>{location.path}</code></div>)}</div>
+        </section>
+
+        <section className="settings-section span-two">
+          <div className="section-title"><Archive size={17} /><span>Configuration backups</span></div>
+          <p className="settings-note">Snapshot KAI settings and project permissions before changing models, providers, MCP servers, or service routing.</p>
+          {backupError && <div className="workbench-error" role="alert">{backupError}</div>}
+          <div className="backup-create-row">
+            <label className="field"><span>Backup name</span><input value={backupName} onChange={(event) => setBackupName(event.target.value)} placeholder="Optional label" /></label>
+            <button type="button" className="primary-button" disabled={busy} onClick={() => void createBackup()}><Archive size={15} /><span>Create backup</span></button>
+            <button type="button" className="secondary-button" disabled={busy || backupsLoading} onClick={() => void refreshBackups()}><RefreshCw size={15} className={backupsLoading ? 'spin' : undefined} /><span>Refresh</span></button>
+          </div>
+          <div className="backup-list">
+            {backups.map((backup) => (
+              <article className="backup-row" key={backup.id}>
+                <div className="backup-copy">
+                  <strong>{backup.name}</strong>
+                  <span>{new Date(backup.createdAt).toLocaleString()} · {formatBytes(backup.sizeBytes)}</span>
+                  <code>{backup.path}</code>
+                </div>
+                <div className="backup-actions">
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => void restoreBackup(backup)}><ArchiveRestore size={14} /><span>Restore</span></button>
+                  <button type="button" className="icon-button danger-button" disabled={busy} aria-label={`Delete ${backup.name}`} onClick={() => void deleteBackup(backup)}><Trash2 size={14} /></button>
+                </div>
+              </article>
+            ))}
+            {!backupsLoading && backups.length === 0 && <div className="empty-list">No configuration backups yet</div>}
+          </div>
         </section>
 
         <section className="settings-section span-two">
@@ -253,4 +338,14 @@ function parseCredentialRefs(value: string): Record<string, string> {
     if (key && credentialId) result[key] = credentialId;
   }
   return result;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : 'The settings operation failed.';
 }

@@ -1,6 +1,6 @@
 import type { IpcResponse } from '@kai/contracts';
 
-export type ViewId = 'workspace' | 'projects' | 'brain' | 'proxy' | 'workflows' | 'history' | 'settings';
+export type ViewId = 'workspace' | 'projects' | 'brain' | 'rules' | 'proxy' | 'workflows' | 'history' | 'settings';
 
 export function unwrap<T>(response: IpcResponse<T>): T {
   if (!response.ok) throw new Error(response.error.message);

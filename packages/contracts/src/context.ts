@@ -40,7 +40,58 @@ export const contextPreviewInputSchema = z
   })
   .strict();
 
+export const contextChipSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('file'), path: z.string().min(1).max(2_000) }).strict(),
+  z
+    .object({
+      type: z.literal('selection'),
+      path: z.string().min(1).max(2_000),
+      startLine: z.number().int().min(1),
+      endLine: z.number().int().min(1),
+      content: z.string().max(100_000).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('terminal'),
+      content: z.string().min(1).max(100_000),
+    })
+    .strict(),
+  z.object({ type: z.literal('gitDiff'), stat: z.string().min(1).max(100_000) }).strict(),
+  z
+    .object({
+      type: z.literal('memory'),
+      query: z.string().min(1).max(2_000),
+      summary: z.string().min(1).max(100_000),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('image'),
+      name: z.string().min(1).max(500),
+      path: z.string().min(1).max(2_000),
+    })
+    .strict(),
+]);
+
+export const contextSearchInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    query: z.string().max(500),
+  })
+  .strict();
+
+export const gitDiffStatResultSchema = z
+  .object({
+    stat: z.string(),
+    error: z.string().optional(),
+  })
+  .strict();
+
 export type ContextPreviewItem = z.infer<typeof contextPreviewItemSchema>;
 export type ContextPreviewSection = z.infer<typeof contextPreviewSectionSchema>;
 export type ContextPreview = z.infer<typeof contextPreviewSchema>;
 export type ContextPreviewInput = z.infer<typeof contextPreviewInputSchema>;
+export type ContextChip = z.infer<typeof contextChipSchema>;
+export type ContextSearchInput = z.infer<typeof contextSearchInputSchema>;
+export type GitDiffStatResult = z.infer<typeof gitDiffStatResultSchema>;

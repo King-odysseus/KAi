@@ -19,6 +19,7 @@ afterEach(async () => {
 describe('desktop direct provider runtime', () => {
   it('reports missing model and credential setup without making a request', async () => {
     const settings = createDefaultSettings();
+    settings.directApi.model = '';
     const runtime = new DesktopDirectProviderRuntime(settingsPort(settings), credentialPort());
 
     await expect(runtime.capability()).resolves.toMatchObject({

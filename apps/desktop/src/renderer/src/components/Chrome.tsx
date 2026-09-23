@@ -7,6 +7,7 @@ import {
   FolderOpen,
   History,
   Layers3,
+  ListChecks,
   Moon,
   PanelLeftClose,
   PanelRightClose,
@@ -18,7 +19,7 @@ import {
   Trash2,
   Workflow,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type { ConversationRecord, ProjectRecord } from '@kai/contracts';
 import type { ViewId } from '../types';
 import { relativeTime } from '../types';
@@ -27,11 +28,20 @@ export const navigation: Array<{ id: ViewId; label: string; icon: typeof Brain }
   { id: 'workspace', label: 'Workspace', icon: Layers3 },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
   { id: 'brain', label: 'C1 Brain', icon: Brain },
+  { id: 'rules', label: 'Execution Rules', icon: ListChecks },
   { id: 'proxy', label: 'Universal Proxy', icon: Route },
   { id: 'workflows', label: 'Workflows', icon: Workflow },
   { id: 'history', label: 'History', icon: History },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
+
+export interface CommandPaletteItem {
+  id: string;
+  label: string;
+  description: string;
+  shortcut?: string;
+  run: () => void | Promise<void>;
+}
 
 export function NavigationRail({ view, version, serviceStatus, onChange }: { view: ViewId; version: string; serviceStatus: string; onChange: (view: ViewId) => void }): ReactNode {
   return (
@@ -60,7 +70,7 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onToggleTheme, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: 'dark' | 'light'; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleTheme: () => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onToggleTheme, onOpenSearch, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: 'dark' | 'light'; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleContext: () => void }): ReactNode {
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
@@ -70,12 +80,88 @@ export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, 
         <button type="button" className="icon-button" title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} onClick={onToggleTheme}>
           {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
         </button>
-        <button type="button" className="icon-button" title="Search" aria-label="Search"><Search size={17} /></button>
+        <button type="button" className="icon-button" title="Command palette (Ctrl+K)" aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
         <button type="button" className="icon-button" title={rightOpen ? 'Hide context panel (Ctrl+B)' : 'Show context panel (Ctrl+B)'} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
           {rightOpen ? <PanelRightClose size={17} /> : <PanelLeftClose size={17} />}
         </button>
       </div>
     </header>
+  );
+}
+
+export function CommandPalette({ items, onClose }: { items: CommandPaletteItem[]; onClose: () => void }): ReactNode {
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
+  const normalized = query.trim().toLowerCase();
+  const visible = items.filter((item) => !normalized || `${item.label} ${item.description}`.toLowerCase().includes(normalized));
+  const selectedIndex = Math.min(activeIndex, Math.max(0, visible.length - 1));
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query]);
+
+  function run(item: CommandPaletteItem | undefined): void {
+    if (!item) return;
+    onClose();
+    void item.run();
+  }
+
+  function onKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex((current) => visible.length ? (Math.min(current, visible.length - 1) + 1) % visible.length : 0);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex((current) => visible.length ? (Math.min(current, visible.length - 1) - 1 + visible.length) % visible.length : 0);
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      run(visible[selectedIndex]);
+    }
+  }
+
+  return (
+    <div className="command-palette-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <label className="command-palette-search">
+          <Search size={17} />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Type a command"
+            aria-label="Search commands"
+          />
+          <kbd>Esc</kbd>
+        </label>
+        <div className="command-palette-list" role="listbox" aria-label="Commands">
+          {visible.map((item, index) => (
+            <button
+              key={item.id}
+              type="button"
+              role="option"
+              aria-selected={index === selectedIndex}
+              className={`command-palette-item ${index === selectedIndex ? 'active' : ''}`}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => run(item)}
+            >
+              <span><strong>{item.label}</strong><small>{item.description}</small></span>
+              {item.shortcut && <kbd>{item.shortcut}</kbd>}
+            </button>
+          ))}
+          {visible.length === 0 && <div className="command-palette-empty">No matching commands</div>}
+        </div>
+      </section>
+    </div>
   );
 }
 

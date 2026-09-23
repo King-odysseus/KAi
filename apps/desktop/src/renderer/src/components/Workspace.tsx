@@ -1,20 +1,41 @@
 import {
+  Archive,
+  AtSign,
+  ArrowRight,
+  Braces,
+  Brain,
   ChevronDown,
   Check,
   Circle,
   Cloud,
   Cpu,
+  Eye,
+  File,
+  FileSearch,
   ExternalLink,
   FileDiff,
+  FolderPlus,
   FolderOpen,
+  GitCompare,
+  Goal,
+  History,
   LogIn,
+  ImagePlus,
+  Paperclip,
+  Pencil,
+  Play,
+  Plus,
   RefreshCw,
   Route,
+  Search,
   Send,
   Settings2,
   ShieldCheck,
   Sparkles,
   Square,
+  Trash2,
+  Undo2,
+  X,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type {
@@ -22,21 +43,48 @@ import type {
   AgentId,
   AppSettings,
   AutonomyMode,
+  CheckpointReview,
+  CompareRun,
   ConversationRecord,
+  ContextChip,
   ContextPreview,
   DirectApiCapability,
   ExecutionMode,
+  GoalInput,
+  NormalizedGoalInput,
+  PersistedEvent,
+  PermissionKey,
+  ProjectPreferences,
   ProjectRecord,
   RouteMode,
   ServiceState,
+  SkillSummary,
+  WorkbenchGoal,
 } from '@kai/contracts';
-import { relativeTime, statusLabel } from '../types';
+import { relativeTime, statusLabel, unwrap } from '../types';
 
-export function WorkspaceView({ activeProject, activeConversation, settings, busy, running, notice, streamingText, pendingApproval, agentCapabilities, directApiCapability, selectedAgent, executionMode, selectedRoute, selectedAutonomy, proxyReady, onSelectExecution, onSelectAgent, onSelectRoute, onSelectAutonomy, onChooseProject, onCreateConversation, onSend, onCancel, onApprovalResponse, onSignIn, onRefreshAgents, onOpenSettings }: {
+export interface WorkspaceSendOptions {
+  goal?: NormalizedGoalInput;
+  skills?: string[];
+  selectedPaths?: string[];
+  contextChips?: ContextChip[];
+  agent?: AgentId;
+}
+
+export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff';
+
+export interface WorkspaceCommandRequest {
+  kind: WorkspaceCommandKind;
+  nonce: number;
+}
+
+interface WorkspaceViewProps {
   activeProject: ProjectRecord | null;
   activeConversation: ConversationRecord | null;
   settings: AppSettings;
+  projectPreferences: ProjectPreferences | null;
   busy: boolean;
+  commandRequest: WorkspaceCommandRequest | null;
   running: boolean;
   notice: string | null;
   streamingText: string;
@@ -58,38 +106,630 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
   onSelectAgent: (agent: AgentId) => void;
   onSelectRoute: (route: RouteMode) => void;
   onSelectAutonomy: (autonomy: AutonomyMode) => void;
+  onUpdatePreferences: (preferences: ProjectPreferences) => Promise<void>;
+  onUpdateConversation: (conversation: ConversationRecord) => Promise<void>;
   onChooseProject: () => void;
-  onCreateConversation: (prompt: string) => void;
-  onSend: (prompt: string) => void;
+  onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
+  onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
+  onHandoff: (agent: AgentId, prompt: string) => void;
+  onCompare: (prompt: string, targetAgent: AgentId) => Promise<CompareRun>;
+  onPickCompare: (id: string, side: 'left' | 'right') => Promise<void>;
+  onDiscardCompare: (id: string) => Promise<void>;
+  onOpenCompareWorktree: (id: string, side: 'left' | 'right') => Promise<void>;
+  onReviewCheckpoint: (conversationId: string, turnId: string) => Promise<CheckpointReview>;
+  onRejectCheckpointFile: (conversationId: string, turnId: string, filePath: string) => Promise<void>;
+  onRestoreCheckpoint: (conversationId: string, turnId: string) => Promise<void>;
   onCancel: () => void;
   onApprovalResponse: (approved: boolean) => void;
   onSignIn: (agent: AgentId) => void;
   onRefreshAgents: () => void;
   onOpenSettings: () => void;
-}): ReactNode {
+  onOpenRules: () => void;
+  onOpenWorkflows: () => void;
+}
+
+interface QueuedPrompt {
+  text: string;
+  options: WorkspaceSendOptions;
+}
+
+const STATUS_WORDS = [
+  'Thinking',
+  'Reasoning',
+  'Reading context',
+  'Tracing the code',
+  'Building a plan',
+  'Checking the details',
+  'Connecting the dots',
+  'Untangling the problem',
+  'Synthesizing',
+  'Testing assumptions',
+  'Looking for edges',
+  'Wrangling the types',
+  'Asking the compiler nicely',
+  'Counting semicolons',
+  'Reading the stack trace',
+  'Making the pixels behave',
+  'Refactoring the vibes',
+  'Trying not to overthink this',
+  'Double-checking the obvious',
+  'Talking to the test suite',
+] as const;
+
+const COMMANDS = [
+  '/goal',
+  '/skills',
+  '/rules',
+  '/agent',
+  '/route',
+  '/handoff',
+  '/review',
+  '/implement',
+  '/debug',
+  '/explain',
+  '/test',
+] as const;
+
+const COMMAND_TEMPLATES: Record<string, string> = {
+  review: 'Review this code for bugs, style issues, and improvements:',
+  implement: 'Implement the following change:',
+  debug: 'Debug this issue:',
+  explain: 'Explain how this code works:',
+  test: 'Write tests for:',
+};
+
+const PERMISSIONS: ReadonlyArray<{ key: PermissionKey; label: string; description: string }> = [
+  { key: 'workspaceEdit', label: 'Edit workspace', description: 'Create, edit, or delete project files.' },
+  { key: 'shellCommand', label: 'Run commands', description: 'Run project-scoped build, test, and shell commands.' },
+  { key: 'dependencyInstall', label: 'Install dependencies', description: 'Add or update project packages and tools.' },
+  { key: 'configWrite', label: 'Write config', description: 'Change project or KAI configuration files.' },
+  { key: 'network', label: 'Network access', description: 'Allow commands or tools to reach the network.' },
+  { key: 'gitCommit', label: 'Git commit', description: 'Create commits in the active project.' },
+  { key: 'gitPush', label: 'Git push', description: 'Push commits to a configured remote.' },
+  { key: 'destructiveFilesystem', label: 'Destructive filesystem', description: 'Allow recursive or permanent file removal.' },
+];
+
+export function WorkspaceView({
+  activeProject,
+  activeConversation,
+  settings,
+  projectPreferences,
+  busy,
+  commandRequest,
+  running,
+  notice,
+  streamingText,
+  pendingApproval,
+  agentCapabilities,
+  directApiCapability,
+  selectedAgent,
+  executionMode,
+  selectedRoute,
+  selectedAutonomy,
+  proxyReady,
+  onSelectExecution,
+  onSelectAgent,
+  onSelectRoute,
+  onSelectAutonomy,
+  onUpdatePreferences,
+  onUpdateConversation,
+  onChooseProject,
+  onCreateConversation,
+  onSend,
+  onHandoff,
+  onCompare,
+  onPickCompare,
+  onDiscardCompare,
+  onOpenCompareWorktree,
+  onReviewCheckpoint,
+  onRejectCheckpointFile,
+  onRestoreCheckpoint,
+  onCancel,
+  onApprovalResponse,
+  onSignIn,
+  onRefreshAgents,
+  onOpenSettings,
+  onOpenRules,
+  onOpenWorkflows,
+}: WorkspaceViewProps): ReactNode {
   const [prompt, setPrompt] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [contextChips, setContextChips] = useState<ContextChip[]>([]);
+  const [contextPickerOpen, setContextPickerOpen] = useState(false);
+  const [fileQuery, setFileQuery] = useState('');
+  const [fileResults, setFileResults] = useState<string[]>([]);
+  const [contextBusy, setContextBusy] = useState(false);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<SkillSummary[]>([]);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [skillQuery, setSkillQuery] = useState('');
+  const [goalEditor, setGoalEditor] = useState<GoalInput | null>(null);
+  const [queuedPrompts, setQueuedPrompts] = useState<QueuedPrompt[]>([]);
+  const [statusWord, setStatusWord] = useState<(typeof STATUS_WORDS)[number]>('Thinking');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareAgent, setCompareAgent] = useState<AgentId>('claude');
+  const [compareResult, setCompareResult] = useState<CompareRun | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [checkpointReview, setCheckpointReview] = useState<CheckpointReview | null>(null);
+  const [rawEventsOpen, setRawEventsOpen] = useState(false);
+  const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const apiRun = executionMode === 'api';
   const ready = apiRun ? Boolean(directApiCapability?.available) : Boolean(selectedCapability?.available);
   const unavailableReason = apiRun
     ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
     : selectedCapability?.unavailableReason ?? 'No agent CLI is available.';
+  const activeGoal = activeConversation?.goal ?? null;
+  const allContextChips: ContextChip[] = [
+    ...selectedFiles.map((path) => ({ type: 'file' as const, path })),
+    ...contextChips,
+  ];
+  const sendOptions: WorkspaceSendOptions | undefined = (activeGoal || selectedSkills.length || allContextChips.length)
+    ? {
+        ...(activeGoal ? { goal: activeGoal } : {}),
+        ...(selectedSkills.length ? { skills: selectedSkills.map((skill) => skill.name) } : {}),
+        ...(selectedFiles.length ? { selectedPaths: selectedFiles } : {}),
+        ...(allContextChips.length ? { contextChips: allContextChips } : {}),
+      }
+    : undefined;
+
+  useEffect(() => {
+    setSelectedFiles([]);
+    setSelectedSkills([]);
+    setCompareResult(null);
+    if (!activeProject) {
+      setSkills([]);
+      return;
+    }
+    let cancelled = false;
+    void window.kaiDesktop
+      .listSkills(activeProject.id)
+      .then(unwrap)
+      .then((catalog) => {
+        if (!cancelled) setSkills(catalog);
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.id]);
+
+  useEffect(() => {
+    if (!contextPickerOpen || !activeProject) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setContextBusy(true);
+      void window.kaiDesktop
+        .searchFiles({ projectId: activeProject.id, query: fileQuery.trim() })
+        .then(unwrap)
+        .then((files) => {
+          if (!cancelled) setFileResults(files.slice(0, 40));
+        })
+        .catch((caught) => {
+          if (!cancelled) setWorkbenchNotice(messageOf(caught));
+        })
+        .finally(() => {
+          if (!cancelled) setContextBusy(false);
+        });
+    }, fileQuery ? 180 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeProject?.id, contextPickerOpen, fileQuery]);
+
+  useEffect(() => {
+    if (!commandRequest) return;
+    if (commandRequest.kind === 'goal') {
+      setGoalEditor({ outcome: '', constraints: '', verification: '' });
+    } else if (commandRequest.kind === 'skills') {
+      setSkillsOpen(true);
+    } else if (commandRequest.kind === 'context') {
+      setContextPickerOpen(true);
+      window.setTimeout(() => promptRef.current?.focus(), 0);
+    } else if (commandRequest.kind === 'raw') {
+      setRawEventsOpen(true);
+    } else if (commandRequest.kind === 'handoff') {
+      setPrompt('/handoff ');
+      window.setTimeout(() => promptRef.current?.focus(), 0);
+    } else if (commandRequest.kind === 'checkpoint') {
+      const conversation = activeConversation;
+      const latest = conversation?.events
+        .filter((event): event is Extract<PersistedEvent, { type: 'turn.changes' }> =>
+          event.type === 'turn.changes' && Boolean(event.turnId) && event.hasCheckpoint)
+        .at(-1);
+      if (!conversation || !latest?.turnId) {
+        setWorkbenchNotice('No checkpointed turn is available in the active conversation.');
+        return;
+      }
+      void onReviewCheckpoint(conversation.id, latest.turnId)
+        .then(setCheckpointReview)
+        .catch((caught) => setWorkbenchNotice(messageOf(caught)));
+    }
+  }, [commandRequest?.nonce]);
+
+  useEffect(() => {
+    if (!running) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const started = Date.now();
+    setStatusWord(STATUS_WORDS[Math.floor(Math.random() * STATUS_WORDS.length)]);
+    const wordTimer = window.setInterval(() => {
+      setStatusWord((current) => {
+        const currentIndex = STATUS_WORDS.indexOf(current);
+        return STATUS_WORDS[(currentIndex + 1 + Math.floor(Math.random() * 3)) % STATUS_WORDS.length];
+      });
+    }, 2_200);
+    const clockTimer = window.setInterval(() => setElapsedSeconds(Math.floor((Date.now() - started) / 1_000)), 1_000);
+    return () => {
+      window.clearInterval(wordTimer);
+      window.clearInterval(clockTimer);
+    };
+  }, [running]);
+
+  useEffect(() => {
+    const next = queuedPrompts[0];
+    if (running || busy || !next || !activeProject || !ready) return;
+    setQueuedPrompts((current) => current.slice(1));
+    if (activeConversation) onSend(next.text, next.options);
+    else onCreateConversation(next.text, next.options);
+  }, [activeConversation, activeProject, busy, onCreateConversation, onSend, queuedPrompts, ready, running]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.scrollTop = canvas.scrollHeight;
+  }, [activeConversation?.turns.length, compareResult, queuedPrompts.length, streamingText]);
+
+  const queueOrSend = (text: string, options = sendOptions): void => {
+    if (!text || !activeProject || !ready) return;
+    if (running) {
+      setQueuedPrompts((current) => [...current, { text, options: options ?? {} }]);
+      return;
+    }
+    if (activeConversation) onSend(text, options);
+    else onCreateConversation(text, options);
+  };
+
+  const optionsForPrompt = (text: string): WorkspaceSendOptions | undefined => {
+    const namedSkills = skills
+      .filter((skill) => new RegExp(`\\$${escapeRegExp(skill.name)}(?![A-Za-z0-9_-])`, 'i').test(text))
+      .map((skill) => skill.name);
+    const skillNames = [...new Set([...selectedSkills.map((skill) => skill.name), ...namedSkills])];
+    const options: WorkspaceSendOptions = {
+      ...(sendOptions ?? {}),
+      ...(skillNames.length ? { skills: skillNames } : {}),
+    };
+    return Object.keys(options).length ? options : undefined;
+  };
+
   const send = (): void => {
     const text = prompt.trim();
     if (!text || !activeProject || busy || !ready) return;
+    const command = commandFor(text);
+    if (command) {
+      setPrompt('');
+      runCommand(command, text);
+      return;
+    }
     setPrompt('');
-    if (activeConversation) onSend(text);
-    else onCreateConversation(text);
+    if (compareMode) {
+      setCompareResult(null);
+      setComparing(true);
+      void onCompare(text, compareAgent)
+        .then(setCompareResult)
+        .finally(() => setComparing(false));
+      clearComposerContext();
+      setSelectedSkills([]);
+      return;
+    }
+    queueOrSend(text, optionsForPrompt(text));
+    clearComposerContext();
+    setSelectedSkills([]);
   };
+
+  const steerNow = (): void => {
+    const text = prompt.trim();
+    if (!text || !activeProject || busy || !ready) return;
+    setQueuedPrompts((current) => [{ text, options: optionsForPrompt(text) ?? {} }, ...current]);
+    setPrompt('');
+    clearComposerContext();
+    setSelectedSkills([]);
+    if (running) onCancel();
+  };
+
+  function cycleAutonomy(): void {
+    const modes: AutonomyMode[] = ['plan', 'ask', 'autoEdit', 'full'];
+    const index = modes.indexOf(selectedAutonomy);
+    onSelectAutonomy(modes[(index === -1 ? 0 : index + 1) % modes.length]);
+  }
+
+  function commandFor(text: string): string | undefined {
+    const match = /^\/(goal|skills|rules|agent|route|handoff|workflows|review|implement|debug|explain|test)\b/i.exec(text);
+    return match?.[1]?.toLowerCase();
+  }
+
+  function runCommand(command: string, text: string): void {
+    if (command === 'goal') {
+      setGoalEditor({ outcome: text.replace(/^\/goal\s*/i, '').trim(), constraints: '', verification: '' });
+      return;
+    }
+    if (command === 'skills') {
+      setSkillsOpen(true);
+      return;
+    }
+    if (command === 'rules') {
+      onOpenRules();
+      return;
+    }
+    if (command === 'workflows') {
+      onOpenWorkflows();
+      return;
+    }
+    if (command === 'handoff') {
+      const [, requestedAgent, ...rest] = text.split(/\s+/);
+      const target = agentCapabilities.find((agent) => agent.id === requestedAgent)?.id;
+      if (!target) return;
+      const handoffPrompt = rest.join(' ').trim() || `Continue the current task with ${target}.`;
+      onHandoff(target, handoffPrompt);
+      return;
+    }
+    if (command === 'agent') {
+      const requestedAgent = text.split(/\s+/)[1]?.toLowerCase();
+      const target = agentCapabilities.find((agent) => agent.id === requestedAgent)?.id;
+      if (target) onSelectAgent(target);
+      return;
+    }
+    if (command === 'route') {
+      const requestedRoute = text.split(/\s+/)[1]?.toLowerCase();
+      if (requestedRoute === 'direct' || requestedRoute === 'proxy') onSelectRoute(requestedRoute);
+      return;
+    }
+    const template = COMMAND_TEMPLATES[command];
+    if (template) {
+      setPrompt(`${template} `);
+      window.setTimeout(() => promptRef.current?.focus(), 0);
+      return;
+    }
+    setPrompt(`${text} `);
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }
+
+  function clearComposerContext(): void {
+    setSelectedFiles([]);
+    setContextChips([]);
+  }
+
+  async function attachFiles(): Promise<void> {
+    if (!activeProject) return;
+    try {
+      const files = await window.kaiDesktop.chooseFiles(activeProject.id).then(unwrap);
+      setSelectedFiles((current) => [...new Set([...current, ...files])]);
+    } catch {
+      // The app-level error banner reports IPC failures.
+    }
+  }
+
+  function applyCommand(command: string): void {
+    if (command === '/goal') {
+      setGoalEditor({ outcome: '', constraints: '', verification: '' });
+      return;
+    }
+    if (command === '/skills') {
+      setSkillsOpen(true);
+      return;
+    }
+    if (command === '/rules') {
+      onOpenRules();
+      return;
+    }
+    const name = command.replace(/^\//, '').toLowerCase();
+    const template = COMMAND_TEMPLATES[name];
+    if (template) {
+      setPrompt(`${template} `);
+      promptRef.current?.focus();
+      return;
+    }
+    setPrompt(`${command} `);
+    promptRef.current?.focus();
+  }
+
+  async function addSelectionContext(): Promise<void> {
+    const path = window.prompt('Project-relative file path', selectedFiles[0] ?? '');
+    if (!path?.trim()) return;
+    const start = Number.parseInt(window.prompt('Start line', '1') ?? '', 10);
+    const end = Number.parseInt(window.prompt('End line', String(Math.max(1, start))) ?? '', 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) {
+      setWorkbenchNotice('Selection lines must be positive and the end line must follow the start line.');
+      return;
+    }
+    setContextChips((current) => [
+      ...current.filter((chip) => !(chip.type === 'selection' && chip.path === path.trim())),
+      { type: 'selection', path: path.trim(), startLine: start, endLine: end },
+    ]);
+    setContextPickerOpen(false);
+  }
+
+  async function addGitDiffContext(): Promise<void> {
+    if (!activeProject) return;
+    setContextBusy(true);
+    try {
+      const result = await window.kaiDesktop.gitDiffStat(activeProject.id).then(unwrap);
+      if (result.error) {
+        setWorkbenchNotice(result.error);
+        return;
+      }
+      setContextChips((current) => [
+        ...current.filter((chip) => chip.type !== 'gitDiff'),
+        { type: 'gitDiff', stat: result.stat },
+      ]);
+      setContextPickerOpen(false);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
+  async function addMemoryContext(): Promise<void> {
+    const query = window.prompt('Search Cognitive1 memory for:')?.trim();
+    if (!query) return;
+    setContextBusy(true);
+    try {
+      const memories = await window.kaiDesktop.searchBrain({ query, maxResults: 8 }).then(unwrap);
+      const summary = memories.length > 0
+        ? memories.map((entry) => `${entry.title}\n${entry.project} / ${entry.type}\n${Object.values(entry.fields).filter(Boolean).join('\n')}`).join('\n\n')
+        : `No recall results found for "${query}".`;
+      setContextChips((current) => [
+        ...current.filter((chip) => !(chip.type === 'memory' && chip.query === query)),
+        { type: 'memory', query, summary },
+      ]);
+      setContextPickerOpen(false);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
+  async function attachImageFile(file: File): Promise<void> {
+    if (!file.type.startsWith('image/')) {
+      setWorkbenchNotice('Attach a PNG, JPEG, GIF, or WebP image.');
+      return;
+    }
+    setContextBusy(true);
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const chip = await window.kaiDesktop.saveAttachment(file.name, dataUrl).then(unwrap);
+      if (chip.type !== 'image') throw new Error('The attachment service returned an invalid image chip.');
+      setContextChips((current) => [
+        ...current.filter((item) => !(item.type === 'image' && item.name === chip.name)),
+        chip,
+      ]);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    } finally {
+      setContextBusy(false);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+    }
+  }
+
+  async function reviewTurnChanges(turnId: string): Promise<void> {
+    if (!activeConversation) return;
+    try {
+      setCheckpointReview(await onReviewCheckpoint(activeConversation.id, turnId));
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    }
+  }
+
+  async function rejectReviewedFile(filePath: string): Promise<void> {
+    if (!checkpointReview) return;
+    try {
+      await onRejectCheckpointFile(checkpointReview.conversationId, checkpointReview.turnId, filePath);
+      setCheckpointReview(await onReviewCheckpoint(checkpointReview.conversationId, checkpointReview.turnId));
+      setWorkbenchNotice(`Restored ${filePath} from the turn checkpoint.`);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    }
+  }
+
+  async function restoreTurnChanges(turnId: string): Promise<void> {
+    if (!activeConversation) return;
+    try {
+      await onRestoreCheckpoint(activeConversation.id, turnId);
+      setCheckpointReview(null);
+      setWorkbenchNotice('Restored every file changed during that turn.');
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    }
+  }
+
+  async function saveGoal(start: boolean): Promise<void> {
+    if (!goalEditor?.outcome.trim() || !activeProject) return;
+    const now = new Date().toISOString();
+    const goal: WorkbenchGoal = activeGoal && activeGoal.outcome === goalEditor.outcome
+      ? {
+          ...activeGoal,
+          constraints: goalEditor.constraints ?? '',
+          verification: goalEditor.verification ?? '',
+          updatedAt: now,
+        }
+      : {
+          id: `goal_${crypto.randomUUID()}`,
+          outcome: goalEditor.outcome.trim(),
+          constraints: goalEditor.constraints?.trim() ?? '',
+          verification: goalEditor.verification?.trim() ?? '',
+          status: 'running',
+          createdAt: now,
+          updatedAt: now,
+          startedAt: now,
+        };
+    if (activeConversation) await onUpdateConversation({ ...activeConversation, goal, updatedAt: now });
+    setGoalEditor(null);
+    if (start) queueOrSend(goal.outcome, { ...sendOptions, goal });
+  }
+
+  async function updateGoalState(status: WorkbenchGoal['status']): Promise<void> {
+    if (!activeConversation?.goal) return;
+    const now = new Date().toISOString();
+    const goal: WorkbenchGoal = status === 'completed'
+      ? { ...activeConversation.goal, status, completedAt: now, updatedAt: now }
+      : status === 'paused'
+        ? { ...activeConversation.goal, status, pausedAt: now, updatedAt: now }
+        : { ...activeConversation.goal, status, pausedAt: undefined, updatedAt: now };
+    await onUpdateConversation({ ...activeConversation, goal, updatedAt: now });
+  }
+
+  async function clearGoal(): Promise<void> {
+    if (!activeConversation) return;
+    await onUpdateConversation({ ...activeConversation, goal: null, updatedAt: new Date().toISOString() });
+  }
+
+  async function togglePermission(key: PermissionKey, enabled: boolean): Promise<void> {
+    if (!activeProject) return;
+    await onUpdatePreferences({
+      schemaVersion: 1,
+      projectId: activeProject.id,
+      ...(projectPreferences ?? {}),
+      customPermissions: { ...projectPreferences?.customPermissions, [key]: enabled },
+    });
+  }
+
+  const visibleSkills = skills.filter((skill) => {
+    const query = skillQuery.trim().toLowerCase();
+    return !query || skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query);
+  });
+  const cost = activeConversation?.events.reduce((sum, event) => sum + (event.type === 'cost.update' ? event.amountUsd ?? 0 : 0), 0) ?? 0;
+  const rawEvents = (activeConversation?.events ?? [])
+    .filter((event): event is Extract<PersistedEvent, { type: 'raw.fallback' }> => event.type === 'raw.fallback')
+    .slice(-50)
+    .reverse();
+
   return (
     <div className="workspace-view">
       <div className="workspace-header">
         <div><span className="eyebrow">{activeConversation ? 'Conversation' : 'Workspace'}</span><h1>{activeConversation?.title ?? activeProject?.name ?? 'Open a project'}</h1></div>
         <div className="workspace-status">
+          <button type="button" className={`status-action ${rawEventsOpen ? 'active' : ''}`} aria-pressed={rawEventsOpen} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw fallback events"><Braces size={13} /><span>Raw</span><small>{rawEvents.length}</small></button>
           <span className={`status-pill ${ready ? 'ready' : 'unavailable'}`}><Circle size={7} fill="currentColor" /> {apiRun ? 'API' : 'CLI'} {ready ? 'ready' : 'unavailable'}</span>
           <span className="status-pill lavender"><Sparkles size={13} /> {apiRun ? directApiCapability?.model || directApiCapability?.displayName || 'Direct API' : selectedCapability?.version ?? selectedCapability?.displayName ?? selectedAgent}</span>
         </div>
       </div>
+
+      {workbenchNotice && (
+        <div className="workbench-notice" role="status">
+          <span>{workbenchNotice}</span>
+          <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></button>
+        </div>
+      )}
 
       {pendingApproval && (
         <div className="approval-overlay">
@@ -109,19 +749,123 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
         </div>
       )}
 
-      <div className="conversation-canvas">
+      {skillsOpen && (
+        <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Skills">
+          <div className="skills-panel">
+            <div className="skills-panel-head">
+              <div><span className="eyebrow">Project capabilities</span><h2>Skills</h2></div>
+              <button type="button" className="icon-button compact" aria-label="Close skills" onClick={() => setSkillsOpen(false)}><X size={15} /></button>
+            </div>
+            <label className="input-with-icon"><Search size={14} /><input value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)} placeholder="Search skills" autoFocus /></label>
+            <div className="skills-list">
+              {visibleSkills.map((skill) => {
+                const selected = selectedSkills.some((item) => item.name === skill.name);
+                return (
+                    <button key={`${skill.scope}:${skill.path}`} type="button" className={`skill-row ${selected ? 'selected' : ''}`} onClick={() => { setSelectedSkills((current) => selected ? current.filter((item) => item.name !== skill.name) : [...current, skill]); setPrompt((current) => /\$[A-Za-z0-9_-]*$/.test(current) ? current.replace(/\$[A-Za-z0-9_-]*$/, `$${skill.name} `) : current); }}>
+                    <span><strong>${skill.name}</strong><small>{skill.scope}</small></span>
+                    <p>{skill.description}</p>
+                  </button>
+                );
+              })}
+              {visibleSkills.length === 0 && <div className="empty-list">No matching skills</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rawEventsOpen && (
+        <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Raw event inspector">
+          <div className="skills-panel raw-event-panel">
+            <div className="skills-panel-head">
+              <div><span className="eyebrow">Diagnostics</span><h2>Raw event inspector</h2></div>
+              <button type="button" className="icon-button compact" aria-label="Close raw event inspector" onClick={() => setRawEventsOpen(false)}><X size={15} /></button>
+            </div>
+            <div className="raw-event-list">
+              {rawEvents.map((event) => (
+                <article className="raw-event" key={event.id}>
+                  <div className="raw-event-heading">
+                    <strong>{event.sourceType}</strong>
+                    <span>{new Date(event.timestamp).toLocaleString()}{event.agent ? ` · ${event.agent}` : ''}</span>
+                    <button type="button" className="secondary-button" onClick={() => void copyRawEvent(event.payload, setWorkbenchNotice)}>Copy payload</button>
+                  </div>
+                  <pre>{formatRawPayload(event.payload)}</pre>
+                </article>
+              ))}
+              {rawEvents.length === 0 && <div className="empty-list">No raw fallback events captured in this conversation</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {checkpointReview && (
+        <div className="skills-overlay checkpoint-overlay" role="dialog" aria-modal="true" aria-label="Review turn changes">
+          <div className="skills-panel checkpoint-panel">
+            <div className="skills-panel-head">
+              <div><span className="eyebrow">Checkpoint review</span><h2>{checkpointReview.files.length} changed file{checkpointReview.files.length === 1 ? '' : 's'}</h2></div>
+              <div className="checkpoint-head-actions">
+                <button type="button" className="secondary-button" onClick={() => void restoreTurnChanges(checkpointReview.turnId)}><Undo2 size={14} /><span>Undo all</span></button>
+                <button type="button" className="icon-button compact" aria-label="Close checkpoint review" onClick={() => setCheckpointReview(null)}><X size={15} /></button>
+              </div>
+            </div>
+            {!checkpointReview.gitAvailable && <div className="workbench-error">This turn has no Git checkpoint, so files cannot be restored automatically.</div>}
+            <div className="checkpoint-files">
+              {checkpointReview.files.map((file) => (
+                <article className="checkpoint-file" key={file.path}>
+                  <div className="checkpoint-file-heading">
+                    <div><strong>{file.path}</strong><span><b className="diff-add">+{file.added}</b><b className="diff-remove">-{file.removed}</b>{file.binary ? ' · binary' : ''}</span></div>
+                    <button type="button" className="secondary-button" disabled={!checkpointReview.gitAvailable} onClick={() => void rejectReviewedFile(file.path)}><Undo2 size={13} /><span>Restore file</span></button>
+                  </div>
+                  {!file.binary && (
+                    <div className="checkpoint-diff">
+                      <div><span>Before</span><pre>{file.before || '(empty)'}</pre></div>
+                      <div><span>After</span><pre>{file.after || '(empty)'}</pre></div>
+                    </div>
+                  )}
+                </article>
+              ))}
+              {checkpointReview.files.length === 0 && <div className="empty-list">No files differ from this checkpoint</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div ref={canvasRef} className="conversation-canvas">
         {activeConversation?.turns.length || streamingText ? (
           <>
             {activeConversation?.turns.map((turn) => (
               <article key={turn.id} className={`message ${turn.role}`}><div className="message-role">{turn.role === 'user' ? 'You' : 'KAI'}</div><div className="message-body">{turn.text}</div></article>
             ))}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
+            {running && !streamingText && (
+              <article className="thinking" role="status" aria-live="polite">
+                <span className="spinner" />
+                <span className="status-word">{statusWord}</span>
+                <span className="status-timer">{elapsedSeconds}s</span>
+              </article>
+            )}
+            {activeConversation?.events.slice(-40).map((event) => <RunEventCard key={event.id} event={event} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} />)}
+            {compareResult && (
+              <ComparePanel
+                result={compareResult}
+                onPick={async (id, side) => {
+                  await onPickCompare(id, side);
+                  setCompareResult(null);
+                  setWorkbenchNotice(`Applied the ${side} agent's changes to the workspace.`);
+                }}
+                onOpen={onOpenCompareWorktree}
+                onDiscard={async (id) => {
+                  await onDiscardCompare(id);
+                  setCompareResult(null);
+                }}
+              />
+            )}
+            {comparing && <div className="thinking"><span className="spinner" /><span className="status-word">Comparing agents</span><span className="status-timer">0s</span></div>}
           </>
         ) : (
           <div className="workspace-empty">
-            <div className="empty-symbol">{apiRun ? <Cloud size={26} /> : <Cpu size={26} />}</div>
-            <h2>{activeProject ? 'Start with a concrete task' : 'Choose a project to begin'}</h2>
-            <p>{activeProject ? ready ? apiRun ? 'Ask the direct API model to inspect or change the project. File changes require approval.' : 'Ask KAI to inspect, change, or explain the project.' : unavailableReason : 'KAI keeps project files and local state on this machine.'}</p>
+            <Sparkles size={40} />
+            <h2>Ready when you are</h2>
+            <p>Send a message to KAI, use <code>/goal</code> for durable work, or type <code>$</code> to invoke a skill.</p>
             {!activeProject && <button type="button" className="primary-button" onClick={onChooseProject}><FolderOpen size={16} /><span>Open project</span></button>}
           </div>
         )}
@@ -159,74 +903,393 @@ export function WorkspaceView({ activeProject, activeConversation, settings, bus
             </div>
           </div>
         )}
-        <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder={ready ? apiRun ? 'Ask the configured API model' : 'Ask KAI to inspect, change, or explain code' : unavailableReason} aria-label="Task prompt" disabled={!activeProject || busy || !ready} />
-        <div className="composer-toolbar">
-          <div className="composer-controls">
-            <div className="mode-toggle" role="group" aria-label="Execution mode">
-              <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
-              <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
+        {activeGoal && (
+          <div className={`goal-progress status-${activeGoal.status}`}>
+            <span className="goal-target"><Goal size={15} /></span>
+            <div className="goal-copy"><strong>{activeGoal.outcome}</strong><small>{activeGoal.status}{activeGoal.verification ? ` · ${activeGoal.verification}` : ''}</small></div>
+            <div className="goal-actions">
+              {activeGoal.status === 'running'
+                ? <button type="button" title="Pause goal" onClick={() => void updateGoalState('paused')}><Square size={11} /></button>
+                : <button type="button" title="Resume goal" onClick={() => void updateGoalState('running')}><Play size={12} /></button>}
+              <button type="button" title="Complete goal" onClick={() => void updateGoalState('completed')}><Check size={12} /></button>
+              <button type="button" title="Clear goal" onClick={() => void clearGoal()}><X size={12} /></button>
             </div>
-            {apiRun ? (
-              <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}>
-                <Cloud size={14} />
-                <span className="truncate">{selectedRoute === 'proxy'
-                  ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}`
-                  : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span>
-              </button>
-            ) : (
-              <SelectMenu
-                ariaLabel="Agent"
-                className={`agent-select ${ready ? '' : 'unavailable'}`}
-                disabled={busy}
-                icon={<Cpu size={14} />}
-                onChange={onSelectAgent}
-                options={agentCapabilities.map((agent) => ({
-                  value: agent.id,
-                  label: `${agent.displayName}${setupSuffix(agent)}`,
-                }))}
-                title={selectedCapability?.unavailableReason}
-                value={selectedAgent}
-              />
-            )}
-            <SelectMenu
-              ariaLabel="Route"
-              className={`control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
-              disabled={busy || !apiRun}
-              icon={<Route size={14} />}
-              onChange={onSelectRoute}
-              options={[
-                { value: 'direct', label: 'Direct' },
-                { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !apiRun || !proxyReady },
-              ]}
-              title={apiRun ? proxyReady ? 'Choose the direct provider route or KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route' : 'CLI agents currently use direct routing'}
-              value={apiRun ? selectedRoute : 'direct'}
-            />
-            <SelectMenu
-              ariaLabel="Autonomy"
-              className="control-select autonomy-select"
-              disabled={busy}
-              icon={<ShieldCheck size={14} />}
-              onChange={onSelectAutonomy}
-              options={[
-                { value: 'plan', label: 'Plan' },
-                { value: 'ask', label: 'Ask' },
-                { value: 'autoEdit', label: 'Auto-edit' },
-                { value: 'full', label: 'Full control' },
-                { value: 'custom', label: 'Custom' },
-              ]}
-              title="Choose how much project access the active run has"
-              value={selectedAutonomy}
-            />
           </div>
-          {running ? (
-            <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
-          ) : (
-            <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>
-          )}
+        )}
+        {queuedPrompts.length > 0 && (
+          <div className="queue-list">
+            {queuedPrompts.map((item, index) => (
+              <div className="queue-row" key={`${item.text}:${index}`}>
+                <span className="queue-label">Queued</span><span className="truncate">{item.text}</span>
+                <button type="button" aria-label="Edit queued prompt" onClick={() => { setPrompt(item.text); setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index)); promptRef.current?.focus(); }}><Pencil size={12} /></button>
+                <button type="button" aria-label="Remove queued prompt" onClick={() => setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={12} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="context-chip-row">
+          {selectedFiles.map((file) => (
+            <span className="context-chip" key={file} title={file}><File size={11} /><span className="truncate">{file}</span><button type="button" aria-label={`Remove ${file}`} onClick={() => setSelectedFiles((current) => current.filter((item) => item !== file))}><X size={11} /></button></span>
+          ))}
+          {contextChips.map((chip) => (
+            <span className={`context-chip ${chip.type}-chip`} key={contextChipKey(chip)} title={contextChipLabel(chip)}>
+              {contextChipIcon(chip.type)}
+              <span className="truncate">{contextChipLabel(chip)}</span>
+              <button type="button" aria-label={`Remove ${contextChipLabel(chip)}`} onClick={() => setContextChips((current) => current.filter((item) => contextChipKey(item) !== contextChipKey(chip)))}><X size={11} /></button>
+            </span>
+          ))}
+          {selectedSkills.map((skill) => (
+            <span className="context-chip skill-chip" key={skill.name}>${skill.name}<button type="button" aria-label={`Remove ${skill.name}`} onClick={() => setSelectedSkills((current) => current.filter((item) => item.name !== skill.name))}><X size={11} /></button></span>
+          ))}
         </div>
+        {contextPickerOpen && activeProject && (
+          <div className="context-picker">
+            <div className="context-picker-head">
+              <div><strong>Add context</strong><span>Files, selections, changes, memory, or an image</span></div>
+              <button type="button" className="icon-button compact" aria-label="Close context picker" onClick={() => setContextPickerOpen(false)}><X size={14} /></button>
+            </div>
+            <div className="context-picker-actions">
+              <button type="button" disabled={contextBusy} onClick={() => void addSelectionContext()}><Braces size={14} /><span>Current selection</span></button>
+              <button type="button" disabled={contextBusy} onClick={() => void addGitDiffContext()}><FileDiff size={14} /><span>Uncommitted changes</span></button>
+              <button type="button" disabled={contextBusy} onClick={() => void addMemoryContext()}><Brain size={14} /><span>Search memory</span></button>
+              <button type="button" disabled={contextBusy} onClick={() => imageInputRef.current?.click()}><ImagePlus size={14} /><span>Attach image</span></button>
+            </div>
+            <label className="input-with-icon context-file-search"><FileSearch size={14} /><input autoFocus value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="Search project files" /></label>
+            <div className="context-file-results">
+              {fileResults.map((file) => (
+                <button type="button" key={file} onClick={() => { setSelectedFiles((current) => [...new Set([...current, file])]); setContextPickerOpen(false); setFileQuery(''); setPrompt((current) => current.replace(/@[^\s]*$/, '').trimEnd()); }}>
+                  <AtSign size={12} /><span className="truncate">{file}</span>
+                </button>
+              ))}
+              {contextBusy && <div className="empty-list">Searching project files</div>}
+              {!contextBusy && fileResults.length === 0 && <div className="empty-list">No matching files</div>}
+            </div>
+          </div>
+        )}
+        {goalEditor && (
+          <div className="goal-editor">
+            <div className="goal-editor-head"><strong>Goal</strong><span>Outcome, constraints, and proof of completion</span></div>
+            <label><span>Outcome</span><textarea rows={2} value={goalEditor.outcome} onChange={(event) => setGoalEditor({ ...goalEditor, outcome: event.target.value })} placeholder="What should be true when this work is done?" /></label>
+            <label><span>Constraints</span><textarea rows={2} value={goalEditor.constraints ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, constraints: event.target.value })} placeholder="Required tools, boundaries, or approaches to avoid" /></label>
+            <label><span>Verification</span><textarea rows={2} value={goalEditor.verification ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, verification: event.target.value })} placeholder="Tests, measurements, or review criteria that prove completion" /></label>
+            <div className="button-row align-end"><button type="button" className="secondary-button" onClick={() => setGoalEditor(null)}>Cancel</button><button type="button" className="secondary-button" onClick={() => void saveGoal(false)}>Save</button><button type="button" className="primary-button" onClick={() => void saveGoal(true)}>Start goal</button></div>
+          </div>
+        )}
+        <input
+          ref={imageInputRef}
+          className="visually-hidden"
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void attachImageFile(file);
+          }}
+        />
+        <div className="composer-box">
+          <textarea
+            ref={promptRef}
+            value={prompt}
+            onChange={(event) => {
+              const value = event.target.value;
+              setPrompt(value);
+              if (/(?:^|\s)@[^\s]*$/.test(value)) {
+                setContextPickerOpen(true);
+                setFileQuery(value.split('@').pop() ?? '');
+              }
+              const skillMatch = /(?:^|\s)\$([A-Za-z0-9_-]*)$/.exec(value);
+              if (skillMatch) {
+                setSkillsOpen(true);
+                setSkillQuery(skillMatch[1]);
+              }
+            }}
+            onPaste={(event) => {
+              const image = [...event.clipboardData.items].find((item) => item.type.startsWith('image/'));
+              const file = image?.getAsFile();
+              if (file) {
+                event.preventDefault();
+                void attachImageFile(file);
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Tab' && event.shiftKey) {
+                event.preventDefault();
+                cycleAutonomy();
+                return;
+              }
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                if (event.ctrlKey || event.metaKey) steerNow();
+                else send();
+              }
+              if (event.key === 'Escape') {
+                setGoalEditor(null);
+                setContextPickerOpen(false);
+              }
+            }}
+            placeholder="Ask KAI, /goal for a target, $ for skills"
+            aria-label="Task prompt"
+            disabled={!activeProject || (busy && !running) || !ready}
+          />
+          <div className="composer-toolbar">
+            <div className="composer-leading">
+              <button type="button" className="composer-icon-button" onClick={() => void attachFiles()} title="Add project files" aria-label="Add project files"><Paperclip size={14} /></button>
+              <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add context" aria-label="Add context"><AtSign size={14} /></button>
+              <button type="button" className="composer-icon-button" onClick={() => imageInputRef.current?.click()} title="Attach an image" aria-label="Attach an image"><ImagePlus size={14} /></button>
+              <button type="button" className="composer-icon-button" onClick={() => setSkillsOpen(true)} title="Add a skill" aria-label="Add a skill"><Sparkles size={14} /></button>
+              <div className="mode-toggle" role="group" aria-label="Execution mode">
+                <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
+                <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
+              </div>
+              {apiRun ? (
+                <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}>
+                  <Cloud size={14} />
+                  <span className="truncate">{selectedRoute === 'proxy'
+                    ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}`
+                    : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span>
+                </button>
+              ) : (
+                <SelectMenu
+                  ariaLabel="Agent"
+                  className={`agent-select ${ready ? '' : 'unavailable'}`}
+                  disabled={busy}
+                  icon={<Cpu size={14} />}
+                  onChange={onSelectAgent}
+                  options={agentCapabilities.map((agent) => ({
+                    value: agent.id,
+                    label: `${agent.displayName}${setupSuffix(agent)}`,
+                  }))}
+                  title={selectedCapability?.unavailableReason}
+                  value={selectedAgent}
+                />
+              )}
+              <SelectMenu
+                ariaLabel="Route"
+                className={`control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
+                disabled={busy || !apiRun}
+                icon={<Route size={14} />}
+                onChange={onSelectRoute}
+                options={[
+                  { value: 'direct', label: 'Direct' },
+                  { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !apiRun || !proxyReady },
+                ]}
+                title={apiRun ? proxyReady ? 'Choose the direct provider route or KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route' : 'CLI agents currently use direct routing'}
+                value={apiRun ? selectedRoute : 'direct'}
+              />
+              <SelectMenu
+                ariaLabel="Autonomy"
+                className="control-select autonomy-select"
+                disabled={busy}
+                icon={<ShieldCheck size={14} />}
+                onChange={onSelectAutonomy}
+                options={[
+                  { value: 'plan', label: 'Plan' },
+                  { value: 'ask', label: 'Ask' },
+                  { value: 'autoEdit', label: 'Auto-edit' },
+                  { value: 'full', label: 'Full control' },
+                  { value: 'custom', label: 'Custom' },
+                ]}
+                title="Choose how much project access the active run has"
+                value={selectedAutonomy}
+              />
+            </div>
+            <div className="composer-actions">
+              <button type="button" className={`composer-icon-button ${compareMode ? 'active' : ''}`} onClick={() => setCompareMode((current) => !current)} title="Compare two agents" aria-pressed={compareMode}><GitCompare size={14} /></button>
+              {compareMode && <select value={compareAgent} onChange={(event) => setCompareAgent(event.target.value as AgentId)} aria-label="Comparison agent">{agentCapabilities.filter((agent) => agent.id !== selectedAgent).map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</select>}
+              <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
+              <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>
+              <button type="button" className={`composer-icon-button ${rawEventsOpen ? 'active' : ''}`} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw events"><Braces size={14} /></button>
+              {running ? <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button> : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
+            </div>
+          </div>
+        </div>
+        {selectedAutonomy === 'custom' && activeProject && (
+          <div className="permission-grid">
+            {PERMISSIONS.map((permission) => (
+              <label key={permission.key} title={permission.description}>
+                <input type="checkbox" checked={Boolean(projectPreferences?.customPermissions?.[permission.key])} onChange={(event) => void togglePermission(permission.key, event.target.checked)} />
+                <span><strong>{permission.label}</strong><small>{permission.description}</small></span>
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
+        <div className="composer-footer"><span>Enter to send · Ctrl+Enter to steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
   );
+}
+
+function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void> }): ReactNode {
+  if (event.type === 'text.delta') return null;
+  if (event.type === 'tool.call') {
+    return (
+      <div className={`run-event tool ${event.status}`}>
+        <span>Tool</span><strong>{event.name}</strong><small>{event.status}</small>
+      </div>
+    );
+  }
+  if (event.type === 'diff.proposal') {
+    return <div className="run-event diff"><span>Proposed</span><strong>{event.filePath}</strong><small>{event.summary}</small></div>;
+  }
+  if (event.type === 'file.edit.applied' || event.type === 'file.change') {
+    const path = event.type === 'file.edit.applied' ? event.filePath : event.path;
+    return <div className="run-event diff"><span>Changed</span><strong>{path}</strong>{event.type === 'file.change' && <small>{event.action}</small>}</div>;
+  }
+  if (event.type === 'memory.event') {
+    return <div className="run-event memory"><span>Memory</span><strong>{event.action.replace('_', ' ')}</strong><small>{event.summary}</small></div>;
+  }
+  if (event.type === 'cost.update') {
+    const details = [event.amountUsd != null ? `$${event.amountUsd.toFixed(4)}` : '', event.inputTokens != null ? `${event.inputTokens} in` : '', event.outputTokens != null ? `${event.outputTokens} out` : ''].filter(Boolean).join(' · ');
+    return details ? <div className="run-event cost"><span>Usage</span><strong>{details}</strong></div> : null;
+  }
+  if (event.type === 'error') {
+    return <div className="run-event error"><span>Error</span><strong>{event.message}</strong>{event.recoverable && <small>recoverable</small>}</div>;
+  }
+  if (event.type === 'turn.changes') {
+    const added = event.files.reduce((sum, file) => sum + file.added, 0);
+    const removed = event.files.reduce((sum, file) => sum + file.removed, 0);
+    return (
+      <section className="changes-card">
+        <div className="changes-head">
+          <strong>Edited {event.files.length} file{event.files.length === 1 ? '' : 's'}</strong>
+          {added > 0 && <span className="diff-add">+{added}</span>}
+          {removed > 0 && <span className="diff-remove">-{removed}</span>}
+        </div>
+        <div className="changes-list">
+          {event.files.slice(0, 8).map((file) => (
+            <div className="changes-row" key={file.path}><span className="truncate">{file.path}</span><small><span className="diff-add">+{file.added}</span> <span className="diff-remove">-{file.removed}</span></small></div>
+          ))}
+          {event.files.length > 8 && <div className="changes-more">+{event.files.length - 8} more files</div>}
+        </div>
+        <div className="changes-actions">
+          <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review</span></button>
+          <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo all</span></button>
+        </div>
+      </section>
+    );
+  }
+  return null;
+}
+
+function ComparePanel({ result, onPick, onOpen, onDiscard }: { result: CompareRun; onPick: (id: string, side: 'left' | 'right') => Promise<void>; onOpen: (id: string, side: 'left' | 'right') => Promise<void>; onDiscard: (id: string) => Promise<void> }): ReactNode {
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const runAction = async (key: string, action: () => Promise<void>): Promise<void> => {
+    setActionBusy(key);
+    try {
+      await action();
+      setActionError(null);
+    } catch (caught) {
+      setActionError(messageOf(caught));
+    } finally {
+      setActionBusy(null);
+    }
+  };
+  return (
+    <section className="compare-panel">
+      <div className="compare-heading"><GitCompare size={15} /><strong>Agent comparison</strong><span>{result.prompt}</span></div>
+      <div className="compare-grid">
+        {[{ side: result.left, position: 'left' as const }, { side: result.right, position: 'right' as const }].map(({ side, position }) => (
+          <article key={position} className="compare-result">
+            <div className="compare-label"><span className={`agent-dot ${side.agent}`} />{side.agent}<span className={`compare-state ${side.ok ? 'ok' : 'failed'}`}>{side.ok ? 'completed' : 'failed'}</span><small>{formatElapsed(side.elapsedMs)}</small></div>
+            <MessageText text={side.output || side.error || 'No output returned.'} />
+            <div className="compare-file-summary">
+              <span>{side.files.length} changed file{side.files.length === 1 ? '' : 's'}</span>
+              <span className="diff-add">+{side.files.reduce((sum, file) => sum + file.added, 0)}</span>
+              <span className="diff-remove">-{side.files.reduce((sum, file) => sum + file.removed, 0)}</span>
+            </div>
+            <div className="compare-actions">
+              <button type="button" className="primary-button" disabled={Boolean(actionBusy) || !side.ok} onClick={() => void runAction(`pick-${position}`, () => onPick(result.id, position))}><Check size={13} /><span>{actionBusy === `pick-${position}` ? 'Applying' : 'Pick this one'}</span></button>
+              <button type="button" className="secondary-button" disabled={Boolean(actionBusy)} onClick={() => void runAction(`open-${position}`, () => onOpen(result.id, position))}><FolderOpen size={13} /><span>Open worktree</span></button>
+            </div>
+          </article>
+        ))}
+      </div>
+      {actionError && <div className="workbench-error">{actionError}</div>}
+      <div className="compare-discard-row"><button type="button" className="secondary-button" disabled={Boolean(actionBusy)} onClick={() => void runAction('discard', () => onDiscard(result.id))}><Trash2 size={13} /><span>Discard both</span></button></div>
+    </section>
+  );
+}
+
+function MessageText({ text }: { text: string }): ReactNode {
+  return <div className="message-body">{text}</div>;
+}
+
+function contextChipKey(chip: ContextChip): string {
+  return JSON.stringify(chip);
+}
+
+function contextChipLabel(chip: ContextChip): string {
+  switch (chip.type) {
+    case 'file':
+      return chip.path;
+    case 'selection':
+      return `${chip.path}:${chip.startLine}-${chip.endLine}`;
+    case 'terminal':
+      return 'Terminal output';
+    case 'gitDiff':
+      return 'Uncommitted changes';
+    case 'memory':
+      return `Memory: ${chip.query}`;
+    case 'image':
+      return chip.name;
+  }
+}
+
+function contextChipIcon(type: ContextChip['type']): ReactNode {
+  switch (type) {
+    case 'file':
+      return <File size={11} />;
+    case 'selection':
+    case 'terminal':
+      return <Braces size={11} />;
+    case 'gitDiff':
+      return <FileDiff size={11} />;
+    case 'memory':
+      return <Brain size={11} />;
+    case 'image':
+      return <ImagePlus size={11} />;
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('The image could not be read.'));
+    reader.onerror = () => reject(reader.error ?? new Error('The image could not be read.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function copyRawEvent(payload: unknown, notify: (message: string) => void): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(formatRawPayload(payload));
+    notify('Raw event payload copied to the clipboard.');
+  } catch (error) {
+    notify(messageOf(error));
+  }
+}
+
+function formatRawPayload(payload: unknown): string {
+  if (typeof payload === 'string') return payload;
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
+}
+
+function formatElapsed(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${milliseconds} ms`;
+  return `${(milliseconds / 1_000).toFixed(1)} s`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : 'The operation failed.';
 }
 
 interface SelectMenuOption<T extends string> {

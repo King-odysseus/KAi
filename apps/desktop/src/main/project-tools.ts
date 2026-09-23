@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { AutonomyMode } from '@kai/contracts';
+import type { AutonomyMode, PermissionKey } from '@kai/contracts';
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_READ_LINES = 400;
@@ -177,7 +177,10 @@ export interface ExternalToolPort {
 export class DesktopProjectToolRuntime {
   private resolvedRoot: Promise<string> | undefined;
 
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly customPermissions: Partial<Record<PermissionKey, boolean>> = {},
+  ) {}
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
     if (name === 'read_file' || name === 'search_files') return { decision: 'allow' };
@@ -186,6 +189,7 @@ export class DesktopProjectToolRuntime {
         return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
       }
       if (autonomy === 'full') return { decision: 'allow' };
+      if (autonomy === 'custom' && this.customPermissions.shellCommand) return { decision: 'allow' };
       return {
         decision: 'ask',
         title: 'Run a project command?',
@@ -200,6 +204,7 @@ export class DesktopProjectToolRuntime {
       return { decision: 'deny', reason: `The current plan mode does not allow ${name}.` };
     }
     if (autonomy === 'autoEdit' || autonomy === 'full') return { decision: 'allow' };
+    if (autonomy === 'custom' && this.customPermissions.workspaceEdit) return { decision: 'allow' };
     return {
       decision: 'ask',
       title: name === 'create_file' ? 'Create a project file?' : 'Edit a project file?',

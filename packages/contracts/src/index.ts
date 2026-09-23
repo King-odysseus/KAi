@@ -9,3 +9,5 @@ export * from './ipc';
 export * from './migrations';
 export * from './primitives';
 export * from './proxy';
+export * from './rules';
+export * from './workbench';

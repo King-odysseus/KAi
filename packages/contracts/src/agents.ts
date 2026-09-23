@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { conversationRecordV1Schema } from './domain';
+import { contextChipSchema } from './context';
 import { persistedEventV1Schema } from './events';
 import { agentIdSchema, autonomyModeSchema, executionModeSchema, providerIdSchema, routeModeSchema } from './primitives';
+import { goalInputSchema } from './workbench';
 
 export const agentCapabilitySchema = z
   .object({
@@ -27,6 +29,10 @@ export const agentRunRequestSchema = z
     execution: executionModeSchema.optional(),
     route: routeModeSchema,
     autonomy: autonomyModeSchema,
+    goal: goalInputSchema.optional(),
+    skills: z.array(z.string().min(1).max(200)).max(50).optional(),
+    selectedPaths: z.array(z.string().min(1).max(2_000)).max(50).optional(),
+    contextChips: z.array(contextChipSchema).max(50).optional(),
   })
   .strict();
 

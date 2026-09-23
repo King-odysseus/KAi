@@ -5,21 +5,32 @@ import type {
   AgentId,
   AutonomyMode,
   BootstrapPayload,
+  CheckpointReview,
+  CompareRun,
+  ConfigBackup,
   ConversationRecord,
   ContextPreview,
   CredentialStatus,
   DirectApiCapability,
   ExecutionMode,
   LogEntry,
+  ProjectPreferences,
   RouteMode,
   SettingsUpdate,
 } from '@kai/contracts';
-import { ConversationSidebar, NavigationRail, navigation, TitleBar } from './components/Chrome';
+import { CommandPalette, ConversationSidebar, NavigationRail, navigation, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { BrainPanel } from './components/BrainView';
 import { ProxyPanel } from './components/ProxyView';
+import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
-import { ContextPanel, WorkspaceView } from './components/Workspace';
+import {
+  ContextPanel,
+  WorkspaceView,
+  type WorkspaceSendOptions,
+  type WorkspaceCommandKind,
+  type WorkspaceCommandRequest,
+} from './components/Workspace';
 import { clamp, unwrap, type ViewId } from './types';
 
 const emptyCredentials: CredentialStatus = { available: false, ids: [] };
@@ -41,6 +52,7 @@ export function App(): ReactNode {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [agentCapabilities, setAgentCapabilities] = useState<AgentCapability[]>([]);
   const [directApiCapability, setDirectApiCapability] = useState<DirectApiCapability | null>(null);
+  const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
@@ -58,11 +70,62 @@ export function App(): ReactNode {
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [workspaceCommand, setWorkspaceCommand] = useState<WorkspaceCommandRequest | null>(null);
   const started = useRef(false);
+  const commandNonce = useRef(0);
   const resizeOrigin = useRef<{ kind: 'sidebar' | 'context'; x: number; width: number } | null>(null);
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+  const commandItems: CommandPaletteItem[] = [
+    { id: 'workbench', label: 'Open Agent Workbench', description: 'Return to the active conversation and composer', shortcut: 'Ctrl+1', run: () => setView('workspace') },
+    { id: 'goal', label: 'Start or Edit Goal', description: 'Define the outcome, constraints, and verification', run: () => openWorkspaceCommand('goal') },
+    { id: 'skills', label: 'Browse Skills', description: 'Add a project or personal skill to the next run', run: () => openWorkspaceCommand('skills') },
+    { id: 'selection', label: 'Add Selection to Chat', description: 'Attach a referenced file and line range as context', run: () => openWorkspaceCommand('context') },
+    { id: 'checkpoint', label: 'Review Latest Turn Changes', description: 'Open the checkpoint viewer for the newest captured turn', run: () => openWorkspaceCommand('checkpoint') },
+    { id: 'raw', label: 'Inspect Raw Fallback Events', description: 'Review and copy raw diagnostic payloads', run: () => openWorkspaceCommand('raw') },
+    { id: 'handoff', label: 'Handoff to Another Agent', description: 'Start a handoff prompt in the active conversation', run: () => openWorkspaceCommand('handoff') },
+    { id: 'rules', label: 'View and Edit Execution Rules', description: 'Manage the authoritative rules injected into agent runs', run: () => setView('rules') },
+    { id: 'brain', label: 'Open C1 Brain', description: 'Search, inspect, and maintain the shared brain', run: () => setView('brain') },
+    { id: 'proxy', label: 'Open Universal Proxy', description: 'Show proxy status, activity, health, history, and costs', run: () => setView('proxy') },
+    { id: 'workflows', label: 'Open Workflows', description: 'Build, save, and run sequential agent work', run: () => setView('workflows') },
+    { id: 'history', label: 'Open Conversation History', description: 'Search, rename, archive, fork, and reopen threads', run: () => setView('history') },
+    { id: 'settings', label: 'Open Settings', description: 'Configure agents, routes, API providers, services, and MCP', run: () => setView('settings') },
+    { id: 'backups', label: 'Open Configuration Backups', description: 'Create, restore, or delete app-owned configuration backups', run: () => setView('settings') },
+    { id: 'restart-proxy', label: 'Restart Universal Proxy', description: 'Stop and start the managed proxy service', run: () => controlService('universalProxy', 'restart') },
+    ...agentCapabilities.map((agent): CommandPaletteItem => ({
+      id: `agent-${agent.id}`,
+      label: `Set Agent: ${agent.displayName}`,
+      description: agent.available ? `Use ${agent.displayName} for CLI runs` : agent.unavailableReason ?? `${agent.displayName} is unavailable`,
+      run: () => {
+        setSelectedAgent(agent.id);
+        setExecutionMode('cli');
+        setSelectedRoute('direct');
+        setAgentNotice(agent.available ? null : agent.unavailableReason ?? `${agent.displayName} is unavailable.`);
+      },
+    })),
+    { id: 'route-direct', label: 'Set Route: Direct provider', description: 'Use API mode with the configured direct provider', run: () => { setExecutionMode('api'); setSelectedRoute('direct'); } },
+    { id: 'route-proxy', label: 'Set Route: Universal Proxy', description: 'Use API mode through the managed Universal Proxy', run: () => { setExecutionMode('api'); setSelectedRoute('proxy'); } },
+    { id: 'route-toggle', label: 'Toggle Direct/Proxy Route', description: 'Switch API mode to the other configured route', run: () => { setExecutionMode('api'); setSelectedRoute((route) => route === 'direct' ? 'proxy' : 'direct'); } },
+    { id: 'autonomy-plan', label: 'Set Autonomy: Plan', description: 'Read-only planning before any project change', run: () => setSelectedAutonomy('plan') },
+    { id: 'autonomy-ask', label: 'Set Autonomy: Ask', description: 'Ask before edits and commands', run: () => setSelectedAutonomy('ask') },
+    { id: 'autonomy-auto', label: 'Set Autonomy: Auto-edit', description: 'Edit automatically and ask before risky commands', run: () => setSelectedAutonomy('autoEdit') },
+    { id: 'autonomy-full', label: 'Set Autonomy: Full Control', description: 'Run without approval prompts', run: () => setSelectedAutonomy('full') },
+    { id: 'autonomy-custom', label: 'Set Autonomy: Custom', description: 'Choose individual file, shell, network, and MCP permissions', run: () => setSelectedAutonomy('custom') },
+    { id: 'autonomy-cycle', label: 'Cycle Autonomy Mode', description: 'Advance through Plan, Ask, Auto-edit, and Full Control', shortcut: 'Shift+Tab', run: cycleAutonomyMode },
+  ];
+
+  function openWorkspaceCommand(kind: WorkspaceCommandKind): void {
+    commandNonce.current += 1;
+    setView('workspace');
+    setWorkspaceCommand({ kind, nonce: commandNonce.current });
+  }
+
+  function cycleAutonomyMode(): void {
+    const modes: AutonomyMode[] = ['plan', 'ask', 'autoEdit', 'full'];
+    setSelectedAutonomy((current) => modes[(Math.max(0, modes.indexOf(current)) + 1) % modes.length]);
+  }
 
   useEffect(() => {
     if (!activeProject) {
@@ -91,6 +154,26 @@ export function App(): ReactNode {
       cancelled = true;
     };
   }, [activeProject?.id, activeConversation?.id, activeConversation?.updatedAt, activeConversation?.events.length]);
+
+  useEffect(() => {
+    if (!activeProject) {
+      setProjectPreferences(null);
+      return;
+    }
+    let cancelled = false;
+    void window.kaiDesktop
+      .getPreferences(activeProject.id)
+      .then(unwrap)
+      .then((preferences) => {
+        if (!cancelled) setProjectPreferences(preferences);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectPreferences(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.id]);
 
   async function perform<T>(task: () => Promise<T>, message?: string): Promise<T | null> {
     if (message) setBusy(message);
@@ -197,6 +280,11 @@ export function App(): ReactNode {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
       if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
       if (event.key.toLowerCase() === 'b') {
         event.preventDefault();
         setContextOpen((open) => !open);
@@ -258,7 +346,7 @@ export function App(): ReactNode {
     setView('workspace');
   }
 
-  async function createConversation(prompt: string): Promise<void> {
+  async function createConversation(prompt: string, options: WorkspaceSendOptions = {}): Promise<void> {
     if (!bootstrap || !activeProject) return;
     const conversation = await perform(
       () => window.kaiDesktop.createConversation(activeProject.id, prompt).then(unwrap),
@@ -268,23 +356,31 @@ export function App(): ReactNode {
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
     setView('workspace');
-    await runConversation(conversation, prompt);
+    await runConversation(conversation, prompt, options);
   }
 
-  async function sendPrompt(prompt: string): Promise<void> {
+  async function sendPrompt(prompt: string, options: WorkspaceSendOptions = {}): Promise<void> {
     if (!bootstrap || !activeConversation) {
-      await createConversation(prompt);
+      await createConversation(prompt, options);
       return;
     }
-    await runConversation(activeConversation, prompt);
+    await runConversation(activeConversation, prompt, options);
   }
 
-  async function runConversation(conversation: ConversationRecord, prompt: string): Promise<void> {
+  async function runConversation(
+    conversation: ConversationRecord,
+    prompt: string,
+    options: WorkspaceSendOptions & { agent?: AgentId; execution?: ExecutionMode; route?: RouteMode; autonomy?: AutonomyMode } = {},
+  ): Promise<void> {
     if (!bootstrap) return;
-    const apiRun = executionMode === 'api';
-    const capability = agentCapabilities.find((agent) => agent.id === selectedAgent);
+    const runAgentId = options.agent ?? selectedAgent;
+    const runExecution = options.execution ?? executionMode;
+    const runRoute = options.route ?? (runExecution === 'api' ? selectedRoute : 'direct');
+    const runAutonomy = options.autonomy ?? selectedAutonomy;
+    const apiRun = runExecution === 'api';
+    const capability = agentCapabilities.find((agent) => agent.id === runAgentId);
     if (!apiRun && !capability?.available) {
-      setError(capability?.unavailableReason ?? `${selectedAgent} CLI is not available.`);
+      setError(capability?.unavailableReason ?? `${runAgentId} CLI is not available.`);
       return;
     }
     if (apiRun && !directApiCapability?.available) {
@@ -301,10 +397,13 @@ export function App(): ReactNode {
         () => window.kaiDesktop.runAgent({
           conversationId: conversation.id,
           prompt,
-          agent: selectedAgent,
-          execution: executionMode,
-          route: apiRun ? selectedRoute : 'direct',
-          autonomy: selectedAutonomy,
+          agent: runAgentId,
+          execution: runExecution,
+          route: apiRun ? runRoute : 'direct',
+          autonomy: runAutonomy,
+          ...(options.goal ? { goal: options.goal } : {}),
+          ...(options.skills?.length ? { skills: options.skills } : {}),
+          ...(options.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
         }).then(unwrap),
         apiRun
           ? `${directApiCapability?.displayName} is working`
@@ -333,6 +432,84 @@ export function App(): ReactNode {
       setPendingApproval(null);
       setAgentNotice('Stopping the current agent run.');
     }
+  }
+
+  async function handoffConversation(agent: AgentId, prompt: string): Promise<void> {
+    setSelectedAgent(agent);
+    if (!activeConversation) {
+      await createConversation(prompt, { agent });
+      return;
+    }
+    await runConversation(activeConversation, prompt, { agent });
+  }
+
+  async function compareConversation(prompt: string, targetAgent: AgentId): Promise<CompareRun> {
+    if (!bootstrap || !activeProject) throw new Error('Open a project before comparing agents.');
+    return execute('Comparing agents in isolated worktrees', () => window.kaiDesktop.startCompare({
+      projectId: activeProject.id,
+      prompt,
+      agent: selectedAgent,
+      targetAgent,
+      execution: executionMode,
+      route: executionMode === 'api' ? selectedRoute : 'direct',
+      autonomy: selectedAutonomy,
+    }).then(unwrap));
+  }
+
+  async function pickCompareWinner(id: string, side: 'left' | 'right'): Promise<void> {
+    await execute('Applying comparison changes', () => window.kaiDesktop.pickCompareWinner(id, side).then(unwrap));
+    setAgentNotice(`Applied the ${side} agent's changes to the workspace.`);
+  }
+
+  async function discardCompare(id: string): Promise<void> {
+    await execute('Discarding comparison', () => window.kaiDesktop.discardCompare(id).then(unwrap));
+  }
+
+  async function openCompareWorktree(id: string, side: 'left' | 'right'): Promise<void> {
+    await execute('Opening comparison worktree', () => window.kaiDesktop.openCompareWorktree(id, side).then(unwrap));
+  }
+
+  async function reviewConversationCheckpoint(conversationId: string, turnId: string): Promise<CheckpointReview> {
+    return execute('Reviewing turn changes', () => window.kaiDesktop.reviewCheckpoint(conversationId, turnId).then(unwrap));
+  }
+
+  async function refreshConversationRecord(id: string): Promise<void> {
+    const conversation = await window.kaiDesktop.getConversation(id).then(unwrap);
+    if (!conversation) return;
+    setConversations((current) => [conversation, ...current.filter((item) => item.id !== id)]);
+  }
+
+  async function rejectConversationFile(conversationId: string, turnId: string, filePath: string): Promise<void> {
+    await execute('Restoring file from checkpoint', () => window.kaiDesktop.rejectCheckpointFile(conversationId, turnId, filePath).then(unwrap));
+    await refreshConversationRecord(conversationId);
+  }
+
+  async function restoreConversationCheckpoint(conversationId: string, turnId: string): Promise<void> {
+    await execute('Restoring turn checkpoint', () => window.kaiDesktop.restoreCheckpoint(conversationId, turnId).then(unwrap));
+    await refreshConversationRecord(conversationId);
+  }
+
+  async function listConfigBackups(): Promise<ConfigBackup[]> {
+    return execute('Loading configuration backups', () => window.kaiDesktop.listBackups().then(unwrap));
+  }
+
+  async function createConfigBackup(name?: string): Promise<ConfigBackup> {
+    return execute('Creating configuration backup', () => window.kaiDesktop.createBackup(name).then(unwrap));
+  }
+
+  async function restoreConfigBackup(id: string): Promise<void> {
+    await execute('Restoring configuration backup', () => window.kaiDesktop.restoreBackup(id).then(unwrap));
+    await loadApplication();
+  }
+
+  async function deleteConfigBackup(id: string): Promise<void> {
+    await execute('Deleting configuration backup', () => window.kaiDesktop.deleteBackup(id).then(unwrap));
+  }
+
+  async function execute<T>(message: string, task: () => Promise<T>): Promise<T> {
+    const result = await perform(task, message);
+    if (result === null) throw new Error(error ?? 'The operation failed.');
+    return result;
   }
 
   async function respondToApproval(approved: boolean): Promise<void> {
@@ -391,6 +568,46 @@ export function App(): ReactNode {
     });
   }
 
+  async function renameConversation(id: string, title: string): Promise<void> {
+    const conversation = conversations.find((item) => item.id === id) ?? await perform(
+      () => window.kaiDesktop.getConversation(id).then(unwrap),
+      'Loading conversation',
+    );
+    if (!conversation) return;
+    await saveConversationRecord({ ...conversation, title, updatedAt: new Date().toISOString() });
+  }
+
+  async function archiveConversation(id: string, archived: boolean): Promise<void> {
+    const conversation = conversations.find((item) => item.id === id) ?? await perform(
+      () => window.kaiDesktop.getConversation(id).then(unwrap),
+      'Loading conversation',
+    );
+    if (!conversation) return;
+    await saveConversationRecord({ ...conversation, archived, updatedAt: new Date().toISOString() });
+  }
+
+  async function forkConversation(id: string): Promise<void> {
+    const original = conversations.find((item) => item.id === id) ?? await perform(
+      () => window.kaiDesktop.getConversation(id).then(unwrap),
+      'Loading conversation',
+    );
+    if (!original) return;
+    const now = new Date().toISOString();
+    const forked: ConversationRecord = {
+      ...original,
+      id: `conv_${crypto.randomUUID()}`,
+      title: `${original.title} (fork)`,
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+      unread: false,
+      turns: original.turns.map((turn) => ({ ...turn, id: `turn_${crypto.randomUUID()}` })),
+      events: original.events.map((event) => ({ ...event, id: `evt_${crypto.randomUUID()}`, taskId: `conv_${crypto.randomUUID()}` })),
+    };
+    await saveConversationRecord(forked);
+    setActiveConversationId(forked.id);
+  }
+
   async function saveSettings(update: SettingsUpdate): Promise<void> {
     const settings = await perform(() => window.kaiDesktop.updateSettings(update).then(unwrap), 'Saving settings');
     if (settings) {
@@ -399,6 +616,38 @@ export function App(): ReactNode {
       if (!activeConversation) setSelectedAgent(settings.defaultAgent);
       await refreshDirectApiStatus();
     }
+  }
+
+  async function saveProjectPreferences(preferences: ProjectPreferences): Promise<void> {
+    const saved = await perform(
+      () => window.kaiDesktop.updatePreferences(preferences).then(unwrap),
+      'Saving project permissions',
+    );
+    if (saved) setProjectPreferences(saved);
+  }
+
+  async function saveConversationRecord(conversation: ConversationRecord): Promise<void> {
+    const saved = await perform(
+      () => window.kaiDesktop.saveConversation(conversation).then(unwrap),
+      'Saving conversation',
+    );
+    if (!saved) return;
+    setConversations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+  }
+
+  async function importBrain(): Promise<void> {
+    const result = await perform(
+      () => window.kaiDesktop.importBrain().then(unwrap),
+      'Importing C1 brain data',
+    );
+    if (!result) return;
+    setAgentNotice(`Imported ${result.imported} brain files; skipped ${result.skipped} existing files.`);
+    const [services, logs] = await Promise.all([
+      window.kaiDesktop.serviceStatus().then(unwrap),
+      window.kaiDesktop.recentLogs(50).then(unwrap),
+    ]);
+    setBootstrap((current) => current ? { ...current, services } : current);
+    setLogs(logs);
   }
 
   function toggleTheme(): void {
@@ -521,6 +770,8 @@ export function App(): ReactNode {
             <BrainPanel service={serviceFor(bootstrap, 'cognitive1')} />
           </ServiceView>
         );
+      case 'rules':
+        return <RulesView />;
       case 'proxy':
         return (
           <ServiceView
@@ -538,13 +789,25 @@ export function App(): ReactNode {
           </ServiceView>
         );
       case 'workflows':
-        return <WorkflowsView />;
+        return (
+          <WorkflowsView
+            activeProject={activeProject}
+            agentCapabilities={agentCapabilities}
+            settings={bootstrap.settings}
+            busy={Boolean(busy)}
+          />
+        );
       case 'history':
         return (
           <HistoryView
             conversations={conversations}
             activeId={activeConversationId}
+            projects={bootstrap.projects}
             onOpen={(id) => void openConversation(id)}
+            onRename={(id, title) => void renameConversation(id, title)}
+            onArchive={(id, archived) => void archiveConversation(id, archived)}
+            onFork={(id) => void forkConversation(id)}
+            onDelete={(id) => void deleteConversation(id)}
           />
         );
       case 'settings':
@@ -556,8 +819,13 @@ export function App(): ReactNode {
             logs={logs}
             busy={Boolean(busy)}
             onSave={(update) => void saveSettings(update)}
+            onImportBrain={() => void importBrain()}
             onSaveCredential={(id, value) => void saveCredential(id, value)}
             onClearCredential={(id) => void clearCredential(id)}
+            onListBackups={listConfigBackups}
+            onCreateBackup={createConfigBackup}
+            onRestoreBackup={restoreConfigBackup}
+            onDeleteBackup={deleteConfigBackup}
           />
         );
       case 'workspace':
@@ -567,7 +835,9 @@ export function App(): ReactNode {
             activeProject={activeProject}
             activeConversation={activeConversation}
             settings={bootstrap.settings}
+            projectPreferences={projectPreferences}
             busy={Boolean(busy)}
+            commandRequest={workspaceCommand}
             agentCapabilities={agentCapabilities}
             directApiCapability={directApiCapability}
             selectedAgent={selectedAgent}
@@ -596,14 +866,26 @@ export function App(): ReactNode {
               setSelectedAutonomy(autonomy);
               setAgentNotice(null);
             }}
+            onUpdatePreferences={saveProjectPreferences}
+            onUpdateConversation={saveConversationRecord}
             onChooseProject={() => void chooseProject()}
-            onCreateConversation={(prompt) => void createConversation(prompt)}
-            onSend={(prompt) => void sendPrompt(prompt)}
+            onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
+            onSend={(prompt, options) => void sendPrompt(prompt, options)}
+            onHandoff={(agent, prompt) => void handoffConversation(agent, prompt)}
+            onCompare={compareConversation}
+            onPickCompare={pickCompareWinner}
+            onDiscardCompare={discardCompare}
+            onOpenCompareWorktree={openCompareWorktree}
+            onReviewCheckpoint={reviewConversationCheckpoint}
+            onRejectCheckpointFile={rejectConversationFile}
+            onRestoreCheckpoint={restoreConversationCheckpoint}
             onCancel={() => void cancelConversation()}
             onApprovalResponse={(approved) => void respondToApproval(approved)}
             onSignIn={(agent) => void signInAgent(agent)}
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
+            onOpenRules={() => setView('rules')}
+            onOpenWorkflows={() => setView('workflows')}
           />
         );
     }
@@ -638,8 +920,10 @@ export function App(): ReactNode {
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
         onToggleTheme={toggleTheme}
+        onOpenSearch={() => setCommandPaletteOpen(true)}
         onToggleContext={() => setContextOpen((open) => !open)}
       />
+      {commandPaletteOpen && <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} />}
       {error && (
         <div className="error-banner" role="alert">
           <AlertTriangle size={16} />

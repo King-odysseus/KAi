@@ -3,6 +3,7 @@ import {
   appSettingsV1Schema,
   conversationRecordV1Schema,
   createDefaultSettings,
+  directProviderPreset,
   migrateConversation,
   migrateSettings,
   parseIpcInput,
@@ -16,7 +17,40 @@ describe('desktop contracts', () => {
     expect(settings.defaultAgent).toBe('codex');
     expect(settings.defaultAutonomy).toBe('ask');
     expect(settings.theme).toBe('dark');
-    expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: '' });
+    expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
+  });
+
+  it('ships current provider model catalogs', () => {
+    expect(directProviderPreset('openai')).toMatchObject({
+      defaultModel: 'gpt-6-astra',
+      models: expect.arrayContaining(['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna']),
+    });
+    expect(directProviderPreset('deepseek')).toMatchObject({
+      defaultModel: 'deepseek-flash',
+      models: expect.arrayContaining(['deepseek-flash', 'deepseek-v4-pro']),
+    });
+    expect(directProviderPreset('openrouter')).toMatchObject({
+      defaultModel: 'openai/gpt-6-astra',
+      models: expect.arrayContaining([
+        'openai/gpt-6-astra',
+        'anthropic/claude-opus-5.5',
+        'google/gemini-3.8-flash',
+        'x-ai/grok-4.7',
+        'deepseek/deepseek-v4.1-flash',
+      ]),
+    });
+    expect(directProviderPreset('xai')).toMatchObject({
+      defaultModel: 'grok-4.7',
+      models: expect.arrayContaining(['grok-4.7', 'grok-4.6']),
+    });
+    expect(directProviderPreset('together').models).toEqual(expect.arrayContaining([
+      'deepseek-ai/DeepSeek-V4.1-Flash',
+      'Qwen/Qwen3.8-2.4T-A95B',
+    ]));
+    expect(directProviderPreset('fireworks').models).toEqual(expect.arrayContaining([
+      'accounts/fireworks/models/deepseek-v4p1-flash',
+      'accounts/fireworks/models/kimi-k3',
+    ]));
   });
 
   it('rejects malformed IPC before main handles it', () => {
@@ -100,7 +134,7 @@ describe('desktop contracts', () => {
     expect(migrated.defaultAutonomy).toBe('ask');
     expect(migrated.theme).toBe('dark');
     expect(migrated.directApi.provider).toBe('openai');
-    expect(migrated.directApi.model).toBe('');
+    expect(migrated.directApi.model).toBe('gpt-6-astra');
     expect(migrated.windowBounds).toBeNull();
     expect('proxyApiKey' in migrated).toBe(false);
   });

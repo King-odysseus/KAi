@@ -154,6 +154,45 @@ The tool list is created in `src/mcp/tools/index.ts:172-223`. Each row is a requ
 | Routing profiles and presets | `presets.ts` | Reuse versioned data; keep credentials separate | Provider setup | Provider registry | `presets.test.ts` | Not started |
 | Universal Agent Proxy sidebar/dashboard | `sidebar.ts`, `webview.ts`, `dashboard.html` | Native activity, metrics, provider health, history, and detail screen implemented; broader dashboard parity remains open | Proxy UI | VS Code webview reference only | Packaged real-engine UI smoke at 1440x920 and 960x640 | In progress |
 
+## VS Code extension command and workbench parity
+
+The desktop app reproduces the extension's user-facing command and workbench
+surfaces with native Electron controls. The palette is available from the title
+bar Search button or `Ctrl+K`; it includes navigation, goal/skills/rules, agent,
+route, autonomy, handoff, checkpoint, raw-event, proxy, workflow, history, backup,
+and service actions. The packaged smoke checks opening the palette, filtering to
+Execution Rules, navigating to the Rules view, and returning to the Workbench.
+
+| VS Code extension surface | Desktop equivalent | Verification | Status |
+| --- | --- | --- | --- |
+| Open Agent Workbench | Workspace navigation item and command palette | Packaged UI smoke | Verified |
+| Open Settings | Settings navigation item and command palette | Packaged UI smoke | Verified |
+| Open Engine Room | C1 Brain and Universal Proxy service pages, plus Settings diagnostics | Service UI and real-engine smoke | Integrated |
+| Open Memory | C1 Brain navigation item | Brain flow smoke | Verified |
+| Open Sessions | History navigation item with search, rename, archive, fork, and delete | Responsive UI and type checks | Integrated |
+| Open Chat in Editor | Workspace conversation view | Desktop-native equivalent | Integrated |
+| Start or Edit Goal | Composer goal button, `/goal`, and command palette | Focused UI implementation | Integrated |
+| Browse Skills | Composer `$` picker and command palette | Focused UI implementation | Integrated |
+| View and Edit Execution Rules | Rules navigation item and command palette | Packaged command-palette smoke | Verified |
+| Set Agent | Agent menu plus one command per discovered agent | Packaged menu smoke and agent capability tests | Verified |
+| Set Route | Direct/Proxy route menu plus palette commands | Direct-provider and proxy UI tests | Verified |
+| Toggle Route | Command palette direct/proxy toggle | Focused UI implementation | Integrated |
+| Set Autonomy | Autonomy menu plus command per mode | Packaged menu smoke | Verified |
+| Cycle Autonomy | `Shift+Tab` and command palette | Packaged menu smoke and keyboard handler | Verified |
+| Handoff | `/handoff <agent>` and command palette handoff prompt | Focused UI implementation | Integrated |
+| Show Proxy Status | Universal Proxy page status, health, and activity | Real-engine proxy smoke | Verified |
+| Restart Proxy | Universal Proxy Restart and command palette action | Service control tests and real-engine smoke | Integrated |
+| List/Restore Configuration Backups | Settings backup list, create, restore, and delete actions | Desktop backup tests and packaged UI smoke | Verified |
+| Inspect Raw Events | Raw status button and command palette inspector, bounded to the latest 50 events | Focused UI implementation | Integrated |
+| Add Selection to Chat | Context picker selection chip and palette action | Focused UI implementation | Integrated |
+| Reject Checkpoint File | Checkpoint review per-file Restore action | Desktop checkpoint flow and focused tests | Integrated |
+| Open in Browser | Not applicable to the native Electron shell; VS Code's local `serve-web` session is host-specific. Desktop exposes service endpoints, tokens, diagnostics, and controls in-app. | Architecture decision documented | Not applicable |
+
+Selection context is deliberately desktop-native. VS Code can read the active
+editor selection directly; Electron has no editor window, so the context picker
+asks for a project-relative file and line range and sends the same bounded
+`selection` context chip to the agent runtime.
+
 ## Requested desktop additions that are not source-parity features
 
 These are explicit product additions. They must not be presented as parity work.
