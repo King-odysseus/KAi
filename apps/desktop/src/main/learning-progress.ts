@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
+import { z } from 'zod';
 import {
   learningProgressSchema,
   type LearningEvidence,
@@ -10,6 +11,13 @@ import {
   type LearningTutorResponse,
 } from '@kai/contracts';
 import { AtomicJsonStore, type NodeFileSystem } from '@kai/runtime';
+
+// Dot-prefixed so it can never collide with a project's progress file.
+const SHARED_PREFERENCES_FILE = '.preferences.json';
+const sharedPreferencesSchema = z
+  .object({ schemaVersion: z.literal(1), preferences: learningProgressSchema.shape.preferences })
+  .strict();
+type SharedPreferences = z.infer<typeof sharedPreferencesSchema>;
 
 const masteryRank: Record<LearningMastery, number> = {
   introduced: 0,
@@ -32,22 +40,48 @@ export class LearningProgressStore {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  /**
+   * Progress is kept per project, but the assistance level and inline-suggestion switch are the user's own
+   * preference and follow them to every project. Until a preference has been chosen once, a project keeps
+   * whatever it had saved before preferences were shared.
+   */
   async get(projectId: string): Promise<LearningProgress> {
-    return this.store(projectId).load();
+    const progress = await this.store(projectId).load();
+    const shared = await this.readSharedPreferences();
+    return shared ? { ...progress, preferences: shared } : progress;
   }
 
   async updatePreferences(input: LearningPreferencesInput): Promise<LearningProgress> {
-    const progress = await this.get(input.projectId);
+    const preferences = { assistance: input.assistance, inlineSuggestions: input.inlineSuggestions };
+    await this.sharedPreferencesStore().save({ schemaVersion: 1, preferences });
+    const progress = await this.store(input.projectId).load();
     const updated = learningProgressSchema.parse({
       ...progress,
-      preferences: {
-        assistance: input.assistance,
-        inlineSuggestions: input.inlineSuggestions,
-      },
+      preferences,
       updatedAt: this.now().toISOString(),
     });
     await this.store(input.projectId).save(updated);
     return updated;
+  }
+
+  private async readSharedPreferences(): Promise<LearningProgress['preferences'] | null> {
+    const file = path.join(this.directory, SHARED_PREFERENCES_FILE);
+    if (!(await this.fileSystem.exists(file))) return null;
+    try {
+      return (await this.sharedPreferencesStore().load()).preferences;
+    } catch {
+      // An unreadable preferences file must not hide the project's own progress.
+      return null;
+    }
+  }
+
+  private sharedPreferencesStore(): AtomicJsonStore<SharedPreferences> {
+    return new AtomicJsonStore({
+      filePath: path.join(this.directory, SHARED_PREFERENCES_FILE),
+      fileSystem: this.fileSystem,
+      schema: sharedPreferencesSchema,
+      defaultValue: () => ({ schemaVersion: 1 as const, preferences: { assistance: 'guided' as const, inlineSuggestions: false } }),
+    });
   }
 
   async recordEvaluation(

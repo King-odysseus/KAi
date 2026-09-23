@@ -111,7 +111,27 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
   const [notice, setNotice] = useState<string | null>(null);
   const [diskChanged, setDiskChanged] = useState<string | null>(null);
   const [editorReady, setEditorReady] = useState(false);
-  const [tutorOpen, setTutorOpen] = useState(true);
+  // Whether the tutor panel is open is remembered between visits.
+  const [tutorOpen, setTutorOpenState] = useState(() => {
+    try {
+      return window.localStorage.getItem('kai.learningTutorOpen') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const setTutorOpen = (next: boolean | ((current: boolean) => boolean)): void => {
+    setTutorOpenState((current) => {
+      const value = typeof next === 'function' ? next(current) : next;
+      try {
+        window.localStorage.setItem('kai.learningTutorOpen', String(value));
+      } catch {
+        // A remembered panel state is a convenience only.
+      }
+      return value;
+    });
+  };
+  // The mode the user just picked; it wins over a progress load that was already in flight.
+  const chosenPreferences = useRef<LearningProgress['preferences'] | null>(null);
   const [progress, setProgress] = useState<LearningProgress | null>(null);
   const [learningResult, setLearningResult] = useState<LearningEvaluationResult | null>(null);
   const [learningBusy, setLearningBusy] = useState<LearningAction | 'record' | null>(null);
@@ -170,13 +190,16 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     setNotice(null);
     setFiles([]);
     setProgress(null);
+    chosenPreferences.current = null;
     setLearningResult(null);
     setLearningError(null);
     setQuestion('');
     setGitInfo(null);
     void loadTree();
     if (projectId) {
-      void window.kaiDesktop.learningProgress(projectId).then(unwrap).then(setProgress).catch((caught) => {
+      void window.kaiDesktop.learningProgress(projectId).then(unwrap).then((loaded) => {
+        setProgress(chosenPreferences.current ? { ...loaded, preferences: chosenPreferences.current } : loaded);
+      }).catch((caught) => {
         setLearningError(caught instanceof Error ? caught.message : 'Learning progress could not be loaded.');
       });
     }
@@ -471,6 +494,8 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
   async function updatePreferences(nextAssistance: LearningAssistance, nextInline: boolean): Promise<void> {
     if (!projectId) return;
     const previous = progress;
+    const chosen = { assistance: nextAssistance, inlineSuggestions: nextInline };
+    chosenPreferences.current = chosen;
     setLearningError(null);
     setProgress((current) => current
       ? { ...current, preferences: { assistance: nextAssistance, inlineSuggestions: nextInline } }
@@ -483,6 +508,7 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
       }));
       setProgress(updated);
     } catch (caught) {
+      chosenPreferences.current = null;
       setProgress(previous);
       setLearningError(caught instanceof Error ? caught.message : 'Learning preferences could not be saved.');
     }

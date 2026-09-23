@@ -1,5 +1,6 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import type { AppSettings, ServiceKind, ServiceState, SettingsUpdate } from '@kai/contracts';
 import {
@@ -16,6 +17,57 @@ import {
 import type { RedactedLogger, SettingsService } from '@kai/runtime';
 import type { CredentialVault } from './credential-vault';
 import type { DesktopPaths } from './paths';
+
+/** The port the standalone Cognitive1 daemon uses. KAI's managed copy must not share it. */
+export const STANDALONE_COGNITIVE1_PORT = 9876;
+
+export function isLoopbackPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
+  });
+}
+
+/**
+ * Older KAI versions defaulted the managed Cognitive1 endpoint to the standalone daemon's port. When that
+ * port is taken, return an endpoint on the next free port; otherwise null (nothing to change). An endpoint
+ * the user chose themselves is never rewritten.
+ */
+export async function moveOffStandalonePort(
+  endpoint: string,
+  isFree: (port: number) => Promise<boolean> = isLoopbackPortFree,
+): Promise<string | null> {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return null;
+  }
+  if (Number(url.port) !== STANDALONE_COGNITIVE1_PORT || (await isFree(STANDALONE_COGNITIVE1_PORT))) return null;
+  for (let port = STANDALONE_COGNITIVE1_PORT + 1; port < STANDALONE_COGNITIVE1_PORT + 50; port += 1) {
+    if (await isFree(port)) {
+      url.port = String(port);
+      return url.toString().replace(/\/$/, '');
+    }
+  }
+  return null;
+}
+
+/** A plain-language message for the most common start failure. */
+export function explainStartFailure(kind: ServiceKind, endpoint: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/EADDRINUSE|address already in use/i.test(message)) return message;
+  const port = (() => {
+    try {
+      return new URL(endpoint).port;
+    } catch {
+      return '';
+    }
+  })();
+  const name = kind === 'cognitive1' ? 'Cognitive1' : 'the Universal Proxy';
+  return `Port ${port || '(unknown)'} is already in use by another program, so ${name} could not start. Another copy may be running. Change the port in Settings or stop that program.`;
+}
 
 export interface ServiceControllerOptions {
   paths: DesktopPaths;
@@ -77,9 +129,18 @@ export class DesktopServiceController {
   }
 
   async start(kind: ServiceKind, suppliedSettings?: AppSettings, persistEnabled = true): Promise<ServiceState[]> {
-    const settings = suppliedSettings ?? (await this.options.settings.load());
+    let settings = suppliedSettings ?? (await this.options.settings.load());
     const current = this.manager.getState(kind).status;
     if (current === 'ready' || current === 'starting') return this.status();
+
+    if (kind === 'cognitive1') {
+      const moved = await moveOffStandalonePort(settings.cognitive1.endpoint);
+      if (moved) {
+        settings = { ...settings, cognitive1: { ...settings.cognitive1, endpoint: moved } };
+        await this.options.settings.save(settings);
+        this.options.logger.info('internal', `Cognitive1 endpoint moved to ${moved} because the standalone daemon uses port ${STANDALONE_COGNITIVE1_PORT}`);
+      }
+    }
 
     let gateway: AuthenticatedLoopbackGateway | null = null;
     try {
@@ -97,8 +158,9 @@ export class DesktopServiceController {
     } catch (error) {
       await gateway?.stop().catch(() => undefined);
       this.gateways.delete(kind);
-      this.installationErrors.set(kind, messageOf(error));
-      throw error;
+      const explained = explainStartFailure(kind, endpointFor(kind, settings), error);
+      this.installationErrors.set(kind, explained);
+      throw explained === messageOf(error) ? error : new Error(explained);
     }
     if (persistEnabled) await this.persistEnabled(kind, true);
     return this.status();
