@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
@@ -36,6 +37,7 @@ import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
+import { PreviewRuntime } from './preview-runtime';
 
 app.setName('KAI');
 if (process.env.KAI_DESKTOP_USER_DATA) {
@@ -86,6 +88,7 @@ app.on('before-quit', (event) => {
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
     .then(() => activeContext?.workflows.dispose())
     .then(() => activeContext?.terminal.stopAll())
+    .then(() => activeContext?.preview.stopAll())
     .then(() => Promise.all([
       serviceController?.dispose() ?? Promise.resolve(),
       mcpRuntime?.dispose() ?? Promise.resolve(),
@@ -200,6 +203,7 @@ async function startApplication(): Promise<void> {
     },
     teachingLibrary,
   );
+  const preview = new PreviewRuntime(pathToFileURL(path.join(__dirname, '../preload/preview.cjs')).toString());
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
     waitIfPaused: (conversationId, signal) => runControl.waitIfPaused(conversationId, signal),
@@ -258,6 +262,7 @@ async function startApplication(): Promise<void> {
     backups,
     learningProgress,
     learningTutor,
+    preview,
     teachingLibrary,
     compareRuns: new Map(),
     memorySessions: new Map(),
@@ -480,6 +485,7 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      webviewTag: true,
       devTools: !app.isPackaged || process.env.KAI_DESKTOP_DEVTOOLS === 'true',
     },
   });
@@ -516,6 +522,27 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
   window.webContents.setWindowOpenHandler(({ url }) => {
     openExternalIfSafe(url);
     return { action: 'deny' };
+  });
+  window.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    if (!isLocalPreviewUrl(params.src)) {
+      event.preventDefault();
+      return;
+    }
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+  });
+  window.webContents.on('did-attach-webview', (_event, guest) => {
+    const allowLocalNavigation = (event: Electron.Event, url: string): void => {
+      if (!isLocalPreviewUrl(url)) event.preventDefault();
+    };
+    guest.on('will-navigate', allowLocalNavigation);
+    guest.on('will-redirect', allowLocalNavigation);
+    guest.setWindowOpenHandler(({ url }) => {
+      openExternalIfSafe(url);
+      return { action: 'deny' };
+    });
   });
   window.webContents.on('will-navigate', (event, url) => {
     if (!isApplicationUrl(url)) event.preventDefault();
@@ -598,6 +625,17 @@ function restoreBounds(bounds: { x: number; y: number; width: number; height: nu
 function isApplicationUrl(url: string): boolean {
   if (process.env.ELECTRON_RENDERER_URL && url.startsWith(process.env.ELECTRON_RENDERER_URL)) return true;
   return url.startsWith('file://') && url.includes('/out/renderer/');
+}
+
+function isLocalPreviewUrl(url: string): boolean {
+  if (url === 'about:blank') return true;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:'
+      && ['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function openExternalIfSafe(url: string): void {

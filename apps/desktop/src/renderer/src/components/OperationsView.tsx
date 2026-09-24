@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { ProjectRecord, RecoveryResume } from '@kai/contracts';
 import { CoordinationPanel } from './CoordinationPanel';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
@@ -21,6 +21,9 @@ export function OperationsView({ initialTab, activeProject, onResume, onRecovery
   onRecoveryChanged: () => void;
 }): ReactNode {
   const [tab, setTab] = useState<OperationsTab>(initialTab ?? 'recovery');
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
   return (
     <div className="page-view ops-view">
       <header className="page-header">

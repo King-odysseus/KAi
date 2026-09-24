@@ -1,5 +1,5 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type {
   AgentCapability,
   AgentId,
@@ -32,9 +32,10 @@ import { CodeView } from './components/CodeView';
 import { GitView } from './components/GitView';
 import { TasksView } from './components/TasksView';
 import { TerminalView } from './components/TerminalView';
+import { PreviewView } from './components/PreviewView';
 import { UrgentBanner } from './components/CoordinationPanel';
 import { UpdateBanner } from './components/UpdatesPanel';
-import { OperationsView } from './components/OperationsView';
+import { OperationsView, type OperationsTab } from './components/OperationsView';
 import { UsageView } from './components/UsageView';
 import {
   ContextPanel,
@@ -81,6 +82,13 @@ export function App(): ReactNode {
   const [view, setView] = useState<ViewId>('workspace');
   const [interruptedRuns, setInterruptedRuns] = useState(0);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem('kai.previewOpen') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [terminalHeight, setTerminalHeight] = useState(() => {
     try {
       return clamp(Number(window.localStorage.getItem('kai.terminalHeight')) || 260, 140, 700);
@@ -103,9 +111,28 @@ export function App(): ReactNode {
       return false;
     }
   });
-  const [sidebarWidth, setSidebarWidth] = useState(248);
-  const [contextWidth, setContextWidth] = useState(286);
-  const [resizing, setResizing] = useState<'sidebar' | 'context' | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      return clamp(Number(window.localStorage.getItem('kai.sidebarWidth')) || 248, 190, 480);
+    } catch {
+      return 248;
+    }
+  });
+  const [contextWidth, setContextWidth] = useState(() => {
+    try {
+      return clamp(Number(window.localStorage.getItem('kai.contextWidth')) || 286, 230, 560);
+    } catch {
+      return 286;
+    }
+  });
+  const [previewWidth, setPreviewWidth] = useState(() => {
+    try {
+      return clamp(Number(window.localStorage.getItem('kai.previewWidth')) || 460, 340, 760);
+    } catch {
+      return 460;
+    }
+  });
+  const [resizing, setResizing] = useState<'sidebar' | 'context' | 'preview' | null>(null);
   const [busy, setBusy] = useState('Starting KAI');
   const [runningConversationId, setRunningConversationId] = useState<string | null>(null);
   const [runPaused, setRunPaused] = useState(false);
@@ -116,9 +143,10 @@ export function App(): ReactNode {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
   const [workspaceCommand, setWorkspaceCommand] = useState<WorkspaceCommandRequest | null>(null);
+  const [operationsTab, setOperationsTab] = useState<OperationsTab>('recovery');
   const started = useRef(false);
   const commandNonce = useRef(0);
-  const resizeOrigin = useRef<{ kind: 'sidebar' | 'context'; x: number; width: number } | null>(null);
+  const resizeOrigin = useRef<{ kind: 'sidebar' | 'context' | 'preview'; x: number; width: number } | null>(null);
   const runningConversationIdRef = useRef<string | null>(null);
   const shortcutsRef = useRef(bootstrap?.settings.shortcuts ?? {});
   const shortcutSheetOpenRef = useRef(false);
@@ -146,17 +174,18 @@ export function App(): ReactNode {
     { id: 'workflows', label: 'Open Workflows', description: 'Build, save, and run sequential agent work', run: () => setView('workflows') },
     { id: 'history', label: 'Open Conversation History', description: 'Search, rename, archive, fork, and reopen threads', run: () => setView('history') },
     { id: 'usage', label: 'Open Usage and Budgets', description: 'See estimated API spend and set warn or block limits', run: () => setView('usage') },
-    { id: 'operations-recovery', label: 'Open Recovery (interrupted runs)', description: 'Resume or discard runs interrupted by a crash or close', run: () => setView('operations') },
+    { id: 'operations-recovery', label: 'Open Recovery (interrupted runs)', description: 'Resume or discard runs interrupted by a crash or close', run: () => openOperations('recovery') },
     { id: 'code', label: 'Open Code Editor', description: 'Browse and edit project files with the built-in editor', run: () => setView('code') },
+    { id: 'preview', label: 'Toggle Live Preview Pane', description: 'Run the project, inspect rendered elements, and capture browser errors', run: () => setPreviewOpen((open) => !open) },
     { id: 'tasks', label: 'Open Tasks, Reviews and Handoffs', description: 'Shared task board, review queue, handoff inbox and decision log', run: () => setView('tasks') },
-    { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => setView('operations') },
+    { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => openOperations('verification') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
     { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: shortcutLabel(shortcuts, 'terminal'), run: () => setTerminalOpen((open) => !open) },
     { id: 'threads', label: 'Toggle Threads Panel', description: 'Show or hide the conversation threads on the left', shortcut: shortcutLabel(shortcuts, 'threads'), run: () => setThreadsOpen((open) => !open) },
     { id: 'context-panel', label: 'Toggle Context Panel', description: 'Show or hide project context on the right', shortcut: shortcutLabel(shortcuts, 'context-panel'), run: () => setContextOpen((open) => !open) },
     { id: 'command-palette', label: 'Show Command Palette', description: 'Search commands, conversations, and the brain', shortcut: shortcutLabel(shortcuts, 'command-palette'), run: () => setCommandPaletteOpen(true) },
     { id: 'shortcut-sheet', label: 'Open Shortcut Sheet', description: 'Review and customize keyboard shortcuts', shortcut: shortcutLabel(shortcuts, 'shortcuts'), run: () => setShortcutSheetOpen(true) },
-    { id: 'diagnostics', label: 'Open Diagnostics', description: 'Service health, engine checks and a copyable bug report', run: () => setView('operations') },
+    { id: 'diagnostics', label: 'Open Diagnostics', description: 'Service health, engine checks and a copyable bug report', run: () => openOperations('diagnostics') },
     { id: 'settings', label: 'Open Settings', description: 'Configure agents, routes, API providers, services, and MCP', run: () => setView('settings') },
     { id: 'backups', label: 'Open Configuration Backups', description: 'Create, restore, or delete app-owned configuration backups', run: () => setView('settings') },
     { id: 'restart-proxy', label: 'Restart Universal Proxy', description: 'Stop and start the managed proxy service', run: () => controlService('universalProxy', 'restart') },
@@ -417,6 +446,24 @@ export function App(): ReactNode {
     }
   }, [contextOpen]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('kai.sidebarWidth', String(sidebarWidth));
+      window.localStorage.setItem('kai.contextWidth', String(contextWidth));
+      window.localStorage.setItem('kai.previewWidth', String(previewWidth));
+    } catch {
+      // Remembering pane widths is a convenience only.
+    }
+  }, [contextWidth, previewWidth, sidebarWidth]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('kai.previewOpen', String(previewOpen));
+    } catch {
+      // Remembering pane visibility is a convenience only.
+    }
+  }, [previewOpen]);
+
   const openConversationRef = useRef(openConversation);
   openConversationRef.current = openConversation;
   useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId }) => {
@@ -459,6 +506,11 @@ export function App(): ReactNode {
       setBootstrap(next);
       setActiveConversationId(next.activeConversationId);
     }
+  }
+
+  function openOperations(tab: OperationsTab): void {
+    setOperationsTab(tab);
+    setView('operations');
   }
 
   async function openProject(id: string): Promise<void> {
@@ -975,8 +1027,8 @@ export function App(): ReactNode {
     return false;
   }
 
-  function beginResize(kind: 'sidebar' | 'context', event: ReactPointerEvent<HTMLDivElement>): void {
-    const width = kind === 'sidebar' ? sidebarWidth : contextWidth;
+  function beginResize(kind: 'sidebar' | 'context' | 'preview', event: ReactPointerEvent<HTMLDivElement>): void {
+    const width = kind === 'sidebar' ? sidebarWidth : kind === 'context' ? contextWidth : previewWidth;
     resizeOrigin.current = { kind, x: event.clientX, width };
     event.currentTarget.setPointerCapture(event.pointerId);
     setResizing(kind);
@@ -986,8 +1038,9 @@ export function App(): ReactNode {
     const origin = resizeOrigin.current;
     if (!origin) return;
     const delta = event.clientX - origin.x;
-    if (origin.kind === 'sidebar') setSidebarWidth(clamp(origin.width + delta, 190, 360));
-    else setContextWidth(clamp(origin.width - delta, 230, 430));
+    if (origin.kind === 'sidebar') setSidebarWidth(clamp(origin.width + delta, 190, 480));
+    else if (origin.kind === 'context') setContextWidth(clamp(origin.width - delta, 230, 560));
+    else setPreviewWidth(clamp(origin.width - delta, 340, 760));
   }
 
   function endResize(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -996,6 +1049,29 @@ export function App(): ReactNode {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+  }
+
+  function resizePaneWithKeyboard(kind: 'sidebar' | 'context' | 'preview', event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 32 : 12;
+    const current = kind === 'sidebar' ? sidebarWidth : kind === 'context' ? contextWidth : previewWidth;
+    const minimum = kind === 'sidebar' ? 190 : kind === 'context' ? 230 : 340;
+    const maximum = kind === 'sidebar' ? 480 : kind === 'context' ? 560 : 760;
+    let next = current;
+    if (event.key === 'Home') next = minimum;
+    else if (event.key === 'End') next = maximum;
+    else if (kind === 'sidebar') next += event.key === 'ArrowRight' ? step : -step;
+    else next += event.key === 'ArrowLeft' ? step : -step;
+    if (kind === 'sidebar') setSidebarWidth(clamp(next, minimum, maximum));
+    else if (kind === 'context') setContextWidth(clamp(next, minimum, maximum));
+    else setPreviewWidth(clamp(next, minimum, maximum));
+  }
+
+  function requestPreviewChange(prompt: string): void {
+    commandNonce.current += 1;
+    setWorkspaceCommand({ kind: 'preview-change', nonce: commandNonce.current, prompt });
+    setView('workspace');
   }
 
   function renderCurrentView(): ReactNode {
@@ -1086,7 +1162,7 @@ export function App(): ReactNode {
       case 'code':
         return null;
       case 'operations':
-        return <OperationsView activeProject={activeProject} onResume={resumeInterruptedRun} onRecoveryChanged={() => void refreshInterrupted()} />;
+        return <OperationsView initialTab={operationsTab} activeProject={activeProject} onResume={resumeInterruptedRun} onRecoveryChanged={() => void refreshInterrupted()} />;
       case 'settings':
         return (
           <SettingsView
@@ -1126,6 +1202,7 @@ export function App(): ReactNode {
             streamingText={streamingText}
             running={runningConversationId === activeConversation?.id}
             paused={runPaused}
+            awaitingApproval={pendingApproval?.conversationId === activeConversation?.id}
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
@@ -1168,7 +1245,8 @@ export function App(): ReactNode {
             selectedModel={modelChoices[`${executionMode}:${selectedAgent}`] ?? ''}
             onSelectModel={(model) => setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }))}
             interruptedRuns={interruptedRuns}
-            onOpenRecovery={() => setView('operations')}
+            onOpenRecovery={() => openOperations('recovery')}
+            onOpenVerification={() => openOperations('verification')}
             onOpenRules={() => setView('rules')}
             onOpenWorkflows={() => setView('workflows')}
             onCompactConversation={() => void compactActiveConversation()}
@@ -1204,6 +1282,7 @@ export function App(): ReactNode {
         theme={bootstrap.settings.theme}
         leftOpen={threadsOpen}
         rightOpen={contextOpen}
+        previewOpen={previewOpen}
         shortcuts={shortcuts}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
@@ -1213,6 +1292,7 @@ export function App(): ReactNode {
         onOpenShortcuts={() => setShortcutSheetOpen(true)}
         onToggleThreads={() => setThreadsOpen((open) => !open)}
         onToggleContext={() => setContextOpen((open) => !open)}
+        onTogglePreview={() => setPreviewOpen((open) => !open)}
       />
       <UrgentBanner />
       <UpdateBanner onOpen={() => setView('settings')} />
@@ -1271,10 +1351,16 @@ export function App(): ReactNode {
               role="separator"
               aria-label="Resize conversations"
               aria-orientation="vertical"
+              aria-valuemin={190}
+              aria-valuemax={480}
+              aria-valuenow={Math.round(sidebarWidth)}
+              tabIndex={0}
               onPointerDown={(event) => beginResize('sidebar', event)}
               onPointerMove={continueResize}
               onPointerUp={endResize}
               onPointerCancel={endResize}
+              onDoubleClick={() => setSidebarWidth(248)}
+              onKeyDown={(event) => resizePaneWithKeyboard('sidebar', event)}
             />
           </>
         )}
@@ -1282,7 +1368,13 @@ export function App(): ReactNode {
           <main className={`app-main view-${view}`}>
             {view !== 'code' && renderCurrentView()}
             <div className={`persistent-code-view ${view === 'code' ? 'active' : ''}`} aria-hidden={view !== 'code'}>
-              <CodeView activeProject={activeProject} editorState={bootstrap.editor} onOpenSettings={() => setView('settings')} />
+              <CodeView
+                activeProject={activeProject}
+                editorState={bootstrap.editor}
+                autoSave={bootstrap.settings.editor.autoSave}
+                autoSaveDelayMs={bootstrap.settings.editor.autoSaveDelayMs}
+                onOpenSettings={() => setView('settings')}
+              />
             </div>
           </main>
           <TerminalView
@@ -1320,10 +1412,16 @@ export function App(): ReactNode {
               role="separator"
               aria-label="Resize context panel"
               aria-orientation="vertical"
+              aria-valuemin={230}
+              aria-valuemax={560}
+              aria-valuenow={Math.round(contextWidth)}
+              tabIndex={0}
               onPointerDown={(event) => beginResize('context', event)}
               onPointerMove={continueResize}
               onPointerUp={endResize}
               onPointerCancel={endResize}
+              onDoubleClick={() => setContextWidth(286)}
+              onKeyDown={(event) => resizePaneWithKeyboard('context', event)}
             />
             <div className="context-column" style={{ width: contextWidth }}>
               <ContextPanel
@@ -1332,6 +1430,33 @@ export function App(): ReactNode {
                 services={bootstrap.services}
                 contextPreview={contextPreview}
                 contextPreviewLoading={contextPreviewLoading}
+              />
+            </div>
+          </>
+        )}
+        {previewOpen && (
+          <>
+            <div
+              className="resize-handle"
+              role="separator"
+              aria-label="Resize live preview pane"
+              aria-orientation="vertical"
+              aria-valuemin={340}
+              aria-valuemax={760}
+              aria-valuenow={Math.round(previewWidth)}
+              tabIndex={0}
+              onPointerDown={(event) => beginResize('preview', event)}
+              onPointerMove={continueResize}
+              onPointerUp={endResize}
+              onPointerCancel={endResize}
+              onDoubleClick={() => setPreviewWidth(460)}
+              onKeyDown={(event) => resizePaneWithKeyboard('preview', event)}
+            />
+            <div className="preview-column" style={{ width: previewWidth }}>
+              <PreviewView
+                activeProject={activeProject}
+                onRequestChange={requestPreviewChange}
+                onClose={() => setPreviewOpen(false)}
               />
             </div>
           </>

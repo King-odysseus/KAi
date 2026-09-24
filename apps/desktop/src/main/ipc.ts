@@ -111,6 +111,7 @@ import {
   worktreeChanges,
   worktreeDiffPatch,
 } from './worktrees';
+import type { PreviewRuntime } from './preview-runtime';
 
 export interface IpcContext {
   appName: string;
@@ -138,6 +139,7 @@ export interface IpcContext {
   learningProgress: LearningProgressStore;
   learningTutor: DesktopLearningTutor;
   teachingLibrary: TeachingLibraryStore;
+  preview: PreviewRuntime;
   compareRuns: Map<string, ActiveCompareRun>;
   memorySessions: Map<string, ActiveMemorySession>;
   pendingApprovals: Map<string, {
@@ -399,6 +401,22 @@ export function registerIpc(context: IpcContext): void {
       .find((turn) => turn.role === 'user')
       ?.text ?? '';
     return (await buildConversationContext(context, project.path, project.name, conversation, prompt)).preview;
+  });
+  handle(context, 'preview:info', async ({ projectId }) => {
+    const project = await resolveProject(context, projectId, true);
+    return context.preview.info(project.path);
+  });
+  handle(context, 'preview:status', async ({ projectId }) => {
+    const project = await resolveProject(context, projectId, true);
+    return context.preview.status(project.id, project.path);
+  });
+  handle(context, 'preview:start', async ({ projectId, command }) => {
+    const project = await resolveProject(context, projectId, true);
+    return context.preview.start(project.id, project.path, command);
+  });
+  handle(context, 'preview:stop', async ({ projectId }) => {
+    const project = await resolveProject(context, projectId, true);
+    return context.preview.stop(project.id, project.path);
   });
   handle(context, 'agents:run', async (request, ipcRequest) => runConversationAgent(context, request, ownerWindowId(context, ipcRequest)));
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));

@@ -80,6 +80,13 @@ import {
   type ServiceState,
 } from './primitives';
 import {
+  previewProjectInputSchema,
+  previewStartInputSchema,
+  type PreviewInfo,
+  type PreviewStartInput,
+  type PreviewState,
+} from './preview';
+import {
   proxyConnectionTestSchema,
   proxyAgentIdSchema,
   proxyAgentRouteSchema,
@@ -323,6 +330,10 @@ export const ipcChannels = [
   'agents:approval-response',
   'agents:api-capability',
   'context:preview',
+  'preview:info',
+  'preview:status',
+  'preview:start',
+  'preview:stop',
   'usage:summary',
   'ui:report-view',
   'coordination:overview',
@@ -389,6 +400,13 @@ export const ipcInputSchemas = {
         .strict()
         .optional(),
       learningTutor: learningTutorSettingsSchema.partial().strict().optional(),
+      editor: z
+        .object({
+          autoSave: z.boolean().optional(),
+          autoSaveDelayMs: z.number().int().min(300).max(10_000).optional(),
+        })
+        .strict()
+        .optional(),
       cognitive1: cognitive1ServiceSettingsSchema.partial().strict().optional(),
       proxy: proxyServiceSettingsSchema.partial().strict().optional(),
       usageBudget: usageBudgetSchema.partial().strict().optional(),
@@ -518,6 +536,10 @@ export const ipcInputSchemas = {
   'agents:approval-response': agentApprovalResponseInputSchema,
   'agents:api-capability': emptyInputSchema,
   'context:preview': contextPreviewInputSchema,
+  'preview:info': previewProjectInputSchema,
+  'preview:status': previewProjectInputSchema,
+  'preview:start': previewStartInputSchema,
+  'preview:stop': previewProjectInputSchema,
   'usage:summary': z.object({ conversationId: z.string().min(1).optional() }).strict(),
   'ui:report-view': viewReportSchema,
   'coordination:overview': emptyInputSchema,
@@ -694,6 +716,7 @@ export interface SettingsUpdate {
   mcpServers?: AppSettings['mcpServers'];
   directApi?: Partial<AppSettings['directApi']>;
   learningTutor?: Partial<AppSettings['learningTutor']>;
+  editor?: Partial<AppSettings['editor']>;
   cognitive1?: Partial<AppSettings['cognitive1']>;
   proxy?: Partial<AppSettings['proxy']>;
   usageBudget?: Partial<AppSettings['usageBudget']>;
@@ -822,6 +845,10 @@ export interface KaiDesktopBridge {
   directApiCapability(): Promise<IpcResponse<DirectApiCapability>>;
   listProviderModels(request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }): Promise<IpcResponse<ProviderModelCatalog>>;
   previewContext(request: ContextPreviewInput): Promise<IpcResponse<ContextPreview>>;
+  previewInfo(projectId: string): Promise<IpcResponse<PreviewInfo>>;
+  previewStatus(projectId: string): Promise<IpcResponse<PreviewState>>;
+  startPreview(request: PreviewStartInput): Promise<IpcResponse<PreviewState>>;
+  stopPreview(projectId: string): Promise<IpcResponse<PreviewState>>;
   runAgent(request: AgentRunRequest): Promise<IpcResponse<AgentRunResult>>;
   cancelAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   pauseAgent(conversationId: string): Promise<IpcResponse<boolean>>;

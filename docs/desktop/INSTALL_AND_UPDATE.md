@@ -29,14 +29,21 @@ Settings, Configuration backups lists the backup made just before the update. Re
 
 ## Validation status (2026-09-24)
 
+- [x] `desktop:typecheck`, the production build and the full automated suite
+  passed (`567 passed`, `1 intentionally skipped`).
 - [x] Built the unsigned NSIS installer and installed it over the development
   installation with exit code 0.
+- [x] Installer: `apps/desktop/release/KAI-Setup-0.1.0.exe`, 205,431,333 bytes,
+  SHA-256 `8943223C4E2BD0DF1D0DC6ABB33D759F559D303523C90956E97D0FBC05DC7810`.
+- [x] Installed executable: `%LOCALAPPDATA%\Programs\KAI\KAI.exe`, 202,690,560
+  bytes, SHA-256 `6A113AF8A194439F5C14A4128C97539B14DF19402AF4EFF1A11FAF2C151C2F2E`.
 - [x] Confirmed the installed executable matches the packaged build and that the
   bundled Cognitive1 1.0.0, Universal Agent Proxy 1.9.0 and `node-pty` Windows
   x64 prebuilds are present.
-- [x] Passed the isolated first-run, packaged and installed smoke suites,
-  including independent windows, terminal, editor, diagnostics, settings,
-  shortcut customization and the model-menu stacking check.
+- [x] Passed the isolated source, unpacked-package and installed-app smoke
+  suites, including Learning Tutor light mode, resizable panes, editor autosave,
+  live preview and element handoff, independent windows, terminal, diagnostics,
+  settings, shortcut customization and the model-menu stacking check.
 - [ ] Run the full checklist on a separate machine with no KAI data.
 - [ ] Publish a newer test release; confirm Check, Download and the release notes.
 - [ ] Install the published update; confirm the backup exists, KAI restarts, and

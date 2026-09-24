@@ -400,6 +400,37 @@ describe('desktop learning mode', () => {
     expect(JSON.stringify(bodies[1])).toContain('previous response did not match');
   });
 
+  it('repairs a local JSON syntax error without making a second paid tutor request', async () => {
+    let calls = 0;
+    const valid = JSON.stringify({
+      ...tutorResponse(),
+      checks: ['First check', 'Second check'],
+    });
+    const malformed = valid.replace('"First check","Second check"', '"First check" "Second check"');
+    expect(malformed).not.toBe(valid);
+    const server = http.createServer((_request, response) => {
+      calls += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ output_text: malformed }));
+    });
+    const settings = createDefaultSettings();
+    settings.learningTutor.enabled = true;
+    settings.learningTutor.provider = 'openai';
+    settings.learningTutor.model = 'test-model';
+    settings.learningTutor.baseUrl = `${await listen(server)}/v1`;
+    const tutor = new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, has: async () => true, get: async () => 'sk-test' },
+      async () => temporaryDirectory(),
+    );
+
+    await expect(tutor.evaluate(tutorRequest('explain-file', 'guided'))).resolves.toMatchObject({
+      title: 'Variables hold changing values',
+      checks: ['First check', 'Second check'],
+    });
+    expect(calls).toBe(1);
+  });
+
   it('parses generated teaching drafts without accepting incomplete content', () => {
     expect(parseTeachingDraftContent('```json\n{"title":"Method","description":"","content":"# Method"}\n```')).toEqual({
       title: 'Method',

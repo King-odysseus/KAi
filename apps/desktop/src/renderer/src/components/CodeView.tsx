@@ -12,7 +12,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type {
   GitFileInfo,
@@ -55,6 +55,8 @@ interface OpenDocument {
 const normalise = (text: string): string => text.replace(/\r\n/g, '\n');
 const POLL_MS = 3_000;
 const MAX_LEARNING_CODE = 120_000;
+const DEFAULT_FILE_PANE_WIDTH = 230;
+const DEFAULT_LEARNING_PANE_WIDTH = 360;
 
 function sameLearningSelection(
   left: LearningSelectionPreview | null,
@@ -198,10 +200,14 @@ function countLines(value: string): number {
 export function CodeView({
   activeProject,
   editorState,
+  autoSave,
+  autoSaveDelayMs,
   onOpenSettings,
 }: {
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
+  autoSave: boolean;
+  autoSaveDelayMs: number;
   onOpenSettings: () => void;
 }): ReactNode {
   const projectId = activeProject?.id ?? null;
@@ -223,6 +229,21 @@ export function CodeView({
       return true;
     }
   });
+  const [filePaneWidth, setFilePaneWidth] = useState(() => {
+    try {
+      return clampNumber(Number(window.localStorage.getItem('kai.codeFilePaneWidth')) || DEFAULT_FILE_PANE_WIDTH, 160, 420);
+    } catch {
+      return DEFAULT_FILE_PANE_WIDTH;
+    }
+  });
+  const [learningPaneWidth, setLearningPaneWidth] = useState(() => {
+    try {
+      return clampNumber(Number(window.localStorage.getItem('kai.learningPaneWidth')) || DEFAULT_LEARNING_PANE_WIDTH, 280, 620);
+    } catch {
+      return DEFAULT_LEARNING_PANE_WIDTH;
+    }
+  });
+  const [codeResizing, setCodeResizing] = useState<'files' | 'learning' | null>(null);
   const setTutorOpen = (next: boolean | ((current: boolean) => boolean)): void => {
     setTutorOpenState((current) => {
       const value = typeof next === 'function' ? next(current) : next;
@@ -265,11 +286,46 @@ export function CodeView({
   const preferenceRevision = useRef(0);
   const learningBusyRef = useRef(false);
   const activeLearningRequestId = useRef<string | null>(null);
+  const codeResizeOrigin = useRef<{ kind: 'files' | 'learning'; x: number; width: number } | null>(null);
+  const autoSaveTimers = useRef(new Map<string, number>());
+  const autoSaveInFlight = useRef(new Set<string>());
+  const autoSaveConfigRef = useRef({ enabled: autoSave, delayMs: autoSaveDelayMs });
+  const diskChangedRef = useRef<string | null>(diskChanged);
   const learningStateRef = useRef({ projectId, filePath: activePath, assistance, inlineSuggestions, progress });
   activeRef.current = activePath;
   openPathsRef.current = openPaths;
   projectIdRef.current = projectId;
+  autoSaveConfigRef.current = { enabled: autoSave, delayMs: autoSaveDelayMs };
+  diskChangedRef.current = diskChanged;
   learningStateRef.current = { projectId, filePath: activePath, assistance, inlineSuggestions, progress };
+
+  function clearAutoSaveTimer(path?: string): void {
+    if (path) {
+      const timer = autoSaveTimers.current.get(path);
+      if (timer) window.clearTimeout(timer);
+      autoSaveTimers.current.delete(path);
+      return;
+    }
+    for (const timer of autoSaveTimers.current.values()) window.clearTimeout(timer);
+    autoSaveTimers.current.clear();
+  }
+
+  function scheduleAutoSave(path: string): void {
+    clearAutoSaveTimer(path);
+    const config = autoSaveConfigRef.current;
+    if (!config.enabled || diskChangedRef.current === path) return;
+    const timer = window.setTimeout(() => {
+      autoSaveTimers.current.delete(path);
+      const document = documents.current.get(path);
+      if (!document || normalise(document.model.getValue()) === document.savedValue) return;
+      if (autoSaveInFlight.current.has(path)) {
+        scheduleAutoSave(path);
+        return;
+      }
+      void saveDocument(path, 'auto');
+    }, config.delayMs);
+    autoSaveTimers.current.set(path, timer);
+  }
 
   const syncLearningSelection = useCallback((): void => {
     const path = activeRef.current;
@@ -291,6 +347,41 @@ export function CodeView({
     };
     setLearningSelection((current) => sameLearningSelection(current, next) ? current : next);
   }, []);
+
+  function beginCodeResize(kind: 'files' | 'learning', event: ReactPointerEvent<HTMLDivElement>): void {
+    codeResizeOrigin.current = { kind, x: event.clientX, width: kind === 'files' ? filePaneWidth : learningPaneWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCodeResizing(kind);
+  }
+
+  function continueCodeResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    const origin = codeResizeOrigin.current;
+    if (!origin) return;
+    const delta = event.clientX - origin.x;
+    if (origin.kind === 'files') setFilePaneWidth(clampNumber(origin.width + delta, 160, 420));
+    else setLearningPaneWidth(clampNumber(origin.width - delta, 280, 620));
+  }
+
+  function endCodeResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    codeResizeOrigin.current = null;
+    setCodeResizing(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function resizeCodePaneWithKeyboard(kind: 'files' | 'learning', event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 32 : 12;
+    const current = kind === 'files' ? filePaneWidth : learningPaneWidth;
+    let next = current;
+    if (event.key === 'Home') next = kind === 'files' ? 160 : 280;
+    else if (event.key === 'End') next = kind === 'files' ? 420 : 620;
+    else if (kind === 'files') next += event.key === 'ArrowRight' ? step : -step;
+    else next += event.key === 'ArrowLeft' ? step : -step;
+    next = clampNumber(next, kind === 'files' ? 160 : 280, kind === 'files' ? 420 : 620);
+    if (kind === 'files') setFilePaneWidth(next);
+    else setLearningPaneWidth(next);
+  }
 
   useEffect(() => {
     syncLearningSelection();
@@ -341,6 +432,28 @@ export function CodeView({
     void loadTeachingLibrary();
   }, [loadTeachingLibrary]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('kai.codeFilePaneWidth', String(filePaneWidth));
+      window.localStorage.setItem('kai.learningPaneWidth', String(learningPaneWidth));
+    } catch {
+      // Remembering pane widths is a convenience only.
+    }
+  }, [filePaneWidth, learningPaneWidth]);
+
+  useEffect(() => {
+    if (!autoSave) {
+      clearAutoSaveTimer();
+      return;
+    }
+    if (!editorReady || !projectId) return;
+    for (const path of openPathsRef.current) {
+      if (documents.current.get(path)) scheduleAutoSave(path);
+    }
+    // The autosave configuration is intentionally applied to every open dirty document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSave, autoSaveDelayMs, editorReady, projectId]);
+
   // The main process owns snapshots, so changing projects replaces the local session cleanly.
   useEffect(() => {
     if (initializedProjectId.current === projectId) return;
@@ -365,6 +478,8 @@ export function CodeView({
     setGitInfo(null);
     activeLearningRequestId.current = null;
     learningBusyRef.current = false;
+    clearAutoSaveTimer();
+    autoSaveInFlight.current.clear();
     void loadTree();
     void window.kaiDesktop.learningReadiness().then(unwrap).then(setReadiness).catch((caught) => {
       setReadiness(null);
@@ -439,9 +554,25 @@ export function CodeView({
 
       disposables.push(monaco.languages.registerInlineCompletionsProvider('*', {
         async provideInlineCompletions(model, position, context, token) {
-          if (context.triggerKind !== monaco.languages.InlineCompletionTriggerKind.Explicit) return { items: [] };
-          const state = learningStateRef.current;
+          const explicit = context.triggerKind === monaco.languages.InlineCompletionTriggerKind.Explicit;
+          let state = learningStateRef.current;
           if (!state.projectId || !state.filePath || state.assistance !== 'copilot' || !state.inlineSuggestions) return { items: [] };
+          if (!explicit) {
+            const idle = await new Promise<boolean>((resolve) => {
+              let cancellation: Monaco.IDisposable | null = null;
+              const timer = window.setTimeout(() => {
+                cancellation?.dispose();
+                resolve(true);
+              }, 450);
+              cancellation = token.onCancellationRequested(() => {
+                window.clearTimeout(timer);
+                resolve(false);
+              });
+            });
+            if (!idle || token.isCancellationRequested) return { items: [] };
+            state = learningStateRef.current;
+            if (!state.projectId || !state.filePath || state.assistance !== 'copilot' || !state.inlineSuggestions) return { items: [] };
+          }
           const result = await learningActionRef.current('complete');
           if (token.isCancellationRequested || !result?.response.suggestion) return { items: [] };
           const selection = editor.getSelection();
@@ -484,6 +615,8 @@ export function CodeView({
       disposables.forEach((disposable) => disposable.dispose());
       editorRef.current?.dispose();
       editorRef.current = null;
+      clearAutoSaveTimer();
+      autoSaveInFlight.current.clear();
       for (const document of documents.current.values()) document.model.dispose();
       documents.current.clear();
     };
@@ -525,6 +658,7 @@ export function CodeView({
         const nextDirty = normalise(model.getValue()) !== document.savedValue;
         setDirty((current) => current[state.path] === nextDirty ? current : { ...current, [state.path]: nextDirty });
         reportDocument(state.projectId, state.path, document);
+        scheduleAutoSave(state.path);
       });
     }
     const openPaths = snapshot.openPaths.filter((path) => documents.current.has(path));
@@ -554,6 +688,7 @@ export function CodeView({
         size: saved.size,
       };
       document.savedValue = normalise(saved.savedContent);
+      clearAutoSaveTimer(saved.path);
       const nextDirty = normalise(document.model.getValue()) !== document.savedValue;
       setDirty((current) => current[saved.path] === nextDirty ? current : { ...current, [saved.path]: nextDirty });
       reportDocument(saved.projectId, saved.path, document);
@@ -568,7 +703,10 @@ export function CodeView({
       const document = path ? documents.current.get(path) : undefined;
       if (!path || !document) return;
       void window.kaiDesktop.projectFileChanged(projectId, path, document.opened.hash).then((response) => {
-        if (response.ok && response.data && activeRef.current === path) setDiskChanged(path);
+        if (response.ok && response.data && activeRef.current === path) {
+          clearAutoSaveTimer(path);
+          setDiskChanged(path);
+        }
       });
     }, POLL_MS);
     return () => window.clearInterval(timer);
@@ -611,6 +749,7 @@ export function CodeView({
           const nextDirty = normalise(model.getValue()) !== created.savedValue;
           setDirty((current) => current[path] === nextDirty ? current : { ...current, [path]: nextDirty });
           reportDocument(currentProjectId, path, created);
+          scheduleAutoSave(path);
         });
         reportDocument(currentProjectId, path, created);
         setNotice(null);
@@ -630,33 +769,57 @@ export function CodeView({
     setLearningError(null);
   }
 
-  async function saveActive(): Promise<void> {
-    const path = activeRef.current;
+  async function saveDocument(path: string, mode: 'manual' | 'auto'): Promise<void> {
     const document = path ? documents.current.get(path) : undefined;
     const currentProjectId = projectIdRef.current;
-    if (!currentProjectId || !path || !document) return;
+    if (!currentProjectId || !document) return;
+    clearAutoSaveTimer(path);
+    if (mode === 'auto') autoSaveInFlight.current.add(path);
     const content = document.model.getValue();
-    const response = await window.kaiDesktop.writeProjectFile({
-      projectId: currentProjectId,
-      path,
-      content,
-      expectedHash: document.opened.hash,
-      eol: document.opened.eol,
-      bom: document.opened.bom,
-    });
-    if (!response.ok) {
-      if (response.error.code === 'CONFLICT') setDiskChanged(path);
-      setNotice(response.error.message);
-      return;
+    let saveConflict = false;
+    try {
+      const response = await window.kaiDesktop.writeProjectFile({
+        projectId: currentProjectId,
+        path,
+        content,
+        expectedHash: document.opened.hash,
+        eol: document.opened.eol,
+        bom: document.opened.bom,
+      });
+      if (!response.ok) {
+        if (response.error.code === 'CONFLICT') {
+          saveConflict = true;
+          setDiskChanged(path);
+        }
+        setNotice(response.error.message);
+        return;
+      }
+      if (projectIdRef.current !== currentProjectId || documents.current.get(path) !== document) return;
+      document.opened = { ...document.opened, hash: response.data.hash, mtimeMs: response.data.mtimeMs, size: response.data.size };
+      document.savedValue = normalise(content);
+      const stillLatest = document.model.getValue() === content;
+      setDirty((current) => ({ ...current, [path]: !stillLatest }));
+      reportDocument(currentProjectId, path, document);
+      setNotice(`${mode === 'auto' ? 'Autosaved' : 'Saved'} ${path}`);
+      if (stillLatest) setDiskChanged(null);
+    } finally {
+      if (mode === 'auto') {
+        autoSaveInFlight.current.delete(path);
+        const currentDocument = documents.current.get(path);
+        if (projectIdRef.current === currentProjectId
+          && currentDocument
+          && normalise(currentDocument.model.getValue()) !== currentDocument.savedValue
+          && !saveConflict
+          && diskChangedRef.current !== path) {
+          scheduleAutoSave(path);
+        }
+      }
     }
-    if (projectIdRef.current !== currentProjectId || documents.current.get(path) !== document) return;
-    document.opened = { ...document.opened, hash: response.data.hash, mtimeMs: response.data.mtimeMs, size: response.data.size };
-    document.savedValue = normalise(content);
-    const stillLatest = document.model.getValue() === content;
-    setDirty((current) => ({ ...current, [path]: !stillLatest }));
-    reportDocument(currentProjectId, path, document);
-    setNotice(`Saved ${path}`);
-    if (stillLatest) setDiskChanged(null);
+  }
+
+  async function saveActive(): Promise<void> {
+    const path = activeRef.current;
+    if (path) await saveDocument(path, 'manual');
   }
 
   /** Re-read the file from disk. With keepEdits, only the stored hash moves, so the next save knowingly overwrites. */
@@ -691,6 +854,7 @@ export function CodeView({
     if (currentProjectId) {
       await window.kaiDesktop.removeEditorDocument({ projectId: currentProjectId, path }).catch(() => undefined);
     }
+    clearAutoSaveTimer(path);
     documents.current.get(path)?.model.dispose();
     documents.current.delete(path);
     const remaining = openPathsRef.current.filter((item) => item !== path);
@@ -995,8 +1159,12 @@ export function CodeView({
     );
   }
 
+  const paneStyle = {
+    '--code-file-pane-width': `${filePaneWidth}px`,
+    '--code-learning-pane-width': `${learningPaneWidth}px`,
+  } as CSSProperties;
   return (
-    <div className={`code-view ${tutorOpen ? 'learning-open' : ''}`}>
+    <div className={`code-view ${tutorOpen ? 'learning-open' : ''} ${codeResizing ? 'is-resizing' : ''}`} style={paneStyle}>
       <aside className="code-sidebar" aria-label="Project files">
         <div className="code-sidebar-head">
           <label className="input-with-icon"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" aria-label="Search files" /></label>
@@ -1011,6 +1179,22 @@ export function CodeView({
           {truncated && <div className="settings-note">Showing the first {files.length} files.</div>}
         </div>
       </aside>
+      <div
+        className="resize-handle code-pane-resize files"
+        role="separator"
+        aria-label="Resize project files pane"
+        aria-orientation="vertical"
+        aria-valuemin={160}
+        aria-valuemax={420}
+        aria-valuenow={Math.round(filePaneWidth)}
+        tabIndex={0}
+        onPointerDown={(event) => beginCodeResize('files', event)}
+        onPointerMove={continueCodeResize}
+        onPointerUp={endCodeResize}
+        onPointerCancel={endCodeResize}
+        onDoubleClick={() => setFilePaneWidth(DEFAULT_FILE_PANE_WIDTH)}
+        onKeyDown={(event) => resizeCodePaneWithKeyboard('files', event)}
+      />
       <section className="code-main">
         <div className="code-tabs" role="tablist" aria-label="Open files">
           {openPaths.map((path) => (
@@ -1020,6 +1204,7 @@ export function CodeView({
             </div>
           ))}
           <span className="code-tabs-spacer" />
+          {autoSave && activePath && dirty[activePath] && <span className="code-autosave-status" role="status">Autosave on</span>}
           <button type="button" className="icon-button compact" title="Format with Prettier" aria-label="Format with Prettier" disabled={!activePath || formatting} onClick={() => void formatActive()}><Braces size={14} /></button>
           <button type="button" className={`icon-button compact ${tutorOpen ? 'active' : ''}`} title={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} aria-label={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} onClick={() => setTutorOpen((current) => !current)}><PanelRightOpen size={14} /></button>
           <button type="button" className="secondary-button" disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></button>
@@ -1038,31 +1223,49 @@ export function CodeView({
         {editorReady && openPaths.length === 0 && <div className="code-empty"><Sparkles size={18} /><span>Choose a file from the list to edit it</span></div>}
       </section>
       {tutorOpen && (
-        <LearningPanel
-          progress={progress}
-          readiness={readiness}
-          result={learningResult}
-          selection={learningSelection}
-          gitInfo={gitInfo}
-          busy={learningBusy}
-          formatting={formatting}
-          error={learningError}
-          question={question}
-          onQuestionChange={setQuestion}
-          onAction={(action) => void runLearningAction(action)}
-          onPreferences={(nextAssistance, nextInline) => void updatePreferences(nextAssistance, nextInline)}
-          onInsertSuggestion={insertSuggestion}
-          onRecordLesson={() => void recordLesson()}
-          onFormat={() => void formatActive()}
-          teachingLibrary={teachingLibrary}
-          teachingBusy={teachingBusy}
-          onSaveTeachingEntry={saveTeachingEntry}
-          onDeleteTeachingEntry={deleteTeachingEntry}
-          onResetTeachingEntry={resetTeachingEntry}
-          onGenerateTeachingDraft={generateTeachingDraft}
-          onOpenSettings={onOpenSettings}
-          onClose={() => setTutorOpen(false)}
-        />
+        <>
+          <div
+            className="resize-handle code-pane-resize learning"
+            role="separator"
+            aria-label="Resize learning tutor pane"
+            aria-orientation="vertical"
+            aria-valuemin={280}
+            aria-valuemax={620}
+            aria-valuenow={Math.round(learningPaneWidth)}
+            tabIndex={0}
+            onPointerDown={(event) => beginCodeResize('learning', event)}
+            onPointerMove={continueCodeResize}
+            onPointerUp={endCodeResize}
+            onPointerCancel={endCodeResize}
+            onDoubleClick={() => setLearningPaneWidth(DEFAULT_LEARNING_PANE_WIDTH)}
+            onKeyDown={(event) => resizeCodePaneWithKeyboard('learning', event)}
+          />
+          <LearningPanel
+            progress={progress}
+            readiness={readiness}
+            result={learningResult}
+            selection={learningSelection}
+            gitInfo={gitInfo}
+            busy={learningBusy}
+            formatting={formatting}
+            error={learningError}
+            question={question}
+            onQuestionChange={setQuestion}
+            onAction={(action) => void runLearningAction(action)}
+            onPreferences={(nextAssistance, nextInline) => void updatePreferences(nextAssistance, nextInline)}
+            onInsertSuggestion={insertSuggestion}
+            onRecordLesson={() => void recordLesson()}
+            onFormat={() => void formatActive()}
+            teachingLibrary={teachingLibrary}
+            teachingBusy={teachingBusy}
+            onSaveTeachingEntry={saveTeachingEntry}
+            onDeleteTeachingEntry={deleteTeachingEntry}
+            onResetTeachingEntry={resetTeachingEntry}
+            onGenerateTeachingDraft={generateTeachingDraft}
+            onOpenSettings={onOpenSettings}
+            onClose={() => setTutorOpen(false)}
+          />
+        </>
       )}
     </div>
   );
@@ -1103,4 +1306,8 @@ function learningRequestStillCurrent(
 
 function progressRef(progress: LearningProgress | null): LearningProgress['concepts'] {
   return progress?.concepts ?? [];
+}
+
+function clampNumber(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
 }

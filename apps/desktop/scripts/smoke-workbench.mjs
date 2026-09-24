@@ -36,6 +36,8 @@ try {
   await verifyBuildIdentifier(page);
 
   await verifyCodeEditor(page);
+  await verifyEditorAutosave(page);
+  await verifyLivePreview(electronApp, page);
   await verifyGitAndTerminal(page);
   await verifyOperations(page);
   await verifyTasksAndSettings(page);
@@ -45,6 +47,7 @@ try {
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
   console.log(`KAI workbench smoke passed. Screenshots: ${outputDirectory}`);
 } catch (error) {
+  if (rendererErrors.length > 0) console.error(`Renderer errors: ${rendererErrors.join(' | ')}`);
   if (electronApp) {
     const windows = electronApp.windows();
     for (const [index, window] of windows.entries()) {
@@ -61,7 +64,7 @@ try {
 
 async function verifyCodeEditor(page) {
   await page.getByRole('button', { name: 'Code', exact: true }).click();
-  await page.getByLabel('Project files').waitFor();
+  await page.getByLabel('Project files', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'src', exact: true }).click();
   const file = page.getByRole('button', { name: 'hello.ts' });
   await file.waitFor();
@@ -73,6 +76,8 @@ async function verifyCodeEditor(page) {
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
   await page.getByText('export const hello').first().waitFor();
   await assertTutorTextareaStyled(page);
+  await verifyResizablePane(page, 'Resize project files pane', '.code-sidebar');
+  await verifyResizablePane(page, 'Resize learning tutor pane', '.learning-panel');
   await page.screenshot({ path: path.join(outputDirectory, 'code-1440x920.png') });
 
   await page.locator('.monaco-editor .view-lines').first().click();
@@ -104,6 +109,82 @@ async function verifyCodeEditor(page) {
   await resizeWindow(electronApp, 1440, 920);
 }
 
+async function verifyLivePreview(application, page) {
+  const titlebar = page.locator('.titlebar-actions');
+  await titlebar.getByRole('button', { name: 'Show live preview pane' }).waitFor();
+  if (await page.locator('.preview-column').count() > 0) {
+    throw new Error('The live preview pane should start closed.');
+  }
+  await titlebar.getByRole('button', { name: 'Show live preview pane' }).click();
+  await page.locator('.preview-pane').waitFor();
+  await titlebar.getByRole('button', { name: 'Hide live preview pane' }).waitFor();
+  await page.getByLabel('Preview command').waitFor();
+  await verifyResizablePane(page, 'Resize live preview pane', '.preview-column');
+  await page.getByRole('button', { name: 'Start project' }).click();
+  await page.locator('.preview-status.running').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => {
+    const preview = document.querySelector('webview');
+    return preview instanceof HTMLElement && preview.getAttribute('src')?.startsWith('http://127.0.0.1:');
+  }, undefined, { timeout: 30_000 });
+  await page.getByRole('tab', { name: /Issues/ }).click();
+  await page.getByText(/KAI preview error/).waitFor({ timeout: 20_000 });
+  await page.getByText(/KAI preview warning/).waitFor({ timeout: 20_000 });
+
+  const preview = page.locator('webview');
+  await preview.evaluate(async (element) => {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (await element.executeJavaScript("Boolean(document.getElementById('preview-target'))").catch(() => false)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('The live preview document did not load.');
+  });
+  await page.getByRole('button', { name: 'Select element' }).first().click();
+  await preview.evaluate((element) => element.executeJavaScript("document.getElementById('preview-target').click(); true"));
+  await page.getByText('#preview-target', { exact: true }).waitFor({ timeout: 10_000 });
+  await page.getByPlaceholder('Describe what should change...').fill('Make the heading shorter and clearer.');
+  await page.getByRole('button', { name: 'Send to workspace' }).click();
+  await page.getByText('Preview context added. Add any extra detail, then send the change request.').waitFor();
+  const prompt = await page.getByLabel('Task prompt').inputValue();
+  if (!prompt.includes('Change the selected element') || !prompt.includes('Make the heading shorter and clearer.')) {
+    throw new Error(`The preview context was not sent to the composer: ${prompt}`);
+  }
+
+  await page.locator('.preview-status.running').waitFor({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.locator('.preview-status.stopped').waitFor({ timeout: 20_000 });
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'live-preview-1440x920.png') });
+
+  await resizeWindow(application, 960, 640);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'live-preview-960x640.png') });
+  await resizeWindow(application, 1440, 920);
+  await titlebar.getByRole('button', { name: 'Hide live preview pane' }).click();
+  await page.locator('.preview-column').waitFor({ state: 'detached' });
+}
+
+async function verifyEditorAutosave(page) {
+  const navigation = page.locator('.nav-rail');
+  await navigation.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
+  const autoSaveToggle = page.getByRole('checkbox', { name: /Autosave edited files/ });
+  await autoSaveToggle.waitFor();
+  if (await autoSaveToggle.isChecked()) throw new Error('The autosave smoke expected autosave to start disabled.');
+  await autoSaveToggle.check();
+  await page.getByRole('button', { name: 'Save editor settings' }).click();
+  await page.getByText('Settings saved and shared with all open KAI windows.').waitFor();
+
+  await navigation.getByRole('button', { name: 'Code', exact: true }).click();
+  await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
+  await page.locator('.monaco-editor .view-lines').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\n// autosaved in KAI');
+  await page.getByText('Autosave on').waitFor();
+  await page.getByText('Autosaved src/hello.ts').waitFor({ timeout: 10_000 });
+  const saved = await readFile(path.join(projectPath, 'src', 'hello.ts'), 'utf8');
+  if (!saved.includes('// autosaved in KAI')) throw new Error('The edited file was not saved by autosave.');
+}
+
 async function verifyGitAndTerminal(page) {
   await page.getByRole('button', { name: 'Git', exact: true }).click();
   await page.getByRole('heading', { name: 'Git', level: 1 }).waitFor();
@@ -124,8 +205,12 @@ async function verifyGitAndTerminal(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'git-960x640.png') });
   await resizeWindow(electronApp, 1440, 920);
 
-  // The terminal is a bottom panel toggled with Ctrl+`, available from any page.
-  await page.keyboard.press('Control+Backquote');
+  // The terminal is a bottom panel available from any page. Exercise the
+  // command-palette path here so the smoke does not depend on raw key delivery.
+  await page.getByRole('button', { name: 'Open command palette' }).click();
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await palette.getByLabel('Search commands').fill('Toggle Terminal Panel');
+  await palette.getByRole('option', { name: /Toggle Terminal Panel/ }).click();
   const dock = page.getByRole('region', { name: 'Terminal' });
   await dock.waitFor();
   const terminalInput = dock.locator('.xterm-helper-textarea');
@@ -146,7 +231,7 @@ async function verifyGitAndTerminal(page) {
   await page.waitForFunction(
     () => document.querySelector('.terminal-dock .xterm-rows')?.textContent?.includes('KAI_TERMINAL_OK') ?? false,
   );
-  await page.keyboard.press('Control+Backquote');
+  await dock.getByRole('button', { name: 'Close terminal' }).click();
   await dock.waitFor({ state: 'hidden' });
   await assertNoHorizontalOverflow(page);
 }
@@ -198,6 +283,17 @@ async function verifyTasksAndSettings(page) {
   await page.getByText('CLI models').waitFor();
   await page.getByText('Tray and notifications').waitFor();
   await assertSettingsSectionsFullWidth(page);
+  const learningSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
+  const learningProvider = learningSection.locator('label.field:has(span:text-is("Provider")) > select');
+  await learningProvider.selectOption('deepseek');
+  const learningModel = learningSection.locator('label.field:has(span:text-is("Model")) > input');
+  if ((await learningModel.inputValue()) !== 'deepseek-v4-pro') {
+    throw new Error(`The DeepSeek tutor default is stale: ${await learningModel.inputValue()}`);
+  }
+  const learningModels = await learningSection.locator('#learning-tutor-models option').evaluateAll((options) => options.map((option) => option.value));
+  if (!learningModels.includes('deepseek-flash') || !learningModels.includes('deepseek-v4-pro')) {
+    throw new Error(`The DeepSeek tutor catalog is stale: ${learningModels.join(', ')}`);
+  }
   await verifyShortcutSheet(page);
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
@@ -214,8 +310,15 @@ async function verifyTasksAndSettings(page) {
   }
   await titlebar.getByRole('button', { name: 'Show threads panel' }).click();
   await page.locator('.conversation-column').waitFor();
+  await verifyResizablePane(page, 'Resize conversations', '.conversation-column');
   await titlebar.getByRole('button', { name: 'Hide threads panel' }).click();
   await page.locator('.conversation-column').waitFor({ state: 'detached' });
+
+  await titlebar.getByRole('button', { name: 'Show context panel' }).click();
+  await page.locator('.context-column').waitFor();
+  await verifyResizablePane(page, 'Resize context panel', '.context-column');
+  await titlebar.getByRole('button', { name: 'Hide context panel' }).click();
+  await page.locator('.context-column').waitFor({ state: 'detached' });
 
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
   await page.getByRole('listbox', { name: 'Agent', exact: true }).getByRole('option', { name: /^Qwen Code/ }).click();
@@ -239,18 +342,35 @@ async function verifyTasksAndSettings(page) {
 }
 
 async function verifyThemes(page) {
-  // The title-bar button cycles dark -> navy -> purple -> light -> dark.
+  // The title-bar button cycles in this order. Synchronize on state rather than
+  // assuming a click landed before the previous settings write completed.
   const order = ['navy', 'purple', 'light', 'dark'];
   for (const theme of order) {
-    await page.locator('button[aria-label^="Theme:"]').click();
-    await page.waitForFunction((mode) => document.documentElement.dataset.theme === mode, theme, { timeout: 10_000 });
+    await setTheme(page, theme);
     for (const [button, heading] of [['Usage', 'Usage'], ['Code', null], ['Workspace', null], ['Settings', 'Settings']]) {
       await page.getByRole('button', { name: button, exact: true }).click();
       if (heading) await page.getByRole('heading', { name: heading, level: 1 }).waitFor();
       await page.waitForTimeout(500);
+      if (theme === 'light' && button === 'Code') await assertTutorTextareaLightTheme(page);
       await page.screenshot({ path: path.join(outputDirectory, `theme-${theme}-${button.toLowerCase()}.png`) });
     }
   }
+}
+
+async function setTheme(page, target) {
+  const themeButton = page.locator('button[aria-label^="Theme:"]');
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await page.evaluate(() => document.documentElement.dataset.theme ?? '');
+    if (current === target) return;
+    await themeButton.click();
+    await page.waitForFunction(
+      (previous) => (document.documentElement.dataset.theme ?? '') !== previous,
+      current,
+      { timeout: 4_000 },
+    ).catch(() => undefined);
+  }
+  const actual = await page.evaluate(() => document.documentElement.dataset.theme ?? 'unset');
+  throw new Error(`The theme did not reach ${target}; current theme is ${actual}.`);
 }
 
 async function verifyIndependentWindows(application, page) {
@@ -280,18 +400,12 @@ async function verifyIndependentWindows(application, page) {
   await waitForProjectName(second, 'Second Project');
   await waitForProjectName(page, 'Sample Project');
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (await page.evaluate(() => document.documentElement.dataset.theme === 'light')) break;
-    await page.locator('button[aria-label^="Theme:"]').click();
-  }
+  await setTheme(page, 'light');
   await second.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await waitForProjectName(second, 'Second Project');
   await waitForProjectName(page, 'Sample Project');
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark')) break;
-    await page.locator('button[aria-label^="Theme:"]').click();
-  }
+  await setTheme(page, 'dark');
   await second.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 
   await page.close();
@@ -320,6 +434,16 @@ async function createProject() {
   await mkdir(path.join(secondProjectPath, 'src'), { recursive: true });
   await writeFile(path.join(projectPath, 'src', 'hello.ts'), 'export const hello = "world";\r\n', 'utf8');
   await writeFile(path.join(projectPath, 'README.md'), '# Sample\n', 'utf8');
+  await writeFile(path.join(projectPath, 'package.json'), JSON.stringify({ name: 'kai-preview-smoke', private: true, scripts: { dev: 'node preview-server.cjs' } }, null, 2), 'utf8');
+  await writeFile(path.join(projectPath, 'preview-server.cjs'), [
+    "const http = require('node:http');",
+    'const server = http.createServer((_request, response) => {',
+    "  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });",
+    "  response.end('<!doctype html><html><body><main><h1 id=\"preview-target\">Preview target</h1></main><script>console.warn(\"KAI preview warning\"); console.error(\"KAI preview error\");</script></body></html>');",
+    '});',
+    "server.listen(0, '127.0.0.1', () => console.log(`Local: http://127.0.0.1:${server.address().port}/`));",
+    "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+  ].join('\n'), 'utf8');
   await writeFile(path.join(projectPath, '.gitignore'), 'ignored.txt\n', 'utf8');
   await writeFile(path.join(projectPath, 'ignored.txt'), 'secret\n', 'utf8');
   await writeFile(path.join(projectPath, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0]));
@@ -342,6 +466,7 @@ async function createProject() {
     diagnosticsEnabled: true,
     directApi: { enabled: false, provider: 'openai', model: '', baseUrl: 'https://api.openai.com/v1', credentialId: 'provider.openai' },
     learningTutor: { enabled: false, provider: 'openai', model: 'gpt-6-astra', baseUrl: 'https://api.openai.com/v1', credentialId: 'provider.openai' },
+    editor: { autoSave: false, autoSaveDelayMs: 800 },
     mcpServers: [],
     cognitive1: { enabled: false, endpoint: 'http://127.0.0.1:9876', dataPath: null },
     proxy: { enabled: false, port: 8082, targetBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat', credentialId: 'provider.deepseek' },
@@ -417,5 +542,54 @@ async function assertTutorTextareaStyled(page) {
   }
   if (style.caretColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
     throw new Error(`The tutor textarea lacks visible caret/background styling: ${JSON.stringify(style)}`);
+  }
+}
+
+async function assertTutorTextareaLightTheme(page) {
+  const textarea = page.getByLabel('Tutor question');
+  await textarea.waitFor();
+  const colors = await textarea.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  const background = colors.background.match(/\d+/g)?.slice(0, 3).map(Number) ?? [];
+  const foreground = colors.color.match(/\d+/g)?.slice(0, 3).map(Number) ?? [];
+  const average = (values) => values.reduce((total, value) => total + value, 0) / Math.max(1, values.length);
+  if (average(background) < 200 || average(foreground) > 120) {
+    throw new Error(`The Learning Tutor textarea did not follow light theme colours: ${JSON.stringify(colors)}`);
+  }
+}
+
+async function verifyResizablePane(page, separatorName, paneSelector) {
+  const separator = page.getByRole('separator', { name: separatorName });
+  const pane = page.locator(paneSelector);
+  await separator.waitFor();
+  const before = await pane.boundingBox();
+  if (!before) throw new Error(`The pane ${paneSelector} has no measurable size.`);
+  await separator.press('End');
+  await page.waitForFunction(
+    ({ selector, minimum }) => {
+      const element = document.querySelector(selector);
+      return Boolean(element && element.getBoundingClientRect().width > minimum);
+    },
+    { selector: paneSelector, minimum: before.width + 1 },
+    { timeout: 5_000 },
+  );
+  const expanded = await pane.boundingBox();
+  if (!expanded || expanded.width <= before.width + 1) {
+    throw new Error(`The pane ${paneSelector} did not expand from ${before.width}px: ${JSON.stringify(expanded)}`);
+  }
+  await separator.dblclick();
+  await page.waitForFunction(
+    ({ selector, width }) => {
+      const element = document.querySelector(selector);
+      return Boolean(element && Math.abs(element.getBoundingClientRect().width - width) <= 18);
+    },
+    { selector: paneSelector, width: before.width },
+    { timeout: 5_000 },
+  );
+  const reset = await pane.boundingBox();
+  if (!reset || Math.abs(reset.width - before.width) > 18) {
+    throw new Error(`The pane ${paneSelector} did not reset predictably: ${JSON.stringify({ before, reset })}`);
   }
 }

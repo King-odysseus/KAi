@@ -14,6 +14,7 @@ import {
   Keyboard,
   Layers3,
   ListChecks,
+  MonitorPlay,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
@@ -89,7 +90,7 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void }): ReactNode {
   const newWindowShortcut = shortcutLabel(shortcuts, 'new-window');
   const searchShortcut = shortcutLabel(shortcuts, 'command-palette');
   const threadsShortcut = shortcutLabel(shortcuts, 'threads');
@@ -113,6 +114,9 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         </button>
         <button type="button" className="icon-button" title={rightOpen ? `Hide context panel${contextShortcut ? ` (${contextShortcut})` : ''}` : `Show context panel${contextShortcut ? ` (${contextShortcut})` : ''}`} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
           {rightOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+        </button>
+        <button type="button" className={`icon-button ${previewOpen ? 'active' : ''}`} title={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-label={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-pressed={previewOpen} onClick={onTogglePreview}>
+          <MonitorPlay size={17} />
         </button>
         <button type="button" className="icon-button" title={`Keyboard shortcuts${sheetShortcut ? ` (${sheetShortcut})` : ''}`} aria-label="Open keyboard shortcuts" onClick={onOpenShortcuts}><Keyboard size={17} /></button>
       </div>

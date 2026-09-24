@@ -28,10 +28,13 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@kai/contracts'] })],
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/preload/index.ts'),
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          preview: resolve(__dirname, 'src/preload/preview.ts'),
+        },
         output: {
           format: 'cjs',
-          entryFileNames: 'index.cjs',
+          entryFileNames: '[name].cjs',
         },
       },
     },

@@ -91,6 +91,35 @@
   and Gemini CLI offer their newer model IDs alongside legacy aliases, and the
   selected model is visually prominent in the composer menu. The popover is no
   longer clipped by the composer container, so every option remains clickable.
+- **Live application preview is built in.** The title-bar preview button opens
+  an on-demand side pane. It detects a project's `dev`, `start`, `serve` or
+  `preview` script, runs it with a stop control, discovers the local URL from
+  the server output, and hosts it in a sandboxed local-only webview. Select
+  element mode turns a rendered component into structured context for the
+  composer, while console warnings, errors and failed loads appear in the
+  inspector beneath the preview.
+- **Workspace and editor panes are resizable.** The conversation list, context
+  panel, live preview, project files tree and Learning Tutor column can be
+  dragged, resized with the keyboard, and reset by double-clicking the divider.
+  Widths persist between sessions, and the preview pane starts closed.
+- **Agent activity is readable at a glance.** The composer shows whether the
+  active run is thinking, reading, editing, checking, waiting for approval,
+  paused, blocked or complete, with the last meaningful action and accessible
+  pause, resume and stop controls.
+- **Review and recovery sit beside the conversation.** Agent change cards open
+  expanded, summarize what changed, show verification state, and put Review
+  changes, Undo turn and Verification details directly in the transcript.
+- **Copilot suggestions are proactive and tutor responses recover locally.**
+  Copilot mode requests inline completions after a short typing pause when the
+  option is enabled. Minor malformed Learning Tutor JSON, such as a missing
+  array comma, is repaired locally before KAI attempts a second paid request.
+- **The editor can autosave safely.** Autosave is enabled by default and can be
+  configured with a 300-10,000 ms delay in Settings. It debounces per file,
+  continues if you switch tabs, keeps `Ctrl+S` immediate, and stops on an
+  external disk conflict instead of overwriting the other change.
+- **Light mode now covers the Learning Tutor composer.** The prompt textarea
+  uses theme colours instead of fixed dark colours, with the packaged smoke
+  checking its contrast in Light mode.
 
 ## 2026-09-23
 

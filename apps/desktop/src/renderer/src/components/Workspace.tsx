@@ -63,6 +63,7 @@ import type {
   RouteMode,
   ServiceState,
   SkillSummary,
+  VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
 import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, directProviderPreset, estimateConversationTokens } from '@kai/contracts';
@@ -72,6 +73,7 @@ import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
 import { promptDialog } from './AppDialog';
+import { AgentActivityStrip } from './AgentActivity';
 
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
@@ -81,11 +83,12 @@ export interface WorkspaceSendOptions {
   agent?: AgentId;
 }
 
-export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff';
+export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff' | 'preview-change';
 
 export interface WorkspaceCommandRequest {
   kind: WorkspaceCommandKind;
   nonce: number;
+  prompt?: string;
 }
 
 interface WorkspaceViewProps {
@@ -97,6 +100,7 @@ interface WorkspaceViewProps {
   commandRequest: WorkspaceCommandRequest | null;
   running: boolean;
   paused: boolean;
+  awaitingApproval: boolean;
   notice: string | null;
   streamingText: string;
   agentCapabilities: AgentCapability[];
@@ -134,6 +138,7 @@ interface WorkspaceViewProps {
   onSelectModel: (model: string) => void;
   interruptedRuns: number;
   onOpenRecovery: () => void;
+  onOpenVerification: () => void;
   onOpenRules: () => void;
   onOpenWorkflows: () => void;
   onCompactConversation: () => void;
@@ -209,6 +214,7 @@ export function WorkspaceView({
   commandRequest,
   running,
   paused,
+  awaitingApproval,
   notice,
   streamingText,
   agentCapabilities,
@@ -246,6 +252,7 @@ export function WorkspaceView({
   onSelectModel,
   interruptedRuns,
   onOpenRecovery,
+  onOpenVerification,
   onOpenRules,
   onOpenWorkflows,
   onCompactConversation,
@@ -361,6 +368,10 @@ export function WorkspaceView({
       setRawEventsOpen(true);
     } else if (commandRequest.kind === 'handoff') {
       setPrompt('/handoff ');
+      window.setTimeout(() => promptRef.current?.focus(), 0);
+    } else if (commandRequest.kind === 'preview-change') {
+      setPrompt(commandRequest.prompt ?? '');
+      setWorkbenchNotice('Preview context added. Add any extra detail, then send the change request.');
       window.setTimeout(() => promptRef.current?.focus(), 0);
     } else if (commandRequest.kind === 'checkpoint') {
       const conversation = activeConversation;
@@ -921,7 +932,7 @@ export function WorkspaceView({
                 <button type="button" className="secondary-button" onClick={paused ? onResume : onPause}>{paused ? <Play size={12} /> : <Pause size={12} />}<span>{paused ? 'Resume' : 'Pause'}</span></button>
               </article>
             )}
-            {activeConversation?.events.slice(-40).map((event) => <RunEventCard key={event.id} event={event} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} />)}
+            {activeConversation?.events.slice(-40).map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
             {compareResult && (
               <ComparePanel
                 result={compareResult}
@@ -950,6 +961,15 @@ export function WorkspaceView({
       </div>
 
       <div className="composer">
+        {activeConversation && <AgentActivityStrip
+          events={activeConversation.events}
+          running={running}
+          paused={paused}
+          awaitingApproval={awaitingApproval}
+          onPause={onPause}
+          onResume={onResume}
+          onCancel={onCancel}
+        />}
         {activeProject && !ready && (apiRun ? directApiCapability : selectedCapability) && (
           <div className="agent-setup-banner" role="status">
             <div className="agent-setup-copy">
@@ -1232,8 +1252,19 @@ export function WorkspaceView({
   );
 }
 
-function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void> }): ReactNode {
-  const [changesExpanded, setChangesExpanded] = useState(false);
+function RunEventCard({ event, projectId, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
+  const [changesExpanded, setChangesExpanded] = useState(true);
+  const [verification, setVerification] = useState<VerificationOverview | null>(null);
+  useEffect(() => {
+    if (event.type !== 'turn.changes' || !projectId) return;
+    let cancelled = false;
+    void window.kaiDesktop.verificationOverview(projectId).then(unwrap).then((next) => {
+      if (!cancelled) setVerification(next);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [event.id, event.type, projectId]);
   if (event.type === 'text.delta') return null;
   if (event.type === 'tool.call') {
     return (
@@ -1262,8 +1293,22 @@ function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onRe
   if (event.type === 'turn.changes') {
     const added = event.files.reduce((sum, file) => sum + file.added, 0);
     const removed = event.files.reduce((sum, file) => sum + file.removed, 0);
+    const changedPaths = new Set(event.files.map((file) => file.path));
+    const latestFiles = (verification?.files ?? []).filter((file) => changedPaths.has(file.path));
+    const stale = latestFiles.some((file) => file.status === 'stale');
+    const failed = latestFiles.some((file) => file.status === 'failed');
+    const verified = latestFiles.length > 0 && latestFiles.every((file) => file.status === 'verified');
+    const verificationLabel = !verification?.latest ? 'Not checked yet' : stale ? 'Checks stale after later edits' : failed ? 'Latest check failed' : verified ? 'Changed files verified' : 'Verification is partial';
     return (
       <section className={`changes-card ${changesExpanded ? 'expanded' : ''}`}>
+        <div className="changes-summary">
+          <div>
+            <strong>KAI changed {event.files.length} file{event.files.length === 1 ? '' : 's'}</strong>
+            <span>Review the exact diff, restore individual hunks or files, or undo the whole turn.</span>
+          </div>
+          <VerificationBadge status={stale ? 'stale' : failed ? 'failed' : verified ? 'verified' : 'unverified'} />
+          <small>{verificationLabel}{verification?.latest ? ` · ${relativeTime(verification.latest.startedAt)}` : ''}</small>
+        </div>
         <button
           type="button"
           className="changes-head"
@@ -1272,7 +1317,7 @@ function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onRe
           onClick={() => setChangesExpanded((current) => !current)}
         >
           <ChevronDown className="changes-chevron" size={14} />
-          <strong>Edited {event.files.length} file{event.files.length === 1 ? '' : 's'}</strong>
+          <strong>Changed files</strong>
           <span className="changes-head-spacer" />
           {added > 0 && <span className="diff-add">+{added}</span>}
           {removed > 0 && <span className="diff-remove">-{removed}</span>}
@@ -1286,12 +1331,13 @@ function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onRe
               {event.files.length === 0 && <div className="changes-more">No files were changed in this turn.</div>}
               {event.files.length > 8 && <div className="changes-more">+{event.files.length - 8} more files</div>}
             </div>
-            <div className="changes-actions">
-              <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review</span></button>
-              <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo all</span></button>
-            </div>
           </>
         )}
+        <div className="changes-actions">
+          <button type="button" className="primary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review changes</span></button>
+          <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo turn</span></button>
+          {verification?.latest && <button type="button" className="secondary-button" onClick={onOpenVerification} title="Open verification history"><ShieldCheck size={13} /><span>Verification details</span></button>}
+        </div>
       </section>
     );
   }

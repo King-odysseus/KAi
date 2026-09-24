@@ -526,6 +526,7 @@ export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdat
     ...update,
     directApi: { ...settings.directApi, ...update.directApi },
     learningTutor: { ...settings.learningTutor, ...update.learningTutor },
+    editor: { ...settings.editor, ...update.editor },
     mcpServers: update.mcpServers ?? settings.mcpServers,
     cognitive1: { ...settings.cognitive1, ...update.cognitive1 },
     proxy: { ...settings.proxy, ...update.proxy },

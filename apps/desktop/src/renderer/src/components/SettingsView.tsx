@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
@@ -259,6 +259,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
       agentModels: draft.agentModels,
       directApi: draft.directApi,
       learningTutor: draft.learningTutor,
+      editor: draft.editor,
       mcpServers: draft.mcpServers,
       cognitive1: draft.cognitive1,
       proxy: draft.proxy,
@@ -305,6 +306,32 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <Check size={16} /><span>{saveFeedback?.kind === 'pending' ? 'Saving settings' : 'Save settings'}</span>
           </button>
           <FeedbackMessage feedback={saveFeedback} />
+        </section>
+
+        <section className="settings-section">
+          <div className="section-title"><Code2 size={17} /><span>Code editor</span></div>
+          <p className="settings-note">Autosave writes after a short pause when the file has not changed elsewhere. Conflicting external edits are never overwritten.</p>
+          <NotificationToggle
+            label="Autosave edited files"
+            hint="Keeps files current while you work; Ctrl+S still saves immediately"
+            checked={draft.editor.autoSave}
+            onChange={(autoSave) => setDraft((current) => ({ ...current, editor: { ...current.editor, autoSave } }))}
+          />
+          {draft.editor.autoSave && (
+            <div className="field-grid">
+              <NumberField
+                label="Autosave delay (ms)"
+                value={draft.editor.autoSaveDelayMs}
+                min={300}
+                max={10_000}
+                step={100}
+                onChange={(autoSaveDelayMs) => setDraft((current) => ({ ...current, editor: { ...current.editor, autoSaveDelayMs } }))}
+              />
+            </div>
+          )}
+          <button type="button" className="primary-button align-end" disabled={busy || shortcutConflictList.length > 0} onClick={() => void saveDraft()}>
+            <Check size={16} /><span>{saveFeedback?.kind === 'pending' ? 'Saving settings' : 'Save editor settings'}</span>
+          </button>
         </section>
 
         <UpdatesPanel settings={settings} />

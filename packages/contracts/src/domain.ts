@@ -227,6 +227,13 @@ export const learningTutorSettingsSchema = z
   })
   .strict();
 
+export const editorSettingsSchema = z
+  .object({
+    autoSave: z.boolean().default(true),
+    autoSaveDelayMs: z.number().int().min(300).max(10_000).default(1_000),
+  })
+  .strict();
+
 const mcpServerBaseSchema = {
   id: z.string().min(1).max(100),
   name: z.string().min(1).max(100),
@@ -290,6 +297,7 @@ export const appSettingsV1Schema = z
     installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
     directApi: directApiSettingsSchema,
     learningTutor: learningTutorSettingsSchema,
+    editor: editorSettingsSchema.default({}),
     mcpServers: z.array(mcpServerSettingsSchema),
     cognitive1: cognitive1ServiceSettingsSchema,
     proxy: proxyServiceSettingsSchema,
@@ -396,6 +404,10 @@ export function createDefaultSettings(): AppSettings {
       model: 'gpt-6-astra',
       baseUrl: 'https://api.openai.com/v1',
       credentialId: 'provider.openai',
+    },
+    editor: {
+      autoSave: true,
+      autoSaveDelayMs: 1_000,
     },
     mcpServers: [{
       id: PLAYWRIGHT_MCP_SERVER_ID,

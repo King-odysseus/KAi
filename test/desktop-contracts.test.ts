@@ -21,6 +21,7 @@ describe('desktop contracts', () => {
     expect(settings.theme).toBe('dark');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(settings.learningTutor).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
+    expect(settings.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000 });
     expect(settings.cognitive1.overwatch).toEqual({
       enabled: false,
       provider: 'deepseek',
@@ -90,6 +91,10 @@ describe('desktop contracts', () => {
       credentialId: 'provider.openrouter',
     })).toMatchObject({ provider: 'openrouter' });
     expect(parseIpcInput('settings:update', { theme: 'light' })).toEqual({ theme: 'light' });
+    expect(parseIpcInput('settings:update', { editor: { autoSave: false, autoSaveDelayMs: 1_500 } })).toEqual({
+      editor: { autoSave: false, autoSaveDelayMs: 1_500 },
+    });
+    expect(() => parseIpcInput('settings:update', { editor: { autoSaveDelayMs: 50 } })).toThrow();
     expect(parseIpcInput('settings:update', {
       cognitive1: {
         overwatch: {

@@ -35,6 +35,8 @@ Electron main
 
 The renderer has `nodeIntegration: false`, `contextIsolation: true`, and `sandbox: true`. It receives no filesystem, shell, or generic IPC function. Main validates every request and checks project scope before a privileged operation.
 
+Live Preview is an on-demand, resizable side pane opened from the title bar. It uses an Electron `<webview>` only for the project's local dev server. The webview is created with Node integration disabled, context isolation and Chromium sandbox enabled, and a dedicated preload that exposes only element selection. Main rejects non-loopback initial attachment and later guest navigation or redirects; the preview process is owned by the main process and stopped with its process tree.
+
 Long-running engine work runs outside the renderer. Cognitive1 and Universal Agent Proxy are pinned, staged with production dependencies, and supervised as child processes through Electron's own runtime. The system never spawns a bare `node` command from `PATH`.
 
 ## Repository layout

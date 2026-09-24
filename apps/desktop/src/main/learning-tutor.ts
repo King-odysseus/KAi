@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { jsonrepair } from 'jsonrepair';
 import {
   directProviderPreset,
   learningTutorResponseSchema,
@@ -504,10 +505,18 @@ function parseJsonResponse(content: string, label: string): unknown {
   const start = unfenced.indexOf('{');
   const end = unfenced.lastIndexOf('}');
   if (start < 0 || end <= start) throw new Error(`The provider did not return a JSON ${label} response.`);
+  const candidate = unfenced.slice(start, end + 1);
   try {
-    return JSON.parse(unfenced.slice(start, end + 1));
+    return JSON.parse(candidate);
   } catch (error) {
-    throw new Error(`The provider returned malformed ${label} JSON: ${error instanceof Error ? error.message : String(error)}`);
+    try {
+      // Minor model mistakes such as a missing comma or trailing comma are deterministic to repair
+      // locally. Doing this before the paid model repair keeps a transient syntax error from turning
+      // into a second provider request.
+      return JSON.parse(jsonrepair(candidate));
+    } catch {
+      throw new Error(`The provider returned malformed ${label} JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
