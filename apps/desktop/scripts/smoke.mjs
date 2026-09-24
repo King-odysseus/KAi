@@ -1053,7 +1053,9 @@ async function verifyBrainFlow(application, page, cognitive1Port) {
 
   await page.getByRole('button', { name: 'C1 Brain' }).click();
   await page.getByRole('heading', { name: 'Ready' }).waitFor();
-  await page.getByRole('heading', { name: 'Brain operations' }).waitFor();
+  // The panel opens on Review, which is the draft queue. The brain explorer itself lives under the Memory tab.
+  await page.getByRole('heading', { name: 'Review, Overwatch, and memory' }).waitFor();
+  await page.locator('.cognitive1-tabs').getByRole('button', { name: 'Memory', exact: true }).click();
   await page.getByRole('heading', { name: 'Brain overview' }).waitFor();
   await page.getByRole('heading', { name: 'Brain Git sync' }).waitFor();
   await page.getByPlaceholder('Title, field, agent, or project').fill(marker);

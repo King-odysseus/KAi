@@ -1,16 +1,20 @@
 import {
   Activity,
   AlertTriangle,
+  Archive,
   BookOpen,
   Brain,
   CheckCircle2,
   ClipboardCheck,
   Clock3,
   Download,
+  Eye,
   FileCode2,
   GitBranch,
+  Info,
   KeyRound,
   LifeBuoy,
+  ListChecks,
   Play,
   RefreshCw,
   ShieldCheck,
@@ -19,7 +23,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
   cognitive1McpTools,
   cognitive1Operations,
@@ -32,33 +36,55 @@ import {
 import { confirmDialog, messageDialog } from './AppDialog';
 import { unwrap } from '../types';
 import { BrainPanel } from './BrainView';
+import {
+  applyClassifications,
+  countOverrules,
+  describeDecisions,
+  draftCounts,
+  draftRows,
+  learnedCorrections,
+  markFor,
+  marksForAll,
+  planDecisions,
+  planTypeChanges,
+  reviewRecap,
+  type DraftMark,
+  type DraftRow,
+  type MarkBook,
+} from './cognitive1-drafts';
 
-type Cognitive1Tab = 'memory' | 'maintenance' | 'work' | 'recovery' | 'skills' | 'system' | 'advanced';
+type Cognitive1Tab = 'review' | 'overwatch' | 'memory' | 'work' | 'recovery' | 'skills' | 'advanced';
 
 const tabs: Array<{ id: Cognitive1Tab; label: string }> = [
+  { id: 'review', label: 'Review' },
+  { id: 'overwatch', label: 'Overwatch' },
   { id: 'memory', label: 'Memory' },
-  { id: 'maintenance', label: 'Maintenance' },
   { id: 'work', label: 'Work' },
   { id: 'recovery', label: 'Recovery' },
   { id: 'skills', label: 'Skills' },
-  { id: 'system', label: 'System' },
   { id: 'advanced', label: 'Advanced' },
 ];
 
+/** What each tab needs before it can draw itself. Review is first because its queue is what usually needs a person. */
 const tabLoads: Record<Cognitive1Tab, Cognitive1Operation[]> = {
+  review: ['brain-drafts', 'urgent-list', 'overwatch-status', 'overwatch-insights'],
+  overwatch: ['overwatch-status', 'overwatch-insights', 'metrics'],
   memory: [],
-  maintenance: ['brain-drafts', 'urgent-list'],
-  work: ['status', 'handoffs', 'tasks', 'reviews', 'regressions'],
+  work: ['status', 'handoffs', 'tasks', 'reviews', 'regressions', 'git-status', 'integration-status'],
   recovery: ['recover', 'recap-check', 'status'],
   skills: ['skills'],
-  system: ['metrics', 'git-status', 'integration-status', 'overwatch-status', 'overwatch-insights'],
   advanced: ['status'],
 };
+
+/** The queue headline shown on the tab strip, so a backlog is visible from any tab. */
+const headlineLoads: Cognitive1Operation[] = ['brain-drafts', 'urgent-list'];
 
 interface OperationLoad {
   values: Partial<Record<Cognitive1Operation, unknown>>;
   failures: string[];
 }
+
+type Invoke = (operation: Cognitive1Operation, payload?: Record<string, unknown>) => Promise<unknown>;
 
 export function Cognitive1Panel({
   service,
@@ -67,7 +93,7 @@ export function Cognitive1Panel({
   service: ServiceState;
   projects: ProjectRecord[];
 }): ReactNode {
-  const [tab, setTab] = useState<Cognitive1Tab>('memory');
+  const [tab, setTab] = useState<Cognitive1Tab>('review');
   const [data, setData] = useState<Partial<Record<Cognitive1Operation, unknown>>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -89,6 +115,21 @@ export function Cognitive1Panel({
     });
     return () => { active = false; };
   }, [ready, service.updatedAt, tab]);
+
+  // The review queue decides nothing about the current tab, but its size belongs on the tab strip, so it is fetched
+  // once per service change even while the user is somewhere else.
+  useEffect(() => {
+    if (!ready || tab === 'review') return;
+    let active = true;
+    void loadOperations(headlineLoads).then(({ values }) => {
+      if (active) setData((current) => ({ ...current, ...values }));
+    });
+    return () => { active = false; };
+  }, [ready, service.updatedAt, tab]);
+
+  const queue = data['brain-drafts'];
+  const headline = useMemo(() => draftCounts(draftRows(queue)), [queue]);
+  const urgentCount = useMemo(() => records(data['urgent-list'], 'urgentNotes').length, [data]);
 
   async function invoke(operation: Cognitive1Operation, payload: Record<string, unknown> = {}): Promise<unknown> {
     setBusy(operationLabel(operation));
@@ -120,21 +161,35 @@ export function Cognitive1Panel({
   }
 
   async function refreshCore(): Promise<void> {
-    if (!ready) return;
-    const { values, failures } = await loadOperations(tabLoads[tab]);
+    await reload(tabLoads[tab]);
+  }
+
+  /**
+   * Re-reads chosen operations. Callers name what they actually changed so an unchanged draft queue keeps the
+   * classifications already paid for: reloading it would return the same drafts under a new object, which the review
+   * tab would read as a different queue and reset the verdicts on.
+   */
+  async function reload(operations: Cognitive1Operation[]): Promise<void> {
+    if (!ready || operations.length === 0) return;
+    const { values, failures } = await loadOperations(operations);
     setData((current) => ({ ...current, ...values }));
     setError(failures.length ? `${failures.length} C1 panel request(s) failed: ${failures[0]}` : null);
   }
+
+  const disabled = !ready || Boolean(busy);
 
   return (
     <section className="cognitive1-panel">
       <div className="cognitive1-control-heading">
         <div>
           <span className="eyebrow">Cognitive1 control centre</span>
-          <h2>Brain operations</h2>
-          <p>Native desktop access to memory, maintenance, tasks, recovery, skills, and Overwatch.</p>
+          <h2>Review, Overwatch, and memory</h2>
+          <p>
+            Drafts Overwatch has judged wait under Review. Its engine, findings and history live under Overwatch.
+            {headline.total > 0 && ` ${headline.total} draft(s) are in the queue right now.`}
+          </p>
         </div>
-        <button type="button" className="secondary-button" disabled={!ready || Boolean(busy)} onClick={() => void refreshCore()}>
+        <button type="button" className="secondary-button" disabled={disabled} onClick={() => void refreshCore()}>
           <RefreshCw size={14} className={busy?.startsWith('Loading') ? 'spin' : undefined} />
           <span>Refresh all</span>
         </button>
@@ -150,6 +205,7 @@ export function Cognitive1Panel({
             onClick={() => setTab(item.id)}
           >
             {item.label}
+            {item.id === 'review' && headline.total > 0 && <span className="cognitive1-tab-count">{headline.total}</span>}
           </button>
         ))}
       </nav>
@@ -158,141 +214,549 @@ export function Cognitive1Panel({
       {error && <div className="proxy-error" role="alert"><AlertTriangle size={15} /><span>{error}</span><button type="button" className="icon-button compact" aria-label="Dismiss C1 error" onClick={() => setError(null)}><X size={14} /></button></div>}
       {busy && <div className="proxy-action-state"><RefreshCw size={14} className="spin" /><span>{busy}</span></div>}
 
-      {tab === 'memory' && <BrainPanel service={service} />}
-      {tab === 'maintenance' && <MaintenancePanel data={data} projects={projects} disabled={!ready || Boolean(busy)} onRun={run} />}
-      {tab === 'work' && <WorkPanel data={data} projects={projects} disabled={!ready || Boolean(busy)} onRun={run} />}
-      {tab === 'recovery' && <RecoveryPanel data={data} projects={projects} disabled={!ready || Boolean(busy)} onRun={run} />}
-      {tab === 'skills' && <SkillsPanel data={data} projects={projects} disabled={!ready || Boolean(busy)} onRun={run} onInvoke={invoke} />}
-      {tab === 'system' && <SystemPanel data={data} projects={projects} disabled={!ready || Boolean(busy)} onRun={run} />}
-      {tab === 'advanced' && <AdvancedPanel data={data} projects={projects} disabled={!ready || Boolean(busy)} onRun={run} />}
+      {tab === 'review' && <ReviewPanel data={data} projects={projects} disabled={disabled} onInvoke={invoke} onReload={reload} onNotice={setNotice} />}
+      {tab === 'overwatch' && <OverwatchPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
+      {tab === 'memory' && <MemoryPanel data={data} projects={projects} disabled={disabled} onRun={run} service={service} />}
+      {tab === 'work' && <WorkPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
+      {tab === 'recovery' && <RecoveryPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
+      {tab === 'skills' && <SkillsPanel data={data} projects={projects} disabled={disabled} onRun={run} onInvoke={invoke} />}
+      {tab === 'advanced' && <AdvancedPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
     </section>
   );
 }
 
-function MaintenancePanel({
+/**
+ * The draft queue: what Overwatch decided, what it would not decide, and one place to act on either.
+ *
+ * Approving and rejecting are the same two endpoints the queue always had; what is new is that each draft carries an
+ * Overwatch verdict and its own mark, so agreeing with Overwatch is a single click and disagreeing is one more.
+ */
+function ReviewPanel({
   data,
   projects,
   disabled,
-  onRun,
-}: PanelProps): ReactNode {
-  // The age-based prune only becomes available once a preview has reported something to delete.
-  const prunePreview = (data['brain-prune'] ?? {}) as { handoffs?: number; dailyLogs?: number; resolvedEntries?: number };
-  const prunableTotal = (prunePreview.handoffs ?? 0) + (prunePreview.dailyLogs ?? 0) + (prunePreview.resolvedEntries ?? 0);
-  const [title, setTitle] = useState('');
-  const [type, setType] = useState<BrainEntryType>('gotchas');
-  const [project, setProject] = useState(projects[0]?.name ?? '');
-  const [agent, setAgent] = useState('kai-desktop');
-  const [tags, setTags] = useState('');
-  const [fact, setFact] = useState('');
-  const [fieldName, setFieldName] = useState('');
-  const [fieldValue, setFieldValue] = useState('');
-  const [urgentProject, setUrgentProject] = useState(projects[0]?.name ?? 'global');
-  const [urgentWhat, setUrgentWhat] = useState('');
-  const [urgentDo, setUrgentDo] = useState('');
-  const [urgentDoNot, setUrgentDoNot] = useState('');
-  const [pruneTitle, setPruneTitle] = useState('');
-  const drafts = records(data['brain-drafts'], 'drafts');
-  const urgentNotes = records(data['urgent-list'], 'urgentNotes');
+  onInvoke,
+  onReload,
+  onNotice,
+}: {
+  data: PanelProps['data'];
+  projects: ProjectRecord[];
+  disabled: boolean;
+  onInvoke: Invoke;
+  onReload: (operations: Cognitive1Operation[]) => Promise<void>;
+  onNotice: (message: string | null) => void;
+}): ReactNode {
+  const queue = data['brain-drafts'];
+  const [marks, setMarks] = useState<MarkBook>({});
+  const [adoptTypes, setAdoptTypes] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [classifying, setClassifying] = useState(false);
+  // Classifications are keyed to the exact queue payload they came from: once the queue changes they describe drafts
+  // that are no longer at those positions, so they are dropped rather than applied to the wrong entries.
+  const [classified, setClassified] = useState<{ queue: unknown; value: unknown } | null>(null);
 
-  async function learn(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!title.trim()) return;
-    const payload: Record<string, unknown> = {
-      title: title.trim(),
-      type,
-      project: project.trim() || 'global',
-      agent,
-      tags,
-      fact,
-    };
-    if (fieldName.trim() && fieldValue.trim()) payload[fieldName.trim()] = fieldValue.trim();
-    const result = recordOf(await onRun('brain-learn', payload, 'Memory entry submitted.'));
-    if (result.rejected) {
-      void messageDialog({
-        title: 'Memory entry rejected',
-        detail: String(result.reason ?? 'The quality gate rejected the entry.'),
-      });
-      return;
+  const rows = useMemo(() => {
+    const base = draftRows(queue);
+    return classified && classified.queue === queue ? applyClassifications(base, classified.value) : base;
+  }, [queue, classified]);
+  const counts = useMemo(() => draftCounts(rows), [rows]);
+  const decisions = useMemo(() => planDecisions(rows, marks), [rows, marks]);
+  // `suggested` is every retype Overwatch would make, so the toggle can say how many it is holding back.
+  const suggested = useMemo(() => planTypeChanges(rows, decisions, true), [rows, decisions]);
+  const typeChanges = useMemo(() => planTypeChanges(rows, decisions, adoptTypes), [rows, decisions, adoptTypes]);
+  const overrules = useMemo(() => countOverrules(rows, decisions), [rows, decisions]);
+  const overwatchStatus = recordOf(data['overwatch-status']);
+  const insights = arrayOf(recordOf(data['overwatch-insights']).insights);
+  const urgentNotes = records(data['urgent-list'], 'urgentNotes');
+  const pending = decisions.length + typeChanges.length;
+  const recap = useMemo(() => reviewRecap({
+    counts,
+    overwatch: { enabled: overwatchStatus.enabled === true, ready: overwatchStatus.ready === true },
+    urgentCount: urgentNotes.length,
+    insights: insights.map((insight) => String(insight.message ?? '')).filter((message) => message.length > 0),
+  }), [counts, overwatchStatus.enabled, overwatchStatus.ready, urgentNotes.length, insights]);
+
+  function setMark(row: DraftRow, mark: DraftMark): void {
+    setMarks((current) => ({ ...current, [row.index]: { title: row.title, mark } }));
+  }
+
+  async function classify(): Promise<void> {
+    setClassifying(true);
+    try {
+      const result = await onInvoke('overwatch-resolve-preview');
+      if (result === null) return;
+      setClassified({ queue, value: result });
+      const merged = draftCounts(applyClassifications(rows, result));
+      onNotice(merged.unclassified === 0
+        ? `Overwatch has a verdict on all ${merged.total} draft(s).`
+        : `Overwatch classified ${merged.total - merged.unclassified} of ${merged.total} draft(s); ${merged.unclassified} came back without one.`);
+    } finally {
+      setClassifying(false);
     }
-    setTitle('');
-    setFact('');
-    setFieldName('');
-    setFieldValue('');
+  }
+
+  /** The note list is one of this tab's four loads, so only it is re-read; the draft queue is left untouched. */
+  async function saveUrgentNote(payload: Record<string, unknown>): Promise<boolean> {
+    if ((await onInvoke('urgent-set', payload)) === null) return false;
+    await onReload(['urgent-list']);
+    onNotice('Urgent note saved.');
+    return true;
+  }
+
+  async function clearUrgentNotes(): Promise<void> {
+    if (urgentNotes.length === 0) return;
+    const confirmed = await confirmDialog({
+      title: 'Clear every urgent note?',
+      detail: `${urgentNotes.length} pinned warning(s) will be removed for every agent reading this brain.`,
+      confirmLabel: 'Clear urgent notes',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    if ((await onInvoke('urgent-clear')) === null) return;
+    await onReload(['urgent-list']);
+    onNotice('All urgent notes cleared.');
+  }
+
+  async function apply(): Promise<void> {
+    if (pending === 0) return;
+    const { approvals, rejections } = describeDecisions(decisions);
+    const actions = [
+      approvals > 0 ? `approve ${approvals} draft(s) into the brain` : null,
+      rejections > 0 ? `delete ${rejections} draft(s) from the queue` : null,
+      typeChanges.length > 0 ? `file ${typeChanges.length} approval(s) under the type Overwatch suggested` : null,
+    ].filter(Boolean).join(', ');
+    const detail = actions.charAt(0).toUpperCase() + actions.slice(1);
+    const teaching = overrules > 0
+      ? ` ${overrules} of these overrule Overwatch, and C1 will show it those corrections when it judges future drafts.`
+      : '';
+    const confirmed = await confirmDialog({
+      title: 'Apply these draft decisions?',
+      detail: `${detail}. Rejected drafts are removed without being filed, and approving cannot be undone from here.${teaching}`,
+      confirmLabel: `Apply ${decisions.length} decision(s)`,
+      destructive: rejections > 0,
+    });
+    if (!confirmed) return;
+
+    setApplying(true);
+    let failures = 0;
+    try {
+      // Types first: an approved block is copied verbatim, so its `#type:` has to be right before it is filed. Both
+      // loops run highest index first because each call renumbers everything below it.
+      for (const change of typeChanges) {
+        if ((await onInvoke('brain-draft-type', { index: change.index, type: change.type })) === null) failures += 1;
+      }
+      for (const decision of decisions) {
+        const operation = decision.action === 'approve' ? 'brain-draft-approve' : 'brain-draft-reject';
+        if ((await onInvoke(operation, { index: decision.index })) === null) failures += 1;
+      }
+    } finally {
+      setApplying(false);
+    }
+    setMarks({});
+    // Status too: an overrule changes the count of corrections Overwatch has learned.
+    await onReload(['brain-drafts', 'overwatch-status']);
+    onNotice(failures === 0
+      ? `Applied ${decisions.length} decision(s): ${approvals} approved, ${rejections} rejected.`
+      : `Applied ${decisions.length - failures} of ${decisions.length} decision(s). ${failures} request(s) failed; the queue is unchanged for those.`);
   }
 
   return (
     <div className="cognitive1-page">
-      <div className="cognitive1-grid two">
-        <BrainLearnCard
-          title={title}
-          type={type}
-          project={project}
-          agent={agent}
-          tags={tags}
-          fact={fact}
-          fieldName={fieldName}
-          fieldValue={fieldValue}
-          projects={projects}
-          disabled={disabled}
-          onTitle={setTitle}
-          onType={setType}
-          onProject={setProject}
-          onAgent={setAgent}
-          onTags={setTags}
-          onFact={setFact}
-          onFieldName={setFieldName}
-          onFieldValue={setFieldValue}
-          onSubmit={(event) => void learn(event)}
-        />
+      <section className="cognitive1-card cognitive1-recap">
+        <SectionHeading eyebrow="What needs you" title="Overwatch recap" icon={<Info size={16} />} />
+        <ul className="cognitive1-recap-lines">
+          {recap.map((line) => <li className={line.tone} key={line.text}>{line.text}</li>)}
+        </ul>
+      </section>
 
-        <section className="cognitive1-card">
-          <SectionHeading eyebrow="Quality queue" title={`Draft review (${drafts.length})`} icon={<ClipboardCheck size={16} />} />
-          <div className="cognitive1-list">
-            {drafts.map((draft, index) => (
-              <article className="cognitive1-row" key={`${draft.index ?? index}-${draft.title ?? 'draft'}`}>
-                <div>
-                  <strong>{String(draft.title ?? `Draft ${index + 1}`)}</strong>
-                  <small>{String(draft.type ?? 'untyped')} {draft.project ? `- ${String(draft.project)}` : ''}</small>
-                </div>
-                <div className="cognitive1-row-actions">
-                  <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('brain-draft-approve', { index: Number(draft.index ?? index) }, 'Draft approved.')}>Approve</button>
-                  <button type="button" className="secondary-button danger-button" disabled={disabled} onClick={() => void onRun('brain-draft-reject', { index: Number(draft.index ?? index) }, 'Draft rejected.')}>Reject</button>
-                </div>
-              </article>
-            ))}
-            {drafts.length === 0 && <EmptyText>No drafts are waiting for review.</EmptyText>}
+      <section className="cognitive1-card">
+        <SectionHeading eyebrow="Quality queue" title={`Draft review (${counts.total})`} icon={<ClipboardCheck size={16} />} />
+        <div className="cognitive1-verdict-summary">
+          <VerdictCount label="Keep" value={counts.keep} tone="keep" />
+          <VerdictCount label="Noise" value={counts.noise} tone="noise" />
+          <VerdictCount label="Borderline" value={counts.borderline} tone="borderline" />
+          <VerdictCount label="No verdict" value={counts.unclassified} tone="unknown" />
+        </div>
+
+        <div className="cognitive1-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={disabled || classifying || counts.unclassified === 0}
+            title={counts.unclassified === 0 ? 'Every draft already carries a verdict.' : undefined}
+            onClick={() => void classify()}
+          >
+            {classifying ? <RefreshCw size={13} className="spin" /> : <Eye size={13} />}
+            <span>Ask Overwatch about {counts.unclassified} draft(s)</span>
+          </button>
+          <button type="button" className="secondary-button" disabled={disabled || counts.total === 0} onClick={() => setMarks({})}>Use Overwatch's verdicts</button>
+          <button type="button" className="secondary-button" disabled={disabled || counts.total === 0} onClick={() => setMarks(marksForAll(rows, null))}>Hold everything</button>
+        </div>
+        <p className="cognitive1-copy">
+          Asking Overwatch costs one model call for each draft that has no verdict yet. Drafts it has already
+          annotated are reused for free, and the answer is a preview: nothing is filed or deleted until you apply.
+        </p>
+
+        {pending > 0 && (
+          <div className="cognitive1-mark-bar">
+            <div>
+              <strong>{decisions.length + typeChanges.length} change(s) ready</strong>
+              <span>
+                {describeDecisions(decisions).approvals} to approve, {describeDecisions(decisions).rejections} to reject
+                {typeChanges.length > 0 ? `, ${typeChanges.length} to refile` : ''}
+              </span>
+              {overrules > 0 && (
+                <span className="cognitive1-teaching">
+                  {overrules} of these overrule Overwatch. It will be shown them as corrections next time.
+                </span>
+              )}
+            </div>
+            <div className="cognitive1-actions">
+              <button type="button" className="secondary-button" disabled={disabled || applying} onClick={() => setMarks({})}>Reset marks</button>
+              <button type="button" className="primary-button" disabled={disabled || applying} onClick={() => void apply()}>
+                {applying ? <RefreshCw size={13} className="spin" /> : <ListChecks size={13} />}
+                <span>{applying ? 'Applying' : `Apply ${pending} change(s)`}</span>
+              </button>
+            </div>
           </div>
-          <div className="cognitive1-actions">
-            <button type="button" className="secondary-button" disabled={disabled || drafts.length === 0} onClick={() => void onRun('brain-draft-approve-all', {}, 'All drafts approved.')}>Approve all</button>
-          </div>
-        </section>
+        )}
+
+        {suggested.length > 0 && (
+          <label className="cognitive1-adopt">
+            <input type="checkbox" checked={adoptTypes} onChange={(event) => setAdoptTypes(event.target.checked)} />
+            <span>File {suggested.length} approval(s) under the type Overwatch suggested before approving</span>
+          </label>
+        )}
+
+        <div className="cognitive1-list">
+          {rows.map((row) => (
+            <DraftCard
+              key={`${row.index}-${row.title}`}
+              row={row}
+              mark={markFor(row, marks)}
+              disabled={disabled || applying}
+              onMark={(mark) => setMark(row, mark)}
+            />
+          ))}
+          {rows.length === 0 && <EmptyText>No drafts are waiting for review.</EmptyText>}
+        </div>
+      </section>
+
+      <section className="cognitive1-card">
+        <SectionHeading eyebrow="Attention" title={`Urgent notes (${urgentNotes.length})`} icon={<Siren size={16} />} />
+        <div className="cognitive1-list compact">
+          {urgentNotes.map((note, index) => (
+            <div className="cognitive1-note" key={`${note.project ?? 'global'}-${index}`}>
+              <strong>{String(note.project ?? 'global')}</strong>
+              <span>{String(note.what ?? '')}</span>
+              {Boolean(note.do) && <small>Do: {String(note.do)}</small>}
+              {Boolean(note.doNot) && <small>Do not: {String(note.doNot)}</small>}
+            </div>
+          ))}
+          {urgentNotes.length === 0 && <EmptyText>No urgent warnings.</EmptyText>}
+        </div>
+        <UrgentNoteForm projects={projects} disabled={disabled} onSave={saveUrgentNote} onClearAll={() => void clearUrgentNotes()} />
+      </section>
+    </div>
+  );
+}
+
+/** One draft, its verdict, and its two marks. Clicking the active mark again clears it back to "leave it". */
+function DraftCard({
+  row,
+  mark,
+  disabled,
+  onMark,
+}: {
+  row: DraftRow;
+  mark: DraftMark;
+  disabled: boolean;
+  onMark: (mark: DraftMark) => void;
+}): ReactNode {
+  const refile = row.suggestedType !== null && row.suggestedType !== row.type;
+  const meta = [
+    row.type,
+    row.project ? row.project : `from ${row.agent}`,
+    row.tags.length > 0 ? row.tags.map((tag) => `#${tag}`).join(' ') : null,
+  ].filter(Boolean).join(' - ');
+
+  return (
+    <article className="cognitive1-draft">
+      <div className="cognitive1-draft-head">
+        <VerdictBadge row={row} />
+        <div className="cognitive1-draft-title">
+          <strong>{row.title}</strong>
+          <small>{meta}</small>
+        </div>
+        <div className="cognitive1-mark-pair" role="group" aria-label={`Decision for ${row.title}`}>
+          <button
+            type="button"
+            className={mark === 'approve' ? 'cognitive1-mark approve active' : 'cognitive1-mark approve'}
+            aria-pressed={mark === 'approve'}
+            disabled={disabled}
+            onClick={() => onMark(mark === 'approve' ? null : 'approve')}
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            className={mark === 'reject' ? 'cognitive1-mark reject active' : 'cognitive1-mark reject'}
+            aria-pressed={mark === 'reject'}
+            disabled={disabled}
+            onClick={() => onMark(mark === 'reject' ? null : 'reject')}
+          >
+            Reject
+          </button>
+        </div>
+      </div>
+      {row.reason && <p className="cognitive1-draft-reason">{row.reason}</p>}
+      {refile && <span className="cognitive1-suggested">Overwatch would file this under {row.suggestedType}</span>}
+    </article>
+  );
+}
+
+function VerdictBadge({ row }: { row: DraftRow }): ReactNode {
+  const verdict = row.verdict ?? 'unclassified';
+  const label = row.verdict === null ? 'No verdict' : row.verdict;
+  const percent = row.confidence === null ? null : `${Math.round(row.confidence * 100)}%`;
+  return (
+    <span
+      className={`cognitive1-verdict ${verdict}`}
+      title={row.verdictSource === 'overwatch' ? 'From the last Overwatch classification' : row.verdictSource === 'annotation' ? "From Overwatch's own note in the draft" : 'Overwatch has not judged this draft'}
+    >
+      {label}{percent && <em>{percent}</em>}
+    </span>
+  );
+}
+
+function VerdictCount({ label, value, tone }: { label: string; value: number; tone: string }): ReactNode {
+  return (
+    <div className={`cognitive1-verdict-count ${tone} ${value === 0 ? 'zero' : ''}`}>
+      <strong>{value}</strong>
+      <small>{label}</small>
+    </div>
+  );
+}
+
+function UrgentNoteForm({ projects, disabled, onSave, onClearAll }: { projects: ProjectRecord[]; disabled: boolean; onSave: (payload: Record<string, unknown>) => Promise<boolean>; onClearAll: () => void }): ReactNode {
+  const [project, setProject] = useState(projects[0]?.name ?? 'global');
+  const [what, setWhat] = useState('');
+  const [action, setAction] = useState('');
+  const [doNot, setDoNot] = useState('');
+  return (
+    <form className="cognitive1-form" onSubmit={(event) => {
+      event.preventDefault();
+      void onSave({ project, what, do: action, do_not: doNot, agent: 'kai-desktop' }).then((saved) => {
+        if (!saved) return;
+        setWhat(''); setAction(''); setDoNot('');
+      });
+    }}>
+      <ProjectPicker label="Project" value={project} projects={projects} onChange={setProject} />
+      <TextField label="What is urgent" value={what} onChange={setWhat} />
+      <TextField label="Required action" value={action} onChange={setAction} />
+      <TextField label="Do not" value={doNot} onChange={setDoNot} />
+      <div className="cognitive1-actions">
+        <button type="submit" className="primary-button" disabled={disabled || !what.trim()}>Set urgent note</button>
+        <button type="button" className="secondary-button danger-button" disabled={disabled} onClick={onClearAll}>Clear all</button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * The Overwatch engine on its own screen: what it is doing, what it has found, and the one place that says honestly
+ * which of its judgements are automatic and which always come back to a person.
+ */
+function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
+  const overwatch = recordOf(data['overwatch-status']);
+  const insights = arrayOf(recordOf(data['overwatch-insights']).insights);
+  const metrics = recordOf(data.metrics);
+  const duplicates = arrayOf(recordOf(data['overwatch-semantic-dupes']).duplicates);
+  const bugRefs = arrayOf(recordOf(data['overwatch-cross-ref-bugs']).bugRefs);
+  // A full cycle returns the audit alongside its classifications, so either action can be the one that produced it.
+  const audited = recordOf(recordOf(data['overwatch-audit']).audit);
+  const audit = Object.keys(audited).length > 0 ? audited : recordOf(recordOf(data['overwatch-run']).audit);
+  const distill = recordOf(data['overwatch-distill-kernels']);
+  const pushed = recordOf(data['overwatch-push-to-memory']);
+  const resolved = recordOf(recordOf(data['overwatch-resolve']).resolved);
+  const knowledgeGaps = stringsOf(audit.knowledgeGaps);
+  const crossPatterns = stringsOf(audit.crossProjectPatterns);
+  const kernels = stringsOf(distill.written);
+
+  const state = overwatch.enabled !== true
+    ? { tone: 'warn', title: 'Overwatch is not configured', detail: 'C1 can still store memory, but nothing judges the drafts it collects. Set a provider, a model and an API key under Settings, C1 Brain, AI Overwatch.' }
+    : overwatch.ready !== true
+      ? { tone: 'warn', title: 'Overwatch has no API key', detail: `It is set to ${String(overwatch.provider ?? 'a provider')} with ${String(overwatch.model ?? 'no model')}, but no key is stored, so drafting and auditing stay switched off.` }
+      : { tone: 'good', title: 'Overwatch is ready', detail: `${String(overwatch.provider ?? '')} - ${String(overwatch.model ?? '')} - ${String(overwatch.baseUrl ?? '')}` };
+
+  return (
+    <div className="cognitive1-page">
+      <div className="cognitive1-metric-strip">
+        <Metric label="Sessions" value={numberText(metrics.totalSessions)} />
+        <Metric label="Bugs" value={numberText(metrics.totalBugs)} />
+        <Metric label="Decisions" value={numberText(metrics.totalDecisions)} />
+        <Metric label="Gotchas" value={numberText(metrics.totalGotchas)} />
+        <Metric label="Patterns" value={numberText(metrics.totalPatterns)} />
+        <Metric label="Overwatch" value={overwatch.ready === true ? 'Ready' : overwatch.enabled === true ? 'No key' : 'Off'} tone={overwatch.ready === true ? 'good' : 'warn'} />
       </div>
 
       <div className="cognitive1-grid two">
         <section className="cognitive1-card">
-          <SectionHeading eyebrow="Attention" title={`Urgent notes (${urgentNotes.length})`} icon={<Siren size={16} />} />
+          <SectionHeading eyebrow="Engine" title="Overwatch status" icon={<Eye size={16} />} />
+          <div className={`cognitive1-status ${state.tone}`}>
+            <strong>{state.title}</strong>
+            <span>{state.detail}</span>
+          </div>
+          <h4 className="cognitive1-subheading">How a verdict is acted on</h4>
+          <ul className="cognitive1-rules">
+            <li><b>keep</b> waits for you to approve it under Review. Only "Let Overwatch clear the queue" below files it without asking.</li>
+            <li><b>noise</b> at or above the auto-reject threshold is deleted from the queue without asking.</li>
+            <li><b>noise</b> below it, and every <b>borderline</b>, stays in the queue for you.</li>
+          </ul>
+          <p className="cognitive1-copy">
+            The auto-reject threshold and the provider settings live under Settings, C1 Brain, AI Overwatch.
+          </p>
+          <LearningNote precedents={overwatch.precedents} />
+        </section>
+
+        <section className="cognitive1-card">
+          <SectionHeading eyebrow="Judgement" title="Run a cycle" icon={<Play size={16} />} />
+          <p className="cognitive1-copy">Each of these makes real model calls and can take a while. Findings appear below and stay until the panel reloads.</p>
+          <div className="cognitive1-actions">
+            <button type="button" className="primary-button" disabled={disabled} onClick={() => void onRun('overwatch-run', {}, 'Overwatch full cycle completed.')}><Play size={13} /><span>Classify drafts and audit</span></button>
+            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-audit', {}, 'Audit completed.')}>Audit the brain</button>
+            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-semantic-dupes', {}, 'Duplicate scan completed.')}>Find duplicates</button>
+            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-cross-ref-bugs', {}, 'Bug cross-reference completed.')}>Cross-reference bugs</button>
+            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Distill kernels</button>
+            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Push kernels to memory</button>
+            <button
+              type="button"
+              className="secondary-button danger-button"
+              disabled={disabled}
+              onClick={() => void confirmDialog({
+                title: 'Delete heuristic noise drafts?',
+                detail: 'Drafts whose titles match C1\'s noise keywords are deleted from the queue immediately, without a model call and without being filed. This cannot be undone.',
+                confirmLabel: 'Delete noise drafts',
+                destructive: true,
+              }).then((confirmed) => {
+                if (!confirmed) return;
+                void onRun('overwatch-heuristic-clean', {}, 'Heuristic noise drafts deleted.');
+              })}
+            >Delete keyword noise…</button>
+          </div>
+        </section>
+      </div>
+
+      <section className="cognitive1-card">
+        <SectionHeading eyebrow="Hands off" title="Let Overwatch clear the queue" icon={<Archive size={16} />} />
+        <p className="cognitive1-copy">
+          One pass that applies its own verdicts: every draft it judges <b>keep</b> is filed into the brain,
+          <b> noise</b> at or above the auto-reject threshold is deleted, and uncertain noise and anything
+          <b> borderline</b> is annotated and left for you. It cannot be previewed first and it cannot be undone, so
+          the marked review is the safer route when you want a say.
+        </p>
+        <div className="cognitive1-actions">
+          <button
+            type="button"
+            className="secondary-button danger-button"
+            disabled={disabled}
+            onClick={() => void confirmDialog({
+              title: 'Let Overwatch resolve the whole queue?',
+              detail: 'It will file everything it judges keep without asking you, delete noise at or above the auto-reject threshold, and leave uncertain noise and borderline drafts annotated for you. This runs model calls and cannot be undone.',
+              confirmLabel: 'Resolve the queue',
+              destructive: true,
+            }).then((confirmed) => {
+              if (!confirmed) return;
+              void onRun('overwatch-resolve', {}, 'Overwatch resolved the draft queue.');
+            })}
+          >Resolve the whole queue…</button>
+        </div>
+        {Object.keys(resolved).length > 0 && (
+          <p className="cognitive1-copy">Last resolve: {String(resolved.approved ?? 0)} filed, {String(resolved.rejected ?? 0)} deleted, {String(resolved.skipped ?? 0)} left.</p>
+        )}
+      </section>
+
+      <div className="cognitive1-grid two">
+        <section className="cognitive1-card">
+          <SectionHeading eyebrow="Findings" title={`Duplicate candidates (${duplicates.length})`} icon={<Archive size={16} />} />
           <div className="cognitive1-list compact">
-            {urgentNotes.map((note, index) => (
-              <div className="cognitive1-note" key={`${note.project ?? 'global'}-${index}`}>
-                <strong>{String(note.project ?? 'global')}</strong>
-                <span>{String(note.what ?? '')}</span>
-                {Boolean(note.do) && <small>Do: {String(note.do)}</small>}
-                {Boolean(note.doNot) && <small>Do not: {String(note.doNot)}</small>}
+            {duplicates.map((pair, index) => (
+              <div className="cognitive1-note" key={`dupe-${index}`}>
+                <strong>{Math.round(Number(pair.score ?? 0) * 100)}% alike</strong>
+                <span>{String(pair.entryA ?? '')}</span>
+                <span>{String(pair.entryB ?? '')}</span>
               </div>
             ))}
-            {urgentNotes.length === 0 && <EmptyText>No urgent warnings.</EmptyText>}
+            {duplicates.length === 0 && <EmptyText>No duplicate scan has run yet, or no candidates were found.</EmptyText>}
           </div>
-          <form className="cognitive1-form" onSubmit={(event) => { event.preventDefault(); void onRun('urgent-set', { project: urgentProject, what: urgentWhat, do: urgentDo, do_not: urgentDoNot, agent }, 'Urgent note saved.').then(() => { setUrgentWhat(''); setUrgentDo(''); setUrgentDoNot(''); }); }}>
-            <ProjectPicker label="Project" value={urgentProject} projects={projects} onChange={setUrgentProject} />
-            <TextField label="What is urgent" value={urgentWhat} onChange={setUrgentWhat} />
-            <TextField label="Required action" value={urgentDo} onChange={setUrgentDo} />
-            <TextField label="Do not" value={urgentDoNot} onChange={setUrgentDoNot} />
-            <div className="cognitive1-actions">
-              <button type="submit" className="primary-button" disabled={disabled || !urgentWhat.trim()}>Set urgent note</button>
-              <button type="button" className="secondary-button danger-button" disabled={disabled} onClick={() => void onRun('urgent-clear', {}, 'All urgent notes cleared.')}>Clear all</button>
-            </div>
-          </form>
         </section>
+
+        <section className="cognitive1-card">
+          <SectionHeading eyebrow="Findings" title={`Bug cross-references (${bugRefs.length})`} icon={<GitBranch size={16} />} />
+          <div className="cognitive1-list compact">
+            {bugRefs.map((ref, index) => (
+              <div className="cognitive1-note" key={`bugref-${index}`}>
+                <strong>{Math.round(Number(ref.confidence ?? 0) * 100)}% confident</strong>
+                <span>{String(ref.bug ?? '')}</span>
+                <span>commit {String(ref.commit ?? '')}</span>
+              </div>
+            ))}
+            {bugRefs.length === 0 && <EmptyText>No bug cross-reference has run yet, or nothing was matched.</EmptyText>}
+          </div>
+        </section>
+      </div>
+
+      {(Object.keys(audit).length > 0 || Object.keys(distill).length > 0 || Object.keys(pushed).length > 0) && (
+        <section className="cognitive1-card">
+          <SectionHeading eyebrow="Findings" title="Audit and distillation" icon={<Activity size={16} />} />
+          <div className="cognitive1-grid two">
+            <div className="cognitive1-list compact">
+              {Object.keys(audit).length > 0 && (
+                <>
+                  <div className="cognitive1-note"><strong>{numberText(audit.duplicatesFound)} duplicate(s)</strong><span>{knowledgeGaps.length} knowledge gap(s), {crossPatterns.length} cross-project pattern(s)</span></div>
+                  {knowledgeGaps.slice(0, 6).map((gap, index) => <div className="cognitive1-note" key={`gap-${index}`}><strong>Gap</strong><span>{String(gap)}</span></div>)}
+                  {crossPatterns.slice(0, 6).map((pattern, index) => <div className="cognitive1-note" key={`pattern-${index}`}><strong>Cross-project</strong><span>{String(pattern)}</span></div>)}
+                </>
+              )}
+            </div>
+            <div className="cognitive1-list compact">
+              {kernels.length > 0 && <div className="cognitive1-note"><strong>Kernels distilled</strong><span>{kernels.join(', ')}</span></div>}
+              {arrayOf(distill.skipped).map((item, index) => <div className="cognitive1-note" key={`skip-${index}`}><strong>Skipped {String(item.project ?? '')}</strong><span>{String(item.reason ?? 'no reason given')}</span></div>)}
+              {arrayOf(pushed.pushed).length > 0 && <div className="cognitive1-note"><strong>Pushed to memory</strong><span>{arrayOf(pushed.pushed).map((item) => String(item.project ?? '')).join(', ')}</span></div>}
+              {arrayOf(pushed.failed).map((item, index) => <div className="cognitive1-note" key={`fail-${index}`}><strong>Push failed {String(item.project ?? '')}</strong><span>{String(item.error ?? '')}</span></div>)}
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className="cognitive1-card">
+        <SectionHeading eyebrow="Recent activity" title={`Overwatch insights (${insights.length})`} icon={<Activity size={16} />} />
+        <p className="cognitive1-copy">C1 keeps the last hundred insights in memory only, so they clear when the daemon restarts.</p>
+        <div className="cognitive1-list compact">
+          {insights.map((insight, index) => (
+            <div className="cognitive1-note" key={`insight-${index}`}>
+              <strong>{String(insight.category ?? 'overwatch')} - {timestampText(insight.timestamp)}</strong>
+              <span>{String(insight.message ?? '')}</span>
+              {Boolean(insight.detail) && <small>{String(insight.detail)}</small>}
+            </div>
+          ))}
+          {insights.length === 0 && <EmptyText>No Overwatch activity has been recorded since the daemon started.</EmptyText>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** Memory: what C1 knows, how to add to it, and how to take things out. */
+function MemoryPanel({ data, projects, disabled, onRun, service }: PanelProps & { service: ServiceState }): ReactNode {
+  const prunePreview = recordOf(data['brain-prune']);
+  const prunableTotal = (Number(prunePreview.handoffs ?? 0)) + (Number(prunePreview.dailyLogs ?? 0)) + (Number(prunePreview.resolvedEntries ?? 0));
+  const [pruneTitle, setPruneTitle] = useState('');
+
+  return (
+    <div className="cognitive1-page">
+      <div className="cognitive1-grid two">
+        <BrainLearnCard projects={projects} disabled={disabled} onRun={onRun} />
 
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Retention" title="Prune and audit" icon={<Trash2 size={16} />} />
@@ -339,46 +803,50 @@ function MaintenancePanel({
           <JsonPreview value={data['brain-prune']} />
         </section>
       </div>
+
+      <BrainPanel service={service} />
     </div>
   );
 }
 
-function BrainLearnCard(props: {
-  title: string;
-  type: BrainEntryType;
-  project: string;
-  agent: string;
-  tags: string;
-  fact: string;
-  fieldName: string;
-  fieldValue: string;
-  projects: ProjectRecord[];
-  disabled: boolean;
-  onTitle: (value: string) => void;
-  onType: (value: BrainEntryType) => void;
-  onProject: (value: string) => void;
-  onAgent: (value: string) => void;
-  onTags: (value: string) => void;
-  onFact: (value: string) => void;
-  onFieldName: (value: string) => void;
-  onFieldValue: (value: string) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}): ReactNode {
+function BrainLearnCard({ projects, disabled, onRun }: { projects: ProjectRecord[]; disabled: boolean; onRun: PanelProps['onRun'] }): ReactNode {
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState<BrainEntryType>('gotchas');
+  const [project, setProject] = useState(projects[0]?.name ?? '');
+  const [agent, setAgent] = useState('kai-desktop');
+  const [tags, setTags] = useState('');
+  const [fact, setFact] = useState('');
+  const [fieldName, setFieldName] = useState('');
+  const [fieldValue, setFieldValue] = useState('');
+
+  async function learn(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!title.trim()) return;
+    const payload: Record<string, unknown> = { title: title.trim(), type, project: project.trim() || 'global', agent, tags, fact };
+    if (fieldName.trim() && fieldValue.trim()) payload[fieldName.trim()] = fieldValue.trim();
+    const result = recordOf(await onRun('brain-learn', payload, 'Memory entry submitted.'));
+    if (result.rejected) {
+      void messageDialog({ title: 'Memory entry rejected', detail: String(result.reason ?? 'The quality gate rejected the entry.') });
+      return;
+    }
+    setTitle(''); setFact(''); setFieldName(''); setFieldValue('');
+  }
+
   return (
     <section className="cognitive1-card">
       <SectionHeading eyebrow="Durable knowledge" title="Learn an entry" icon={<Brain size={16} />} />
-      <form className="cognitive1-form" onSubmit={props.onSubmit}>
-        <TextField label="Title" value={props.title} onChange={props.onTitle} />
+      <form className="cognitive1-form" onSubmit={(event) => void learn(event)}>
+        <TextField label="Title" value={title} onChange={setTitle} />
         <div className="field-grid two">
-          <label className="field"><span>Type</span><select value={props.type} onChange={(event) => props.onType(event.target.value as BrainEntryType)}><option value="bugs">Bug</option><option value="decisions">Decision</option><option value="gotchas">Gotcha</option><option value="patterns">Pattern</option></select></label>
-          <ProjectPicker label="Project" value={props.project} projects={props.projects} onChange={props.onProject} />
-          <TextField label="Agent" value={props.agent} onChange={props.onAgent} />
-          <TextField label="Tags" value={props.tags} onChange={props.onTags} />
-          <TextField label="Optional field name" value={props.fieldName} onChange={props.onFieldName} />
-          <TextField label="Optional field value" value={props.fieldValue} onChange={props.onFieldValue} />
+          <label className="field"><span>Type</span><select value={type} onChange={(event) => setType(event.target.value as BrainEntryType)}><option value="bugs">Bug</option><option value="decisions">Decision</option><option value="gotchas">Gotcha</option><option value="patterns">Pattern</option></select></label>
+          <ProjectPicker label="Project" value={project} projects={projects} onChange={setProject} />
+          <TextField label="Agent" value={agent} onChange={setAgent} />
+          <TextField label="Tags" value={tags} onChange={setTags} />
+          <TextField label="Optional field name" value={fieldName} onChange={setFieldName} />
+          <TextField label="Optional field value" value={fieldValue} onChange={setFieldValue} />
         </div>
-        <label className="field"><span>Knowledge</span><textarea rows={5} value={props.fact} onChange={(event) => props.onFact(event.target.value)} placeholder="What should future agents know?" /></label>
-        <div className="cognitive1-actions"><button type="submit" className="primary-button" disabled={props.disabled || !props.title.trim() || !props.fact.trim()}>Learn entry</button></div>
+        <label className="field"><span>Knowledge</span><textarea rows={5} value={fact} onChange={(event) => setFact(event.target.value)} placeholder="What should future agents know?" /></label>
+        <div className="cognitive1-actions"><button type="submit" className="primary-button" disabled={disabled || !title.trim() || !fact.trim()}>Learn entry</button></div>
       </form>
     </section>
   );
@@ -392,6 +860,9 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
   const tasks = taskList.length ? taskList : arrayOf(status.tasks);
   const reviews = arrayOf(recordOf(data.reviews).reviews);
   const regressions = arrayOf(recordOf(data.regressions).recentRuns);
+  const git = recordOf(data['git-status']);
+  const repos = arrayOf(git.repos);
+  const integrations = arrayOf(recordOf(data['integration-status']).projects);
   const [taskTitle, setTaskTitle] = useState('');
   const [taskProject, setTaskProject] = useState(projects[0]?.name ?? '');
   const [taskAgent, setTaskAgent] = useState('kai-desktop');
@@ -470,6 +941,34 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
           <div className="cognitive1-list compact">{regressions.map((run, index) => <JsonRow key={`regression-${index}`} row={run} />)}{regressions.length === 0 && <EmptyText>No regression runs recorded.</EmptyText>}</div>
         </section>
       </div>
+
+      <div className="cognitive1-grid two">
+        <section className="cognitive1-card">
+          <SectionHeading eyebrow="Repositories" title="Git monitor" icon={<GitBranch size={16} />} />
+          <div className="cognitive1-list compact">
+            {repos.map((repo, index) => (
+              <div className="cognitive1-note" key={`${repo.name ?? index}`}><strong>{String(repo.name ?? 'repository')}</strong><span>{String(repo.branch ?? 'unknown')} - {String(repo.dirty ?? 0)} changed - {String(repo.lastCommit ?? '')}</span></div>
+            ))}
+            {repos.length === 0 && <EmptyText>No monitored repositories.</EmptyText>}
+          </div>
+        </section>
+
+        <section className="cognitive1-card">
+          <SectionHeading eyebrow="Project wiring" title="Cognitive1 integration status" icon={<ShieldCheck size={16} />} />
+          <div className="cognitive1-integration-grid">
+            {integrations.map((item, index) => (
+              <article className="cognitive1-integration-row" key={`${item.name ?? index}`}>
+                <strong>{String(item.name ?? 'project')}</strong>
+                <span className={item.instruct ? 'ok' : 'missing'}>Instruct</span>
+                <span className={item.agentsMd ? 'ok' : 'missing'}>AGENTS</span>
+                <span className={item.gitignoreOk ? 'ok' : 'missing'}>gitignore</span>
+                <span className={item.hooksOk ? 'ok' : 'missing'}>hooks</span>
+              </article>
+            ))}
+            {integrations.length === 0 && <EmptyText>No integration scan results.</EmptyText>}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -537,7 +1036,7 @@ function SkillsPanel({
   disabled,
   onRun,
   onInvoke,
-}: PanelProps & { onInvoke: (operation: Cognitive1Operation, payload?: Record<string, unknown>) => Promise<unknown> }): ReactNode {
+}: PanelProps & { onInvoke: Invoke }): ReactNode {
   const skills = arrayOf(recordOf(data.skills).skills);
   const [selected, setSelected] = useState('');
   const [content, setContent] = useState('');
@@ -570,75 +1069,6 @@ function SkillsPanel({
         <SectionHeading eyebrow={selected || 'Select a skill'} title="Skill content" icon={<BookOpen size={16} />} />
         <textarea value={content} disabled={disabled || !selected} onChange={(event) => setContent(event.target.value)} spellCheck={false} />
         <div className="cognitive1-actions"><button type="button" className="primary-button" disabled={disabled || !selected || !content.trim()} onClick={() => void onRun('skill-save', { name: selected, content }, 'Skill saved.')}>Save skill</button></div>
-      </section>
-    </div>
-  );
-}
-
-function SystemPanel({ data, disabled, onRun }: PanelProps): ReactNode {
-  const metrics = recordOf(data.metrics);
-  const git = recordOf(data['git-status']);
-  const integration = recordOf(data['integration-status']);
-  const overwatch = recordOf(data['overwatch-status']);
-  const insights = arrayOf(recordOf(data['overwatch-insights']).insights);
-  const repos = arrayOf(git.repos);
-  const integrations = arrayOf(integration.projects);
-
-  return (
-    <div className="cognitive1-page">
-      <div className="cognitive1-metric-strip">
-        <Metric label="Sessions" value={numberText(metrics.totalSessions)} />
-        <Metric label="Bugs" value={numberText(metrics.totalBugs)} />
-        <Metric label="Decisions" value={numberText(metrics.totalDecisions)} />
-        <Metric label="Gotchas" value={numberText(metrics.totalGotchas)} />
-        <Metric label="Patterns" value={numberText(metrics.totalPatterns)} />
-        <Metric label="Overwatch" value={overwatch.ready ? 'Ready' : overwatch.enabled ? 'Enabled' : 'Off'} tone={overwatch.ready ? 'good' : 'warn'} />
-      </div>
-
-      <div className="cognitive1-grid two">
-        <section className="cognitive1-card">
-          <SectionHeading eyebrow="Knowledge quality" title="System intelligence" icon={<Activity size={16} />} />
-          <div className="cognitive1-actions">
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-run', {}, 'Overwatch full cycle completed.')}><Play size={13} /><span>Run Overwatch cycle</span></button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-audit', {}, 'Overwatch audit completed.')}>Run audit</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-semantic-dupes', {}, 'Semantic duplicate scan completed.')}>Find duplicates</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-cross-ref-bugs', {}, 'Bug cross-reference completed.')}>Cross-reference bugs</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Distill kernels</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Push kernels</button>
-          </div>
-          <div className="cognitive1-note">
-            <strong>{overwatch.enabled ? 'Overwatch configured' : 'Overwatch disabled'}</strong>
-            <span>{String(overwatch.provider ?? 'No provider')} - {String(overwatch.model ?? 'No model')} - {overwatch.hasKey ? 'API key ready' : 'API key missing'}</span>
-            <span>{String(overwatch.baseUrl ?? 'No base URL configured')}</span>
-          </div>
-          <div className="cognitive1-list compact">{insights.slice(-6).reverse().map((insight, index) => <JsonRow key={`insight-${index}`} row={insight} />)}{insights.length === 0 && <EmptyText>No Overwatch insights recorded.</EmptyText>}</div>
-        </section>
-
-        <section className="cognitive1-card">
-          <SectionHeading eyebrow="Repositories" title="Git monitor" icon={<GitBranch size={16} />} />
-          <div className="cognitive1-list compact">
-            {repos.map((repo, index) => (
-              <div className="cognitive1-note" key={`${repo.name ?? index}`}><strong>{String(repo.name ?? 'repository')}</strong><span>{String(repo.branch ?? 'unknown')} - {String(repo.dirty ?? 0)} changed - {String(repo.lastCommit ?? '')}</span></div>
-            ))}
-            {repos.length === 0 && <EmptyText>No monitored repositories.</EmptyText>}
-          </div>
-        </section>
-      </div>
-
-      <section className="cognitive1-card">
-        <SectionHeading eyebrow="Project wiring" title="Cognitive1 integration status" icon={<ShieldCheck size={16} />} />
-        <div className="cognitive1-integration-grid">
-          {integrations.map((item, index) => (
-            <article className="cognitive1-integration-row" key={`${item.name ?? index}`}>
-              <strong>{String(item.name ?? 'project')}</strong>
-              <span className={item.instruct ? 'ok' : 'missing'}>Instruct</span>
-              <span className={item.agentsMd ? 'ok' : 'missing'}>AGENTS</span>
-              <span className={item.gitignoreOk ? 'ok' : 'missing'}>gitignore</span>
-              <span className={item.hooksOk ? 'ok' : 'missing'}>hooks</span>
-            </article>
-          ))}
-          {integrations.length === 0 && <EmptyText>No integration scan results.</EmptyText>}
-        </div>
       </section>
     </div>
   );
@@ -722,6 +1152,25 @@ function ProjectPicker({ label, value, projects, onChange }: { label: string; va
   );
 }
 
+/**
+ * How many of your corrections Overwatch now judges with. Renders nothing when the connected C1 engine predates
+ * learning, because a missing count is not the same as zero corrections.
+ */
+function LearningNote({ precedents }: { precedents: unknown }): ReactNode {
+  const learned = learnedCorrections(precedents);
+  if (learned === null) return null;
+  return (
+    <div className="cognitive1-learning">
+      <strong>{learned === 0 ? 'Not taught yet' : `Learning from ${learned} correction(s)`}</strong>
+      <span>
+        {learned === 0
+          ? 'When you reject a draft Overwatch wanted to keep, or approve one it called noise, C1 remembers it and shows Overwatch that correction whenever it judges a new draft.'
+          : 'Each is a draft where you overruled its verdict. Overwatch sees the most recent of them every time it judges a new draft, so it stops repeating calls you have already corrected.'}
+      </span>
+    </div>
+  );
+}
+
 function Metric({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' }): ReactNode {
   return <div className={`cognitive1-metric ${tone ?? ''}`}><small>{label}</small><strong>{value}</strong></div>;
 }
@@ -751,6 +1200,11 @@ function arrayOf(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : [];
 }
 
+/** Audit findings and distilled kernels arrive as bare strings, which `arrayOf` would drop for not being objects. */
+function stringsOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
 function recordOf(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -763,6 +1217,12 @@ function compact(value: unknown): string {
 
 function numberText(value: unknown): string {
   return typeof value === 'number' ? new Intl.NumberFormat().format(value) : '0';
+}
+
+function timestampText(value: unknown): string {
+  if (typeof value !== 'string') return 'unknown time';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 function operationLabel(operation: Cognitive1Operation): string {

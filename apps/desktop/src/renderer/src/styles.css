@@ -4042,6 +4042,364 @@ code {
   background: rgba(242, 189, 104, 0.1);
 }
 
+.cognitive1-tabs button .cognitive1-tab-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #081b18;
+  background: var(--mint);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.cognitive1-tabs button.active .cognitive1-tab-count {
+  color: var(--mint);
+  background: #081b18;
+}
+
+.cognitive1-recap-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cognitive1-recap-lines li {
+  position: relative;
+  padding-left: 15px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.cognitive1-recap-lines li::before {
+  position: absolute;
+  top: 5px;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--text-dim);
+  content: "";
+}
+
+.cognitive1-recap-lines li.good::before {
+  background: var(--mint);
+}
+
+.cognitive1-recap-lines li.warn::before {
+  background: var(--amber);
+}
+
+.cognitive1-recap-lines li.warn {
+  color: var(--text);
+}
+
+.cognitive1-verdict-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.cognitive1-verdict-count {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: rgba(8, 18, 31, 0.42);
+}
+
+.cognitive1-verdict-count strong {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.1;
+}
+
+.cognitive1-verdict-count small {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.cognitive1-verdict-count.keep {
+  border-color: rgba(102, 227, 189, 0.35);
+}
+
+.cognitive1-verdict-count.noise {
+  border-color: rgba(242, 125, 135, 0.32);
+}
+
+.cognitive1-verdict-count.borderline {
+  border-color: rgba(242, 189, 104, 0.32);
+}
+
+.cognitive1-verdict-count.zero {
+  opacity: 0.5;
+}
+
+.cognitive1-mark-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid rgba(102, 227, 189, 0.42);
+  border-radius: 7px;
+  background: var(--mint-soft);
+}
+
+.cognitive1-mark-bar strong {
+  display: block;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.cognitive1-mark-bar span {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.cognitive1-adopt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.cognitive1-adopt input {
+  flex: 0 0 auto;
+}
+
+.cognitive1-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: rgba(8, 18, 31, 0.42);
+}
+
+.cognitive1-draft-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.cognitive1-draft-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cognitive1-draft-title strong {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.cognitive1-draft-title small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cognitive1-draft-reason {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.cognitive1-verdict {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 76px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.cognitive1-verdict em {
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.cognitive1-verdict.keep {
+  color: #06251c;
+  background: var(--mint);
+}
+
+.cognitive1-verdict.noise {
+  color: #2b0c10;
+  background: var(--red);
+}
+
+.cognitive1-verdict.borderline {
+  color: #2b1e05;
+  background: var(--amber);
+}
+
+.cognitive1-verdict.unclassified {
+  color: var(--text-muted);
+  background: rgba(132, 147, 168, 0.16);
+}
+
+.cognitive1-mark-pair {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.cognitive1-mark {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.cognitive1-mark:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.cognitive1-mark:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cognitive1-mark.approve.active {
+  border-color: var(--mint);
+  color: #06251c;
+  background: var(--mint);
+}
+
+.cognitive1-mark.reject.active {
+  border-color: var(--red);
+  color: #2b0c10;
+  background: var(--red);
+}
+
+.cognitive1-suggested {
+  align-self: flex-start;
+  padding: 2px 7px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.cognitive1-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-soft);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: rgba(8, 18, 31, 0.42);
+}
+
+.cognitive1-status strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.cognitive1-status span {
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cognitive1-status.good {
+  border-left-color: var(--mint);
+}
+
+.cognitive1-status.warn {
+  border-left-color: var(--amber);
+}
+
+/* Overwatch's learned corrections: same card shape as the status, in lavender so it never reads as a verdict tone. */
+.cognitive1-learning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 11px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--lavender);
+  border-radius: 6px;
+  background: rgba(8, 18, 31, 0.42);
+}
+
+.cognitive1-learning strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.cognitive1-learning span {
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.cognitive1-mark-bar .cognitive1-teaching {
+  display: block;
+  margin-top: 2px;
+  color: var(--lavender);
+}
+
+.cognitive1-subheading {
+  margin: 13px 0 0;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.cognitive1-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 7px 0 0;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.cognitive1-rules b {
+  color: var(--text);
+}
+
 .spin {
   animation: spin 700ms linear infinite;
 }
@@ -6821,8 +7179,22 @@ code {
 :root[data-theme="light"] .cognitive1-task-row,
 :root[data-theme="light"] .cognitive1-note,
 :root[data-theme="light"] .cognitive1-skill-row,
-:root[data-theme="light"] .cognitive1-integration-row {
+:root[data-theme="light"] .cognitive1-integration-row,
+:root[data-theme="light"] .cognitive1-draft,
+:root[data-theme="light"] .cognitive1-verdict-count,
+:root[data-theme="light"] .cognitive1-status,
+:root[data-theme="light"] .cognitive1-learning {
   background: var(--bg-subtle);
+}
+
+:root[data-theme="light"] .cognitive1-tabs button .cognitive1-tab-count {
+  color: #06251c;
+  background: #34c79c;
+}
+
+:root[data-theme="light"] .cognitive1-tabs button.active .cognitive1-tab-count {
+  color: #69dcb9;
+  background: #06251c;
 }
 
 :root[data-theme="light"] .cognitive1-code {
