@@ -18,6 +18,9 @@ const engines = [
     directoryNames: ['cognitive1'],
     environmentVariable: 'KAI_COGNITIVE1_ENGINE_ROOT',
     include: ['out', 'templates', 'agents', 'package.json', 'LICENSE'],
+    // Compiled from source before it is copied. Copying `out/` as found shipped whatever the last
+    // manual build happened to leave there, which could be older than the source beside it.
+    buildScript: 'build',
   },
   {
     name: 'universal-agent-proxy',
@@ -38,6 +41,15 @@ for (const engine of engines) {
   const sourceRoot = await findEngineRoot(engine);
   const destinationRoot = path.join(resourcesRoot, engine.name);
   await mkdir(destinationRoot, { recursive: true });
+
+  if (engine.buildScript) {
+    process.stdout.write(`Building ${engine.packageName} from source in ${sourceRoot}\n`);
+    try {
+      runNpm(['run', engine.buildScript], sourceRoot, { stdio: 'inherit' });
+    } catch {
+      throw new Error(`${engine.packageName} failed to build. Fix the build in ${sourceRoot}, then stage again.`);
+    }
+  }
 
   for (const entry of engine.include) {
     await cp(path.join(sourceRoot, entry), path.join(destinationRoot, entry), {
@@ -152,14 +164,15 @@ async function assertSafeTarget() {
   }
 }
 
-function runNpm(args, cwd) {
+function runNpm(args, cwd, options = {}) {
   const npmCli = process.env.npm_execpath;
   if (npmCli && existsSync(npmCli)) {
-    return execFileSync(process.execPath, [npmCli, ...args], { cwd, encoding: 'utf8' });
+    return execFileSync(process.execPath, [npmCli, ...args], { cwd, encoding: 'utf8', ...options });
   }
   return execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
     cwd,
     encoding: 'utf8',
     shell: process.platform === 'win32',
+    ...options,
   });
 }
