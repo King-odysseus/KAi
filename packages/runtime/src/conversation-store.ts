@@ -9,6 +9,7 @@ import { NodeFileSystem } from './node-file-system';
 
 export class ConversationStore implements ConversationStorePort {
   private readonly fileSystem: NodeFileSystem;
+  private readonly writeTails = new Map<string, Promise<void>>();
 
   constructor(private readonly directory: string, fileSystem: NodeFileSystem = new NodeFileSystem()) {
     this.fileSystem = fileSystem;
@@ -37,12 +38,27 @@ export class ConversationStore implements ConversationStorePort {
   }
 
   async save(conversation: ConversationRecord): Promise<void> {
-    await this.storeFor(conversation.id).save(conversation);
+    await this.serialiseWrite(conversation.id, () => this.storeFor(conversation.id).save(conversation));
   }
 
   async remove(id: string): Promise<void> {
-    const target = storePath(this.directory, id);
-    if (await this.fileSystem.exists(target)) await this.fileSystem.remove(target);
+    await this.serialiseWrite(id, async () => {
+      const target = storePath(this.directory, id);
+      if (await this.fileSystem.exists(target)) await this.fileSystem.remove(target);
+    });
+  }
+
+  private serialiseWrite(id: string, operation: () => Promise<void>): Promise<void> {
+    // Writes for one conversation are ordered by call. Concurrent windows therefore have last-writer-wins
+    // semantics instead of racing atomic file replacements and randomly dropping one update.
+    const previous = this.writeTails.get(id) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const tail = result.then(() => undefined, () => undefined);
+    this.writeTails.set(id, tail);
+    void tail.finally(() => {
+      if (this.writeTails.get(id) === tail) this.writeTails.delete(id);
+    });
+    return result;
   }
 
   private storeFor(id: string): AtomicJsonStore<ConversationRecord> {

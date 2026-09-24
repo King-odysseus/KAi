@@ -1,5 +1,6 @@
 import * as path from 'node:path';
-import { stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
 import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
@@ -11,7 +12,7 @@ import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
-import { cancelConversationRun, closeCompareRuns, closeMemorySessions, importBrainFromDirectory, registerIpc, type IpcContext } from './ipc';
+import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { UniversalProxyClient } from './proxy-client';
 import { DesktopProxyRouting } from './proxy-routing';
@@ -30,6 +31,10 @@ import { WorkflowTemplateStore } from './workflow-templates';
 import { LearningProgressStore } from './learning-progress';
 import { DesktopLearningTutor } from './learning-tutor';
 import { TeachingLibraryStore } from './teaching-library';
+import { EditorSessionManager } from './editor-sessions';
+import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
+import { DesktopWorkflowRunner } from './workflow-runner';
+import { DesktopWindowRegistry } from './desktop-windows';
 
 app.setName('KAI');
 if (process.env.KAI_DESKTOP_USER_DATA) {
@@ -37,21 +42,24 @@ if (process.env.KAI_DESKTOP_USER_DATA) {
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
-let mainWindow: BrowserWindow | null = null;
 let ipcContext: IpcContext | null = null;
 let serviceController: DesktopServiceController | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
 let shutdownPromise: Promise<void> | null = null;
 let desktopShell: DesktopShell | null = null;
+let quitting = false;
+const desktopWindows = new DesktopWindowRegistry();
+const forceClosing = new Set<number>();
 
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+    const window = desktopWindows.focused()?.window;
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
   });
 }
 
@@ -62,19 +70,36 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
-  if ((!serviceController && !mcpRuntime) || shutdownPromise) return;
-  event.preventDefault();
+  quitting = true;
   const activeContext = ipcContext;
-  shutdownPromise = (activeContext ? closeMemorySessions(activeContext) : Promise.resolve())
+  if (!activeContext || shutdownPromise) return;
+  event.preventDefault();
+  shutdownPromise = (async () => {
+    for (const session of desktopWindows.live()) {
+      if (await confirmEditorNavigation(activeContext, session, 'quit KAI')) continue;
+      quitting = false;
+      throw new Error('QUIT_CANCELLED');
+    }
+  })()
+    .then(() => closeMemorySessions(activeContext))
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
+    .then(() => activeContext?.workflows.dispose())
     .then(() => activeContext?.terminal.stopAll())
     .then(() => Promise.all([
       serviceController?.dispose() ?? Promise.resolve(),
       mcpRuntime?.dispose() ?? Promise.resolve(),
     ]))
     .then(() => undefined)
-    .catch((error) => ipcContext?.logger.error('service_error', 'Service shutdown failed', undefined, error))
+    .catch((error) => {
+      if (messageOf(error) !== 'QUIT_CANCELLED') {
+        ipcContext?.logger.error('service_error', 'Service shutdown failed', undefined, error);
+      }
+    })
     .finally(() => {
+      if (!quitting) {
+        shutdownPromise = null;
+        return;
+      }
       serviceController = null;
       mcpRuntime = null;
       desktopShell?.dispose();
@@ -91,6 +116,7 @@ async function startApplication(): Promise<void> {
   const paths = createDesktopPaths(userDataRoot);
   const fileSystem = new NodeFileSystem();
   const logger = new RedactedLogger(new RotatingLogSink(paths.logs));
+  const buildIdentifier = await identifyBuild(app.getVersion());
   const settings = new SettingsService(paths.settings, fileSystem);
   const projects = new ProjectStore(paths.projects, fileSystem);
   const preferences = new ProjectPreferenceStore(paths.preferences, fileSystem);
@@ -143,6 +169,8 @@ async function startApplication(): Promise<void> {
   const workflowTemplates = new WorkflowTemplateStore(path.join(paths.root, 'workflows'));
   const backups = new DesktopConfigBackupStore(paths);
   const learningProgress = new LearningProgressStore(paths.learning, fileSystem);
+  const learningUsage = new LearningUsageStore(paths.learning, fileSystem);
+  const learningBudget = new LearningBudgetGuard();
   const teachingLibrary = new TeachingLibraryStore(path.join(paths.learning, 'teaching'), fileSystem);
   const learningTutor = new DesktopLearningTutor(
     settings,
@@ -169,21 +197,27 @@ async function startApplication(): Promise<void> {
 
   const notifications = new NotificationCenter({
     getSettings: async () => (await settings.load()).notifications,
-    isWindowFocused: () => mainWindow?.isFocused() ?? false,
+    isWindowFocused: (windowId) => {
+      const session = windowId === undefined ? desktopWindows.focused() : desktopWindows.get(windowId);
+      return session?.window.isFocused() ?? false;
+    },
     show: (notification) => desktopShell?.show(notification),
   });
   const shell = new DesktopShell({
     center: notifications,
-    getWindow: () => mainWindow,
+    getWindow: () => desktopWindows.focused()?.window ?? null,
     stopRun: (conversationId) => {
       if (ipcContext) cancelConversationRun(ipcContext, conversationId);
     },
   });
   shell.apply((await settings.load()).notifications);
+  const editorSessions = new EditorSessionManager();
+  let workflowRunner!: DesktopWorkflowRunner;
 
   ipcContext = {
     appName: 'KAI',
     version: app.getVersion(),
+    buildIdentifier,
     paths,
     fileSystem,
     logger,
@@ -209,6 +243,11 @@ async function startApplication(): Promise<void> {
     compareRuns: new Map(),
     memorySessions: new Map(),
     pendingApprovals: new Map(),
+    windows: desktopWindows,
+    editorSessions,
+    learningUsage,
+    learningBudget,
+    workflows: workflowRunner,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
     verification: new VerificationStore(path.join(paths.root, 'verification')),
@@ -218,17 +257,49 @@ async function startApplication(): Promise<void> {
       enabled: app.isPackaged && process.env.KAI_DESKTOP_UPDATES !== 'off',
       backup: async (name) => (await backups.create(name)).name,
       onChange: (state) => {
-        const window = mainWindow;
-        if (window && !window.isDestroyed()) window.webContents.send('app:update-state', state);
+        desktopWindows.broadcast('app:update-state', state);
       },
     }),
-    terminal: new TerminalManager((event) => {
-      const window = mainWindow;
-      if (window && !window.isDestroyed()) window.webContents.send('terminal:event', event);
+    terminal: new TerminalManager((event, ownerWindowId) => {
+      if (ownerWindowId !== null && desktopWindows.send(ownerWindowId, 'terminal:event', event)) return;
+      const fallback = desktopWindows.focused();
+      if (fallback) fallback.window.webContents.send('terminal:event', event);
     }),
     desktopShell: shell,
-    getMainWindow: () => mainWindow,
+    getMainWindow: () => desktopWindows.focused()?.window ?? null,
+    createWindow: () => createMainWindow(null),
   };
+  workflowRunner = new DesktopWorkflowRunner({
+    listConversations: () => conversations.list(),
+    getConversation: (id) => conversations.get(id),
+    saveConversation: (conversation) => conversations.save(conversation),
+    createConversation: async (projectId, firstPrompt) => {
+      const now = new Date().toISOString();
+      const conversation = {
+        schemaVersion: 1 as const,
+        id: `conv_${crypto.randomUUID()}`,
+        projectId,
+        title: firstPrompt.trim().slice(0, 64) || 'Workflow',
+        createdAt: now,
+        updatedAt: now,
+        archived: false,
+        unread: false,
+        activeAgent: null,
+        route: null,
+        autonomy: null,
+        turns: [],
+        events: [],
+      };
+      await conversations.save(conversation);
+      return conversation;
+    },
+    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
+    notifyChanged: (ownerWindowId, run) => {
+      desktopWindows.send(ownerWindowId, 'workflows:changed', run);
+    },
+  });
+  ipcContext.workflows = workflowRunner;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);
@@ -329,12 +400,16 @@ async function importLocalCognitive1Brain(context: IpcContext, kaiRoot: string):
   }
 }
 
-async function createMainWindow(): Promise<void> {
+async function createMainWindow(initialProjectId?: string | null): Promise<void> {
   if (!ipcContext) return;
   const settings = await ipcContext.settings.load();
-  const restored = restoreBounds(settings.windowBounds);
+  const isFirstWindow = desktopWindows.live().length === 0;
+  const restored = isFirstWindow
+    ? restoreBounds(settings.windowBounds)
+    : { width: 1280, height: 820, x: 80 + desktopWindows.live().length * 24, y: 80 + desktopWindows.live().length * 24 };
+  const projectId = initialProjectId === undefined ? settings.activeProjectId : initialProjectId;
 
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     ...restored,
     minWidth: 960,
     minHeight: 640,
@@ -356,34 +431,51 @@ async function createMainWindow(): Promise<void> {
       devTools: !app.isPackaged || process.env.KAI_DESKTOP_DEVTOOLS === 'true',
     },
   });
+  const session = desktopWindows.register(window, projectId);
 
-  if (settings.windowBounds?.maximized) mainWindow.maximize();
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
-  mainWindow.on('close', (event) => {
-    void persistWindowState();
+  if (isFirstWindow && settings.windowBounds?.maximized) window.maximize();
+  window.once('ready-to-show', () => window.show());
+  window.on('close', (event) => {
+    if (forceClosing.has(session.id)) return;
     if (desktopShell?.shouldHideOnClose()) {
       event.preventDefault();
-      mainWindow?.hide();
+      window.hide();
+      return;
     }
+    event.preventDefault();
+    void (async () => {
+      if (ipcContext && !(await confirmEditorNavigation(ipcContext, session, 'close the window'))) return;
+      await persistWindowState(window, isFirstWindow);
+      if (ipcContext) {
+        handleRendererWindowClosed(ipcContext, session.id);
+        const replacement = desktopWindows.live().find((candidate) => candidate.id !== session.id)?.id ?? null;
+        await ipcContext.workflows.ownerWindowClosed(session.id, replacement);
+      }
+      forceClosing.add(session.id);
+      window.close();
+    })();
   });
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  window.on('closed', () => {
+    ipcContext?.editorSessions.removeWindow(session.id);
+    ipcContext?.notifications.removeWindow(session.id);
+    desktopWindows.remove(session.id);
+    forceClosing.delete(session.id);
   });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url }) => {
     openExternalIfSafe(url);
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  window.webContents.on('will-navigate', (event, url) => {
     if (!isApplicationUrl(url)) event.preventDefault();
   });
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+  window.webContents.on('render-process-gone', (_event, details) => {
     ipcContext?.logger.error('renderer_error', 'Renderer process exited', details.reason);
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
-    await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+    await window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
-    await mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    await window.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 }
 
@@ -409,13 +501,29 @@ function installContentSecurityPolicy(): void {
   });
 }
 
-async function persistWindowState(): Promise<void> {
-  if (!ipcContext || !mainWindow) return;
-  const settings = await ipcContext.settings.load();
-  const bounds = mainWindow.isMaximized() ? settings.windowBounds : mainWindow.getBounds();
-  await ipcContext.settings.save({
-    ...settings,
-    windowBounds: bounds ? { ...bounds, maximized: mainWindow.isMaximized() } : null,
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function identifyBuild(version: string): Promise<string> {
+  const supplied = process.env.KAI_BUILD_ID?.trim();
+  if (supplied) return supplied;
+  try {
+    const hash = createHash('sha256').update(await readFile(__filename)).digest('hex').slice(0, 10);
+    return `${version}+${hash}`;
+  } catch {
+    return `${version}+unidentified`;
+  }
+}
+
+async function persistWindowState(window: BrowserWindow, isPrimary: boolean): Promise<void> {
+  if (!ipcContext || !isPrimary) return;
+  await ipcContext.settings.update((settings) => {
+    const bounds = window.isMaximized() ? settings.windowBounds : window.getBounds();
+    return {
+      ...settings,
+      windowBounds: bounds ? { ...bounds, maximized: window.isMaximized() } : null,
+    };
   });
 }
 

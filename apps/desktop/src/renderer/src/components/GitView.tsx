@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, ExternalLink, GitBranch, GitCommitHorizontal, GitPu
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { GitChange, GitOverview, GitSyncAction, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 const POLL_MS = 10_000;
 
@@ -87,10 +88,15 @@ export function GitView({ activeProject }: { activeProject: ProjectRecord | null
         <div className="page-actions">
           <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></button>
           <button type="button" className="secondary-button" disabled={busy !== null || !overview.upstream} title="Fast-forward only; never merges or rewrites history" onClick={() => void sync('pull', 'Pull')}><ArrowDown size={14} /><span>Pull</span></button>
-          <button type="button" className="primary-button" disabled={busy !== null || !overview.branch || (overview.upstream !== null && overview.ahead === 0)} onClick={() => {
+          <button type="button" className="primary-button" disabled={busy !== null || !overview.branch || (overview.upstream !== null && overview.ahead === 0)} onClick={() => void (async () => {
             const target = overview.githubRepository ? `origin (${overview.githubRepository})` : 'the remote';
-            if (window.confirm(`Push "${overview.branch}" to ${target}?\n\nThis sends ${overview.ahead > 0 ? `${overview.ahead} commit${overview.ahead === 1 ? '' : 's'}` : 'the branch'} off this machine. KAI never force-pushes.`)) void sync('push', 'Push');
-          }}><ArrowUp size={14} /><span>{overview.upstream ? 'Push' : 'Publish branch'}</span></button>
+            const confirmed = await confirmDialog({
+              title: 'Push this branch?',
+              detail: `Push "${overview.branch}" to ${target}?\n\nThis sends ${overview.ahead > 0 ? `${overview.ahead} commit${overview.ahead === 1 ? '' : 's'}` : 'the branch'} off this machine. KAI never force-pushes.`,
+              confirmLabel: 'Push branch',
+            });
+            if (confirmed) await sync('push', 'Push');
+          })()}><ArrowUp size={14} /><span>{overview.upstream ? 'Push' : 'Publish branch'}</span></button>
         </div>
       </header>
 
@@ -164,14 +170,19 @@ export function GitView({ activeProject }: { activeProject: ProjectRecord | null
                     <label className="field"><span>Pull request title</span><input value={pr.title} onChange={(event) => setPr({ ...pr, title: event.target.value })} /></label>
                   </div>
                   <label className="field"><span>Description</span><textarea rows={3} value={pr.body} onChange={(event) => setPr({ ...pr, body: event.target.value })} /></label>
-                  <button type="button" className="primary-button align-end" disabled={busy !== null || !pr.title.trim() || overview.ahead > 0} title={overview.ahead > 0 ? 'Push your commits first' : undefined} onClick={() => {
-                    if (!window.confirm(`Open a pull request from "${overview.branch}" on ${overview.githubRepository}? It is visible to everyone with access to the repository.`)) return;
+                  <button type="button" className="primary-button align-end" disabled={busy !== null || !pr.title.trim() || overview.ahead > 0} title={overview.ahead > 0 ? 'Push your commits first' : undefined} onClick={() => void (async () => {
+                    const confirmed = await confirmDialog({
+                      title: 'Open a pull request?',
+                      detail: `Open a pull request from "${overview.branch}" on ${overview.githubRepository}? It is visible to everyone with access to the repository.`,
+                      confirmLabel: 'Open pull request',
+                    });
+                    if (!confirmed) return;
                     void act('Open pull request', async () => {
                       const result = unwrap(await window.kaiDesktop.gitPullRequest(activeProject.id, pr.title.trim(), pr.body));
                       setPr({ title: '', body: '' });
                       window.open(result.url);
                     }, 'Pull request opened.');
-                  }}>Open pull request</button>
+                  })()}>Open pull request</button>
                 </>
               )}
             </>

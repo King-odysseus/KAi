@@ -2,6 +2,7 @@ import { FileText, RotateCcw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { RecoveryRecap, RecoveryRecord, RecoveryResume } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 export function RecoveryPanel({ onResume, onChanged }: { onResume: (resume: RecoveryResume) => Promise<void>; onChanged: () => void }): ReactNode {
   const [records, setRecords] = useState<RecoveryRecord[]>([]);
@@ -56,12 +57,17 @@ export function RecoveryPanel({ onResume, onChanged }: { onResume: (resume: Reco
             <button type="button" className="secondary-button" disabled={working !== null} onClick={() => void act(record.conversationId, async () => {
               setRecap(unwrap(await window.kaiDesktop.interruptedRunRecap(record.conversationId)));
             })}><FileText size={14} /><span>View recap</span></button>
-            <button type="button" className="secondary-button" disabled={working !== null} onClick={() => {
-              if (window.confirm('Discard this interrupted run? Its files stay as they are.')) void act(record.conversationId, async () => {
+            <button type="button" className="secondary-button" disabled={working !== null} onClick={() => void confirmDialog({
+              title: 'Discard interrupted run?',
+              detail: 'Discard this interrupted run? Its files stay as they are.',
+              confirmLabel: 'Discard run',
+              destructive: true,
+            }).then((confirmed) => {
+              if (confirmed) void act(record.conversationId, async () => {
                 unwrap(await window.kaiDesktop.discardInterruptedRun(record.conversationId));
                 if (recap?.conversationId === record.conversationId) setRecap(null);
               });
-            }}><Trash2 size={14} /><span>Discard</span></button>
+            })}><Trash2 size={14} /><span>Discard</span></button>
           </div>
           {recap?.conversationId === record.conversationId && (
             <div className="ops-recap">

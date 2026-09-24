@@ -35,6 +35,7 @@ import {
   type SkillSummary,
   type ServiceTokenCopyResult,
   type ServiceState,
+  type SharedDesktopState,
   type WorkflowTemplate,
   type WorkflowTemplateSaveInput,
   type CodeFormatResult,
@@ -42,6 +43,8 @@ import {
   type LearningEvaluationResult,
   type LearningLessonRecordResult,
   type LearningProgress,
+  type WorkflowRun,
+  type WorkflowStartInput,
   parseIpcInput,
   parseTestCounts,
   revertHunks,
@@ -82,6 +85,10 @@ import type { LearningProgressStore } from './learning-progress';
 import type { DesktopLearningTutor } from './learning-tutor';
 import type { TeachingLibraryStore } from './teaching-library';
 import { recordLearningLesson } from './learning-records';
+import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
+import type { DesktopWorkflowRunner } from './workflow-runner';
+import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWindowSession } from './desktop-windows';
+import type { EditorSessionManager } from './editor-sessions';
 import { formatProjectCode, projectGitFileInfo } from './code-tools';
 import {
   createCheckpoint,
@@ -103,6 +110,7 @@ import {
 export interface IpcContext {
   appName: string;
   version: string;
+  buildIdentifier: string;
   paths: DesktopPaths;
   fileSystem: NodeFileSystem;
   logger: RedactedLogger;
@@ -127,7 +135,17 @@ export interface IpcContext {
   teachingLibrary: TeachingLibraryStore;
   compareRuns: Map<string, ActiveCompareRun>;
   memorySessions: Map<string, ActiveMemorySession>;
-  pendingApprovals: Map<string, { conversationId: string; resolve: (approved: boolean) => void }>;
+  pendingApprovals: Map<string, {
+    conversationId: string;
+    ownerWindowId: number | null;
+    event: Extract<AgentRunEvent['event'], { type: 'approval.request' }>;
+    resolve: (approved: boolean) => void;
+  }>;
+  windows: DesktopWindowRegistry;
+  editorSessions: EditorSessionManager;
+  learningUsage: LearningUsageStore;
+  learningBudget: LearningBudgetGuard;
+  workflows: DesktopWorkflowRunner;
   notifications: NotificationCenter;
   recovery: RecoveryStore;
   verification: VerificationStore;
@@ -135,6 +153,13 @@ export interface IpcContext {
   updater: UpdateController;
   desktopShell: DesktopShell;
   getMainWindow: () => BrowserWindow | null;
+  createWindow: () => Promise<void>;
+}
+
+interface IpcRequestContext {
+  event: Electron.IpcMainInvokeEvent;
+  session: DesktopWindowSession | null;
+  ownerWindowId: number | null;
 }
 
 interface ActiveMemorySession {
@@ -155,20 +180,23 @@ export interface ActiveCompareRun {
 }
 
 export function registerIpc(context: IpcContext): void {
-  handle(context, 'app:get-bootstrap', async () => createBootstrap(context));
-  handle(context, 'projects:choose', async () => chooseProject(context));
-  handle(context, 'projects:open', async ({ id }) => openProject(context, id));
-  handle(context, 'projects:remove', async ({ id }) => removeProject(context, id));
+  handle(context, 'app:get-bootstrap', async (_input, request) => createBootstrap(context, request.session));
+  handle(context, 'projects:choose', async (_input, request) => chooseProject(context, request.session));
+  handle(context, 'projects:open', async ({ id }, request) => openProject(context, id, request.session));
+  handle(context, 'projects:remove', async ({ id }, request) => removeProject(context, id, request.session));
   handle(context, 'settings:get', async () => context.settings.load());
   handle(context, 'settings:update', async (update) => {
-    const settings = await context.settings.load();
-    const merged = mergeSettingsUpdate(settings, update);
-    const proxyChanged = update.proxy !== undefined && JSON.stringify(merged.proxy) !== JSON.stringify(settings.proxy);
-    const cognitive1Changed = update.cognitive1 !== undefined && JSON.stringify(merged.cognitive1) !== JSON.stringify(settings.cognitive1);
+    const snapshot: { previous: AppSettings | null } = { previous: null };
+    const merged = await context.settings.update((settings) => {
+      snapshot.previous = settings;
+      return mergeSettingsUpdate(settings, update);
+    });
+    if (!snapshot.previous) throw new Error('Settings could not be read.');
+    const proxyChanged = update.proxy !== undefined && JSON.stringify(merged.proxy) !== JSON.stringify(snapshot.previous.proxy);
+    const cognitive1Changed = update.cognitive1 !== undefined && JSON.stringify(merged.cognitive1) !== JSON.stringify(snapshot.previous.cognitive1);
     const services = await context.services.status();
     const proxyWasReady = services.some((service) => service.kind === 'universalProxy' && service.status === 'ready');
     const cognitive1WasReady = services.some((service) => service.kind === 'cognitive1' && service.status === 'ready');
-    await context.settings.save(merged);
     context.desktopShell.apply(merged.notifications);
     context.mcp.invalidate();
     if (proxyChanged && proxyWasReady) {
@@ -180,13 +208,30 @@ export function registerIpc(context: IpcContext): void {
       else await context.services.stop('cognitive1');
     }
     await context.services.syncFromSettings(merged);
+    await broadcastSharedState(context);
     return context.settings.load();
   });
   handle(context, 'services:status', async () => context.services.status());
-  handle(context, 'services:start', async ({ kind }) => context.services.start(kind));
-  handle(context, 'services:stop', async ({ kind }) => context.services.stop(kind));
-  handle(context, 'services:restart', async ({ kind }) => context.services.restart(kind));
-  handle(context, 'services:rotate-token', async ({ kind }) => context.services.rotateToken(kind));
+  handle(context, 'services:start', async ({ kind }) => {
+    const services = await context.services.start(kind);
+    await broadcastSharedState(context);
+    return services;
+  });
+  handle(context, 'services:stop', async ({ kind }) => {
+    const services = await context.services.stop(kind);
+    await broadcastSharedState(context);
+    return services;
+  });
+  handle(context, 'services:restart', async ({ kind }) => {
+    const services = await context.services.restart(kind);
+    await broadcastSharedState(context);
+    return services;
+  });
+  handle(context, 'services:rotate-token', async ({ kind }) => {
+    const services = await context.services.rotateToken(kind);
+    await broadcastSharedState(context);
+    return services;
+  });
   handle(context, 'services:copy-token', async ({ kind }) => {
     const access = await context.services.loopbackAccess(kind);
     clipboard.writeText(access.token);
@@ -211,7 +256,11 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'files:search', async ({ projectId, query }) => searchProjectFiles(context, projectId, query));
   handle(context, 'context:git-diff', async ({ projectId }) => gitDiffForProject(context, projectId));
   handle(context, 'attachments:save', async ({ name, dataUrl }) => saveAttachment(context, name, dataUrl));
-  handle(context, 'workflows:list-templates', async () => context.workflowTemplates.list());
+  handle(context, 'workflows:list-templates', async ({ projectId }) => context.workflowTemplates.list(projectId));
+  handle(context, 'workflows:list-runs', async ({ projectId }) => context.workflows.list(projectId));
+  handle(context, 'workflows:start', async (input, request) => context.workflows.start(input, ownerWindowId(context, request)));
+  handle(context, 'workflows:stop', async ({ workflowId }) => context.workflows.stop(workflowId));
+  handle(context, 'workflows:resume', async ({ workflowId }, request) => context.workflows.resume(workflowId, ownerWindowId(context, request)));
   handle(context, 'workflows:save-template', async (template) => context.workflowTemplates.save(template));
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
   handle(context, 'proxy:overview', async () => context.proxy.overview());
@@ -227,8 +276,11 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'proxy:replay', async ({ id }) => context.proxy.replay(id));
   handle(context, 'proxy:models', async () => context.proxy.models());
   handle(context, 'proxy:routes', async () => context.proxyRouting.routes());
-  handle(context, 'proxy:route-action', async ({ agent, action, routeUntil }) =>
-    context.proxyRouting.action(agent, action, routeUntil));
+  handle(context, 'proxy:route-action', async ({ agent, action, routeUntil }) => {
+    const result = await context.proxyRouting.action(agent, action, routeUntil);
+    await broadcastSharedState(context);
+    return result;
+  });
   handle(context, 'proxy:export-config', async () => exportProxyConfig(context));
   handle(context, 'proxy:import-config', async () => importProxyConfig(context));
   handle(context, 'proxy:copy-env', async ({ agent }) => copyProxyEnv(context, agent ?? 'claude'));
@@ -255,17 +307,21 @@ export function registerIpc(context: IpcContext): void {
     await context.credentials.set(id, value);
     context.mcp.invalidate();
     await restartCognitive1ForOverwatchCredential(context, id);
-    return credentialStatus(context);
+    const status = await credentialStatus(context);
+    await broadcastSharedState(context);
+    return status;
   });
   handle(context, 'credentials:clear', async ({ id }) => {
     await context.credentials.delete(id);
     context.mcp.invalidate();
     await restartCognitive1ForOverwatchCredential(context, id);
-    return credentialStatus(context);
+    const status = await credentialStatus(context);
+    await broadcastSharedState(context);
+    return status;
   });
   handle(context, 'conversations:list', async () => context.conversations.list());
   handle(context, 'conversations:get', async ({ id }) => context.conversations.get(id));
-  handle(context, 'conversations:create', async ({ projectId, firstPrompt }) => {
+  handle(context, 'conversations:create', async ({ projectId, firstPrompt }, request) => {
     const now = new Date().toISOString();
     const conversation: ConversationRecord = {
       schemaVersion: 1,
@@ -283,11 +339,13 @@ export function registerIpc(context: IpcContext): void {
       events: [],
     };
     await context.conversations.save(conversation);
+    if (request.session) request.session.conversationId = conversation.id;
     return conversation;
   });
   handle(context, 'conversations:compact', async ({ conversationId }) => compactConversation(context, conversationId));
-  handle(context, 'conversations:save', async (conversation) => {
+  handle(context, 'conversations:save', async (conversation, request) => {
     await context.conversations.save(conversation);
+    if (request.session) request.session.conversationId = conversation.id;
     return conversation;
   });
   handle(context, 'conversations:delete', async ({ id }) => {
@@ -310,6 +368,7 @@ export function registerIpc(context: IpcContext): void {
     await context.backups.restore(id);
     const settings = await context.settings.load();
     await context.services.syncFromSettings(settings);
+    await broadcastSharedState(context);
     return { restored: true };
   });
   handle(context, 'backups:delete', async ({ id }) => {
@@ -328,20 +387,33 @@ export function registerIpc(context: IpcContext): void {
       ?.text ?? '';
     return (await buildConversationContext(context, project.path, project.name, conversation, prompt)).preview;
   });
-  handle(context, 'agents:run', async (request) => runConversationAgent(context, request));
+  handle(context, 'agents:run', async (request, ipcRequest) => runConversationAgent(context, request, ownerWindowId(context, ipcRequest)));
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
   handle(context, 'agents:sign-in', async ({ agent }) => context.agents.signIn(agent));
-  handle(context, 'agents:approval-response', async ({ conversationId, requestId, approved }) => {
+  handle(context, 'agents:approval-response', async ({ conversationId, requestId, approved }, request) => {
     const pending = context.pendingApprovals.get(requestId);
     if (!pending || pending.conversationId !== conversationId) return false;
+    if (pending.ownerWindowId !== null && pending.ownerWindowId !== request.ownerWindowId) return false;
     context.pendingApprovals.delete(requestId);
     pending.resolve(approved);
     return true;
   });
   handle(context, 'usage:summary', async ({ conversationId }) =>
-    summarizeUsage(await context.conversations.list(), (await context.settings.load()).usageBudget, new Date(), conversationId));
-  handle(context, 'ui:report-view', async ({ view, conversationId }) => {
-    context.notifications.setViewing(view, conversationId);
+    summarizeUsage(
+      await context.conversations.list(),
+      (await context.settings.load()).usageBudget,
+      new Date(),
+      conversationId,
+      await context.learningUsage.runs(),
+    ));
+  handle(context, 'ui:report-view', async ({ view, conversationId }, request) => {
+    const owner = ownerWindowId(context, request);
+    const session = context.windows.get(owner);
+    if (session) {
+      session.view = view;
+      session.conversationId = conversationId;
+    }
+    context.notifications.setViewing(owner, view, conversationId);
     return true;
   });
   handle(context, 'files:tree', async ({ projectId }) => listProjectFiles((await resolveProject(context, projectId, true)).path));
@@ -356,19 +428,59 @@ export function registerIpc(context: IpcContext): void {
   });
   handle(context, 'files:changed', async ({ projectId, path: filePath, expectedHash }) =>
     fileChangedOnDisk((await resolveProject(context, projectId, true)).path, filePath, expectedHash));
+  handle(context, 'editor:update-document', async (document, request) => {
+    if (request.ownerWindowId !== null) context.editorSessions.update(request.ownerWindowId, document);
+    return true;
+  });
+  handle(context, 'editor:remove-document', async ({ projectId, path: filePath }, request) => {
+    if (request.ownerWindowId !== null) context.editorSessions.remove(request.ownerWindowId, projectId, filePath);
+    return true;
+  });
+  handle(context, 'editor:update-window', async (snapshot, request) => {
+    if (request.ownerWindowId !== null) context.editorSessions.updateWindow(request.ownerWindowId, snapshot);
+    return true;
+  });
   handle(context, 'learning:progress', async ({ projectId }): Promise<LearningProgress> => {
     await resolveProject(context, projectId, true);
     return context.learningProgress.get(projectId);
   });
+  handle(context, 'learning:readiness', async () => context.learningTutor.readiness());
   handle(context, 'learning:update-preferences', async (input): Promise<LearningProgress> => {
     await resolveProject(context, input.projectId, true);
     return context.learningProgress.updatePreferences(input);
   });
   handle(context, 'learning:evaluate', async (request): Promise<LearningEvaluationResult> => {
     await resolveProject(context, request.projectId, true);
-    const response = await context.learningTutor.evaluate(request);
-    const progress = await context.learningProgress.recordEvaluation(request, response);
-    return { response, progress };
+    const settings = await context.settings.load();
+    const readiness = await context.learningTutor.readiness();
+    if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
+    const estimatedInputTokens = Math.ceil((request.code.length + (request.selectedText?.length ?? 0) + (request.question?.length ?? 0)) / 4) + 1_500;
+    const reservation = context.learningBudget.reserve({
+      projectId: request.projectId,
+      provider: readiness.provider,
+      model: readiness.model,
+      conversations: await context.conversations.list(),
+      budget: settings.usageBudget,
+      estimatedInputTokens,
+      estimatedOutputTokens: 6_000,
+      externalRuns: await context.learningUsage.runs(),
+    });
+    if (reservation.blockedReason) {
+      throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
+    }
+    try {
+      const detailed = await context.learningTutor.evaluateDetailed(request);
+      await context.learningUsage.record({
+        projectId: request.projectId,
+        provider: readiness.provider,
+        model: readiness.model,
+        usage: detailed.usage,
+      });
+      const progress = await context.learningProgress.recordEvaluation(request, detailed.response);
+      return { response: detailed.response, progress, usage: detailed.usage };
+    } finally {
+      context.learningBudget.release(reservation.id);
+    }
   });
   handle(context, 'learning:record-lesson', async (input): Promise<LearningLessonRecordResult> => {
     const project = await resolveProject(context, input.projectId, true);
@@ -378,7 +490,37 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'learning:save-teaching-entry', async (input) => context.teachingLibrary.save(input));
   handle(context, 'learning:delete-teaching-entry', async ({ kind, id }) => context.teachingLibrary.remove(kind, id));
   handle(context, 'learning:reset-teaching-entry', async ({ kind, id }) => context.teachingLibrary.reset(kind, id));
-  handle(context, 'learning:generate-teaching-draft', async (input) => context.learningTutor.generateTeachingDraft(input));
+  handle(context, 'learning:generate-teaching-draft', async (input, request) => {
+    const settings = await context.settings.load();
+    const learningProjectId = request.session?.projectId ?? settings.activeProjectId ?? 'learning-library';
+    const readiness = await context.learningTutor.readiness();
+    if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
+    const reservation = context.learningBudget.reserve({
+      projectId: learningProjectId,
+      provider: readiness.provider,
+      model: readiness.model,
+      conversations: await context.conversations.list(),
+      budget: settings.usageBudget,
+      estimatedInputTokens: Math.ceil((input.topic.length + (input.instructions?.length ?? 0) + (input.baseContent?.length ?? 0)) / 4) + 2_000,
+      estimatedOutputTokens: 6_000,
+      externalRuns: await context.learningUsage.runs(),
+    });
+    if (reservation.blockedReason) {
+      throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
+    }
+    try {
+      const detailed = await context.learningTutor.generateTeachingDraftDetailed(input);
+      await context.learningUsage.record({
+        projectId: learningProjectId,
+        provider: readiness.provider,
+        model: readiness.model,
+        usage: detailed.usage,
+      });
+      return detailed.draft;
+    } finally {
+      context.learningBudget.release(reservation.id);
+    }
+  });
   handle(context, 'code:format', async ({ projectId, filePath, content }): Promise<CodeFormatResult> => {
     const project = await resolveProject(context, projectId, true);
     return formatProjectCode(project.path, filePath, content);
@@ -398,8 +540,8 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'updates:download', async () => context.updater.download());
   // Installing restarts the app; the controller backs up the configuration first and refuses if that fails.
   handle(context, 'updates:install', async () => context.updater.installAndRestart());
-  handle(context, 'terminal:run', async ({ projectId, command, shell }) => ({
-    id: context.terminal.start(projectId, await projectPath(projectId), command, shell),
+  handle(context, 'terminal:run', async ({ projectId, command, shell }, request) => ({
+    id: context.terminal.start(projectId, await projectPath(projectId), command, shell, ownerWindowId(context, request)),
   }));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
   handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
@@ -458,7 +600,13 @@ export function registerIpc(context: IpcContext): void {
   });
   handle(context, 'diagnostics:data-locations', async () => dataLocations(context.paths));
   handle(context, 'diagnostics:recent-logs', async ({ count }) => context.logger.recent(count));
-  handle(context, 'window:state', async () => ({ maximized: context.getMainWindow()?.isMaximized() ?? false }));
+  handle(context, 'window:state', async (_input, request) => ({
+    maximized: request.session?.window.isMaximized() ?? false,
+  }));
+  handle(context, 'window:new', async () => {
+    await context.createWindow();
+    return true;
+  });
 }
 
 async function restartCognitive1ForOverwatchCredential(context: IpcContext, credentialId: string): Promise<void> {
@@ -470,9 +618,10 @@ async function restartCognitive1ForOverwatchCredential(context: IpcContext, cred
   if (cognitive1Ready) await context.services.restart('cognitive1', settings);
 }
 
-async function runConversationAgent(
+export async function runConversationAgent(
   context: IpcContext,
   request: AgentRunRequest,
+  ownerWindowId: number | null = null,
 ): Promise<AgentRunResult> {
   const conversation = await context.conversations.get(request.conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
@@ -495,7 +644,13 @@ async function runConversationAgent(
   const executionMode = request.execution ?? 'cli';
   if (executionMode === 'api') {
     // Block mode refuses before anything is saved or sent, so the run never reaches the provider.
-    const usage = summarizeUsage(await context.conversations.list(), settings.usageBudget, new Date(), conversation.id);
+    const usage = summarizeUsage(
+      await context.conversations.list(),
+      settings.usageBudget,
+      new Date(),
+      conversation.id,
+      await context.learningUsage.runs(),
+    );
     if (usage.blockedReason) {
       context.logger.info('internal', 'Direct API run blocked by usage budget', usage.blockedReason);
       return { conversation, status: 'failed', output: '', error: `${usage.blockedReason} Raise the limit or switch to warn mode in Settings to continue.` };
@@ -580,15 +735,28 @@ async function runConversationAgent(
     const activity = describeEvent(event);
     if (activity) void context.recovery.touch(conversation.id, activity).catch(() => undefined);
     if (event.type === 'approval.request') {
-      void context.notifications.notifyApproval(conversation.id, conversation.title, event.title);
+      void context.notifications.notifyApproval(conversation.id, conversation.title, event.title, ownerWindowId ?? undefined);
     }
-    const window = context.getMainWindow();
-    if (!window || window.isDestroyed()) return;
-    window.webContents.send('agents:event', { conversationId: conversation.id, event } satisfies AgentRunEvent);
+    const payload = { conversationId: conversation.id, event } satisfies AgentRunEvent;
+    if (ownerWindowId !== null && context.windows.send(ownerWindowId, 'agents:event', payload)) return;
+    context.windows.broadcast('agents:event', payload);
   };
   const approvals: DirectApiApprovalPort = {
     request: (approval) => new Promise<boolean>((resolve) => {
-      context.pendingApprovals.set(approval.requestId, { conversationId: conversation.id, resolve });
+      const event: Extract<AgentRunEvent['event'], { type: 'approval.request' }> = {
+        schemaVersion: 1,
+        id: `evt_${crypto.randomUUID()}`,
+        taskId: conversation.id,
+        timestamp: new Date().toISOString(),
+        agent: request.agent,
+        type: 'approval.request',
+        requestId: approval.requestId,
+        title: approval.title,
+        detail: approval.detail,
+        risk: approval.risk,
+        ...(approval.tool ? { tool: approval.tool } : {}),
+      };
+      context.pendingApprovals.set(approval.requestId, { conversationId: conversation.id, ownerWindowId, event, resolve });
     }),
   };
   const contextText = executionMode === 'api'
@@ -710,9 +878,16 @@ async function runConversationAgent(
     conversation.title,
     cancelled ? 'cancelled' : execution.status,
     execution.error,
+    ownerWindowId ?? undefined,
   );
   if (executionMode === 'api') {
-    const usage = summarizeUsage(await context.conversations.list(), settings.usageBudget, new Date(), conversation.id);
+    const usage = summarizeUsage(
+      await context.conversations.list(),
+      settings.usageBudget,
+      new Date(),
+      conversation.id,
+      await context.learningUsage.runs(),
+    );
     void context.notifications.notifyBudget(conversation.id, usage.limits);
   }
 
@@ -1514,31 +1689,61 @@ function resolvePendingApprovals(context: IpcContext, conversationId: string, ap
   }
 }
 
-async function createBootstrap(context: IpcContext): Promise<BootstrapPayload> {
+async function broadcastSharedState(context: IpcContext): Promise<void> {
+  const [settings, projects, services, credentials] = await Promise.all([
+    context.settings.load(),
+    context.projects.list(),
+    context.services.status(),
+    credentialStatus(context),
+  ]);
+  context.windows.broadcast('app:shared-state', {
+    settings,
+    projects,
+    services,
+    credentials,
+  } satisfies SharedDesktopState);
+}
+
+async function createBootstrap(
+  context: IpcContext,
+  session?: DesktopWindowSession | null,
+): Promise<BootstrapPayload> {
   const [settings, projects, services] = await Promise.all([
     context.settings.load(),
     context.projects.list(),
     context.services.status(),
   ]);
+  const requestedProjectId = projectSelectionForWindow(session, settings.activeProjectId);
+  const activeProjectId = projects.some((project) => project.id === requestedProjectId)
+    ? requestedProjectId
+    : null;
+  if (session && session.projectId !== activeProjectId) session.projectId = activeProjectId;
 
   return {
     appName: context.appName,
     version: context.version,
     platform: process.platform,
     projects,
-    activeProjectId: settings.activeProjectId,
+    activeProjectId,
+    activeConversationId: session?.conversationId ?? null,
+    buildIdentifier: context.buildIdentifier,
+    editor: activeProjectId ? context.editorSessions.snapshot(session?.id ?? 0, activeProjectId) : null,
     settings,
     services,
     dataLocations: dataLocations(context.paths),
   };
 }
 
-async function chooseProject(context: IpcContext): Promise<ProjectRecord | null> {
+async function chooseProject(
+  context: IpcContext,
+  session: DesktopWindowSession | null,
+): Promise<ProjectRecord | null> {
+  if (session && !(await confirmEditorNavigation(context, session, 'open another project'))) return null;
   const options: OpenDialogOptions = {
     title: 'Open a project',
     properties: ['openDirectory', 'createDirectory'],
   };
-  const mainWindow = context.getMainWindow();
+  const mainWindow = session?.window ?? context.getMainWindow();
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
   if (result.canceled || !result.filePaths[0]) return null;
 
@@ -1553,40 +1758,119 @@ async function chooseProject(context: IpcContext): Promise<ProjectRecord | null>
     lastOpenedAt: now,
   };
   await context.projects.upsert(project);
-  const settings = await context.settings.load();
-  await context.settings.save({
+  await context.settings.update((settings) => ({
     ...settings,
     activeProjectId: project.id,
     projectOrder: [project.id, ...settings.projectOrder.filter((id) => id !== project.id)],
-  });
+  }));
+  if (session) {
+    session.projectId = project.id;
+    session.conversationId = null;
+  }
+  await broadcastSharedState(context);
   context.logger.info('internal', 'Project opened', project.name);
   return project;
 }
 
-async function openProject(context: IpcContext, id: string): Promise<BootstrapPayload> {
+async function openProject(
+  context: IpcContext,
+  id: string,
+  session: DesktopWindowSession | null,
+): Promise<BootstrapPayload> {
   const project = (await context.projects.list()).find((item) => item.id === id);
   if (!project) throw new NotFoundError('Project not found.');
+  if (session?.projectId !== id && session && !(await confirmEditorNavigation(context, session, 'switch projects'))) {
+    return createBootstrap(context, session);
+  }
   project.lastOpenedAt = new Date().toISOString();
   await context.projects.upsert(project);
-  const settings = await context.settings.load();
-  await context.settings.save({
+  await context.settings.update((settings) => ({
     ...settings,
     activeProjectId: id,
     projectOrder: [id, ...settings.projectOrder.filter((projectId) => projectId !== id)],
-  });
-  return createBootstrap(context);
+  }));
+  if (session) {
+    session.projectId = id;
+    session.conversationId = null;
+  }
+  await broadcastSharedState(context);
+  return createBootstrap(context, session);
 }
 
-async function removeProject(context: IpcContext, id: string): Promise<BootstrapPayload> {
+async function removeProject(
+  context: IpcContext,
+  id: string,
+  session: DesktopWindowSession | null,
+): Promise<BootstrapPayload> {
+  if (session?.projectId === id && !(await confirmEditorNavigation(context, session, 'remove this project'))) {
+    return createBootstrap(context, session);
+  }
   await context.projects.remove(id);
   await context.preferences.remove(id);
-  const settings = await context.settings.load();
-  await context.settings.save({
+  await context.settings.update((settings) => ({
     ...settings,
     activeProjectId: settings.activeProjectId === id ? null : settings.activeProjectId,
     projectOrder: settings.projectOrder.filter((projectId) => projectId !== id),
+  }));
+  if (session?.projectId === id) {
+    session.projectId = null;
+    session.conversationId = null;
+  }
+  await broadcastSharedState(context);
+  return createBootstrap(context, session);
+}
+
+export async function confirmEditorNavigation(
+  context: IpcContext,
+  session: DesktopWindowSession,
+  purpose: string,
+): Promise<boolean> {
+  const dirty = context.editorSessions.dirty(session.id);
+  if (dirty.length === 0) return true;
+  const detail = dirty.slice(0, 8).map((document) => document.path).join('\n');
+  const result = await dialog.showMessageBox(session.window, {
+    type: 'warning',
+    title: 'Unsaved changes',
+    message: `${dirty.length} file${dirty.length === 1 ? '' : 's'} have unsaved changes.`,
+    detail: `${detail}${dirty.length > 8 ? `\n...and ${dirty.length - 8} more` : ''}\n\nSave them before KAI continues to ${purpose}?`,
+    buttons: ['Save and continue', 'Discard changes', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
   });
-  return createBootstrap(context);
+  if (result.response === 2) return false;
+  if (result.response === 1) return true;
+  const projects = await context.projects.list();
+  const roots = new Map(projects.map((project) => [project.id, project.path]));
+  const saved = await context.editorSessions.saveDirty(session.id, roots);
+  if (saved.conflict) {
+    await dialog.showMessageBox(session.window, {
+      type: 'error',
+      title: 'Save failed',
+      message: 'KAI could not save every file, so the current context was kept.',
+      detail: saved.conflict,
+    });
+    return false;
+  }
+  if (saved.saved.length > 0) context.windows.send(session.id, 'editor:documents-saved', saved.saved);
+  return true;
+}
+
+/** Transfer approvals to another window when possible; otherwise release the waiting agent. */
+export function handleRendererWindowClosed(context: IpcContext, windowId: number): void {
+  const replacement = context.windows.live().find((session) => session.id !== windowId) ?? null;
+  for (const pending of context.pendingApprovals.values()) {
+    if (pending.ownerWindowId !== windowId) continue;
+    if (replacement) {
+      pending.ownerWindowId = replacement.id;
+      context.windows.send(replacement.id, 'agents:event', {
+        conversationId: pending.conversationId,
+        event: pending.event,
+      } satisfies AgentRunEvent);
+    } else {
+      pending.resolve(false);
+    }
+  }
 }
 
 async function credentialStatus(context: IpcContext): Promise<CredentialStatus> {
@@ -1596,19 +1880,31 @@ async function credentialStatus(context: IpcContext): Promise<CredentialStatus> 
 function handle<TChannel extends IpcChannel>(
   context: IpcContext,
   channel: TChannel,
-  handler: (input: ReturnType<typeof parseIpcInput<TChannel>>) => Promise<unknown>,
+  handler: (
+    input: ReturnType<typeof parseIpcInput<TChannel>>,
+    request: IpcRequestContext,
+  ) => Promise<unknown>,
 ): void {
   ipcMain.handle(channel, async (event, rawInput: unknown): Promise<IpcResponse<unknown>> => {
     try {
       assertTrustedSender(event.senderFrame?.url ?? '');
       const input = parseIpcInput(channel, rawInput);
-      const data = await handler(input);
+      const session = context.windows.fromWebContentsId(event.sender.id);
+      const data = await handler(input, {
+        event,
+        session,
+        ownerWindowId: session?.id ?? null,
+      });
       return { ok: true, data };
     } catch (error) {
       context.logger.error('ipc_error', `IPC ${channel} failed`, undefined, error);
       return failureFor(error);
     }
   });
+}
+
+function ownerWindowId(context: IpcContext, request: IpcRequestContext): number {
+  return request.ownerWindowId ?? request.event.sender.id ?? context.windows.focused()?.id ?? 0;
 }
 
 function assertTrustedSender(url: string): void {

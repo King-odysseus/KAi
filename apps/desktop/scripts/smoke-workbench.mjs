@@ -11,7 +11,9 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke-workbench');
 const userData = await mkdtemp(path.join(tmpdir(), 'kai-workbench-smoke-'));
 const projectPath = path.join(userData, 'sample-project');
+const secondProjectPath = path.join(userData, 'second-project');
 const electronExecutable = createRequire(import.meta.url)('electron');
+const packagedExecutable = process.env.KAI_PACKAGED_EXECUTABLE;
 const { ELECTRON_RUN_AS_NODE: _runAsNode, ...launchEnvironment } = process.env;
 const rendererErrors = [];
 let electronApp;
@@ -22,28 +24,34 @@ await createProject();
 
 try {
   electronApp = await electron.launch({
-    args: [appRoot],
+    args: packagedExecutable ? [] : [appRoot],
     cwd: appRoot,
-    executablePath: electronExecutable,
+    executablePath: packagedExecutable ?? electronExecutable,
     env: { ...launchEnvironment, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', KAI_DESKTOP_USER_DATA: userData, KAI_DESKTOP_NOTIFICATIONS: 'off' },
     timeout: 30_000,
   });
   const page = await electronApp.firstWindow();
   page.on('pageerror', (error) => rendererErrors.push(error.message));
   await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor({ timeout: 20_000 });
+  await verifyBuildIdentifier(page);
 
   await verifyCodeEditor(page);
   await verifyGitAndTerminal(page);
   await verifyOperations(page);
   await verifyTasksAndSettings(page);
   await verifyThemes(page);
+  await verifyIndependentWindows(electronApp, page);
 
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
   console.log(`KAI workbench smoke passed. Screenshots: ${outputDirectory}`);
 } catch (error) {
   if (electronApp) {
-    const page = await electronApp.firstWindow().catch(() => null);
-    await page?.screenshot({ path: path.join(outputDirectory, 'failure.png') }).catch(() => undefined);
+    const windows = electronApp.windows();
+    for (const [index, window] of windows.entries()) {
+      window.on('pageerror', (pageError) => rendererErrors.push(pageError.message));
+      await window.screenshot({ path: path.join(outputDirectory, `failure-${index + 1}.png`) }).catch(() => undefined);
+      console.error(`Window ${index + 1} body:\n${await window.locator('body').innerText().catch(() => '<body unavailable>')}`);
+    }
   }
   throw error;
 } finally {
@@ -80,6 +88,13 @@ async function verifyCodeEditor(page) {
   await writeFile(path.join(projectPath, 'src', 'hello.ts'), 'export const hello = "changed elsewhere";\r\n', 'utf8');
   await page.getByText(/changed on disk after you opened it/).waitFor({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Reload from disk' }).click();
+  await page.getByText('changed elsewhere').first().waitFor();
+
+  // Ordinary page navigation keeps the editor session alive instead of deleting and recreating the model.
+  await page.getByRole('button', { name: 'Usage', exact: true }).click();
+  await page.getByRole('heading', { name: 'Usage', level: 1 }).waitFor();
+  await page.getByRole('button', { name: 'Code', exact: true }).click();
+  await page.locator('.monaco-editor').first().waitFor();
   await page.getByText('changed elsewhere').first().waitFor();
 
   await resizeWindow(electronApp, 960, 640);
@@ -141,8 +156,8 @@ async function verifyOperations(page) {
   await page.getByRole('tab', { name: 'Checks' }).click();
   await page.getByText('No check has been recorded for this project yet.').waitFor();
   await page.getByLabel('Check command').fill('node -e "process.exit(0)"');
-  page.once('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: /Run checks/ }).click();
+  await page.getByRole('dialog', { name: 'Run this check?' }).getByRole('button', { name: 'Run check' }).click();
   await page.getByText('Passed', { exact: false }).first().waitFor({ timeout: 30_000 });
   await page.screenshot({ path: path.join(outputDirectory, 'checks-1440x920.png') });
 
@@ -168,7 +183,11 @@ async function verifyTasksAndSettings(page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await page.getByText('Updates', { exact: true }).waitFor();
-  await page.getByText(/only available in installed builds/).waitFor();
+  if (packagedExecutable) {
+    await page.getByRole('button', { name: 'Check for updates' }).waitFor();
+  } else {
+    await page.getByText(/only available in installed builds/).waitFor();
+  }
   await page.getByText('CLI models').waitFor();
   await page.getByText('Tray and notifications').waitFor();
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
@@ -195,8 +214,67 @@ async function verifyThemes(page) {
   }
 }
 
+async function verifyIndependentWindows(application, page) {
+  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+
+  const secondWindowPromise = application.waitForEvent('window');
+  await page.getByRole('button', { name: 'New window' }).click();
+  const second = await secondWindowPromise;
+  second.on('pageerror', (error) => rendererErrors.push(error.message));
+  await second.getByText('Open a local repository').waitFor({ timeout: 20_000 });
+
+  const thirdWindowPromise = application.waitForEvent('window');
+  await page.keyboard.press('Control+Shift+N');
+  const third = await thirdWindowPromise;
+  third.on('pageerror', (error) => rendererErrors.push(error.message));
+  await third.getByText('Open a local repository').waitFor({ timeout: 20_000 });
+  await third.close();
+
+  await second.locator('.project-picker-button').click();
+  await second.getByRole('button', { name: /Second Project/ }).click();
+  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor();
+  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+
+  // A renderer reload must restore this window's own project rather than another window's selection.
+  await second.reload();
+  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor({ timeout: 20_000 });
+  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await page.evaluate(() => document.documentElement.dataset.theme === 'light')) break;
+    await page.locator('button[aria-label^="Theme:"]').click();
+  }
+  await second.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor();
+  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark')) break;
+    await page.locator('button[aria-label^="Theme:"]').click();
+  }
+  await second.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+
+  await page.close();
+  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor();
+  await second.screenshot({ path: path.join(outputDirectory, 'independent-windows-1440x920.png') });
+}
+
+async function verifyBuildIdentifier(page) {
+  const response = await page.evaluate(() => window.kaiDesktop.bootstrap());
+  if (!response.ok || !response.data.buildIdentifier || response.data.buildIdentifier.includes('unidentified')) {
+    throw new Error(`The desktop build identifier is missing: ${JSON.stringify(response)}`);
+  }
+  const rail = await page.locator('.rail-footer').innerText();
+  const suffix = response.data.buildIdentifier.split('+').at(-1);
+  if (!suffix || !rail.includes(suffix)) {
+    throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail}`);
+  }
+}
+
 async function createProject() {
   await mkdir(path.join(projectPath, 'src'), { recursive: true });
+  await mkdir(path.join(secondProjectPath, 'src'), { recursive: true });
   await writeFile(path.join(projectPath, 'src', 'hello.ts'), 'export const hello = "world";\r\n', 'utf8');
   await writeFile(path.join(projectPath, 'README.md'), '# Sample\n', 'utf8');
   await writeFile(path.join(projectPath, '.gitignore'), 'ignored.txt\n', 'utf8');
@@ -207,6 +285,7 @@ async function createProject() {
   execFileSync('git', ['-c', 'user.email=smoke@example.test', '-c', 'user.name=Smoke', 'commit', '-q', '-m', 'initial'], { cwd: projectPath });
   const now = new Date().toISOString();
   const project = { schemaVersion: 1, id: 'project-workbench-smoke', name: 'Sample Project', path: projectPath, createdAt: now, lastOpenedAt: now };
+  const secondProject = { schemaVersion: 1, id: 'project-workbench-smoke-second', name: 'Second Project', path: secondProjectPath, createdAt: now, lastOpenedAt: now };
   const settings = {
     schemaVersion: 1,
     defaultAgent: 'codex',
@@ -214,7 +293,7 @@ async function createProject() {
     defaultAutonomy: 'ask',
     theme: 'dark',
     activeProjectId: project.id,
-    projectOrder: [project.id],
+    projectOrder: [project.id, secondProject.id],
     windowBounds: null,
     logRetentionEntries: 2000,
     diagnosticsEnabled: true,
@@ -224,7 +303,7 @@ async function createProject() {
     proxy: { enabled: false, port: 8082, targetBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat', credentialId: 'provider.deepseek' },
   };
   await writeFile(path.join(userData, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
-  await writeFile(path.join(userData, 'projects.json'), `${JSON.stringify({ schemaVersion: 1, projects: [project] }, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(userData, 'projects.json'), `${JSON.stringify({ schemaVersion: 1, projects: [project, secondProject] }, null, 2)}\n`, 'utf8');
 }
 
 async function resizeWindow(application, width, height) {

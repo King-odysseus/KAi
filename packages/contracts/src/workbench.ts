@@ -67,7 +67,9 @@ export const workflowSchema = z
     id: z.string().min(1),
     title: z.string().trim().min(1).max(200),
     steps: z.array(workflowStepSchema).min(1).max(50),
+    execution: executionModeSchema.default('cli'),
     route: routeModeSchema,
+    model: z.string().trim().max(240).optional(),
     autonomy: autonomyModeSchema,
     status: workflowStatusSchema,
     currentStepIndex: z.number().int().nonnegative(),
@@ -94,6 +96,8 @@ export const workflowTemplateSchema = z
       .min(1)
       .max(50),
     route: routeModeSchema,
+    execution: executionModeSchema.default('cli'),
+    model: z.string().trim().max(240).optional(),
     autonomy: autonomyModeSchema,
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
@@ -107,6 +111,39 @@ export const workflowTemplateSaveInputSchema = workflowTemplateSchema.omit({
   createdAt: timestampSchema.optional(),
   updatedAt: timestampSchema.optional(),
 });
+
+export const workflowStartStepSchema = z
+  .object({
+    id: z.string().min(1).max(160),
+    agent: agentIdSchema,
+    prompt: z.string().trim().min(1).max(20_000),
+    label: z.string().max(200).optional(),
+  })
+  .strict();
+
+export const workflowStartInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    title: z.string().trim().min(1).max(200),
+    steps: z.array(workflowStartStepSchema).min(1).max(50),
+    execution: executionModeSchema,
+    route: routeModeSchema,
+    model: z.string().trim().max(240).optional(),
+    autonomy: autonomyModeSchema,
+  })
+  .strict();
+
+export const workflowControlInputSchema = z
+  .object({ workflowId: z.string().min(1) })
+  .strict();
+
+export const workflowRunSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    projectId: z.string().nullable(),
+    workflow: workflowSchema,
+  })
+  .strict();
 
 export const permissionKeyInfoSchema = z
   .object({
@@ -243,6 +280,9 @@ export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 export type WorkflowTemplateSaveInput = z.input<typeof workflowTemplateSaveInputSchema>;
+export type WorkflowStartInput = z.infer<typeof workflowStartInputSchema>;
+export type WorkflowControlInput = z.infer<typeof workflowControlInputSchema>;
+export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 export type PermissionKeyInfo = z.infer<typeof permissionKeyInfoSchema>;
 export type CheckpointRecord = z.infer<typeof checkpointRecordSchema>;
 export type TurnFileChange = z.infer<typeof turnFileChangeSchema>;

@@ -48,6 +48,7 @@ import type {
   ServiceState,
 } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 import { ProxySettingsPanel } from './ProxySettingsPanel';
 
 type ProxyTab = 'overview' | 'routing' | 'diagnostics' | 'history' | 'settings';
@@ -609,7 +610,11 @@ export function ProxyPanel({
   async function runReplay(): Promise<void> {
     if (!detail) return;
     const previewText = replayPreview ? JSON.stringify(replayPreview, null, 2).slice(0, 1_500) : '{}';
-    if (!window.confirm(`Replay ${detail.requestMethod} ${detail.requestPath} using the current credential and route?\n\nThis sends a real request to the upstream provider and may be billed to your API account.\n\n${previewText}`)) return;
+    if (!(await confirmDialog({
+      title: 'Replay this request?',
+      detail: `Replay ${detail.requestMethod} ${detail.requestPath} using the current credential and route?\n\nThis sends a real request to the upstream provider and may be billed to your API account.\n\n${previewText}`,
+      confirmLabel: 'Send replay',
+    }))) return;
     const result = await run('replay', () => window.kaiDesktop.replayProxyRequest(detail.id).then(unwrap));
     if (!result) return;
     setReplayResult(result);
@@ -646,7 +651,7 @@ export function ProxyPanel({
   }
 
   async function clearCosts(): Promise<void> {
-    if (!window.confirm('Clear the proxy session cost data?')) return;
+    if (!(await confirmDialog({ title: 'Clear proxy cost data?', detail: 'Clear the proxy session cost data?', confirmLabel: 'Clear costs', destructive: true }))) return;
     const result = await run('clear-costs', () => window.kaiDesktop.clearProxyCosts().then(unwrap));
     if (!result) return;
     setNotice(`Cleared ${result.cleared} costed calls.`);
@@ -664,7 +669,12 @@ export function ProxyPanel({
       setClaudeResetArmed(true);
       return;
     }
-    if (!window.confirm('Reset Claude Code configuration? This removes proxy environment variables, stops tracked Claude sessions, clears Claude credentials and session state, then reselects first-run onboarding. The action is not reversible.')) {
+    if (!(await confirmDialog({
+      title: 'Reset Claude Code configuration?',
+      detail: 'This removes proxy environment variables, stops tracked Claude sessions, clears Claude credentials and session state, then reselects first-run onboarding. The action is not reversible.',
+      confirmLabel: 'Reset Claude Code',
+      destructive: true,
+    }))) {
       setClaudeResetArmed(false);
       return;
     }
@@ -757,7 +767,11 @@ export function ProxyPanel({
   }
 
   async function enterLoginMode(): Promise<void> {
-    if (!window.confirm('Claude Login Mode disables the proxy and restores Claude Code to its native login path. Continue?')) return;
+    if (!(await confirmDialog({
+      title: 'Enter Claude Login Mode?',
+      detail: 'Claude Login Mode disables the proxy and restores Claude Code to its native login path.',
+      confirmLabel: 'Enter Login Mode',
+    }))) return;
     await onSave({ proxy: { ...settings.proxy, enabled: false, routeClaudeCode: false, routeClaudeCodeUntil: 0 } });
     await routeAction('claude', 'direct');
     setNotice('Claude Login Mode is active. Run `claude login`, then choose Restore Proxy.');

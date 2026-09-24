@@ -2,6 +2,7 @@ import { Download, RefreshCw, RotateCw } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { AppSettings, UpdateState } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 function useUpdateState(): [UpdateState | null, (state: UpdateState) => void] {
   const [state, setState] = useState<UpdateState | null>(null);
@@ -68,9 +69,13 @@ export function UpdatesPanel({ settings }: { settings: AppSettings }): ReactNode
       <div className="ops-actions">
         <button type="button" className="secondary-button" disabled={state.status === 'disabled' || busy || state.status === 'ready'} onClick={() => void step(async () => unwrap(await window.kaiDesktop.checkForUpdates()))}><RefreshCw size={14} /><span>{state.status === 'checking' ? 'Checking…' : 'Check for updates'}</span></button>
         {state.status === 'available' && <button type="button" className="primary-button" onClick={() => void step(async () => unwrap(await window.kaiDesktop.downloadUpdate()))}><Download size={14} /><span>Download</span></button>}
-        {state.status === 'ready' && <button type="button" className="primary-button" onClick={() => {
-          if (window.confirm('Install the update now?\n\nKAI backs up your settings, stops running work and restarts.')) void step(async () => unwrap(await window.kaiDesktop.installUpdate()));
-        }}><RotateCw size={14} /><span>Install and restart</span></button>}
+        {state.status === 'ready' && <button type="button" className="primary-button" onClick={() => void confirmDialog({
+          title: 'Install the update now?',
+          detail: 'KAI backs up your settings, stops running work and restarts.',
+          confirmLabel: 'Install and restart',
+        }).then((confirmed) => {
+          if (confirmed) void step(async () => unwrap(await window.kaiDesktop.installUpdate()));
+        })}><RotateCw size={14} /><span>Install and restart</span></button>}
       </div>
       <label className="toggle-row"><span><strong>Check automatically</strong><small>Once after startup and every few hours. Nothing is downloaded or installed without you.</small></span><input type="checkbox" checked={autoCheck} onChange={(event) => {
         setAutoCheck(event.target.checked);

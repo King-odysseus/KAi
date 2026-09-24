@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
 import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, SettingsUpdate } from '@kai/contracts';
+import { confirmDialog } from './AppDialog';
 
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
@@ -94,7 +95,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   }
 
   async function restoreBackup(backup: ConfigBackup): Promise<void> {
-    if (!window.confirm(`Restore "${backup.name}"? Current settings will be replaced.`)) return;
+    if (!(await confirmDialog({ title: 'Restore configuration backup?', detail: `Restore "${backup.name}"? Current settings will be replaced.`, confirmLabel: 'Restore backup', destructive: true }))) return;
     try {
       await onRestoreBackup(backup.id);
       setBackupError(null);
@@ -104,7 +105,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   }
 
   async function deleteBackup(backup: ConfigBackup): Promise<void> {
-    if (!window.confirm(`Delete "${backup.name}"?`)) return;
+    if (!(await confirmDialog({ title: 'Delete configuration backup?', detail: `Delete "${backup.name}"?`, confirmLabel: 'Delete backup', destructive: true }))) return;
     try {
       await onDeleteBackup(backup.id);
       setBackups((current) => current.filter((item) => item.id !== backup.id));

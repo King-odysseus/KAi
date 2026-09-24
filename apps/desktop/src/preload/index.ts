@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentRunEvent, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, TerminalEvent, UpdateState } from '@kai/contracts';
+import type { AgentRunEvent, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, SharedDesktopState, TerminalEvent, UpdateState } from '@kai/contracts';
 
 const bridge: KaiDesktopBridge = {
   bootstrap: () => ipcRenderer.invoke('app:get-bootstrap', {}),
@@ -8,6 +8,11 @@ const bridge: KaiDesktopBridge = {
   removeProject: (id) => ipcRenderer.invoke('projects:remove', { id }),
   getSettings: () => ipcRenderer.invoke('settings:get', {}),
   updateSettings: (update) => ipcRenderer.invoke('settings:update', update),
+  onSharedDesktopState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: SharedDesktopState): void => listener(payload);
+    ipcRenderer.on('app:shared-state', handler);
+    return () => ipcRenderer.removeListener('app:shared-state', handler);
+  },
   serviceStatus: () => ipcRenderer.invoke('services:status', {}),
   startService: (kind) => ipcRenderer.invoke('services:start', { kind }),
   stopService: (kind) => ipcRenderer.invoke('services:stop', { kind }),
@@ -29,7 +34,16 @@ const bridge: KaiDesktopBridge = {
   readProjectFile: (projectId, path) => ipcRenderer.invoke('files:read', { projectId, path }),
   writeProjectFile: (request) => ipcRenderer.invoke('files:write', request),
   projectFileChanged: (projectId, path, expectedHash) => ipcRenderer.invoke('files:changed', { projectId, path, expectedHash }),
+  updateEditorDocument: (document) => ipcRenderer.invoke('editor:update-document', document),
+  removeEditorDocument: (document) => ipcRenderer.invoke('editor:remove-document', document),
+  updateEditorWindow: (snapshot) => ipcRenderer.invoke('editor:update-window', snapshot),
+  onEditorDocumentsSaved: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: import('@kai/contracts').EditorSavedDocument[]): void => listener(payload);
+    ipcRenderer.on('editor:documents-saved', handler);
+    return () => ipcRenderer.removeListener('editor:documents-saved', handler);
+  },
   learningProgress: (projectId) => ipcRenderer.invoke('learning:progress', { projectId }),
+  learningReadiness: () => ipcRenderer.invoke('learning:readiness', {}),
   updateLearningPreferences: (input) => ipcRenderer.invoke('learning:update-preferences', input),
   evaluateLearning: (request) => ipcRenderer.invoke('learning:evaluate', request),
   recordLearningLesson: (input) => ipcRenderer.invoke('learning:record-lesson', input),
@@ -44,6 +58,15 @@ const bridge: KaiDesktopBridge = {
   gitDiffStat: (projectId) => ipcRenderer.invoke('context:git-diff', { projectId }),
   saveAttachment: (name, dataUrl) => ipcRenderer.invoke('attachments:save', { name, dataUrl }),
   listWorkflowTemplates: (projectId) => ipcRenderer.invoke('workflows:list-templates', projectId ? { projectId } : {}),
+  listWorkflowRuns: (projectId) => ipcRenderer.invoke('workflows:list-runs', projectId ? { projectId } : {}),
+  startWorkflow: (request) => ipcRenderer.invoke('workflows:start', request),
+  stopWorkflow: (workflowId) => ipcRenderer.invoke('workflows:stop', { workflowId }),
+  resumeWorkflow: (workflowId) => ipcRenderer.invoke('workflows:resume', { workflowId }),
+  onWorkflowChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, run: import('@kai/contracts').WorkflowRun): void => listener(run);
+    ipcRenderer.on('workflows:changed', handler);
+    return () => ipcRenderer.removeListener('workflows:changed', handler);
+  },
   saveWorkflowTemplate: (request) => ipcRenderer.invoke('workflows:save-template', request),
   deleteWorkflowTemplate: (id) => ipcRenderer.invoke('workflows:delete-template', { id }),
   proxyOverview: () => ipcRenderer.invoke('proxy:overview', {}),
@@ -156,6 +179,7 @@ const bridge: KaiDesktopBridge = {
   dataLocations: () => ipcRenderer.invoke('diagnostics:data-locations', {}),
   recentLogs: (count) => ipcRenderer.invoke('diagnostics:recent-logs', { count }),
   windowState: () => ipcRenderer.invoke('window:state', {}),
+  newWindow: () => ipcRenderer.invoke('window:new', {}),
 };
 
 contextBridge.exposeInMainWorld('kaiDesktop', bridge);

@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type {
   AgentCapability,
@@ -42,6 +42,8 @@ import {
   type WorkspaceCommandRequest,
 } from './components/Workspace';
 import { clamp, unwrap, type ViewId } from './types';
+import { confirmDialog, DialogHost } from './components/AppDialog';
+import { shouldHandleAgentEvent } from './agent-events';
 
 const emptyCredentials: CredentialStatus = { available: false, ids: [] };
 
@@ -87,7 +89,7 @@ export function App(): ReactNode {
   const [busy, setBusy] = useState('Starting KAI');
   const [runningConversationId, setRunningConversationId] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState('');
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -95,11 +97,15 @@ export function App(): ReactNode {
   const started = useRef(false);
   const commandNonce = useRef(0);
   const resizeOrigin = useRef<{ kind: 'sidebar' | 'context'; x: number; width: number } | null>(null);
+  const runningConversationIdRef = useRef<string | null>(null);
+  const pendingApproval = pendingApprovals[0] ?? null;
+  runningConversationIdRef.current = runningConversationId;
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   const commandItems: CommandPaletteItem[] = [
     { id: 'workbench', label: 'Open Agent Workbench', description: 'Return to the active conversation and composer', shortcut: 'Ctrl+1', run: () => setView('workspace') },
+    { id: 'new-window', label: 'New Window', description: 'Open another independent KAI project window', shortcut: 'Ctrl+Shift+N', run: () => void openNewWindow() },
     { id: 'goal', label: 'Start or Edit Goal', description: 'Define the outcome, constraints, and verification', run: () => openWorkspaceCommand('goal') },
     { id: 'skills', label: 'Browse Skills', description: 'Add a project or personal skill to the next run', run: () => openWorkspaceCommand('skills') },
     { id: 'selection', label: 'Add Selection to Chat', description: 'Attach a referenced file and line range as context', run: () => openWorkspaceCommand('context') },
@@ -272,7 +278,7 @@ export function App(): ReactNode {
       ]);
       setBootstrap(nextBootstrap);
       setConversations(nextConversations);
-      setActiveConversationId((current) => current ?? nextConversations[0]?.id ?? null);
+      setActiveConversationId(nextBootstrap.activeConversationId ?? nextConversations.find((conversation) => conversation.projectId === nextBootstrap.activeProjectId)?.id ?? null);
       setCredentials(nextCredentials);
       setLogs(nextLogs);
       setAgentCapabilities(nextAgentCapabilities);
@@ -321,25 +327,40 @@ export function App(): ReactNode {
     return () => window.clearInterval(timer);
   }, [servicesStarting]);
 
-  useEffect(() => {
-    if (!runningConversationId) return;
-    return window.kaiDesktop.onAgentEvent(({ conversationId, event }) => {
-      if (conversationId !== runningConversationId) return;
+  useEffect(() => window.kaiDesktop.onSharedDesktopState((shared) => {
+    setBootstrap((current) => current ? {
+      ...current,
+      settings: shared.settings,
+      projects: shared.projects,
+      services: shared.services,
+    } : current);
+    setCredentials(shared.credentials);
+    void refreshDirectApiStatus();
+  }), []);
+
+  useEffect(() => window.kaiDesktop.onAgentEvent((payload) => {
+    const { conversationId, event } = payload;
+    if (!shouldHandleAgentEvent(payload, runningConversationIdRef.current)) return;
+    if (event.type === 'approval.request') {
+      const requestId = event.requestId;
+      if (!requestId) return;
+      setPendingApprovals((current) => current.some((approval) => approval.requestId === requestId)
+        ? current
+        : [...current, {
+            conversationId,
+            requestId,
+            title: event.title,
+            detail: event.detail,
+            risk: event.risk,
+            tool: event.tool,
+          }]);
+      return;
+    }
+    if (conversationId !== runningConversationIdRef.current) return;
       if (event.type === 'text.delta' && event.channel === 'assistant') {
         setStreamingText((current) => current + event.text);
       }
-      if (event.type === 'approval.request' && event.requestId) {
-        setPendingApproval({
-          conversationId,
-          requestId: event.requestId,
-          title: event.title,
-          detail: event.detail,
-          risk: event.risk,
-          tool: event.tool,
-        });
-      }
-    });
-  }, [runningConversationId]);
+  }), []);
 
   useEffect(() => {
     void window.kaiDesktop.reportView(view, activeConversationId).catch(() => undefined);
@@ -353,6 +374,11 @@ export function App(): ReactNode {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        void openNewWindow();
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key === '`') {
         event.preventDefault();
         setTerminalOpen((open) => !open);
@@ -385,12 +411,22 @@ export function App(): ReactNode {
     const project = await perform(() => window.kaiDesktop.chooseProject().then(unwrap), 'Opening project');
     if (!project) return;
     const next = await perform(() => window.kaiDesktop.bootstrap().then(unwrap), 'Refreshing workspace');
-    if (next) setBootstrap(next);
+    if (next) {
+      setBootstrap(next);
+      setActiveConversationId(next.activeConversationId);
+    }
   }
 
   async function openProject(id: string): Promise<void> {
     const next = await perform(() => window.kaiDesktop.openProject(id).then(unwrap), 'Opening project');
-    if (next) setBootstrap(next);
+    if (next) {
+      setBootstrap(next);
+      setActiveConversationId(next.activeConversationId);
+    }
+  }
+
+  async function openNewWindow(): Promise<void> {
+    await perform(() => window.kaiDesktop.newWindow().then(unwrap), 'Opening a new window');
   }
 
   async function removeProject(id: string): Promise<void> {
@@ -474,7 +510,11 @@ export function App(): ReactNode {
         const check = unwrap(await window.kaiDesktop.coordinationPreflight(projectForCheck, options.selectedPaths));
         if (check.conflicts.length > 0) {
           const detail = check.conflicts.map((conflict) => `${conflict.agent} (${conflict.project}): ${conflict.overlap.join(', ')}`).join('\n');
-          if (!window.confirm(`Another agent is working on files you selected:\n\n${detail}\n\nRun anyway?`)) return;
+          if (!(await confirmDialog({
+            title: 'Files are already claimed',
+            detail: `Another agent is working on files you selected:\n\n${detail}\n\nRun anyway?`,
+            confirmLabel: 'Run anyway',
+          }))) return;
         }
       } catch {
         // The check is advisory; a failure must not stop the run.
@@ -483,7 +523,7 @@ export function App(): ReactNode {
 
     setAgentNotice(null);
     setStreamingText('');
-    setPendingApproval(null);
+    setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     setRunningConversationId(conversation.id);
     try {
       const result = await perform(
@@ -512,7 +552,7 @@ export function App(): ReactNode {
     } finally {
       setRunningConversationId(null);
       setStreamingText('');
-      setPendingApproval(null);
+      setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     }
   }
 
@@ -523,7 +563,7 @@ export function App(): ReactNode {
       'Stopping agent',
     );
     if (cancelled) {
-      setPendingApproval(null);
+      setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== runningConversationId));
       setAgentNotice('Stopping the current agent run.');
     }
   }
@@ -609,7 +649,7 @@ export function App(): ReactNode {
   async function respondToApproval(approved: boolean): Promise<void> {
     const approval = pendingApproval;
     if (!approval) return;
-    setPendingApproval(null);
+    setPendingApprovals((current) => current.filter((item) => item.requestId !== approval.requestId));
     await perform(
       () => window.kaiDesktop.respondToApproval({
         conversationId: approval.conversationId,
@@ -935,7 +975,7 @@ export function App(): ReactNode {
       case 'tasks':
         return <TasksView activeProject={activeProject} cognitive1Ready={serviceFor(bootstrap, 'cognitive1').status === 'ready'} onStartTask={async (prompt) => { setView('workspace'); await createConversation(prompt); }} />;
       case 'code':
-        return <CodeView activeProject={activeProject} />;
+        return null;
       case 'operations':
         return <OperationsView activeProject={activeProject} onResume={resumeInterruptedRun} onRecoveryChanged={() => void refreshInterrupted()} />;
       case 'settings':
@@ -974,7 +1014,6 @@ export function App(): ReactNode {
             selectedAutonomy={selectedAutonomy}
             proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
             streamingText={streamingText}
-            pendingApproval={pendingApproval}
             running={runningConversationId === activeConversation?.id}
             notice={agentNotice}
             onSelectExecution={(mode) => {
@@ -1008,7 +1047,6 @@ export function App(): ReactNode {
             onRejectCheckpointFile={rejectConversationFile}
             onRestoreCheckpoint={restoreConversationCheckpoint}
             onCancel={() => void cancelConversation()}
-            onApprovalResponse={(approved) => void respondToApproval(approved)}
             onSignIn={(agent) => void signInAgent(agent)}
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
@@ -1053,6 +1091,7 @@ export function App(): ReactNode {
         rightOpen={contextOpen}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
+        onNewWindow={() => void openNewWindow()}
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setCommandPaletteOpen(true)}
         onToggleContext={() => setContextOpen((open) => !open)}
@@ -1077,7 +1116,7 @@ export function App(): ReactNode {
       <div className="app-body">
         <NavigationRail
           view={view}
-          version={`v${bootstrap.version}`}
+          version={`v${bootstrap.version} · ${bootstrap.buildIdentifier.split('+').at(-1) ?? 'dev'}`}
           serviceStatus={serviceFor(bootstrap, 'universalProxy').status}
           onChange={setView}
         />
@@ -1111,7 +1150,12 @@ export function App(): ReactNode {
           </>
         )}
         <div className="main-column">
-          <main className={`app-main view-${view}`}>{renderCurrentView()}</main>
+          <main className={`app-main view-${view}`}>
+            {view !== 'code' && renderCurrentView()}
+            <div className={`persistent-code-view ${view === 'code' ? 'active' : ''}`} aria-hidden={view !== 'code'}>
+              <CodeView activeProject={activeProject} editorState={bootstrap.editor} onOpenSettings={() => setView('settings')} />
+            </div>
+          </main>
           <TerminalView
             activeProject={activeProject}
             open={terminalOpen}
@@ -1170,6 +1214,36 @@ export function App(): ReactNode {
           {busy}
         </div>
       )}
+      {pendingApproval && (
+        <ApprovalDialog approval={pendingApproval} onRespond={(approved) => void respondToApproval(approved)} />
+      )}
+      <DialogHost />
+    </div>
+  );
+}
+
+function ApprovalDialog({
+  approval,
+  onRespond,
+}: {
+  approval: PendingApproval;
+  onRespond: (approved: boolean) => void;
+}): ReactNode {
+  return (
+    <div className="approval-overlay">
+      <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+        <div className="approval-dialog-head">
+          <ShieldCheck size={20} />
+          <div><span className="eyebrow">Project approval</span><h2 id="approval-title">{approval.title}</h2></div>
+          <span className={`risk-badge ${approval.risk}`}>{approval.risk} risk</span>
+        </div>
+        {approval.tool && <code className="approval-tool">{approval.tool}</code>}
+        <pre className="approval-detail">{approval.detail}</pre>
+        <div className="approval-dialog-actions">
+          <button type="button" className="secondary-button" onClick={() => onRespond(false)}>Deny</button>
+          <button type="button" className="primary-button" autoFocus onClick={() => onRespond(true)}>Allow once</button>
+        </div>
+      </section>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import {
   Activity,
+  AppWindow,
   Brain,
   Code2,
   GitBranch,
@@ -84,13 +85,16 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onToggleTheme, onOpenSearch, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleContext: () => void }): ReactNode {
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
         <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} />
       </div>
       <div className="titlebar-actions">
+        <button type="button" className="icon-button" title="New window (Ctrl+Shift+N)" aria-label="New window" onClick={onNewWindow}>
+          <AppWindow size={17} />
+        </button>
         <button type="button" className="icon-button" title={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} aria-label={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} onClick={onToggleTheme}>
           <Palette size={17} />
         </button>

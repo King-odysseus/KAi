@@ -2,6 +2,7 @@ import { ClipboardCopy, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { ProjectRecord, ServiceState } from '@kai/contracts';
 import { statusLabel, unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 type CheckTool = 'doctor' | 'compliance_audit' | 'git_status' | 'wiki_status';
 
@@ -112,13 +113,17 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
           <label className="field"><span>Setting name</span><input value={configKey} placeholder="logLevel" onChange={(event) => setConfigKey(event.target.value)} /></label>
           <label className="field"><span>New value</span><input value={configValue} onChange={(event) => setConfigValue(event.target.value)} /></label>
         </div>
-        <button type="button" className="primary-button align-end" disabled={!c1Ready || !configKey.trim() || !configValue.trim() || running !== null} onClick={() => {
-          if (!window.confirm(`Change the C1 setting "${configKey.trim()}" to "${configValue.trim()}"? Cognitive1 validates the value and may need a restart to apply it.`)) return;
+        <button type="button" className="primary-button align-end" disabled={!c1Ready || !configKey.trim() || !configValue.trim() || running !== null} onClick={() => void confirmDialog({
+          title: 'Change Cognitive1 setting?',
+          detail: `Change "${configKey.trim()}" to "${configValue.trim()}"? Cognitive1 validates the value and may need a restart to apply it.`,
+          confirmLabel: 'Change setting',
+        }).then((confirmed) => {
+          if (!confirmed) return;
           void window.kaiDesktop.cognitive1Tool({ tool: 'config_set', arguments: { key: configKey.trim(), value: configValue.trim() } })
             .then(unwrap)
             .then((result) => { setMessage(textOf(result) || 'Setting saved.'); setConfigKey(''); setConfigValue(''); })
             .catch((caught) => setError(caught instanceof Error ? caught.message : 'The setting could not be changed.'));
-        }}>Change setting</button>
+        })}>Change setting</button>
       </section>
 
       <section className="settings-section">

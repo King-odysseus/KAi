@@ -70,6 +70,7 @@ import { HunkReview, canReviewHunks } from './HunkReview';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
+import { promptDialog } from './AppDialog';
 
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
@@ -96,13 +97,6 @@ interface WorkspaceViewProps {
   running: boolean;
   notice: string | null;
   streamingText: string;
-  pendingApproval: {
-    requestId: string;
-    title: string;
-    detail: string;
-    risk: 'low' | 'medium' | 'high';
-    tool?: string;
-  } | null;
   agentCapabilities: AgentCapability[];
   directApiCapability: DirectApiCapability | null;
   selectedAgent: AgentId;
@@ -128,7 +122,6 @@ interface WorkspaceViewProps {
   onRejectCheckpointFile: (conversationId: string, turnId: string, filePath: string) => Promise<void>;
   onRestoreCheckpoint: (conversationId: string, turnId: string) => Promise<void>;
   onCancel: () => void;
-  onApprovalResponse: (approved: boolean) => void;
   onSignIn: (agent: AgentId) => void;
   onRefreshAgents: () => void;
   onOpenSettings: () => void;
@@ -213,7 +206,6 @@ export function WorkspaceView({
   running,
   notice,
   streamingText,
-  pendingApproval,
   agentCapabilities,
   directApiCapability,
   selectedAgent,
@@ -239,7 +231,6 @@ export function WorkspaceView({
   onRejectCheckpointFile,
   onRestoreCheckpoint,
   onCancel,
-  onApprovalResponse,
   onSignIn,
   onRefreshAgents,
   onOpenSettings,
@@ -565,14 +556,35 @@ export function WorkspaceView({
   }
 
   async function addSelectionContext(): Promise<void> {
-    const path = window.prompt('Project-relative file path', selectedFiles[0] ?? '');
+    const path = await promptDialog({
+      title: 'Add selection context',
+      label: 'Project-relative file path',
+      initialValue: selectedFiles[0] ?? '',
+      placeholder: 'src/component.tsx',
+      confirmLabel: 'Next',
+      validate: (value) => value.startsWith('/') || /^[A-Za-z]:/.test(value)
+        ? 'Use a project-relative path.'
+        : null,
+    });
     if (!path?.trim()) return;
-    const start = Number.parseInt(window.prompt('Start line', '1') ?? '', 10);
-    const end = Number.parseInt(window.prompt('End line', String(Math.max(1, start))) ?? '', 10);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) {
-      setWorkbenchNotice('Selection lines must be positive and the end line must follow the start line.');
-      return;
-    }
+    const startValue = await promptDialog({
+      title: 'Add selection context',
+      label: 'Start line',
+      initialValue: '1',
+      confirmLabel: 'Next',
+      validate: positiveLine,
+    });
+    if (startValue === null) return;
+    const start = Number(startValue);
+    const endValue = await promptDialog({
+      title: 'Add selection context',
+      label: 'End line',
+      initialValue: String(start),
+      confirmLabel: 'Add context',
+      validate: (value) => positiveLine(value) ?? (Number(value) < start ? 'The end line must follow the start line.' : null),
+    });
+    if (endValue === null) return;
+    const end = Number(endValue);
     setContextChips((current) => [
       ...current.filter((chip) => !(chip.type === 'selection' && chip.path === path.trim())),
       { type: 'selection', path: path.trim(), startLine: start, endLine: end },
@@ -602,7 +614,12 @@ export function WorkspaceView({
   }
 
   async function addMemoryContext(): Promise<void> {
-    const query = window.prompt('Search Cognitive1 memory for:')?.trim();
+    const query = (await promptDialog({
+      title: 'Search memory',
+      label: 'Cognitive1 memory query',
+      placeholder: 'Search terms or a question',
+      confirmLabel: 'Search',
+    }))?.trim();
     if (!query) return;
     setContextBusy(true);
     try {
@@ -789,24 +806,6 @@ export function WorkspaceView({
         <div className="workbench-notice" role="status">
           <span>{workbenchNotice}</span>
           <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></button>
-        </div>
-      )}
-
-      {pendingApproval && (
-        <div className="approval-overlay">
-          <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
-            <div className="approval-dialog-head">
-              <ShieldCheck size={20} />
-              <div><span className="eyebrow">Project approval</span><h2 id="approval-title">{pendingApproval.title}</h2></div>
-              <span className={`risk-badge ${pendingApproval.risk}`}>{pendingApproval.risk} risk</span>
-            </div>
-            {pendingApproval.tool && <code className="approval-tool">{pendingApproval.tool}</code>}
-            <pre className="approval-detail">{pendingApproval.detail}</pre>
-            <div className="approval-dialog-actions">
-              <button type="button" className="secondary-button" onClick={() => onApprovalResponse(false)}>Deny</button>
-              <button type="button" className="primary-button" onClick={() => onApprovalResponse(true)}>Allow once</button>
-            </div>
-          </section>
         </div>
       )}
 
@@ -1140,8 +1139,16 @@ export function WorkspaceView({
                     onSelectModel(value);
                     return;
                   }
-                  const typed = window.prompt('Model name to use for this agent (letters, numbers, . - _ / : only)', selectedModel)?.trim();
-                  if (typed !== undefined) onSelectModel(typed);
+                  void promptDialog({
+                    title: 'Use a custom model',
+                    label: 'Model name',
+                    initialValue: selectedModel,
+                    placeholder: 'provider/model-name',
+                    confirmLabel: 'Use model',
+                    validate: validateModelName,
+                  }).then((typed) => {
+                    if (typed) onSelectModel(typed);
+                  });
                 }}
                 options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)}
                 title={apiRun ? 'Model for this conversation. Default is the model set in Settings.' : 'Model the CLI is asked to use. Default lets the CLI choose its own.'}
@@ -1379,6 +1386,17 @@ function messageOf(error: unknown): string {
 }
 
 const CUSTOM_MODEL = '__custom__';
+
+function positiveLine(value: string): string | null {
+  return /^\d+$/.test(value) && Number(value) >= 1 ? null : 'Enter a positive line number.';
+}
+
+function validateModelName(value: string): string | null {
+  if (value.length > 240) return 'Model names must be 240 characters or fewer.';
+  return /^[A-Za-z0-9._/:\-]+$/.test(value)
+    ? null
+    : 'Use only letters, numbers, ., -, _, /, and :.';
+}
 
 function modelOptions(
   apiRun: boolean,

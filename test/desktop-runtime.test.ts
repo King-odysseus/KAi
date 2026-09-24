@@ -12,6 +12,7 @@ import {
   redactText,
 } from '../packages/runtime/src';
 import { ProjectPreferenceStore } from '../apps/desktop/src/main/project-preference-store';
+import { ProjectStore } from '../apps/desktop/src/main/project-store';
 
 const temporaryDirectories: string[] = [];
 
@@ -75,6 +76,55 @@ describe('portable desktop runtime', () => {
       nested: { token: '[REDACTED]' },
     });
     expect(JSON.stringify(logger.recent())).not.toContain('secret-token-123456');
+  });
+
+  it('serializes concurrent settings updates without losing either change', async () => {
+    const directory = await temporaryDirectory();
+    const store = new SettingsService(path.join(directory, 'settings.json'), new NodeFileSystem());
+
+    await Promise.all([
+      store.update(async (current) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { ...current, theme: 'light' };
+      }),
+      store.update(async (current) => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return { ...current, defaultAgent: 'gemini' };
+      }),
+    ]);
+
+    await expect(store.load()).resolves.toMatchObject({ theme: 'light', defaultAgent: 'gemini' });
+  });
+
+  it('serializes project and project-preference writes from independent windows', async () => {
+    const directory = await temporaryDirectory();
+    const projects = new ProjectStore(path.join(directory, 'projects.json'), new NodeFileSystem());
+    const preferences = new ProjectPreferenceStore(path.join(directory, 'preferences.json'), new NodeFileSystem());
+    const now = new Date().toISOString();
+
+    await Promise.all([
+      projects.upsert({ schemaVersion: 1, id: 'one', name: 'One', path: 'C:/one', createdAt: now, lastOpenedAt: now }),
+      projects.upsert({ schemaVersion: 1, id: 'two', name: 'Two', path: 'C:/two', createdAt: now, lastOpenedAt: now }),
+      preferences.upsert({ schemaVersion: 1, projectId: 'one', agent: 'codex' }),
+      preferences.upsert({ schemaVersion: 1, projectId: 'two', agent: 'gemini' }),
+    ]);
+
+    await expect(projects.list()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'one' }),
+      expect.objectContaining({ id: 'two' }),
+    ]));
+    await expect(preferences.get('one')).resolves.toMatchObject({ agent: 'codex' });
+    await expect(preferences.get('two')).resolves.toMatchObject({ agent: 'gemini' });
+  });
+
+  it('defines concurrent same-conversation writes as call-ordered last-writer-wins', async () => {
+    const directory = await temporaryDirectory();
+    const store = new ConversationStore(path.join(directory, 'conversations'));
+    const first = makeConversation('conv-race', 'First writer');
+    const second = makeConversation('conv-race', 'Second writer');
+
+    await Promise.all([store.save(first), store.save(second)]);
+    await expect(store.get('conv-race')).resolves.toMatchObject({ title: 'Second writer' });
   });
 });
 

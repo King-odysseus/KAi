@@ -7,6 +7,8 @@ import {
   type AppSettings,
   type LearningTutorRequest,
   type LearningTutorResponse,
+  type LearningReadiness,
+  type LearningProviderUsage,
   type TeachingDraft,
   type TeachingDraftGenerateInput,
 } from '@kai/contracts';
@@ -18,6 +20,7 @@ interface SettingsPort {
 
 interface CredentialPort {
   isAvailable(): boolean;
+  has?(id: string): Promise<boolean>;
   get(id: string): Promise<string | undefined>;
 }
 
@@ -142,9 +145,52 @@ export class DesktopLearningTutor {
     private readonly credentials: CredentialPort,
     private readonly resolveProjectRoot: (projectId: string) => Promise<string>,
     private readonly teachingLibrary?: TeachingLibraryPort,
+    private readonly requestTimeoutMs = 120_000,
   ) {}
 
+  async readiness(): Promise<LearningReadiness> {
+    const settings = await this.settings.load();
+    const directApi = settings.directApi;
+    const preset = directProviderPreset(directApi.provider);
+    const supported = preset.protocol !== 'unsupported';
+    const credentialStored = Boolean(await this.credentials.has?.(directApi.credentialId));
+    let reason: string | null = null;
+    let recovery: string | null = null;
+    if (!directApi.enabled) {
+      reason = 'Direct API is disabled.';
+      recovery = 'Enable Direct API in Settings and choose a supported provider.';
+    } else if (!supported) {
+      reason = `${preset.displayName} does not support the Learning Mode adapter.`;
+      recovery = 'Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider in Settings.';
+    } else if (!directApi.model.trim()) {
+      reason = 'No direct API model is configured.';
+      recovery = 'Choose a model in Settings before using Learning Mode.';
+    } else if (!this.credentials.isAvailable()) {
+      reason = 'OS credential encryption is unavailable.';
+      recovery = 'Repair or enable the operating-system credential store, then save the API key again.';
+    } else if (!credentialStored) {
+      reason = `No ${directApi.credentialId} credential is stored.`;
+      recovery = 'Open Settings and save the provider API key.';
+    }
+    return {
+      enabled: directApi.enabled,
+      supported,
+      ready: reason === null,
+      provider: directApi.provider,
+      displayName: preset.displayName,
+      model: directApi.model,
+      protocol: preset.protocol,
+      credentialStored,
+      reason,
+      recovery,
+    };
+  }
+
   async evaluate(request: LearningTutorRequest): Promise<LearningTutorResponse> {
+    return (await this.evaluateDetailed(request)).response;
+  }
+
+  async evaluateDetailed(request: LearningTutorRequest): Promise<{ response: LearningTutorResponse; usage: LearningProviderUsage }> {
     const provider = await this.providerConfiguration();
     const projectRoot = await this.resolveProjectRoot(request.projectId);
     const [teachingProfile, projectProfile] = await Promise.all([
@@ -152,19 +198,30 @@ export class DesktopLearningTutor {
       loadProjectTeachingProfile(projectRoot),
     ]);
     const prompt = tutorPrompt(request, teachingProfile, projectProfile);
-    const content = provider.protocol === 'responses'
+    const result = provider.protocol === 'responses'
       ? await this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, 'kai_learning_tutor_response', learningTutorJsonSchema)
       : await this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, 'kai_learning_tutor_response', learningTutorJsonSchema);
-    return parseLearningTutorContent(content);
+    const response = parseLearningTutorContent(result.content);
+    return {
+      response,
+      usage: result.usage ?? estimateTutorUsage(prompt, result.content),
+    };
   }
 
   async generateTeachingDraft(input: TeachingDraftGenerateInput): Promise<TeachingDraft> {
+    return (await this.generateTeachingDraftDetailed(input)).draft;
+  }
+
+  async generateTeachingDraftDetailed(input: TeachingDraftGenerateInput): Promise<{ draft: TeachingDraft; usage: LearningProviderUsage }> {
     const provider = await this.providerConfiguration();
     const prompt = teachingDraftPrompt(input);
-    const content = provider.protocol === 'responses'
+    const result = provider.protocol === 'responses'
       ? await this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, 'kai_teaching_draft', teachingDraftJsonSchema)
       : await this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, 'kai_teaching_draft', teachingDraftJsonSchema);
-    return parseTeachingDraftContent(content);
+    return {
+      draft: parseTeachingDraftContent(result.content),
+      usage: result.usage ?? estimateTutorUsage(prompt, result.content),
+    };
   }
 
   private async providerConfiguration(): Promise<{
@@ -201,7 +258,7 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     schemaName: string,
     schema: object,
-  ): Promise<string> {
+  ): Promise<{ content: string; usage: LearningProviderUsage | null }> {
     const response = await fetch(responsesUrl(baseUrl), {
       method: 'POST',
       headers: {
@@ -222,11 +279,11 @@ export class DesktopLearningTutor {
           },
         },
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
-    return responseOutputText(value);
+    return { content: responseOutputText(value), usage: providerUsage(value.usage) };
   }
 
   private async requestChatCompletions(
@@ -237,13 +294,13 @@ export class DesktopLearningTutor {
     openRouter: boolean,
     schemaName: string,
     schema: object,
-  ): Promise<string> {
+  ): Promise<{ content: string; usage: LearningProviderUsage | null }> {
     const structured = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, true, schemaName, schema);
-    if (structured.ok) return structured.content;
+    if (structured.ok) return { content: structured.content, usage: structured.usage };
     if (![400, 404, 415, 422].includes(structured.status)) throw structured.error;
     const fallback = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, false, schemaName, schema);
     if (!fallback.ok) throw fallback.error;
-    return fallback.content;
+    return { content: fallback.content, usage: fallback.usage };
   }
 
   private async fetchChatCompletion(
@@ -255,7 +312,7 @@ export class DesktopLearningTutor {
     structured: boolean,
     schemaName: string,
     schema: object,
-  ): Promise<{ ok: true; content: string } | { ok: false; status: number; error: Error }> {
+  ): Promise<{ ok: true; content: string; usage: LearningProviderUsage | null } | { ok: false; status: number; error: Error }> {
     try {
       const response = await fetch(chatCompletionsUrl(baseUrl), {
         method: 'POST',
@@ -282,13 +339,13 @@ export class DesktopLearningTutor {
             },
           } : {}),
         }),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
       });
       if (!response.ok) return { ok: false, status: response.status, error: await providerFailure(response) };
       const value = await response.json() as Record<string, unknown>;
       const content = chatOutputText(value);
       if (!content) throw new Error('The provider returned no tutor content.');
-      return { ok: true, content };
+      return { ok: true, content, usage: providerUsage(value.usage) };
     } catch (error) {
       return { ok: false, status: 0, error: error instanceof Error ? error : new Error(String(error)) };
     }
@@ -454,6 +511,35 @@ function chatOutputText(value: Record<string, unknown>): string | null {
     }).join('') || null;
   }
   return null;
+}
+
+function providerUsage(value: unknown): LearningProviderUsage | null {
+  if (!value || typeof value !== 'object') return null;
+  const usage = value as Record<string, unknown>;
+  const input = typeof usage.input_tokens === 'number'
+    ? usage.input_tokens
+    : typeof usage.prompt_tokens === 'number'
+      ? usage.prompt_tokens
+      : null;
+  const output = typeof usage.output_tokens === 'number'
+    ? usage.output_tokens
+    : typeof usage.completion_tokens === 'number'
+      ? usage.completion_tokens
+      : null;
+  if (input === null || output === null || input < 0 || output < 0) return null;
+  return { inputTokens: Math.round(input), outputTokens: Math.round(output), source: 'provider' };
+}
+
+function estimateTutorUsage(
+  prompt: { system: string; user: string },
+  content: string,
+): LearningProviderUsage {
+  // Four characters per token is deliberately conservative for mixed source code and prose.
+  return {
+    inputTokens: Math.ceil((prompt.system.length + prompt.user.length) / 4),
+    outputTokens: Math.ceil(content.length / 4),
+    source: 'estimated',
+  };
 }
 
 async function providerFailure(response: Response): Promise<Error> {

@@ -16,10 +16,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type * as Monaco from 'monaco-editor';
 import type {
   GitFileInfo,
+  EditorWindowSnapshot,
   LearningAction,
   LearningAssistance,
   LearningEvaluationResult,
   LearningProgress,
+  LearningReadiness,
   LearningTutorRequest,
   OpenedFile,
   ProjectFileEntry,
@@ -33,6 +35,7 @@ import type {
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { LearningPanel } from './LearningPanel';
+import { confirmDialog, promptDialog } from './AppDialog';
 
 interface TreeNode {
   name: string;
@@ -46,6 +49,7 @@ interface OpenDocument {
   model: Monaco.editor.ITextModel;
   savedValue: string;
   language: string;
+  version: number;
 }
 
 const normalise = (text: string): string => text.replace(/\r\n/g, '\n');
@@ -89,17 +93,104 @@ function languageForPath(filePath: string): string {
   return names[extension] ?? 'plaintext';
 }
 
-function boundedCode(value: string, selectedStartLine: number): string {
+export function boundedCode(
+  value: string,
+  selectedStartLine: number,
+  selectedEndLine = selectedStartLine,
+): string {
   if (value.length <= MAX_LEARNING_CODE) return value;
-  const lines = value.split('\n');
-  const marker = Math.max(0, Math.min(lines.length - 1, selectedStartLine - 1));
-  const head = lines.slice(0, Math.max(1, marker - 350)).join('\n');
-  const middle = lines.slice(Math.max(0, marker - 350), marker + 350).join('\n');
-  const tail = lines.slice(marker + 350).join('\n');
-  return `${head}\n\n[KAI omitted code above the active area]\n\n${middle}\n\n[KAI omitted code below the active area]\n\n${tail}`.slice(0, MAX_LEARNING_CODE);
+  const startLine = Math.max(1, selectedStartLine);
+  const endLine = Math.max(startLine, selectedEndLine);
+  const startOffset = offsetForLine(value, startLine);
+  const endOffset = offsetForLine(value, endLine + 1);
+  const selectionLength = Math.max(0, endOffset - startOffset);
+  let rawBudget = MAX_LEARNING_CODE;
+  let rendered = '';
+
+  // Line-number prefixes count toward the tutor request schema, so shrink the raw slice until the final
+  // numbered excerpt fits rather than only bounding the unnumbered source.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const { excerptStart, excerptEnd } = excerptRange(value, startOffset, endOffset, selectionLength, rawBudget);
+    const firstLine = lineAtOffset(value, excerptStart);
+    const lastLine = lineAtOffset(value, excerptEnd);
+    const excerpt = value.slice(excerptStart, excerptEnd);
+    const numbered = excerpt.split('\n').map((line, index) => `${firstLine + index}: ${line}`).join('\n');
+    const above = firstLine > 1 ? `[KAI omitted lines 1-${firstLine - 1}]\n\n` : '';
+    const below = lastLine < countLines(value) ? `\n\n[KAI omitted lines ${lastLine + 1}-${countLines(value)}]` : '';
+    rendered = `${above}${numbered}${below}`;
+    if (rendered.length <= MAX_LEARNING_CODE) return rendered;
+    rawBudget -= rendered.length - MAX_LEARNING_CODE + 64;
+    if (rawBudget <= 0) break;
+  }
+
+  // A pathological all-selected-range case can still have oversized metadata. Return a valid bounded
+  // response rather than sending a request that fails schema validation.
+  return rendered.slice(0, MAX_LEARNING_CODE);
 }
 
-export function CodeView({ activeProject }: { activeProject: ProjectRecord | null }): ReactNode {
+function excerptRange(
+  value: string,
+  startOffset: number,
+  endOffset: number,
+  selectionLength: number,
+  rawBudget: number,
+): { excerptStart: number; excerptEnd: number } {
+  let excerptStart: number;
+  let excerptEnd: number;
+  if (selectionLength >= rawBudget) {
+    excerptStart = startOffset + Math.floor((selectionLength - rawBudget) / 2);
+    excerptEnd = Math.min(endOffset, excerptStart + rawBudget);
+  } else {
+    const remaining = rawBudget - selectionLength;
+    const beforeBudget = Math.floor(remaining * 0.68);
+    const afterBudget = remaining - beforeBudget;
+    excerptStart = Math.max(0, startOffset - beforeBudget);
+    excerptEnd = Math.min(value.length, endOffset + afterBudget);
+    const lineStart = value.lastIndexOf('\n', Math.max(0, excerptStart - 1)) + 1;
+    if (excerptStart - lineStart <= 200) excerptStart = lineStart;
+    const lineEnd = value.indexOf('\n', excerptEnd);
+    if (lineEnd >= 0 && lineEnd - excerptEnd <= 200) excerptEnd = lineEnd;
+  }
+  return { excerptStart, excerptEnd };
+}
+
+function offsetForLine(value: string, line: number): number {
+  let offset = 0;
+  for (let current = 1; current < line; current += 1) {
+    const next = value.indexOf('\n', offset);
+    if (next < 0) return value.length;
+    offset = next + 1;
+  }
+  return offset;
+}
+
+function lineAtOffset(value: string, offset: number): number {
+  let line = 1;
+  let cursor = 0;
+  while (cursor < offset) {
+    const next = value.indexOf('\n', cursor);
+    if (next < 0 || next >= offset) break;
+    line += 1;
+    cursor = next + 1;
+  }
+  return line;
+}
+
+function countLines(value: string): number {
+  let count = 1;
+  for (let index = value.indexOf('\n'); index >= 0; index = value.indexOf('\n', index + 1)) count += 1;
+  return count;
+}
+
+export function CodeView({
+  activeProject,
+  editorState,
+  onOpenSettings,
+}: {
+  activeProject: ProjectRecord | null;
+  editorState: EditorWindowSnapshot | null;
+  onOpenSettings: () => void;
+}): ReactNode {
   const projectId = activeProject?.id ?? null;
   const [files, setFiles] = useState<ProjectFileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -132,7 +223,10 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
   };
   // The mode the user just picked; it wins over a progress load that was already in flight.
   const chosenPreferences = useRef<LearningProgress['preferences'] | null>(null);
+  const confirmedPreferences = useRef<LearningProgress['preferences'] | null>(null);
+  const [optimisticPreferences, setOptimisticPreferences] = useState<LearningProgress['preferences'] | null>(null);
   const [progress, setProgress] = useState<LearningProgress | null>(null);
+  const [readiness, setReadiness] = useState<LearningReadiness | null>(null);
   const [learningResult, setLearningResult] = useState<LearningEvaluationResult | null>(null);
   const [learningBusy, setLearningBusy] = useState<LearningAction | 'record' | null>(null);
   const [learningError, setLearningError] = useState<string | null>(null);
@@ -141,20 +235,49 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
   const [formatting, setFormatting] = useState(false);
   const [teachingLibrary, setTeachingLibrary] = useState<TeachingLibrary | null>(null);
   const [teachingBusy, setTeachingBusy] = useState<string | null>(null);
-  const assistance = progress?.preferences.assistance ?? 'guided';
-  const inlineSuggestions = progress?.preferences.inlineSuggestions ?? false;
+  const assistance = optimisticPreferences?.assistance ?? progress?.preferences.assistance ?? 'guided';
+  const inlineSuggestions = optimisticPreferences?.inlineSuggestions ?? progress?.preferences.inlineSuggestions ?? false;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const documents = useRef(new Map<string, OpenDocument>());
   const activeRef = useRef<string | null>(null);
+  const openPathsRef = useRef<string[]>([]);
   const lastLearningRequest = useRef<LearningTutorRequest | null>(null);
   const learningActionRef = useRef<(action: LearningAction) => Promise<LearningEvaluationResult | null>>(async () => null);
   const projectIdRef = useRef<string | null>(projectId);
+  const initializedProjectId = useRef<string | null>(null);
+  const restoredEditorProject = useRef<string | null>(null);
+  const preferenceRevision = useRef(0);
+  const learningBusyRef = useRef(false);
+  const activeLearningRequestId = useRef<string | null>(null);
   const learningStateRef = useRef({ projectId, filePath: activePath, assistance, inlineSuggestions, progress });
   activeRef.current = activePath;
+  openPathsRef.current = openPaths;
   projectIdRef.current = projectId;
   learningStateRef.current = { projectId, filePath: activePath, assistance, inlineSuggestions, progress };
+
+  const reportDocument = useCallback((documentProjectId: string, path: string, document: OpenDocument): void => {
+    void window.kaiDesktop.updateEditorDocument({
+      projectId: documentProjectId,
+      path,
+      content: document.model.getValue(),
+      savedContent: document.savedValue,
+      expectedHash: document.opened.hash,
+      eol: document.opened.eol,
+      bom: document.opened.bom,
+      dirty: normalise(document.model.getValue()) !== document.savedValue,
+    }).catch(() => undefined);
+  }, []);
+
+  const reportWindow = useCallback((documentProjectId: string, nextOpenPaths: string[], nextActivePath: string | null): void => {
+    void window.kaiDesktop.updateEditorWindow({
+      projectId: documentProjectId,
+      documents: [],
+      openPaths: nextOpenPaths,
+      activePath: nextActivePath,
+    }).catch(() => undefined);
+  }, []);
 
   const loadTree = useCallback(async () => {
     if (!projectId) return;
@@ -179,8 +302,11 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     void loadTeachingLibrary();
   }, [loadTeachingLibrary]);
 
-  // Start clean whenever the project changes.
+  // The main process owns snapshots, so changing projects replaces the local session cleanly.
   useEffect(() => {
+    if (initializedProjectId.current === projectId) return;
+    initializedProjectId.current = projectId;
+    restoredEditorProject.current = null;
     for (const document of documents.current.values()) document.model.dispose();
     documents.current.clear();
     setOpenPaths([]);
@@ -191,13 +317,24 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     setFiles([]);
     setProgress(null);
     chosenPreferences.current = null;
+    confirmedPreferences.current = null;
+    preferenceRevision.current = 0;
+    setOptimisticPreferences(null);
     setLearningResult(null);
     setLearningError(null);
     setQuestion('');
     setGitInfo(null);
+    activeLearningRequestId.current = null;
+    learningBusyRef.current = false;
     void loadTree();
+    void window.kaiDesktop.learningReadiness().then(unwrap).then(setReadiness).catch((caught) => {
+      setReadiness(null);
+      setLearningError(caught instanceof Error ? caught.message : 'Learning Mode readiness could not be loaded.');
+    });
     if (projectId) {
+      const revisionAtLoad = preferenceRevision.current;
       void window.kaiDesktop.learningProgress(projectId).then(unwrap).then((loaded) => {
+        if (preferenceRevision.current === revisionAtLoad) confirmedPreferences.current = loaded.preferences;
         setProgress(chosenPreferences.current ? { ...loaded, preferences: chosenPreferences.current } : loaded);
       }).catch((caught) => {
         setLearningError(caught instanceof Error ? caught.message : 'Learning progress could not be loaded.');
@@ -313,6 +450,75 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!editorReady || !projectId || !monacoRef.current || !editorRef.current) return;
+    if (restoredEditorProject.current === projectId) return;
+    restoredEditorProject.current = projectId;
+    const snapshot = editorState?.projectId === projectId ? editorState : null;
+    if (!snapshot) return;
+    const monaco = monacoRef.current;
+    for (const state of snapshot.documents) {
+      if (documents.current.has(state.path)) continue;
+      const language = languageForPath(state.path);
+      const model = monaco.editor.createModel(state.content, language, monaco.Uri.file(`/${state.path}`));
+      model.setEOL(state.eol === 'crlf' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF);
+      const document: OpenDocument = {
+        opened: {
+          path: state.path,
+          content: state.content,
+          eol: state.eol,
+          bom: state.bom,
+          hash: state.expectedHash,
+          mtimeMs: 0,
+          size: state.content.length,
+        },
+        model,
+        savedValue: normalise(state.savedContent),
+        language,
+        version: 1,
+      };
+      documents.current.set(state.path, document);
+      model.onDidChangeContent(() => {
+        if (projectIdRef.current !== state.projectId) return;
+        document.version += 1;
+        const nextDirty = normalise(model.getValue()) !== document.savedValue;
+        setDirty((current) => current[state.path] === nextDirty ? current : { ...current, [state.path]: nextDirty });
+        reportDocument(state.projectId, state.path, document);
+      });
+    }
+    const openPaths = snapshot.openPaths.filter((path) => documents.current.has(path));
+    const activePath = snapshot.activePath && documents.current.has(snapshot.activePath)
+      ? snapshot.activePath
+      : openPaths.at(-1) ?? null;
+    setOpenPaths(openPaths);
+    setDirty((current) => ({
+      ...current,
+      ...Object.fromEntries([...documents.current.entries()]
+        .filter(([path]) => openPaths.includes(path))
+        .map(([path, document]) => [path, normalise(document.model.getValue()) !== document.savedValue])),
+    }));
+    setActivePath(activePath);
+    editorRef.current.setModel(activePath ? documents.current.get(activePath)?.model ?? null : null);
+  }, [editorReady, editorState, projectId, reportDocument]);
+
+  useEffect(() => window.kaiDesktop.onEditorDocumentsSaved((savedDocuments) => {
+    for (const saved of savedDocuments) {
+      if (projectIdRef.current !== saved.projectId) continue;
+      const document = documents.current.get(saved.path);
+      if (!document) continue;
+      document.opened = {
+        ...document.opened,
+        hash: saved.hash,
+        mtimeMs: saved.mtimeMs,
+        size: saved.size,
+      };
+      document.savedValue = normalise(saved.savedContent);
+      const nextDirty = normalise(document.model.getValue()) !== document.savedValue;
+      setDirty((current) => current[saved.path] === nextDirty ? current : { ...current, [saved.path]: nextDirty });
+      reportDocument(saved.projectId, saved.path, document);
+    }
+  }), [reportDocument]);
+
   // Warn when the open file changes on disk, for example because an agent edited it.
   useEffect(() => {
     if (!projectId) return;
@@ -343,28 +549,41 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
   }, [projectId, activePath]);
 
   async function openFile(path: string): Promise<void> {
-    if (!projectId || !monacoRef.current || !editorRef.current) return;
+    const currentProjectId = projectIdRef.current;
+    if (!currentProjectId || !monacoRef.current || !editorRef.current) return;
     setDiskChanged(null);
     let document = documents.current.get(path);
     if (!document) {
       try {
-        const opened = unwrap(await window.kaiDesktop.readProjectFile(projectId, path));
+        const opened = unwrap(await window.kaiDesktop.readProjectFile(currentProjectId, path));
+        if (projectIdRef.current !== currentProjectId) return;
         const monaco = monacoRef.current;
         const language = languageForPath(path);
         const model = monaco.editor.createModel(opened.content, language, monaco.Uri.file(`/${path}`));
         model.setEOL(opened.eol === 'crlf' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF);
-        document = { opened, model, savedValue: normalise(opened.content), language };
+        document = { opened, model, savedValue: normalise(opened.content), language, version: 1 };
         documents.current.set(path, document);
         const created = document;
-        model.onDidChangeContent(() => setDirty((current) => ({ ...current, [path]: normalise(model.getValue()) !== created.savedValue })));
+        model.onDidChangeContent(() => {
+          if (projectIdRef.current !== currentProjectId) return;
+          created.version += 1;
+          const nextDirty = normalise(model.getValue()) !== created.savedValue;
+          setDirty((current) => current[path] === nextDirty ? current : { ...current, [path]: nextDirty });
+          reportDocument(currentProjectId, path, created);
+        });
+        reportDocument(currentProjectId, path, created);
         setNotice(null);
       } catch (caught) {
+        if (projectIdRef.current !== currentProjectId) return;
         setNotice(caught instanceof Error ? caught.message : 'That file could not be opened.');
         return;
       }
     }
     editorRef.current.setModel(document.model);
-    setOpenPaths((current) => (current.includes(path) ? current : [...current, path]));
+    const nextOpenPaths = openPathsRef.current.includes(path) ? openPathsRef.current : [...openPathsRef.current, path];
+    openPathsRef.current = nextOpenPaths;
+    setOpenPaths(nextOpenPaths);
+    reportWindow(currentProjectId, nextOpenPaths, path);
     setActivePath(path);
     setLearningResult(null);
     setLearningError(null);
@@ -389,11 +608,14 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
       setNotice(response.error.message);
       return;
     }
+    if (projectIdRef.current !== currentProjectId || documents.current.get(path) !== document) return;
     document.opened = { ...document.opened, hash: response.data.hash, mtimeMs: response.data.mtimeMs, size: response.data.size };
     document.savedValue = normalise(content);
-    setDirty((current) => ({ ...current, [path]: false }));
+    const stillLatest = document.model.getValue() === content;
+    setDirty((current) => ({ ...current, [path]: !stillLatest }));
+    reportDocument(currentProjectId, path, document);
     setNotice(`Saved ${path}`);
-    setDiskChanged(null);
+    if (stillLatest) setDiskChanged(null);
   }
 
   /** Re-read the file from disk. With keepEdits, only the stored hash moves, so the next save knowingly overwrites. */
@@ -403,24 +625,37 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     if (!projectId || !path || !document) return;
     try {
       const fresh = unwrap(await window.kaiDesktop.readProjectFile(projectId, path));
+      if (projectIdRef.current !== projectId || documents.current.get(path) !== document) return;
       document.opened = fresh;
       if (!keepEdits) {
         document.model.setValue(fresh.content);
         document.savedValue = normalise(fresh.content);
         setDirty((current) => ({ ...current, [path]: false }));
       }
+      reportDocument(projectId, path, document);
       setDiskChanged(null);
     } catch (caught) {
       setNotice(caught instanceof Error ? caught.message : 'The file could not be reloaded.');
     }
   }
 
-  function closeFile(path: string): void {
-    if (dirty[path] && !window.confirm(`Discard unsaved changes to ${path}?`)) return;
+  async function closeFile(path: string): Promise<void> {
+    if (dirty[path] && !(await confirmDialog({
+      title: 'Discard unsaved changes?',
+      detail: `${path} has unsaved changes.`,
+      confirmLabel: 'Discard',
+      destructive: true,
+    }))) return;
+    const currentProjectId = projectIdRef.current;
+    if (currentProjectId) {
+      await window.kaiDesktop.removeEditorDocument({ projectId: currentProjectId, path }).catch(() => undefined);
+    }
     documents.current.get(path)?.model.dispose();
     documents.current.delete(path);
-    const remaining = openPaths.filter((item) => item !== path);
+    const remaining = openPathsRef.current.filter((item) => item !== path);
+    openPathsRef.current = remaining;
     setOpenPaths(remaining);
+    if (currentProjectId) reportWindow(currentProjectId, remaining, activePath === path ? remaining.at(-1) ?? null : activePath);
     setDirty(({ [path]: _removed, ...rest }) => rest);
     if (activePath === path) {
       const next = remaining.at(-1) ?? null;
@@ -432,7 +667,13 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
 
   async function createFile(): Promise<void> {
     if (!projectId) return;
-    const path = window.prompt('New file path, relative to the project (for example src/util.ts)')?.trim();
+    const path = (await promptDialog({
+      title: 'Create a file',
+      label: 'Project-relative file path',
+      placeholder: 'src/util.ts',
+      confirmLabel: 'Create file',
+      validate: (value) => value.startsWith('/') || /^[A-Za-z]:/.test(value) ? 'Use a project-relative path.' : null,
+    }))?.trim();
     if (!path) return;
     const response = await window.kaiDesktop.writeProjectFile({ projectId, path, content: '', expectedHash: null, eol: 'lf', bom: false });
     if (!response.ok) {
@@ -444,6 +685,7 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
   }
 
   async function runLearningAction(action: LearningAction): Promise<LearningEvaluationResult | null> {
+    if (learningBusyRef.current) return null;
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
     const editor = editorRef.current;
@@ -457,45 +699,73 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     }
     let errorText: string | undefined;
     if (action === 'explain-error') {
-      errorText = window.prompt('Paste the exact error message to investigate:')?.trim() || undefined;
+      errorText = (await promptDialog({
+        title: 'Explain an error',
+        label: 'Exact error message',
+        placeholder: 'Paste the full stack trace or compiler message',
+        confirmLabel: 'Explain error',
+        multiline: true,
+      }))?.trim() || undefined;
       if (!errorText) return null;
     }
     const selection = editor.getSelection();
     const selectedText = selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 50_000) : undefined;
+    const requestId = `learning_${crypto.randomUUID()}`;
+    const documentVersion = document.version;
     const request: LearningTutorRequest = {
+      requestId,
       projectId,
       filePath: path,
+      documentVersion,
+      ...(selection ? {
+        selection: {
+          startLine: selection.startLineNumber,
+          startColumn: selection.startColumn,
+          endLine: selection.endLineNumber,
+          endColumn: selection.endColumn,
+        },
+      } : {}),
       language: document.language,
       action,
       assistance,
-      code: boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1),
+      code: boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1),
       ...(selectedText ? { selectedText } : {}),
       cursorLine: editor.getPosition()?.lineNumber ?? 1,
       ...(errorText ? { errorText } : {}),
       ...(question.trim() ? { question: question.trim().slice(0, 4_000) } : {}),
     };
+    activeLearningRequestId.current = requestId;
+    learningBusyRef.current = true;
     setLearningBusy(action);
     setLearningError(null);
     try {
       const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
+      if (activeLearningRequestId.current !== requestId || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, editor, documents.current)) return null;
       lastLearningRequest.current = request;
       setLearningResult(result);
       setProgress(result.progress);
       return result;
     } catch (caught) {
-      setLearningError(caught instanceof Error ? caught.message : 'The tutor request failed.');
+      if (activeLearningRequestId.current === requestId) {
+        setLearningError(caught instanceof Error ? caught.message : 'The tutor request failed.');
+      }
       return null;
     } finally {
-      setLearningBusy(null);
+      if (activeLearningRequestId.current === requestId) {
+        learningBusyRef.current = false;
+        setLearningBusy(null);
+      }
     }
   }
   learningActionRef.current = runLearningAction;
 
   async function updatePreferences(nextAssistance: LearningAssistance, nextInline: boolean): Promise<void> {
     if (!projectId) return;
-    const previous = progress;
     const chosen = { assistance: nextAssistance, inlineSuggestions: nextInline };
+    const revision = preferenceRevision.current + 1;
+    preferenceRevision.current = revision;
     chosenPreferences.current = chosen;
+    setOptimisticPreferences(chosen);
     setLearningError(null);
     setProgress((current) => current
       ? { ...current, preferences: { assistance: nextAssistance, inlineSuggestions: nextInline } }
@@ -506,10 +776,16 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
         assistance: nextAssistance,
         inlineSuggestions: nextInline,
       }));
+      if (preferenceRevision.current !== revision) return;
+      confirmedPreferences.current = updated.preferences;
       setProgress(updated);
+      setOptimisticPreferences(updated.preferences);
     } catch (caught) {
+      if (preferenceRevision.current !== revision) return;
       chosenPreferences.current = null;
-      setProgress(previous);
+      setOptimisticPreferences(null);
+      const fallback = confirmedPreferences.current ?? { assistance: 'guided', inlineSuggestions: false };
+      setProgress((current) => current ? { ...current, preferences: fallback } : current);
       setLearningError(caught instanceof Error ? caught.message : 'Learning preferences could not be saved.');
     }
   }
@@ -521,6 +797,11 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
     const document = path ? documents.current.get(path) : undefined;
     const monaco = monacoRef.current;
     if (!suggestion || !editor || !document || !monaco) return;
+    const request = lastLearningRequest.current;
+    if (!request || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, editor, documents.current)) {
+      setNotice('The tutor suggestion was ignored because the file or selection changed.');
+      return;
+    }
     const selection = editor.getSelection();
     const range = suggestion.replaceSelection && selection && !selection.isEmpty()
       ? selection
@@ -693,7 +974,7 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
           {openPaths.map((path) => (
             <div key={path} className={`code-tab ${activePath === path ? 'active' : ''}`} role="tab" aria-selected={activePath === path}>
               <button type="button" className="code-tab-name" onClick={() => void openFile(path)}><span className="truncate">{path.split('/').at(-1)}</span>{dirty[path] && <span className="code-dirty">●</span>}</button>
-              <button type="button" className="icon-button compact" aria-label={`Close ${path}`} onClick={() => closeFile(path)}><X size={11} /></button>
+              <button type="button" className="icon-button compact" aria-label={`Close ${path}`} onClick={() => void closeFile(path)}><X size={11} /></button>
             </div>
           ))}
           <span className="code-tabs-spacer" />
@@ -717,6 +998,7 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
       {tutorOpen && (
         <LearningPanel
           progress={progress}
+          readiness={readiness}
           result={learningResult}
           gitInfo={gitInfo}
           busy={learningBusy}
@@ -735,6 +1017,7 @@ export function CodeView({ activeProject }: { activeProject: ProjectRecord | nul
           onDeleteTeachingEntry={deleteTeachingEntry}
           onResetTeachingEntry={resetTeachingEntry}
           onGenerateTeachingDraft={generateTeachingDraft}
+          onOpenSettings={onOpenSettings}
           onClose={() => setTutorOpen(false)}
         />
       )}
@@ -749,6 +1032,27 @@ function learningState(
   inlineSuggestions: boolean,
 ): { projectId: string; filePath: string; assistance: LearningAssistance; inlineSuggestions: boolean } | null {
   return projectId && filePath ? { projectId, filePath, assistance, inlineSuggestions } : null;
+}
+
+function learningRequestStillCurrent(
+  request: LearningTutorRequest,
+  projectId: string | null,
+  activePath: string | null,
+  assistance: LearningAssistance,
+  editor: Monaco.editor.IStandaloneCodeEditor,
+  documents: ReadonlyMap<string, OpenDocument>,
+): boolean {
+  if (projectId !== request.projectId) return false;
+  if (activePath !== request.filePath || assistance !== request.assistance) return false;
+  const document = documents.get(request.filePath);
+  if (!document || document.version !== request.documentVersion) return false;
+  if (!request.selection) return true;
+  const selection = editor.getSelection();
+  return Boolean(selection
+    && selection.startLineNumber === request.selection.startLine
+    && selection.startColumn === request.selection.startColumn
+    && selection.endLineNumber === request.selection.endLine
+    && selection.endColumn === request.selection.endColumn);
 }
 
 function progressRef(progress: LearningProgress | null): LearningProgress['concepts'] {

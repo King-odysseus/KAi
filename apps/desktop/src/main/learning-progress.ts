@@ -34,6 +34,8 @@ interface EvaluationEvidence {
 }
 
 export class LearningProgressStore {
+  private writeTail: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly directory: string,
     private readonly fileSystem: NodeFileSystem,
@@ -52,6 +54,10 @@ export class LearningProgressStore {
   }
 
   async updatePreferences(input: LearningPreferencesInput): Promise<LearningProgress> {
+    return this.serialiseWrite(() => this.updatePreferencesUnlocked(input));
+  }
+
+  private async updatePreferencesUnlocked(input: LearningPreferencesInput): Promise<LearningProgress> {
     const preferences = { assistance: input.assistance, inlineSuggestions: input.inlineSuggestions };
     await this.sharedPreferencesStore().save({ schemaVersion: 1, preferences });
     const progress = await this.store(input.projectId).load();
@@ -85,6 +91,13 @@ export class LearningProgressStore {
   }
 
   async recordEvaluation(
+    request: LearningTutorRequest,
+    response: LearningTutorResponse,
+  ): Promise<LearningProgress> {
+    return this.serialiseWrite(() => this.recordEvaluationUnlocked(request, response));
+  }
+
+  private async recordEvaluationUnlocked(
     request: LearningTutorRequest,
     response: LearningTutorResponse,
   ): Promise<LearningProgress> {
@@ -143,6 +156,12 @@ export class LearningProgressStore {
     });
     await this.store(request.projectId).save(updated);
     return updated;
+  }
+
+  private serialiseWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.writeTail.then(operation);
+    this.writeTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private store(projectId: string): AtomicJsonStore<LearningProgress> {

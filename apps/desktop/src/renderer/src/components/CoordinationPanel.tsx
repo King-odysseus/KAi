@@ -2,6 +2,7 @@ import { AlertTriangle, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { CoordinationOverview, UrgentNote } from '@kai/contracts';
 import { unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 const REFRESH_MS = 15_000;
 
@@ -84,9 +85,16 @@ export function CoordinationPanel(): ReactNode {
                   <td title={claim.files.join(', ')}>{claim.files.join(', ') || '—'}</td>
                   <td>
                     <button type="button" className="icon-button compact" aria-label={`Release ${claim.agent}'s claim`} title="Release this claim" onClick={() => {
-                      if (window.confirm(`Release ${claim.agent}'s claim on ${claim.project}? They may still be working.`)) {
+                      void confirmDialog({
+                        title: 'Release this claim?',
+                        detail: `Release ${claim.agent}'s claim on ${claim.project}? They may still be working.`,
+                        confirmLabel: 'Release claim',
+                        destructive: true,
+                      }).then((confirmed) => {
+                        if (confirmed) {
                         void run(async () => { unwrap(await window.kaiDesktop.cognitive1Operation({ operation: 'active-release', payload: { agent: claim.agent } })); }, `Released ${claim.agent}'s claim.`);
-                      }
+                        }
+                      });
                     }}><Trash2 size={13} /></button>
                   </td>
                 </tr>

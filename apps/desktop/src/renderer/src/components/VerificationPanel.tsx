@@ -2,6 +2,7 @@ import { CheckCircle2, CircleDashed, Play, RefreshCw, XCircle } from 'lucide-rea
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { FileVerificationState, ProjectRecord, VerificationOverview } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 const LABELS: Record<FileVerificationState, string> = {
   verified: 'Verified',
@@ -40,7 +41,11 @@ export function VerificationPanel({ activeProject }: { activeProject: ProjectRec
 
   async function run(): Promise<void> {
     if (!projectId || !command.trim()) return;
-    if (!window.confirm(`Run "${command.trim()}" in ${activeProject?.name}?\n\nIt runs with your user permissions and can take a few minutes.`)) return;
+    if (!(await confirmDialog({
+      title: 'Run this check?',
+      detail: `Run "${command.trim()}" in ${activeProject?.name}?\n\nIt runs with your user permissions and can take a few minutes.`,
+      confirmLabel: 'Run check',
+    }))) return;
     setRunning(true);
     try {
       unwrap(await window.kaiDesktop.runVerification(projectId, command.trim()));

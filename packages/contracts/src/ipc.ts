@@ -131,7 +131,7 @@ import { updateSettingsSchema, updateStateSchema, type UpdateState } from './upd
 import { terminalEventSchema, terminalRunInputSchema, terminalRunResultSchema, terminalStopInputSchema, type TerminalEvent, type TerminalRunResult, type TerminalShell } from './terminal';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitOverview, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
-import { fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
+import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
 import {
   codeFormatInputSchema,
   codeFormatResultSchema,
@@ -141,6 +141,7 @@ import {
   learningLessonRecordResultSchema,
   learningPreferencesInputSchema,
   learningProgressSchema,
+  learningReadinessSchema,
   learningTutorRequestSchema,
   teachingDraftGenerateInputSchema,
   teachingDraftSchema,
@@ -155,6 +156,7 @@ import {
   type LearningLessonRecordResult,
   type LearningPreferencesInput,
   type LearningProgress,
+  type LearningReadiness,
   type LearningTutorRequest,
   type TeachingDraft,
   type TeachingDraftGenerateInput,
@@ -180,6 +182,9 @@ import {
   skillSummarySchema,
   workflowTemplateSaveInputSchema,
   workflowTemplateSchema,
+  workflowStartInputSchema,
+  workflowControlInputSchema,
+  workflowRunSchema,
   type CheckpointRestoreResult,
   type CheckpointReview,
   type ComparePickInput,
@@ -189,6 +194,8 @@ import {
   type SkillSummary,
   type WorkflowTemplate,
   type WorkflowTemplateSaveInput,
+  type WorkflowStartInput,
+  type WorkflowRun,
 } from './workbench';
 
 export const ipcChannels = [
@@ -219,7 +226,11 @@ export const ipcChannels = [
   'files:read',
   'files:write',
   'files:changed',
+  'editor:update-document',
+  'editor:remove-document',
+  'editor:update-window',
   'learning:progress',
+  'learning:readiness',
   'learning:update-preferences',
   'learning:evaluate',
   'learning:record-lesson',
@@ -234,6 +245,10 @@ export const ipcChannels = [
   'context:git-diff',
   'attachments:save',
   'workflows:list-templates',
+  'workflows:list-runs',
+  'workflows:start',
+  'workflows:stop',
+  'workflows:resume',
   'workflows:save-template',
   'workflows:delete-template',
   'proxy:overview',
@@ -316,6 +331,7 @@ export const ipcChannels = [
   'diagnostics:data-locations',
   'diagnostics:recent-logs',
   'window:state',
+  'window:new',
 ] as const;
 
 export type IpcChannel = (typeof ipcChannels)[number];
@@ -376,7 +392,11 @@ export const ipcInputSchemas = {
   'files:read': fileReadInputSchema,
   'files:write': fileWriteInputSchema,
   'files:changed': fileChangedInputSchema,
+  'editor:update-document': editorDocumentStateSchema,
+  'editor:remove-document': editorDocumentRemoveSchema,
+  'editor:update-window': editorWindowSnapshotSchema,
   'learning:progress': z.object({ projectId: z.string().min(1) }).strict(),
+  'learning:readiness': emptyInputSchema,
   'learning:update-preferences': learningPreferencesInputSchema,
   'learning:evaluate': learningTutorRequestSchema,
   'learning:record-lesson': learningLessonRecordInputSchema,
@@ -396,6 +416,10 @@ export const ipcInputSchemas = {
     })
     .strict(),
   'workflows:list-templates': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'workflows:list-runs': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'workflows:start': workflowStartInputSchema,
+  'workflows:stop': workflowControlInputSchema,
+  'workflows:resume': workflowControlInputSchema,
   'workflows:save-template': workflowTemplateSaveInputSchema,
   'workflows:delete-template': z.object({ id: z.string().min(1) }).strict(),
   'proxy:overview': emptyInputSchema,
@@ -484,6 +508,7 @@ export const ipcInputSchemas = {
   'diagnostics:data-locations': emptyInputSchema,
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
   'window:state': emptyInputSchema,
+  'window:new': emptyInputSchema,
 } satisfies Record<IpcChannel, z.ZodTypeAny>;
 
 export interface IpcSuccess<T> {
@@ -515,6 +540,7 @@ export const selectedFilesResponseSchema = z.array(z.string().min(1));
 export const gitDiffStatResponseSchema = gitDiffStatResultSchema;
 export const attachmentResultSchema = contextChipSchema;
 export const workflowTemplateListResponseSchema = z.array(workflowTemplateSchema);
+export const workflowRunListResponseSchema = z.array(workflowRunSchema);
 export const checkpointReviewResponseSchema = checkpointReviewSchema;
 export const checkpointRestoreResponseSchema = checkpointRestoreResultSchema;
 export const compareRunResponseSchema = compareRunSchema;
@@ -550,6 +576,7 @@ export const projectFileTreeResponseSchema = projectFileTreeSchema;
 export const openedFileResponseSchema = openedFileSchema;
 export const writtenFileResponseSchema = writtenFileSchema;
 export const learningProgressResponseSchema = learningProgressSchema;
+export const learningReadinessResponseSchema = learningReadinessSchema;
 export const learningEvaluationResponseSchema = learningEvaluationResultSchema;
 export const learningLessonRecordResponseSchema = learningLessonRecordResultSchema;
 export const teachingLibraryResponseSchema = teachingLibrarySchema;
@@ -571,6 +598,7 @@ export const recoveryListResponseSchema = z.array(recoveryRecordSchema);
 export const recoveryRecapResponseSchema = recoveryRecapSchema;
 export const recoveryResumeResponseSchema = recoveryResumeSchema;
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
+export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
 
 export function parseIpcInput<TChannel extends IpcChannel>(
   channel: TChannel,
@@ -593,9 +621,20 @@ export interface BootstrapPayload {
   platform: string;
   projects: ProjectRecord[];
   activeProjectId: string | null;
+  activeConversationId: string | null;
+  buildIdentifier: string;
+  editor: EditorWindowSnapshot | null;
   settings: AppSettings;
   services: ServiceState[];
   dataLocations: DataLocation[];
+}
+
+/** Shared state broadcast to every independent window after a main-process mutation. */
+export interface SharedDesktopState {
+  settings: AppSettings;
+  projects: ProjectRecord[];
+  credentials: CredentialStatus;
+  services: ServiceState[];
 }
 
 export interface SettingsUpdate {
@@ -635,6 +674,7 @@ export interface KaiDesktopBridge {
   removeProject(id: string): Promise<IpcResponse<BootstrapPayload>>;
   getSettings(): Promise<IpcResponse<AppSettings>>;
   updateSettings(update: SettingsUpdate): Promise<IpcResponse<AppSettings>>;
+  onSharedDesktopState(listener: (state: SharedDesktopState) => void): () => void;
   serviceStatus(): Promise<IpcResponse<ServiceState[]>>;
   startService(kind: ServiceState['kind']): Promise<IpcResponse<ServiceState[]>>;
   stopService(kind: ServiceState['kind']): Promise<IpcResponse<ServiceState[]>>;
@@ -656,7 +696,12 @@ export interface KaiDesktopBridge {
   readProjectFile(projectId: string, path: string): Promise<IpcResponse<OpenedFile>>;
   writeProjectFile(request: FileWriteInput): Promise<IpcResponse<WrittenFile>>;
   projectFileChanged(projectId: string, path: string, expectedHash: string): Promise<IpcResponse<boolean>>;
+  updateEditorDocument(document: EditorDocumentState): Promise<IpcResponse<boolean>>;
+  removeEditorDocument(document: EditorDocumentRemove): Promise<IpcResponse<boolean>>;
+  updateEditorWindow(snapshot: EditorWindowSnapshot): Promise<IpcResponse<boolean>>;
+  onEditorDocumentsSaved(listener: (documents: EditorSavedDocument[]) => void): () => void;
   learningProgress(projectId: string): Promise<IpcResponse<LearningProgress>>;
+  learningReadiness(): Promise<IpcResponse<LearningReadiness>>;
   updateLearningPreferences(input: LearningPreferencesInput): Promise<IpcResponse<LearningProgress>>;
   evaluateLearning(request: LearningTutorRequest): Promise<IpcResponse<LearningEvaluationResult>>;
   recordLearningLesson(input: LearningLessonRecordInput): Promise<IpcResponse<LearningLessonRecordResult>>;
@@ -671,6 +716,11 @@ export interface KaiDesktopBridge {
   gitDiffStat(projectId: string): Promise<IpcResponse<GitDiffStatResult>>;
   saveAttachment(name: string, dataUrl: string): Promise<IpcResponse<ContextChip>>;
   listWorkflowTemplates(projectId?: string): Promise<IpcResponse<WorkflowTemplate[]>>;
+  listWorkflowRuns(projectId?: string): Promise<IpcResponse<WorkflowRun[]>>;
+  startWorkflow(request: WorkflowStartInput): Promise<IpcResponse<WorkflowRun>>;
+  stopWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
+  resumeWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
+  onWorkflowChanged(listener: (run: WorkflowRun) => void): () => void;
   saveWorkflowTemplate(request: WorkflowTemplateSaveInput): Promise<IpcResponse<WorkflowTemplate>>;
   deleteWorkflowTemplate(id: string): Promise<IpcResponse<{ deleted: boolean }>>;
   proxyOverview(): Promise<IpcResponse<ProxyOverview>>;
@@ -758,4 +808,5 @@ export interface KaiDesktopBridge {
   dataLocations(): Promise<IpcResponse<DataLocation[]>>;
   recentLogs(count?: number): Promise<IpcResponse<LogEntry[]>>;
   windowState(): Promise<IpcResponse<{ maximized: boolean }>>;
+  newWindow(): Promise<IpcResponse<boolean>>;
 }

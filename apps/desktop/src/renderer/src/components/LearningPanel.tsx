@@ -14,6 +14,7 @@ import {
   Play,
   Save,
   Send,
+  Settings,
   Sparkles,
   WandSparkles,
 } from 'lucide-react';
@@ -25,6 +26,7 @@ import type {
   LearningEvaluationResult,
   LearningMastery,
   LearningProgress,
+  LearningReadiness,
   TeachingDraft,
   TeachingDraftGenerateInput,
   TeachingLibrary,
@@ -35,6 +37,7 @@ import { TeachingLibraryPanel } from './TeachingLibraryPanel';
 
 interface LearningPanelProps {
   progress: LearningProgress | null;
+  readiness: LearningReadiness | null;
   result: LearningEvaluationResult | null;
   gitInfo: GitFileInfo | null;
   busy: LearningAction | 'record' | null;
@@ -53,6 +56,7 @@ interface LearningPanelProps {
   onDeleteTeachingEntry: (input: TeachingLibraryEntryInput) => Promise<void>;
   onResetTeachingEntry: (input: TeachingLibraryEntryInput) => Promise<void>;
   onGenerateTeachingDraft: (input: TeachingDraftGenerateInput) => Promise<TeachingDraft>;
+  onOpenSettings: () => void;
   onClose: () => void;
 }
 
@@ -75,6 +79,7 @@ const actionOptions: Array<{ id: LearningAction; label: string; icon: ReactNode;
 
 export function LearningPanel({
   progress,
+  readiness,
   result,
   gitInfo,
   busy,
@@ -93,6 +98,7 @@ export function LearningPanel({
   onDeleteTeachingEntry,
   onResetTeachingEntry,
   onGenerateTeachingDraft,
+  onOpenSettings,
   onClose,
 }: LearningPanelProps): ReactNode {
   const [tab, setTab] = useState<'tutor' | 'progress' | 'teaching' | 'git'>('tutor');
@@ -140,12 +146,24 @@ export function LearningPanel({
         <span>Inline suggestions</span>
       </label>
 
+      {readiness && !readiness.ready && (
+        <div className="learning-readiness" role="alert">
+          <div>
+            <strong>{readiness.displayName} needs attention</strong>
+            <span>{readiness.reason}</span>
+            {readiness.recovery && <small>{readiness.recovery}</small>}
+          </div>
+          <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} />Settings</button>
+        </div>
+      )}
+      {!readiness && <div className="learning-readiness neutral"><LoaderCircle className="spin" size={14} /><span>Checking tutor readiness</span></div>}
+
       <div className="learning-actions">
         {actionOptions.map((option) => (
           <button
             key={option.id}
             type="button"
-            disabled={Boolean(busy) || (option.id === 'complete' && assistance !== 'copilot')}
+            disabled={!readiness?.ready || Boolean(busy) || (option.id === 'complete' && assistance !== 'copilot')}
             onClick={() => onAction(option.id)}
             title={option.label}
           >

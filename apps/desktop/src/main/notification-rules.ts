@@ -9,7 +9,7 @@ export interface DesktopNotification {
 
 export interface NotificationCenterDeps {
   getSettings: () => Promise<NotificationSettings>;
-  isWindowFocused: () => boolean;
+  isWindowFocused: (windowId?: number) => boolean;
   show: (notification: DesktopNotification) => void;
 }
 
@@ -33,15 +33,25 @@ function clip(text: string): string {
  * already showing the conversation it is about.
  */
 export class NotificationCenter {
-  private viewing: { view: string; conversationId: string | null } = { view: 'workspace', conversationId: null };
+  private readonly viewing = new Map<number, { view: string; conversationId: string | null }>();
+  private fallbackViewing: { view: string; conversationId: string | null } = { view: 'workspace', conversationId: null };
   private readonly activeRuns = new Set<string>();
   private readonly budgetLevels = new Map<string, UsageLimitStatus['level']>();
   private readonly runListeners = new Set<() => void>();
 
   constructor(private readonly deps: NotificationCenterDeps) {}
 
-  setViewing(view: string, conversationId: string | null): void {
-    this.viewing = { view, conversationId };
+  setViewing(windowId: number | string, view: string, conversationId?: string | null): void {
+    if (typeof windowId === 'number') {
+      this.viewing.set(windowId, { view, conversationId: conversationId ?? null });
+    } else {
+      // Preserve the original two-argument API used by older callers and tests.
+      this.fallbackViewing = { view: windowId, conversationId: view ?? null };
+    }
+  }
+
+  removeWindow(windowId: number): void {
+    this.viewing.delete(windowId);
   }
 
   onRunsChanged(listener: () => void): () => void {
@@ -62,15 +72,15 @@ export class NotificationCenter {
     if (this.activeRuns.delete(conversationId)) this.emitRunsChanged();
   }
 
-  async notifyRunFinished(conversationId: string, title: string, status: 'completed' | 'failed' | 'cancelled', detail?: string): Promise<boolean> {
+  async notifyRunFinished(conversationId: string, title: string, status: 'completed' | 'failed' | 'cancelled', detail?: string, ownerWindowId?: number): Promise<boolean> {
     if (status === 'cancelled') return false;
     return status === 'completed'
-      ? this.raise({ kind: 'complete', conversationId, title: 'Run finished', body: clip(title) })
-      : this.raise({ kind: 'failure', conversationId, title: 'Run failed', body: clip(detail ? `${title}: ${detail}` : title) });
+      ? this.raise({ kind: 'complete', conversationId, title: 'Run finished', body: clip(title) }, ownerWindowId)
+      : this.raise({ kind: 'failure', conversationId, title: 'Run failed', body: clip(detail ? `${title}: ${detail}` : title) }, ownerWindowId);
   }
 
-  async notifyApproval(conversationId: string, title: string, approvalTitle: string): Promise<boolean> {
-    return this.raise({ kind: 'approval', conversationId, title: 'Approval needed', body: clip(`${approvalTitle} (${title})`) });
+  async notifyApproval(conversationId: string, title: string, approvalTitle: string, ownerWindowId?: number): Promise<boolean> {
+    return this.raise({ kind: 'approval', conversationId, title: 'Approval needed', body: clip(`${approvalTitle} (${title})`) }, ownerWindowId);
   }
 
   /** Raises one notification for limits that newly reached warning or exceeded; quiet while a level holds. */
@@ -93,13 +103,14 @@ export class NotificationCenter {
     });
   }
 
-  private async raise(notification: DesktopNotification): Promise<boolean> {
+  private async raise(notification: DesktopNotification, ownerWindowId?: number): Promise<boolean> {
     const settings = await this.deps.getSettings();
     if (!settings[SETTING_FOR_KIND[notification.kind]]) return false;
-    const onScreen = this.deps.isWindowFocused()
-      && this.viewing.view === 'workspace'
+    const viewing = ownerWindowId === undefined ? this.fallbackViewing : this.viewing.get(ownerWindowId);
+    const onScreen = this.deps.isWindowFocused(ownerWindowId)
+      && viewing?.view === 'workspace'
       && notification.conversationId !== null
-      && this.viewing.conversationId === notification.conversationId;
+      && viewing.conversationId === notification.conversationId;
     if (onScreen) return false;
     this.deps.show(notification);
     return true;

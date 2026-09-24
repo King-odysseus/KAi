@@ -17,6 +17,8 @@ import { recordLearningLesson } from '../apps/desktop/src/main/learning-records'
 import { LearningProgressStore } from '../apps/desktop/src/main/learning-progress';
 import { DesktopLearningTutor, parseLearningTutorContent, parseTeachingDraftContent } from '../apps/desktop/src/main/learning-tutor';
 import { TeachingLibraryStore } from '../apps/desktop/src/main/teaching-library';
+import { boundedCode } from '../apps/desktop/src/renderer/src/components/CodeView';
+import { LearningBudgetGuard, LearningUsageStore } from '../apps/desktop/src/main/learning-usage';
 
 const directories: string[] = [];
 const servers: http.Server[] = [];
@@ -124,7 +126,10 @@ describe('desktop learning mode', () => {
       request.on('end', () => {
         bodies.push(JSON.parse(raw) as Record<string, unknown>);
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ output_text: JSON.stringify(tutorResponse()) }));
+        response.end(JSON.stringify({
+          output_text: JSON.stringify(tutorResponse()),
+          usage: { input_tokens: 321, output_tokens: 123 },
+        }));
       });
     });
     const baseUrl = await listen(server);
@@ -147,9 +152,11 @@ describe('desktop learning mode', () => {
       { profile: async () => 'KAI-owned library policy: guided discovery.' },
     );
 
-    const result = await tutor.evaluate(tutorRequest('explain-file', 'guided'));
+    const detailed = await tutor.evaluateDetailed(tutorRequest('explain-file', 'guided'));
+    const result = detailed.response;
 
     expect(result.title).toBe('Variables hold changing values');
+    expect(detailed.usage).toEqual({ inputTokens: 321, outputTokens: 123, source: 'provider' });
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({
       model: 'test-model',
@@ -199,7 +206,8 @@ describe('desktop learning mode', () => {
       { profile: async () => 'KAI-owned teaching policy.' },
     );
 
-    const draft = await tutor.generateTeachingDraft({ kind: 'rule', topic: 'evidence-led feedback' });
+    const detailed = await tutor.generateTeachingDraftDetailed({ kind: 'rule', topic: 'evidence-led feedback' });
+    const draft = detailed.draft;
 
     expect(draft).toEqual({
       title: 'Check first, explain second',
@@ -214,6 +222,129 @@ describe('desktop learning mode', () => {
         },
       },
     });
+    expect(detailed.usage.source).toBe('estimated');
+  });
+
+  it('reports actionable readiness without making a provider request', async () => {
+    const settings = createDefaultSettings();
+    let providerCalls = 0;
+    const tutor = (stored = true) => new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, has: async () => stored, get: async () => stored ? 'secret' : undefined },
+      async () => {
+        providerCalls += 1;
+        return temporaryDirectory();
+      },
+    );
+
+    settings.directApi.enabled = false;
+    await expect(tutor().readiness()).resolves.toMatchObject({
+      enabled: false,
+      ready: false,
+      reason: 'Direct API is disabled.',
+    });
+    settings.directApi.enabled = true;
+    settings.directApi.provider = 'anthropic';
+    settings.directApi.model = 'claude-sonnet';
+    await expect(tutor().readiness()).resolves.toMatchObject({ supported: false, ready: false });
+    settings.directApi.provider = 'openai';
+    settings.directApi.model = '';
+    await expect(tutor().readiness()).resolves.toMatchObject({ ready: false, reason: 'No direct API model is configured.' });
+    settings.directApi.model = 'gpt-test';
+    await expect(tutor(false).readiness()).resolves.toMatchObject({ credentialStored: false, ready: false });
+    await expect(tutor().readiness()).resolves.toMatchObject({ credentialStored: true, ready: true, reason: null });
+    expect(providerCalls).toBe(0);
+  });
+
+  it('keeps a selection near the end of a large file inside the bounded tutor context', () => {
+    const values = Array.from({ length: 13_500 }, (_, index) => `const line${index + 1} = ${index + 1};`);
+    values[12_999] = 'const TARGET_NEAR_EOF = 42;';
+    const source = values.join('\n');
+
+    const bounded = boundedCode(source, 13_000, 13_000);
+
+    expect(bounded).toContain('13000: const TARGET_NEAR_EOF = 42;');
+    expect(bounded).toContain('[KAI omitted lines 1-');
+    expect(bounded.length).toBeLessThanOrEqual(120_000);
+
+    const middle = boundedCode(source, 6_000, 6_000);
+    expect(middle).toContain('6000: const line6000 = 6000;');
+    expect(middle.length).toBeLessThanOrEqual(120_000);
+  });
+
+  it('blocks a concurrent paid tutor request before it can be sent', () => {
+    const guard = new LearningBudgetGuard();
+    const budget = {
+      mode: 'block' as const,
+      perConversationUsd: 0,
+      dailyUsd: 0.5,
+      monthlyUsd: 0,
+      providerDailyUsd: {},
+    };
+    const request = {
+      projectId: 'p1',
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      conversations: [],
+      budget,
+      estimatedInputTokens: 1_000_000,
+      estimatedOutputTokens: 0,
+    };
+
+    const first = guard.reserve(request);
+    expect(first.blockedReason).toBeNull();
+    expect(guard.reserve(request).blockedReason).toMatch(/daily budget/);
+    guard.release(first.id);
+    expect(guard.reserve(request).blockedReason).toBeNull();
+  });
+
+  it('records provider and estimated learning usage without counting it as a conversation run', async () => {
+    const root = await temporaryDirectory();
+    const usage = new LearningUsageStore(root, new NodeFileSystem());
+    await usage.record({ projectId: 'p1', provider: 'deepseek', model: 'deepseek-chat', usage: { inputTokens: 100, outputTokens: 50, source: 'provider' } });
+    await usage.record({ projectId: 'p1', provider: 'custom', model: 'mystery', usage: { inputTokens: 20, outputTokens: 10, source: 'estimated' } });
+
+    await expect(usage.runs()).resolves.toEqual([
+      expect.objectContaining({ conversationId: 'learning:p1', provider: 'deepseek', inputTokens: 100, priced: true }),
+      expect.objectContaining({ conversationId: 'learning:p1', provider: 'custom', inputTokens: 20, priced: false }),
+    ]);
+  });
+
+  it('recovers from malformed provider JSON, provider errors, and timeouts', async () => {
+    const settings = createDefaultSettings();
+    settings.directApi.enabled = true;
+    settings.directApi.provider = 'openai';
+    settings.directApi.model = 'test-model';
+    const makeTutor = (baseUrl: string, timeout = 120_000) => new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, has: async () => true, get: async () => 'sk-test' },
+      async () => temporaryDirectory(),
+      undefined,
+      timeout,
+    );
+
+    const malformed = http.createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ output_text: 'not json' }));
+    });
+    settings.directApi.baseUrl = `${await listen(malformed)}/v1`;
+    await expect(makeTutor(settings.directApi.baseUrl).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/did not return a JSON tutor response/i);
+
+    const failed = http.createServer((_request, response) => {
+      response.writeHead(500, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: { message: 'fixture failed' } }));
+    });
+    settings.directApi.baseUrl = `${await listen(failed)}/v1`;
+    await expect(makeTutor(settings.directApi.baseUrl).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/Learning provider request failed \(500\): fixture failed/);
+
+    const slow = http.createServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ output_text: JSON.stringify(tutorResponse()) }));
+      }, 150);
+    });
+    settings.directApi.baseUrl = `${await listen(slow)}/v1`;
+    await expect(makeTutor(settings.directApi.baseUrl, 20).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/abort|timeout/i);
   });
 
   it('parses generated teaching drafts without accepting incomplete content', () => {

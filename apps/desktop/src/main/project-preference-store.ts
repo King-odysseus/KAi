@@ -16,6 +16,7 @@ type PreferenceCollection = z.infer<typeof preferenceCollectionSchema>;
 
 export class ProjectPreferenceStore {
   private readonly store: AtomicJsonStore<PreferenceCollection>;
+  private writeTail: Promise<void> = Promise.resolve();
 
   constructor(filePath: string, fileSystem: NodeFileSystem) {
     this.store = new AtomicJsonStore({
@@ -32,20 +33,30 @@ export class ProjectPreferenceStore {
   }
 
   async upsert(preferences: ProjectPreferences): Promise<void> {
-    const collection = await this.store.load();
-    const index = collection.preferences.findIndex(
-      (preference) => preference.projectId === preferences.projectId,
-    );
-    if (index >= 0) collection.preferences[index] = preferences;
-    else collection.preferences.push(preferences);
-    await this.store.save(collection);
+    await this.serialiseWrite(async () => {
+      const collection = await this.store.load();
+      const index = collection.preferences.findIndex(
+        (preference) => preference.projectId === preferences.projectId,
+      );
+      if (index >= 0) collection.preferences[index] = preferences;
+      else collection.preferences.push(preferences);
+      await this.store.save(collection);
+    });
   }
 
   async remove(projectId: string): Promise<void> {
-    const collection = await this.store.load();
-    collection.preferences = collection.preferences.filter(
-      (preference) => preference.projectId !== projectId,
-    );
-    await this.store.save(collection);
+    await this.serialiseWrite(async () => {
+      const collection = await this.store.load();
+      collection.preferences = collection.preferences.filter(
+        (preference) => preference.projectId !== projectId,
+      );
+      await this.store.save(collection);
+    });
+  }
+
+  private serialiseWrite(operation: () => Promise<void>): Promise<void> {
+    const result = this.writeTail.then(operation);
+    this.writeTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 }

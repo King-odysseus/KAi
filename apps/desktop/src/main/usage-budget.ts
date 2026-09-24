@@ -66,7 +66,7 @@ export function limitLevel(ratio: number): UsageLimitStatus['level'] {
   return ratio >= WARNING_RATIO ? 'warning' : 'ok';
 }
 
-interface PaidRun {
+export interface ExternalPaidRun {
   conversationId: string;
   title: string;
   provider: string;
@@ -78,9 +78,15 @@ interface PaidRun {
   priced: boolean;
 }
 
+interface PaidRun extends ExternalPaidRun {
+}
+
 /** Only events that carry a provider are paid API runs; subscription CLI usage is never counted. */
-export function collectPaidRuns(conversations: readonly ConversationRecord[]): PaidRun[] {
-  const runs: PaidRun[] = [];
+export function collectPaidRuns(
+  conversations: readonly ConversationRecord[],
+  externalRuns: readonly ExternalPaidRun[] = [],
+): PaidRun[] {
+  const runs: PaidRun[] = [...externalRuns];
   for (const conversation of conversations) {
     for (const event of conversation.events) {
       if (event.type !== 'cost.update' || !event.provider) continue;
@@ -175,8 +181,9 @@ export function summarizeUsage(
   budget: UsageBudget,
   now: Date,
   conversationId?: string,
+  externalRuns: readonly ExternalPaidRun[] = [],
 ): UsageSummary {
-  const runs = collectPaidRuns(conversations);
+  const runs = collectPaidRuns(conversations, externalRuns);
   const dayStart = startOfLocalDay(now);
   const monthStart = startOfLocalMonth(now);
 

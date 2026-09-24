@@ -27,14 +27,18 @@ import type {
   AgentCapability,
   AgentId,
   AppSettings,
+  AutonomyMode,
   ConversationRecord,
+  ExecutionMode,
   ProjectRecord,
+  RouteMode,
   ServiceState,
-  Workflow,
+  WorkflowRun,
   WorkflowStep,
   WorkflowTemplate,
 } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
+import { confirmDialog, promptDialog } from './AppDialog';
 
 export function ProjectsView({
   projects,
@@ -213,12 +217,58 @@ export function WorkflowsView({
     { id: 'step_0', agent: settings.defaultAgent, prompt: '', label: 'Step 1', status: 'pending' },
   ]);
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
-  const [running, setRunning] = useState(false);
+  const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [execution, setExecution] = useState<ExecutionMode>('cli');
+  const [route, setRoute] = useState<RouteMode>('direct');
+  const [autonomy, setAutonomy] = useState<AutonomyMode>(settings.defaultAutonomy);
+  const [model, setModel] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const activeRun = runs.find((run) => run.workflow.id === activeRunId) ?? null;
+  const running = activeRun?.workflow.status === 'running';
+  const resumable = Boolean(activeRun && activeRun.workflow.status !== 'completed' && activeRun.workflow.status !== 'running'
+    && activeRun.workflow.steps.some((step) => step.status !== 'completed'));
+
+  function reconcileRun(run: WorkflowRun): void {
+    setRuns((current) => [run, ...current.filter((item) => item.workflow.id !== run.workflow.id)]
+      .sort((left, right) => right.workflow.createdAt.localeCompare(left.workflow.createdAt)));
+  }
 
   useEffect(() => {
     void window.kaiDesktop.listWorkflowTemplates(activeProject?.id).then(unwrap).then(setTemplates).catch(() => undefined);
+    void window.kaiDesktop.listWorkflowRuns(activeProject?.id).then(unwrap).then((loaded) => {
+      setRuns(loaded);
+      setActiveRunId((current) => current && loaded.some((run) => run.workflow.id === current)
+        ? current
+        : loaded.find((run) => run.workflow.status === 'running' || run.workflow.status === 'paused' || run.workflow.status === 'aborted')?.workflow.id
+          ?? loaded[0]?.workflow.id
+          ?? null);
+    }).catch((caught) => setError(messageOf(caught)));
   }, [activeProject?.id]);
+
+  useEffect(() => window.kaiDesktop.onWorkflowChanged((run) => {
+    if ((run.projectId ?? null) !== (activeProject?.id ?? null)) return;
+    reconcileRun(run);
+    setActiveRunId((current) => current ?? run.workflow.id);
+  }), [activeProject?.id]);
+
+  useEffect(() => {
+    if (!activeRun) return;
+    setTitle(activeRun.workflow.title);
+    setExecution(activeRun.workflow.execution);
+    setRoute(activeRun.workflow.route);
+    setAutonomy(activeRun.workflow.autonomy);
+    setModel(activeRun.workflow.model ?? '');
+    setSteps(activeRun.workflow.steps.map((step) => ({
+      id: step.id,
+      agent: step.agent,
+      prompt: step.prompt,
+      label: step.label ?? 'Step',
+      status: step.status,
+      ...(step.output ? { output: step.output } : {}),
+      ...(step.error ? { error: step.error } : {}),
+    })));
+  }, [activeRun]);
 
   function addStep(): void {
     setSteps((current) => [...current, {
@@ -239,8 +289,10 @@ export function WorkflowsView({
         name: title.trim() || 'Untitled workflow',
         description: '',
         steps: steps.filter((step) => step.prompt.trim()).map((step) => ({ agent: step.agent, prompt: step.prompt.trim(), label: step.label })),
-        route: 'direct',
-        autonomy: settings.defaultAutonomy,
+        execution,
+        route,
+        model: model.trim() || undefined,
+        autonomy,
         createdAt: now,
       }).then(unwrap);
       setTemplates((current) => [...current.filter((item) => item.id !== template.id), template].sort((left, right) => left.name.localeCompare(right.name)));
@@ -259,87 +311,50 @@ export function WorkflowsView({
     }
   }
 
-  async function runWorkflow(): Promise<void> {
+  async function startWorkflow(): Promise<void> {
     if (!activeProject || running) return;
     const executable = steps.filter((step) => step.prompt.trim());
     if (executable.length === 0) return;
-    setRunning(true);
     setError(null);
     try {
-      const conversation = await window.kaiDesktop
-        .createConversation(activeProject.id, `Workflow: ${title.trim() || 'Untitled workflow'}`)
-        .then(unwrap);
-      const workflow: Workflow = {
-        id: `workflow_${crypto.randomUUID()}`,
+      const run = await window.kaiDesktop.startWorkflow({
+        projectId: activeProject.id,
         title: title.trim() || 'Untitled workflow',
-        route: 'direct',
-        autonomy: settings.defaultAutonomy,
-        status: 'running',
-        currentStepIndex: 0,
-        createdAt: new Date().toISOString(),
+        execution,
+        route,
+        autonomy,
+        ...(model.trim() ? { model: model.trim() } : {}),
         steps: executable.map((step) => ({
           id: step.id,
           agent: step.agent,
           prompt: step.prompt.trim(),
           label: step.label,
-          status: 'pending',
         })),
-      };
-      conversation.workflow = workflow;
-      await window.kaiDesktop.saveConversation(conversation).then(unwrap);
-
-      for (let index = 0; index < executable.length; index += 1) {
-        const step = executable[index];
-        setSteps((current) => current.map((item) => item.id === step.id ? { ...item, status: 'running', error: undefined } : item));
-        workflow.currentStepIndex = index;
-        workflow.steps[index].status = 'running';
-        workflow.steps[index].startedAt = new Date().toISOString();
-        conversation.workflow = { ...workflow };
-        await window.kaiDesktop.saveConversation(conversation).then(unwrap);
-        try {
-          const result = await window.kaiDesktop.runAgent({
-            conversationId: conversation.id,
-            prompt: step.prompt.trim(),
-            agent: step.agent,
-            execution: 'cli',
-            route: 'direct',
-            autonomy: settings.defaultAutonomy,
-          }).then(unwrap);
-          const completedAt = new Date().toISOString();
-          workflow.steps[index].status = result.error ? 'failed' : 'completed';
-          workflow.steps[index].output = result.output;
-          workflow.steps[index].error = result.error;
-          workflow.steps[index].completedAt = completedAt;
-          setSteps((current) => current.map((item) => item.id === step.id ? {
-            ...item,
-            status: result.error ? 'failed' : 'completed',
-            output: result.output,
-            error: result.error,
-          } : item));
-          Object.assign(conversation, result.conversation, { workflow });
-          await window.kaiDesktop.saveConversation(conversation).then(unwrap);
-          if (result.error) {
-            workflow.status = 'paused';
-            break;
-          }
-        } catch (caught) {
-          const detail = messageOf(caught);
-          workflow.steps[index].status = 'failed';
-          workflow.steps[index].error = detail;
-          workflow.status = 'paused';
-          setSteps((current) => current.map((item) => item.id === step.id ? { ...item, status: 'failed', error: detail } : item));
-          setError(detail);
-          break;
-        }
-      }
-      workflow.status = workflow.steps.every((step) => step.status === 'completed') ? 'completed' : workflow.status;
-      workflow.completedAt = workflow.status === 'completed' ? new Date().toISOString() : undefined;
-      conversation.workflow = { ...workflow };
-      await window.kaiDesktop.saveConversation(conversation).then(unwrap);
+      }).then(unwrap);
+      reconcileRun(run);
+      setActiveRunId(run.workflow.id);
     } catch (caught) {
       setError(messageOf(caught));
-    } finally {
-      setRunning(false);
+    }
+  }
+
+  async function stopWorkflow(): Promise<void> {
+    if (!activeRun) return;
+    try {
+      reconcileRun(await window.kaiDesktop.stopWorkflow(activeRun.workflow.id).then(unwrap));
+      setError(null);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  async function resumeWorkflow(): Promise<void> {
+    if (!activeRun) return;
+    try {
+      reconcileRun(await window.kaiDesktop.resumeWorkflow(activeRun.workflow.id).then(unwrap));
+      setError(null);
+    } catch (caught) {
+      setError(messageOf(caught));
     }
   }
 
@@ -347,9 +362,24 @@ export function WorkflowsView({
     <div className="page-view">
       <PageHeader title="Workflows" detail="Build, save, and run sequential multi-agent work">
         <button type="button" className="secondary-button" disabled={busy || running || !steps.some((step) => step.prompt.trim())} onClick={() => void saveTemplate()}><Save size={15} /><span>Save template</span></button>
-        <button type="button" className="primary-button" disabled={busy || running || !activeProject || !steps.some((step) => step.prompt.trim())} onClick={() => void runWorkflow()}><Play size={15} /><span>{running ? 'Running' : 'Run workflow'}</span></button>
+        {running ? (
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => void stopWorkflow()}><Square size={13} /><span>Stop</span></button>
+        ) : resumable ? (
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => void resumeWorkflow()}><RotateCcw size={14} /><span>Resume</span></button>
+        ) : null}
+        <button type="button" className="primary-button" disabled={busy || running || !activeProject || !steps.some((step) => step.prompt.trim())} onClick={() => void startWorkflow()}><Play size={15} /><span>{running ? 'Running' : 'Run workflow'}</span></button>
       </PageHeader>
       {error && <div className="rules-error"><span>{error}</span></div>}
+      {runs.length > 0 && (
+        <div className="workflow-run-list" aria-label="Workflow runs">
+          {runs.slice(0, 8).map((run) => (
+            <button key={run.workflow.id} type="button" className={run.workflow.id === activeRunId ? 'active' : ''} onClick={() => setActiveRunId(run.workflow.id)}>
+              <span className="truncate">{run.workflow.title}</span>
+              <small className={`workflow-status ${run.workflow.status}`}>{run.workflow.status}</small>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="workflow-builder">
         <div className="workflow-builder-head">
           <label className="workflow-field" htmlFor="workflow-title">
@@ -367,6 +397,10 @@ export function WorkflowsView({
                 if (!template) return;
                 setTitle(template.name);
                 setSteps(template.steps.map((step, index) => ({ id: `step_${crypto.randomUUID()}`, agent: step.agent, prompt: step.prompt, label: step.label ?? `Step ${index + 1}`, status: 'pending' })));
+                setExecution(template.execution);
+                setRoute(template.route);
+                setAutonomy(template.autonomy);
+                setModel(template.model ?? '');
                 event.target.value = '';
               }}
             >
@@ -374,6 +408,12 @@ export function WorkflowsView({
               {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
             </select>
           </label>
+        </div>
+        <div className="workflow-builder-head workflow-run-options">
+          <label className="workflow-field" htmlFor="workflow-execution"><span>Execution</span><select id="workflow-execution" value={execution} onChange={(event) => setExecution(event.target.value as ExecutionMode)}><option value="cli">CLI</option><option value="api">Direct API / Proxy</option></select></label>
+          <label className="workflow-field" htmlFor="workflow-route"><span>Route</span><select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></select></label>
+          <label className="workflow-field" htmlFor="workflow-autonomy"><span>Autonomy</span><select id="workflow-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}><option value="plan">Plan</option><option value="ask">Ask</option><option value="autoEdit">Auto-edit</option><option value="full">Full control</option><option value="custom">Custom</option></select></label>
+          <label className="workflow-field" htmlFor="workflow-model"><span>Model override</span><input id="workflow-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider or CLI model" /></label>
         </div>
         <div className="workflow-step-list">
           {steps.map((step, index) => (
@@ -456,10 +496,10 @@ export function HistoryView({
             <span className="truncate">{projects.find((project) => project.id === conversation.projectId)?.name ?? 'Unassigned'}</span>
             <span>{relativeTime(conversation.updatedAt)}</span>
             <span className="history-actions">
-              <button type="button" title="Rename" onClick={() => { const next = window.prompt('Conversation title', conversation.title); if (next?.trim()) onRename(conversation.id, next.trim()); }}><Pencil size={13} /></button>
+              <button type="button" title="Rename" onClick={() => { void promptDialog({ title: 'Rename conversation', label: 'Conversation title', initialValue: conversation.title, confirmLabel: 'Rename' }).then((next) => { if (next?.trim()) onRename(conversation.id, next.trim()); }); }}><Pencil size={13} /></button>
               <button type="button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onArchive(conversation.id, !conversation.archived)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}</button>
               <button type="button" title="Fork" onClick={() => onFork(conversation.id)}><GitFork size={13} /></button>
-              <button type="button" title="Delete" onClick={() => { if (window.confirm(`Delete "${conversation.title}"?`)) onDelete(conversation.id); }}><Trash2 size={13} /></button>
+              <button type="button" title="Delete" onClick={() => { void confirmDialog({ title: 'Delete conversation?', detail: `Delete "${conversation.title}"?`, confirmLabel: 'Delete', destructive: true }).then((confirmed) => { if (confirmed) onDelete(conversation.id); }); }}><Trash2 size={13} /></button>
             </span>
           </div>
         ))}

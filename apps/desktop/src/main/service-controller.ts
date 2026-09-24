@@ -30,9 +30,9 @@ export function isLoopbackPortFree(port: number): Promise<boolean> {
 }
 
 /**
- * Older KAI versions defaulted the managed Cognitive1 endpoint to the standalone daemon's port. When that
- * port is taken, return an endpoint on the next free port; otherwise null (nothing to change). An endpoint
- * the user chose themselves is never rewritten.
+ * Older KAI versions defaulted the managed Cognitive1 endpoint to the standalone daemon's port. That exact
+ * legacy value is always migrated, even when 9876 is currently free, so KAI cannot take the port first and
+ * stop a standalone daemon from starting later. Any other user-selected endpoint is left untouched.
  */
 export async function moveOffStandalonePort(
   endpoint: string,
@@ -44,7 +44,7 @@ export async function moveOffStandalonePort(
   } catch {
     return null;
   }
-  if (Number(url.port) !== STANDALONE_COGNITIVE1_PORT || (await isFree(STANDALONE_COGNITIVE1_PORT))) return null;
+  if (Number(url.port) !== STANDALONE_COGNITIVE1_PORT) return null;
   for (let port = STANDALONE_COGNITIVE1_PORT + 1; port < STANDALONE_COGNITIVE1_PORT + 50; port += 1) {
     if (await isFree(port)) {
       url.port = String(port);
@@ -137,7 +137,10 @@ export class DesktopServiceController {
       const moved = await moveOffStandalonePort(settings.cognitive1.endpoint);
       if (moved) {
         settings = { ...settings, cognitive1: { ...settings.cognitive1, endpoint: moved } };
-        await this.options.settings.save(settings);
+        await this.options.settings.update((current) => ({
+          ...current,
+          cognitive1: { ...current.cognitive1, endpoint: moved },
+        }));
         this.options.logger.info('internal', `Cognitive1 endpoint moved to ${moved} because the standalone daemon uses port ${STANDALONE_COGNITIVE1_PORT}`);
       }
     }
@@ -505,10 +508,9 @@ export class DesktopServiceController {
   }
 
   private async persistEnabled(kind: ServiceKind, enabled: boolean): Promise<void> {
-    const settings = await this.options.settings.load();
-    if (kind === 'cognitive1') settings.cognitive1.enabled = enabled;
-    else settings.proxy.enabled = enabled;
-    await this.options.settings.save(settings);
+    await this.options.settings.update((settings) => kind === 'cognitive1'
+      ? { ...settings, cognitive1: { ...settings.cognitive1, enabled } }
+      : { ...settings, proxy: { ...settings.proxy, enabled } });
   }
 
   private logServiceLine(kind: ServiceKind, stream: 'stdout' | 'stderr', line: string): void {

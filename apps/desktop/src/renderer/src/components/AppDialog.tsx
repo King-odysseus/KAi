@@ -1,0 +1,176 @@
+import { AlertTriangle, X } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+
+export interface PromptDialogOptions {
+  title: string;
+  label: string;
+  initialValue?: string;
+  placeholder?: string;
+  confirmLabel?: string;
+  multiline?: boolean;
+  rows?: number;
+  validate?: (value: string) => string | null;
+}
+
+export interface ConfirmDialogOptions {
+  title: string;
+  detail: string;
+  confirmLabel?: string;
+  destructive?: boolean;
+}
+
+export interface MessageDialogOptions {
+  title: string;
+  detail: string;
+  confirmLabel?: string;
+}
+
+type DialogRequest =
+  | { id: number; kind: 'prompt'; options: PromptDialogOptions; resolve: (value: string | null) => void }
+  | { id: number; kind: 'confirm'; options: ConfirmDialogOptions; resolve: (value: boolean) => void }
+  | { id: number; kind: 'message'; options: MessageDialogOptions; resolve: () => void };
+
+let nextId = 1;
+const queue: DialogRequest[] = [];
+const listeners = new Set<(request: DialogRequest | null) => void>();
+
+function publish(): void {
+  const request = queue[0] ?? null;
+  for (const listener of listeners) listener(request);
+}
+
+function enqueue<T>(create: (resolve: (value: T) => void) => DialogRequest): Promise<T> {
+  return new Promise<T>((resolve) => {
+    queue.push(create(resolve as (value: unknown) => void));
+    publish();
+  });
+}
+
+export function promptDialog(options: PromptDialogOptions): Promise<string | null> {
+  return enqueue<string | null>((resolve) => ({ id: nextId++, kind: 'prompt', options, resolve }));
+}
+
+export function confirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
+  return enqueue<boolean>((resolve) => ({ id: nextId++, kind: 'confirm', options, resolve }));
+}
+
+export function messageDialog(options: MessageDialogOptions): Promise<void> {
+  return enqueue<void>((resolve) => ({ id: nextId++, kind: 'message', options, resolve }));
+}
+
+export function DialogHost(): ReactNode {
+  const [request, setRequest] = useState<DialogRequest | null>(null);
+  useEffect(() => {
+    listeners.add(setRequest);
+    setRequest(queue[0] ?? null);
+    return () => {
+      listeners.delete(setRequest);
+    };
+  }, []);
+  if (!request) return null;
+  return <Dialog key={request.id} request={request} onFinish={(value) => {
+    queue.shift();
+    if (request.kind === 'prompt') request.resolve(value as string | null);
+    else if (request.kind === 'confirm') request.resolve(Boolean(value));
+    else request.resolve();
+    publish();
+  }} />;
+}
+
+function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (value: string | null | boolean) => void }): ReactNode {
+  const [value, setValue] = useState(request.kind === 'prompt' ? request.options.initialValue ?? '' : '');
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    window.setTimeout(() => (request.kind === 'prompt' ? inputRef.current : request.kind === 'message' ? confirmRef.current : cancelRef.current)?.focus(), 0);
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onFinish(request.kind === 'prompt' ? null : request.kind === 'confirm' ? false : true);
+      } else if (event.key === 'Tab') {
+        const dialog = document.querySelector<HTMLElement>('[data-kai-dialog="true"]');
+        if (!dialog) return;
+        const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled])')];
+        if (focusable.length === 0) return;
+        const index = focusable.indexOf(document.activeElement as HTMLElement);
+        const next = event.shiftKey ? (index - 1 + focusable.length) % focusable.length : (index + 1) % focusable.length;
+        event.preventDefault();
+        focusable[next]?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus();
+    };
+  }, [onFinish, request.kind]);
+
+  function submit(event: FormEvent): void {
+    event.preventDefault();
+    if (request.kind !== 'prompt') {
+      onFinish(request.kind === 'confirm' ? true : true);
+      return;
+    }
+    const next = value.trim();
+    const validation = request.options.validate?.(next) ?? null;
+    if (!next) {
+      setError(`${request.options.label} is required.`);
+      return;
+    }
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    onFinish(next);
+  }
+
+  const titleId = `kai-dialog-title-${request.id}`;
+  const detailId = `kai-dialog-detail-${request.id}`;
+  return (
+    <div className="app-dialog-overlay" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onFinish(request.kind === 'prompt' ? null : request.kind === 'confirm' ? false : true);
+    }}>
+      <form className="app-dialog" data-kai-dialog="true" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={detailId} onSubmit={submit}>
+        <header>
+          <span className="app-dialog-icon">{request.kind === 'confirm' && request.options.destructive ? <AlertTriangle size={17} /> : <span>K</span>}</span>
+          <div><h2 id={titleId}>{request.options.title}</h2><p id={detailId}>{request.kind === 'prompt' ? request.options.label : request.options.detail}</p></div>
+          <button type="button" className="icon-button compact" aria-label="Close dialog" onClick={() => onFinish(request.kind === 'prompt' ? null : request.kind === 'confirm' ? false : true)}><X size={14} /></button>
+        </header>
+        {request.kind === 'prompt' && (
+          <label className="app-dialog-field">
+            <span>{request.options.label}</span>
+            {request.options.multiline ? (
+              <textarea
+                ref={inputRef as RefObject<HTMLTextAreaElement>}
+                value={value}
+                onChange={(event) => { setValue(event.target.value); setError(null); }}
+                placeholder={request.options.placeholder}
+                rows={request.options.rows ?? 6}
+                aria-invalid={Boolean(error)}
+              />
+            ) : (
+              <input
+                ref={inputRef as RefObject<HTMLInputElement>}
+                value={value}
+                onChange={(event) => { setValue(event.target.value); setError(null); }}
+                placeholder={request.options.placeholder}
+                aria-invalid={Boolean(error)}
+              />
+            )}
+          </label>
+        )}
+        {error && <div className="app-dialog-error" role="alert">{error}</div>}
+        <footer className={request.kind === 'message' ? 'single-action' : ''}>
+          {request.kind !== 'message' && <button ref={cancelRef} type="button" className="secondary-button" onClick={() => onFinish(request.kind === 'prompt' ? null : false)}>Cancel</button>}
+          <button ref={confirmRef} type="submit" className={`primary-button ${request.kind === 'confirm' && request.options.destructive ? 'destructive-button' : ''}`}>
+            {request.options.confirmLabel ?? (request.kind === 'prompt' ? 'OK' : request.kind === 'message' ? 'Close' : 'Confirm')}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}

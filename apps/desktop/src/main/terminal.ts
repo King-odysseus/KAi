@@ -24,6 +24,7 @@ const MAX_CHUNK = 16_000;
 interface Session {
   child: ChildProcess;
   projectId: string;
+  ownerWindowId: number | null;
 }
 
 /**
@@ -36,13 +37,13 @@ interface Session {
 export class TerminalManager {
   private readonly sessions = new Map<string, Session>();
 
-  constructor(private readonly emit: (event: TerminalEvent) => void) {}
+  constructor(private readonly emit: (event: TerminalEvent, ownerWindowId: number | null) => void) {}
 
   runningCount(): number {
     return this.sessions.size;
   }
 
-  start(projectId: string, cwd: string, command: string, shell: TerminalShell): string {
+  start(projectId: string, cwd: string, command: string, shell: TerminalShell, ownerWindowId: number | null = null): string {
     if (this.sessions.size >= MAX_RUNNING) throw new Error(`Only ${MAX_RUNNING} commands can run at once. Stop one first.`);
     const id = `term_${randomUUID()}`;
     if (shell === 'gitbash' && !findGitBash()) throw new Error('Git Bash was not found. Install Git for Windows, or choose another shell.');
@@ -52,12 +53,12 @@ export class TerminalManager {
       ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
       // Detached on POSIX so the whole process group can be stopped, not just the shell.
       : spawn(command, { cwd, shell: true, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
-    this.sessions.set(id, { child, projectId });
+    this.sessions.set(id, { child, projectId, ownerWindowId });
 
     const forward = (stream: 'stdout' | 'stderr') => (chunk: Buffer): void => {
       const text = chunk.toString('utf8');
       for (let offset = 0; offset < text.length; offset += MAX_CHUNK) {
-        this.emit({ kind: 'output', id, stream, text: text.slice(offset, offset + MAX_CHUNK) });
+        this.emit({ kind: 'output', id, stream, text: text.slice(offset, offset + MAX_CHUNK) }, ownerWindowId);
       }
     };
     child.stdout?.on('data', forward('stdout'));
@@ -67,10 +68,10 @@ export class TerminalManager {
       if (finished) return;
       finished = true;
       this.sessions.delete(id);
-      this.emit({ kind: 'exit', id, code, signal });
+      this.emit({ kind: 'exit', id, code, signal }, ownerWindowId);
     };
     child.once('error', (error) => {
-      this.emit({ kind: 'output', id, stream: 'stderr', text: `${error.message}\n` });
+      this.emit({ kind: 'output', id, stream: 'stderr', text: `${error.message}\n` }, ownerWindowId);
       finish(null, null);
     });
     child.once('close', (code, signal) => finish(code, signal));

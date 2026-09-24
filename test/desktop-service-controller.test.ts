@@ -13,13 +13,14 @@ describe('managed Cognitive1 port', () => {
     expect(createDefaultSettings().cognitive1.endpoint).toBe('http://127.0.0.1:9877');
   });
 
-  it('moves an old default endpoint to the next free port when the standalone daemon holds 9876', async () => {
+  it('moves the legacy managed endpoint even while 9876 is free, so standalone C1 can start later', async () => {
+    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken())).toBe('http://127.0.0.1:9877');
     expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken(9876))).toBe('http://127.0.0.1:9877');
     expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken(9876, 9877, 9878))).toBe('http://127.0.0.1:9879');
   });
 
-  it('leaves the endpoint alone when 9876 is free, or when the user chose another port', async () => {
-    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken())).toBeNull();
+  it('is idempotent and leaves a genuinely custom endpoint alone', async () => {
+    expect(await moveOffStandalonePort('http://127.0.0.1:9877', taken())).toBeNull();
     expect(await moveOffStandalonePort('http://127.0.0.1:9900', taken(9876, 9900))).toBeNull();
     expect(await moveOffStandalonePort('not a url', taken(9876))).toBeNull();
   });

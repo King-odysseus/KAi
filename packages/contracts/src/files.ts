@@ -42,6 +42,43 @@ export const fileChangedInputSchema = z
   .object({ projectId: z.string().min(1), path: z.string().min(1), expectedHash: z.string().min(1) })
   .strict();
 
+export const editorDocumentStateSchema = z
+  .object({
+    projectId: z.string().min(1),
+    path: z.string().min(1).max(2_000),
+    content: z.string().max(2_000_000),
+    savedContent: z.string().max(2_000_000),
+    expectedHash: z.string().min(1),
+    eol: eolSchema,
+    bom: z.boolean(),
+    dirty: z.boolean(),
+  })
+  .strict();
+
+export const editorDocumentRemoveSchema = z
+  .object({ projectId: z.string().min(1), path: z.string().min(1).max(2_000) })
+  .strict();
+
+export const editorSavedDocumentSchema = z
+  .object({
+    projectId: z.string().min(1),
+    path: z.string().min(1).max(2_000),
+    hash: z.string().min(1),
+    mtimeMs: z.number(),
+    size: z.number().int().nonnegative(),
+    savedContent: z.string().max(2_000_000),
+  })
+  .strict();
+
+export const editorWindowSnapshotSchema = z
+  .object({
+    projectId: z.string().min(1),
+    documents: z.array(editorDocumentStateSchema).max(100),
+    openPaths: z.array(z.string().min(1).max(2_000)).max(100),
+    activePath: z.string().min(1).max(2_000).nullable(),
+  })
+  .strict();
+
 export const rejectHunksInputSchema = z
   .object({
     conversationId: z.string().min(1),
@@ -56,3 +93,7 @@ export type ProjectFileTree = z.infer<typeof projectFileTreeSchema>;
 export type OpenedFile = z.infer<typeof openedFileSchema>;
 export type FileWriteInput = z.infer<typeof fileWriteInputSchema>;
 export type WrittenFile = z.infer<typeof writtenFileSchema>;
+export type EditorDocumentState = z.infer<typeof editorDocumentStateSchema>;
+export type EditorDocumentRemove = z.infer<typeof editorDocumentRemoveSchema>;
+export type EditorSavedDocument = z.infer<typeof editorSavedDocumentSchema>;
+export type EditorWindowSnapshot = z.infer<typeof editorWindowSnapshotSchema>;

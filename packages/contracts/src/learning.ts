@@ -76,8 +76,16 @@ export type LearningTutorResponse = z.infer<typeof learningTutorResponseSchema>;
 
 export const learningTutorRequestSchema = z
   .object({
+    requestId: z.string().min(1).max(160).optional(),
     projectId: z.string().min(1),
     filePath: z.string().min(1).max(1_000),
+    documentVersion: z.number().int().nonnegative().optional(),
+    selection: z.object({
+      startLine: z.number().int().min(1).max(1_000_000),
+      startColumn: z.number().int().min(1).max(1_000_000),
+      endLine: z.number().int().min(1).max(1_000_000),
+      endColumn: z.number().int().min(1).max(1_000_000),
+    }).strict().optional(),
     language: z.string().max(80).optional(),
     action: learningActionSchema,
     assistance: learningAssistanceSchema,
@@ -89,6 +97,31 @@ export const learningTutorRequestSchema = z
   })
   .strict();
 export type LearningTutorRequest = z.infer<typeof learningTutorRequestSchema>;
+
+export const learningProviderUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    source: z.enum(['provider', 'estimated']),
+  })
+  .strict();
+export type LearningProviderUsage = z.infer<typeof learningProviderUsageSchema>;
+
+export const learningReadinessSchema = z
+  .object({
+    enabled: z.boolean(),
+    supported: z.boolean(),
+    ready: z.boolean(),
+    provider: z.string().min(1),
+    displayName: z.string().min(1),
+    model: z.string(),
+    protocol: z.string().min(1),
+    credentialStored: z.boolean(),
+    reason: z.string().nullable(),
+    recovery: z.string().nullable(),
+  })
+  .strict();
+export type LearningReadiness = z.infer<typeof learningReadinessSchema>;
 
 export const learningConceptProgressSchema = z
   .object({
@@ -148,6 +181,7 @@ export const learningEvaluationResultSchema = z
   .object({
     response: learningTutorResponseSchema,
     progress: learningProgressSchema,
+    usage: learningProviderUsageSchema.optional(),
   })
   .strict();
 export type LearningEvaluationResult = z.infer<typeof learningEvaluationResultSchema>;

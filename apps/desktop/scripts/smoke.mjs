@@ -68,6 +68,7 @@ try {
         level: usesAgentProject ? 1 : 2,
       })
       .waitFor({ timeout: 20_000 });
+    await verifyBuildIdentifier(page);
     if (!usesAgentProject) {
       await page.getByText('Open a local repository').waitFor({ timeout: 5_000 });
     }
@@ -368,6 +369,18 @@ async function verifyThemeToggle(page) {
     await page.waitForTimeout(150);
   }
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+}
+
+async function verifyBuildIdentifier(page) {
+  const response = await page.evaluate(() => window.kaiDesktop.bootstrap());
+  if (!response.ok || !response.data.buildIdentifier || response.data.buildIdentifier.includes('unidentified')) {
+    throw new Error(`The desktop build identifier is missing: ${JSON.stringify(response)}`);
+  }
+  const rail = await page.locator('.rail-footer').innerText();
+  const suffix = response.data.buildIdentifier.split('+').at(-1);
+  if (!suffix || !rail.includes(suffix)) {
+    throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail}`);
+  }
 }
 
 async function verifyCodeLearningWorkspace(application, page) {

@@ -29,6 +29,7 @@ import {
   type ProjectRecord,
   type ServiceState,
 } from '@kai/contracts';
+import { confirmDialog, messageDialog } from './AppDialog';
 import { unwrap } from '../types';
 import { BrainPanel } from './BrainView';
 
@@ -207,7 +208,10 @@ function MaintenancePanel({
     if (fieldName.trim() && fieldValue.trim()) payload[fieldName.trim()] = fieldValue.trim();
     const result = recordOf(await onRun('brain-learn', payload, 'Memory entry submitted.'));
     if (result.rejected) {
-      window.alert(String(result.reason ?? 'The quality gate rejected the entry.'));
+      void messageDialog({
+        title: 'Memory entry rejected',
+        detail: String(result.reason ?? 'The quality gate rejected the entry.'),
+      });
       return;
     }
     setTitle('');
@@ -300,11 +304,16 @@ function MaintenancePanel({
               className="secondary-button danger-button"
               disabled={disabled || prunableTotal === 0}
               title={prunableTotal === 0 ? 'Preview the prune first; nothing is deleted until you confirm.' : undefined}
-              onClick={() => {
-                if (!window.confirm(`Delete ${prunePreview.handoffs ?? 0} old handoffs, ${prunePreview.dailyLogs ?? 0} old daily logs and ${prunePreview.resolvedEntries ?? 0} resolved entries? This cannot be undone.`)) return;
+              onClick={() => void confirmDialog({
+                title: 'Apply age-based prune?',
+                detail: `Delete ${prunePreview.handoffs ?? 0} old handoffs, ${prunePreview.dailyLogs ?? 0} old daily logs and ${prunePreview.resolvedEntries ?? 0} resolved entries? This cannot be undone.`,
+                confirmLabel: 'Apply prune',
+                destructive: true,
+              }).then((confirmed) => {
+                if (!confirmed) return;
                 void window.kaiDesktop.cognitive1Tool({ tool: 'brain_prune', arguments: { execute: true } })
                   .then(() => onRun('brain-prune', {}, 'Age-based prune applied.'));
-              }}
+              })}
             >Apply prune…</button>
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('brain-auto-learn', { source: 'manual', type: 'patterns', title: 'Manual auto-learn check', fields: { note: 'Desktop maintenance check' }, require_approval: true }, 'Auto-learn check completed.')}>Run auto-learn check</button>
           </div>
@@ -314,10 +323,15 @@ function MaintenancePanel({
               type="button"
               className="secondary-button danger-button"
               disabled={disabled || !pruneTitle.trim()}
-              onClick={() => {
-                if (!window.confirm(`Delete brain entries titled "${pruneTitle.trim()}"?`)) return;
+              onClick={() => void confirmDialog({
+                title: 'Delete matching brain entries?',
+                detail: `Delete brain entries titled "${pruneTitle.trim()}"?`,
+                confirmLabel: 'Delete entries',
+                destructive: true,
+              }).then((confirmed) => {
+                if (!confirmed) return;
                 void onRun('brain-prune', { target_title: pruneTitle.trim() }, 'Targeted brain entries deleted.');
-              }}
+              })}
             >
               Delete matching titles
             </button>

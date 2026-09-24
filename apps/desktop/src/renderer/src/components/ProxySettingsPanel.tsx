@@ -1,6 +1,7 @@
 import { Check, KeyRound, Plus, RefreshCw, Route, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { AppSettings, CredentialStatus } from '@kai/contracts';
+import { confirmDialog } from './AppDialog';
 
 type ProxySettings = AppSettings['proxy'];
 type ProviderEntry = ProxySettings['providers'][string];
@@ -451,7 +452,7 @@ function CredentialCentre({
   }
 
   async function clear(credentialId: string): Promise<void> {
-    if (!window.confirm(`Remove the stored credential for ${credentialId}?`)) return;
+    if (!(await confirmDialog({ title: 'Remove stored credential?', detail: `Remove the stored credential for ${credentialId}?`, confirmLabel: 'Remove credential', destructive: true }))) return;
     try {
       await onClear(credentialId);
       setMessage(`Removed ${credentialId}.`);
