@@ -318,7 +318,7 @@ async function startApplication(): Promise<void> {
     .catch((error) => logger.error('service_error', 'Managed service startup failed', undefined, error));
 }
 
-const DEPRECATED_DEEPSEEK_MODELS = new Set(['deepseek-flash', 'deepseek-v4-pro']);
+const LEGACY_DEEPSEEK_MODELS = new Set(['deepseek-flash', 'deepseek-v3', 'deepseek-v3.1']);
 
 async function repairProviderSettings(
   settings: SettingsService,
@@ -329,7 +329,7 @@ async function repairProviderSettings(
   const currentPreset = directProviderPreset(current.directApi.provider);
   const storedCredentials = new Set(await credentials.status());
   const deprecatedDeepSeekModel = current.directApi.provider === 'deepseek'
-    && DEPRECATED_DEEPSEEK_MODELS.has(model);
+    && LEGACY_DEEPSEEK_MODELS.has(model);
   let directApi = current.directApi;
   let changed = false;
 
@@ -362,7 +362,7 @@ async function repairProviderSettings(
   let proxy = current.proxy;
   if (
     current.proxy.credentialId === 'provider.deepseek'
-    && DEPRECATED_DEEPSEEK_MODELS.has(current.proxy.defaultModel.trim())
+    && LEGACY_DEEPSEEK_MODELS.has(current.proxy.defaultModel.trim())
   ) {
     proxy = {
       ...current.proxy,
@@ -371,7 +371,20 @@ async function repairProviderSettings(
     changed = true;
   }
 
-  if (changed) await settings.save({ ...current, directApi, proxy });
+  let learningTutor = current.learningTutor;
+  if (
+    learningTutor.provider === 'deepseek'
+    && LEGACY_DEEPSEEK_MODELS.has(learningTutor.model.trim())
+  ) {
+    learningTutor = {
+      ...learningTutor,
+      model: directProviderPreset('deepseek').defaultModel,
+      baseUrl: directProviderPreset('deepseek').defaultBaseUrl,
+    };
+    changed = true;
+  }
+
+  if (changed) await settings.save({ ...current, directApi, learningTutor, proxy });
 }
 
 async function importLocalCognitive1Brain(context: IpcContext, kaiRoot: string): Promise<void> {

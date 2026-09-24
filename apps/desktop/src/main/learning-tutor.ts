@@ -32,6 +32,33 @@ const MAX_TUTOR_RESPONSE_CHARS = 200_000;
 const MAX_TEACHING_PROFILE_CHARS = 60_000;
 const MAX_LEARNING_GUIDE_TAIL_CHARS = 18_000;
 
+const LEARNING_TUTOR_FORMAT_GUIDE = [
+  'Return one JSON object with exactly these top-level keys and no additional keys:',
+  'title, recap, purpose, analogy, steps, concepts, codePreview, lineByLine, checks, sourceNotes, followUpQuestion, suggestion.',
+  'Required value shapes:',
+  'title/recap/purpose: strings.',
+  'analogy: { title: string, explanation: string, mappings: [{ analogyPart: string, codePart: string, explanation: string }], limits: string }.',
+  'steps: at least one { title: string, explanation: string }.',
+  'concepts: [{ name: string, category: string, mastery: one of introduced|needs-practice|developing|practising|independent, evidence: string }].',
+  'codePreview: string. lineByLine: [{ line: string, explanation: string }]. checks: string[].',
+  'sourceNotes: [{ label: string, url: string or null }]. followUpQuestion: string.',
+  'suggestion: null or { code: string, language: string, replaceSelection: boolean, explanation: string }.',
+  'Use empty arrays where an optional collection has no entries, but steps must contain at least one entry. Do not rename, wrap, or omit keys.',
+].join('\n');
+
+interface LearningProviderConfiguration {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  protocol: 'responses' | 'chat-completions';
+  openRouter: boolean;
+}
+
+interface LearningProviderResult {
+  content: string;
+  usage: LearningProviderUsage | null;
+}
+
 const learningTutorJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -150,35 +177,35 @@ export class DesktopLearningTutor {
 
   async readiness(): Promise<LearningReadiness> {
     const settings = await this.settings.load();
-    const directApi = settings.directApi;
-    const preset = directProviderPreset(directApi.provider);
+    const learningTutor = settings.learningTutor;
+    const preset = directProviderPreset(learningTutor.provider);
     const supported = preset.protocol !== 'unsupported';
-    const credentialStored = Boolean(await this.credentials.has?.(directApi.credentialId));
+    const credentialStored = Boolean(await this.credentials.has?.(learningTutor.credentialId));
     let reason: string | null = null;
     let recovery: string | null = null;
-    if (!directApi.enabled) {
-      reason = 'Direct API is disabled.';
-      recovery = 'Enable Direct API in Settings and choose a supported provider.';
+    if (!learningTutor.enabled) {
+      reason = 'Learning Tutor API is disabled.';
+      recovery = 'Enable the Learning Tutor API in Settings and choose a supported provider.';
     } else if (!supported) {
       reason = `${preset.displayName} does not support the Learning Mode adapter.`;
-      recovery = 'Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider in Settings.';
-    } else if (!directApi.model.trim()) {
-      reason = 'No direct API model is configured.';
-      recovery = 'Choose a model in Settings before using Learning Mode.';
+      recovery = 'Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider in Learning Tutor settings.';
+    } else if (!learningTutor.model.trim()) {
+      reason = 'No Learning Tutor model is configured.';
+      recovery = 'Choose a model in Learning Tutor settings before using Learning Mode.';
     } else if (!this.credentials.isAvailable()) {
       reason = 'OS credential encryption is unavailable.';
       recovery = 'Repair or enable the operating-system credential store, then save the API key again.';
     } else if (!credentialStored) {
-      reason = `No ${directApi.credentialId} credential is stored.`;
-      recovery = 'Open Settings and save the provider API key.';
+      reason = `No ${learningTutor.credentialId} credential is stored.`;
+      recovery = 'Open Learning Tutor settings and save the provider API key.';
     }
     return {
-      enabled: directApi.enabled,
+      enabled: learningTutor.enabled,
       supported,
       ready: reason === null,
-      provider: directApi.provider,
+      provider: learningTutor.provider,
       displayName: preset.displayName,
-      model: directApi.model,
+      model: learningTutor.model,
       protocol: preset.protocol,
       credentialStored,
       reason,
@@ -198,13 +225,17 @@ export class DesktopLearningTutor {
       loadProjectTeachingProfile(projectRoot),
     ]);
     const prompt = tutorPrompt(request, teachingProfile, projectProfile);
-    const result = provider.protocol === 'responses'
-      ? await this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, 'kai_learning_tutor_response', learningTutorJsonSchema)
-      : await this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, 'kai_learning_tutor_response', learningTutorJsonSchema);
-    const response = parseLearningTutorContent(result.content);
+    const result = await this.requestAndParse(
+      provider,
+      prompt,
+      'kai_learning_tutor_response',
+      learningTutorJsonSchema,
+      parseLearningTutorContent,
+      (invalid, error) => tutorRepairPrompt(prompt, invalid, error),
+    );
     return {
-      response,
-      usage: result.usage ?? estimateTutorUsage(prompt, result.content),
+      response: result.value,
+      usage: result.usage,
     };
   }
 
@@ -215,40 +246,78 @@ export class DesktopLearningTutor {
   async generateTeachingDraftDetailed(input: TeachingDraftGenerateInput): Promise<{ draft: TeachingDraft; usage: LearningProviderUsage }> {
     const provider = await this.providerConfiguration();
     const prompt = teachingDraftPrompt(input);
-    const result = provider.protocol === 'responses'
-      ? await this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, 'kai_teaching_draft', teachingDraftJsonSchema)
-      : await this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, 'kai_teaching_draft', teachingDraftJsonSchema);
+    const result = await this.requestAndParse(
+      provider,
+      prompt,
+      'kai_teaching_draft',
+      teachingDraftJsonSchema,
+      parseTeachingDraftContent,
+      (invalid, error) => teachingDraftRepairPrompt(prompt, invalid, error),
+    );
     return {
-      draft: parseTeachingDraftContent(result.content),
-      usage: result.usage ?? estimateTutorUsage(prompt, result.content),
+      draft: result.value,
+      usage: result.usage,
     };
   }
 
-  private async providerConfiguration(): Promise<{
-    baseUrl: string;
-    model: string;
-    apiKey: string;
-    protocol: 'responses' | 'chat-completions';
-    openRouter: boolean;
-  }> {
+  private async providerConfiguration(): Promise<LearningProviderConfiguration> {
     const settings = await this.settings.load();
-    const directApi = settings.directApi;
-    if (!directApi.enabled) throw new Error('Enable Direct API mode in Settings before using Learning Mode.');
-    const preset = directProviderPreset(directApi.provider);
+    const learningTutor = settings.learningTutor;
+    if (!learningTutor.enabled) throw new Error('Enable the Learning Tutor API in Settings before using Learning Mode.');
+    const preset = directProviderPreset(learningTutor.provider);
     if (preset.protocol === 'unsupported') {
-      throw new Error(`${preset.displayName} does not support the direct Learning Mode adapter. Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider.`);
+      throw new Error(`${preset.displayName} does not support the Learning Mode adapter. Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider in Learning Tutor settings.`);
     }
-    if (!directApi.model.trim()) throw new Error('Set a direct API model in Settings before using Learning Mode.');
+    if (!learningTutor.model.trim()) throw new Error('Set a Learning Tutor model in Settings before using Learning Mode.');
     if (!this.credentials.isAvailable()) throw new Error('OS credential encryption is unavailable; Learning Mode will not use a plaintext API key.');
-    const apiKey = await this.credentials.get(directApi.credentialId);
-    if (!apiKey) throw new Error(`Save the ${directApi.credentialId} credential in Settings before using Learning Mode.`);
+    const apiKey = await this.credentials.get(learningTutor.credentialId);
+    if (!apiKey) throw new Error(`Save the ${learningTutor.credentialId} credential in Learning Tutor settings before using Learning Mode.`);
     return {
-      baseUrl: directApi.baseUrl,
-      model: directApi.model,
+      baseUrl: learningTutor.baseUrl,
+      model: learningTutor.model,
       apiKey,
       protocol: preset.protocol === 'responses' ? 'responses' : 'chat-completions',
-      openRouter: directApi.provider === 'openrouter',
+      openRouter: learningTutor.provider === 'openrouter',
     };
+  }
+
+  private async requestAndParse<T>(
+    provider: LearningProviderConfiguration,
+    prompt: { system: string; user: string },
+    schemaName: string,
+    schema: object,
+    parse: (content: string) => T,
+    repairPrompt: (invalidContent: string, error: unknown) => { system: string; user: string },
+  ): Promise<{ value: T; usage: LearningProviderUsage }> {
+    const first = await this.requestStructured(provider, prompt, schemaName, schema);
+    try {
+      return {
+        value: parse(first.content),
+        usage: first.usage ?? estimateTutorUsage(prompt, first.content),
+      };
+    } catch (firstError) {
+      const repair = repairPrompt(first.content, firstError);
+      const repaired = await this.requestStructured(provider, repair, schemaName, schema);
+      try {
+        return {
+          value: parse(repaired.content),
+          usage: combinedTutorUsage(first, repaired, prompt, repair),
+        };
+      } catch (repairError) {
+        throw new Error(`The provider returned an invalid Learning Tutor response after one automatic repair attempt. ${messageOf(repairError)}`);
+      }
+    }
+  }
+
+  private async requestStructured(
+    provider: LearningProviderConfiguration,
+    prompt: { system: string; user: string },
+    schemaName: string,
+    schema: object,
+  ): Promise<LearningProviderResult> {
+    return provider.protocol === 'responses'
+      ? this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema)
+      : this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, schemaName, schema);
   }
 
   private async requestResponses(
@@ -258,7 +327,7 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     schemaName: string,
     schema: object,
-  ): Promise<{ content: string; usage: LearningProviderUsage | null }> {
+  ): Promise<LearningProviderResult> {
     const response = await fetch(responsesUrl(baseUrl), {
       method: 'POST',
       headers: {
@@ -294,7 +363,7 @@ export class DesktopLearningTutor {
     openRouter: boolean,
     schemaName: string,
     schema: object,
-  ): Promise<{ content: string; usage: LearningProviderUsage | null }> {
+  ): Promise<LearningProviderResult> {
     const structured = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, true, schemaName, schema);
     if (structured.ok) return { content: structured.content, usage: structured.usage };
     if (![400, 404, 415, 422].includes(structured.status)) throw structured.error;
@@ -353,11 +422,20 @@ export class DesktopLearningTutor {
 }
 
 export function parseLearningTutorContent(content: string): LearningTutorResponse {
-  return learningTutorResponseSchema.parse(parseJsonResponse(content, 'tutor'));
+  return parseStructuredResponse(learningTutorResponseSchema, content, 'tutor');
 }
 
 export function parseTeachingDraftContent(content: string): TeachingDraft {
-  return teachingDraftSchema.parse(parseJsonResponse(content, 'teaching draft'));
+  return parseStructuredResponse(teachingDraftSchema, content, 'teaching draft');
+}
+
+function parseStructuredResponse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: Array<string | number>; message: string }> } } }, content: string, label: string): T {
+  const parsed = schema.safeParse(parseJsonResponse(content, label));
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues.slice(0, 8)
+    .map((issue) => `${issue.path.join('.') || label}: ${issue.message}`)
+    .join('; ');
+  throw new Error(`The provider ${label} JSON did not match the required format: ${issues || 'unknown schema error'}.`);
 }
 
 function parseJsonResponse(content: string, label: string): unknown {
@@ -426,6 +504,7 @@ function tutorPrompt(
   const system = [
     'You are KAI Learning Mode, an evidence-based coding tutor inside a desktop editor.',
     'Return only JSON matching the provided schema. Never include markdown fences around the JSON.',
+    LEARNING_TUTOR_FORMAT_GUIDE,
     'Be precise, age-neutral, and technically correct. Do not invent APIs, files, test results, or learner ability.',
     'Use the requested assistance level consistently.',
     'A recap is mandatory before the teaching block.',
@@ -456,6 +535,67 @@ function tutorPrompt(
     `Active code:\n\`\`\`\n${code}\n\`\`\``,
   ].filter(Boolean).join('\n\n');
   return { system, user };
+}
+
+function tutorRepairPrompt(
+  original: { system: string; user: string },
+  invalidContent: string,
+  error: unknown,
+): { system: string; user: string } {
+  return {
+    system: [
+      'You repair malformed structured responses for KAI Learning Mode.',
+      'Return only one corrected JSON object. Never include markdown fences, commentary, or an explanation.',
+      LEARNING_TUTOR_FORMAT_GUIDE,
+    ].join('\n\n'),
+    user: [
+      'The previous response did not match the required Learning Tutor contract.',
+      `Validation error: ${messageOf(error)}`,
+      'Correct the previous response without inventing facts. Preserve any useful teaching content, but rename or move fields into the required contract.',
+      `Invalid response:\n${limitMiddle(invalidContent, 80_000)}`,
+      `Original request context:\n${limitMiddle(original.user, 80_000)}`,
+    ].join('\n\n'),
+  };
+}
+
+function teachingDraftRepairPrompt(
+  original: { system: string; user: string },
+  invalidContent: string,
+  error: unknown,
+): { system: string; user: string } {
+  return {
+    system: [
+      'You repair malformed structured responses for KAI teaching-library drafts.',
+      'Return only one JSON object with exactly title, description, and content. Never include markdown fences or commentary.',
+    ].join('\n\n'),
+    user: [
+      `Validation error: ${messageOf(error)}`,
+      `Invalid response:\n${limitMiddle(invalidContent, 80_000)}`,
+      `Original request:\n${limitMiddle(original.user, 40_000)}`,
+    ].join('\n\n'),
+  };
+}
+
+function combinedTutorUsage(
+  first: LearningProviderResult,
+  repaired: LearningProviderResult,
+  firstPrompt: { system: string; user: string },
+  repairPrompt: { system: string; user: string },
+): LearningProviderUsage {
+  if (first.usage && repaired.usage && first.usage.source === 'provider' && repaired.usage.source === 'provider') {
+    return {
+      inputTokens: first.usage.inputTokens + repaired.usage.inputTokens,
+      outputTokens: first.usage.outputTokens + repaired.usage.outputTokens,
+      source: 'provider',
+    };
+  }
+  const firstUsage = first.usage ?? estimateTutorUsage(firstPrompt, first.content);
+  const repairedUsage = repaired.usage ?? estimateTutorUsage(repairPrompt, repaired.content);
+  return {
+    inputTokens: firstUsage.inputTokens + repairedUsage.inputTokens,
+    outputTokens: firstUsage.outputTokens + repairedUsage.outputTokens,
+    source: 'estimated',
+  };
 }
 
 function limitMiddle(value: string, maxCharacters: number): string {
@@ -540,6 +680,10 @@ function estimateTutorUsage(
     outputTokens: Math.ceil(content.length / 4),
     source: 'estimated',
   };
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function providerFailure(response: Response): Promise<Error> {

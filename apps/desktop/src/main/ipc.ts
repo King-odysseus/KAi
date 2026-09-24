@@ -86,6 +86,7 @@ import type { DesktopLearningTutor } from './learning-tutor';
 import type { TeachingLibraryStore } from './teaching-library';
 import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
+import { listProviderModels } from './provider-models';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWindowSession } from './desktop-windows';
 import type { EditorSessionManager } from './editor-sessions';
@@ -185,6 +186,7 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'projects:open', async ({ id }, request) => openProject(context, id, request.session));
   handle(context, 'projects:remove', async ({ id }, request) => removeProject(context, id, request.session));
   handle(context, 'settings:get', async () => context.settings.load());
+  handle(context, 'providers:list-models', async (request) => listProviderModels(request, context.credentials));
   handle(context, 'settings:update', async (update) => {
     const snapshot: { previous: AppSettings | null } = { previous: null };
     const merged = await context.settings.update((settings) => {

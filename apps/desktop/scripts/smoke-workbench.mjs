@@ -298,6 +298,7 @@ async function createProject() {
     logRetentionEntries: 2000,
     diagnosticsEnabled: true,
     directApi: { enabled: false, provider: 'openai', model: '', baseUrl: 'https://api.openai.com/v1', credentialId: 'provider.openai' },
+    learningTutor: { enabled: false, provider: 'openai', model: 'gpt-6-astra', baseUrl: 'https://api.openai.com/v1', credentialId: 'provider.openai' },
     mcpServers: [],
     cognitive1: { enabled: false, endpoint: 'http://127.0.0.1:9876', dataPath: null },
     proxy: { enabled: false, port: 8082, targetBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat', credentialId: 'provider.deepseek' },

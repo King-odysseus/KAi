@@ -1,4 +1,5 @@
-import type { ProviderId } from './primitives';
+import { z } from 'zod';
+import { providerIdSchema, type ProviderId } from './primitives';
 
 export type DirectProviderProtocol = 'responses' | 'chat-completions' | 'unsupported';
 
@@ -13,6 +14,17 @@ export interface DirectProviderPreset {
   supportsTools: boolean;
   models: readonly string[];
 }
+
+export const providerModelCatalogSchema = z
+  .object({
+    provider: providerIdSchema,
+    models: z.array(z.string().trim().min(1).max(500)).max(2_000),
+    source: z.enum(['live', 'preset']),
+    fetchedAt: z.string().datetime(),
+    error: z.string().max(2_000).nullable(),
+  })
+  .strict();
+export type ProviderModelCatalog = z.infer<typeof providerModelCatalogSchema>;
 
 function providerUrl(hostAndPath: string): string {
   return `https://${hostAndPath}`;
@@ -63,10 +75,18 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
     displayName: 'DeepSeek API',
     protocol: 'chat-completions',
     defaultBaseUrl: providerUrl('api.deepseek.com'),
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-pro',
     credentialId: 'provider.deepseek',
     supportsTools: true,
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    models: [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'deepseek-v4.1-flash',
+      'DeepSeek-V4.1-Flash',
+      'DeepSeek-V4-Pro-0813',
+      'deepseek-chat',
+      'deepseek-reasoner',
+    ],
   },
   openrouter: {
     id: 'openrouter',
@@ -84,7 +104,7 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
       'anthropic/claude-opus-5.5',
       'anthropic/claude-fable-5.1',
       'google/gemini-3.8-flash',
-      'x-ai/grok-4.7',
+      'x-ai/grok-4.20',
       'qwen/qwen3.8-max-0902',
       'deepseek/deepseek-v4.1-flash',
       'z-ai/glm-5.3',
@@ -99,7 +119,7 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
     defaultModel: 'llama-3.3-70b-versatile',
     credentialId: 'provider.groq',
     supportsTools: true,
-    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b'],
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
   },
   mistral: {
     id: 'mistral',
@@ -116,10 +136,19 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
     displayName: 'xAI API',
     protocol: 'chat-completions',
     defaultBaseUrl: providerUrl('api.x.ai/v1'),
-    defaultModel: 'grok-4.7',
+    defaultModel: 'grok-4.20',
     credentialId: 'provider.xai',
     supportsTools: true,
-    models: ['grok-4.7', 'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-build-0.1'],
+    models: [
+      'grok-4.20',
+      'grok-4.20-reasoning',
+      'grok-4.20-fast',
+      'grok-4.7',
+      'grok-4.6',
+      'grok-4.5',
+      'grok-4.3',
+      'grok-build-0.1',
+    ],
   },
   together: {
     id: 'together',

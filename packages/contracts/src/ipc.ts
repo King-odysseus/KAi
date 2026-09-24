@@ -60,7 +60,9 @@ import {
   projectPreferencesV1Schema,
   projectRecordV1Schema,
   proxyServiceSettingsSchema,
+  learningTutorSettingsSchema,
 } from './domain';
+import { providerModelCatalogSchema, type ProviderModelCatalog } from './direct-providers';
 import {
   agentIdSchema,
   autonomyModeSchema,
@@ -205,6 +207,7 @@ export const ipcChannels = [
   'projects:remove',
   'settings:get',
   'settings:update',
+  'providers:list-models',
   'services:status',
   'services:start',
   'services:stop',
@@ -363,12 +366,20 @@ export const ipcInputSchemas = {
         })
         .strict()
         .optional(),
+      learningTutor: learningTutorSettingsSchema.partial().strict().optional(),
       cognitive1: cognitive1ServiceSettingsSchema.partial().strict().optional(),
       proxy: proxyServiceSettingsSchema.partial().strict().optional(),
       usageBudget: usageBudgetSchema.partial().strict().optional(),
       notifications: notificationSettingsSchema.partial().strict().optional(),
       updates: updateSettingsSchema.partial().strict().optional(),
       agentModels: z.record(agentIdSchema, cliModelNameSchema).optional(),
+    })
+    .strict(),
+  'providers:list-models': z
+    .object({
+      provider: providerIdSchema,
+      baseUrl: z.string().url(),
+      credentialId: z.string().min(1),
     })
     .strict(),
   'services:status': emptyInputSchema,
@@ -570,6 +581,7 @@ export const agentRunResponseSchema = agentRunResultSchema;
 export const agentCancelResponseSchema = z.boolean();
 export const agentSignInResponseSchema = agentSignInResultSchema;
 export const directApiCapabilityResponseSchema = directApiCapabilitySchema;
+export const providerModelCatalogResponseSchema = providerModelCatalogSchema;
 export const contextPreviewResponseSchema = contextPreviewSchema;
 export const usageSummaryResponseSchema = usageSummarySchema;
 export const projectFileTreeResponseSchema = projectFileTreeSchema;
@@ -646,6 +658,7 @@ export interface SettingsUpdate {
   diagnosticsEnabled?: boolean;
   mcpServers?: AppSettings['mcpServers'];
   directApi?: Partial<AppSettings['directApi']>;
+  learningTutor?: Partial<AppSettings['learningTutor']>;
   cognitive1?: Partial<AppSettings['cognitive1']>;
   proxy?: Partial<AppSettings['proxy']>;
   usageBudget?: Partial<AppSettings['usageBudget']>;
@@ -770,6 +783,7 @@ export interface KaiDesktopBridge {
   deleteBackup(id: string): Promise<IpcResponse<{ deleted: boolean }>>;
   agentCapabilities(): Promise<IpcResponse<AgentCapability[]>>;
   directApiCapability(): Promise<IpcResponse<DirectApiCapability>>;
+  listProviderModels(request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }): Promise<IpcResponse<ProviderModelCatalog>>;
   previewContext(request: ContextPreviewInput): Promise<IpcResponse<ContextPreview>>;
   runAgent(request: AgentRunRequest): Promise<IpcResponse<AgentRunResult>>;
   cancelAgent(conversationId: string): Promise<IpcResponse<boolean>>;

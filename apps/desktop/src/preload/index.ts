@@ -125,6 +125,7 @@ const bridge: KaiDesktopBridge = {
   deleteBackup: (id) => ipcRenderer.invoke('backups:delete', { id }),
   agentCapabilities: () => ipcRenderer.invoke('agents:capabilities', {}),
   directApiCapability: () => ipcRenderer.invoke('agents:api-capability', {}),
+  listProviderModels: (request) => ipcRenderer.invoke('providers:list-models', request),
   previewContext: (request) => ipcRenderer.invoke('context:preview', request),
   runAgent: (request) => ipcRenderer.invoke('agents:run', request),
   cancelAgent: (conversationId) => ipcRenderer.invoke('agents:cancel', { conversationId }),

@@ -742,14 +742,16 @@ export function App(): ReactNode {
     setActiveConversationId(forked.id);
   }
 
-  async function saveSettings(update: SettingsUpdate): Promise<void> {
+  async function saveSettings(update: SettingsUpdate): Promise<boolean> {
     const settings = await perform(() => window.kaiDesktop.updateSettings(update).then(unwrap), 'Saving settings');
     if (settings) {
       const services = await window.kaiDesktop.serviceStatus().then(unwrap);
       setBootstrap((current) => (current ? { ...current, settings, services } : current));
       if (!activeConversation) setSelectedAgent(settings.defaultAgent);
       await refreshDirectApiStatus();
+      return true;
     }
+    return false;
   }
 
   async function saveProjectPreferences(preferences: ProjectPreferences): Promise<void> {
@@ -850,20 +852,24 @@ export function App(): ReactNode {
     if (services) setBootstrap((current) => (current ? { ...current, services } : current));
   }
 
-  async function saveCredential(id: string, value: string): Promise<void> {
+  async function saveCredential(id: string, value: string): Promise<boolean> {
     const status = await perform(() => window.kaiDesktop.setCredential(id, value).then(unwrap), 'Saving credential');
     if (status) {
       setCredentials(status);
       await refreshDirectApiStatus();
+      return true;
     }
+    return false;
   }
 
-  async function clearCredential(id: string): Promise<void> {
+  async function clearCredential(id: string): Promise<boolean> {
     const status = await perform(() => window.kaiDesktop.clearCredential(id).then(unwrap), 'Removing credential');
     if (status) {
       setCredentials(status);
       await refreshDirectApiStatus();
+      return true;
     }
+    return false;
   }
 
   function beginResize(kind: 'sidebar' | 'context', event: ReactPointerEvent<HTMLDivElement>): void {
@@ -939,9 +945,9 @@ export function App(): ReactNode {
               busy={Boolean(busy)}
               logs={logs}
               credentialStatus={credentials}
-              onSave={(update) => saveSettings(update)}
-              onSaveCredential={(id, value) => saveCredential(id, value)}
-              onClearCredential={(id) => clearCredential(id)}
+              onSave={(update) => void saveSettings(update)}
+              onSaveCredential={(id, value) => void saveCredential(id, value)}
+              onClearCredential={(id) => void clearCredential(id)}
               onReload={loadApplication}
             />
           </ServiceView>
@@ -986,10 +992,11 @@ export function App(): ReactNode {
             dataLocations={bootstrap.dataLocations}
             logs={logs}
             busy={Boolean(busy)}
-            onSave={(update) => void saveSettings(update)}
+            onSave={(update) => saveSettings(update)}
             onImportBrain={() => void importBrain()}
-            onSaveCredential={(id, value) => void saveCredential(id, value)}
-            onClearCredential={(id) => void clearCredential(id)}
+            onSaveCredential={(id, value) => saveCredential(id, value)}
+            onClearCredential={(id) => clearCredential(id)}
+            onListProviderModels={(request) => window.kaiDesktop.listProviderModels(request).then(unwrap)}
             onListBackups={listConfigBackups}
             onCreateBackup={createConfigBackup}
             onRestoreBackup={restoreConfigBackup}

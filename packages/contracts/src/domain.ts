@@ -39,7 +39,7 @@ export const cognitive1OverwatchSettingsSchema = z
     provider: z.enum(['deepseek', 'claude', 'openai']).default('deepseek'),
     baseUrl: z.string().url().default('https://api.deepseek.com'),
     credentialId: z.string().min(1).default('cognitive1.overwatch'),
-    model: z.string().min(1).default('deepseek-chat'),
+    model: z.string().min(1).default('deepseek-v4-pro'),
     autoRejectThreshold: z.number().min(0).max(1).default(0.85),
   })
   .strict();
@@ -54,7 +54,7 @@ export const cognitive1ServiceSettingsSchema = z
       provider: 'deepseek',
       baseUrl: 'https://api.deepseek.com',
       credentialId: 'cognitive1.overwatch',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-pro',
       autoRejectThreshold: 0.85,
     }),
   })
@@ -217,6 +217,16 @@ export const directApiSettingsSchema = z
   })
   .strict();
 
+export const learningTutorSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    provider: providerIdSchema.default('openai'),
+    model: z.string().default('gpt-6-astra'),
+    baseUrl: z.string().url().default('https://api.openai.com/v1'),
+    credentialId: z.string().min(1).default('provider.openai'),
+  })
+  .strict();
+
 const mcpServerBaseSchema = {
   id: z.string().min(1).max(100),
   name: z.string().min(1).max(100),
@@ -268,6 +278,13 @@ export const appSettingsV1Schema = z
     diagnosticsEnabled: z.boolean(),
     installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
     directApi: directApiSettingsSchema,
+    learningTutor: learningTutorSettingsSchema.default({
+      enabled: true,
+      provider: 'openai',
+      model: 'gpt-6-astra',
+      baseUrl: 'https://api.openai.com/v1',
+      credentialId: 'provider.openai',
+    }),
     mcpServers: z.array(mcpServerSettingsSchema),
     cognitive1: cognitive1ServiceSettingsSchema,
     proxy: proxyServiceSettingsSchema,
@@ -337,6 +354,7 @@ export const conversationRecordV1Schema = z
 
 export type ProjectRecord = z.infer<typeof projectRecordV1Schema>;
 export type AppSettings = z.infer<typeof appSettingsV1Schema>;
+export type LearningTutorSettings = z.infer<typeof learningTutorSettingsSchema>;
 export type McpServerSettings = z.infer<typeof mcpServerSettingsSchema>;
 export type McpStdioServerSettings = z.infer<typeof mcpStdioServerSettingsSchema>;
 export type McpHttpServerSettings = z.infer<typeof mcpHttpServerSettingsSchema>;
@@ -365,6 +383,13 @@ export function createDefaultSettings(): AppSettings {
       baseUrl: 'https://api.openai.com/v1',
       credentialId: 'provider.openai',
     },
+    learningTutor: {
+      enabled: true,
+      provider: 'openai',
+      model: 'gpt-6-astra',
+      baseUrl: 'https://api.openai.com/v1',
+      credentialId: 'provider.openai',
+    },
     mcpServers: [{
       id: PLAYWRIGHT_MCP_SERVER_ID,
       name: 'Playwright Browser',
@@ -385,7 +410,7 @@ export function createDefaultSettings(): AppSettings {
         provider: 'deepseek',
         baseUrl: 'https://api.deepseek.com',
         credentialId: 'cognitive1.overwatch',
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-pro',
         autoRejectThreshold: 0.85,
       },
     },
@@ -393,7 +418,7 @@ export function createDefaultSettings(): AppSettings {
       enabled: false,
       port: 8082,
       targetBaseUrl: 'https://api.deepseek.com',
-      defaultModel: 'deepseek-chat',
+      defaultModel: 'deepseek-v4-pro',
       credentialId: 'provider.deepseek',
     },
   });

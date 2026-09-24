@@ -94,7 +94,7 @@ try {
       throw new Error('Universal Agent Proxy did not reach ready state in the desktop host.');
     }
     const repairedSettings = JSON.parse(await readFile(path.join(userDataDirectory, 'settings.json'), 'utf8'));
-    if (repairedSettings.proxy?.defaultModel !== 'deepseek-chat') {
+    if (repairedSettings.proxy?.defaultModel !== 'deepseek-v4-pro') {
       throw new Error(`Deprecated proxy model was not repaired: ${JSON.stringify(repairedSettings.proxy)}`);
     }
     const proxyAccess = await verifyAuthenticatedLoopback(electronApp, page, enginePorts);
@@ -164,6 +164,14 @@ try {
   const providerOptions = await providerSelect.locator('option').allTextContents();
   if (!providerOptions.includes('OpenRouter') || !providerOptions.includes('DeepSeek API')) {
     throw new Error(`Direct API provider presets are incomplete: ${providerOptions.join(', ')}`);
+  }
+  const learningApiSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
+  await learningApiSection.getByText('Dedicated provider connection for Learn, Guided, Pair, and Copilot.', { exact: false }).waitFor();
+  await learningApiSection.getByRole('button', { name: 'Refresh models' }).waitFor();
+  const learningProviderSelect = learningApiSection.locator('label.field:has(span:text-is("Provider")) > select');
+  const learningProviderOptions = await learningProviderSelect.locator('option').allTextContents();
+  if (!learningProviderOptions.includes('OpenRouter') || !learningProviderOptions.includes('DeepSeek API')) {
+    throw new Error(`Learning Tutor provider presets are incomplete: ${learningProviderOptions.join(', ')}`);
   }
   await verifySelectContrast(providerSelect, 'Direct API provider');
   await page.getByRole('button', { name: 'Save settings' }).click();

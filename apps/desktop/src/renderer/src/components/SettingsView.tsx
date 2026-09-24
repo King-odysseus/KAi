@@ -1,21 +1,30 @@
-import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, KeyRound, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
-import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, SettingsUpdate } from '@kai/contracts';
+import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
 type StdioMcpServer = Extract<McpServer, { transport: 'stdio' }>;
 type McpServerPatch = Partial<HttpMcpServer> | Partial<StdioMcpServer>;
+type ProviderScope = 'direct' | 'learning';
+type FeedbackScope = ProviderScope | 'generic' | 'overwatch';
+type FeedbackKind = 'success' | 'error' | 'pending';
+interface SettingsFeedback { kind: FeedbackKind; message: string }
 
-export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, onSave, onImportBrain, onSaveCredential, onClearCredential, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; onSave: (update: SettingsUpdate) => void; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => void; onClearCredential: (id: string) => void; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void> }): ReactNode {
+export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void> }): ReactNode {
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
   const [directCredentialValue, setDirectCredentialValue] = useState('');
+  const [learningCredentialValue, setLearningCredentialValue] = useState('');
   const [overwatchCredentialValue, setOverwatchCredentialValue] = useState('');
+  const [providerModels, setProviderModels] = useState<Record<ProviderScope, ProviderModelCatalog | null>>({ direct: null, learning: null });
+  const [refreshingModels, setRefreshingModels] = useState<ProviderScope | null>(null);
+  const [modelFeedback, setModelFeedback] = useState<Record<ProviderScope, SettingsFeedback | null>>({ direct: null, learning: null });
+  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, generic: null, overwatch: null });
   const [backups, setBackups] = useState<ConfigBackup[]>([]);
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
@@ -26,6 +35,13 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     void refreshBackups();
   }, []);
   const directPreset = directProviderPreset(draft.directApi.provider);
+  const learningPreset = directProviderPreset(draft.learningTutor.provider);
+  const directModels = providerModels.direct?.provider === draft.directApi.provider
+    ? providerModels.direct.models
+    : directPreset.models;
+  const learningModels = providerModels.learning?.provider === draft.learningTutor.provider
+    ? providerModels.learning.models
+    : learningPreset.models;
   const overwatchCredentialReady = credentialStatus.ids.includes(draft.cognitive1.overwatch.credentialId);
   const setAgentModel = (agent: 'claude' | 'codex' | 'qwen' | 'gemini', value: string): void => {
     setDraft((current) => {
@@ -44,10 +60,27 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   const updateDirectProvider = (provider: AppSettings['directApi']['provider']): void => {
     const preset = directProviderPreset(provider);
     setCredentialId(preset.credentialId);
+    setProviderModels((current) => ({ ...current, direct: null }));
+    setModelFeedback((current) => ({ ...current, direct: null }));
     setDraft((current) => ({
       ...current,
       directApi: {
         ...current.directApi,
+        provider,
+        baseUrl: preset.defaultBaseUrl,
+        model: preset.defaultModel,
+        credentialId: preset.credentialId,
+      },
+    }));
+  };
+  const updateLearningProvider = (provider: AppSettings['learningTutor']['provider']): void => {
+    const preset = directProviderPreset(provider);
+    setProviderModels((current) => ({ ...current, learning: null }));
+    setModelFeedback((current) => ({ ...current, learning: null }));
+    setDraft((current) => ({
+      ...current,
+      learningTutor: {
+        ...current.learningTutor,
         provider,
         baseUrl: preset.defaultBaseUrl,
         model: preset.defaultModel,
@@ -81,6 +114,96 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     } finally {
       setBackupsLoading(false);
     }
+  }
+
+  async function refreshProviderModels(scope: ProviderScope): Promise<void> {
+    const configuration = scope === 'direct' ? draft.directApi : draft.learningTutor;
+    setRefreshingModels(scope);
+    setModelFeedback((current) => ({ ...current, [scope]: { kind: 'pending', message: 'Refreshing provider models...' } }));
+    try {
+      const catalog = await onListProviderModels({
+        provider: configuration.provider,
+        baseUrl: configuration.baseUrl,
+        credentialId: configuration.credentialId,
+      });
+      setProviderModels((current) => ({ ...current, [scope]: catalog }));
+      setModelFeedback((current) => ({
+        ...current,
+        [scope]: catalog.source === 'live'
+          ? { kind: 'success', message: `Loaded ${catalog.models.length} live models from ${directProviderPreset(configuration.provider).displayName}.` }
+          : { kind: 'error', message: catalog.error ?? 'Live model refresh was unavailable; using the bundled catalog.' },
+      }));
+    } catch (caught) {
+      setModelFeedback((current) => ({ ...current, [scope]: { kind: 'error', message: messageOf(caught) } }));
+    } finally {
+      setRefreshingModels((current) => current === scope ? null : current);
+    }
+  }
+
+  async function saveProviderKey(scope: ProviderScope): Promise<void> {
+    const configuration = scope === 'direct' ? draft.directApi : draft.learningTutor;
+    const value = scope === 'direct' ? directCredentialValue : learningCredentialValue;
+    if (!value.trim()) return;
+    setCredentialFeedback((current) => ({ ...current, [scope]: { kind: 'pending', message: 'Saving key in the OS vault...' } }));
+    const settingsSaved = await onSave(scope === 'direct' ? { directApi: configuration } : { learningTutor: configuration });
+    const keySaved = await onSaveCredential(configuration.credentialId, value);
+    if (settingsSaved && keySaved) {
+      if (scope === 'direct') setDirectCredentialValue('');
+      else setLearningCredentialValue('');
+      setCredentialFeedback((current) => ({
+        ...current,
+        [scope]: { kind: 'success', message: `${directProviderPreset(configuration.provider).displayName} key saved in the OS vault and this connection is ready to use.` },
+      }));
+      return;
+    }
+    setCredentialFeedback((current) => ({
+      ...current,
+      [scope]: {
+        kind: 'error',
+        message: keySaved
+          ? 'The key was saved, but the provider settings could not be updated. Use Save settings and try again.'
+          : 'The key could not be saved. Check the OS credential vault and try again.',
+      },
+    }));
+  }
+
+  async function clearProviderCredential(scope: ProviderScope): Promise<void> {
+    const configuration = scope === 'direct' ? draft.directApi : draft.learningTutor;
+    const cleared = await onClearCredential(configuration.credentialId);
+    setCredentialFeedback((current) => ({
+      ...current,
+      [scope]: {
+        kind: cleared ? 'success' : 'error',
+        message: cleared ? 'Credential removed from the OS vault.' : 'The credential could not be removed.',
+      },
+    }));
+  }
+
+  async function saveNamedCredential(id: string, value: string, scope: FeedbackScope): Promise<void> {
+    setCredentialFeedback((current) => ({ ...current, [scope]: { kind: 'pending', message: 'Saving credential...' } }));
+    const saved = await onSaveCredential(id, value);
+    if (saved) {
+      if (scope === 'generic') setCredentialValue('');
+      if (scope === 'overwatch') setOverwatchCredentialValue('');
+    }
+    setCredentialFeedback((current) => ({
+      ...current,
+      [scope]: {
+        kind: saved ? 'success' : 'error',
+        message: saved ? `Credential "${id}" saved in the OS vault.` : 'The credential could not be saved.',
+      },
+    }));
+  }
+
+  async function clearNamedCredential(id: string, scope: FeedbackScope): Promise<void> {
+    const cleared = await onClearCredential(id);
+    setCredentialFeedback((current) => ({
+      ...current,
+      [scope]: {
+        kind: cleared ? 'success' : 'error',
+        message: cleared ? `Credential "${id}" removed from the OS vault.` : 'The credential could not be removed.',
+      },
+    }));
   }
 
   async function createBackup(): Promise<void> {
@@ -146,7 +269,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <NotificationToggle label="Notify when approval is needed" hint="A tool is waiting for your decision" checked={draft.notifications.onApproval} onChange={(onApproval) => setDraft({ ...draft, notifications: { ...draft.notifications, onApproval } })} />
             <NotificationToggle label="Notify on budget warnings" hint="When a usage limit reaches 80% or 100%" checked={draft.notifications.onBudget} onChange={(onBudget) => setDraft({ ...draft, notifications: { ...draft.notifications, onBudget } })} />
           </div>
-          <button type="button" className="primary-button align-end" disabled={busy} onClick={() => onSave({
+          <button type="button" className="primary-button align-end" disabled={busy} onClick={() => void onSave({
             defaultAgent: draft.defaultAgent,
             defaultRoute: draft.defaultRoute,
             defaultAutonomy: draft.defaultAutonomy,
@@ -156,6 +279,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             notifications: draft.notifications,
             agentModels: draft.agentModels,
             directApi: draft.directApi,
+            learningTutor: draft.learningTutor,
             mcpServers: draft.mcpServers,
             cognitive1: draft.cognitive1,
             proxy: draft.proxy,
@@ -164,37 +288,69 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
 
         <UpdatesPanel settings={settings} />
 
-        <section className="settings-section">
-          <div className="section-title"><Cloud size={17} /><span>Direct API</span></div>
-          <label className="toggle-row"><span><strong>Enable direct API mode</strong><small>Uses a provider key from the OS vault</small></span><input type="checkbox" checked={draft.directApi.enabled} onChange={(event) => setDraft({ ...draft, directApi: { ...draft.directApi, enabled: event.target.checked } })} /></label>
-          <div className="field-grid">
-            <SelectField label="Provider" value={draft.directApi.provider} onChange={(value) => updateDirectProvider(value as AppSettings['directApi']['provider'])} options={DIRECT_PROVIDER_ORDER.map((id) => ({ value: id, label: directProviderPreset(id).displayName }))} />
-            <TextField label="Model" value={draft.directApi.model} list="direct-api-models" onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, model: value } })} />
-            <TextField label="Base URL" value={draft.directApi.baseUrl} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, baseUrl: value } })} />
-            <TextField label="Credential ID" value={draft.directApi.credentialId} onChange={(value) => setDraft({ ...draft, directApi: { ...draft.directApi, credentialId: value } })} />
-          </div>
-          <datalist id="direct-api-models">{directPreset.models.map((model) => <option key={model} value={model} />)}</datalist>
-          <div className="credential-form">
-            <TextField label="API key" value={directCredentialValue} type="password" onChange={setDirectCredentialValue} />
-            <div className="button-row align-start">
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={!directCredentialValue.trim() || !credentialStatus.available || busy}
-                onClick={() => {
-                  onSave({ directApi: draft.directApi });
-                  onSaveCredential(draft.directApi.credentialId, directCredentialValue);
-                  setDirectCredentialValue('');
-                }}
-              >
-                <KeyRound size={15} />
-                <span>Save key and use provider</span>
-              </button>
-              <span className="settings-note">{credentialStatus.ids.includes(draft.directApi.credentialId) ? 'Credential stored in the OS vault.' : 'No credential stored for this ID.'}</span>
-            </div>
-          </div>
-          <p className="settings-note">{directPreset.protocol === 'responses' ? 'Uses the OpenAI Responses API. ' : 'Uses the OpenAI-compatible Chat Completions API. '}Assistant text streams into the workspace, and built-in project tools plus enabled MCP servers use the same approval rules.</p>
-        </section>
+        <ProviderConnectionSection
+          title="Learning Tutor API"
+          icon={<GraduationCap size={17} />}
+          detail="Dedicated provider connection for Learn, Guided, Pair, and Copilot. It stays independent from Compose and Direct API mode."
+          toggleLabel="Enable Learning Tutor API"
+          toggleHint="Uses its own provider and OS-vault credential"
+          enabled={draft.learningTutor.enabled}
+          provider={draft.learningTutor.provider}
+          model={draft.learningTutor.model}
+          baseUrl={draft.learningTutor.baseUrl}
+          credentialId={draft.learningTutor.credentialId}
+          models={learningModels}
+          catalog={providerModels.learning}
+          modelFeedback={modelFeedback.learning}
+          refreshingModels={refreshingModels === 'learning'}
+          credentialValue={learningCredentialValue}
+          credentialStored={credentialStatus.ids.includes(draft.learningTutor.credentialId)}
+          credentialFeedback={credentialFeedback.learning}
+          busy={busy}
+          modelListId="learning-tutor-models"
+          onEnabledChange={(enabled) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, enabled } })}
+          onProviderChange={(provider) => updateLearningProvider(provider)}
+          onModelChange={(model) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, model } })}
+          onBaseUrlChange={(baseUrl) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, baseUrl } })}
+          onCredentialIdChange={(id) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, credentialId: id } })}
+          onCredentialValueChange={setLearningCredentialValue}
+          onRefreshModels={() => void refreshProviderModels('learning')}
+          onSaveKey={() => void saveProviderKey('learning')}
+          onClearKey={() => void clearProviderCredential('learning')}
+          vaultAvailable={credentialStatus.available}
+        />
+
+        <ProviderConnectionSection
+          title="Direct API"
+          icon={<Cloud size={17} />}
+          detail="Provider connection used by Compose when execution is set to API. Changing it does not change Learning Tutor."
+          toggleLabel="Enable direct API mode"
+          toggleHint="Uses a provider key from the OS vault"
+          enabled={draft.directApi.enabled}
+          provider={draft.directApi.provider}
+          model={draft.directApi.model}
+          baseUrl={draft.directApi.baseUrl}
+          credentialId={draft.directApi.credentialId}
+          models={directModels}
+          catalog={providerModels.direct}
+          modelFeedback={modelFeedback.direct}
+          refreshingModels={refreshingModels === 'direct'}
+          credentialValue={directCredentialValue}
+          credentialStored={credentialStatus.ids.includes(draft.directApi.credentialId)}
+          credentialFeedback={credentialFeedback.direct}
+          busy={busy}
+          modelListId="direct-api-models"
+          onEnabledChange={(enabled) => setDraft({ ...draft, directApi: { ...draft.directApi, enabled } })}
+          onProviderChange={(provider) => updateDirectProvider(provider)}
+          onModelChange={(model) => setDraft({ ...draft, directApi: { ...draft.directApi, model } })}
+          onBaseUrlChange={(baseUrl) => setDraft({ ...draft, directApi: { ...draft.directApi, baseUrl } })}
+          onCredentialIdChange={(id) => setDraft({ ...draft, directApi: { ...draft.directApi, credentialId: id } })}
+          onCredentialValueChange={setDirectCredentialValue}
+          onRefreshModels={() => void refreshProviderModels('direct')}
+          onSaveKey={() => void saveProviderKey('direct')}
+          onClearKey={() => void clearProviderCredential('direct')}
+          vaultAvailable={credentialStatus.available}
+        />
 
         <section className="settings-section span-two">
           <div className="section-title"><Plug size={17} /><span>MCP servers</span></div>
@@ -240,10 +396,11 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <TextField label="Credential ID" value={credentialId} onChange={setCredentialId} />
             <TextField label="Secret" value={credentialValue} onChange={setCredentialValue} type="password" />
             <div className="button-row">
-              <button type="button" className="primary-button" disabled={!credentialValue.trim() || !credentialStatus.available || busy} onClick={() => { onSaveCredential(credentialId, credentialValue); setCredentialValue(''); }}><KeyRound size={15} /><span>Save credential</span></button>
-              <button type="button" className="secondary-button" disabled={busy || !credentialStatus.ids.includes(credentialId)} onClick={() => onClearCredential(credentialId)}><Trash2 size={15} /><span>Remove</span></button>
+              <button type="button" className="primary-button" disabled={!credentialValue.trim() || !credentialStatus.available || busy} onClick={() => void saveNamedCredential(credentialId, credentialValue, 'generic')}><KeyRound size={15} /><span>Save credential</span></button>
+              <button type="button" className="secondary-button" disabled={busy || !credentialStatus.ids.includes(credentialId)} onClick={() => void clearNamedCredential(credentialId, 'generic')}><Trash2 size={15} /><span>Remove</span></button>
             </div>
           </div>
+          <FeedbackMessage feedback={credentialFeedback.generic} />
         </section>
 
         <section className="settings-section span-two">
@@ -316,10 +473,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
                       type="button"
                       className="secondary-button"
                       disabled={!overwatchCredentialValue.trim() || !credentialStatus.available || busy}
-                      onClick={() => {
-                        onSaveCredential(draft.cognitive1.overwatch.credentialId, overwatchCredentialValue);
-                        setOverwatchCredentialValue('');
-                      }}
+                      onClick={() => void saveNamedCredential(draft.cognitive1.overwatch.credentialId, overwatchCredentialValue, 'overwatch')}
                     >
                       <KeyRound size={15} />
                       <span>Save Overwatch key</span>
@@ -328,13 +482,14 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
                       type="button"
                       className="secondary-button"
                       disabled={busy || !overwatchCredentialReady}
-                      onClick={() => onClearCredential(draft.cognitive1.overwatch.credentialId)}
+                      onClick={() => void clearNamedCredential(draft.cognitive1.overwatch.credentialId, 'overwatch')}
                     >
                       <Trash2 size={15} />
                       <span>Remove key</span>
                     </button>
                   </div>
                 </div>
+                <FeedbackMessage feedback={credentialFeedback.overwatch} />
                 <p className={`settings-note ${overwatchCredentialReady ? 'ready' : ''}`}>
                   {overwatchCredentialReady
                     ? 'Credential stored in the OS vault. Save settings to restart C1 with this Overwatch configuration.'
@@ -412,6 +567,122 @@ function PageHeader({ title, detail }: { title: string; detail: string }): React
   return <header className="page-header"><div><h1>{title}</h1><p>{detail}</p></div></header>;
 }
 
+function ProviderConnectionSection({
+  title,
+  icon,
+  detail,
+  toggleLabel,
+  toggleHint,
+  enabled,
+  provider,
+  model,
+  baseUrl,
+  credentialId,
+  models,
+  catalog,
+  modelFeedback,
+  refreshingModels,
+  credentialValue,
+  credentialStored,
+  credentialFeedback,
+  busy,
+  modelListId,
+  vaultAvailable,
+  onEnabledChange,
+  onProviderChange,
+  onModelChange,
+  onBaseUrlChange,
+  onCredentialIdChange,
+  onCredentialValueChange,
+  onRefreshModels,
+  onSaveKey,
+  onClearKey,
+}: {
+  title: string;
+  icon: ReactNode;
+  detail: string;
+  toggleLabel: string;
+  toggleHint: string;
+  enabled: boolean;
+  provider: AppSettings['directApi']['provider'];
+  model: string;
+  baseUrl: string;
+  credentialId: string;
+  models: readonly string[];
+  catalog: ProviderModelCatalog | null;
+  modelFeedback: SettingsFeedback | null;
+  refreshingModels: boolean;
+  credentialValue: string;
+  credentialStored: boolean;
+  credentialFeedback: SettingsFeedback | null;
+  busy: boolean;
+  modelListId: string;
+  vaultAvailable: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  onProviderChange: (provider: AppSettings['directApi']['provider']) => void;
+  onModelChange: (model: string) => void;
+  onBaseUrlChange: (baseUrl: string) => void;
+  onCredentialIdChange: (id: string) => void;
+  onCredentialValueChange: (value: string) => void;
+  onRefreshModels: () => void;
+  onSaveKey: () => void;
+  onClearKey: () => void;
+}): ReactNode {
+  const preset = directProviderPreset(provider);
+  return (
+    <section className="settings-section">
+      <div className="section-title">{icon}<span>{title}</span></div>
+      <p className="settings-note">{detail}</p>
+      <label className="toggle-row"><span><strong>{toggleLabel}</strong><small>{toggleHint}</small></span><input type="checkbox" checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} /></label>
+      <div className="field-grid">
+        <SelectField label="Provider" value={provider} onChange={(value) => onProviderChange(value as AppSettings['directApi']['provider'])} options={DIRECT_PROVIDER_ORDER.map((id) => ({ value: id, label: directProviderPreset(id).displayName }))} />
+        <TextField label="Model" value={model} list={modelListId} onChange={onModelChange} />
+        <TextField label="Base URL" value={baseUrl} onChange={onBaseUrlChange} />
+        <TextField label="Credential ID" value={credentialId} onChange={onCredentialIdChange} />
+      </div>
+      <datalist id={modelListId}>{models.map((candidate) => <option key={candidate} value={candidate} />)}</datalist>
+      <div className="button-row align-start">
+        <button type="button" className="secondary-button" disabled={busy || refreshingModels} onClick={onRefreshModels}>
+          <RefreshCw size={15} className={refreshingModels ? 'spin' : undefined} />
+          <span>{refreshingModels ? 'Refreshing models' : 'Refresh models'}</span>
+        </button>
+        <span className="settings-note">
+          {catalog?.source === 'live'
+            ? `${catalog.models.length} live provider models. Refreshed ${formatRefreshTime(catalog.fetchedAt)}.`
+            : 'Bundled model catalog. Refresh uses the stored credential without exposing it.'}
+        </span>
+      </div>
+      <FeedbackMessage feedback={modelFeedback} />
+      <div className="credential-form">
+        <TextField label="API key" value={credentialValue} type="password" onChange={onCredentialValueChange} />
+        <div className="button-row align-start">
+          <button type="button" className="secondary-button" disabled={!credentialValue.trim() || !vaultAvailable || busy} onClick={onSaveKey}>
+            <KeyRound size={15} />
+            <span>Save key and use provider</span>
+          </button>
+          <button type="button" className="secondary-button" disabled={busy || !credentialStored} onClick={onClearKey}>
+            <Trash2 size={15} />
+            <span>Remove key</span>
+          </button>
+          <span className="settings-note">{credentialStored ? 'Credential stored in the OS vault.' : 'No credential stored for this ID.'}</span>
+        </div>
+      </div>
+      <FeedbackMessage feedback={credentialFeedback} />
+      <p className="settings-note">{preset.protocol === 'responses' ? 'Uses the OpenAI Responses API. ' : preset.protocol === 'chat-completions' ? 'Uses the OpenAI-compatible Chat Completions API. ' : 'This provider does not support the Learning Mode adapter. '}{title === 'Direct API' ? 'Assistant text streams into Compose, and enabled MCP servers use the same approval rules.' : 'Tutor requests use this connection even when Compose is set to CLI or Direct API is disabled.'}</p>
+    </section>
+  );
+}
+
+function FeedbackMessage({ feedback }: { feedback: SettingsFeedback | null }): ReactNode {
+  if (!feedback) return null;
+  return <p className={`settings-feedback ${feedback.kind}`} role={feedback.kind === 'error' ? 'alert' : 'status'}>{feedback.message}</p>;
+}
+
+function formatRefreshTime(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleTimeString() : value;
+}
+
 type SelectOption = string | { value: string; label: string };
 
 function NotificationToggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (value: boolean) => void }): ReactNode {
@@ -477,7 +748,7 @@ function overwatchProviderPreset(provider: AppSettings['cognitive1']['overwatch'
 } {
   if (provider === 'claude') return { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-5' };
   if (provider === 'openai') return { baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-astra' };
-  return { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' };
+  return { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' };
 }
 
 function formatCredentialRefs(values: Record<string, string>): string {

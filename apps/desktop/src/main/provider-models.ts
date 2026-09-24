@@ -1,0 +1,111 @@
+import {
+  directProviderPreset,
+  providerModelCatalogSchema,
+  type ProviderId,
+  type ProviderModelCatalog,
+} from '@kai/contracts';
+
+interface CredentialPort {
+  get(id: string): Promise<string | undefined>;
+}
+
+export async function listProviderModels(
+  request: { provider: ProviderId; baseUrl: string; credentialId: string },
+  credentials: CredentialPort,
+  timeoutMs = 15_000,
+): Promise<ProviderModelCatalog> {
+  const preset = directProviderPreset(request.provider);
+  const fallback = (error: string): ProviderModelCatalog => providerModelCatalogSchema.parse({
+    provider: request.provider,
+    models: [...preset.models],
+    source: 'preset',
+    fetchedAt: new Date().toISOString(),
+    error,
+  });
+
+  let apiKey: string | undefined;
+  try {
+    apiKey = await credentials.get(request.credentialId);
+  } catch (error) {
+    return fallback(`The stored credential could not be read: ${messageOf(error)}`);
+  }
+  if (!apiKey && request.provider !== 'openrouter' && !isLocalEndpoint(request.baseUrl)) {
+    return fallback(`Save a credential for ${request.credentialId} before refreshing this provider's models.`);
+  }
+
+  try {
+    const response = await fetch(modelsUrl(request.baseUrl), {
+      method: 'GET',
+      headers: {
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      return fallback(`The provider model list request failed (${response.status})${await responseDetail(response)}`);
+    }
+    const models = parseModelIds(await response.json() as unknown);
+    if (models.length === 0) return fallback('The provider returned an empty model list.');
+    return providerModelCatalogSchema.parse({
+      provider: request.provider,
+      models,
+      source: 'live',
+      fetchedAt: new Date().toISOString(),
+      error: null,
+    });
+  } catch (error) {
+    return fallback(`The provider model list could not be refreshed: ${messageOf(error)}`);
+  }
+}
+
+export function parseModelIds(value: unknown): string[] {
+  const records = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).data)
+      ? (value as Record<string, unknown>).data as unknown[]
+      : value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).models)
+        ? (value as Record<string, unknown>).models as unknown[]
+        : [];
+  const models = records.flatMap((entry) => {
+    if (typeof entry === 'string') return [entry.trim()];
+    if (!entry || typeof entry !== 'object') return [];
+    const record = entry as Record<string, unknown>;
+    const candidate = typeof record.id === 'string'
+      ? record.id
+      : typeof record.name === 'string'
+        ? record.name
+        : typeof record.model === 'string'
+          ? record.model
+          : '';
+    return [candidate.trim()];
+  }).filter(Boolean);
+  return [...new Set(models)].sort((left, right) => left.localeCompare(right)).slice(0, 2_000);
+}
+
+function modelsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  return /\/models$/i.test(trimmed) ? trimmed : `${trimmed}/models`;
+}
+
+function isLocalEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+async function responseDetail(response: Response): Promise<string> {
+  try {
+    const text = (await response.text()).trim();
+    return text ? `: ${text.slice(0, 1_000)}` : '.';
+  } catch {
+    return '.';
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

@@ -5,6 +5,7 @@ import {
   createDefaultSettings,
   cognitive1ServiceSettingsSchema,
   directApiSettingsSchema,
+  learningTutorSettingsSchema,
   mcpServerSettingsSchema,
   proxyServiceSettingsSchema,
   type AppSettings,
@@ -35,13 +36,27 @@ function migrateAutonomy(value: unknown): AppSettings['defaultAutonomy'] {
 }
 
 export function migrateSettings(input: unknown): AppSettings {
+  const root = input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {};
+  const defaults = createDefaultSettings();
+  const explicitLearningTutor = learningTutorSettingsSchema.safeParse(root.learningTutor);
   const parsedV1 = appSettingsV1Schema.safeParse(input);
-  if (parsedV1.success) return parsedV1.data;
+  if (parsedV1.success) {
+    if (explicitLearningTutor.success) return parsedV1.data;
+    const directApi = directApiSettingsSchema.safeParse(root.directApi);
+    return appSettingsV1Schema.parse({
+      ...parsedV1.data,
+      learningTutor: directApi.success
+        ? { ...directApi.data, enabled: true }
+        : defaults.learningTutor,
+    });
+  }
 
   const legacy = legacySettingsSchema.parse(input ?? {});
-  const defaults = createDefaultSettings();
   const cognitive1 = cognitive1ServiceSettingsSchema.safeParse(legacy.cognitive1);
   const directApi = directApiSettingsSchema.safeParse(legacy.directApi);
+  const learningTutor = learningTutorSettingsSchema.safeParse(legacy.learningTutor);
   const proxy = proxyServiceSettingsSchema.safeParse(legacy.proxy);
   const mcpServers = z.array(mcpServerSettingsSchema).safeParse(legacy.mcpServers);
   const legacyProxy = legacy.proxy && typeof legacy.proxy === 'object' ? legacy.proxy as Record<string, unknown> : {};
@@ -54,6 +69,11 @@ export function migrateSettings(input: unknown): AppSettings {
     activeProjectId: legacy.activeProjectId ?? null,
     projectOrder: legacy.projectOrder ?? [],
     directApi: directApi.success ? directApi.data : defaults.directApi,
+    learningTutor: learningTutor.success
+      ? learningTutor.data
+      : directApi.success
+        ? { ...directApi.data, enabled: true }
+        : defaults.learningTutor,
     mcpServers: mcpServers.success ? mcpServers.data : defaults.mcpServers,
     cognitive1: cognitive1.success ? cognitive1.data : defaults.cognitive1,
     proxy: proxy.success ? proxy.data : {

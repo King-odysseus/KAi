@@ -19,12 +19,13 @@ describe('desktop contracts', () => {
     expect(settings.defaultAutonomy).toBe('ask');
     expect(settings.theme).toBe('dark');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
+    expect(settings.learningTutor).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(settings.cognitive1.overwatch).toEqual({
       enabled: false,
       provider: 'deepseek',
       baseUrl: 'https://api.deepseek.com',
       credentialId: 'cognitive1.overwatch',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-pro',
       autoRejectThreshold: 0.85,
     });
   });
@@ -35,8 +36,8 @@ describe('desktop contracts', () => {
       models: expect.arrayContaining(['gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna']),
     });
     expect(directProviderPreset('deepseek')).toMatchObject({
-      defaultModel: 'deepseek-chat',
-      models: expect.arrayContaining(['deepseek-chat', 'deepseek-reasoner']),
+      defaultModel: 'deepseek-v4-pro',
+      models: expect.arrayContaining(['deepseek-v4-flash', 'deepseek-v4-pro', 'DeepSeek-V4-Pro-0813', 'deepseek-chat']),
     });
     expect(directProviderPreset('openrouter')).toMatchObject({
       defaultModel: 'openai/gpt-6-astra',
@@ -44,13 +45,13 @@ describe('desktop contracts', () => {
         'openai/gpt-6-astra',
         'anthropic/claude-opus-5.5',
         'google/gemini-3.8-flash',
-        'x-ai/grok-4.7',
+        'x-ai/grok-4.20',
         'deepseek/deepseek-v4.1-flash',
       ]),
     });
     expect(directProviderPreset('xai')).toMatchObject({
-      defaultModel: 'grok-4.7',
-      models: expect.arrayContaining(['grok-4.7', 'grok-4.6']),
+      defaultModel: 'grok-4.20',
+      models: expect.arrayContaining(['grok-4.20', 'grok-4.20-reasoning', 'grok-4.7']),
     });
     expect(directProviderPreset('together').models).toEqual(expect.arrayContaining([
       'deepseek-ai/DeepSeek-V4.1-Flash',
@@ -76,6 +77,14 @@ describe('desktop contracts', () => {
     expect(parseIpcInput('settings:update', { directApi: { provider: 'deepseek' } })).toMatchObject({
       directApi: { provider: 'deepseek' },
     });
+    expect(parseIpcInput('settings:update', { learningTutor: { provider: 'deepseek', model: 'deepseek-v4-pro' } })).toMatchObject({
+      learningTutor: { provider: 'deepseek', model: 'deepseek-v4-pro' },
+    });
+    expect(parseIpcInput('providers:list-models', {
+      provider: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      credentialId: 'provider.openrouter',
+    })).toMatchObject({ provider: 'openrouter' });
     expect(parseIpcInput('settings:update', { theme: 'light' })).toEqual({ theme: 'light' });
     expect(parseIpcInput('settings:update', {
       cognitive1: {
@@ -84,7 +93,7 @@ describe('desktop contracts', () => {
           provider: 'deepseek',
           baseUrl: 'https://api.deepseek.com',
           credentialId: 'cognitive1.overwatch',
-          model: 'deepseek-chat',
+          model: 'deepseek-v4-pro',
           autoRejectThreshold: 0.9,
         },
       },
@@ -252,6 +261,7 @@ describe('desktop contracts', () => {
     expect(migrated.theme).toBe('dark');
     expect(migrated.directApi.provider).toBe('openai');
     expect(migrated.directApi.model).toBe('gpt-6-astra');
+    expect(migrated.learningTutor).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(migrated.windowBounds).toBeNull();
     expect('proxyApiKey' in migrated).toBe(false);
   });
@@ -272,8 +282,29 @@ describe('desktop contracts', () => {
       overwatch: {
         enabled: false,
         provider: 'deepseek',
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-pro',
       },
+    });
+  });
+
+  it('migrates the existing Direct API connection into an independent Learning Tutor connection', () => {
+    const migrated = migrateSettings({
+      directApi: {
+        enabled: false,
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        baseUrl: 'https://api.deepseek.com',
+        credentialId: 'provider.deepseek',
+      },
+    });
+
+    expect(migrated.directApi.enabled).toBe(false);
+    expect(migrated.learningTutor).toEqual({
+      enabled: true,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      baseUrl: 'https://api.deepseek.com',
+      credentialId: 'provider.deepseek',
     });
   });
 

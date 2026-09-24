@@ -134,10 +134,11 @@ describe('desktop learning mode', () => {
     });
     const baseUrl = await listen(server);
     const settings = createDefaultSettings();
-    settings.directApi.enabled = true;
-    settings.directApi.provider = 'openai';
-    settings.directApi.model = 'test-model';
-    settings.directApi.baseUrl = `${baseUrl}/v1`;
+    settings.directApi.enabled = false;
+    settings.learningTutor.enabled = true;
+    settings.learningTutor.provider = 'openai';
+    settings.learningTutor.model = 'test-model';
+    settings.learningTutor.baseUrl = `${baseUrl}/v1`;
     const root = await temporaryDirectory();
     await fs.mkdir(path.join(root, 'docs'));
     await fs.writeFile(path.join(root, 'docs', 'KAI-TEACHING.md'), 'KAI project overlay: use short verification loops.\n', 'utf8');
@@ -195,10 +196,10 @@ describe('desktop learning mode', () => {
     });
     const baseUrl = await listen(server);
     const settings = createDefaultSettings();
-    settings.directApi.enabled = true;
-    settings.directApi.provider = 'openai';
-    settings.directApi.model = 'test-model';
-    settings.directApi.baseUrl = `${baseUrl}/v1`;
+    settings.learningTutor.enabled = true;
+    settings.learningTutor.provider = 'openai';
+    settings.learningTutor.model = 'test-model';
+    settings.learningTutor.baseUrl = `${baseUrl}/v1`;
     const tutor = new DesktopLearningTutor(
       { load: async () => settings },
       { isAvailable: () => true, get: async () => 'sk-test-secret' },
@@ -237,20 +238,20 @@ describe('desktop learning mode', () => {
       },
     );
 
-    settings.directApi.enabled = false;
+    settings.learningTutor.enabled = false;
     await expect(tutor().readiness()).resolves.toMatchObject({
       enabled: false,
       ready: false,
-      reason: 'Direct API is disabled.',
+      reason: 'Learning Tutor API is disabled.',
     });
-    settings.directApi.enabled = true;
-    settings.directApi.provider = 'anthropic';
-    settings.directApi.model = 'claude-sonnet';
+    settings.learningTutor.enabled = true;
+    settings.learningTutor.provider = 'anthropic';
+    settings.learningTutor.model = 'claude-sonnet';
     await expect(tutor().readiness()).resolves.toMatchObject({ supported: false, ready: false });
-    settings.directApi.provider = 'openai';
-    settings.directApi.model = '';
-    await expect(tutor().readiness()).resolves.toMatchObject({ ready: false, reason: 'No direct API model is configured.' });
-    settings.directApi.model = 'gpt-test';
+    settings.learningTutor.provider = 'openai';
+    settings.learningTutor.model = '';
+    await expect(tutor().readiness()).resolves.toMatchObject({ ready: false, reason: 'No Learning Tutor model is configured.' });
+    settings.learningTutor.model = 'gpt-test';
     await expect(tutor(false).readiness()).resolves.toMatchObject({ credentialStored: false, ready: false });
     await expect(tutor().readiness()).resolves.toMatchObject({ credentialStored: true, ready: true, reason: null });
     expect(providerCalls).toBe(0);
@@ -312,9 +313,9 @@ describe('desktop learning mode', () => {
 
   it('recovers from malformed provider JSON, provider errors, and timeouts', async () => {
     const settings = createDefaultSettings();
-    settings.directApi.enabled = true;
-    settings.directApi.provider = 'openai';
-    settings.directApi.model = 'test-model';
+    settings.learningTutor.enabled = true;
+    settings.learningTutor.provider = 'openai';
+    settings.learningTutor.model = 'test-model';
     const makeTutor = (baseUrl: string, timeout = 120_000) => new DesktopLearningTutor(
       { load: async () => settings },
       { isAvailable: () => true, has: async () => true, get: async () => 'sk-test' },
@@ -327,15 +328,15 @@ describe('desktop learning mode', () => {
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ output_text: 'not json' }));
     });
-    settings.directApi.baseUrl = `${await listen(malformed)}/v1`;
-    await expect(makeTutor(settings.directApi.baseUrl).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/did not return a JSON tutor response/i);
+    settings.learningTutor.baseUrl = `${await listen(malformed)}/v1`;
+    await expect(makeTutor(settings.learningTutor.baseUrl).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/after one automatic repair attempt/i);
 
     const failed = http.createServer((_request, response) => {
       response.writeHead(500, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ error: { message: 'fixture failed' } }));
     });
-    settings.directApi.baseUrl = `${await listen(failed)}/v1`;
-    await expect(makeTutor(settings.directApi.baseUrl).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/Learning provider request failed \(500\): fixture failed/);
+    settings.learningTutor.baseUrl = `${await listen(failed)}/v1`;
+    await expect(makeTutor(settings.learningTutor.baseUrl).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/Learning provider request failed \(500\): fixture failed/);
 
     const slow = http.createServer((_request, response) => {
       setTimeout(() => {
@@ -343,8 +344,46 @@ describe('desktop learning mode', () => {
         response.end(JSON.stringify({ output_text: JSON.stringify(tutorResponse()) }));
       }, 150);
     });
-    settings.directApi.baseUrl = `${await listen(slow)}/v1`;
-    await expect(makeTutor(settings.directApi.baseUrl, 20).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/abort|timeout/i);
+    settings.learningTutor.baseUrl = `${await listen(slow)}/v1`;
+    await expect(makeTutor(settings.learningTutor.baseUrl, 20).evaluate(tutorRequest('explain-file', 'guided'))).rejects.toThrow(/abort|timeout/i);
+  });
+
+  it('repairs one malformed tutor response without falling back to generic request validation', async () => {
+    let calls = 0;
+    const bodies: Array<Record<string, unknown>> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        calls += 1;
+        bodies.push(JSON.parse(raw) as Record<string, unknown>);
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({
+          output_text: calls === 1
+            ? JSON.stringify({ title: 'Wrong shape', walkthrough: 'The model used its own keys.' })
+            : JSON.stringify(tutorResponse()),
+        }));
+      });
+    });
+    const settings = createDefaultSettings();
+    settings.directApi.enabled = false;
+    settings.learningTutor.enabled = true;
+    settings.learningTutor.provider = 'openai';
+    settings.learningTutor.model = 'test-model';
+    settings.learningTutor.baseUrl = `${await listen(server)}/v1`;
+    const tutor = new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, has: async () => true, get: async () => 'sk-test' },
+      async () => temporaryDirectory(),
+    );
+
+    await expect(tutor.evaluate(tutorRequest('explain-file', 'guided'))).resolves.toMatchObject({
+      title: 'Variables hold changing values',
+    });
+    expect(calls).toBe(2);
+    expect(JSON.stringify(bodies[0])).toContain('exactly these top-level keys');
+    expect(JSON.stringify(bodies[1])).toContain('previous response did not match');
   });
 
   it('parses generated teaching drafts without accepting incomplete content', () => {
