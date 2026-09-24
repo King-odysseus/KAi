@@ -18,9 +18,11 @@ import type {
   RecoveryResume,
   RouteMode,
   SettingsUpdate,
+  SetupCheck,
+  SetupStatus,
 } from '@kai/contracts';
 import { THEME_MODES } from '@kai/contracts';
-import { CommandPalette, ConversationSidebar, NavigationRail, navigation, TitleBar, type CommandPaletteItem } from './components/Chrome';
+import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
 import { ProxyPanel } from './components/ProxyView';
@@ -44,6 +46,9 @@ import {
 import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
 import { shouldHandleAgentEvent } from './agent-events';
+import { SetupPanel } from './components/SetupPanel';
+import { ShortcutSheet } from './components/ShortcutSheet';
+import { matchingShortcutAction, shortcutLabel, shortcutsWithDefaults } from './shortcuts';
 
 const emptyCredentials: CredentialStatus = { available: false, ids: [] };
 
@@ -64,6 +69,8 @@ export function App(): ReactNode {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [agentCapabilities, setAgentCapabilities] = useState<AgentCapability[]>([]);
   const [directApiCapability, setDirectApiCapability] = useState<DirectApiCapability | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
   const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
@@ -82,12 +89,18 @@ export function App(): ReactNode {
     }
   });
   const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
-  const [contextOpen, setContextOpen] = useState(true);
+  const [contextOpen, setContextOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem('kai.contextOpen') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [threadsOpen, setThreadsOpen] = useState(() => {
     try {
-      return window.localStorage.getItem('kai.threadsOpen') !== 'false';
+      return window.localStorage.getItem('kai.threadsOpen') === 'true';
     } catch {
-      return true;
+      return false;
     }
   });
   const [sidebarWidth, setSidebarWidth] = useState(248);
@@ -101,19 +114,25 @@ export function App(): ReactNode {
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
   const [workspaceCommand, setWorkspaceCommand] = useState<WorkspaceCommandRequest | null>(null);
   const started = useRef(false);
   const commandNonce = useRef(0);
   const resizeOrigin = useRef<{ kind: 'sidebar' | 'context'; x: number; width: number } | null>(null);
   const runningConversationIdRef = useRef<string | null>(null);
+  const shortcutsRef = useRef(bootstrap?.settings.shortcuts ?? {});
+  const shortcutSheetOpenRef = useRef(false);
   const pendingApproval = pendingApprovals[0] ?? null;
   runningConversationIdRef.current = runningConversationId;
+  shortcutsRef.current = bootstrap?.settings.shortcuts ?? {};
+  shortcutSheetOpenRef.current = shortcutSheetOpen;
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+  const shortcuts = shortcutsWithDefaults(bootstrap?.settings.shortcuts ?? {});
   const commandItems: CommandPaletteItem[] = [
-    { id: 'workbench', label: 'Open Agent Workbench', description: 'Return to the active conversation and composer', shortcut: 'Ctrl+1', run: () => setView('workspace') },
-    { id: 'new-window', label: 'New Window', description: 'Open another independent KAI project window', shortcut: 'Ctrl+Shift+N', run: () => void openNewWindow() },
+    { id: 'workbench', label: 'Open Agent Workbench', description: 'Return to the active conversation and composer', shortcut: shortcutLabel(shortcuts, 'workbench'), run: () => setView('workspace') },
+    { id: 'new-window', label: 'New Window', description: 'Open another independent KAI project window', shortcut: shortcutLabel(shortcuts, 'new-window'), run: () => void openNewWindow() },
     { id: 'goal', label: 'Start or Edit Goal', description: 'Define the outcome, constraints, and verification', run: () => openWorkspaceCommand('goal') },
     { id: 'skills', label: 'Browse Skills', description: 'Add a project or personal skill to the next run', run: () => openWorkspaceCommand('skills') },
     { id: 'selection', label: 'Add Selection to Chat', description: 'Attach a referenced file and line range as context', run: () => openWorkspaceCommand('context') },
@@ -132,8 +151,11 @@ export function App(): ReactNode {
     { id: 'tasks', label: 'Open Tasks, Reviews and Handoffs', description: 'Shared task board, review queue, handoff inbox and decision log', run: () => setView('tasks') },
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => setView('operations') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
-    { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: 'Ctrl+`', run: () => setTerminalOpen((open) => !open) },
-    { id: 'threads', label: 'Toggle Threads Panel', description: 'Show or hide the conversation threads on the left', shortcut: 'Ctrl+Shift+B', run: () => setThreadsOpen((open) => !open) },
+    { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: shortcutLabel(shortcuts, 'terminal'), run: () => setTerminalOpen((open) => !open) },
+    { id: 'threads', label: 'Toggle Threads Panel', description: 'Show or hide the conversation threads on the left', shortcut: shortcutLabel(shortcuts, 'threads'), run: () => setThreadsOpen((open) => !open) },
+    { id: 'context-panel', label: 'Toggle Context Panel', description: 'Show or hide project context on the right', shortcut: shortcutLabel(shortcuts, 'context-panel'), run: () => setContextOpen((open) => !open) },
+    { id: 'command-palette', label: 'Show Command Palette', description: 'Search commands, conversations, and the brain', shortcut: shortcutLabel(shortcuts, 'command-palette'), run: () => setCommandPaletteOpen(true) },
+    { id: 'shortcut-sheet', label: 'Open Shortcut Sheet', description: 'Review and customize keyboard shortcuts', shortcut: shortcutLabel(shortcuts, 'shortcuts'), run: () => setShortcutSheetOpen(true) },
     { id: 'diagnostics', label: 'Open Diagnostics', description: 'Service health, engine checks and a copyable bug report', run: () => setView('operations') },
     { id: 'settings', label: 'Open Settings', description: 'Configure agents, routes, API providers, services, and MCP', run: () => setView('settings') },
     { id: 'backups', label: 'Open Configuration Backups', description: 'Create, restore, or delete app-owned configuration backups', run: () => setView('settings') },
@@ -277,6 +299,7 @@ export function App(): ReactNode {
         nextLogs,
         nextAgentCapabilities,
         nextDirectApiCapability,
+        nextSetupStatus,
       ] = await Promise.all([
         window.kaiDesktop.bootstrap().then(unwrap),
         window.kaiDesktop.listConversations().then(unwrap),
@@ -284,6 +307,7 @@ export function App(): ReactNode {
         window.kaiDesktop.recentLogs(50).then(unwrap),
         window.kaiDesktop.agentCapabilities().then(unwrap),
         window.kaiDesktop.directApiCapability().then(unwrap),
+        window.kaiDesktop.setupStatus().then(unwrap),
       ]);
       setBootstrap(nextBootstrap);
       setConversations(nextConversations);
@@ -292,6 +316,8 @@ export function App(): ReactNode {
       setLogs(nextLogs);
       setAgentCapabilities(nextAgentCapabilities);
       setDirectApiCapability(nextDirectApiCapability);
+      setSetupStatus(nextSetupStatus);
+      setSetupOpen(!nextSetupStatus.complete);
       setSelectedAgent(nextBootstrap.settings.defaultAgent);
       setExecutionMode('cli');
       setSelectedRoute('direct');
@@ -383,6 +409,14 @@ export function App(): ReactNode {
     }
   }, [threadsOpen]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('kai.contextOpen', String(contextOpen));
+    } catch {
+      // Remembering panel visibility is a convenience only.
+    }
+  }, [contextOpen]);
+
   const openConversationRef = useRef(openConversation);
   openConversationRef.current = openConversation;
   useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId }) => {
@@ -391,38 +425,26 @@ export function App(): ReactNode {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'n') {
-        event.preventDefault();
-        void openNewWindow();
-        return;
-      }
-      if ((event.ctrlKey || event.metaKey) && event.key === '`') {
-        event.preventDefault();
-        setTerminalOpen((open) => !open);
-        return;
-      }
-      if (!event.ctrlKey || event.altKey || event.metaKey) return;
-      if (event.shiftKey && event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        setThreadsOpen((open) => !open);
-        return;
-      }
-      if (event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setCommandPaletteOpen(true);
-        return;
-      }
-      if (event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        setContextOpen((open) => !open);
-        return;
-      }
-      const index = Number.parseInt(event.key, 10) - 1;
-      const destination = navigation[index];
-      if (destination) {
-        event.preventDefault();
-        setView(destination.id);
-      }
+      if (event.defaultPrevented || shortcutSheetOpenRef.current) return;
+      const action = matchingShortcutAction(event, shortcutsRef.current);
+      if (!action) return;
+      const target = event.target;
+      const typing = target instanceof HTMLElement && (
+        target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT'
+        || target.isContentEditable
+      );
+      if (typing && action !== 'command-palette') return;
+      event.preventDefault();
+      if (action === 'workbench') setView('workspace');
+      else if (action === 'code') setView('code');
+      else if (action === 'new-window') void openNewWindow();
+      else if (action === 'terminal') setTerminalOpen((open) => !open);
+      else if (action === 'command-palette') setCommandPaletteOpen(true);
+      else if (action === 'threads') setThreadsOpen((open) => !open);
+      else if (action === 'context-panel') setContextOpen((open) => !open);
+      else if (action === 'shortcuts') setShortcutSheetOpen(true);
     }
 
     window.addEventListener('keydown', onKeyDown);
@@ -449,6 +471,40 @@ export function App(): ReactNode {
 
   async function openNewWindow(): Promise<void> {
     await perform(() => window.kaiDesktop.newWindow().then(unwrap), 'Opening a new window');
+  }
+
+  async function refreshSetupStatus(): Promise<void> {
+    try {
+      const status = await window.kaiDesktop.setupStatus().then(unwrap);
+      setSetupStatus(status);
+    } catch {
+      // The setup panel keeps its last known state if the main process is busy.
+    }
+  }
+
+  async function runSetupAction(action: NonNullable<SetupCheck['action']>): Promise<void> {
+    if (action === 'open_project') {
+      await chooseProject();
+    } else if (action === 'open_settings') {
+      setSetupOpen(false);
+      setView('settings');
+    } else if (action === 'start_cognitive1') {
+      await controlService('cognitive1', 'start');
+    } else {
+      await controlService('universalProxy', 'start');
+    }
+    await refreshSetupStatus();
+  }
+
+  async function completeSetup(): Promise<void> {
+    const status = await perform(
+      () => window.kaiDesktop.completeSetup(true).then(unwrap),
+      'Finishing setup',
+    );
+    if (!status) return;
+    setSetupStatus(status);
+    setSetupOpen(false);
+    setAgentNotice('Setup complete. KAI is ready for your first task.');
   }
 
   async function removeProject(id: string): Promise<void> {
@@ -512,12 +568,17 @@ export function App(): ReactNode {
     if (!bootstrap) return;
     const runAgentId = options.agent ?? selectedAgent;
     const runExecution = options.execution ?? executionMode;
-    const runRoute = options.route ?? (runExecution === 'api' ? selectedRoute : 'direct');
     const runAutonomy = options.autonomy ?? selectedAutonomy;
     const apiRun = runExecution === 'api';
     const capability = agentCapabilities.find((agent) => agent.id === runAgentId);
+    const requestedRoute = options.route ?? selectedRoute;
+    const runRoute = !apiRun && !capability?.supportsRoutes.includes('proxy') ? 'direct' : requestedRoute;
     if (!apiRun && !capability?.available) {
       setError(capability?.unavailableReason ?? `${runAgentId} CLI is not available.`);
+      return;
+    }
+    if (runRoute === 'proxy' && serviceFor(bootstrap, 'universalProxy').status !== 'ready') {
+      setError('Start Universal Proxy before running an agent through its proxy route.');
       return;
     }
     if (apiRun && !directApiCapability?.available) {
@@ -555,7 +616,7 @@ export function App(): ReactNode {
           prompt,
           agent: runAgentId,
           execution: runExecution,
-          route: apiRun ? runRoute : 'direct',
+          route: runRoute,
           autonomy: runAutonomy,
           ...(modelChoices[`${runExecution}:${runAgentId}`] ? { model: modelChoices[`${runExecution}:${runAgentId}`] } : {}),
           ...(options.goal ? { goal: options.goal } : {}),
@@ -1068,11 +1129,12 @@ export function App(): ReactNode {
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
-              if (mode === 'cli') setSelectedRoute('direct');
               setAgentNotice(null);
             }}
             onSelectAgent={(agent) => {
               setSelectedAgent(agent);
+              const capability = agentCapabilities.find((item) => item.id === agent);
+              if (!capability?.supportsRoutes.includes('proxy')) setSelectedRoute('direct');
               setAgentNotice(null);
             }}
             onSelectRoute={(route) => {
@@ -1142,16 +1204,27 @@ export function App(): ReactNode {
         theme={bootstrap.settings.theme}
         leftOpen={threadsOpen}
         rightOpen={contextOpen}
+        shortcuts={shortcuts}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
         onNewWindow={() => void openNewWindow()}
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setCommandPaletteOpen(true)}
+        onOpenShortcuts={() => setShortcutSheetOpen(true)}
         onToggleThreads={() => setThreadsOpen((open) => !open)}
         onToggleContext={() => setContextOpen((open) => !open)}
       />
       <UrgentBanner />
       <UpdateBanner onOpen={() => setView('settings')} />
+      {setupStatus && !setupStatus.complete && !setupOpen && (
+        <button type="button" className="setup-reminder" onClick={() => setSetupOpen(true)}>
+          <ShieldCheck size={15} />
+          <span>Finish KAI setup</span>
+          <span className="setup-reminder-progress">
+            {setupStatus.checks.filter((check) => check.status === 'ready').length}/{setupStatus.checks.length} ready
+          </span>
+        </button>
+      )}
       {commandPaletteOpen && <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} onSearch={searchEverything} />}
       {error && (
         <div className="error-banner" role="alert">
@@ -1172,6 +1245,7 @@ export function App(): ReactNode {
           view={view}
           version={`v${bootstrap.version} · ${bootstrap.buildIdentifier.split('+').at(-1) ?? 'dev'}`}
           serviceStatus={serviceFor(bootstrap, 'universalProxy').status}
+          shortcuts={shortcuts}
           onChange={setView}
         />
         {showThreads && (
@@ -1271,6 +1345,23 @@ export function App(): ReactNode {
       )}
       {pendingApproval && (
         <ApprovalDialog approval={pendingApproval} onRespond={(approved) => void respondToApproval(approved)} />
+      )}
+      {setupOpen && setupStatus && !setupStatus.complete && (
+        <SetupPanel
+          status={setupStatus}
+          busy={Boolean(busy)}
+          onAction={(action) => void runSetupAction(action)}
+          onComplete={() => void completeSetup()}
+          onDismiss={() => setSetupOpen(false)}
+        />
+      )}
+      {shortcutSheetOpen && (
+        <ShortcutSheet
+          shortcuts={shortcuts}
+          busy={Boolean(busy)}
+          onSave={(next) => saveSettings({ shortcuts: next })}
+          onClose={() => setShortcutSheetOpen(false)}
+        />
       )}
       <DialogHost />
     </div>

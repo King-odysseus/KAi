@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRunRequest } from '../packages/contracts/src';
-import { buildAgentArgs, DesktopAgentRuntime } from '../apps/desktop/src/main/agent-runtime';
+import { buildAgentArgs, cliProxyEnvironment, DesktopAgentRuntime } from '../apps/desktop/src/main/agent-runtime';
 
 const temporaryDirectories: string[] = [];
 
@@ -14,6 +14,21 @@ afterEach(async () => {
 });
 
 describe('desktop agent runtime', () => {
+  it('maps CLI proxy routes to each agent native environment contract', () => {
+    const access = { endpoint: 'http://127.0.0.1:8082/', token: 'loopback-token' };
+    expect(cliProxyEnvironment('claude', access)).toMatchObject({
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:8082/a/claude',
+      ANTHROPIC_AUTH_TOKEN: 'loopback-token',
+      ANTHROPIC_API_KEY: 'loopback-token',
+    });
+    expect(cliProxyEnvironment('codex', access)).toMatchObject({
+      OPENAI_BASE_URL: 'http://127.0.0.1:8082/a/codex/v1',
+      OPENAI_API_KEY: 'loopback-token',
+      CODEX_API_KEY: 'loopback-token',
+    });
+    expect(() => cliProxyEnvironment('qwen', access)).toThrow(/does not support/);
+  });
+
   it('detects an installed CLI through its version command', async () => {
     const root = await temporaryDirectory();
     const command = await fakeAgent(root, { reply: 'hello' });

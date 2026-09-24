@@ -40,7 +40,10 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     plugins: [react()],
     resolve: {
-      alias: [{ find: /^monaco-worker\/(.*)$/, replacement: `${monacoEsmRoot}/$1` }],
+      alias: [
+        { find: /^monaco-worker\/(.*)$/, replacement: `${monacoEsmRoot}/$1` },
+        { find: /^monaco-editor\/(.*)$/, replacement: `${monacoEsmRoot}/$1` },
+      ],
     },
     build: {
       rollupOptions: {

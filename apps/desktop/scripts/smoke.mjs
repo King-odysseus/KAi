@@ -61,13 +61,14 @@ try {
 
   const page = await electronApp.firstWindow();
   page.on('pageerror', (error) => rendererErrors.push(error.message));
+  const setupDialog = page.getByRole('dialog', { name: 'Make KAI ready' });
+  await setupDialog.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
+  if (await setupDialog.isVisible().catch(() => false)) {
+    await setupDialog.locator('button.secondary-button').filter({ hasText: 'Set up later' }).click({ force: true });
+    await setupDialog.waitFor({ state: 'detached' });
+  }
   try {
-    await page
-      .getByRole('heading', {
-        name: usesAgentProject ? 'KAI Live Agent Smoke' : 'No project',
-        level: usesAgentProject ? 1 : 2,
-      })
-      .waitFor({ timeout: 20_000 });
+    await page.locator('.project-picker-button').getByText(usesAgentProject ? 'KAI Live Agent Smoke' : 'No project', { exact: true }).waitFor({ timeout: 20_000 });
     await verifyBuildIdentifier(page);
     if (!usesAgentProject) {
       await page.getByText('Open a local repository').waitFor({ timeout: 5_000 });
@@ -221,9 +222,13 @@ try {
   await resizeWindow(electronApp, 1440, 920);
 
   await page.getByRole('button', { name: 'Workspace' }).click();
-  await page.getByRole('button', { name: 'Hide context panel' }).click();
   await page.getByRole('button', { name: 'Show context panel' }).waitFor();
+  if (await page.locator('.context-panel').count() > 0) {
+    throw new Error('The context panel should start minimised.');
+  }
   await page.getByRole('button', { name: 'Show context panel' }).click();
+  await page.getByRole('button', { name: 'Hide context panel' }).click();
+  await page.locator('.context-panel').waitFor({ state: 'detached' });
 
   const minimumSize = await resizeWindow(electronApp, 960, 640);
   assertSize(minimumSize, 960, 640);
@@ -311,10 +316,15 @@ async function verifyWorkspaceControls(page) {
   ];
   for (const [agent, label] of agents) {
     await selectMenuOption(page, 'Agent', label);
-    await page.waitForFunction((expected) => {
-      const trigger = document.querySelector('button[aria-label="Agent"]');
-      return trigger?.textContent?.includes(expected) ?? false;
-    }, label);
+    try {
+      await page.waitForFunction((expected) => {
+        const trigger = document.querySelector('button[aria-label="Agent"]');
+        return trigger?.textContent?.includes(expected) ?? false;
+      }, label, { timeout: 5_000 });
+    } catch (error) {
+      const actual = await page.getByRole('button', { name: 'Agent', exact: true }).innerText();
+      throw new Error(`Agent menu did not select ${agent}. Expected ${label}, received ${JSON.stringify(actual)}.`, { cause: error });
+    }
     const selected = await page.getByRole('button', { name: 'Agent', exact: true }).innerText();
     if (!selected.includes(label)) {
       throw new Error(`The workspace did not switch to the ${agent} agent; selected value was ${JSON.stringify(selected)}.`);
@@ -454,7 +464,8 @@ async function verifyCommandPalette(page) {
 
 async function selectMenuOption(page, triggerLabel, optionName) {
   await openSelectMenu(page, triggerLabel);
-  const option = page.getByRole('option', { name: optionName });
+  const listbox = page.getByRole('listbox', { name: triggerLabel, exact: true });
+  const option = listbox.getByRole('option', { name: optionName });
   await option.click({ force: true });
 }
 
@@ -576,7 +587,7 @@ async function verifyDirectApiFlow(page, fixture, usesMcp, usesRemoteMcp = false
   if (!settings.ok) throw new Error(settings.error.message);
 
   await page.reload();
-  await page.getByRole('heading', { name: 'KAI Live Agent Smoke', level: 1 }).waitFor({ timeout: 20_000 });
+  await page.locator('.project-picker-button').getByText('KAI Live Agent Smoke', { exact: true }).waitFor({ timeout: 20_000 });
   const contextPreview = await page.evaluate(() => window.kaiDesktop.previewContext({ projectId: 'project-live-agent-smoke' }));
   if (!contextPreview.ok || contextPreview.data.estimatedTokens < 1) {
     throw new Error(`Project context preview was not populated: ${JSON.stringify(contextPreview)}`);
@@ -1040,9 +1051,19 @@ async function verifyBrainFlow(application, page, cognitive1Port) {
   await page.getByRole('heading', { name: 'Ready' }).waitFor();
   await page.getByRole('heading', { name: 'Brain operations' }).waitFor();
   await page.getByRole('heading', { name: 'Brain overview' }).waitFor();
+  await page.getByRole('heading', { name: 'Brain Git sync' }).waitFor();
   await page.getByPlaceholder('Title, field, agent, or project').fill(marker);
+  await page.getByLabel('Search mode').selectOption('semantic');
+  if (await page.getByLabel('Search mode').inputValue() !== 'semantic') {
+    throw new Error('The brain search mode did not switch to semantic retrieval.');
+  }
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByText(marker).waitFor();
+  const initializeBrain = page.getByRole('button', { name: 'Initialize' });
+  if (await initializeBrain.isEnabled()) {
+    await initializeBrain.click();
+    await page.getByText(/changed file|Working tree clean/).waitFor({ timeout: 20_000 });
+  }
   await page.getByRole('button', { name: 'Advanced' }).click();
   await page.getByText('Run any Cognitive1 tool').waitFor();
 

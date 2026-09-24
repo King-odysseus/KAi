@@ -271,7 +271,7 @@ describe('desktop Cognitive1 brain client', () => {
     });
 
     await expect(
-      client.search({ query: 'isolated', tag: 'testing', project: 'KAI', maxResults: 12 }),
+      client.search({ query: 'isolated', tag: 'testing', project: 'KAI', mode: 'semantic', maxResults: 12 }),
     ).resolves.toEqual([
       {
         date: '2026-09-22',
@@ -288,6 +288,7 @@ describe('desktop Cognitive1 brain client', () => {
       query: 'isolated',
       tag: 'testing',
       project: 'KAI',
+      mode: 'semantic',
       max_results: 12,
     });
 

@@ -91,6 +91,7 @@ import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
 import { buildSetupStatus } from './setup-status';
+import { syncCognitive1Mcp } from './agent-mcp-config';
 import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWindowSession } from './desktop-windows';
 import type { EditorSessionManager } from './editor-sessions';
 import { formatProjectCode, projectGitFileInfo } from './code-tools';
@@ -214,12 +215,14 @@ export function registerIpc(context: IpcContext): void {
       else await context.services.stop('cognitive1');
     }
     await context.services.syncFromSettings(merged);
+    await syncManagedCognitive1Mcp(context);
     await broadcastSharedState(context);
     return context.settings.load();
   });
   handle(context, 'services:status', async () => context.services.status());
   handle(context, 'services:start', async ({ kind }) => {
     const services = await context.services.start(kind);
+    if (kind === 'cognitive1') await syncManagedCognitive1Mcp(context);
     await broadcastSharedState(context);
     return services;
   });
@@ -230,11 +233,13 @@ export function registerIpc(context: IpcContext): void {
   });
   handle(context, 'services:restart', async ({ kind }) => {
     const services = await context.services.restart(kind);
+    if (kind === 'cognitive1') await syncManagedCognitive1Mcp(context);
     await broadcastSharedState(context);
     return services;
   });
   handle(context, 'services:rotate-token', async ({ kind }) => {
     const services = await context.services.rotateToken(kind);
+    if (kind === 'cognitive1') await syncManagedCognitive1Mcp(context);
     await broadcastSharedState(context);
     return services;
   });
@@ -1601,6 +1606,25 @@ async function cognitive1Ready(context: IpcContext): Promise<boolean> {
     return states.some((state) => state.kind === 'cognitive1' && state.status === 'ready');
   } catch {
     return false;
+  }
+}
+
+async function syncManagedCognitive1Mcp(context: IpcContext): Promise<void> {
+  try {
+    const state = (await context.services.status()).find((service) => service.kind === 'cognitive1');
+    if (state?.status !== 'ready') return;
+    const results = await syncCognitive1Mcp(() => context.services.loopbackAccess('cognitive1'));
+    for (const result of results) {
+      if (result.error) {
+        context.logger.warn(
+          'internal',
+          `Cognitive1 MCP could not be added to ${result.agent}`,
+          `${result.configPath}: ${result.error}`,
+        );
+      }
+    }
+  } catch (error) {
+    context.logger.warn('internal', 'Cognitive1 MCP registration was skipped', messageOf(error));
   }
 }
 

@@ -100,6 +100,33 @@ export interface DesktopAgentRuntimeOptions {
   resumeProcess?: (pid: number) => Promise<void>;
 }
 
+export interface CliProxyAccess {
+  endpoint: string;
+  token: string;
+}
+
+/** Environment-only routing keeps the CLI's own configuration and credentials untouched. */
+export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess): NodeJS.ProcessEnv {
+  const baseUrl = `${access.endpoint.replace(/\/+$/, '')}/a/${agent}`;
+  if (agent === 'claude') {
+    return {
+      ...process.env,
+      ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_AUTH_TOKEN: access.token,
+      ANTHROPIC_API_KEY: access.token,
+    };
+  }
+  if (agent === 'codex') {
+    return {
+      ...process.env,
+      OPENAI_BASE_URL: `${baseUrl}/v1`,
+      OPENAI_API_KEY: access.token,
+      CODEX_API_KEY: access.token,
+    };
+  }
+  throw new Error(`${agent} does not support Universal Proxy routing.`);
+}
+
 interface ActiveAgentRun {
   controller: AbortController;
   child: ChildProcess | null;

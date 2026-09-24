@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { appSettingsV1Schema, cliModelNameSchema, createDefaultSettings, themeModeSchema, THEME_MODES } from '../packages/contracts/src';
+import { appSettingsV1Schema, CLI_MODEL_SUGGESTIONS, cliModelNameSchema, createDefaultSettings, themeModeSchema, THEME_MODES } from '../packages/contracts/src';
 import { buildAgentArgs } from '../apps/desktop/src/main/agent-runtime';
 import { mergeSettingsUpdate } from '../apps/desktop/src/main/service-controller';
 
 const base = { prompt: 'Fix the bug', autonomy: 'ask' as const };
 
 describe('CLI model selection', () => {
+  it('offers current model families without duplicate menu entries', () => {
+    expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(expect.arrayContaining(['claude-opus-5.5', 'claude-sonnet-5', 'opus']));
+    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(expect.arrayContaining(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']));
+    expect(CLI_MODEL_SUGGESTIONS.qwen).toEqual(expect.arrayContaining(['qwen3.8-max', 'qwen3.8-flash', 'qwen3-coder-plus']));
+    expect(CLI_MODEL_SUGGESTIONS.gemini).toEqual(expect.arrayContaining(['gemini-3.8-pro', 'gemini-3.8-flash', 'flash']));
+
+    for (const models of Object.values(CLI_MODEL_SUGGESTIONS)) {
+      expect(new Set(models).size).toBe(models.length);
+      expect(models.every((model) => cliModelNameSchema.safeParse(model).success)).toBe(true);
+    }
+  });
+
   it('leaves every CLI on its own default when no model is set', () => {
     for (const agent of ['claude', 'codex', 'qwen', 'gemini'] as const) {
       expect(buildAgentArgs({ ...base, agent }, 'C:/repo')).not.toContain('--model');
@@ -24,11 +36,11 @@ describe('CLI model selection', () => {
     expect(buildAgentArgs({ ...base, agent: 'claude' }, 'C:/repo', undefined, undefined, 'claude-sonnet-5')).toEqual(
       expect.arrayContaining(['-p', '--output-format', 'json', '--model', 'claude-sonnet-5']),
     );
-    const qwen = buildAgentArgs({ ...base, agent: 'qwen' }, 'C:/repo', undefined, undefined, 'qwen3-coder-plus');
-    expect(qwen).toEqual(expect.arrayContaining(['--model', 'qwen3-coder-plus']));
+    const qwen = buildAgentArgs({ ...base, agent: 'qwen' }, 'C:/repo', undefined, undefined, 'qwen3.8-max');
+    expect(qwen).toEqual(expect.arrayContaining(['--model', 'qwen3.8-max']));
     expect(qwen.at(-1)).toBe('Fix the bug');
-    const gemini = buildAgentArgs({ ...base, agent: 'gemini' }, 'C:/repo', 'resume-1', undefined, 'gemini-2.5-pro');
-    expect(gemini).toEqual(expect.arrayContaining(['--model', 'gemini-2.5-pro', '--resume', 'resume-1']));
+    const gemini = buildAgentArgs({ ...base, agent: 'gemini' }, 'C:/repo', 'resume-1', undefined, 'gemini-3.8-pro');
+    expect(gemini).toEqual(expect.arrayContaining(['--model', 'gemini-3.8-pro', '--resume', 'resume-1']));
   });
 });
 
@@ -45,7 +57,8 @@ describe('CLI model setting', () => {
   it('defaults to no overrides, and settings saved before this existed still load', () => {
     const defaults = createDefaultSettings();
     expect(defaults.agentModels).toEqual({});
-    const { agentModels: _omitted, ...legacy } = defaults;
+    const legacy: Record<string, unknown> = { ...defaults };
+    delete legacy.agentModels;
     expect(appSettingsV1Schema.parse(legacy).agentModels).toEqual({});
   });
 

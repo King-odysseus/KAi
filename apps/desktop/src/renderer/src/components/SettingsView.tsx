@@ -1,9 +1,11 @@
-import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Cloud, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
 import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
+import { ShortcutEditor } from './ShortcutSheet';
+import { shortcutConflicts } from '../shortcuts';
 
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
@@ -29,6 +31,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<SettingsFeedback | null>(null);
 
   useEffect(() => setDraft(settings), [settings]);
   useEffect(() => {
@@ -43,6 +46,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     ? providerModels.learning.models
     : learningPreset.models;
   const overwatchCredentialReady = credentialStatus.ids.includes(draft.cognitive1.overwatch.credentialId);
+  const shortcutConflictList = shortcutConflicts(draft.shortcuts);
   const setAgentModel = (agent: 'claude' | 'codex' | 'qwen' | 'gemini', value: string): void => {
     setDraft((current) => {
       const next = { ...current.agentModels };
@@ -238,6 +242,34 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     }
   }
 
+  async function saveDraft(): Promise<void> {
+    if (shortcutConflictList.length > 0) {
+      setSaveFeedback({ kind: 'error', message: shortcutConflictList[0]! });
+      return;
+    }
+    setSaveFeedback({ kind: 'pending', message: 'Saving settings...' });
+    const saved = await onSave({
+      defaultAgent: draft.defaultAgent,
+      defaultRoute: draft.defaultRoute,
+      defaultAutonomy: draft.defaultAutonomy,
+      theme: draft.theme,
+      logRetentionEntries: draft.logRetentionEntries,
+      diagnosticsEnabled: draft.diagnosticsEnabled,
+      notifications: draft.notifications,
+      agentModels: draft.agentModels,
+      directApi: draft.directApi,
+      learningTutor: draft.learningTutor,
+      mcpServers: draft.mcpServers,
+      cognitive1: draft.cognitive1,
+      proxy: draft.proxy,
+      shortcuts: draft.shortcuts,
+    });
+    setSaveFeedback({
+      kind: saved ? 'success' : 'error',
+      message: saved ? 'Settings saved and shared with all open KAI windows.' : 'Settings were not saved. Review the error shown at the top of the window.',
+    });
+  }
+
   return (
     <div className="page-view settings-view">
       <PageHeader title="Settings" detail="App-owned configuration and local diagnostics" />
@@ -269,24 +301,27 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <NotificationToggle label="Notify when approval is needed" hint="A tool is waiting for your decision" checked={draft.notifications.onApproval} onChange={(onApproval) => setDraft({ ...draft, notifications: { ...draft.notifications, onApproval } })} />
             <NotificationToggle label="Notify on budget warnings" hint="When a usage limit reaches 80% or 100%" checked={draft.notifications.onBudget} onChange={(onBudget) => setDraft({ ...draft, notifications: { ...draft.notifications, onBudget } })} />
           </div>
-          <button type="button" className="primary-button align-end" disabled={busy} onClick={() => void onSave({
-            defaultAgent: draft.defaultAgent,
-            defaultRoute: draft.defaultRoute,
-            defaultAutonomy: draft.defaultAutonomy,
-            theme: draft.theme,
-            logRetentionEntries: draft.logRetentionEntries,
-            diagnosticsEnabled: draft.diagnosticsEnabled,
-            notifications: draft.notifications,
-            agentModels: draft.agentModels,
-            directApi: draft.directApi,
-            learningTutor: draft.learningTutor,
-            mcpServers: draft.mcpServers,
-            cognitive1: draft.cognitive1,
-            proxy: draft.proxy,
-          })}><Check size={16} /><span>Save settings</span></button>
+          <button type="button" className="primary-button align-end" disabled={busy || shortcutConflictList.length > 0} onClick={() => void saveDraft()}>
+            <Check size={16} /><span>{saveFeedback?.kind === 'pending' ? 'Saving settings' : 'Save settings'}</span>
+          </button>
+          <FeedbackMessage feedback={saveFeedback} />
         </section>
 
         <UpdatesPanel settings={settings} />
+
+        <section className="settings-section">
+          <div className="section-title"><Keyboard size={17} /><span>Keyboard shortcuts</span></div>
+          <p className="settings-note">Focus a shortcut and press a new key combination. Changes are shared by every KAI window after saving.</p>
+          <ShortcutEditor
+            shortcuts={draft.shortcuts}
+            disabled={busy}
+            onChange={(shortcuts) => {
+              setDraft((current) => ({ ...current, shortcuts }));
+              setSaveFeedback(null);
+            }}
+          />
+          {shortcutConflictList.length > 0 && <FeedbackMessage feedback={{ kind: 'error', message: shortcutConflictList[0]! }} />}
+        </section>
 
         <ProviderConnectionSection
           title="Learning Tutor API"

@@ -5,8 +5,8 @@ import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
 import { DIRECT_PROVIDER_ORDER, directProviderPreset, migrateDeepSeekModel } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
-import { DesktopAgentRuntime } from './agent-runtime';
-import { preparePlaywrightMcpSettings } from './agent-mcp-config';
+import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
+import { preparePlaywrightMcpSettings, syncCognitive1Mcp } from './agent-mcp-config';
 import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
@@ -159,7 +159,16 @@ async function startApplication(): Promise<void> {
     loadSettings: () => settings.load(),
     saveSettings: (next) => settings.save(next),
   });
-  const agents = new DesktopAgentRuntime();
+  const agents = new DesktopAgentRuntime(undefined, undefined, {
+    resolveProxyEnvironment: async (agent) => {
+      const controller = serviceController;
+      if (!controller) throw new Error('The managed service controller is unavailable.');
+      const service = (await controller.status()).find((candidate) => candidate.kind === 'universalProxy');
+      if (service?.status !== 'ready') throw new Error('Start Universal Proxy before using its CLI route.');
+      const access = await controller.loopbackAccess('universalProxy');
+      return cliProxyEnvironment(agent, access);
+    },
+  });
   const runControl = new DesktopRunControl({
     suspendRun: async (conversationId) => {
       await agents.pause(conversationId);
@@ -333,7 +342,24 @@ async function startApplication(): Promise<void> {
   setInterval(checkForUpdates, 6 * 60 * 60_000).unref();
   void serviceController
     .startConfigured()
+    .then(() => syncCognitive1McpFromService(serviceController!, logger))
     .catch((error) => logger.error('service_error', 'Managed service startup failed', undefined, error));
+}
+
+export async function syncCognitive1McpFromService(
+  services: DesktopServiceController,
+  logger?: Pick<RedactedLogger, 'info' | 'warn'>,
+): Promise<void> {
+  const state = (await services.status()).find((service) => service.kind === 'cognitive1');
+  if (state?.status !== 'ready') return;
+  const results = await syncCognitive1Mcp(() => services.loopbackAccess('cognitive1'));
+  for (const result of results) {
+    if (result.error) {
+      logger?.warn('internal', `Cognitive1 MCP could not be added to ${result.agent}`, `${result.configPath}: ${result.error}`);
+    } else if (result.changed) {
+      logger?.info('internal', `Cognitive1 MCP added to ${result.agent}`, result.configPath);
+    }
+  }
 }
 
 async function repairProviderSettings(

@@ -11,6 +11,7 @@ import {
   FolderKanban,
   FolderOpen,
   History,
+  Keyboard,
   Layers3,
   ListChecks,
   Palette,
@@ -27,9 +28,10 @@ import {
   Workflow,
 } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { THEME_MODES, type ConversationRecord, type ProjectRecord, type ThemeMode } from '@kai/contracts';
+import { THEME_MODES, type AppSettings, type ConversationRecord, type ProjectRecord, type ThemeMode } from '@kai/contracts';
 import type { ViewId } from '../types';
 import { relativeTime } from '../types';
+import { shortcutLabel } from '../shortcuts';
 
 const themeLabel = (theme: ThemeMode): string => THEME_MODES.find((item) => item.id === theme)?.label ?? theme;
 const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.findIndex((item) => item.id === theme) + 1) % THEME_MODES.length]!.id;
@@ -60,12 +62,12 @@ export interface CommandPaletteItem {
   run: () => void | Promise<void>;
 }
 
-export function NavigationRail({ view, version, serviceStatus, onChange }: { view: ViewId; version: string; serviceStatus: string; onChange: (view: ViewId) => void }): ReactNode {
+export function NavigationRail({ view, version, serviceStatus, shortcuts, onChange }: { view: ViewId; version: string; serviceStatus: string; shortcuts: AppSettings['shortcuts']; onChange: (view: ViewId) => void }): ReactNode {
   return (
     <aside className="nav-rail" aria-label="Primary navigation">
       <div className="brand-mark" aria-label="KAI">K</div>
       <nav className="nav-stack">
-        {navigation.map((item, index) => {
+        {navigation.map((item) => {
           const Icon = item.icon;
           return (
             <button
@@ -73,7 +75,7 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
               type="button"
               className={`nav-button ${view === item.id ? 'active' : ''}`}
               onClick={() => onChange(item.id)}
-              title={`${item.label} (Ctrl+${index + 1})`}
+              title={navigationShortcut(item.id, shortcuts) ? `${item.label} (${navigationShortcut(item.id, shortcuts)})` : item.label}
               aria-label={item.label}
               aria-current={view === item.id ? 'page' : undefined}
             >
@@ -87,29 +89,41 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onToggleThreads, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleThreads: () => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void }): ReactNode {
+  const newWindowShortcut = shortcutLabel(shortcuts, 'new-window');
+  const searchShortcut = shortcutLabel(shortcuts, 'command-palette');
+  const threadsShortcut = shortcutLabel(shortcuts, 'threads');
+  const contextShortcut = shortcutLabel(shortcuts, 'context-panel');
+  const sheetShortcut = shortcutLabel(shortcuts, 'shortcuts');
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
         <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} />
       </div>
       <div className="titlebar-actions">
-        <button type="button" className="icon-button" title="New window (Ctrl+Shift+N)" aria-label="New window" onClick={onNewWindow}>
+        <button type="button" className="icon-button" title={`New window${newWindowShortcut ? ` (${newWindowShortcut})` : ''}`} aria-label="New window" onClick={onNewWindow}>
           <AppWindow size={17} />
         </button>
         <button type="button" className="icon-button" title={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} aria-label={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} onClick={onToggleTheme}>
           <Palette size={17} />
         </button>
-        <button type="button" className="icon-button" title="Command palette (Ctrl+K)" aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
-        <button type="button" className="icon-button" title={leftOpen ? 'Hide threads panel (Ctrl+Shift+B)' : 'Show threads panel (Ctrl+Shift+B)'} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>
+        <button type="button" className="icon-button" title={`Command palette${searchShortcut ? ` (${searchShortcut})` : ''}`} aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
+        <button type="button" className="icon-button" title={leftOpen ? `Hide threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}` : `Show threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}`} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>
           {leftOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
         </button>
-        <button type="button" className="icon-button" title={rightOpen ? 'Hide context panel (Ctrl+B)' : 'Show context panel (Ctrl+B)'} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
+        <button type="button" className="icon-button" title={rightOpen ? `Hide context panel${contextShortcut ? ` (${contextShortcut})` : ''}` : `Show context panel${contextShortcut ? ` (${contextShortcut})` : ''}`} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
           {rightOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
         </button>
+        <button type="button" className="icon-button" title={`Keyboard shortcuts${sheetShortcut ? ` (${sheetShortcut})` : ''}`} aria-label="Open keyboard shortcuts" onClick={onOpenShortcuts}><Keyboard size={17} /></button>
       </div>
     </header>
   );
+}
+
+function navigationShortcut(id: ViewId, shortcuts: AppSettings['shortcuts']): string {
+  if (id === 'workspace') return shortcutLabel(shortcuts, 'workbench');
+  if (id === 'code') return shortcutLabel(shortcuts, 'code');
+  return '';
 }
 
 export function CommandPalette({ items, onClose, onSearch }: { items: CommandPaletteItem[]; onClose: () => void; onSearch?: (query: string) => Promise<CommandPaletteItem[]> }): ReactNode {

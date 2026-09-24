@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -77,6 +77,10 @@ function harness(overrides: Partial<WorkflowRunnerPorts> = {}): {
 }
 
 describe('desktop workflow runner', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('owns execution in the main process, honors route settings, and completes each step once', async () => {
     const requests: AgentRunRequest[] = [];
     const { runner, records, notifications } = harness({
@@ -255,6 +259,41 @@ describe('desktop workflow runner', () => {
 
     expect(calls).toBe(1);
     expect(records.get(run.conversationId)?.workflow?.loopProgress).toMatchObject({ costUsd: 0.6, stopReason: 'cost_limit' });
+  });
+
+  it('pauses before a new round when the time limit is reached', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-24T10:00:00.000Z'));
+    let calls = 0;
+    const { runner, records } = harness({
+      runAgent: async (request) => {
+        calls += 1;
+        vi.setSystemTime(new Date('2026-09-24T10:01:01.000Z'));
+        return {
+          conversation: records.get(request.conversationId)!,
+          status: 'completed',
+          output: 'done',
+        };
+      },
+      runCheck: async () => ({ passed: false, exitCode: 1, output: 'still failing' }),
+    });
+
+    try {
+      const run = await runner.start(startInput({
+        steps: [{ id: 'only', agent: 'codex', prompt: 'Work', label: 'Work' }],
+        loop: { enabled: true, maxRounds: 5, maxCostUsd: 0, maxDurationMinutes: 1, checkCommand: 'npm test' },
+      }), 7);
+      await vi.runAllTimersAsync();
+
+      expect(calls).toBe(1);
+      expect(records.get(run.conversationId)?.workflow?.loopProgress).toMatchObject({
+        round: 2,
+        elapsedMs: 61_000,
+        stopReason: 'time_limit',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('transfers a running workflow and its future updates when its owner window closes', async () => {

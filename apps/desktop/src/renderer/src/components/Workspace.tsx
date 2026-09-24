@@ -280,6 +280,9 @@ export function WorkspaceView({
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const brainReady = settings.cognitive1.enabled;
   const apiRun = executionMode === 'api';
+  const cliProxySupported = Boolean(selectedCapability?.supportsRoutes.includes('proxy'));
+  const routeAvailable = apiRun || (cliProxySupported && proxyReady);
+  const effectiveRoute = apiRun || cliProxySupported ? selectedRoute : 'direct';
   const ready = apiRun ? Boolean(directApiCapability?.available) : Boolean(selectedCapability?.available);
   const unavailableReason = apiRun
     ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
@@ -1164,16 +1167,20 @@ export function WorkspaceView({
               />
               <SelectMenu
                 ariaLabel="Route"
-                className={`control-select route-select ${apiRun && selectedRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
-                disabled={busy || !apiRun}
+                className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
+                disabled={busy || !routeAvailable}
                 icon={<Route size={14} />}
                 onChange={onSelectRoute}
                 options={[
                   { value: 'direct', label: 'Direct' },
-                  { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !apiRun || !proxyReady },
+                  { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady },
                 ]}
-                title={apiRun ? proxyReady ? 'Choose the direct provider route or KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route' : 'CLI agents currently use direct routing'}
-                value={apiRun ? selectedRoute : 'direct'}
+                title={!routeAvailable
+                  ? 'This agent does not support the Universal Proxy route'
+                  : proxyReady
+                    ? 'Choose direct provider access or the KAI Universal Proxy route'
+                    : 'Start Universal Proxy in Settings to use the proxy route'}
+                value={effectiveRoute}
               />
               <SelectMenu
                 ariaLabel="Autonomy"

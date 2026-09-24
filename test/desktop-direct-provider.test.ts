@@ -214,6 +214,87 @@ describe('desktop direct provider runtime', () => {
     expect(requests[0]).toMatchObject({ path: '/v1/chat/completions', body: { model: 'deepseek-reasoner' } });
   });
 
+  it('streams native Anthropic Messages with the Anthropic credential headers', async () => {
+    const requests: Array<{ path?: string; apiKey?: string; version?: string; body: Record<string, unknown> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push({
+          path: request.url,
+          apiKey: request.headers['x-api-key'] as string | undefined,
+          version: request.headers['anthropic-version'] as string | undefined,
+          body: JSON.parse(raw) as Record<string, unknown>,
+        });
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":0}}}\n\n');
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Claude ready."}}\n\nevent: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":3}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5');
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(settings),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run(runRequest(), process.cwd(), undefined, undefined, undefined, '# KAI project context\nAnthropic context.');
+
+    expect(result).toMatchObject({ status: 'completed', output: 'Claude ready.' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      path: '/v1/messages',
+      apiKey: 'anthropic-secret',
+      version: '2023-06-01',
+      body: {
+        model: 'claude-sonnet-5',
+        system: '# KAI project context\nAnthropic context.',
+        stream: true,
+      },
+    });
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'cost.update', inputTokens: 7, outputTokens: 3, provider: 'anthropic' }),
+    ]));
+  });
+
+  it('streams native Gemini generative AI responses with the Google credential header', async () => {
+    const requests: Array<{ path?: string; apiKey?: string; body: Record<string, unknown> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push({
+          path: request.url,
+          apiKey: request.headers['x-goog-api-key'] as string | undefined,
+          body: JSON.parse(raw) as Record<string, unknown>,
+        });
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.end('data: {"candidates":[{"content":{"parts":[{"text":"Gemini ready."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7}}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = directProviderSettings(baseUrl, 'google', 'gemini-3.8-flash');
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(settings),
+      credentialPort('provider.google', 'google-secret'),
+    );
+
+    const result = await runtime.run(runRequest(), process.cwd());
+
+    expect(result).toMatchObject({ status: 'completed', output: 'Gemini ready.' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      path: '/v1/models/gemini-3.8-flash:streamGenerateContent?alt=sse',
+      apiKey: 'google-secret',
+      body: { contents: [{ role: 'user', parts: [{ text: 'Inspect the project' }] }] },
+    });
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'cost.update', inputTokens: 5, outputTokens: 2, provider: 'google' }),
+    ]));
+  });
+
   it('cancels an in-flight Chat Completions stream', async () => {
     const server = http.createServer((_request, response) => {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -608,6 +689,17 @@ function chatProviderSettings(
   const settings = enabledSettings(baseUrl, model);
   settings.directApi.provider = provider;
   settings.directApi.credentialId = provider === 'openrouter' ? 'provider.openrouter' : 'provider.deepseek';
+  return settings;
+}
+
+function directProviderSettings(
+  baseUrl: string,
+  provider: 'anthropic' | 'google',
+  model: string,
+): AppSettings {
+  const settings = enabledSettings(baseUrl, model);
+  settings.directApi.provider = provider;
+  settings.directApi.credentialId = provider === 'anthropic' ? 'provider.anthropic' : 'provider.google';
   return settings;
 }
 

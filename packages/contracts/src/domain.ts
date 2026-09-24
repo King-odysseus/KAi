@@ -270,6 +270,7 @@ export const DEFAULT_DESKTOP_SHORTCUTS: Readonly<Record<string, string>> = {
   'new-window': 'Ctrl+Shift+N',
   'terminal': 'Ctrl+`',
   'command-palette': 'Ctrl+K',
+  'threads': 'Ctrl+Shift+B',
   'context-panel': 'Ctrl+B',
   'shortcuts': 'Ctrl+/',
 };

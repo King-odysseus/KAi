@@ -14,8 +14,9 @@
   through the GitHub CLI if you are signed in to it; KAI stores no tokens and
   never force-pushes.
 - **A terminal panel.** Press Ctrl+` from any page. Run commands in the open
-  project with Command Prompt, PowerShell or Git Bash, watch the output and stop
-  them. It is a command runner, so programs that wait for typed input end.
+  project with Command Prompt, PowerShell or Git Bash in an xterm.js terminal
+  backed by a real PTY. Prompts, `vim`, and other full-screen or interactive
+  programs accept input, resize with the panel, and can be stopped.
 - **Publishing always asks.** When an API-mode agent runs `git push`,
   `gh pr create`, `npm publish` and similar commands, KAI asks even in Full
   control.
@@ -42,6 +43,54 @@
   releases, download them and install them; the configuration is backed up first
   and nothing installs without you. The build is unsigned, so Windows shows a
   SmartScreen prompt the first time.
+
+### Desktop audit follow-through
+
+- **Direct API providers now cover Anthropic and Google Gemini.** Both use their
+  native streaming protocols, bounded project/MCP tools, usage accounting,
+  cancellation, and the same approval policy as OpenAI and OpenAI-compatible
+  providers. Anthropic Messages and Gemini direct runs have fixture coverage.
+- **CLI agents can use the Universal Proxy.** Direct and Proxy routing is stored
+  per CLI agent, the route writers are opt-in, and proxy routing is verified
+  before launch instead of silently falling back to a direct account.
+- **Live runs pause and resume.** CLI processes are suspended and resumed through
+  their process tree; API runs pause cooperatively between provider or tool
+  steps. Stop still cancels immediately, and no pause survives a crash as a live
+  process.
+- **Independent project windows are available.** New Window and `Ctrl+Shift+N`
+  open another renderer with its own project, conversation, navigation, editor,
+  terminal, and run ownership. Settings, credentials and managed services remain
+  shared.
+- **Workflow loop mode repeats work, check and fix within explicit limits.**
+  Rounds, cost and elapsed time are persisted. A failed or limited loop pauses;
+  Resume starts the next bounded round and never silently replays completed
+  non-loop work.
+- **Cognitive1 is registered as an MCP server for CLI agents.** Claude Code,
+  Codex, Qwen Code and Gemini CLI receive the authenticated loopback endpoint,
+  while unrelated MCP configuration and existing backups are preserved.
+- **First-run setup is built in.** Setup checks project selection, CLI/provider
+  readiness, credentials, managed services and Brain availability, deep-links to
+  Settings, and is dismissed only after the user completes or skips it.
+- **Brain search can run by meaning and the brain can sync with Git.** Search
+  offers lexical or semantic mode through managed C1. The Brain page can inspect
+  repository state and perform explicit init, commit, pull and push actions
+  without turning network operations into interactive prompts.
+- **Shortcuts are documented and customizable.** A shortcut sheet opens from the
+  title bar or `Ctrl+/`; conflicts are rejected, defaults can be restored, and
+  saved bindings are shared by every KAI window.
+- **Monaco startup only loads supported languages.** The editor API and the
+  common language set used by KAI are loaded on demand instead of Monaco's
+  all-language entry point. The previous 7.66 MB editor chunk is split into a
+  678 KB API chunk and a 1.34 MB editor-engine chunk, with only common language
+  chunks emitted.
+- **The Learn tutor composer is clearer and more robust.** Its textarea has a
+  larger responsive writing area, stronger focus/hover states, stable scrolling
+  and resize behaviour, and the selected tutor mode remains visible while the
+  panel is used.
+- **CLI model presets now use the current families.** Claude, Codex, Qwen Code
+  and Gemini CLI offer their newer model IDs alongside legacy aliases, and the
+  selected model is visually prominent in the composer menu. The popover is no
+  longer clipped by the composer container, so every option remains clickable.
 
 ## 2026-09-23
 

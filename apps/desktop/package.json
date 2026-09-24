@@ -47,6 +47,7 @@
     "appId": "ai.kai.desktop",
     "productName": "KAI",
     "asar": true,
+    "npmRebuild": false,
     "publish": [
       {
         "provider": "github",

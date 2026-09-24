@@ -32,7 +32,7 @@ try {
   });
   const page = await electronApp.firstWindow();
   page.on('pageerror', (error) => rendererErrors.push(error.message));
-  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor({ timeout: 20_000 });
+  await waitForProjectName(page, 'Sample Project');
   await verifyBuildIdentifier(page);
 
   await verifyCodeEditor(page);
@@ -72,6 +72,7 @@ async function verifyCodeEditor(page) {
   await file.click();
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
   await page.getByText('export const hello').first().waitFor();
+  await assertTutorTextareaStyled(page);
   await page.screenshot({ path: path.join(outputDirectory, 'code-1440x920.png') });
 
   await page.locator('.monaco-editor .view-lines').first().click();
@@ -196,21 +197,44 @@ async function verifyTasksAndSettings(page) {
   }
   await page.getByText('CLI models').waitFor();
   await page.getByText('Tray and notifications').waitFor();
+  await assertSettingsSectionsFullWidth(page);
+  await verifyShortcutSheet(page);
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
   // The composer offers a per-conversation model next to agent, route and autonomy.
   await page.getByRole('button', { name: 'Workspace', exact: true }).click();
   const titlebar = page.locator('.titlebar-actions');
-  await titlebar.getByRole('button', { name: 'Hide threads panel' }).click();
   await titlebar.getByRole('button', { name: 'Show threads panel' }).waitFor();
   if (await page.locator('.conversation-column').count() > 0) {
-    throw new Error('The left threads panel remained visible after it was collapsed.');
+    throw new Error('The left threads panel should start minimised.');
+  }
+  await titlebar.getByRole('button', { name: 'Show context panel' }).waitFor();
+  if (await page.locator('.context-column').count() > 0) {
+    throw new Error('The context panel should start minimised.');
   }
   await titlebar.getByRole('button', { name: 'Show threads panel' }).click();
   await page.locator('.conversation-column').waitFor();
+  await titlebar.getByRole('button', { name: 'Hide threads panel' }).click();
+  await page.locator('.conversation-column').waitFor({ state: 'detached' });
 
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await page.getByRole('listbox', { name: 'Agent', exact: true }).getByRole('option', { name: /^Qwen Code/ }).click();
   await page.getByRole('button', { name: 'Model', exact: true }).click();
-  await page.getByRole('option', { name: 'Other model…' }).waitFor();
+  const modelMenu = page.getByRole('listbox', { name: 'Model', exact: true });
+  await modelMenu.getByRole('option', { name: 'qwen3.8-max', exact: true }).waitFor();
+  await modelMenu.getByRole('option', { name: 'Other model…' }).waitFor();
+  const modelMenuStacking = await modelMenu.evaluate((element) => {
+    const composer = document.querySelector('.composer-box');
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + 10, rect.top + 10);
+    return {
+      composerOverflow: composer ? getComputedStyle(composer).overflow : null,
+      hitInsideMenu: hit ? element.contains(hit) : false,
+    };
+  });
+  if (modelMenuStacking.composerOverflow === 'hidden' || !modelMenuStacking.hitInsideMenu) {
+    throw new Error(`The model menu was clipped by its composer container: ${JSON.stringify(modelMenuStacking)}.`);
+  }
   await page.keyboard.press('Escape');
 }
 
@@ -231,38 +255,38 @@ async function verifyThemes(page) {
 
 async function verifyIndependentWindows(application, page) {
   await page.getByRole('button', { name: 'Workspace', exact: true }).click();
-  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+  await waitForProjectName(page, 'Sample Project');
 
   const secondWindowPromise = application.waitForEvent('window');
   await page.getByRole('button', { name: 'New window' }).click();
   const second = await secondWindowPromise;
   second.on('pageerror', (error) => rendererErrors.push(error.message));
-  await second.getByText('Open a local repository').waitFor({ timeout: 20_000 });
+  await second.locator('.project-picker-button').getByText('No project', { exact: true }).waitFor({ timeout: 20_000 });
 
   const thirdWindowPromise = application.waitForEvent('window');
   await page.keyboard.press('Control+Shift+N');
   const third = await thirdWindowPromise;
   third.on('pageerror', (error) => rendererErrors.push(error.message));
-  await third.getByText('Open a local repository').waitFor({ timeout: 20_000 });
+  await third.locator('.project-picker-button').getByText('No project', { exact: true }).waitFor({ timeout: 20_000 });
   await third.close();
 
   await second.locator('.project-picker-button').click();
   await second.getByRole('button', { name: /Second Project/ }).click();
-  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor();
-  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+  await waitForProjectName(second, 'Second Project');
+  await waitForProjectName(page, 'Sample Project');
 
   // A renderer reload must restore this window's own project rather than another window's selection.
   await second.reload();
-  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor({ timeout: 20_000 });
-  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+  await waitForProjectName(second, 'Second Project');
+  await waitForProjectName(page, 'Sample Project');
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     if (await page.evaluate(() => document.documentElement.dataset.theme === 'light')) break;
     await page.locator('button[aria-label^="Theme:"]').click();
   }
   await second.waitForFunction(() => document.documentElement.dataset.theme === 'light');
-  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor();
-  await page.getByRole('heading', { name: 'Sample Project', level: 1 }).waitFor();
+  await waitForProjectName(second, 'Second Project');
+  await waitForProjectName(page, 'Sample Project');
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark')) break;
@@ -271,7 +295,7 @@ async function verifyIndependentWindows(application, page) {
   await second.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 
   await page.close();
-  await second.getByRole('heading', { name: 'Second Project', level: 1 }).waitFor();
+  await waitForProjectName(second, 'Second Project');
   await second.screenshot({ path: path.join(outputDirectory, 'independent-windows-1440x920.png') });
 }
 
@@ -285,6 +309,10 @@ async function verifyBuildIdentifier(page) {
   if (!suffix || !rail.includes(suffix)) {
     throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail}`);
   }
+}
+
+async function waitForProjectName(page, name) {
+  await page.locator('.project-picker-button').getByText(name, { exact: true }).waitFor({ timeout: 20_000 });
 }
 
 async function createProject() {
@@ -317,6 +345,7 @@ async function createProject() {
     mcpServers: [],
     cognitive1: { enabled: false, endpoint: 'http://127.0.0.1:9876', dataPath: null },
     proxy: { enabled: false, port: 8082, targetBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat', credentialId: 'provider.deepseek' },
+    setupCompletedAt: new Date().toISOString(),
   };
   await writeFile(path.join(userData, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   await writeFile(path.join(userData, 'projects.json'), `${JSON.stringify({ schemaVersion: 1, projects: [project, secondProject] }, null, 2)}\n`, 'utf8');
@@ -333,4 +362,60 @@ async function resizeWindow(application, width, height) {
 async function assertNoHorizontalOverflow(page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   if (overflow) throw new Error('KAI displayed horizontal overflow.');
+}
+
+async function assertSettingsSectionsFullWidth(page) {
+  const result = await page.evaluate(() => {
+    const grid = document.querySelector('.settings-grid');
+    if (!(grid instanceof HTMLElement)) return null;
+    const gridStyle = getComputedStyle(grid);
+    const contentWidth = grid.clientWidth - Number.parseFloat(gridStyle.paddingLeft) - Number.parseFloat(gridStyle.paddingRight);
+    const sections = [...grid.querySelectorAll(':scope > .settings-section')].map((section) => section.getBoundingClientRect().width);
+    return { contentWidth, sections };
+  });
+  if (!result || result.sections.length === 0) throw new Error('No settings sections were rendered.');
+  if (result.sections.some((width) => width < result.contentWidth - 2)) {
+    throw new Error(`A settings section did not fill the grid width: ${JSON.stringify(result)}`);
+  }
+}
+
+async function verifyShortcutSheet(page) {
+  await page.keyboard.press('Control+/');
+  const sheet = page.getByRole('dialog', { name: 'Shortcut sheet' });
+  await sheet.waitFor();
+  const codeShortcut = sheet.getByLabel('Shortcut for Code editor');
+  await codeShortcut.focus();
+  await page.keyboard.press('Control+Alt+2');
+  if ((await codeShortcut.inputValue()) !== 'Ctrl+Alt+2') {
+    throw new Error(`Shortcut capture did not record the key combination: ${await codeShortcut.inputValue()}`);
+  }
+  await sheet.getByRole('button', { name: 'Save shortcuts' }).click();
+  await sheet.getByText('Saved and active now').waitFor();
+  await sheet.getByRole('button', { name: 'Reset all' }).click();
+  await sheet.getByRole('button', { name: 'Save shortcuts' }).click();
+  await sheet.getByText('Saved and active now').waitFor();
+  await sheet.getByRole('button', { name: 'Close shortcut sheet' }).click();
+  await sheet.waitFor({ state: 'detached' });
+}
+
+async function assertTutorTextareaStyled(page) {
+  const textarea = page.getByLabel('Tutor question');
+  await textarea.waitFor();
+  const style = await textarea.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    return {
+      minHeight: Number.parseFloat(computed.minHeight),
+      paddingTop: Number.parseFloat(computed.paddingTop),
+      paddingLeft: Number.parseFloat(computed.paddingLeft),
+      borderRadius: Number.parseFloat(computed.borderRadius),
+      caretColor: computed.caretColor,
+      backgroundColor: computed.backgroundColor,
+    };
+  });
+  if (style.minHeight < 100 || style.paddingTop < 12 || style.paddingLeft < 12 || style.borderRadius < 8) {
+    throw new Error(`The tutor textarea style is incomplete: ${JSON.stringify(style)}`);
+  }
+  if (style.caretColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
+    throw new Error(`The tutor textarea lacks visible caret/background styling: ${JSON.stringify(style)}`);
+  }
 }

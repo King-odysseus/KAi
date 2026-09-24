@@ -2,7 +2,12 @@ import {
   AlertTriangle,
   Brain,
   Check,
+  CloudDownload,
+  CloudUpload,
   FileText,
+  FolderPlus,
+  GitBranch,
+  GitCommitHorizontal,
   Pencil,
   RefreshCw,
   Search,
@@ -12,8 +17,17 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { BrainEntry, BrainEntryType, BrainOverview, ServiceState } from '@kai/contracts';
+import type {
+  BrainEntry,
+  BrainEntryType,
+  BrainGitStatus,
+  BrainGitSyncAction,
+  BrainOverview,
+  BrainSearchInput,
+  ServiceState,
+} from '@kai/contracts';
 import { unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 interface SearchFilters {
   query: string;
@@ -21,6 +35,7 @@ interface SearchFilters {
   type: '' | BrainEntryType;
   project: string;
   global: boolean;
+  mode: 'lexical' | 'semantic';
 }
 
 interface FieldEditor {
@@ -35,6 +50,7 @@ const initialFilters: SearchFilters = {
   type: '',
   project: '',
   global: false,
+  mode: 'lexical',
 };
 
 export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
@@ -46,6 +62,9 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<FieldEditor | null>(null);
   const [savingField, setSavingField] = useState<string | null>(null);
+  const [gitStatus, setGitStatus] = useState<BrainGitStatus | null>(null);
+  const [gitBusy, setGitBusy] = useState<BrainGitSyncAction | 'refresh' | null>(null);
+  const [gitFeedback, setGitFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const latestRequest = useRef(0);
 
   useEffect(() => {
@@ -54,6 +73,8 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
       setResults([]);
       setLoading(false);
       setError(null);
+      setGitStatus(null);
+      setGitFeedback(null);
       return;
     }
 
@@ -64,11 +85,13 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
     void Promise.all([
       window.kaiDesktop.brainOverview().then(unwrap),
       window.kaiDesktop.searchBrain(searchRequest(initialFilters)).then(unwrap),
+      window.kaiDesktop.brainGitStatus().then(unwrap),
     ])
-      .then(([nextOverview, nextResults]) => {
+      .then(([nextOverview, nextResults, nextGitStatus]) => {
         if (!active || requestId !== latestRequest.current) return;
         setOverview(nextOverview);
         setResults(nextResults);
+        setGitStatus(nextGitStatus);
       })
       .catch((caught) => {
         if (active && requestId === latestRequest.current) setError(messageOf(caught));
@@ -123,6 +146,49 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
       if (requestId === latestRequest.current) setError(messageOf(caught));
     } finally {
       if (requestId === latestRequest.current) setLoading(false);
+    }
+  }
+
+  async function refreshGitStatus(): Promise<void> {
+    setGitBusy('refresh');
+    try {
+      const status = await window.kaiDesktop.brainGitStatus().then(unwrap);
+      setGitStatus(status);
+      setGitFeedback(status.error ? { kind: 'error', message: status.error } : null);
+    } catch (caught) {
+      setGitFeedback({ kind: 'error', message: messageOf(caught) });
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function runGitAction(action: BrainGitSyncAction): Promise<void> {
+    if (action === 'pull' && !(await confirmDialog({
+      title: 'Pull brain changes?',
+      detail: 'KAI will fast-forward the brain repository from its configured remote. Local conflicts are never overwritten.',
+      confirmLabel: 'Pull changes',
+    }))) return;
+    if (action === 'push' && !(await confirmDialog({
+      title: 'Push brain changes?',
+      detail: 'KAI will push the current brain branch to its configured remote. This sends brain data off this machine.',
+      confirmLabel: 'Push changes',
+      destructive: true,
+    }))) return;
+
+    setGitBusy(action);
+    setGitFeedback(null);
+    try {
+      const result = await window.kaiDesktop.brainGitSync(action).then(unwrap);
+      setGitStatus(result.status);
+      setGitFeedback({
+        kind: result.success ? 'success' : 'error',
+        message: result.message || `${titleCase(action)} completed.`,
+      });
+      if (result.success) await refresh();
+    } catch (caught) {
+      setGitFeedback({ kind: 'error', message: messageOf(caught) });
+    } finally {
+      setGitBusy(null);
     }
   }
 
@@ -250,6 +316,19 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
             placeholder="Project name"
           />
         </label>
+        <label>
+          <span>Search mode</span>
+          <select
+            value={filters.mode}
+            onChange={(event) => setFilters((current) => ({
+              ...current,
+              mode: event.target.value as SearchFilters['mode'],
+            }))}
+          >
+            <option value="lexical">Exact words</option>
+            <option value="semantic">By meaning</option>
+          </select>
+        </label>
         <label className="brain-global-filter">
           <input
             type="checkbox"
@@ -308,6 +387,61 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
           </div>
         )}
       </div>
+
+      {gitStatus && (
+        <section className="brain-git-panel" aria-labelledby="brain-git-title">
+          <div className="brain-section-heading">
+            <div>
+              <span className="eyebrow">Portable memory</span>
+              <h2 id="brain-git-title">Brain Git sync</h2>
+            </div>
+            <button type="button" className="secondary-button" disabled={Boolean(gitBusy)} onClick={() => void refreshGitStatus()}>
+              <RefreshCw size={14} className={gitBusy === 'refresh' ? 'spin' : undefined} />
+              <span>Refresh</span>
+            </button>
+          </div>
+          <div className="brain-git-status">
+            <div>
+              <GitBranch size={15} />
+              <span>{gitStatus.repository ? gitStatus.branch || 'Detached HEAD' : 'Git not initialized'}</span>
+            </div>
+            <div>
+              <FileText size={15} />
+              <span>{gitStatus.clean ? 'Working tree clean' : `${gitStatus.changedFiles} changed file${gitStatus.changedFiles === 1 ? '' : 's'}`}</span>
+            </div>
+            <div>
+              <CloudUpload size={15} />
+              <span>{gitStatus.remote ? `${gitStatus.ahead} ahead / ${gitStatus.behind} behind` : 'No remote configured'}</span>
+            </div>
+            <code title={gitStatus.path}>{gitStatus.path}</code>
+          </div>
+          <div className="brain-git-actions">
+            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || gitStatus.repository} onClick={() => void runGitAction('init')}>
+              <FolderPlus size={14} /><span>Initialize</span>
+            </button>
+            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || gitStatus.clean} onClick={() => void runGitAction('commit')}>
+              <GitCommitHorizontal size={14} /><span>{gitBusy === 'commit' ? 'Committing' : 'Commit all'}</span>
+            </button>
+            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('pull')}>
+              <CloudDownload size={14} /><span>{gitBusy === 'pull' ? 'Pulling' : 'Pull'}</span>
+            </button>
+            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('push')}>
+              <CloudUpload size={14} /><span>{gitBusy === 'push' ? 'Pushing' : 'Push'}</span>
+            </button>
+          </div>
+          {gitStatus.error && !gitFeedback && (
+            <div className="brain-git-feedback error" role="alert">
+              <AlertTriangle size={14} /><span>{gitStatus.error}</span>
+            </div>
+          )}
+          {gitFeedback && (
+            <div className={`brain-git-feedback ${gitFeedback.kind}`} role={gitFeedback.kind === 'error' ? 'alert' : 'status'}>
+              {gitFeedback.kind === 'success' ? <Check size={14} /> : <AlertTriangle size={14} />}
+              <span>{gitFeedback.message}</span>
+            </div>
+          )}
+        </section>
+      )}
     </section>
   );
 }
@@ -410,13 +544,14 @@ function fieldKey(editor: FieldEditor): string {
   return `${editor.title}:${editor.field}`;
 }
 
-function searchRequest(filters: SearchFilters, maxResults = 25) {
+function searchRequest(filters: SearchFilters, maxResults = 25): BrainSearchInput {
   return {
     query: filters.query,
     tag: filters.tag,
     type: filters.type || undefined,
     project: filters.project,
     global: filters.global,
+    mode: filters.mode,
     maxResults,
   };
 }

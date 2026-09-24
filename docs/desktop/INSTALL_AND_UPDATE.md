@@ -27,10 +27,18 @@ KAI reads releases from GitHub (`King-odysseus/KAi`) with `electron-updater`. Th
 
 Settings, Configuration backups lists the backup made just before the update. Restore it to return settings and project permissions to how they were. Conversations, the brain and credentials are not changed by an update.
 
-## Checklist for a clean-machine test (not yet run)
+## Validation status (2026-09-24)
 
-- [ ] Install on a machine with no KAI data; confirm SmartScreen, install and first start.
-- [ ] Confirm the bundled C1 and Universal Proxy engines start (Operations, Diagnostics).
+- [x] Built the unsigned NSIS installer and installed it over the development
+  installation with exit code 0.
+- [x] Confirmed the installed executable matches the packaged build and that the
+  bundled Cognitive1 1.0.0, Universal Agent Proxy 1.9.0 and `node-pty` Windows
+  x64 prebuilds are present.
+- [x] Passed the isolated first-run, packaged and installed smoke suites,
+  including independent windows, terminal, editor, diagnostics, settings,
+  shortcut customization and the model-menu stacking check.
+- [ ] Run the full checklist on a separate machine with no KAI data.
 - [ ] Publish a newer test release; confirm Check, Download and the release notes.
-- [ ] Install it; confirm the backup exists, KAI restarts, and settings, conversations and credentials survived.
+- [ ] Install the published update; confirm the backup exists, KAI restarts, and
+  settings, conversations and credentials survive.
 - [ ] Restore the backup and confirm settings return to their earlier values.

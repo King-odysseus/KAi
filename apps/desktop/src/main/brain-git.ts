@@ -22,7 +22,8 @@ export async function brainGitStatus(brainPath: string): Promise<BrainGitStatus>
   };
   try {
     await fs.access(brainPath);
-    const repository = (await git(brainPath, ['rev-parse', '--is-inside-work-tree'])).trim() === 'true';
+    // An existing folder that has not been initialized is a valid actionable state, not an error.
+    const repository = (await git(brainPath, ['rev-parse', '--is-inside-work-tree']).catch(() => 'false')).trim() === 'true';
     if (!repository) return base;
     const [branchOutput, remoteOutput, statusOutput, upstreamOutput] = await Promise.all([
       git(brainPath, ['branch', '--show-current']).catch(() => ''),

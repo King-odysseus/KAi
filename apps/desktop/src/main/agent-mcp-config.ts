@@ -11,6 +11,7 @@ import {
 const PLAYWRIGHT_CLI_SERVER_NAME = 'playwright';
 const PLAYWRIGHT_CLI_COMMAND = 'npx';
 const PLAYWRIGHT_ARGS = ['-y', '@playwright/mcp@latest'];
+export const COGNITIVE1_CLI_SERVER_NAME = 'cognitive1';
 
 export type CliAgentId = 'claude' | 'codex' | 'qwen' | 'gemini';
 
@@ -36,6 +37,16 @@ export interface PlaywrightMcpPreparation {
   changed: boolean;
   agentsInstalled: boolean;
   cliResults: AgentMcpInstallResult[];
+}
+
+export interface Cognitive1McpInstallOptions extends AgentMcpInstallOptions {
+  endpoint: string;
+  token: string;
+}
+
+export interface Cognitive1McpAccess {
+  endpoint: string;
+  token: string;
 }
 
 export function withPlaywrightMcpSetting(
@@ -95,13 +106,55 @@ export async function preparePlaywrightMcpSettings(
 export async function installPlaywrightMcpForAgents(
   options: AgentMcpInstallOptions = {},
 ): Promise<AgentMcpInstallResult[]> {
+  return installMcpForAgents(PLAYWRIGHT_CLI_SERVER_NAME, () => ({
+    claude: { command: PLAYWRIGHT_CLI_COMMAND, args: [...PLAYWRIGHT_ARGS] },
+    qwen: { command: PLAYWRIGHT_CLI_COMMAND, args: [...PLAYWRIGHT_ARGS] },
+    gemini: { command: PLAYWRIGHT_CLI_COMMAND, args: [...PLAYWRIGHT_ARGS] },
+  }), [
+    '[mcp_servers.playwright]',
+    `command = "${PLAYWRIGHT_CLI_COMMAND}"`,
+    'args = ["-y", "@playwright/mcp@latest"]',
+  ], options);
+}
+
+/** Keep the managed Cognitive1 HTTP MCP endpoint available to every supported CLI. */
+export async function installCognitive1McpForAgents(
+  options: Cognitive1McpInstallOptions,
+): Promise<AgentMcpInstallResult[]> {
+  const endpoint = cognitive1McpEndpoint(options.endpoint);
+  const authorization = `Bearer ${options.token}`;
+  return installMcpForAgents(COGNITIVE1_CLI_SERVER_NAME, () => ({
+    claude: { type: 'http', url: endpoint, headers: { Authorization: authorization } },
+    qwen: { httpUrl: endpoint, headers: { Authorization: authorization } },
+    gemini: { httpUrl: endpoint, headers: { Authorization: authorization } },
+  }), [
+    '[mcp_servers.cognitive1]',
+    `url = "${escapeTomlString(endpoint)}"`,
+    `http_headers = { Authorization = "${escapeTomlString(authorization)}" }`,
+  ], options);
+}
+
+export async function syncCognitive1Mcp(
+  access: () => Promise<Cognitive1McpAccess>,
+  options: AgentMcpInstallOptions = {},
+): Promise<AgentMcpInstallResult[]> {
+  return installCognitive1McpForAgents({ ...await access(), ...options });
+}
+
+async function installMcpForAgents(
+  serverName: string,
+  jsonEntry: () => Record<Exclude<CliAgentId, 'codex'>, unknown>,
+  codexEntry: string[],
+  options: AgentMcpInstallOptions,
+): Promise<AgentMcpInstallResult[]> {
   const homeDirectory = options.homeDirectory ?? os.homedir();
   const backupRootName = options.backupRootName ?? '.kai-backups';
+  const jsonEntries = jsonEntry();
   return Promise.all([
-    installJsonMcp('claude', path.join(homeDirectory, '.claude.json'), backupRootName),
-    installCodexMcp(path.join(homeDirectory, '.codex', 'config.toml'), backupRootName),
-    installJsonMcp('qwen', path.join(homeDirectory, '.qwen', 'settings.json'), backupRootName),
-    installJsonMcp('gemini', path.join(homeDirectory, '.gemini', 'settings.json'), backupRootName),
+    reconcileJsonMcp('claude', path.join(homeDirectory, '.claude.json'), serverName, jsonEntries.claude, backupRootName),
+    reconcileCodexMcp(path.join(homeDirectory, '.codex', 'config.toml'), serverName, codexEntry, backupRootName),
+    reconcileJsonMcp('qwen', path.join(homeDirectory, '.qwen', 'settings.json'), serverName, jsonEntries.qwen, backupRootName),
+    reconcileJsonMcp('gemini', path.join(homeDirectory, '.gemini', 'settings.json'), serverName, jsonEntries.gemini, backupRootName),
   ]);
 }
 
@@ -150,9 +203,11 @@ function quoteCmdArgument(argument: string): string {
   return `"${argument.replace(/(["^&|<>()%!])/g, '^$1')}"`;
 }
 
-async function installJsonMcp(
+async function reconcileJsonMcp(
   agent: Exclude<CliAgentId, 'codex'>,
   configPath: string,
+  serverName: string,
+  desired: unknown,
   backupRootName: string,
 ): Promise<AgentMcpInstallResult> {
   try {
@@ -161,17 +216,14 @@ async function installJsonMcp(
     if (!isRecord(parsed)) throw new Error('The agent configuration root must be a JSON object.');
     const servers = parsed.mcpServers === undefined ? {} : parsed.mcpServers;
     if (!isRecord(servers)) throw new Error('The mcpServers field must be a JSON object.');
-    if (PLAYWRIGHT_CLI_SERVER_NAME in servers) {
+    if (sameJson(servers[serverName], desired)) {
       return { agent, configPath, changed: false };
     }
     const next = {
       ...parsed,
       mcpServers: {
         ...servers,
-        [PLAYWRIGHT_CLI_SERVER_NAME]: {
-          command: PLAYWRIGHT_CLI_COMMAND,
-          args: [...PLAYWRIGHT_ARGS],
-        },
+        [serverName]: desired,
       },
     };
     const backupPath = await backupExisting(configPath, existing, backupRootName);
@@ -182,30 +234,73 @@ async function installJsonMcp(
   }
 }
 
-async function installCodexMcp(
+async function reconcileCodexMcp(
   configPath: string,
+  serverName: string,
+  entryLines: string[],
   backupRootName: string,
 ): Promise<AgentMcpInstallResult> {
   try {
     const existing = await readOptional(configPath);
-    if (/^\s*\[mcp_servers\.playwright(?:\.[^\]]+)?\]\s*$/m.test(existing)) {
+    const block = [
+      `# >>> KAI ${serverName} MCP`,
+      ...entryLines,
+      `# <<< KAI ${serverName} MCP`,
+    ].join('\n');
+    const managedPattern = new RegExp(
+      `^# >>> KAI ${escapeRegExp(serverName)} MCP\\r?\\n[\\s\\S]*?^# <<< KAI ${escapeRegExp(serverName)} MCP\\r?$`,
+      'm',
+    );
+    const managed = managedPattern.exec(existing)?.[0];
+    if (managed?.replace(/\r\n/g, '\n') === block) {
       return { agent: 'codex', configPath, changed: false };
     }
-    const block = [
-      '# >>> KAI playwright MCP',
-      '[mcp_servers.playwright]',
-      `command = "${PLAYWRIGHT_CLI_COMMAND}"`,
-      'args = ["-y", "@playwright/mcp@latest"]',
-      '# <<< KAI playwright MCP',
-    ].join('\n');
-    const separator = existing.trim() ? '\n\n' : '';
-    const next = `${existing.trimEnd()}${separator}${block}\n`;
+    const withoutManaged = managed ? existing.replace(managedPattern, '').trimEnd() : existing.trimEnd();
+    const withoutBare = removeCodexMcpTable(withoutManaged, serverName).trimEnd();
+    const next = `${withoutBare}${withoutBare ? '\n\n' : ''}${block}\n`;
     const backupPath = await backupExisting(configPath, existing, backupRootName);
     await writeText(configPath, next);
     return { agent: 'codex', configPath, changed: true, ...(backupPath ? { backupPath } : {}) };
   } catch (error) {
     return { agent: 'codex', configPath, changed: false, error: messageOf(error) };
   }
+}
+
+function removeCodexMcpTable(toml: string, serverName: string): string {
+  const lines = toml.split(/\r?\n/);
+  const kept: string[] = [];
+  const prefix = `mcp_servers.${serverName}`;
+  let skipping = false;
+  for (const line of lines) {
+    const table = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (table) skipping = table[1].trim() === prefix || table[1].trim().startsWith(`${prefix}.`);
+    if (!skipping) kept.push(line);
+  }
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+function cognitive1McpEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(trimmed)) throw new Error('The Cognitive1 MCP endpoint must be an HTTP or HTTPS URL.');
+  return /\/mcp$/i.test(trimmed) ? trimmed : `${trimmed}/mcp`;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(stableJson(left)) === JSON.stringify(stableJson(right));
+}
+
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableJson(value[key])]));
+}
+
+function escapeTomlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function readOptional(filePath: string): Promise<string> {

@@ -40,10 +40,44 @@ export const agentRunRequestSchema = z
 
 // Suggestions only; any model name the CLI accepts can be typed.
 export const CLI_MODEL_SUGGESTIONS: Record<'claude' | 'codex' | 'qwen' | 'gemini', readonly string[]> = {
-  claude: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'opus', 'sonnet', 'haiku'],
-  codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
-  qwen: ['qwen3-coder-plus', 'qwen-coder-plus'],
-  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+  claude: [
+    'claude-opus-5.5',
+    'claude-opus-5',
+    'claude-sonnet-5',
+    'claude-fable-5.1',
+    'claude-haiku-4-5-20251001',
+    'opus',
+    'sonnet',
+    'haiku',
+  ],
+  codex: [
+    'gpt-6-astra-pro',
+    'gpt-6-astra',
+    'gpt-6-sol',
+    'gpt-6-luna',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.5',
+    'gpt-5.4',
+  ],
+  qwen: [
+    'qwen3.8-max',
+    'qwen3.8-max-0902',
+    'qwen3.8-flash',
+    'qwen3.8-27b',
+    'qwen3-coder-plus',
+    'qwen3-coder-flash',
+    'qwen-coder-plus',
+  ],
+  gemini: [
+    'gemini-3.8-pro',
+    'gemini-3.8-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'pro',
+    'flash',
+  ],
 };
 
 export const agentRunResultSchema = z

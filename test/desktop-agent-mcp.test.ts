@@ -8,6 +8,7 @@ import {
   createDefaultSettings,
 } from '../packages/contracts/src';
 import {
+  installCognitive1McpForAgents,
   preparePlaywrightMcpSettings,
   withPlaywrightMcpSetting,
 } from '../apps/desktop/src/main/agent-mcp-config';
@@ -120,5 +121,92 @@ describe('Playwright MCP installation', () => {
     expect(prepared.agentsInstalled).toBe(false);
     expect(prepared.cliResults.find((result) => result.agent === 'qwen')?.error).toBeTruthy();
     expect(prepared.settings.installedFeatures).not.toContain(PLAYWRIGHT_MCP_FEATURE_ID);
+  });
+
+  it('registers the authenticated Cognitive1 HTTP MCP endpoint for every CLI', async () => {
+    const home = await temporaryHome();
+    await fs.writeFile(path.join(home, '.claude.json'), JSON.stringify({ theme: 'dark' }));
+    await fs.mkdir(path.join(home, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(home, '.codex', 'config.toml'), 'model = "gpt-5.5"\n');
+
+    const results = await installCognitive1McpForAgents({
+      homeDirectory: home,
+      endpoint: 'http://127.0.0.1:9877',
+      token: 'brain-token',
+    });
+
+    expect(results.every((result) => !result.error && result.changed)).toBe(true);
+    expect(results.filter((result) => result.backupPath)).toHaveLength(2);
+
+    const claude = JSON.parse(await fs.readFile(path.join(home, '.claude.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(claude.mcpServers.cognitive1).toEqual({
+      type: 'http',
+      url: 'http://127.0.0.1:9877/mcp',
+      headers: { Authorization: 'Bearer brain-token' },
+    });
+
+    const qwen = JSON.parse(await fs.readFile(path.join(home, '.qwen', 'settings.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(qwen.mcpServers.cognitive1).toEqual({
+      httpUrl: 'http://127.0.0.1:9877/mcp',
+      headers: { Authorization: 'Bearer brain-token' },
+    });
+    const gemini = JSON.parse(await fs.readFile(path.join(home, '.gemini', 'settings.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(gemini.mcpServers.cognitive1).toEqual(qwen.mcpServers.cognitive1);
+
+    const codex = await fs.readFile(path.join(home, '.codex', 'config.toml'), 'utf8');
+    expect(codex).toContain('model = "gpt-5.5"');
+    expect(codex).toContain('# >>> KAI cognitive1 MCP');
+    expect(codex).toContain('[mcp_servers.cognitive1]');
+    expect(codex).toContain('url = "http://127.0.0.1:9877/mcp"');
+    expect(codex).toContain('http_headers = { Authorization = "Bearer brain-token" }');
+  });
+
+  it('reconciles a stale Cognitive1 entry and is idempotent once current', async () => {
+    const home = await temporaryHome();
+    await fs.writeFile(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: {
+        cognitive1: { type: 'http', url: 'http://127.0.0.1:9999/mcp', headers: { Authorization: 'Bearer stale' } },
+      },
+    }));
+    await fs.mkdir(path.join(home, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(home, '.codex', 'config.toml'), [
+      '[mcp_servers.cognitive1]',
+      'url = "http://127.0.0.1:9999/mcp"',
+      'http_headers = { Authorization = "Bearer stale" }',
+      '',
+      '[mcp_servers.existing]',
+      'command = "keep-me"',
+      '',
+    ].join('\n'));
+
+    const first = await installCognitive1McpForAgents({
+      homeDirectory: home,
+      endpoint: 'http://127.0.0.1:9877/mcp',
+      token: 'fresh-token',
+    });
+    expect(first.every((result) => !result.error && result.changed)).toBe(true);
+
+    const claude = JSON.parse(await fs.readFile(path.join(home, '.claude.json'), 'utf8')) as {
+      mcpServers: Record<string, { url: string }>;
+    };
+    expect(claude.mcpServers.cognitive1.url).toBe('http://127.0.0.1:9877/mcp');
+    const codex = await fs.readFile(path.join(home, '.codex', 'config.toml'), 'utf8');
+    expect(codex).toContain('[mcp_servers.existing]');
+    expect(codex).toContain('command = "keep-me"');
+    expect(codex).toContain('http://127.0.0.1:9877/mcp');
+    expect(codex).not.toContain('http://127.0.0.1:9999/mcp');
+
+    const second = await installCognitive1McpForAgents({
+      homeDirectory: home,
+      endpoint: 'http://127.0.0.1:9877/mcp',
+      token: 'fresh-token',
+    });
+    expect(second.every((result) => !result.error && !result.changed)).toBe(true);
   });
 });
