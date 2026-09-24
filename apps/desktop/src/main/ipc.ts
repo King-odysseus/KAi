@@ -88,6 +88,9 @@ import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
 import type { DesktopWorkflowRunner } from './workflow-runner';
+import type { DesktopRunControl } from './run-control';
+import { brainGitStatus, syncBrainGit } from './brain-git';
+import { buildSetupStatus } from './setup-status';
 import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWindowSession } from './desktop-windows';
 import type { EditorSessionManager } from './editor-sessions';
 import { formatProjectCode, projectGitFileInfo } from './code-tools';
@@ -147,6 +150,7 @@ export interface IpcContext {
   learningUsage: LearningUsageStore;
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
+  runControl: DesktopRunControl;
   notifications: NotificationCenter;
   recovery: RecoveryStore;
   verification: VerificationStore;
@@ -249,6 +253,8 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'brain:search', async (query) => context.cognitive1.search(query));
   handle(context, 'brain:update-field', async (update) => context.cognitive1.updateField(update));
   handle(context, 'brain:import', async () => importBrain(context));
+  handle(context, 'brain:git-status', async () => brainGitStatus(await sharedBrainPath(context)));
+  handle(context, 'brain:git-sync', async ({ action }) => syncBrainGit(await sharedBrainPath(context), action));
   handle(context, 'cognitive1:tool', async (request) => context.cognitive1.tool(request));
   handle(context, 'cognitive1:operation', async (request) => context.cognitive1.operation(request));
   handle(context, 'rules:get', async () => context.executionRules.document());
@@ -391,6 +397,8 @@ export function registerIpc(context: IpcContext): void {
   });
   handle(context, 'agents:run', async (request, ipcRequest) => runConversationAgent(context, request, ownerWindowId(context, ipcRequest)));
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
+  handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
+  handle(context, 'agents:resume', async ({ conversationId }) => context.runControl.resume(conversationId));
   handle(context, 'agents:sign-in', async ({ agent }) => context.agents.signIn(agent));
   handle(context, 'agents:approval-response', async ({ conversationId, requestId, approved }, request) => {
     const pending = context.pendingApprovals.get(requestId);
@@ -542,9 +550,18 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'updates:download', async () => context.updater.download());
   // Installing restarts the app; the controller backs up the configuration first and refuses if that fails.
   handle(context, 'updates:install', async () => context.updater.installAndRestart());
-  handle(context, 'terminal:run', async ({ projectId, command, shell }, request) => ({
-    id: context.terminal.start(projectId, await projectPath(projectId), command, shell, ownerWindowId(context, request)),
-  }));
+  handle(context, 'setup:status', async () => currentSetupStatus(context));
+  handle(context, 'setup:complete', async ({ complete }) => {
+    const completedAt = complete ? new Date().toISOString() : null;
+    const settings = await context.settings.load();
+    await context.settings.save({ ...settings, setupCompletedAt: completedAt });
+    await broadcastSharedState(context);
+    return currentSetupStatus(context);
+  });
+  handle(context, 'terminal:start', async ({ projectId, shell, cols, rows }, request) =>
+    context.terminal.start(projectId, await projectPath(projectId), shell, cols, rows, ownerWindowId(context, request)));
+  handle(context, 'terminal:write', async ({ id, data }) => context.terminal.write(id, data));
+  handle(context, 'terminal:resize', async ({ id, cols, rows }) => context.terminal.resize(id, cols, rows));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
   handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
   handle(context, 'git:stage', async ({ projectId, paths, stage }) => gitStage(await projectPath(projectId), paths, stage));
@@ -828,6 +845,7 @@ export async function runConversationAgent(
       : await context.agents.run(executionRequest, project.path, resumeSessionId, emit, preferences?.customPermissions, request.model ?? settings.agentModels[request.agent]);
   } finally {
     context.notifications.runEnded(conversation.id);
+    context.runControl.forget(conversation.id);
     await context.recovery.end(conversation.id).catch(() => undefined);
     // Released on every exit path: completion, failure, cancellation and thrown errors.
     if (claimedProject) await releaseAgentClaim(context, request.agent);
@@ -904,7 +922,13 @@ export async function runConversationAgent(
     status: execution.status,
     output: execution.output,
     error: execution.error,
+    ...costResult(execution.events),
   };
+}
+
+function costResult(events: ReadonlyArray<Record<string, unknown>>): { costUsd?: number } {
+  const values = events.flatMap((event) => (typeof event.amountUsd === 'number' ? [event.amountUsd] : []));
+  return values.length > 0 ? { costUsd: values.reduce((total, value) => total + value, 0) } : {};
 }
 
 /** Send test totals to Cognitive1's regression history when the runner's summary could be read. */
@@ -1680,7 +1704,29 @@ export function cancelConversationRun(context: IpcContext, conversationId: strin
 
 function cancelAgent(context: IpcContext, conversationId: string): boolean {
   resolvePendingApprovals(context, conversationId, false);
+  context.runControl.forget(conversationId);
   return context.agents.cancel(conversationId) || context.directApi.cancel(conversationId);
+}
+
+async function sharedBrainPath(context: IpcContext): Promise<string> {
+  const settings = await context.settings.load();
+  const dataRoot = settings.cognitive1.dataPath ?? path.join(context.paths.root, 'engines', 'cognitive1');
+  return path.join(dataRoot, 'brain');
+}
+
+async function currentSetupStatus(context: IpcContext): Promise<Awaited<ReturnType<typeof buildSetupStatus>>> {
+  return buildSetupStatus({
+    settings: () => context.settings.load(),
+    projects: async () => (await context.projects.list()).map((project) => ({ id: project.id })),
+    services: () => context.services.status(),
+    agentCapabilities: async () => (await context.agents.capabilities()).map((capability) => ({
+      available: capability.available,
+      displayName: capability.displayName,
+      ...(capability.unavailableReason ? { unavailableReason: capability.unavailableReason } : {}),
+    })),
+    directApiAvailable: async () => (await context.directApi.capability()).available,
+    directApiDetail: async () => (await context.directApi.capability()).unavailableReason ?? 'Configure a direct API provider.',
+  });
 }
 
 function resolvePendingApprovals(context: IpcContext, conversationId: string, approved: boolean): void {

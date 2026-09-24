@@ -45,6 +45,29 @@ export const skillSummarySchema = z
 
 export const workflowStepStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
 
+export const workflowLoopSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    maxRounds: z.number().int().min(1).max(20).default(3),
+    maxCostUsd: z.number().min(0).max(10_000).default(0),
+    maxDurationMinutes: z.number().int().min(1).max(1_440).default(30),
+    checkCommand: z.string().trim().max(2_000).default(''),
+  })
+  .strict();
+
+export const workflowLoopProgressSchema = z
+  .object({
+    round: z.number().int().min(1),
+    maxRounds: z.number().int().min(1),
+    startedAt: timestampSchema,
+    elapsedMs: z.number().int().nonnegative().default(0),
+    costUsd: z.number().nonnegative().default(0),
+    lastCheckPassed: z.boolean().nullable().default(null),
+    lastCheckOutput: z.string().default(''),
+    stopReason: z.enum(['passed', 'max_rounds', 'cost_limit', 'time_limit', 'failed', 'stopped']).optional(),
+  })
+  .strict();
+
 export const workflowStepSchema = z
   .object({
     id: z.string().min(1),
@@ -71,6 +94,8 @@ export const workflowSchema = z
     route: routeModeSchema,
     model: z.string().trim().max(240).optional(),
     autonomy: autonomyModeSchema,
+    loop: workflowLoopSettingsSchema.default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
+    loopProgress: workflowLoopProgressSchema.optional(),
     status: workflowStatusSchema,
     currentStepIndex: z.number().int().nonnegative(),
     createdAt: timestampSchema,
@@ -99,6 +124,7 @@ export const workflowTemplateSchema = z
     execution: executionModeSchema.default('cli'),
     model: z.string().trim().max(240).optional(),
     autonomy: autonomyModeSchema,
+    loop: workflowLoopSettingsSchema.default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
   })
@@ -130,6 +156,7 @@ export const workflowStartInputSchema = z
     route: routeModeSchema,
     model: z.string().trim().max(240).optional(),
     autonomy: autonomyModeSchema,
+    loop: workflowLoopSettingsSchema.optional().default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
   })
   .strict();
 
@@ -276,6 +303,8 @@ export type WorkbenchGoal = z.infer<typeof workbenchGoalSchema>;
 export type WorkbenchGoalStatus = z.infer<typeof workbenchGoalStatusSchema>;
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
 export type Workflow = z.infer<typeof workflowSchema>;
+export type WorkflowLoopSettings = z.infer<typeof workflowLoopSettingsSchema>;
+export type WorkflowLoopProgress = z.infer<typeof workflowLoopProgressSchema>;
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;

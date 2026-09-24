@@ -23,6 +23,8 @@ const bridge: KaiDesktopBridge = {
   searchBrain: (request) => ipcRenderer.invoke('brain:search', request),
   updateBrainField: (request) => ipcRenderer.invoke('brain:update-field', request),
   importBrain: () => ipcRenderer.invoke('brain:import', {}),
+  brainGitStatus: () => ipcRenderer.invoke('brain:git-status', {}),
+  brainGitSync: (action) => ipcRenderer.invoke('brain:git-sync', { action }),
   cognitive1Tool: (request) => ipcRenderer.invoke('cognitive1:tool', request),
   cognitive1Operation: (request) => ipcRenderer.invoke('cognitive1:operation', request),
   getRules: () => ipcRenderer.invoke('rules:get', {}),
@@ -129,6 +131,8 @@ const bridge: KaiDesktopBridge = {
   previewContext: (request) => ipcRenderer.invoke('context:preview', request),
   runAgent: (request) => ipcRenderer.invoke('agents:run', request),
   cancelAgent: (conversationId) => ipcRenderer.invoke('agents:cancel', { conversationId }),
+  pauseAgent: (conversationId) => ipcRenderer.invoke('agents:pause', { conversationId }),
+  resumeAgent: (conversationId) => ipcRenderer.invoke('agents:resume', { conversationId }),
   signInAgent: (agent) => ipcRenderer.invoke('agents:sign-in', { agent }),
   respondToApproval: (request) => ipcRenderer.invoke('agents:approval-response', request),
   onAgentEvent: (listener) => {
@@ -145,12 +149,16 @@ const bridge: KaiDesktopBridge = {
   checkForUpdates: () => ipcRenderer.invoke('updates:check', {}),
   downloadUpdate: () => ipcRenderer.invoke('updates:download', {}),
   installUpdate: () => ipcRenderer.invoke('updates:install', {}),
+  setupStatus: () => ipcRenderer.invoke('setup:status', {}),
+  completeSetup: (complete) => ipcRenderer.invoke('setup:complete', { complete }),
   onUpdateState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: UpdateState): void => listener(payload);
     ipcRenderer.on('app:update-state', handler);
     return () => ipcRenderer.removeListener('app:update-state', handler);
   },
-  runTerminalCommand: (projectId, command, shell) => ipcRenderer.invoke('terminal:run', { projectId, command, shell }),
+  startTerminal: (projectId, shell, cols, rows) => ipcRenderer.invoke('terminal:start', { projectId, shell, cols, rows }),
+  writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', { id, data }),
+  resizeTerminal: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
   stopTerminalCommand: (id) => ipcRenderer.invoke('terminal:stop', { id }),
   onTerminalEvent: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: TerminalEvent): void => listener(payload);

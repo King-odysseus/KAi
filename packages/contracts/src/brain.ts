@@ -232,6 +232,31 @@ export const brainImportResultSchema = z
   })
   .strict();
 
+export const brainGitStatusSchema = z
+  .object({
+    repository: z.boolean(),
+    branch: z.string().nullable(),
+    remote: z.string().nullable(),
+    clean: z.boolean(),
+    changedFiles: z.number().int().nonnegative(),
+    ahead: z.number().int().nonnegative(),
+    behind: z.number().int().nonnegative(),
+    path: z.string().min(1),
+    error: z.string().nullable(),
+  })
+  .strict();
+
+export const brainGitSyncActionSchema = z.enum(['init', 'commit', 'pull', 'push']);
+
+export const brainGitSyncResultSchema = z
+  .object({
+    action: brainGitSyncActionSchema,
+    success: z.boolean(),
+    message: z.string(),
+    status: brainGitStatusSchema,
+  })
+  .strict();
+
 export type BrainEntry = z.infer<typeof brainEntrySchema>;
 export type BrainEntryType = z.infer<typeof brainEntryTypeSchema>;
 export type BrainHungerLevel = z.infer<typeof brainHungerLevelSchema>;
@@ -242,6 +267,9 @@ export type BrainFieldUpdateInput = z.input<typeof brainFieldUpdateInputSchema>;
 export type BrainFieldUpdate = z.output<typeof brainFieldUpdateInputSchema>;
 export type BrainFieldUpdateResult = z.infer<typeof brainFieldUpdateResultSchema>;
 export type BrainImportResult = z.infer<typeof brainImportResultSchema>;
+export type BrainGitStatus = z.infer<typeof brainGitStatusSchema>;
+export type BrainGitSyncAction = z.infer<typeof brainGitSyncActionSchema>;
+export type BrainGitSyncResult = z.infer<typeof brainGitSyncResultSchema>;
 export type Cognitive1Operation = z.infer<typeof cognitive1OperationSchema>;
 export type Cognitive1OperationInput = z.input<typeof cognitive1OperationInputSchema>;
 export type NormalizedCognitive1OperationInput = z.output<typeof cognitive1OperationInputSchema>;

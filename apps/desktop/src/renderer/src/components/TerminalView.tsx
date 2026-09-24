@@ -1,21 +1,12 @@
-import { Play, Square, Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
-import type { ProjectRecord, TerminalShell } from '@kai/contracts';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import { Eraser, Play, RotateCcw, Square, X } from 'lucide-react';
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import type { ProjectRecord, TerminalSession, TerminalShell } from '@kai/contracts';
 import { unwrap } from '../types';
 
-interface Run {
-  id: string;
-  command: string;
-  project: string;
-  output: string;
-  status: 'running' | 'exited';
-  code: number | null;
-}
-
-const MAX_OUTPUT = 200_000;
-const SUGGESTIONS = ['git status', 'git log --oneline -10', 'npm test', 'npm run build'];
-
-/** A command console: run a command in the project, watch its output, stop it. Not an interactive shell. */
+/** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
 export function TerminalView({ activeProject, open, height, onClose, onResizeStart }: {
   activeProject: ProjectRecord | null;
   open: boolean;
@@ -23,82 +14,160 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
   onClose: () => void;
   onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
 }): ReactNode {
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [command, setCommand] = useState('');
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const sessionRef = useRef<TerminalSession | null>(null);
+  const earlyOutputRef = useRef(new Map<string, string[]>());
   const [shell, setShell] = useState<TerminalShell>('default');
+  const [session, setSession] = useState<TerminalSession | null>(null);
+  const [status, setStatus] = useState<'idle' | 'starting' | 'running' | 'exited'>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<string[]>([]);
-  const historyIndex = useRef(-1);
-  const endRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  // Output can arrive before the run is added to state, so events are applied to a ref-backed map first.
-  const pending = useRef(new Map<string, { output: string; exit: { code: number | null } | null }>());
+
+  function writeOutput(id: string, data: string): void {
+    if (sessionRef.current?.id === id) {
+      terminalRef.current?.write(data);
+      return;
+    }
+    const queued = earlyOutputRef.current.get(id) ?? [];
+    queued.push(data);
+    earlyOutputRef.current.set(id, queued);
+  }
 
   useEffect(() => window.kaiDesktop.onTerminalEvent((event) => {
-    setRuns((current) => {
-      const index = current.findIndex((run) => run.id === event.id);
-      if (index < 0) {
-        const early = pending.current.get(event.id) ?? { output: '', exit: null };
-        if (event.kind === 'output') early.output += event.text;
-        else early.exit = { code: event.code };
-        pending.current.set(event.id, early);
-        return current;
-      }
-      const next = [...current];
-      const run = next[index]!;
-      next[index] = event.kind === 'output'
-        ? { ...run, output: (run.output + event.text).slice(-MAX_OUTPUT) }
-        : { ...run, status: 'exited', code: event.code };
-      return next;
-    });
+    if (event.kind === 'output') {
+      writeOutput(event.id, event.data);
+      return;
+    }
+    if (sessionRef.current?.id !== event.id) return;
+    setStatus('exited');
+    terminalRef.current?.write(`\r\n[process exited${event.code === null ? '' : ` with code ${event.code}`}]\r\n`);
   }), []);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' });
-  }, [runs]);
+    const host = hostRef.current;
+    if (!host || terminalRef.current) return;
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      scrollback: 8_000,
+      fontFamily: 'Consolas, "Cascadia Mono", monospace',
+      fontSize: 13,
+      theme: {
+        background: '#07101d',
+        foreground: '#d8e2f0',
+        cursor: '#7dd3fc',
+        selectionBackground: '#27506f',
+      },
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(host);
+    terminalRef.current = terminal;
+    fitRef.current = fit;
+    const dataSubscription = terminal.onData((data) => {
+      const id = sessionRef.current?.id;
+      if (id) void window.kaiDesktop.writeTerminal(id, data);
+    });
+    const resizeSubscription = terminal.onResize(({ cols, rows }) => {
+      const id = sessionRef.current?.id;
+      if (id) void window.kaiDesktop.resizeTerminal(id, cols, rows);
+    });
+    const observer = new ResizeObserver(() => {
+      try {
+        fit.fit();
+      } catch {
+        // The dock can be hidden while the browser reports a zero-sized host.
+      }
+    });
+    observer.observe(host);
+    return () => {
+      observer.disconnect();
+      dataSubscription.dispose();
+      resizeSubscription.dispose();
+      terminal.dispose();
+      terminalRef.current = null;
+      fitRef.current = null;
+    };
+  }, []);
 
-  // Focus the command line whenever the panel is opened.
   useEffect(() => {
-    if (open) inputRef.current?.focus();
+    if (open) {
+      window.setTimeout(() => {
+        try {
+          fitRef.current?.fit();
+        } catch {
+          // A hidden or zero-sized host will be fitted on the next resize.
+        }
+        terminalRef.current?.focus();
+      }, 0);
+    }
   }, [open]);
 
-  async function run(text: string): Promise<void> {
-    if (!activeProject || !text.trim()) return;
+  useEffect(() => {
+    const previous = sessionRef.current;
+    if (previous) {
+      void window.kaiDesktop.stopTerminalCommand(previous.id).catch(() => undefined);
+    }
+    sessionRef.current = null;
+    setSession(null);
+    setStatus('idle');
+    terminalRef.current?.reset();
+    if (activeProject) void startSession(shell);
+    return () => {
+      const current = sessionRef.current;
+      sessionRef.current = null;
+      if (current) void window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
+    };
+    // The shell is intentionally applied only when starting/restarting, not by killing a live session on select.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id]);
+
+  async function startSession(nextShell: TerminalShell): Promise<void> {
+    if (!activeProject) return;
     setError(null);
+    setStatus('starting');
     try {
-      const { id } = unwrap(await window.kaiDesktop.runTerminalCommand(activeProject.id, text.trim(), shell));
-      const early = pending.current.get(id) ?? { output: '', exit: null };
-      pending.current.delete(id);
-      // A very fast command can finish before the run is registered here, so its early output and exit are applied now.
-      setRuns((current) => [...current, {
-        id,
-        command: text.trim(),
-        project: activeProject.name,
-        output: early.output,
-        status: early.exit ? 'exited' : 'running',
-        code: early.exit?.code ?? null,
-      }]);
-      setHistory((current) => [text.trim(), ...current.filter((item) => item !== text.trim())].slice(0, 50));
-      historyIndex.current = -1;
-      setCommand('');
+      const terminal = terminalRef.current;
+      const started = unwrap(await window.kaiDesktop.startTerminal(
+        activeProject.id,
+        nextShell,
+        terminal?.cols || 120,
+        terminal?.rows || 30,
+      ));
+      sessionRef.current = started;
+      setSession(started);
+      setStatus('running');
+      for (const chunk of earlyOutputRef.current.get(started.id) ?? []) terminal?.write(chunk);
+      earlyOutputRef.current.delete(started.id);
+      window.setTimeout(() => {
+        try {
+          fitRef.current?.fit();
+        } catch {
+          // The host may still be hidden.
+        }
+        terminalRef.current?.focus();
+      }, 0);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The command could not be started.');
+      setStatus('exited');
+      setError(caught instanceof Error ? caught.message : 'The terminal could not be started.');
     }
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      void run(command);
-    } else if (event.key === 'ArrowUp' && history.length > 0) {
-      event.preventDefault();
-      historyIndex.current = Math.min(historyIndex.current + 1, history.length - 1);
-      setCommand(history[historyIndex.current] ?? '');
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      historyIndex.current = Math.max(historyIndex.current - 1, -1);
-      setCommand(historyIndex.current < 0 ? '' : history[historyIndex.current] ?? '');
-    }
+  async function restart(): Promise<void> {
+    const current = sessionRef.current;
+    if (current) await window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
+    sessionRef.current = null;
+    setSession(null);
+    terminalRef.current?.reset();
+    await startSession(shell);
+  }
+
+  async function stop(): Promise<void> {
+    const current = sessionRef.current;
+    if (!current) return;
+    await window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
+    setStatus('exited');
   }
 
   return (
@@ -107,32 +176,18 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
       <header className="terminal-head">
         <div>
           <strong>Terminal</strong>
-          <span>{activeProject ? ` · ${activeProject.name}` : ' · open a project to run commands'} · runs with your permissions; programs that wait for typed input end at once</span>
+          <span>{activeProject ? ` · ${activeProject.name}` : ' · open a project to start a shell'} · interactive {session?.shell ?? shell} · {status}</span>
         </div>
         <div className="terminal-head-actions">
-          <button type="button" className="secondary-button" disabled={runs.length === 0} onClick={() => setRuns((current) => current.filter((item) => item.status === 'running'))}><Trash2 size={13} /><span>Clear</span></button>
+          {session && status === 'running' && <button type="button" className="secondary-button" onClick={() => void stop()}><Square size={12} /><span>Stop</span></button>}
+          <button type="button" className="secondary-button" disabled={!activeProject || status === 'starting'} onClick={() => void restart()}><RotateCcw size={13} /><span>Restart</span></button>
+          <button type="button" className="secondary-button" onClick={() => terminalRef.current?.clear()}><Eraser size={13} /><span>Clear</span></button>
           <button type="button" className="icon-button compact" aria-label="Close terminal" title="Close (Ctrl+`)" onClick={onClose}><X size={14} /></button>
         </div>
       </header>
-
-      <div className="terminal-log" role="log" aria-label="Command output" aria-live="polite">
-        {runs.length === 0 && <div className="empty-list">Nothing has run yet. Try {SUGGESTIONS.map((item) => <button key={item} type="button" className="terminal-suggestion" onClick={() => setCommand(item)}>{item}</button>)}</div>}
-        {runs.map((item) => (
-          <section key={item.id} className={`terminal-run ${item.status}`}>
-            <div className="terminal-run-head">
-              <code>$ {item.command}</code>
-              {item.status === 'running'
-                ? <button type="button" className="secondary-button" onClick={() => void window.kaiDesktop.stopTerminalCommand(item.id)}><Square size={12} /><span>Stop</span></button>
-                : <span className={`terminal-exit ${item.code === 0 ? 'ok' : 'bad'}`}>{item.code === 0 ? 'exit 0' : item.code === null ? 'stopped' : `exit ${item.code}`}</span>}
-            </div>
-            <pre>{item.output || (item.status === 'running' ? '…' : '(no output)')}</pre>
-          </section>
-        ))}
-        <div ref={endRef} />
-      </div>
-
       {error && <div className="workbench-error" role="alert">{error}</div>}
-      <div className="terminal-input">
+      <div className="terminal-xterm" ref={hostRef} />
+      <div className="terminal-input terminal-launch-row">
         {typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows') && (
           <select aria-label="Shell" value={shell} onChange={(event) => setShell(event.target.value as TerminalShell)}>
             <option value="default">Command Prompt</option>
@@ -140,8 +195,8 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
             <option value="gitbash">Git Bash</option>
           </select>
         )}
-        <input ref={inputRef} aria-label="Command" value={command} disabled={!activeProject} placeholder="Type a command and press Enter" onChange={(event) => setCommand(event.target.value)} onKeyDown={onKeyDown} />
-        <button type="button" className="primary-button" disabled={!activeProject || !command.trim()} onClick={() => void run(command)}><Play size={14} /><span>Run</span></button>
+        <span>{activeProject ? 'Type directly in the terminal. Prompts, interactive tools, and full-screen programs are supported.' : 'Open a project to start a shell.'}</span>
+        <button type="button" className="primary-button" disabled={!activeProject || status === 'starting' || status === 'running'} onClick={() => void startSession(shell)}><Play size={14} /><span>Start</span></button>
       </div>
     </section>
   );

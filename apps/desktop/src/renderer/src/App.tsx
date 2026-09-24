@@ -83,11 +83,19 @@ export function App(): ReactNode {
   });
   const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
   const [contextOpen, setContextOpen] = useState(true);
+  const [threadsOpen, setThreadsOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem('kai.threadsOpen') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [sidebarWidth, setSidebarWidth] = useState(248);
   const [contextWidth, setContextWidth] = useState(286);
   const [resizing, setResizing] = useState<'sidebar' | 'context' | null>(null);
   const [busy, setBusy] = useState('Starting KAI');
   const [runningConversationId, setRunningConversationId] = useState<string | null>(null);
+  const [runPaused, setRunPaused] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
@@ -125,6 +133,7 @@ export function App(): ReactNode {
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => setView('operations') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
     { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: 'Ctrl+`', run: () => setTerminalOpen((open) => !open) },
+    { id: 'threads', label: 'Toggle Threads Panel', description: 'Show or hide the conversation threads on the left', shortcut: 'Ctrl+Shift+B', run: () => setThreadsOpen((open) => !open) },
     { id: 'diagnostics', label: 'Open Diagnostics', description: 'Service health, engine checks and a copyable bug report', run: () => setView('operations') },
     { id: 'settings', label: 'Open Settings', description: 'Configure agents, routes, API providers, services, and MCP', run: () => setView('settings') },
     { id: 'backups', label: 'Open Configuration Backups', description: 'Create, restore, or delete app-owned configuration backups', run: () => setView('settings') },
@@ -366,6 +375,14 @@ export function App(): ReactNode {
     void window.kaiDesktop.reportView(view, activeConversationId).catch(() => undefined);
   }, [view, activeConversationId]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('kai.threadsOpen', String(threadsOpen));
+    } catch {
+      // Remembering panel visibility is a convenience only.
+    }
+  }, [threadsOpen]);
+
   const openConversationRef = useRef(openConversation);
   openConversationRef.current = openConversation;
   useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId }) => {
@@ -385,6 +402,11 @@ export function App(): ReactNode {
         return;
       }
       if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.shiftKey && event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        setThreadsOpen((open) => !open);
+        return;
+      }
       if (event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setCommandPaletteOpen(true);
@@ -525,6 +547,7 @@ export function App(): ReactNode {
     setStreamingText('');
     setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     setRunningConversationId(conversation.id);
+    setRunPaused(false);
     try {
       const result = await perform(
         () => window.kaiDesktop.runAgent({
@@ -551,6 +574,7 @@ export function App(): ReactNode {
       if (result.error) setError(result.error);
     } finally {
       setRunningConversationId(null);
+      setRunPaused(false);
       setStreamingText('');
       setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     }
@@ -862,6 +886,24 @@ export function App(): ReactNode {
     return false;
   }
 
+  async function pauseConversation(): Promise<void> {
+    if (!runningConversationId) return;
+    const paused = await perform(() => window.kaiDesktop.pauseAgent(runningConversationId).then(unwrap), 'Pausing agent');
+    if (paused) {
+      setRunPaused(true);
+      setAgentNotice('The run is paused. It will continue from the same point.');
+    }
+  }
+
+  async function resumeConversation(): Promise<void> {
+    if (!runningConversationId) return;
+    const resumed = await perform(() => window.kaiDesktop.resumeAgent(runningConversationId).then(unwrap), 'Resuming agent');
+    if (resumed) {
+      setRunPaused(false);
+      setAgentNotice(null);
+    }
+  }
+
   async function clearCredential(id: string): Promise<boolean> {
     const status = await perform(() => window.kaiDesktop.clearCredential(id).then(unwrap), 'Removing credential');
     if (status) {
@@ -1022,6 +1064,7 @@ export function App(): ReactNode {
             proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
             streamingText={streamingText}
             running={runningConversationId === activeConversation?.id}
+            paused={runPaused}
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
@@ -1054,6 +1097,8 @@ export function App(): ReactNode {
             onRejectCheckpointFile={rejectConversationFile}
             onRestoreCheckpoint={restoreConversationCheckpoint}
             onCancel={() => void cancelConversation()}
+            onPause={() => void pauseConversation()}
+            onResume={() => void resumeConversation()}
             onSignIn={(agent) => void signInAgent(agent)}
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
@@ -1086,7 +1131,7 @@ export function App(): ReactNode {
     );
   }
 
-  const showThreads = view === 'workspace';
+  const showThreads = view === 'workspace' && threadsOpen;
   const showContext = view === 'workspace' && contextOpen;
 
   return (
@@ -1095,12 +1140,14 @@ export function App(): ReactNode {
         projects={bootstrap.projects}
         activeProject={activeProject}
         theme={bootstrap.settings.theme}
+        leftOpen={threadsOpen}
         rightOpen={contextOpen}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
         onNewWindow={() => void openNewWindow()}
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setCommandPaletteOpen(true)}
+        onToggleThreads={() => setThreadsOpen((open) => !open)}
         onToggleContext={() => setContextOpen((open) => !open)}
       />
       <UrgentBanner />
@@ -1135,6 +1182,7 @@ export function App(): ReactNode {
                 activeId={activeConversationId}
                 onOpen={(id) => void openConversation(id)}
                 onDelete={(id) => void deleteConversation(id)}
+                onCollapse={() => setThreadsOpen(false)}
                 onNew={() => {
                   setActiveConversationId(null);
                   setSelectedAgent(bootstrap.settings.defaultAgent);

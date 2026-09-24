@@ -15,7 +15,9 @@ import {
   ListChecks,
   Palette,
   PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
+  PanelRightOpen,
   Plus,
   Route,
   Search,
@@ -85,7 +87,7 @@ export function NavigationRail({ view, version, serviceStatus, onChange }: { vie
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleContext: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onToggleThreads, onToggleContext }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onToggleThreads: () => void; onToggleContext: () => void }): ReactNode {
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
@@ -99,8 +101,11 @@ export function TitleBar({ projects, activeProject, theme, rightOpen, onChoose, 
           <Palette size={17} />
         </button>
         <button type="button" className="icon-button" title="Command palette (Ctrl+K)" aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
+        <button type="button" className="icon-button" title={leftOpen ? 'Hide threads panel (Ctrl+Shift+B)' : 'Show threads panel (Ctrl+Shift+B)'} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>
+          {leftOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+        </button>
         <button type="button" className="icon-button" title={rightOpen ? 'Hide context panel (Ctrl+B)' : 'Show context panel (Ctrl+B)'} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
-          {rightOpen ? <PanelRightClose size={17} /> : <PanelLeftClose size={17} />}
+          {rightOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
         </button>
       </div>
     </header>
@@ -240,10 +245,16 @@ function ProjectPicker({ projects, activeProject, onChoose, onOpen }: { projects
   );
 }
 
-export function ConversationSidebar({ conversations, activeId, onOpen, onDelete, onNew }: { conversations: ConversationRecord[]; activeId: string | null; onOpen: (id: string) => void; onDelete: (id: string) => void; onNew: () => void }): ReactNode {
+export function ConversationSidebar({ conversations, activeId, onOpen, onDelete, onNew, onCollapse }: { conversations: ConversationRecord[]; activeId: string | null; onOpen: (id: string) => void; onDelete: (id: string) => void; onNew: () => void; onCollapse: () => void }): ReactNode {
   return (
     <aside className="conversation-sidebar">
-      <div className="sidebar-heading"><span>Threads</span><button type="button" className="icon-button compact" onClick={onNew} title="New conversation" aria-label="New conversation"><Plus size={16} /></button></div>
+      <div className="sidebar-heading">
+        <span>Threads</span>
+        <div className="sidebar-heading-actions">
+          <button type="button" className="icon-button compact" onClick={onNew} title="New conversation" aria-label="New conversation"><Plus size={16} /></button>
+          <button type="button" className="icon-button compact" onClick={onCollapse} title="Hide threads panel (Ctrl+Shift+B)" aria-label="Hide threads panel"><PanelLeftClose size={15} /></button>
+        </div>
+      </div>
       <div className="conversation-list">
         {conversations.length === 0 && <div className="empty-list">No conversations</div>}
         {conversations.map((conversation) => (

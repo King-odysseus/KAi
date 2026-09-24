@@ -24,6 +24,7 @@ import {
   Minimize2,
   ImagePlus,
   Paperclip,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -95,6 +96,7 @@ interface WorkspaceViewProps {
   busy: boolean;
   commandRequest: WorkspaceCommandRequest | null;
   running: boolean;
+  paused: boolean;
   notice: string | null;
   streamingText: string;
   agentCapabilities: AgentCapability[];
@@ -122,6 +124,8 @@ interface WorkspaceViewProps {
   onRejectCheckpointFile: (conversationId: string, turnId: string, filePath: string) => Promise<void>;
   onRestoreCheckpoint: (conversationId: string, turnId: string) => Promise<void>;
   onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
   onSignIn: (agent: AgentId) => void;
   onRefreshAgents: () => void;
   onOpenSettings: () => void;
@@ -204,6 +208,7 @@ export function WorkspaceView({
   busy,
   commandRequest,
   running,
+  paused,
   notice,
   streamingText,
   agentCapabilities,
@@ -231,6 +236,8 @@ export function WorkspaceView({
   onRejectCheckpointFile,
   onRestoreCheckpoint,
   onCancel,
+  onPause,
+  onResume,
   onSignIn,
   onRefreshAgents,
   onOpenSettings,
@@ -906,8 +913,9 @@ export function WorkspaceView({
             {running && !streamingText && (
               <article className="thinking" role="status" aria-live="polite">
                 <span className="spinner" />
-                <span className="status-word">{statusWord}</span>
+                <span className="status-word">{paused ? 'Paused' : statusWord}</span>
                 <span className="status-timer">{elapsedSeconds}s</span>
+                <button type="button" className="secondary-button" onClick={paused ? onResume : onPause}>{paused ? <Play size={12} /> : <Pause size={12} />}<span>{paused ? 'Resume' : 'Pause'}</span></button>
               </article>
             )}
             {activeConversation?.events.slice(-40).map((event) => <RunEventCard key={event.id} event={event} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} />)}
@@ -1191,7 +1199,12 @@ export function WorkspaceView({
               <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>
               <button type="button" className={`composer-icon-button ${rawEventsOpen ? 'active' : ''}`} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw events"><Braces size={14} /></button>
-              {running ? <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button> : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
+              {running ? (
+                <>
+                  <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>
+                  <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
+                </>
+              ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
             </div>
           </div>
         </div>
@@ -1213,6 +1226,7 @@ export function WorkspaceView({
 }
 
 function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void> }): ReactNode {
+  const [changesExpanded, setChangesExpanded] = useState(false);
   if (event.type === 'text.delta') return null;
   if (event.type === 'tool.call') {
     return (
@@ -1242,22 +1256,35 @@ function RunEventCard({ event, onReview, onUndo }: { event: PersistedEvent; onRe
     const added = event.files.reduce((sum, file) => sum + file.added, 0);
     const removed = event.files.reduce((sum, file) => sum + file.removed, 0);
     return (
-      <section className="changes-card">
-        <div className="changes-head">
+      <section className={`changes-card ${changesExpanded ? 'expanded' : ''}`}>
+        <button
+          type="button"
+          className="changes-head"
+          aria-expanded={changesExpanded}
+          title={changesExpanded ? 'Hide changed files' : 'Show changed files'}
+          onClick={() => setChangesExpanded((current) => !current)}
+        >
+          <ChevronDown className="changes-chevron" size={14} />
           <strong>Edited {event.files.length} file{event.files.length === 1 ? '' : 's'}</strong>
+          <span className="changes-head-spacer" />
           {added > 0 && <span className="diff-add">+{added}</span>}
           {removed > 0 && <span className="diff-remove">-{removed}</span>}
-        </div>
-        <div className="changes-list">
-          {event.files.slice(0, 8).map((file) => (
-            <div className="changes-row" key={file.path}><span className="truncate">{file.path}</span><small><span className="diff-add">+{file.added}</span> <span className="diff-remove">-{file.removed}</span></small></div>
-          ))}
-          {event.files.length > 8 && <div className="changes-more">+{event.files.length - 8} more files</div>}
-        </div>
-        <div className="changes-actions">
-          <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review</span></button>
-          <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo all</span></button>
-        </div>
+        </button>
+        {changesExpanded && (
+          <>
+            <div className="changes-list">
+              {event.files.slice(0, 8).map((file) => (
+                <div className="changes-row" key={file.path}><span className="truncate">{file.path}</span><small><span className="diff-add">+{file.added}</span> <span className="diff-remove">-{file.removed}</span></small></div>
+              ))}
+              {event.files.length === 0 && <div className="changes-more">No files were changed in this turn.</div>}
+              {event.files.length > 8 && <div className="changes-more">+{event.files.length - 8} more files</div>}
+            </div>
+            <div className="changes-actions">
+              <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review</span></button>
+              <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo all</span></button>
+            </div>
+          </>
+        )}
       </section>
     );
   }

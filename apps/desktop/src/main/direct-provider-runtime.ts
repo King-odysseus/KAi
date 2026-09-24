@@ -74,6 +74,16 @@ interface PendingChatToolCall extends PendingToolCall {
   index: number;
 }
 
+interface AnthropicMessage {
+  role: 'user' | 'assistant';
+  content: string | Array<Record<string, unknown>>;
+}
+
+interface GeminiContent {
+  role: 'user' | 'model';
+  parts: Array<Record<string, unknown>>;
+}
+
 export interface DirectApiApprovalRequest {
   requestId: string;
   tool: string;
@@ -105,6 +115,7 @@ export interface DirectProviderRuntimeOptions {
   maxProviderAttempts?: number;
   retryBaseDelayMs?: number;
   resolveProxyRoute?: (request: AgentRunRequest) => Promise<DirectApiProxyRoute>;
+  waitIfPaused?: (conversationId: string, signal: AbortSignal) => Promise<void>;
 }
 
 export class DesktopDirectProviderRuntime {
@@ -137,13 +148,6 @@ export class DesktopDirectProviderRuntime {
 
     if (!directApi.enabled) {
       return { ...base, available: false, unavailableReason: 'Direct API mode is disabled in Settings.' };
-    }
-    if (preset.protocol === 'unsupported') {
-      return {
-        ...base,
-        available: false,
-        unavailableReason: `${displayName} does not use an OpenAI-compatible adapter. Choose OpenRouter to access the same model family through a supported API.`,
-      };
     }
     if (!directApi.model.trim()) {
       return { ...base, available: false, unavailableReason: 'Set a direct API model in Settings.' };
@@ -184,9 +188,6 @@ export class DesktopDirectProviderRuntime {
       if (!capability.enabled) {
         return immediateFailure(request, 'Direct API mode is disabled in Settings.');
       }
-      if (preset.protocol === 'unsupported') {
-        return immediateFailure(request, `${capability.displayName} cannot be routed through the Universal Proxy adapter.`);
-      }
       if (!capability.model.trim()) {
         return immediateFailure(request, 'Set a direct API model in Settings before using the proxy route.');
       }
@@ -214,8 +215,35 @@ export class DesktopDirectProviderRuntime {
       apiKey = directApiKey;
     }
 
-    if (directProviderPreset(capability.provider).protocol === 'chat-completions') {
+    const protocol = directProviderPreset(capability.provider).protocol;
+    if (protocol === 'chat-completions') {
       return this.runChatCompletions(
+        request,
+        projectRoot,
+        capability,
+        apiKey,
+        onEvent,
+        approvals,
+        contextText,
+        history,
+        customPermissions,
+      );
+    }
+    if (protocol === 'anthropic-messages') {
+      return this.runAnthropicMessages(
+        request,
+        projectRoot,
+        capability,
+        apiKey,
+        onEvent,
+        approvals,
+        contextText,
+        history,
+        customPermissions,
+      );
+    }
+    if (protocol === 'google-generative-ai') {
+      return this.runGoogleGenerativeAi(
         request,
         projectRoot,
         capability,
@@ -257,6 +285,7 @@ export class DesktopDirectProviderRuntime {
 
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+        await this.waitIfPaused(request.conversationId, controller.signal);
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundEmittedText = false;
         let roundProviderError: string | undefined;
@@ -448,6 +477,7 @@ export class DesktopDirectProviderRuntime {
 
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+        await this.waitIfPaused(request.conversationId, controller.signal);
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;
@@ -587,6 +617,312 @@ export class DesktopDirectProviderRuntime {
     };
   }
 
+  private async runAnthropicMessages(
+    request: AgentRunRequest,
+    projectRoot: string,
+    capability: DirectApiCapability,
+    apiKey: string,
+    onEvent?: (event: PersistedEvent) => void,
+    approvals?: DirectApiApprovalPort,
+    contextText?: string,
+    history?: readonly DirectApiHistoryTurn[],
+    customPermissions?: Partial<Record<PermissionKey, boolean>>,
+  ): Promise<AgentExecutionResult> {
+    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    let externalToolDefinitions: readonly unknown[] = [];
+    try {
+      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+    } catch {
+      // A broken optional tool provider must not prevent built-in project tools from running.
+    }
+    const events: PersistedEvent[] = [];
+    const emit = (event: PersistedEvent): void => {
+      events.push(event);
+      onEvent?.(event);
+    };
+    emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
+
+    const controller = new AbortController();
+    this.activeRuns.set(request.conversationId, controller);
+    const messages = anthropicMessages(request, history);
+    const outputParts: string[] = [];
+    const errors: string[] = [];
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let aborted = false;
+    let toolRounds = 0;
+
+    try {
+      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+        await this.waitIfPaused(request.conversationId, controller.signal);
+        const pendingToolCalls = new Map<string, PendingToolCall>();
+        let roundText = '';
+        let roundProviderError: string | undefined;
+        const response = await this.requestAnthropicResponse(
+          request,
+          capability,
+          apiKey,
+          messages,
+          contextText,
+          externalToolDefinitions,
+          controller.signal,
+          emit,
+        );
+        if (!response.body) throw new Error('The provider returned no streaming response body.');
+
+        for await (const streamEvent of readSseEvents(response.body)) {
+          let value: Record<string, unknown>;
+          try {
+            value = asRecord(JSON.parse(streamEvent.data)) ?? {};
+          } catch {
+            continue;
+          }
+          const type = streamEvent.event || stringValue(value.type) || '';
+          if (type === 'message_start') {
+            const usage = asRecord(asRecord(value.message)?.usage);
+            const roundInputTokens = integerValue(usage?.input_tokens);
+            if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens;
+            continue;
+          }
+          if (type === 'content_block_start') {
+            const block = asRecord(value.content_block);
+            if (block?.type === 'tool_use') rememberAnthropicToolCall(pendingToolCalls, block);
+            const initialText = block?.type === 'text' ? stringValue(block.text) : undefined;
+            if (initialText) {
+              roundText += initialText;
+              outputParts.push(initialText);
+              onEvent?.(textEvent(request, initialText));
+            }
+            continue;
+          }
+          if (type === 'content_block_delta') {
+            const delta = asRecord(value.delta);
+            if (delta?.type === 'text_delta') {
+              const text = stringValue(delta.text);
+              if (text) {
+                roundText += text;
+                outputParts.push(text);
+                onEvent?.(textEvent(request, text));
+              }
+            } else if (delta?.type === 'input_json_delta') {
+              rememberAnthropicToolArguments(pendingToolCalls, value, stringValue(delta.partial_json));
+            }
+            continue;
+          }
+          if (type === 'message_delta') {
+            const usage = asRecord(value.usage);
+            const roundOutputTokens = integerValue(usage?.output_tokens);
+            if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
+            const delta = asRecord(value.delta);
+            if (delta?.stop_reason === 'error') roundProviderError = `${capability.displayName} reported a failed response.`;
+            continue;
+          }
+          if (type === 'error') {
+            roundProviderError = providerEventError(value) || `${capability.displayName} reported a failed response.`;
+          }
+        }
+
+        if (roundProviderError) {
+          errors.push(roundProviderError);
+          break;
+        }
+
+        const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
+        if (toolCalls.length === 0) break;
+        if (toolRounds >= MAX_TOOL_ROUNDS) {
+          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+          break;
+        }
+        toolRounds += 1;
+        for (const call of toolCalls) call.callId ||= `toolu_${randomUUID()}`;
+        const assistantContent: Array<Record<string, unknown>> = [];
+        if (roundText) assistantContent.push({ type: 'text', text: roundText });
+        assistantContent.push(...toolCalls.map((call) => ({
+          type: 'tool_use',
+          id: call.callId,
+          name: call.name,
+          input: safeToolArguments(call.argumentsText),
+        })));
+        messages.push({ role: 'assistant', content: assistantContent });
+        const toolResults = await executeToolCalls(
+          request,
+          toolRuntime,
+          toolCalls,
+          controller.signal,
+          approvals,
+          this.externalTools,
+          emit,
+          anthropicToolOutput,
+        );
+        messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
+      }
+    } catch (error) {
+      aborted = controller.signal.aborted;
+      if (!aborted) errors.push(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.activeRuns.delete(request.conversationId);
+    }
+
+    return finishProviderRun({
+      request,
+      capability,
+      events,
+      emit,
+      outputParts,
+      errors,
+      inputTokens,
+      outputTokens,
+      aborted,
+    });
+  }
+
+  private async runGoogleGenerativeAi(
+    request: AgentRunRequest,
+    projectRoot: string,
+    capability: DirectApiCapability,
+    apiKey: string,
+    onEvent?: (event: PersistedEvent) => void,
+    approvals?: DirectApiApprovalPort,
+    contextText?: string,
+    history?: readonly DirectApiHistoryTurn[],
+    customPermissions?: Partial<Record<PermissionKey, boolean>>,
+  ): Promise<AgentExecutionResult> {
+    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    let externalToolDefinitions: readonly unknown[] = [];
+    try {
+      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+    } catch {
+      // A broken optional tool provider must not prevent built-in project tools from running.
+    }
+    const events: PersistedEvent[] = [];
+    const emit = (event: PersistedEvent): void => {
+      events.push(event);
+      onEvent?.(event);
+    };
+    emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
+
+    const controller = new AbortController();
+    this.activeRuns.set(request.conversationId, controller);
+    const contents = geminiContents(request, history);
+    const outputParts: string[] = [];
+    const errors: string[] = [];
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let aborted = false;
+    let toolRounds = 0;
+
+    try {
+      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+        await this.waitIfPaused(request.conversationId, controller.signal);
+        const pendingToolCalls = new Map<string, PendingToolCall>();
+        let roundText = '';
+        let roundProviderError: string | undefined;
+        const response = await this.requestGoogleResponse(
+          request,
+          capability,
+          apiKey,
+          contents,
+          contextText,
+          externalToolDefinitions,
+          controller.signal,
+          emit,
+        );
+        if (!response.body) throw new Error('The provider returned no streaming response body.');
+
+        for await (const streamEvent of readSseEvents(response.body)) {
+          let value: Record<string, unknown>;
+          try {
+            value = asRecord(JSON.parse(streamEvent.data)) ?? {};
+          } catch {
+            continue;
+          }
+          const usage = asRecord(value.usageMetadata);
+          const roundInputTokens = integerValue(usage?.promptTokenCount);
+          const roundOutputTokens = integerValue(usage?.candidatesTokenCount);
+          if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens;
+          if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
+
+          const candidate = firstRecord(value.candidates);
+          const finishReason = stringValue(candidate?.finishReason);
+          if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+            roundProviderError = `${capability.displayName} stopped with ${finishReason}.`;
+          }
+          const parts = asRecord(candidate?.content)?.parts;
+          if (!Array.isArray(parts)) continue;
+          for (const [index, rawPart] of parts.entries()) {
+            const part = asRecord(rawPart);
+            const text = stringValue(part?.text);
+            if (text) {
+              roundText += text;
+              outputParts.push(text);
+              onEvent?.(textEvent(request, text));
+            }
+            const functionCall = asRecord(part?.functionCall);
+            const name = stringValue(functionCall?.name);
+            if (name && functionCall) rememberGeminiToolCall(pendingToolCalls, functionCall, index);
+          }
+        }
+
+        if (roundProviderError) {
+          errors.push(roundProviderError);
+          break;
+        }
+
+        const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
+        if (toolCalls.length === 0) break;
+        if (toolRounds >= MAX_TOOL_ROUNDS) {
+          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+          break;
+        }
+        toolRounds += 1;
+        const modelParts: Array<Record<string, unknown>> = [];
+        if (roundText) modelParts.push({ text: roundText });
+        modelParts.push(...toolCalls.map((call) => ({
+          functionCall: {
+            name: call.name,
+            args: safeToolArguments(call.argumentsText),
+          },
+        })));
+        contents.push({ role: 'model', parts: modelParts });
+        const toolResults = await executeToolCalls(
+          request,
+          toolRuntime,
+          toolCalls,
+          controller.signal,
+          approvals,
+          this.externalTools,
+          emit,
+          (callId, output) => geminiToolOutput(
+            toolCalls.find((call) => call.callId === callId)?.name || 'unknown',
+            output,
+          ),
+        );
+        contents.push({ role: 'user', parts: toolResults as Array<Record<string, unknown>> });
+      }
+    } catch (error) {
+      aborted = controller.signal.aborted;
+      if (!aborted) errors.push(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.activeRuns.delete(request.conversationId);
+    }
+
+    return finishProviderRun({
+      request,
+      capability,
+      events,
+      emit,
+      outputParts,
+      errors,
+      inputTokens,
+      outputTokens,
+      aborted,
+    });
+  }
+
+  private async waitIfPaused(conversationId: string, signal: AbortSignal): Promise<void> {
+    await this.options.waitIfPaused?.(conversationId, signal);
+  }
+
   cancel(conversationId: string): boolean {
     const controller = this.activeRuns.get(conversationId);
     if (!controller) return false;
@@ -619,6 +955,135 @@ export class DesktopDirectProviderRuntime {
             stream_options: { include_usage: true },
             tools: chatToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]),
             tool_choice: 'auto',
+          }),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+        if (attempt >= maxAttempts) throw error;
+        const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
+        emit(lifecycleEvent(
+          request,
+          'starting',
+          `${capability.displayName} connection failed. Retrying in ${formatDelay(delayMs)} (attempt ${attempt + 1}/${maxAttempts}).`,
+        ));
+        await delay(delayMs, signal);
+        continue;
+      }
+
+      if (response.ok) return response;
+
+      const detail = await response.text();
+      const message = providerErrorMessage(response.status, detail);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
+      emit(lifecycleEvent(
+        request,
+        'starting',
+        `${capability.displayName} returned ${response.status}. Retrying in ${formatDelay(delayMs)} (attempt ${attempt + 1}/${maxAttempts}).`,
+      ));
+      await delay(delayMs, signal);
+    }
+
+    throw new Error(`${capability.displayName} exhausted retry attempts.`);
+  }
+
+  private async requestAnthropicResponse(
+    request: AgentRunRequest,
+    capability: DirectApiCapability,
+    apiKey: string,
+    messages: readonly AnthropicMessage[],
+    system: string | undefined,
+    externalToolDefinitions: readonly unknown[],
+    signal: AbortSignal,
+    emit: (event: PersistedEvent) => void,
+  ): Promise<Response> {
+    const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
+    const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response: Response;
+      try {
+        const tools = anthropicToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
+        response = await fetch(anthropicMessagesUrl(capability.baseUrl), {
+          method: 'POST',
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({
+            model: capability.model,
+            max_tokens: 8_192,
+            stream: true,
+            messages,
+            ...(system?.trim() ? { system: system.trim() } : {}),
+            ...(tools.length > 0 ? { tools, tool_choice: { type: 'auto' } } : {}),
+          }),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+        if (attempt >= maxAttempts) throw error;
+        const delayMs = retryDelayMs(baseDelayMs, attempt, undefined);
+        emit(lifecycleEvent(
+          request,
+          'starting',
+          `${capability.displayName} connection failed. Retrying in ${formatDelay(delayMs)} (attempt ${attempt + 1}/${maxAttempts}).`,
+        ));
+        await delay(delayMs, signal);
+        continue;
+      }
+
+      if (response.ok) return response;
+
+      const detail = await response.text();
+      const message = providerErrorMessage(response.status, detail);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
+      emit(lifecycleEvent(
+        request,
+        'starting',
+        `${capability.displayName} returned ${response.status}. Retrying in ${formatDelay(delayMs)} (attempt ${attempt + 1}/${maxAttempts}).`,
+      ));
+      await delay(delayMs, signal);
+    }
+
+    throw new Error(`${capability.displayName} exhausted retry attempts.`);
+  }
+
+  private async requestGoogleResponse(
+    request: AgentRunRequest,
+    capability: DirectApiCapability,
+    apiKey: string,
+    contents: readonly GeminiContent[],
+    system: string | undefined,
+    externalToolDefinitions: readonly unknown[],
+    signal: AbortSignal,
+    emit: (event: PersistedEvent) => void,
+  ): Promise<Response> {
+    const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
+    const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response: Response;
+      try {
+        const functionDeclarations = geminiToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
+        response = await fetch(geminiGenerateUrl(capability.baseUrl, capability.model), {
+          method: 'POST',
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({
+            contents,
+            generationConfig: { maxOutputTokens: 8_192 },
+            ...(system?.trim() ? { systemInstruction: { parts: [{ text: system.trim() }] } } : {}),
+            ...(functionDeclarations.length > 0
+              ? { tools: [{ functionDeclarations }], toolConfig: { functionCallingConfig: { mode: 'AUTO' } } }
+              : {}),
           }),
           signal,
         });
@@ -714,6 +1179,198 @@ export class DesktopDirectProviderRuntime {
 
     throw new Error(`${capability.displayName} exhausted retry attempts.`);
   }
+}
+
+function finishProviderRun(input: {
+  request: AgentRunRequest;
+  capability: DirectApiCapability;
+  events: PersistedEvent[];
+  emit: (event: PersistedEvent) => void;
+  outputParts: string[];
+  errors: string[];
+  inputTokens?: number;
+  outputTokens?: number;
+  aborted: boolean;
+}): AgentExecutionResult {
+  const { request, capability, events, emit, outputParts, errors, inputTokens, outputTokens, aborted } = input;
+  const output = outputParts.join('').trim();
+  const failed = !aborted && (errors.length > 0 || !output);
+  const error = aborted
+    ? `${capability.displayName} run cancelled.`
+    : failed
+      ? errors.at(-1) || `${capability.displayName} returned no output.`
+      : undefined;
+
+  if (output) events.push(textEvent(request, output));
+  if (inputTokens !== undefined || outputTokens !== undefined) {
+    emit({
+      schemaVersion: 1,
+      id: eventId(),
+      taskId: request.conversationId,
+      timestamp: nowIso(),
+      agent: request.agent,
+      type: 'cost.update',
+      inputTokens,
+      outputTokens,
+      estimateProvenance: 'measured',
+      ...costFields(capability.provider, capability.model, inputTokens, outputTokens),
+    });
+  }
+  if (error) {
+    emit({
+      schemaVersion: 1,
+      id: eventId(),
+      taskId: request.conversationId,
+      timestamp: nowIso(),
+      agent: request.agent,
+      type: 'error',
+      message: error,
+      recoverable: true,
+    });
+  }
+  emit(lifecycleEvent(
+    request,
+    failed || aborted ? 'failed' : 'completed',
+    failed || aborted ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
+  ));
+
+  return {
+    status: failed || aborted ? 'failed' : 'completed',
+    output,
+    outputAgent: request.agent,
+    events,
+    error,
+  };
+}
+
+function safeToolArguments(value: string): unknown {
+  try {
+    return parseToolArguments(value);
+  } catch {
+    return { _raw: value };
+  }
+}
+
+function rememberAnthropicToolCall(
+  toolCalls: Map<string, PendingToolCall>,
+  block: Record<string, unknown>,
+): void {
+  const callId = stringValue(block.id);
+  const name = stringValue(block.name);
+  if (!callId || !name) return;
+  const existing = toolCalls.get(callId) ?? { key: callId, callId, name, argumentsText: '' };
+  existing.name = name;
+  const input = block.input;
+  if (input && typeof input === 'object') existing.argumentsText = JSON.stringify(input);
+  toolCalls.set(callId, existing);
+}
+
+function rememberAnthropicToolArguments(
+  toolCalls: Map<string, PendingToolCall>,
+  value: Record<string, unknown>,
+  partialJson: string | undefined,
+): void {
+  const index = integerValue(value.index) ?? 0;
+  const existing = [...toolCalls.values()].find((call) => call.key === `anthropic-index-${index}`)
+    ?? [...toolCalls.values()][index]
+    ?? { key: `anthropic-index-${index}`, argumentsText: '' };
+  if (partialJson) existing.argumentsText += partialJson;
+  toolCalls.set(existing.key, existing);
+}
+
+function rememberGeminiToolCall(
+  toolCalls: Map<string, PendingToolCall>,
+  functionCall: Record<string, unknown>,
+  index: number,
+): void {
+  const name = stringValue(functionCall.name);
+  if (!name) return;
+  const key = stringValue(functionCall.id) || `gemini-${index}-${name}`;
+  const existing = toolCalls.get(key) ?? { key, callId: key, name, argumentsText: '' };
+  existing.name = name;
+  if (functionCall.args !== undefined) existing.argumentsText = JSON.stringify(functionCall.args);
+  toolCalls.set(key, existing);
+}
+
+function anthropicMessages(
+  request: AgentRunRequest,
+  history?: readonly DirectApiHistoryTurn[],
+): AnthropicMessage[] {
+  const turns = history?.length ? history : [{ role: 'user' as const, text: request.prompt }];
+  return turns
+    .filter((turn) => turn.text.trim())
+    .map((turn) => ({ role: turn.role, content: turn.text }));
+}
+
+function geminiContents(
+  request: AgentRunRequest,
+  history?: readonly DirectApiHistoryTurn[],
+): GeminiContent[] {
+  const turns = history?.length ? history : [{ role: 'user' as const, text: request.prompt }];
+  return turns
+    .filter((turn) => turn.text.trim())
+    .map((turn) => ({
+      role: turn.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: turn.text }],
+    }));
+}
+
+function anthropicToolDefinitions(definitions: readonly unknown[]): Array<Record<string, unknown>> {
+  return definitions.flatMap((definition) => {
+    const record = asRecord(definition);
+    const name = stringValue(record?.name);
+    if (!record || record.type !== 'function' || !name) return [];
+    return [{
+      name,
+      description: stringValue(record.description) ?? '',
+      input_schema: asRecord(record.parameters) ?? { type: 'object', properties: {} },
+    }];
+  });
+}
+
+function geminiToolDefinitions(definitions: readonly unknown[]): Array<Record<string, unknown>> {
+  return definitions.flatMap((definition) => {
+    const record = asRecord(definition);
+    const name = stringValue(record?.name);
+    if (!record || record.type !== 'function' || !name) return [];
+    return [{
+      name,
+      description: stringValue(record.description) ?? '',
+      parameters: geminiSchema(asRecord(record.parameters) ?? { type: 'object', properties: {} }),
+    }];
+  });
+}
+
+function geminiSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'additionalProperties') continue;
+    if (Array.isArray(value)) {
+      next[key] = value.map((item) => asRecord(item) ? geminiSchema(asRecord(item)!) : item);
+    } else if (value && typeof value === 'object') {
+      next[key] = geminiSchema(value as Record<string, unknown>);
+    } else {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
+function anthropicToolOutput(callId: string, output: unknown): Record<string, unknown> {
+  return {
+    type: 'tool_result',
+    tool_use_id: callId,
+    content: JSON.stringify(output),
+  };
+}
+
+function geminiToolOutput(name: string, output: unknown): Record<string, unknown> {
+  return {
+    functionResponse: {
+      name,
+      response: output && typeof output === 'object' ? output : { output },
+    },
+  };
 }
 
 async function executeToolCalls(
@@ -976,6 +1633,19 @@ function chatMessages(
 function chatCompletionsUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
   return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
+}
+
+function anthropicMessagesUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  return /\/messages$/i.test(trimmed) ? trimmed : `${trimmed}/messages`;
+}
+
+function geminiGenerateUrl(baseUrl: string, model: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  const modelId = model.trim().replace(/^models\//, '');
+  const encoded = encodeURIComponent(modelId);
+  if (/:streamGenerateContent$/i.test(trimmed)) return `${trimmed}?alt=sse`;
+  return `${trimmed}/models/${encoded}:streamGenerateContent?alt=sse`;
 }
 
 function chatCompletionsHeaders(capability: DirectApiCapability, apiKey: string): Record<string, string> {

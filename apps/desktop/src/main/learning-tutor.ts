@@ -50,7 +50,7 @@ interface LearningProviderConfiguration {
   baseUrl: string;
   model: string;
   apiKey: string;
-  protocol: 'responses' | 'chat-completions';
+  protocol: 'responses' | 'chat-completions' | 'anthropic-messages' | 'google-generative-ai';
   openRouter: boolean;
 }
 
@@ -179,16 +179,13 @@ export class DesktopLearningTutor {
     const settings = await this.settings.load();
     const learningTutor = settings.learningTutor;
     const preset = directProviderPreset(learningTutor.provider);
-    const supported = preset.protocol !== 'unsupported';
+    const supported = true;
     const credentialStored = Boolean(await this.credentials.has?.(learningTutor.credentialId));
     let reason: string | null = null;
     let recovery: string | null = null;
     if (!learningTutor.enabled) {
       reason = 'Learning Tutor API is disabled.';
       recovery = 'Enable the Learning Tutor API in Settings and choose a supported provider.';
-    } else if (!supported) {
-      reason = `${preset.displayName} does not support the Learning Mode adapter.`;
-      recovery = 'Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider in Learning Tutor settings.';
     } else if (!learningTutor.model.trim()) {
       reason = 'No Learning Tutor model is configured.';
       recovery = 'Choose a model in Learning Tutor settings before using Learning Mode.';
@@ -265,9 +262,6 @@ export class DesktopLearningTutor {
     const learningTutor = settings.learningTutor;
     if (!learningTutor.enabled) throw new Error('Enable the Learning Tutor API in Settings before using Learning Mode.');
     const preset = directProviderPreset(learningTutor.provider);
-    if (preset.protocol === 'unsupported') {
-      throw new Error(`${preset.displayName} does not support the Learning Mode adapter. Choose OpenAI, DeepSeek, OpenRouter, or another OpenAI-compatible provider in Learning Tutor settings.`);
-    }
     if (!learningTutor.model.trim()) throw new Error('Set a Learning Tutor model in Settings before using Learning Mode.');
     if (!this.credentials.isAvailable()) throw new Error('OS credential encryption is unavailable; Learning Mode will not use a plaintext API key.');
     const apiKey = await this.credentials.get(learningTutor.credentialId);
@@ -276,7 +270,7 @@ export class DesktopLearningTutor {
       baseUrl: learningTutor.baseUrl,
       model: learningTutor.model,
       apiKey,
-      protocol: preset.protocol === 'responses' ? 'responses' : 'chat-completions',
+      protocol: preset.protocol,
       openRouter: learningTutor.provider === 'openrouter',
     };
   }
@@ -315,9 +309,73 @@ export class DesktopLearningTutor {
     schemaName: string,
     schema: object,
   ): Promise<LearningProviderResult> {
-    return provider.protocol === 'responses'
-      ? this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema)
-      : this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, schemaName, schema);
+    if (provider.protocol === 'responses') {
+      return this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema);
+    }
+    if (provider.protocol === 'anthropic-messages') {
+      return this.requestAnthropicMessages(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema);
+    }
+    if (provider.protocol === 'google-generative-ai') {
+      return this.requestGoogleGenerativeAi(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema);
+    }
+    return this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, schemaName, schema);
+  }
+
+  private async requestAnthropicMessages(
+    baseUrl: string,
+    model: string,
+    apiKey: string,
+    prompt: { system: string; user: string },
+    _schemaName: string,
+    _schema: object,
+  ): Promise<LearningProviderResult> {
+    const response = await fetch(anthropicMessagesUrl(baseUrl), {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        system: prompt.system,
+        max_tokens: 6_000,
+        messages: [{ role: 'user', content: prompt.user }],
+      }),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
+    });
+    if (!response.ok) throw await providerFailure(response);
+    const value = await response.json() as Record<string, unknown>;
+    return { content: anthropicOutputText(value), usage: providerUsage(value.usage) };
+  }
+
+  private async requestGoogleGenerativeAi(
+    baseUrl: string,
+    model: string,
+    apiKey: string,
+    prompt: { system: string; user: string },
+    _schemaName: string,
+    _schema: object,
+  ): Promise<LearningProviderResult> {
+    const response = await fetch(geminiGenerateUrl(baseUrl, model), {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: prompt.system }] },
+        contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
+        generationConfig: {
+          maxOutputTokens: 6_000,
+          responseMimeType: 'application/json',
+        },
+      }),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
+    });
+    if (!response.ok) throw await providerFailure(response);
+    const value = await response.json() as Record<string, unknown>;
+    return { content: geminiOutputText(value), usage: providerUsage(value.usageMetadata) };
   }
 
   private async requestResponses(
@@ -615,6 +673,47 @@ function chatCompletionsUrl(baseUrl: string): string {
   return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
 }
 
+function anthropicMessagesUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  return /\/messages$/i.test(trimmed) ? trimmed : `${trimmed}/messages`;
+}
+
+function geminiGenerateUrl(baseUrl: string, model: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  const modelId = model.trim().replace(/^models\//, '');
+  if (/:generateContent$/i.test(trimmed)) return trimmed;
+  return `${trimmed}/models/${encodeURIComponent(modelId)}:generateContent`;
+}
+
+function anthropicOutputText(value: Record<string, unknown>): string {
+  const content = Array.isArray(value.content) ? value.content : [];
+  const text = content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return '';
+      const record = block as Record<string, unknown>;
+      return record.type === 'text' && typeof record.text === 'string' ? record.text : '';
+    })
+    .join('');
+  if (!text.trim()) throw new Error('The provider returned no tutor content.');
+  return text;
+}
+
+function geminiOutputText(value: Record<string, unknown>): string {
+  const candidate = Array.isArray(value.candidates) && value.candidates[0] && typeof value.candidates[0] === 'object'
+    ? value.candidates[0] as Record<string, unknown>
+    : null;
+  const parts = candidate && candidate.content && typeof candidate.content === 'object'
+    ? (candidate.content as Record<string, unknown>).parts
+    : null;
+  const text = Array.isArray(parts)
+    ? parts.map((part) => part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
+      ? (part as Record<string, unknown>).text as string
+      : '').join('')
+    : '';
+  if (!text.trim()) throw new Error('The provider returned no tutor content.');
+  return text;
+}
+
 function responseOutputText(value: Record<string, unknown>): string {
   if (typeof value.output_text === 'string' && value.output_text.trim()) return value.output_text;
   const output = Array.isArray(value.output) ? value.output : [];
@@ -658,11 +757,15 @@ function providerUsage(value: unknown): LearningProviderUsage | null {
   const usage = value as Record<string, unknown>;
   const input = typeof usage.input_tokens === 'number'
     ? usage.input_tokens
+    : typeof usage.promptTokenCount === 'number'
+      ? usage.promptTokenCount
     : typeof usage.prompt_tokens === 'number'
       ? usage.prompt_tokens
       : null;
   const output = typeof usage.output_tokens === 'number'
     ? usage.output_tokens
+    : typeof usage.candidatesTokenCount === 'number'
+      ? usage.candidatesTokenCount
     : typeof usage.completion_tokens === 'number'
       ? usage.completion_tokens
       : null;

@@ -24,7 +24,7 @@ import { RecoveryStore } from './recovery-store';
 import { TerminalManager } from './terminal';
 import { UpdateController } from './updater';
 import { autoUpdater } from 'electron-updater';
-import { VerificationStore } from './verification';
+import { recordVerification, runCheckCommand, VerificationStore } from './verification';
 import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
 import { WorkflowTemplateStore } from './workflow-templates';
@@ -34,6 +34,7 @@ import { TeachingLibraryStore } from './teaching-library';
 import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
+import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
 
 app.setName('KAI');
@@ -159,6 +160,14 @@ async function startApplication(): Promise<void> {
     saveSettings: (next) => settings.save(next),
   });
   const agents = new DesktopAgentRuntime();
+  const runControl = new DesktopRunControl({
+    suspendRun: async (conversationId) => {
+      await agents.pause(conversationId);
+    },
+    resumeRun: async (conversationId) => {
+      await agents.resume(conversationId);
+    },
+  });
   const bundledRulesPath = app.isPackaged
     ? path.join(process.resourcesPath, 'agent-rules', 'Cognitive1-Rules.md')
     : path.join(kaiRoot, 'apps', 'desktop', 'resources', 'agent-rules', 'Cognitive1-Rules.md');
@@ -184,6 +193,7 @@ async function startApplication(): Promise<void> {
   );
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
+    waitIfPaused: (conversationId, signal) => runControl.waitIfPaused(conversationId, signal),
     resolveProxyRoute: async (request) => {
       const controller = serviceController;
       if (!controller) throw new Error('The managed service controller is unavailable.');
@@ -248,6 +258,7 @@ async function startApplication(): Promise<void> {
     learningUsage,
     learningBudget,
     workflows: workflowRunner,
+    runControl,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
     verification: new VerificationStore(path.join(paths.root, 'verification')),
@@ -294,6 +305,13 @@ async function startApplication(): Promise<void> {
       return conversation;
     },
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    runCheck: async (projectId, command, signal) => {
+      const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('The workflow project is no longer available.');
+      const check = await runCheckCommand(project.path, command, signal);
+      await recordVerification(ipcContext!.verification, project.id, project.path, check).catch(() => undefined);
+      return { passed: check.exitCode === 0, exitCode: check.exitCode, output: check.output };
+    },
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
     notifyChanged: (ownerWindowId, run) => {
       desktopWindows.send(ownerWindowId, 'workflows:changed', run);

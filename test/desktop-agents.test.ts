@@ -26,7 +26,7 @@ describe('desktop agent runtime', () => {
       state: 'ready',
       version: 'fake-agent 1.0.0',
       signInCommand: 'codex login',
-      supportsRoutes: ['direct'],
+      supportsRoutes: ['direct', 'proxy'],
     });
   });
 

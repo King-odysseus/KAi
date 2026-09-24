@@ -68,6 +68,7 @@ function harness(overrides: Partial<WorkflowRunnerPorts> = {}): {
       status: 'completed',
       output: `completed: ${request.prompt}`,
     }),
+    runCheck: async () => ({ passed: true, exitCode: 0, output: 'ok' }),
     cancelAgent: () => false,
     notifyChanged: (owner, run) => notifications.push({ owner, run }),
     ...overrides,
@@ -175,6 +176,85 @@ describe('desktop workflow runner', () => {
 
     expect(prompts).toEqual(['Retry this', 'Then this']);
     expect(records.get(record.id)?.workflow?.steps[0]).toMatchObject({ status: 'completed', output: 'kept' });
+  });
+
+  it('repeats a bounded loop until its check passes', async () => {
+    const prompts: string[] = [];
+    let checks = 0;
+    const { runner, records } = harness({
+      runAgent: async (request) => {
+        prompts.push(request.prompt);
+        return {
+          conversation: records.get(request.conversationId)!,
+          status: 'completed',
+          output: `completed: ${request.prompt}`,
+        };
+      },
+      runCheck: async () => {
+        checks += 1;
+        return { passed: checks >= 2, exitCode: checks >= 2 ? 0 : 1, output: checks >= 2 ? 'passed' : 'failed' };
+      },
+    });
+
+    const run = await runner.start(startInput({
+      loop: { enabled: true, maxRounds: 4, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: 'npm test' },
+    }), 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect(prompts).toEqual(['Inspect the project', 'Implement the change', 'Inspect the project', 'Implement the change']);
+    expect(checks).toBe(2);
+    expect(records.get(run.conversationId)?.workflow?.loopProgress).toMatchObject({
+      round: 2,
+      lastCheckPassed: true,
+      stopReason: 'passed',
+    });
+  });
+
+  it('pauses at the round limit and does not replay beyond it on resume', async () => {
+    let calls = 0;
+    const { runner, records } = harness({
+      runAgent: async (request) => {
+        calls += 1;
+        return {
+          conversation: records.get(request.conversationId)!,
+          status: 'completed',
+          output: 'done',
+        };
+      },
+      runCheck: async () => ({ passed: false, exitCode: 1, output: 'still failing' }),
+    });
+    const run = await runner.start(startInput({
+      loop: { enabled: true, maxRounds: 2, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: 'npm test' },
+    }), 5);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    expect(calls).toBe(4);
+    expect(records.get(run.conversationId)?.workflow?.loopProgress).toMatchObject({ round: 2, stopReason: 'max_rounds' });
+    await expect(runner.resume(run.workflow.id, 5)).rejects.toThrow(/round limit/);
+  });
+
+  it('stops before a new round when the cost limit is reached', async () => {
+    let calls = 0;
+    const { runner, records } = harness({
+      runAgent: async (request) => {
+        calls += 1;
+        return {
+          conversation: records.get(request.conversationId)!,
+          status: 'completed',
+          output: 'done',
+          costUsd: 0.6,
+        };
+      },
+      runCheck: async () => ({ passed: false, exitCode: 1, output: 'failed' }),
+    });
+    const run = await runner.start(startInput({
+      steps: [{ id: 'only', agent: 'codex', prompt: 'Work', label: 'Work' }],
+      loop: { enabled: true, maxRounds: 5, maxCostUsd: 0.5, maxDurationMinutes: 30, checkCommand: 'npm test' },
+    }), 6);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    expect(calls).toBe(1);
+    expect(records.get(run.conversationId)?.workflow?.loopProgress).toMatchObject({ costUsd: 0.6, stopReason: 'cost_limit' });
   });
 
   it('transfers a running workflow and its future updates when its owner window closes', async () => {

@@ -264,6 +264,16 @@ export const cliModelNameSchema = z
   .max(100)
   .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.5 or claude-sonnet-5.');
 
+export const DEFAULT_DESKTOP_SHORTCUTS: Readonly<Record<string, string>> = {
+  'workbench': 'Ctrl+1',
+  'code': 'Ctrl+2',
+  'new-window': 'Ctrl+Shift+N',
+  'terminal': 'Ctrl+`',
+  'command-palette': 'Ctrl+K',
+  'context-panel': 'Ctrl+B',
+  'shortcuts': 'Ctrl+/',
+};
+
 export const appSettingsV1Schema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -285,6 +295,8 @@ export const appSettingsV1Schema = z
     usageBudget: usageBudgetSchema.default({}),
     notifications: notificationSettingsSchema.default({}),
     updates: updateSettingsSchema.default({}),
+    shortcuts: z.record(z.string().min(1).max(100), z.string().min(1).max(80)).default({ ...DEFAULT_DESKTOP_SHORTCUTS }),
+    setupCompletedAt: z.string().datetime().nullable().default(null),
     // Model each CLI agent is asked to use. A missing entry means the CLI uses its own configured default.
     agentModels: z.record(agentIdSchema, cliModelNameSchema).default({}),
   })
@@ -415,5 +427,7 @@ export function createDefaultSettings(): AppSettings {
       defaultModel: 'deepseek-v4-pro',
       credentialId: 'provider.deepseek',
     },
+    shortcuts: { ...DEFAULT_DESKTOP_SHORTCUTS },
+    setupCompletedAt: null,
   });
 }

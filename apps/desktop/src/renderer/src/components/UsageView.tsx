@@ -65,7 +65,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const paidProviders = DIRECT_PROVIDER_ORDER.filter((id) => directProviderPreset(id).protocol !== 'unsupported');
+  const paidProviders = DIRECT_PROVIDER_ORDER;
   const maxDay = Math.max(...(summary?.byDay.map((day) => day.usd) ?? [0]), 0.000001);
   const setLimit = (key: 'perConversationUsd' | 'dailyUsd' | 'monthlyUsd', value: number): void =>
     setDraft((current) => ({ ...current, [key]: Number.isFinite(value) && value >= 0 ? value : 0 }));

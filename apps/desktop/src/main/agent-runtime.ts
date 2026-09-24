@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import type {
   AgentCapability,
   AgentId,
@@ -91,12 +91,28 @@ interface SignInLaunchOptions {
 
 type SignInLauncher = (command: string, args: string[], options: SignInLaunchOptions) => Promise<void>;
 
+export interface DesktopAgentRuntimeOptions {
+  resolveProxyEnvironment?: (
+    agent: AgentId,
+    request: AgentRunRequest,
+  ) => Promise<NodeJS.ProcessEnv | null>;
+  suspendProcess?: (pid: number) => Promise<void>;
+  resumeProcess?: (pid: number) => Promise<void>;
+}
+
+interface ActiveAgentRun {
+  controller: AbortController;
+  child: ChildProcess | null;
+  paused: boolean;
+}
+
 export class DesktopAgentRuntime {
-  private readonly activeRuns = new Map<string, AbortController>();
+  private readonly activeRuns = new Map<string, ActiveAgentRun>();
 
   constructor(
     private readonly commandOverrides: Partial<Record<AgentId, string>> = {},
     private readonly signInLauncher: SignInLauncher = launchDetachedSignIn,
+    private readonly options: DesktopAgentRuntimeOptions = {},
   ) {}
 
   async capabilities(): Promise<AgentCapability[]> {
@@ -121,7 +137,7 @@ export class DesktopAgentRuntime {
         command,
         signInCommand: definition.signInCommand,
         installUrl: definition.installUrl,
-        supportsRoutes: ['direct'],
+        supportsRoutes: supportsProxy(id) ? ['direct', 'proxy'] : ['direct'],
         supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
       };
     }
@@ -139,7 +155,7 @@ export class DesktopAgentRuntime {
       command,
       signInCommand: definition.signInCommand,
       installUrl: definition.installUrl,
-      supportsRoutes: ['direct'],
+      supportsRoutes: supportsProxy(id) ? ['direct', 'proxy'] : ['direct'],
       supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
     };
   }
@@ -194,14 +210,25 @@ export class DesktopAgentRuntime {
         `${definition.displayName} is unavailable: ${capability.unavailableReason || 'command not found'}`,
       );
     }
-    if (request.route !== 'direct') {
-      const message = 'Proxy route is not wired for CLI agents in KAI Desktop yet. Set Route to direct.';
-      return this.immediateFailure(request, message);
+    let environment = process.env;
+    if (request.route === 'proxy') {
+      if (!supportsProxy(request.agent) || !this.options.resolveProxyEnvironment) {
+        return this.immediateFailure(request, `${definition.displayName} does not have a Universal Proxy route in this KAI build.`);
+      }
+      try {
+        environment = await this.options.resolveProxyEnvironment(request.agent, request) ?? process.env;
+      } catch (error) {
+        return this.immediateFailure(
+          request,
+          `Universal Proxy route is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
 
     const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model);
     const controller = new AbortController();
-    this.activeRuns.set(request.conversationId, controller);
+    const active: ActiveAgentRun = { controller, child: null, paused: false };
+    this.activeRuns.set(request.conversationId, active);
 
     const events: PersistedEvent[] = [lifecycleEvent(request, 'starting', `${definition.displayName} starting.`)];
     const outputParts: string[] = [];
@@ -214,7 +241,17 @@ export class DesktopAgentRuntime {
     let exitSignal: NodeJS.Signals | null = null;
 
     try {
-      for await (const chunk of streamProcess(this.commandFor(request.agent), args, cwd, controller.signal, inputFor(request))) {
+      for await (const chunk of streamProcess(
+        this.commandFor(request.agent),
+        args,
+        cwd,
+        controller.signal,
+        inputFor(request),
+        environment,
+        (child) => {
+          active.child = child;
+        },
+      )) {
         if (isProcessResult(chunk)) {
           exitCode = chunk.code;
           exitSignal = chunk.signal;
@@ -243,6 +280,7 @@ export class DesktopAgentRuntime {
       exitCode = 1;
     } finally {
       this.activeRuns.delete(request.conversationId);
+      active.child = null;
     }
 
     const output = outputParts.join('').trim();
@@ -314,9 +352,29 @@ export class DesktopAgentRuntime {
   }
 
   cancel(conversationId: string): boolean {
-    const controller = this.activeRuns.get(conversationId);
-    if (!controller) return false;
-    controller.abort();
+    const active = this.activeRuns.get(conversationId);
+    if (!active) return false;
+    active.controller.abort();
+    return true;
+  }
+
+  async pause(conversationId: string): Promise<boolean> {
+    const active = this.activeRuns.get(conversationId);
+    if (!active || active.paused) return false;
+    active.paused = true;
+    if (active.child?.pid) {
+      await (this.options.suspendProcess ?? suspendProcessTree)(active.child.pid);
+    }
+    return true;
+  }
+
+  async resume(conversationId: string): Promise<boolean> {
+    const active = this.activeRuns.get(conversationId);
+    if (!active || !active.paused) return false;
+    if (active.child?.pid) {
+      await (this.options.resumeProcess ?? resumeProcessTree)(active.child.pid);
+    }
+    active.paused = false;
     return true;
   }
 
@@ -642,14 +700,17 @@ async function* streamProcess(
   cwd: string,
   signal: AbortSignal,
   stdin?: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  onSpawn?: (child: ChildProcess) => void,
 ): AsyncIterable<ProcessChunk | ProcessResult> {
   const useShell = process.platform === 'win32';
   const child = spawn(useShell ? quoteWinArg(command) : command, useShell ? args.map(quoteWinArg) : args, {
     cwd,
     shell: useShell,
     windowsHide: true,
-    env: process.env,
+    env: environment,
   });
+  onSpawn?.(child);
 
   if (stdin !== undefined) {
     child.stdin?.write(stdin);
@@ -691,6 +752,46 @@ async function* streamProcess(
     }
     yield queue.shift()!;
   }
+}
+
+function supportsProxy(agent: AgentId): boolean {
+  return agent === 'claude' || agent === 'codex';
+}
+
+async function suspendProcessTree(pid: number): Promise<void> {
+  if (process.platform === 'win32') {
+    await windowsProcessAction(pid, 'NtSuspendProcess');
+    return;
+  }
+  process.kill(-pid, 'SIGSTOP');
+}
+
+async function resumeProcessTree(pid: number): Promise<void> {
+  if (process.platform === 'win32') {
+    await windowsProcessAction(pid, 'NtResumeProcess');
+    return;
+  }
+  process.kill(-pid, 'SIGCONT');
+}
+
+async function windowsProcessAction(pid: number, method: 'NtSuspendProcess' | 'NtResumeProcess'): Promise<void> {
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    `$root=${pid}`,
+    '$all=@($root)',
+    '$pending=@($root)',
+    'while($pending.Count -gt 0){$parents=$pending;$pending=@();$children=Get-CimInstance Win32_Process | Where-Object { $parents -contains $_.ParentProcessId };foreach($child in $children){if($all -notcontains $child.ProcessId){$all+=$child.ProcessId;$pending+=$child.ProcessId}}}',
+    "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class KaiProcess{[DllImport(\"ntdll.dll\")]public static extern int NtSuspendProcess(IntPtr h);[DllImport(\"ntdll.dll\")]public static extern int NtResumeProcess(IntPtr h);}'",
+    `foreach($id in $all){$p=Get-Process -Id $id -ErrorAction SilentlyContinue;if($p){[KaiProcess]::${method}($p.Handle) | Out-Null;$p.Dispose()}}`,
+  ].join(';');
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    child.once('error', reject);
+    child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`Process ${method} failed with exit code ${code}.`)));
+  });
 }
 
 function quoteWinArg(arg: string): string {

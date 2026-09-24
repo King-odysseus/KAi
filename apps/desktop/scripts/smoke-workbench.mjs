@@ -127,10 +127,14 @@ async function verifyGitAndTerminal(page) {
   await page.keyboard.press('Control+Backquote');
   const dock = page.getByRole('region', { name: 'Terminal' });
   await dock.waitFor();
-  await dock.getByLabel('Command', { exact: true }).fill('node -e "console.log(6 * 7)"');
-  await page.keyboard.press('Enter');
-  await dock.getByText('exit 0').waitFor({ timeout: 20_000 });
-  await dock.getByRole('log').getByText('42', { exact: true }).waitFor();
+  const terminalInput = dock.locator('.xterm-helper-textarea');
+  await terminalInput.fill('echo KAI_TERMINAL_OK');
+  await terminalInput.press('Enter');
+  await page.waitForFunction(
+    () => document.querySelector('.terminal-dock .xterm-rows')?.textContent?.includes('KAI_TERMINAL_OK') ?? false,
+    undefined,
+    { timeout: 20_000 },
+  );
   await page.screenshot({ path: path.join(outputDirectory, 'terminal-dock-1440x920.png') });
   await resizeWindow(electronApp, 960, 640);
   await assertNoHorizontalOverflow(page);
@@ -138,7 +142,9 @@ async function verifyGitAndTerminal(page) {
   await resizeWindow(electronApp, 1440, 920);
   // The panel and its output survive a page change, then hide again.
   await page.getByRole('button', { name: 'Usage', exact: true }).click();
-  await dock.getByText('exit 0').waitFor();
+  await page.waitForFunction(
+    () => document.querySelector('.terminal-dock .xterm-rows')?.textContent?.includes('KAI_TERMINAL_OK') ?? false,
+  );
   await page.keyboard.press('Control+Backquote');
   await dock.waitFor({ state: 'hidden' });
   await assertNoHorizontalOverflow(page);
@@ -194,6 +200,15 @@ async function verifyTasksAndSettings(page) {
 
   // The composer offers a per-conversation model next to agent, route and autonomy.
   await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  const titlebar = page.locator('.titlebar-actions');
+  await titlebar.getByRole('button', { name: 'Hide threads panel' }).click();
+  await titlebar.getByRole('button', { name: 'Show threads panel' }).waitFor();
+  if (await page.locator('.conversation-column').count() > 0) {
+    throw new Error('The left threads panel remained visible after it was collapsed.');
+  }
+  await titlebar.getByRole('button', { name: 'Show threads panel' }).click();
+  await page.locator('.conversation-column').waitFor();
+
   await page.getByRole('button', { name: 'Model', exact: true }).click();
   await page.getByRole('option', { name: 'Other model…' }).waitFor();
   await page.keyboard.press('Escape');

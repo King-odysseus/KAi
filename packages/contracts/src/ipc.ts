@@ -19,6 +19,8 @@ import {
 import {
   brainFieldUpdateInputSchema,
   brainFieldUpdateResultSchema,
+  brainGitStatusSchema,
+  brainGitSyncResultSchema,
   brainImportResultSchema,
   brainOverviewSchema,
   brainSearchInputSchema,
@@ -29,6 +31,8 @@ import {
   type BrainFieldUpdateInput,
   type BrainFieldUpdateResult,
   type BrainImportResult,
+  type BrainGitStatus,
+  type BrainGitSyncResult,
   type BrainOverview,
   type BrainSearchInput,
   type Cognitive1McpToolInput,
@@ -36,6 +40,7 @@ import {
   type Cognitive1OperationInput,
   type Cognitive1OperationResult,
 } from './brain';
+import { setupStatusSchema, type SetupStatus } from './setup';
 import {
   contextChipSchema,
   contextSearchInputSchema,
@@ -130,7 +135,16 @@ import {
 import { coordinationOverviewSchema, preflightInputSchema, preflightResultSchema, type CoordinationOverview, type PreflightResult } from './coordination';
 import { globalSearchInputSchema, globalSearchResultSchema, type GlobalSearchResult } from './search';
 import { updateSettingsSchema, updateStateSchema, type UpdateState } from './updates';
-import { terminalEventSchema, terminalRunInputSchema, terminalRunResultSchema, terminalStopInputSchema, type TerminalEvent, type TerminalRunResult, type TerminalShell } from './terminal';
+import {
+  terminalEventSchema,
+  terminalResizeInputSchema,
+  terminalSessionSchema,
+  terminalStartInputSchema,
+  terminalStopInputSchema,
+  terminalWriteInputSchema,
+  type TerminalEvent,
+  type TerminalSession,
+} from './terminal';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitOverview, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
@@ -218,6 +232,8 @@ export const ipcChannels = [
   'brain:search',
   'brain:update-field',
   'brain:import',
+  'brain:git-status',
+  'brain:git-sync',
   'cognitive1:tool',
   'cognitive1:operation',
   'rules:get',
@@ -301,6 +317,8 @@ export const ipcChannels = [
   'agents:capabilities',
   'agents:run',
   'agents:cancel',
+  'agents:pause',
+  'agents:resume',
   'agents:sign-in',
   'agents:approval-response',
   'agents:api-capability',
@@ -314,7 +332,11 @@ export const ipcChannels = [
   'updates:check',
   'updates:download',
   'updates:install',
-  'terminal:run',
+  'setup:status',
+  'setup:complete',
+  'terminal:start',
+  'terminal:write',
+  'terminal:resize',
   'terminal:stop',
   'git:overview',
   'git:stage',
@@ -373,6 +395,8 @@ export const ipcInputSchemas = {
       notifications: notificationSettingsSchema.partial().strict().optional(),
       updates: updateSettingsSchema.partial().strict().optional(),
       agentModels: z.record(agentIdSchema, cliModelNameSchema).optional(),
+      shortcuts: z.record(z.string().min(1).max(100), z.string().min(1).max(80)).optional(),
+      setupCompletedAt: z.string().datetime().nullable().optional(),
     })
     .strict(),
   'providers:list-models': z
@@ -392,6 +416,8 @@ export const ipcInputSchemas = {
   'brain:search': brainSearchInputSchema,
   'brain:update-field': brainFieldUpdateInputSchema,
   'brain:import': emptyInputSchema,
+  'brain:git-status': emptyInputSchema,
+  'brain:git-sync': z.object({ action: z.enum(['init', 'commit', 'pull', 'push']) }).strict(),
   'cognitive1:tool': cognitive1McpToolInputSchema,
   'cognitive1:operation': cognitive1OperationInputSchema,
   'rules:get': emptyInputSchema,
@@ -486,6 +512,8 @@ export const ipcInputSchemas = {
   'agents:capabilities': emptyInputSchema,
   'agents:run': agentRunRequestSchema,
   'agents:cancel': agentCancelInputSchema,
+  'agents:pause': agentCancelInputSchema,
+  'agents:resume': agentCancelInputSchema,
   'agents:sign-in': agentSignInInputSchema,
   'agents:approval-response': agentApprovalResponseInputSchema,
   'agents:api-capability': emptyInputSchema,
@@ -499,7 +527,11 @@ export const ipcInputSchemas = {
   'updates:check': emptyInputSchema,
   'updates:download': emptyInputSchema,
   'updates:install': emptyInputSchema,
-  'terminal:run': terminalRunInputSchema,
+  'setup:status': emptyInputSchema,
+  'setup:complete': z.object({ complete: z.boolean() }).strict(),
+  'terminal:start': terminalStartInputSchema,
+  'terminal:write': terminalWriteInputSchema,
+  'terminal:resize': terminalResizeInputSchema,
   'terminal:stop': terminalStopInputSchema,
   'git:overview': z.object({ projectId: z.string().min(1) }).strict(),
   'git:stage': gitStageInputSchema,
@@ -543,6 +575,8 @@ export const brainOverviewResponseSchema = brainOverviewSchema;
 export const brainSearchResponseSchema = z.array(brainOverviewSchema.shape.recentEntries.element);
 export const brainFieldUpdateResponseSchema = brainFieldUpdateResultSchema;
 export const brainImportResponseSchema = brainImportResultSchema;
+export const brainGitStatusResponseSchema = brainGitStatusSchema;
+export const brainGitSyncResponseSchema = brainGitSyncResultSchema;
 export const cognitive1McpToolResponseSchema = cognitive1McpToolResultSchema;
 export const cognitive1OperationResponseSchema = cognitive1OperationResultSchema;
 export const executionRuleDocumentResponseSchema = executionRuleDocumentSchema;
@@ -599,7 +633,8 @@ export const coordinationOverviewResponseSchema = coordinationOverviewSchema;
 export const preflightResponseSchema = preflightResultSchema;
 export const globalSearchResponseSchema = globalSearchResultSchema;
 export const updateStateResponseSchema = updateStateSchema;
-export const terminalRunResponseSchema = terminalRunResultSchema;
+export const setupStatusResponseSchema = setupStatusSchema;
+export const terminalSessionResponseSchema = terminalSessionSchema;
 export const terminalEventResponseSchema = terminalEventSchema;
 export const gitOverviewResponseSchema = gitOverviewSchema;
 export const gitActionResponseSchema = gitActionResultSchema;
@@ -665,6 +700,8 @@ export interface SettingsUpdate {
   notifications?: Partial<AppSettings['notifications']>;
   updates?: Partial<AppSettings['updates']>;
   agentModels?: AppSettings['agentModels'];
+  shortcuts?: AppSettings['shortcuts'];
+  setupCompletedAt?: AppSettings['setupCompletedAt'];
 }
 
 export interface CredentialStatus {
@@ -787,6 +824,8 @@ export interface KaiDesktopBridge {
   previewContext(request: ContextPreviewInput): Promise<IpcResponse<ContextPreview>>;
   runAgent(request: AgentRunRequest): Promise<IpcResponse<AgentRunResult>>;
   cancelAgent(conversationId: string): Promise<IpcResponse<boolean>>;
+  pauseAgent(conversationId: string): Promise<IpcResponse<boolean>>;
+  resumeAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   signInAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;
   respondToApproval(request: AgentApprovalResponseInput): Promise<IpcResponse<boolean>>;
   onAgentEvent(listener: (payload: AgentRunEvent) => void): () => void;
@@ -800,9 +839,15 @@ export interface KaiDesktopBridge {
   downloadUpdate(): Promise<IpcResponse<UpdateState>>;
   installUpdate(): Promise<IpcResponse<UpdateState>>;
   onUpdateState(listener: (state: UpdateState) => void): () => void;
-  runTerminalCommand(projectId: string, command: string, shell: TerminalShell): Promise<IpcResponse<TerminalRunResult>>;
+  setupStatus(): Promise<IpcResponse<SetupStatus>>;
+  completeSetup(complete: boolean): Promise<IpcResponse<SetupStatus>>;
+  startTerminal(projectId: string, shell: TerminalSession['shell'], cols: number, rows: number): Promise<IpcResponse<TerminalSession>>;
+  writeTerminal(id: string, data: string): Promise<IpcResponse<boolean>>;
+  resizeTerminal(id: string, cols: number, rows: number): Promise<IpcResponse<boolean>>;
   stopTerminalCommand(id: string): Promise<IpcResponse<boolean>>;
   onTerminalEvent(listener: (event: TerminalEvent) => void): () => void;
+  brainGitStatus(): Promise<IpcResponse<BrainGitStatus>>;
+  brainGitSync(action: 'init' | 'commit' | 'pull' | 'push'): Promise<IpcResponse<BrainGitSyncResult>>;
   gitOverview(projectId: string): Promise<IpcResponse<GitOverview>>;
   gitStage(projectId: string, paths: string[], stage: boolean): Promise<IpcResponse<GitActionResult>>;
   gitCommit(projectId: string, message: string): Promise<IpcResponse<GitActionResult>>;

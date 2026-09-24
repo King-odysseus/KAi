@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { providerIdSchema, type ProviderId } from './primitives';
 
-export type DirectProviderProtocol = 'responses' | 'chat-completions' | 'unsupported';
+export type DirectProviderProtocol = 'responses' | 'chat-completions' | 'anthropic-messages' | 'google-generative-ai';
 
 export interface DirectProviderPreset {
   // Provider presets keep desktop settings and runtime protocol selection in sync.
@@ -68,23 +68,32 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
   },
   anthropic: {
     id: 'anthropic',
-    displayName: 'Anthropic API',
-    protocol: 'unsupported',
-    defaultBaseUrl: providerUrl('api.anthropic.com'),
-    defaultModel: '',
+    displayName: 'Anthropic Messages API',
+    protocol: 'anthropic-messages',
+    defaultBaseUrl: providerUrl('api.anthropic.com/v1'),
+    defaultModel: 'claude-sonnet-5',
     credentialId: 'provider.anthropic',
-    supportsTools: false,
-    models: [],
+    supportsTools: true,
+    models: [
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'claude-haiku-4-5-20251001',
+    ],
   },
   google: {
     id: 'google',
     displayName: 'Google Gemini API',
-    protocol: 'unsupported',
-    defaultBaseUrl: providerUrl('generativelanguage.googleapis.com'),
-    defaultModel: '',
+    protocol: 'google-generative-ai',
+    defaultBaseUrl: providerUrl('generativelanguage.googleapis.com/v1beta'),
+    defaultModel: 'gemini-3.8-flash',
     credentialId: 'provider.google',
-    supportsTools: false,
-    models: [],
+    supportsTools: true,
+    models: [
+      'gemini-3.8-pro',
+      'gemini-3.8-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+    ],
   },
   deepseek: {
     id: 'deepseek',
@@ -206,6 +215,8 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
 
 export const DIRECT_PROVIDER_ORDER: readonly ProviderId[] = [
   'openai',
+  'anthropic',
+  'google',
   'deepseek',
   'openrouter',
   'groq',

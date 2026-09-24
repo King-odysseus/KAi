@@ -247,7 +247,21 @@ describe('desktop learning mode', () => {
     settings.learningTutor.enabled = true;
     settings.learningTutor.provider = 'anthropic';
     settings.learningTutor.model = 'claude-sonnet';
-    await expect(tutor().readiness()).resolves.toMatchObject({ supported: false, ready: false });
+    await expect(tutor().readiness()).resolves.toMatchObject({
+      supported: true,
+      ready: true,
+      protocol: 'anthropic-messages',
+      displayName: 'Anthropic Messages API',
+    });
+    settings.learningTutor.provider = 'deepseek';
+    settings.learningTutor.model = 'deepseek-flash';
+    settings.learningTutor.credentialId = 'provider.deepseek';
+    await expect(tutor().readiness()).resolves.toMatchObject({
+      supported: true,
+      ready: true,
+      protocol: 'chat-completions',
+      displayName: 'DeepSeek API',
+    });
     settings.learningTutor.provider = 'openai';
     settings.learningTutor.model = '';
     await expect(tutor().readiness()).resolves.toMatchObject({ ready: false, reason: 'No Learning Tutor model is configured.' });

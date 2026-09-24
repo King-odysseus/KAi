@@ -668,7 +668,13 @@ function ProviderConnectionSection({
         </div>
       </div>
       <FeedbackMessage feedback={credentialFeedback} />
-      <p className="settings-note">{preset.protocol === 'responses' ? 'Uses the OpenAI Responses API. ' : preset.protocol === 'chat-completions' ? 'Uses the OpenAI-compatible Chat Completions API. ' : 'This provider does not support the Learning Mode adapter. '}{title === 'Direct API' ? 'Assistant text streams into Compose, and enabled MCP servers use the same approval rules.' : 'Tutor requests use this connection even when Compose is set to CLI or Direct API is disabled.'}</p>
+      <p className="settings-note">{preset.protocol === 'responses'
+        ? 'Uses the OpenAI Responses API. '
+        : preset.protocol === 'chat-completions'
+          ? 'Uses the OpenAI-compatible Chat Completions API. '
+          : preset.protocol === 'anthropic-messages'
+            ? 'Uses the native Anthropic Messages API. '
+            : 'Uses the native Google Gemini API. '}{title === 'Direct API' ? 'Assistant text streams into Compose, and enabled MCP servers use the same approval rules.' : 'Tutor requests use this connection even when Compose is set to CLI or Direct API is disabled.'}</p>
     </section>
   );
 }

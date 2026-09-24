@@ -18,6 +18,7 @@ export * from './proxy';
 export * from './recovery';
 export * from './rules';
 export * from './search';
+export * from './setup';
 export * from './tasks';
 export * from './updates';
 export * from './terminal';

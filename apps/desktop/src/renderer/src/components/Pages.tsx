@@ -223,11 +223,17 @@ export function WorkflowsView({
   const [route, setRoute] = useState<RouteMode>('direct');
   const [autonomy, setAutonomy] = useState<AutonomyMode>(settings.defaultAutonomy);
   const [model, setModel] = useState('');
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopRounds, setLoopRounds] = useState(3);
+  const [loopCost, setLoopCost] = useState(0);
+  const [loopMinutes, setLoopMinutes] = useState(30);
+  const [loopCheck, setLoopCheck] = useState('');
   const [error, setError] = useState<string | null>(null);
   const activeRun = runs.find((run) => run.workflow.id === activeRunId) ?? null;
   const running = activeRun?.workflow.status === 'running';
   const resumable = Boolean(activeRun && activeRun.workflow.status !== 'completed' && activeRun.workflow.status !== 'running'
-    && activeRun.workflow.steps.some((step) => step.status !== 'completed'));
+    && (activeRun.workflow.steps.some((step) => step.status !== 'completed')
+      || (activeRun.workflow.loop.enabled && (activeRun.workflow.loopProgress?.round ?? 0) < activeRun.workflow.loop.maxRounds)));
 
   function reconcileRun(run: WorkflowRun): void {
     setRuns((current) => [run, ...current.filter((item) => item.workflow.id !== run.workflow.id)]
@@ -259,6 +265,11 @@ export function WorkflowsView({
     setRoute(activeRun.workflow.route);
     setAutonomy(activeRun.workflow.autonomy);
     setModel(activeRun.workflow.model ?? '');
+    setLoopEnabled(activeRun.workflow.loop.enabled);
+    setLoopRounds(activeRun.workflow.loop.maxRounds);
+    setLoopCost(activeRun.workflow.loop.maxCostUsd);
+    setLoopMinutes(activeRun.workflow.loop.maxDurationMinutes);
+    setLoopCheck(activeRun.workflow.loop.checkCommand);
     setSteps(activeRun.workflow.steps.map((step) => ({
       id: step.id,
       agent: step.agent,
@@ -293,6 +304,7 @@ export function WorkflowsView({
         route,
         model: model.trim() || undefined,
         autonomy,
+        loop: { enabled: loopEnabled, maxRounds: loopRounds, maxCostUsd: loopCost, maxDurationMinutes: loopMinutes, checkCommand: loopCheck.trim() },
         createdAt: now,
       }).then(unwrap);
       setTemplates((current) => [...current.filter((item) => item.id !== template.id), template].sort((left, right) => left.name.localeCompare(right.name)));
@@ -323,6 +335,7 @@ export function WorkflowsView({
         execution,
         route,
         autonomy,
+        loop: { enabled: loopEnabled, maxRounds: loopRounds, maxCostUsd: loopCost, maxDurationMinutes: loopMinutes, checkCommand: loopCheck.trim() },
         ...(model.trim() ? { model: model.trim() } : {}),
         steps: executable.map((step) => ({
           id: step.id,
@@ -401,6 +414,11 @@ export function WorkflowsView({
                 setRoute(template.route);
                 setAutonomy(template.autonomy);
                 setModel(template.model ?? '');
+                setLoopEnabled(template.loop.enabled);
+                setLoopRounds(template.loop.maxRounds);
+                setLoopCost(template.loop.maxCostUsd);
+                setLoopMinutes(template.loop.maxDurationMinutes);
+                setLoopCheck(template.loop.checkCommand);
                 event.target.value = '';
               }}
             >
@@ -414,6 +432,29 @@ export function WorkflowsView({
           <label className="workflow-field" htmlFor="workflow-route"><span>Route</span><select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></select></label>
           <label className="workflow-field" htmlFor="workflow-autonomy"><span>Autonomy</span><select id="workflow-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}><option value="plan">Plan</option><option value="ask">Ask</option><option value="autoEdit">Auto-edit</option><option value="full">Full control</option><option value="custom">Custom</option></select></label>
           <label className="workflow-field" htmlFor="workflow-model"><span>Model override</span><input id="workflow-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider or CLI model" /></label>
+        </div>
+        <div className="workflow-loop-panel">
+          <label className="toggle-row workflow-loop-toggle">
+            <span><strong>Loop until the check passes</strong><small>Repeat the workflow, run a check, then stop at the round, cost, or time limit.</small></span>
+            <input type="checkbox" checked={loopEnabled} disabled={running} onChange={(event) => setLoopEnabled(event.target.checked)} />
+          </label>
+          {loopEnabled && (
+            <div className="workflow-loop-fields">
+              <label className="workflow-field"><span>Maximum rounds</span><input type="number" min={1} max={20} value={loopRounds} onChange={(event) => setLoopRounds(clampNumber(event.target.value, 1, 20, 3))} /></label>
+              <label className="workflow-field"><span>Maximum cost (USD, 0 = off)</span><input type="number" min={0} max={10000} step="0.01" value={loopCost} onChange={(event) => setLoopCost(clampNumber(event.target.value, 0, 10_000, 0))} /></label>
+              <label className="workflow-field"><span>Maximum minutes</span><input type="number" min={1} max={1440} value={loopMinutes} onChange={(event) => setLoopMinutes(clampNumber(event.target.value, 1, 1440, 30))} /></label>
+              <label className="workflow-field workflow-loop-check"><span>Check command</span><input value={loopCheck} onChange={(event) => setLoopCheck(event.target.value)} placeholder="npm test" /></label>
+            </div>
+          )}
+          {activeRun?.workflow.loopProgress && (
+            <div className="workflow-loop-progress" role="status">
+              Round {activeRun.workflow.loopProgress.round} of {activeRun.workflow.loop.maxRounds}
+              {' · '}${activeRun.workflow.loopProgress.costUsd.toFixed(4)}
+              {' · '}{Math.round(activeRun.workflow.loopProgress.elapsedMs / 1000)}s
+              {activeRun.workflow.loopProgress.lastCheckPassed === null ? '' : activeRun.workflow.loopProgress.lastCheckPassed ? ' · check passed' : ' · check failed'}
+              {activeRun.workflow.loopProgress.lastCheckOutput && <pre>{activeRun.workflow.loopProgress.lastCheckOutput}</pre>}
+            </div>
+          )}
         </div>
         <div className="workflow-step-list">
           {steps.map((step, index) => (
@@ -535,4 +576,9 @@ function Metric({ label, value, icon }: { label: string; value: string; icon: Re
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'KAI encountered an unexpected error.';
+}
+
+function clampNumber(value: string, minimum: number, maximum: number, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
 }

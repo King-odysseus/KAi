@@ -34,12 +34,9 @@ export async function listProviderModels(
   }
 
   try {
-    const response = await fetch(modelsUrl(request.baseUrl), {
+    const response = await fetch(modelsUrl(request.provider, request.baseUrl), {
       method: 'GET',
-      headers: {
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        Accept: 'application/json',
-      },
+      headers: modelsHeaders(request.provider, apiKey),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
@@ -78,14 +75,37 @@ export function parseModelIds(value: unknown): string[] {
         : typeof record.model === 'string'
           ? record.model
           : '';
-    return [candidate.trim()];
+    return [candidate.trim().replace(/^models\//, '')];
   }).filter(Boolean);
   return [...new Set(models)].sort((left, right) => left.localeCompare(right)).slice(0, 2_000);
 }
 
-function modelsUrl(baseUrl: string): string {
+function modelsUrl(provider: ProviderId, baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
-  return /\/models$/i.test(trimmed) ? trimmed : `${trimmed}/models`;
+  if (/\/models$/i.test(trimmed)) return trimmed;
+  if (provider === 'google') return `${trimmed}/models`;
+  return `${trimmed}/models`;
+}
+
+function modelsHeaders(provider: ProviderId, apiKey: string | undefined): Record<string, string> {
+  if (!apiKey) return { Accept: 'application/json' };
+  if (provider === 'anthropic') {
+    return {
+      Accept: 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    };
+  }
+  if (provider === 'google') {
+    return {
+      Accept: 'application/json',
+      'x-goog-api-key': apiKey,
+    };
+  }
+  return {
+    Accept: 'application/json',
+    Authorization: `Bearer ${apiKey}`,
+  };
 }
 
 function isLocalEndpoint(baseUrl: string): boolean {

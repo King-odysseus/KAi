@@ -52,6 +52,7 @@ export const agentRunResultSchema = z
     status: z.enum(['completed', 'failed']),
     output: z.string(),
     error: z.string().optional(),
+    costUsd: z.number().nonnegative().optional(),
   })
   .strict();
 
