@@ -1171,7 +1171,9 @@ export function App(): ReactNode {
             dataLocations={bootstrap.dataLocations}
             logs={logs}
             busy={Boolean(busy)}
+            services={bootstrap.services}
             onSave={(update) => saveSettings(update)}
+            onControlService={(kind, action) => void controlService(kind, action)}
             onImportBrain={() => void importBrain()}
             onSaveCredential={(id, value) => saveCredential(id, value)}
             onClearCredential={(id) => clearCredential(id)}

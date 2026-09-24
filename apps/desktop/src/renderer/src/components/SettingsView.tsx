@@ -1,8 +1,10 @@
-import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Plug, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { reconcileSettingsDraft } from './settings-draft';
+import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
+import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
-import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, SettingsUpdate } from '@kai/contracts';
+import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
@@ -16,7 +18,29 @@ type FeedbackScope = ProviderScope | 'generic' | 'overwatch';
 type FeedbackKind = 'success' | 'error' | 'pending';
 interface SettingsFeedback { kind: FeedbackKind; message: string }
 
-export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void> }): ReactNode {
+/** What each card is called in the save bar. */
+const GROUP_LABELS: Record<SettingsGroup, string> = {
+  agentDefaults: 'Agent defaults',
+  editor: 'Code editor',
+  shortcuts: 'Keyboard shortcuts',
+  learningTutor: 'Learning Tutor API',
+  directApi: 'Direct API',
+  mcpServers: 'MCP servers',
+  cognitive1: 'C1 Brain',
+  proxy: 'Universal Proxy',
+};
+
+const SERVICE_STATES: Record<ServiceState['status'], string> = {
+  ready: 'Running',
+  starting: 'Starting',
+  stopping: 'Stopping',
+  degraded: 'Degraded',
+  stopped: 'Stopped',
+  failed: 'Failed',
+  not_configured: 'Off',
+};
+
+export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void }): ReactNode {
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
@@ -31,9 +55,14 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
   const [backupError, setBackupError] = useState<string | null>(null);
-  const [saveFeedback, setSaveFeedback] = useState<SettingsFeedback | null>(null);
+  const [cardFeedback, setCardFeedback] = useState<Record<string, SettingsFeedback | null>>({});
 
-  useEffect(() => setDraft(settings), [settings]);
+  const previousSettings = useRef(settings);
+  useEffect(() => {
+    const previous = previousSettings.current;
+    previousSettings.current = settings;
+    setDraft((current) => reconcileSettingsDraft(current, previous, settings));
+  }, [settings]);
   useEffect(() => {
     void refreshBackups();
   }, []);
@@ -165,7 +194,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
       [scope]: {
         kind: 'error',
         message: keySaved
-          ? 'The key was saved, but the provider settings could not be updated. Use Save settings and try again.'
+          ? 'The key was saved, but the provider settings could not be updated. Use this card\'s Save button and try again.'
           : 'The key could not be saved. Check the OS credential vault and try again.',
       },
     }));
@@ -242,38 +271,88 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     }
   }
 
-  async function saveDraft(): Promise<void> {
-    if (shortcutConflictList.length > 0) {
-      setSaveFeedback({ kind: 'error', message: shortcutConflictList[0]! });
+  async function saveGroups(groups: readonly SettingsGroup[], feedbackKey: string): Promise<void> {
+    if (groups.includes('shortcuts') && shortcutConflictList.length > 0) {
+      setCardFeedback((current) => ({ ...current, [feedbackKey]: { kind: 'error', message: shortcutConflictList[0]! } }));
       return;
     }
-    setSaveFeedback({ kind: 'pending', message: 'Saving settings...' });
-    const saved = await onSave({
-      defaultAgent: draft.defaultAgent,
-      defaultRoute: draft.defaultRoute,
-      defaultAutonomy: draft.defaultAutonomy,
-      theme: draft.theme,
-      logRetentionEntries: draft.logRetentionEntries,
-      diagnosticsEnabled: draft.diagnosticsEnabled,
-      notifications: draft.notifications,
-      agentModels: draft.agentModels,
-      directApi: draft.directApi,
-      learningTutor: draft.learningTutor,
-      editor: draft.editor,
-      mcpServers: draft.mcpServers,
-      cognitive1: draft.cognitive1,
-      proxy: draft.proxy,
-      shortcuts: draft.shortcuts,
-    });
-    setSaveFeedback({
-      kind: saved ? 'success' : 'error',
-      message: saved ? 'Settings saved and shared with all open KAI windows.' : 'Settings were not saved. Review the error shown at the top of the window.',
-    });
+    setCardFeedback((current) => ({ ...current, [feedbackKey]: { kind: 'pending', message: 'Saving settings...' } }));
+    const names = groups.map((group) => GROUP_LABELS[group]).join(', ');
+    const saved = await onSave(updateForGroups(draft, groups));
+    setCardFeedback((current) => ({
+      ...current,
+      [feedbackKey]: {
+        kind: saved ? 'success' : 'error',
+        message: saved
+          ? `${names} saved and shared with all open KAI windows.`
+          : 'Settings were not saved. Review the error shown at the top of the window.',
+      },
+    }));
+  }
+
+  function discardDraft(): void {
+    setDraft(settings);
+    setCardFeedback({});
+  }
+
+  const changed = useMemo(() => changedGroups(draft, settings), [draft, settings]);
+  const isDirty = (groups: readonly SettingsGroup[]): boolean => groups.some((group) => changed.includes(group));
+
+  function serviceState(kind: 'cognitive1' | 'universalProxy'): ServiceState {
+    return services.find((service) => service.kind === kind) ?? {
+      kind,
+      status: 'not_configured',
+      detail: 'Service status is unavailable.',
+      endpoint: null,
+      version: null,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /** The Save button for one card. It stays disabled until that card actually changes something. */
+  function cardSave(feedbackKey: string, label: string, groups: readonly SettingsGroup[]): ReactNode {
+    const pending = cardFeedback[feedbackKey]?.kind === 'pending';
+    return (
+      <>
+        <button
+          type="button"
+          className={`primary-button align-end card-save ${isDirty(groups) ? 'dirty' : ''}`}
+          disabled={busy || !isDirty(groups) || pending || (groups.includes('shortcuts') && shortcutConflictList.length > 0)}
+          onClick={() => void saveGroups(groups, feedbackKey)}
+        >
+          <Check size={16} />
+          <span>{pending ? 'Saving' : label}</span>
+        </button>
+        <FeedbackMessage feedback={cardFeedback[feedbackKey] ?? null} />
+      </>
+    );
   }
 
   return (
     <div className="page-view settings-view">
       <PageHeader title="Settings" detail="App-owned configuration and local diagnostics" />
+      <div className={`settings-save-bar ${changed.length > 0 ? 'dirty' : 'saved'}`}>
+        <div className="settings-save-summary">
+          <strong>{changed.length > 0 ? `${changed.length} card${changed.length === 1 ? '' : 's'} with unsaved changes` : 'All changes saved'}</strong>
+          <small>{changed.length > 0 ? changed.map((group) => GROUP_LABELS[group]).join(' · ') : 'Every card below matches what KAI has stored.'}</small>
+        </div>
+        <div className="button-row">
+          <button type="button" className="secondary-button" disabled={busy || changed.length === 0} onClick={discardDraft}>
+            <RotateCcw size={15} />
+            <span>Discard</span>
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy || changed.length === 0 || shortcutConflictList.length > 0 || cardFeedback.all?.kind === 'pending'}
+            onClick={() => void saveGroups(SETTINGS_GROUP_NAMES, 'all')}
+          >
+            <Save size={15} />
+            <span>{cardFeedback.all?.kind === 'pending' ? 'Saving everything' : 'Save all changes'}</span>
+          </button>
+        </div>
+        <FeedbackMessage feedback={cardFeedback.all ?? null} />
+      </div>
       <div className="settings-grid">
         <section className="settings-section">
           <div className="section-title"><Cpu size={17} /><span>Agent defaults</span></div>
@@ -302,10 +381,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <NotificationToggle label="Notify when approval is needed" hint="A tool is waiting for your decision" checked={draft.notifications.onApproval} onChange={(onApproval) => setDraft({ ...draft, notifications: { ...draft.notifications, onApproval } })} />
             <NotificationToggle label="Notify on budget warnings" hint="When a usage limit reaches 80% or 100%" checked={draft.notifications.onBudget} onChange={(onBudget) => setDraft({ ...draft, notifications: { ...draft.notifications, onBudget } })} />
           </div>
-          <button type="button" className="primary-button align-end" disabled={busy || shortcutConflictList.length > 0} onClick={() => void saveDraft()}>
-            <Check size={16} /><span>{saveFeedback?.kind === 'pending' ? 'Saving settings' : 'Save settings'}</span>
-          </button>
-          <FeedbackMessage feedback={saveFeedback} />
+          {cardSave('agentDefaults', 'Save agent defaults', ['agentDefaults'])}
         </section>
 
         <section className="settings-section">
@@ -329,9 +405,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
               />
             </div>
           )}
-          <button type="button" className="primary-button align-end" disabled={busy || shortcutConflictList.length > 0} onClick={() => void saveDraft()}>
-            <Check size={16} /><span>{saveFeedback?.kind === 'pending' ? 'Saving settings' : 'Save editor settings'}</span>
-          </button>
+          {cardSave('editor', 'Save editor settings', ['editor'])}
         </section>
 
         <UpdatesPanel settings={settings} />
@@ -342,12 +416,10 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           <ShortcutEditor
             shortcuts={draft.shortcuts}
             disabled={busy}
-            onChange={(shortcuts) => {
-              setDraft((current) => ({ ...current, shortcuts }));
-              setSaveFeedback(null);
-            }}
+            onChange={(shortcuts) => setDraft((current) => ({ ...current, shortcuts }))}
           />
           {shortcutConflictList.length > 0 && <FeedbackMessage feedback={{ kind: 'error', message: shortcutConflictList[0]! }} />}
+          {cardSave('shortcuts', 'Save shortcuts', ['shortcuts'])}
         </section>
 
         <ProviderConnectionSection
@@ -370,6 +442,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           credentialFeedback={credentialFeedback.learning}
           busy={busy}
           modelListId="learning-tutor-models"
+          saveSlot={cardSave('learningTutor', 'Save Learning Tutor settings', ['learningTutor'])}
           onEnabledChange={(enabled) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, enabled } })}
           onProviderChange={(provider) => updateLearningProvider(provider)}
           onModelChange={(model) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, model } })}
@@ -402,6 +475,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           credentialFeedback={credentialFeedback.direct}
           busy={busy}
           modelListId="direct-api-models"
+          saveSlot={cardSave('directApi', 'Save Direct API settings', ['directApi'])}
           onEnabledChange={(enabled) => setDraft({ ...draft, directApi: { ...draft.directApi, enabled } })}
           onProviderChange={(provider) => updateDirectProvider(provider)}
           onModelChange={(model) => setDraft({ ...draft, directApi: { ...draft.directApi, model } })}
@@ -449,6 +523,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('stdio')] })}><Plus size={15} /><span>Add local server</span></button>
             <button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('http')] })}><Plus size={15} /><span>Add remote server</span></button>
           </div>
+          {cardSave('mcpServers', 'Save MCP servers', ['mcpServers'])}
         </section>
 
         <section className="settings-section">
@@ -473,6 +548,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
                 <span><strong>C1 Brain</strong><small>Run the pinned Cognitive1 daemon locally</small></span>
                 <input type="checkbox" checked={draft.cognitive1.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, enabled: event.target.checked } })} />
               </label>
+              <ServiceStatusLine kind="cognitive1" service={serviceState('cognitive1')} busy={busy} onStart={() => onControlService('cognitive1', 'start')} onRestart={() => onControlService('cognitive1', 'restart')} />
               <div className="field-grid">
                 <TextField label="Endpoint" value={draft.cognitive1.endpoint} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, endpoint: value } })} />
                 <TextField label="Brain data path" value={draft.cognitive1.dataPath ?? ''} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, dataPath: value || null } })} />
@@ -554,7 +630,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
                 <FeedbackMessage feedback={credentialFeedback.overwatch} />
                 <p className={`settings-note ${overwatchCredentialReady ? 'ready' : ''}`}>
                   {overwatchCredentialReady
-                    ? 'Credential stored in the OS vault. Save settings to restart C1 with this Overwatch configuration.'
+                    ? 'Credential stored in the OS vault. Save this card to restart C1 with this Overwatch configuration.'
                     : 'No credential stored for this ID. Save a key and enable Overwatch to make it ready.'}
                 </p>
               </div>
@@ -565,18 +641,22 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
                 </button>
                 <span className="settings-note">Copies missing brain entries from another Cognitive1 folder and reloads C1.</span>
               </div>
+              {cardSave('cognitive1', 'Save C1 settings', ['cognitive1'])}
             </div>
             <div className="service-setting">
               <label className="toggle-row">
                 <span><strong>Universal Proxy</strong><small>Run the pinned proxy on loopback only</small></span>
                 <input type="checkbox" checked={draft.proxy.enabled} onChange={(event) => setDraft({ ...draft, proxy: { ...draft.proxy, enabled: event.target.checked } })} />
               </label>
+              <ServiceStatusLine kind="universalProxy" service={serviceState('universalProxy')} busy={busy} onStart={() => onControlService('universalProxy', 'start')} onRestart={() => onControlService('universalProxy', 'restart')} />
               <div className="field-grid">
                 <NumberField label="Port" value={draft.proxy.port} min={1024} max={65535} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, port: value } })} />
                 <SelectField label="Credential" value={draft.proxy.credentialId} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, credentialId: value } })} options={[...new Set(DIRECT_PROVIDER_ORDER.map((id) => directProviderPreset(id).credentialId)), 'proxy.main']} />
                 <TextField label="Upstream URL" value={draft.proxy.targetBaseUrl} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, targetBaseUrl: value } })} />
                 <TextField label="Default model" value={draft.proxy.defaultModel} onChange={(value) => setDraft({ ...draft, proxy: { ...draft.proxy, defaultModel: value } })} />
               </div>
+              <p className="settings-note">Route your CLIs through KAI by selecting Proxy in Compose. If another program already holds this port, KAI moves its own proxy to the next free one and saves it here.</p>
+              {cardSave('proxy', 'Save proxy settings', ['proxy'])}
             </div>
           </div>
         </section>
@@ -629,6 +709,26 @@ function PageHeader({ title, detail }: { title: string; detail: string }): React
   return <header className="page-header"><div><h1>{title}</h1><p>{detail}</p></div></header>;
 }
 
+/** The live state of a managed service, so "enabled but not running" shows its reason here and not only on its own page. */
+function ServiceStatusLine({ kind, service, busy, onStart, onRestart }: { kind: ServiceState['kind']; service: ServiceState; busy: boolean; onStart: () => void; onRestart: () => void }): ReactNode {
+  const running = service.status === 'ready';
+  return (
+    <div className={`service-status ${service.status}`}>
+      <div className="service-status-head">
+        <span className="service-status-dot" aria-hidden="true" />
+        <strong>{SERVICE_STATES[service.status]}</strong>
+        {service.endpoint && <code>{service.endpoint}</code>}
+        <button type="button" className="secondary-button compact" disabled={busy} onClick={running ? onRestart : onStart}>
+          {running ? <RefreshCw size={14} /> : <Play size={14} />}
+          <span>{running ? 'Restart' : 'Start'}</span>
+        </button>
+      </div>
+      <p>{service.detail}</p>
+      {service.restartsExhausted === true && <p className="service-status-warning">Automatic restarts stopped after {service.restarts ?? 0} crashes. Start {kind === 'cognitive1' ? 'C1' : 'the proxy'} again once the cause is fixed.</p>}
+    </div>
+  );
+}
+
 function ProviderConnectionSection({
   title,
   icon,
@@ -650,6 +750,7 @@ function ProviderConnectionSection({
   busy,
   modelListId,
   vaultAvailable,
+  saveSlot,
   onEnabledChange,
   onProviderChange,
   onModelChange,
@@ -680,6 +781,7 @@ function ProviderConnectionSection({
   busy: boolean;
   modelListId: string;
   vaultAvailable: boolean;
+  saveSlot: ReactNode;
   onEnabledChange: (enabled: boolean) => void;
   onProviderChange: (provider: AppSettings['directApi']['provider']) => void;
   onModelChange: (model: string) => void;
@@ -737,6 +839,7 @@ function ProviderConnectionSection({
           : preset.protocol === 'anthropic-messages'
             ? 'Uses the native Anthropic Messages API. '
             : 'Uses the native Google Gemini API. '}{title === 'Direct API' ? 'Assistant text streams into Compose, and enabled MCP servers use the same approval rules.' : 'Tutor requests use this connection even when Compose is set to CLI or Direct API is disabled.'}</p>
+      {saveSlot}
     </section>
   );
 }

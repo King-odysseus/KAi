@@ -54,6 +54,24 @@ export async function moveOffStandalonePort(
   return null;
 }
 
+/**
+ * A configured port can be owned by a foreign program: the standalone Universal Proxy, another copy of KAI, or
+ * an unrelated tool. Moving the managed service to the next free loopback port keeps "Enable" working instead
+ * of leaving the service stuck on an address-in-use failure. Returns the port to use, or null to keep the one
+ * that is configured — either because it is free, or because nothing nearby is free either.
+ */
+export async function moveOffBusyPort(
+  port: number,
+  isFree: (port: number) => Promise<boolean> = isLoopbackPortFree,
+): Promise<number | null> {
+  if (!Number.isInteger(port) || port < 1024 || port > 65_535) return null;
+  if (await isFree(port)) return null;
+  for (let candidate = port + 1; candidate <= 65_535 && candidate < port + 50; candidate += 1) {
+    if (await isFree(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** A plain-language message for the most common start failure. */
 export function explainStartFailure(kind: ServiceKind, endpoint: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -80,6 +98,8 @@ export interface ServiceControllerOptions {
   environment?: NodeJS.ProcessEnv;
   executablePath?: string;
   restartPolicy?: import('@kai/integrations').RestartPolicyOptions;
+  /** Loopback port probe. Overridden in tests so port conflicts do not depend on the machine running them. */
+  isPortFree?: (port: number) => Promise<boolean>;
 }
 
 export interface ServiceLoopbackAccess {
@@ -133,8 +153,9 @@ export class DesktopServiceController {
     const current = this.manager.getState(kind).status;
     if (current === 'ready' || current === 'starting') return this.status();
 
+    const isPortFree = this.options.isPortFree ?? isLoopbackPortFree;
     if (kind === 'cognitive1') {
-      const moved = await moveOffStandalonePort(settings.cognitive1.endpoint);
+      const moved = await moveOffStandalonePort(settings.cognitive1.endpoint, isPortFree);
       if (moved) {
         settings = { ...settings, cognitive1: { ...settings.cognitive1, endpoint: moved } };
         await this.options.settings.update((current) => ({
@@ -142,6 +163,17 @@ export class DesktopServiceController {
           cognitive1: { ...current.cognitive1, endpoint: moved },
         }));
         this.options.logger.info('internal', `Cognitive1 endpoint moved to ${moved} because the standalone daemon uses port ${STANDALONE_COGNITIVE1_PORT}`);
+      }
+    } else {
+      const requested = settings.proxy.port;
+      const moved = await moveOffBusyPort(requested, isPortFree);
+      if (moved) {
+        settings = { ...settings, proxy: { ...settings.proxy, port: moved } };
+        await this.options.settings.update((current) => ({
+          ...current,
+          proxy: { ...current.proxy, port: moved },
+        }));
+        this.options.logger.info('internal', `Universal Proxy port moved to ${moved} because port ${requested} is already in use`);
       }
     }
 

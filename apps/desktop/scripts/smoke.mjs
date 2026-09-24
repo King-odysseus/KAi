@@ -175,8 +175,12 @@ try {
     throw new Error(`Learning Tutor provider presets are incomplete: ${learningProviderOptions.join(', ')}`);
   }
   await verifySelectContrast(providerSelect, 'Direct API provider');
-  await page.getByRole('button', { name: 'Save settings' }).click();
-  await page.waitForTimeout(250);
+  // The save bar is always on screen and reports the state of every card, including the managed services.
+  await page.getByText('All changes saved').waitFor();
+  await page.locator('.service-status').first().waitFor();
+  if (await page.locator('.service-status').count() < 2) {
+    throw new Error('Managed services did not show live status for C1 and the Universal Proxy.');
+  }
   await assertNoErrorBanner(page);
   await assertPageContentFillsWidth(page, '.settings-grid');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });

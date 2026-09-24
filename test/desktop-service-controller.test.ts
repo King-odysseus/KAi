@@ -1,10 +1,22 @@
-import { describe, expect, it } from 'vitest';
-import { createDefaultSettings } from '../packages/contracts/src';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createDefaultSettings, type AppSettings } from '../packages/contracts/src';
+import { createDesktopPaths } from '../apps/desktop/src/main/paths';
 import {
   cognitive1OverwatchEnvironment,
+  DesktopServiceController,
   explainStartFailure,
+  moveOffBusyPort,
   moveOffStandalonePort,
 } from '../apps/desktop/src/main/service-controller';
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })));
+});
 
 describe('managed Cognitive1 port', () => {
   const taken = (...ports: number[]) => async (port: number) => !ports.includes(port);
@@ -37,6 +49,56 @@ describe('managed Cognitive1 port', () => {
     );
     expect(explainStartFailure('universalProxy', 'http://127.0.0.1:8082', busy)).toContain('the Universal Proxy could not start');
     expect(explainStartFailure('cognitive1', 'http://127.0.0.1:9877', new Error('boom'))).toBe('boom');
+  });
+});
+
+describe('managed Universal Proxy port', () => {
+  const taken = (...ports: number[]) => async (port: number) => !ports.includes(port);
+
+  it('keeps the configured port when nothing else owns it', async () => {
+    expect(await moveOffBusyPort(8082, taken())).toBeNull();
+  });
+
+  it('moves to the next free port when the standalone proxy already owns the configured one', async () => {
+    expect(await moveOffBusyPort(8082, taken(8082))).toBe(8083);
+    expect(await moveOffBusyPort(8082, taken(8082, 8083, 8084))).toBe(8085);
+  });
+
+  it('ignores values that cannot be a service port and gives up cleanly when nothing nearby is free', async () => {
+    expect(await moveOffBusyPort(80, taken(80))).toBeNull();
+    expect(await moveOffBusyPort(70_000, taken())).toBeNull();
+    expect(await moveOffBusyPort(8082, async () => false)).toBeNull();
+  });
+
+  it('saves the new port before launching, so the proxy route uses it on the next start too', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-service-'));
+    temporaryDirectories.push(root);
+    const settings: AppSettings = { ...createDefaultSettings(), proxy: { ...createDefaultSettings().proxy, enabled: true, port: 8082 } };
+    const updates: Array<Partial<AppSettings>> = [];
+    const controller = new DesktopServiceController({
+      paths: createDesktopPaths(root),
+      settings: {
+        load: async () => settings,
+        update: async (mutate: (current: AppSettings) => AppSettings) => {
+          Object.assign(settings, mutate(settings));
+          updates.push({ proxy: settings.proxy });
+          return settings;
+        },
+      },
+      credentials: { isAvailable: () => false, get: async () => null, has: async () => false, set: async () => undefined },
+      logger: { info: () => undefined, warn: () => undefined, error: () => undefined, child: () => undefined },
+      kaiRoot: root,
+      resourcesPath: root,
+      proxyLauncherPath: path.join(root, 'proxy-launcher.cjs'),
+      isPortFree: async (port: number) => port !== 8082,
+    } as unknown as ConstructorParameters<typeof DesktopServiceController>[0]);
+
+    // The engine is not installed in this temporary root, so the launch itself fails after the port has moved.
+    await controller.start('universalProxy').catch(() => undefined);
+
+    expect(settings.proxy.port).toBe(8083);
+    expect(updates).toHaveLength(1);
+    await controller.dispose();
   });
 });
 
