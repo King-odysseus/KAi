@@ -30,6 +30,22 @@ function providerUrl(hostAndPath: string): string {
   return `https://${hostAndPath}`;
 }
 
+const DEEPSEEK_MODEL_MIGRATIONS: Readonly<Record<string, string>> = {
+  'deepseek-v3': 'deepseek-v4-pro',
+  'deepseek-v3.1': 'deepseek-v4-pro',
+  'deepseek-chat': 'deepseek-v4-pro',
+  'deepseek-reasoner': 'deepseek-v4-pro',
+  'deepseek-v4-flash': 'deepseek-flash',
+  'deepseek-v4.1-flash': 'deepseek-flash',
+  'deepseek-v4.1-pro': 'deepseek-v4-pro',
+  'deepseek-v4-pro-0813': 'deepseek-v4-pro',
+};
+
+export function migrateDeepSeekModel(model: string): string {
+  const trimmed = model.trim();
+  return DEEPSEEK_MODEL_MIGRATIONS[trimmed.toLowerCase()] ?? trimmed;
+}
+
 export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProviderPreset>> = {
   openai: {
     id: 'openai',
@@ -79,13 +95,8 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
     credentialId: 'provider.deepseek',
     supportsTools: true,
     models: [
-      'deepseek-v4-flash',
+      'deepseek-flash',
       'deepseek-v4-pro',
-      'deepseek-v4.1-flash',
-      'DeepSeek-V4.1-Flash',
-      'DeepSeek-V4-Pro-0813',
-      'deepseek-chat',
-      'deepseek-reasoner',
     ],
   },
   openrouter: {

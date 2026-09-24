@@ -34,7 +34,7 @@ import type {
 } from '@kai/contracts';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
-import { LearningPanel } from './LearningPanel';
+import { LearningPanel, type LearningSelectionPreview } from './LearningPanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 
 interface TreeNode {
@@ -55,6 +55,19 @@ interface OpenDocument {
 const normalise = (text: string): string => text.replace(/\r\n/g, '\n');
 const POLL_MS = 3_000;
 const MAX_LEARNING_CODE = 120_000;
+
+function sameLearningSelection(
+  left: LearningSelectionPreview | null,
+  right: LearningSelectionPreview | null,
+): boolean {
+  return left === right || Boolean(left && right
+    && left.filePath === right.filePath
+    && left.startLine === right.startLine
+    && left.startColumn === right.startColumn
+    && left.endLine === right.endLine
+    && left.endColumn === right.endColumn
+    && left.text === right.text);
+}
 
 function buildTree(files: readonly ProjectFileEntry[]): TreeNode {
   const root: TreeNode = { name: '', path: '', children: new Map(), file: false };
@@ -230,6 +243,7 @@ export function CodeView({
   const [learningResult, setLearningResult] = useState<LearningEvaluationResult | null>(null);
   const [learningBusy, setLearningBusy] = useState<LearningAction | 'record' | null>(null);
   const [learningError, setLearningError] = useState<string | null>(null);
+  const [learningSelection, setLearningSelection] = useState<LearningSelectionPreview | null>(null);
   const [question, setQuestion] = useState('');
   const [gitInfo, setGitInfo] = useState<GitFileInfo | null>(null);
   const [formatting, setFormatting] = useState(false);
@@ -256,6 +270,31 @@ export function CodeView({
   openPathsRef.current = openPaths;
   projectIdRef.current = projectId;
   learningStateRef.current = { projectId, filePath: activePath, assistance, inlineSuggestions, progress };
+
+  const syncLearningSelection = useCallback((): void => {
+    const path = activeRef.current;
+    const document = path ? documents.current.get(path) : undefined;
+    const editor = editorRef.current;
+    if (!path || !document || !editor || editor.getModel() !== document.model) {
+      setLearningSelection((current) => current === null ? current : null);
+      return;
+    }
+    const selection = editor.getSelection();
+    const cursor = editor.getPosition();
+    const next: LearningSelectionPreview = {
+      filePath: path,
+      startLine: selection?.startLineNumber ?? cursor?.lineNumber ?? 1,
+      startColumn: selection?.startColumn ?? cursor?.column ?? 1,
+      endLine: selection?.endLineNumber ?? cursor?.lineNumber ?? 1,
+      endColumn: selection?.endColumn ?? cursor?.column ?? 1,
+      text: selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 4_000) : '',
+    };
+    setLearningSelection((current) => sameLearningSelection(current, next) ? current : next);
+  }, []);
+
+  useEffect(() => {
+    syncLearningSelection();
+  }, [activePath, editorReady, syncLearningSelection]);
 
   const reportDocument = useCallback((documentProjectId: string, path: string, document: OpenDocument): void => {
     void window.kaiDesktop.updateEditorDocument({
@@ -362,6 +401,8 @@ export function CodeView({
       });
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void saveActive());
       editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Backslash, () => editor.trigger('keyboard', 'editor.action.inlineSuggest.trigger', {}));
+      disposables.push(editor.onDidChangeCursorSelection(syncLearningSelection));
+      disposables.push(editor.onDidChangeModel(syncLearningSelection));
 
       disposables.push(monaco.languages.registerCodeActionProvider('*', {
         provideCodeActions(model) {
@@ -693,6 +734,7 @@ export function CodeView({
       setLearningError('Open a file before using Learning Mode.');
       return null;
     }
+    setTutorOpen(true);
     if (action === 'explain-selection' && editor.getSelection()?.isEmpty()) {
       setLearningError('Select some code before asking for a selection explanation.');
       return null;
@@ -1000,6 +1042,7 @@ export function CodeView({
           progress={progress}
           readiness={readiness}
           result={learningResult}
+          selection={learningSelection}
           gitInfo={gitInfo}
           busy={learningBusy}
           formatting={formatting}
@@ -1048,11 +1091,14 @@ function learningRequestStillCurrent(
   if (!document || document.version !== request.documentVersion) return false;
   if (!request.selection) return true;
   const selection = editor.getSelection();
-  return Boolean(selection
-    && selection.startLineNumber === request.selection.startLine
+  if (!selection) return false;
+  if (
+    selection.startLineNumber === request.selection.startLine
     && selection.startColumn === request.selection.startColumn
     && selection.endLineNumber === request.selection.endLine
-    && selection.endColumn === request.selection.endColumn);
+    && selection.endColumn === request.selection.endColumn
+  ) return true;
+  return Boolean(request.selectedText && document.model.getValueInRange(selection) === request.selectedText);
 }
 
 function progressRef(progress: LearningProgress | null): LearningProgress['concepts'] {

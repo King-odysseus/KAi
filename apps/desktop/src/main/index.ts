@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, directProviderPreset, migrateDeepSeekModel } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { DesktopAgentRuntime } from './agent-runtime';
@@ -318,8 +318,6 @@ async function startApplication(): Promise<void> {
     .catch((error) => logger.error('service_error', 'Managed service startup failed', undefined, error));
 }
 
-const LEGACY_DEEPSEEK_MODELS = new Set(['deepseek-flash', 'deepseek-v3', 'deepseek-v3.1']);
-
 async function repairProviderSettings(
   settings: SettingsService,
   credentials: CredentialVault,
@@ -328,8 +326,9 @@ async function repairProviderSettings(
   const model = current.directApi.model.trim();
   const currentPreset = directProviderPreset(current.directApi.provider);
   const storedCredentials = new Set(await credentials.status());
+  const repairedDeepSeekModel = migrateDeepSeekModel(model);
   const deprecatedDeepSeekModel = current.directApi.provider === 'deepseek'
-    && LEGACY_DEEPSEEK_MODELS.has(model);
+    && repairedDeepSeekModel !== model;
   let directApi = current.directApi;
   let changed = false;
 
@@ -337,7 +336,7 @@ async function repairProviderSettings(
     if (storedCredentials.has(current.directApi.credentialId)) {
       directApi = {
         ...current.directApi,
-        model: currentPreset.defaultModel,
+        model: deprecatedDeepSeekModel ? repairedDeepSeekModel : currentPreset.defaultModel,
         baseUrl: currentPreset.defaultBaseUrl,
       };
       changed = true;
@@ -360,25 +359,21 @@ async function repairProviderSettings(
   }
 
   let proxy = current.proxy;
-  if (
-    current.proxy.credentialId === 'provider.deepseek'
-    && LEGACY_DEEPSEEK_MODELS.has(current.proxy.defaultModel.trim())
-  ) {
+  const repairedProxyModel = migrateDeepSeekModel(current.proxy.defaultModel);
+  if (current.proxy.credentialId === 'provider.deepseek' && repairedProxyModel !== current.proxy.defaultModel.trim()) {
     proxy = {
       ...current.proxy,
-      defaultModel: directProviderPreset('deepseek').defaultModel,
+      defaultModel: repairedProxyModel,
     };
     changed = true;
   }
 
   let learningTutor = current.learningTutor;
-  if (
-    learningTutor.provider === 'deepseek'
-    && LEGACY_DEEPSEEK_MODELS.has(learningTutor.model.trim())
-  ) {
+  const repairedLearningModel = migrateDeepSeekModel(learningTutor.model);
+  if (learningTutor.provider === 'deepseek' && repairedLearningModel !== learningTutor.model.trim()) {
     learningTutor = {
       ...learningTutor,
-      model: directProviderPreset('deepseek').defaultModel,
+      model: repairedLearningModel,
       baseUrl: directProviderPreset('deepseek').defaultBaseUrl,
     };
     changed = true;

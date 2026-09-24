@@ -5,6 +5,7 @@ import {
   conversationRecordV1Schema,
   createDefaultSettings,
   directProviderPreset,
+  migrateDeepSeekModel,
   migrateConversation,
   migrateSettings,
   parseIpcInput,
@@ -37,8 +38,11 @@ describe('desktop contracts', () => {
     });
     expect(directProviderPreset('deepseek')).toMatchObject({
       defaultModel: 'deepseek-v4-pro',
-      models: expect.arrayContaining(['deepseek-v4-flash', 'deepseek-v4-pro', 'DeepSeek-V4-Pro-0813', 'deepseek-chat']),
+      models: ['deepseek-flash', 'deepseek-v4-pro'],
     });
+    expect(migrateDeepSeekModel('deepseek-flash')).toBe('deepseek-flash');
+    expect(migrateDeepSeekModel('deepseek-v4.1-flash')).toBe('deepseek-flash');
+    expect(migrateDeepSeekModel('DeepSeek-V4-Pro-0813')).toBe('deepseek-v4-pro');
     expect(directProviderPreset('openrouter')).toMatchObject({
       defaultModel: 'openai/gpt-6-astra',
       models: expect.arrayContaining([
@@ -306,6 +310,11 @@ describe('desktop contracts', () => {
       baseUrl: 'https://api.deepseek.com',
       credentialId: 'provider.deepseek',
     });
+
+    const completeLegacy = { ...createDefaultSettings(), directApi: migrated.directApi } as Record<string, unknown>;
+    delete completeLegacy.learningTutor;
+    expect(appSettingsV1Schema.safeParse(completeLegacy).success).toBe(false);
+    expect(migrateSettings(completeLegacy).learningTutor).toEqual(migrated.learningTutor);
   });
 
   it('normalizes legacy stdio MCP settings and accepts remote HTTP MCP settings', () => {

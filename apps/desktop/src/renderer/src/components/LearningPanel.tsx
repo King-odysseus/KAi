@@ -18,7 +18,7 @@ import {
   Sparkles,
   WandSparkles,
 } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
   GitFileInfo,
   LearningAction,
@@ -39,6 +39,7 @@ interface LearningPanelProps {
   progress: LearningProgress | null;
   readiness: LearningReadiness | null;
   result: LearningEvaluationResult | null;
+  selection: LearningSelectionPreview | null;
   gitInfo: GitFileInfo | null;
   busy: LearningAction | 'record' | null;
   formatting: boolean;
@@ -58,6 +59,15 @@ interface LearningPanelProps {
   onGenerateTeachingDraft: (input: TeachingDraftGenerateInput) => Promise<TeachingDraft>;
   onOpenSettings: () => void;
   onClose: () => void;
+}
+
+export interface LearningSelectionPreview {
+  filePath: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  text: string;
 }
 
 const assistanceOptions: Array<{ id: LearningAssistance; label: string }> = [
@@ -81,6 +91,7 @@ export function LearningPanel({
   progress,
   readiness,
   result,
+  selection,
   gitInfo,
   busy,
   formatting,
@@ -109,6 +120,13 @@ export function LearningPanel({
   const overallScore = useMemo(() => concepts.length
     ? Math.round(concepts.reduce((total, concept) => total + concept.score, 0) / concepts.length)
     : 0, [concepts]);
+  const selectionKey = selection?.text.trim()
+    ? `${selection.filePath}:${selection.startLine}:${selection.startColumn}:${selection.endLine}:${selection.endColumn}`
+    : '';
+
+  useEffect(() => {
+    if (selectionKey) setTab('tutor');
+  }, [selectionKey]);
 
   return (
     <aside className="learning-panel" aria-label="Learning tutor">
@@ -185,12 +203,10 @@ export function LearningPanel({
         {tab === 'tutor' && (
           <TutorContent
             response={response}
-            question={question}
+            selection={selection}
             busy={Boolean(busy)}
-            onQuestionChange={onQuestionChange}
             onAction={onAction}
             onInsertSuggestion={onInsertSuggestion}
-            onRecordLesson={onRecordLesson}
           />
         )}
         {tab === 'progress' && <ProgressContent progress={progress} />}
@@ -206,40 +222,48 @@ export function LearningPanel({
         )}
         {tab === 'git' && <GitContent info={gitInfo} formatting={formatting} onFormat={onFormat} />}
       </div>
+      {tab === 'tutor' && (
+        <TutorComposer
+          question={question}
+          busy={Boolean(busy)}
+          selection={selection}
+          response={Boolean(response)}
+          onQuestionChange={onQuestionChange}
+          onAction={onAction}
+          onRecordLesson={onRecordLesson}
+        />
+      )}
     </aside>
   );
 }
 
 function TutorContent({
   response,
-  question,
+  selection,
   busy,
-  onQuestionChange,
   onAction,
   onInsertSuggestion,
-  onRecordLesson,
 }: {
   response: LearningEvaluationResult['response'] | null;
-  question: string;
+  selection: LearningSelectionPreview | null;
   busy: boolean;
-  onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onInsertSuggestion: () => void;
-  onRecordLesson: () => void;
 }): ReactNode {
   if (!response) {
     return (
-      <div className="learning-empty">
-        <span><Sparkles size={20} /></span>
-        <strong>Start with a small question</strong>
-        <p>Ask about the selection, request a hint, or check the code you have written.</p>
-        <textarea value={question} onChange={(event) => onQuestionChange(event.target.value)} placeholder="What are you trying to understand?" rows={3} />
-        <button type="button" className="primary-button" disabled={busy} onClick={() => onAction('next-step')}><Send size={13} />Ask tutor</button>
+      <div className="learning-tutor-start">
+        <div className="learning-start-intro">
+          <span><Sparkles size={18} /></span>
+          <div><strong>Ask about this code</strong><p>Use the current selection or your whole file as context.</p></div>
+        </div>
+        <SelectionContext selection={selection} busy={busy} onAction={onAction} />
       </div>
     );
   }
   return (
     <div className="learning-response">
+      <SelectionContext selection={selection} busy={busy} onAction={onAction} />
       <header>
         <span className="learning-mastery introduced">Tutor response</span>
         <h2>{response.title}</h2>
@@ -286,13 +310,6 @@ function TutorContent({
         </LearningSection>
       )}
       {response.followUpQuestion && <div className="learning-question"><Lightbulb size={14} /><span>{response.followUpQuestion}</span></div>}
-      <div className="learning-question-box">
-        <textarea value={question} onChange={(event) => onQuestionChange(event.target.value)} placeholder="Answer the tutor or ask a follow-up" rows={3} />
-        <div className="learning-question-actions">
-          <button type="button" className="secondary-button" onClick={onRecordLesson}><Save size={13} />Record lesson</button>
-          <button type="button" className="primary-button" disabled={busy} onClick={() => onAction('next-step')}><Send size={13} />Ask</button>
-        </div>
-      </div>
       {response.suggestion && (
         <div className="learning-suggestion">
           <div><Sparkles size={14} /><strong>Suggested change</strong></div>
@@ -310,6 +327,94 @@ function TutorContent({
       )}
     </div>
   );
+}
+
+function SelectionContext({
+  selection,
+  busy,
+  onAction,
+}: {
+  selection: LearningSelectionPreview | null;
+  busy: boolean;
+  onAction: (action: LearningAction) => void;
+}): ReactNode {
+  if (!selection) return null;
+  const selected = selection.text.trim().length > 0;
+  return (
+    <section className={`learning-selection-context ${selected ? 'attached' : ''}`} aria-live="polite">
+      <header>
+        <div><FileCode2 size={14} /><strong>{selected ? 'Selected code' : 'Current file'}</strong></div>
+        <span>{selected ? 'Attached' : 'No selection'}</span>
+      </header>
+      <div className="learning-selection-meta">
+        <code title={selection.filePath}>{selection.filePath}</code>
+        <small>{formatSelectionRange(selection, selected)}</small>
+      </div>
+      {selected ? <pre><code>{selection.text}</code></pre> : <p>No selection attached.</p>}
+      {selected && (
+        <button type="button" className="secondary-button learning-selection-action" disabled={busy} onClick={() => onAction('explain-selection')}>
+          <Code2 size={13} />Explain selection
+        </button>
+      )}
+    </section>
+  );
+}
+
+function TutorComposer({
+  question,
+  busy,
+  selection,
+  response,
+  onQuestionChange,
+  onAction,
+  onRecordLesson,
+}: {
+  question: string;
+  busy: boolean;
+  selection: LearningSelectionPreview | null;
+  response: boolean;
+  onQuestionChange: (value: string) => void;
+  onAction: (action: LearningAction) => void;
+  onRecordLesson?: () => void;
+}): ReactNode {
+  const selected = Boolean(selection?.text.trim());
+  const contextLabel = selection
+    ? `${selection.filePath.split('/').at(-1) ?? selection.filePath} - ${formatSelectionRange(selection, selected)}`
+    : 'No file open';
+  return (
+    <div className={`learning-composer ${response ? 'follow-up' : 'initial'}`}>
+      <header>
+        <div><Sparkles size={14} /><strong>{response ? 'Follow up' : 'Tutor prompt'}</strong></div>
+        <span>{selected ? 'Selection context' : 'File context'}</span>
+      </header>
+      <textarea
+        aria-label="Tutor question"
+        value={question}
+        onChange={(event) => onQuestionChange(event.target.value)}
+        placeholder={selected ? 'Ask about the selected code...' : 'Ask about this file...'}
+        rows={response ? 3 : 4}
+      />
+      <footer>
+        <span title={selection?.filePath ?? undefined}>{contextLabel}</span>
+        <div>
+          {response && onRecordLesson && (
+            <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
+          )}
+          <button type="button" className="primary-button" disabled={busy || !selection} onClick={() => onAction('next-step')}>
+            {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
+            <span>{response ? 'Ask' : 'Ask tutor'}</span>
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function formatSelectionRange(selection: LearningSelectionPreview, selected: boolean): string {
+  if (!selected) return `Line ${selection.startLine}`;
+  return selection.startLine === selection.endLine
+    ? `L${selection.startLine}:${selection.startColumn}-${selection.endColumn}`
+    : `L${selection.startLine}:${selection.startColumn}-L${selection.endLine}:${selection.endColumn}`;
 }
 
 function ProgressContent({ progress }: { progress: LearningProgress | null }): ReactNode {

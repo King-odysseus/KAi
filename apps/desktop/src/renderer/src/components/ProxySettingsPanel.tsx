@@ -47,7 +47,7 @@ const PROXY_PRESETS: ProxyPreset[] = [
   },
   {
     id: 'deepseek',
-    label: 'DeepSeek Flash 4.1 (OpenAI)',
+    label: 'DeepSeek Flash (OpenAI)',
     baseUrl: 'https://api.deepseek.com',
     defaultModel: 'deepseek-flash',
     credentialId: 'provider.deepseek',
@@ -55,7 +55,7 @@ const PROXY_PRESETS: ProxyPreset[] = [
   },
   {
     id: 'deepseek-anthropic',
-    label: 'DeepSeek Flash 4.1 (Anthropic pass-through)',
+    label: 'DeepSeek Flash (Anthropic pass-through)',
     baseUrl: 'https://api.deepseek.com/anthropic',
     defaultModel: 'deepseek-flash',
     credentialId: 'provider.deepseek',

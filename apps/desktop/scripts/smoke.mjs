@@ -94,7 +94,7 @@ try {
       throw new Error('Universal Agent Proxy did not reach ready state in the desktop host.');
     }
     const repairedSettings = JSON.parse(await readFile(path.join(userDataDirectory, 'settings.json'), 'utf8'));
-    if (repairedSettings.proxy?.defaultModel !== 'deepseek-v4-pro') {
+    if (repairedSettings.proxy?.defaultModel !== 'deepseek-flash') {
       throw new Error(`Deprecated proxy model was not repaired: ${JSON.stringify(repairedSettings.proxy)}`);
     }
     const proxyAccess = await verifyAuthenticatedLoopback(electronApp, page, enginePorts);
@@ -396,10 +396,22 @@ async function verifyCodeLearningWorkspace(application, page) {
   await page.locator('.code-view').waitFor();
   await page.getByRole('button', { name: 'AGENTS.md' }).click();
   await page.locator('.learning-panel').waitFor();
-  const explain = page.getByRole('button', { name: 'Explain file', exact: true });
+  await page.locator('.monaco-editor').click();
+  await page.keyboard.press('Control+A');
+  const selectionContext = page.locator('.learning-selection-context');
+  await selectionContext.getByText('Selected code', { exact: true }).waitFor();
+  await selectionContext.getByText('Attached', { exact: true }).waitFor();
+  await page.getByLabel('Tutor question').waitFor();
+  const explain = selectionContext.getByRole('button', { name: 'Explain selection', exact: true });
   await explain.click();
-  await page.getByRole('heading', { name: 'KAI Learning Mode response', level: 2 }).waitFor({ timeout: 20_000 });
+  try {
+    await page.getByRole('heading', { name: 'KAI Learning Mode response', level: 2 }).waitFor({ timeout: 20_000 });
+  } catch (error) {
+    const panelText = await page.locator('.learning-panel').innerText().catch(() => '<panel unavailable>');
+    throw new Error(`The selected-code tutor response did not render. Panel text: ${panelText}`, { cause: error });
+  }
   await page.getByText('Variables hold changing values.').waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'code-learning-tutor-1440x920.png') });
   await page.getByRole('tab', { name: 'Progress' }).click();
   await page.getByText('Variables', { exact: true }).waitFor();
   await page.getByRole('tab', { name: 'Teaching' }).click();
@@ -420,6 +432,7 @@ async function verifyCodeLearningWorkspace(application, page) {
   await page.screenshot({ path: path.join(outputDirectory, 'teaching-library-960x640.png') });
   await page.getByRole('tab', { name: 'Tutor' }).click();
   await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'code-learning-tutor-960x640.png') });
   await resizeWindow(application, 1440, 920);
 }
 
@@ -674,7 +687,7 @@ async function writeEngineSettings(directory, ports) {
       enabled: true,
       port: ports.universalProxy,
       targetBaseUrl: 'http://127.0.0.1:19999/v1',
-      defaultModel: 'deepseek-flash',
+      defaultModel: 'deepseek-v4.1-flash',
       credentialId: 'provider.deepseek',
     },
   };

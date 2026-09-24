@@ -732,6 +732,191 @@
   padding: 10px;
 }
 
+.learning-tutor-start {
+  display: grid;
+  gap: 10px;
+}
+
+.learning-start-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 3px 1px;
+}
+
+.learning-start-intro > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--mint-strong);
+  background: var(--mint-soft);
+}
+
+.learning-start-intro > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.learning-start-intro strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.learning-start-intro p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.learning-selection-context {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-shell);
+}
+
+.learning-selection-context.attached {
+  border-color: rgba(102, 227, 189, 0.34);
+}
+
+.learning-selection-context header,
+.learning-composer header,
+.learning-composer footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.learning-selection-context header > div,
+.learning-composer header > div {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.learning-selection-context header > div svg,
+.learning-composer header > div svg {
+  color: var(--mint-strong);
+}
+
+.learning-selection-context header strong,
+.learning-composer header strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.learning-selection-context header > span,
+.learning-composer header > span {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--text-dim);
+  background: var(--bg-deep);
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.learning-selection-context.attached header > span {
+  color: var(--mint-strong);
+  background: var(--mint-soft);
+}
+
+.learning-selection-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.learning-selection-meta code,
+.learning-composer footer > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.learning-selection-meta small {
+  flex: 0 0 auto;
+  color: var(--mint-strong);
+  font-size: 9px;
+}
+
+.learning-selection-context pre {
+  max-height: 150px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-deep);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.learning-selection-context pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.learning-selection-context p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.learning-selection-action {
+  justify-self: start;
+  min-height: 27px;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+.learning-composer {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-shell);
+}
+
+.learning-panel > .learning-composer {
+  flex: 0 0 auto;
+  margin: 0 10px 10px;
+}
+
+.learning-composer footer > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.learning-composer .secondary-button,
+.learning-composer .primary-button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 10px;
+}
+
 .learning-empty {
   display: flex;
   min-height: 180px;
@@ -771,17 +956,32 @@
   line-height: 1.5;
 }
 
-.learning-empty textarea,
-.learning-question-box textarea {
+.learning-composer textarea {
   width: 100%;
+  min-height: 92px;
+  padding: 9px 10px;
   resize: vertical;
   border: 1px solid var(--border);
   border-radius: 7px;
+  outline: 0;
   color: var(--text);
-  background: var(--bg-shell);
+  background: var(--bg-deep);
   font: inherit;
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.5;
+}
+
+.learning-composer.follow-up textarea {
+  min-height: 76px;
+}
+
+.learning-composer textarea::placeholder {
+  color: var(--text-dim);
+}
+
+.learning-composer textarea:focus {
+  border-color: rgba(102, 227, 189, 0.62);
+  box-shadow: 0 0 0 3px rgba(102, 227, 189, 0.08);
 }
 
 .learning-error {
@@ -838,7 +1038,7 @@
   background: var(--bg-hover);
 }
 
-.learning-response header {
+.learning-response > header {
   padding: 2px 1px 11px;
   border-bottom: 1px solid var(--border-soft);
 }
