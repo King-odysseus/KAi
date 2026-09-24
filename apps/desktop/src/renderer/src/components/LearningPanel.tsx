@@ -78,11 +78,11 @@ export interface LearningSelectionPreview {
   text: string;
 }
 
-const assistanceOptions: Array<{ id: LearningAssistance; label: string }> = [
-  { id: 'learn', label: 'Learn' },
-  { id: 'guided', label: 'Guided' },
-  { id: 'pair', label: 'Pair' },
-  { id: 'copilot', label: 'Copilot' },
+const assistanceOptions: Array<{ id: LearningAssistance; label: string; description: string }> = [
+  { id: 'learn', label: 'Learn', description: 'Step by step' },
+  { id: 'guided', label: 'Guided', description: 'Hints only' },
+  { id: 'pair', label: 'Pair', description: 'Build together' },
+  { id: 'copilot', label: 'Copilot', description: 'Suggest code' },
 ];
 
 const actionOptions: Array<{ id: LearningAction; label: string; icon: ReactNode; needsSelection?: boolean }> = [
@@ -93,6 +93,13 @@ const actionOptions: Array<{ id: LearningAction; label: string; icon: ReactNode;
   { id: 'explain-error', label: 'Explain error', icon: <BrainCircuit size={14} /> },
   { id: 'next-step', label: 'Next step', icon: <Play size={14} /> },
   { id: 'complete', label: 'Complete', icon: <WandSparkles size={14} /> },
+];
+
+const starterPrompts = [
+  "Explain this project's architecture.",
+  'What should I do next?',
+  'How do I run and test this project?',
+  'Find the riskiest area and explain why.',
 ];
 
 export function LearningPanel({
@@ -174,18 +181,6 @@ export function LearningPanel({
         <>
           {controlsOpen && (
             <div className="learning-controls" id="learning-controls">
-              <label className="learning-scope-select">
-                <span><FolderTree size={13} />Tutor context</span>
-                <select
-                  aria-label="Tutor context scope"
-                  value={scope}
-                  onChange={(event) => onScopeChange(event.target.value === 'active-file' ? 'active-file' : 'project')}
-                >
-                  <option value="project">Whole project</option>
-                  <option value="active-file">Active file</option>
-                </select>
-              </label>
-
               <div className="learning-assistance" role="group" aria-label="Assistance level">
                 {assistanceOptions.map((option) => (
                   <button
@@ -195,7 +190,8 @@ export function LearningPanel({
                     aria-pressed={assistance === option.id}
                     onClick={() => onPreferences(option.id, option.id === 'copilot' ? inlineSuggestions : false)}
                   >
-                    {option.label}
+                    <span>{option.label}</span>
+                    <small>{option.description}</small>
                   </button>
                 ))}
               </div>
@@ -215,7 +211,7 @@ export function LearningPanel({
                   <button
                     key={option.id}
                     type="button"
-                    disabled={!readiness?.ready || Boolean(busy) || (option.id === 'complete' && assistance !== 'copilot')}
+                    disabled={!readiness?.ready || Boolean(busy) || (!selection && option.id !== 'next-step') || (option.id === 'complete' && assistance !== 'copilot')}
                     onClick={() => onAction(option.id)}
                     title={option.label}
                   >
@@ -257,6 +253,7 @@ export function LearningPanel({
             busy={Boolean(busy)}
             projectName={projectName}
             scope={scope}
+            onQuestionChange={onQuestionChange}
             onAction={onAction}
             onInsertSuggestion={onInsertSuggestion}
           />
@@ -280,8 +277,10 @@ export function LearningPanel({
           busy={Boolean(busy)}
           selection={selection}
           response={Boolean(response)}
+          scope={scope}
           open={composerOpen}
           onToggle={() => setComposerOpen((current) => !current)}
+          onScopeChange={onScopeChange}
           onQuestionChange={onQuestionChange}
           onAction={onAction}
           onRecordLesson={onRecordLesson}
@@ -297,6 +296,7 @@ function TutorContent({
   busy,
   projectName,
   scope,
+  onQuestionChange,
   onAction,
   onInsertSuggestion,
 }: {
@@ -305,6 +305,7 @@ function TutorContent({
   busy: boolean;
   projectName: string | null;
   scope: LearningTutorScope;
+  onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onInsertSuggestion: () => void;
 }): ReactNode {
@@ -313,9 +314,17 @@ function TutorContent({
       <div className="learning-tutor-start">
         <div className="learning-start-intro">
           <span><Sparkles size={18} /></span>
-          <div><strong>Ask about this project</strong><p>KAI can guide from the whole project and use the active file as the starting point.</p></div>
+          <div><strong>Ask about this project</strong><p>Use whole-project guidance, or switch the prompt to file context when you want a narrower answer.</p></div>
         </div>
         <ProjectContextMode projectName={projectName} scope={scope} filePath={selection?.filePath ?? null} />
+        <div className="learning-starters" aria-label="Suggested tutor prompts">
+          <span>Try asking</span>
+          <div>
+            {starterPrompts.map((prompt) => (
+              <button key={prompt} type="button" onClick={() => onQuestionChange(prompt)}>{prompt}</button>
+            ))}
+          </div>
+        </div>
         <SelectionContext selection={selection} busy={busy} onAction={onAction} />
       </div>
     );
@@ -353,17 +362,17 @@ function TutorContent({
         <p className="learning-limits"><strong>Where it stops:</strong> {response.analogy.limits}</p>
       </LearningSection>
       {remainingSteps.length > 0 && (
-        <LearningSection title="How it works">
+        <LearningSection title="How it works" collapsible defaultOpen={false}>
           <ol className="learning-steps">
             {remainingSteps.map((step, index) => <li key={`${step.title}-${index}`}><strong>{step.title}</strong><span>{step.explanation}</span></li>)}
           </ol>
         </LearningSection>
       )}
       {response.codePreview.trim() && (
-        <LearningSection title="Code preview"><pre className="learning-code"><code>{response.codePreview}</code></pre></LearningSection>
+        <LearningSection title="Code preview" collapsible defaultOpen={false}><pre className="learning-code"><code>{response.codePreview}</code></pre></LearningSection>
       )}
       {response.lineByLine.length > 0 && (
-        <LearningSection title="Line by line">
+        <LearningSection title="Line by line" collapsible defaultOpen={false}>
           <div className="learning-lines">
             {response.lineByLine.map((item, index) => <div key={`${item.line}-${index}`}><code>{item.line}</code><span>{item.explanation}</span></div>)}
           </div>
@@ -391,7 +400,7 @@ function TutorContent({
         </div>
       )}
       {response.sourceNotes.length > 0 && (
-        <LearningSection title="Sources">
+        <LearningSection title="Sources" collapsible defaultOpen={false}>
           <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
         </LearningSection>
       )}
@@ -400,14 +409,21 @@ function TutorContent({
 }
 
 function ProjectContextMode({ projectName, scope, filePath }: { projectName: string | null; scope: LearningTutorScope; filePath: string | null }): ReactNode {
-  const activeFile = filePath?.split(/[\\/]/).at(-1) ?? 'the active file';
+  const activeFile = filePath?.split(/[\\/]/).at(-1) ?? null;
+  const detail = scope === 'project'
+    ? [projectName ?? 'This project', activeFile].filter(Boolean).join(' · ')
+    : activeFile ?? 'Open a file to use file context';
   return (
     <div className={`learning-project-context ${scope}`}>
       <FolderTree size={13} />
-      <span>
+      <span className="learning-project-context-copy">
         <strong>{scope === 'project' ? 'Whole-project guidance' : 'Active-file focus'}</strong>
-        <small>{scope === 'project' ? `${projectName ?? 'This project'} and ${activeFile}` : activeFile}</small>
+        <small>{detail}</small>
       </span>
+      <div className="learning-context-evidence" aria-label="Context available to the tutor">
+        <span>{scope === 'project' ? 'Project scan' : 'Active file'}</span>
+        {activeFile ? <span>File: {activeFile}</span> : <span>No file required</span>}
+      </div>
     </div>
   );
 }
@@ -448,8 +464,10 @@ function TutorComposer({
   busy,
   selection,
   response,
+  scope,
   open,
   onToggle,
+  onScopeChange,
   onQuestionChange,
   onAction,
   onRecordLesson,
@@ -458,22 +476,49 @@ function TutorComposer({
   busy: boolean;
   selection: LearningSelectionPreview | null;
   response: boolean;
+  scope: LearningTutorScope;
   open: boolean;
   onToggle: () => void;
+  onScopeChange: (scope: LearningTutorScope) => void;
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onRecordLesson?: () => void;
 }): ReactNode {
   const selected = Boolean(selection?.text.trim());
-  const contextLabel = selection
+  const fileLabel = selection
     ? `${selection.filePath.split('/').at(-1) ?? selection.filePath} - ${formatSelectionRange(selection, selected)}`
     : 'No file open';
+  const contextLabel = scope === 'project'
+    ? selection
+      ? `Whole project · ${fileLabel}`
+      : 'Whole project'
+    : selection
+      ? fileLabel
+      : 'Open a file to use file context';
+  const placeholder = scope === 'project'
+    ? selected
+      ? 'Ask about the selected code or the whole project...'
+      : 'Ask about the whole project...'
+    : selected
+      ? 'Ask about the selected code...'
+      : 'Ask about this file...';
   return (
     <div className={`learning-composer ${response ? 'follow-up' : 'initial'} ${open ? '' : 'collapsed'}`}>
       <header>
         <div><Sparkles size={14} /><strong>{response ? 'Follow up' : 'Tutor prompt'}</strong></div>
         <div className="learning-composer-heading-actions">
-          <span>{selected ? 'Selection context' : 'File context'}</span>
+          <label className="learning-composer-scope">
+            <FolderTree size={13} aria-hidden="true" />
+            <span className="visually-hidden">Tutor context scope</span>
+            <select
+              aria-label="Tutor context scope"
+              value={scope}
+              onChange={(event) => onScopeChange(event.target.value === 'active-file' ? 'active-file' : 'project')}
+            >
+              <option value="project">Whole project</option>
+              <option value="active-file">File context</option>
+            </select>
+          </label>
           <button
             type="button"
             className="icon-button compact"
@@ -493,7 +538,7 @@ function TutorComposer({
             aria-label="Tutor question"
             value={question}
             onChange={(event) => onQuestionChange(event.target.value)}
-            placeholder={selected ? 'Ask about the selected code...' : 'Ask about this file...'}
+            placeholder={placeholder}
             rows={response ? 3 : 4}
           />
           <footer>
@@ -502,7 +547,7 @@ function TutorComposer({
               {response && onRecordLesson && (
                 <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
               )}
-              <button type="button" className="primary-button" disabled={busy || !selection} onClick={() => onAction('next-step')}>
+              <button type="button" className="primary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={() => onAction('next-step')}>
                 {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
                 <span>{response ? 'Ask' : 'Ask tutor'}</span>
               </button>
@@ -554,8 +599,30 @@ function GitContent({ info, formatting, onFormat }: { info: GitFileInfo | null; 
   );
 }
 
-function LearningSection({ title, className = '', children }: { title: string; className?: string; children: ReactNode }): ReactNode {
-  return <section className={`learning-section ${className}`}><h3>{title}</h3>{children}</section>;
+function LearningSection({
+  title,
+  className = '',
+  collapsible = false,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  className?: string;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}): ReactNode {
+  const [open, setOpen] = useState(defaultOpen);
+  if (!collapsible) return <section className={`learning-section ${className}`}><h3>{title}</h3>{children}</section>;
+  return (
+    <section className={`learning-section ${className} ${open ? 'open' : 'collapsed'}`}>
+      <button type="button" className="learning-section-toggle" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <span className="learning-section-title">{title}</span>
+        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {open && <div className="learning-section-body">{children}</div>}
+    </section>
+  );
 }
 
 function masteryLabel(mastery: LearningMastery): string {

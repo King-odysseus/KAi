@@ -81,7 +81,7 @@ export const learningTutorRequestSchema = z
   .object({
     requestId: z.string().min(1).max(160).optional(),
     projectId: z.string().min(1),
-    filePath: z.string().min(1).max(1_000),
+    filePath: z.string().min(1).max(1_000).optional(),
     documentVersion: z.number().int().nonnegative().optional(),
     selection: z.object({
       startLine: z.number().int().min(1).max(1_000_000),
@@ -149,7 +149,7 @@ export const learningEvidenceSchema = z
     conceptName: z.string().min(1).max(120),
     mastery: learningMasterySchema,
     summary: z.string().min(1).max(1_000),
-    filePath: z.string().min(1).max(1_000),
+    filePath: z.string().min(1).max(1_000).optional(),
     action: learningActionSchema,
     assistance: learningAssistanceSchema,
     createdAt: timestampSchema,
@@ -193,7 +193,7 @@ export type LearningEvaluationResult = z.infer<typeof learningEvaluationResultSc
 export const learningLessonRecordInputSchema = z
   .object({
     projectId: z.string().min(1),
-    filePath: z.string().min(1).max(1_000),
+    filePath: z.string().min(1).max(1_000).optional(),
     request: learningTutorRequestSchema,
     response: learningTutorResponseSchema,
   })

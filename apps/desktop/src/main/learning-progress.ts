@@ -105,13 +105,13 @@ export class LearningProgressStore {
     const evaluation = evaluationEvidence(request);
     const createdAt = this.now().toISOString();
     const evidence = response.concepts.map((concept): LearningEvidence => ({
-      id: `evidence_${createHash('sha256').update(`${request.projectId}:${request.filePath}:${request.action}:${concept.name}:${createdAt}`).digest('hex').slice(0, 24)}`,
+      id: `evidence_${createHash('sha256').update(`${request.projectId}:${request.filePath ?? 'project'}:${request.action}:${concept.name}:${createdAt}`).digest('hex').slice(0, 24)}`,
       conceptName: concept.name,
       mastery: capMastery(concept.mastery, evaluation.mastery),
       summary: concept.evidence
         ? `${concept.evidence} (${evaluation.summary})`
         : evaluation.summary,
-      filePath: request.filePath,
+      ...(request.filePath ? { filePath: request.filePath } : {}),
       action: request.action,
       assistance: request.assistance,
       createdAt,

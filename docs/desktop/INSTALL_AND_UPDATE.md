@@ -33,20 +33,22 @@ Settings, Configuration backups lists the backup made just before the update. Re
   passed (`567 passed`, `1 intentionally skipped`).
 - [x] Built the unsigned NSIS installer and installed it over the development
   installation with exit code 0.
-- [x] Installer: `apps/desktop/release/KAI-Setup-0.1.0.exe`, 205,437,959 bytes,
-  SHA-256 `4B1109A626FC67DDF9907D7F7AEBE30C821E4C80ACEA4A5317DB56A1EB7E7D47`.
+- [x] Installer: `apps/desktop/release/KAI-Setup-0.1.0.exe`, 205,438,712 bytes,
+  SHA-256 `60FFDA7AB52F10D74B5AE20FC8B85BFE01E60CFC2191609AE3EBC490F03347B4`.
 - [x] Packaged and installed executable: `%LOCALAPPDATA%\Programs\KAI\KAI.exe`,
   202,690,560 bytes, SHA-256
-  `9E2D8A0415932D8D07C3CDD961A5B201301725B80B2A38E2145EAA44F02552BF`.
+  `F4394EC546C57E3BF495FFA736A7C8BA4D46C0BB16B654C3C852D4187FE6E6D5`.
 - [x] Confirmed the installed executable hash matches `release/win-unpacked/KAI.exe`
   and that the bundled Cognitive1 1.0.0, Universal Agent Proxy 1.9.0 and
   `node-pty` Windows x64 prebuilds are present.
 - [x] Passed the isolated source, unpacked-package and installed-app smoke
-  suites, including selectable **Whole project** or **Active file** Learning
-  Tutor scope, project-aware guidance, collapsible tutor controls and composer,
-  the wider resizable tutor pane, editor autosave, live preview and element
-  handoff, independent windows, terminal, diagnostics, settings, shortcut
-  customization and the model-menu stacking check.
+  suites, including selectable **Whole project** or **File context** scope in the
+  tutor prompt card, whole-project guidance with no file open, described
+  assistance modes, suggested starter prompts, an explicit context-evidence
+  strip, collapsible deep-detail sections, collapsible tutor controls and
+  composer, the wider resizable tutor pane, editor autosave, live preview and
+  element handoff, independent windows, terminal, diagnostics, settings,
+  shortcut customization and the model-menu stacking check.
 - [x] Confirmed composer diagnostics default to a collapsed **Run details**
   control, zero-change checkpoint cards stay out of the conversation, and active
   runs show a rotating status phrase plus the current agent activity.

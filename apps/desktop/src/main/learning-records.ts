@@ -59,7 +59,7 @@ function lessonEntry(input: LearningLessonRecordInput, existing: string): string
     `## ${heading}`,
     '',
     `Recorded: ${new Date().toISOString()}`,
-    `File: \`${input.filePath}\``,
+    input.filePath ? `File: \`${input.filePath}\`` : 'Scope: `Whole project`',
     `Action: \`${input.request.action}\``,
     `Assistance: \`${input.request.assistance}\``,
     '',

@@ -229,6 +229,9 @@ export class DesktopLearningTutor {
     const provider = await this.providerConfiguration();
     const projectRoot = await this.resolveProjectRoot(request.projectId);
     const scope = request.scope ?? 'project';
+    if (scope === 'active-file' && !request.filePath) {
+      throw new Error('Open a file before using file context.');
+    }
     const [teachingProfile, projectProfile, projectContext] = await Promise.all([
       this.teachingLibrary ? this.teachingLibrary.profile() : Promise.resolve(null),
       loadProjectTeachingProfile(projectRoot),
@@ -558,12 +561,12 @@ async function loadProjectTeachingProfile(projectRoot: string): Promise<string |
   ].filter(Boolean).join('\n\n');
 }
 
-async function loadProjectContext(projectRoot: string, activeFilePath: string): Promise<string | null> {
+async function loadProjectContext(projectRoot: string, activeFilePath?: string): Promise<string | null> {
   const files = await listProjectFiles(projectRoot);
   if (files.length === 0) return null;
 
   const projectBrief = await buildProjectBrief(projectRoot, files);
-  const active = normaliseProjectPath(activeFilePath);
+  const active = activeFilePath ? normaliseProjectPath(activeFilePath) : '';
   const selected = selectProjectContextFiles(files, active);
   const snapshots = await Promise.all(selected.map(async (filePath) => {
     const content = await readProjectSnapshotFile(projectRoot, filePath);
@@ -607,7 +610,7 @@ async function listProjectFiles(projectRoot: string): Promise<string[]> {
   return files;
 }
 
-function selectProjectContextFiles(files: readonly string[], activeFilePath: string): string[] {
+function selectProjectContextFiles(files: readonly string[], activeFilePath = ''): string[] {
   const preferredNames = [
     'package.json',
     'pyproject.toml',
@@ -629,6 +632,11 @@ function selectProjectContextFiles(files: readonly string[], activeFilePath: str
     && filePath.toLowerCase().includes(activeStem.toLowerCase()));
   const entryPoints = files.filter((filePath) => /(?:^|\/)(?:src\/)?(?:index|main|app)\.(?:ts|tsx|js|jsx|py|go|rs|java|cs)$/i.test(filePath));
   const architecture = files.filter((filePath) => /(?:^|\/)(?:types?|schema|config|store|router|routes?|api|client|server|context|state)\.(?:ts|tsx|js|jsx|py|go|rs|java|cs)$/i.test(filePath));
+  if (!activeFilePath) {
+    const tests = files.filter((filePath) => /(?:^|\/)(?:__tests__|tests?|specs?)\//i.test(filePath) || /\.(?:test|spec)\.[^.]+$/i.test(filePath));
+    const manifests = files.filter((filePath) => /^(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|requirements\.txt|Dockerfile|Makefile)$/i.test(filePath));
+    return [...new Set([...preferred, ...entryPoints, ...architecture, ...tests, ...manifests, ...files])].slice(0, 24);
+  }
   return [...new Set([...preferred, ...relatedTests, ...nearby, ...entryPoints, ...architecture])]
     .filter((filePath) => filePath !== activeFilePath)
     .slice(0, 16);
@@ -731,8 +739,10 @@ function tutorPrompt(
     complete: 'Offer a completion only when the assistance level permits it. Clearly label generated code as a suggestion.',
   }[request.action];
   const scope = request.scope ?? 'project';
+  const hasActiveFile = Boolean(request.filePath);
+  const hasActiveCode = hasActiveFile && Boolean(request.code.trim());
   const scopeInstruction = scope === 'project'
-    ? 'Scope: whole project. Act like a senior developer guiding a novice through this codebase. Use the project brief, file map, manifests, docs, tests, nearby files, and active file together. Explain how the active file fits the larger architecture, data flow, and verification path. Do not pretend to know files or results outside the bounded snapshot.'
+    ? `Scope: whole project. Act like a senior developer guiding a novice through this codebase. Use the project brief, file map, manifests, docs, tests, nearby files, and active file together. ${hasActiveFile ? 'Explain how the active file fits the larger architecture, data flow, and verification path.' : 'No file is open. Guide the learner from the project snapshot and name a concrete file or command to inspect first.'} Do not pretend to know files or results outside the bounded snapshot.`
     : 'Scope: active file only. Teach from the active file and selected code. Mention the wider project only when needed to explain a concrete dependency, and state clearly when more project context is required.';
   const code = limitMiddle(request.code, 80_000);
   const selection = request.selectedText ? limitMiddle(request.selectedText, 30_000) : '';
@@ -752,7 +762,9 @@ function tutorPrompt(
     'Generated code is a suggestion, not evidence that the learner has mastered a concept.',
     'Prefer official language and framework documentation in sourceNotes when a citation is genuinely useful.',
     scopeInstruction,
-    'Start with orientation. Before explaining syntax, state what this project appears to be, where the active file fits, and why the next action matters.',
+    hasActiveFile
+      ? 'Start with orientation. Before explaining syntax, state what this project appears to be, where the active file fits, and why the next action matters.'
+      : 'Start with orientation. Before explaining syntax, state what this project appears to be, which area the learner should inspect first, and why that next action matters.',
     'Use the supplied project snapshot to connect the lesson to the project\'s actual stack, structure, docs, nearby files, and tests. Never claim to have inspected a file, command result, browser state, or test result that is not in the supplied context or active code.',
     'When recommending a command, use a command that appears in the supplied manifest or documentation. Otherwise call it an example and tell the learner how to verify it.',
     assistance,
@@ -765,18 +777,20 @@ function tutorPrompt(
       : 'No optional project teaching overlay was found.',
     projectContext
       ? `Whole-project brief and bounded snapshot from the active project. This is local context for choosing the next action; it may not include every file:\n${projectContext}`
-      : 'No project snapshot was available. Base the next action only on the active file and say when more project context is needed.',
+      : hasActiveFile
+        ? 'No project snapshot was available. Base the next action only on the active file and say when more project context is needed.'
+        : 'No project snapshot was available. Ask the learner for a file path or project detail before making a project-wide claim.',
   ].join('\n\n');
   const user = [
     `Action: ${request.action}`,
     `Assistance: ${request.assistance}`,
-    `File: ${request.filePath}`,
+    request.filePath ? `File: ${request.filePath}` : 'No file is open.',
     request.language ? `Language: ${request.language}` : '',
     request.cursorLine ? `Cursor line: ${request.cursorLine}` : '',
     request.question ? `Learner question: ${request.question}` : '',
     request.errorText ? `Reported error:\n${limitMiddle(request.errorText, 12_000)}` : '',
     selection ? `Selected code:\n\`\`\`\n${selection}\n\`\`\`` : '',
-    `Active code:\n\`\`\`\n${code}\n\`\`\``,
+    hasActiveCode ? `Active code:\n\`\`\`\n${code}\n\`\`\`` : '',
   ].filter(Boolean).join('\n\n');
   return { system, user };
 }

@@ -903,12 +903,13 @@ export function CodeView({
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
     const editor = editorRef.current;
-    if (!projectId || !path || !document || !editor) {
-      setLearningError('Open a file before using Learning Mode.');
+    const projectOnlyRequest = learningScope === 'project' && action === 'next-step';
+    if (!projectId || (!projectOnlyRequest && (!path || !document || !editor))) {
+      setLearningError(projectOnlyRequest ? 'Open a project before using Learning Mode.' : 'Open a file before using this Learning Mode action.');
       return null;
     }
     setTutorOpen(true);
-    if (action === 'explain-selection' && editor.getSelection()?.isEmpty()) {
+    if (action === 'explain-selection' && (!editor || editor.getSelection()?.isEmpty())) {
       setLearningError('Select some code before asking for a selection explanation.');
       return null;
     }
@@ -923,15 +924,13 @@ export function CodeView({
       }))?.trim() || undefined;
       if (!errorText) return null;
     }
-    const selection = editor.getSelection();
-    const selectedText = selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 50_000) : undefined;
+    const selection = editor?.getSelection();
+    const selectedText = document && selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 50_000) : undefined;
     const requestId = `learning_${crypto.randomUUID()}`;
-    const documentVersion = document.version;
     const request: LearningTutorRequest = {
       requestId,
       projectId,
-      filePath: path,
-      documentVersion,
+      ...(path && document ? { filePath: path, documentVersion: document.version } : {}),
       ...(selection ? {
         selection: {
           startLine: selection.startLineNumber,
@@ -940,13 +939,13 @@ export function CodeView({
           endColumn: selection.endColumn,
         },
       } : {}),
-      language: document.language,
+      ...(document ? { language: document.language } : {}),
       scope: learningScope,
       action,
       assistance,
-      code: boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1),
+      code: document ? boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1) : '',
       ...(selectedText ? { selectedText } : {}),
-      cursorLine: editor.getPosition()?.lineNumber ?? 1,
+      ...(editor ? { cursorLine: editor.getPosition()?.lineNumber ?? 1 } : {}),
       ...(errorText ? { errorText } : {}),
       ...(question.trim() ? { question: question.trim().slice(0, 4_000) } : {}),
     };
@@ -956,7 +955,7 @@ export function CodeView({
     setLearningError(null);
     try {
       const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
-      if (activeLearningRequestId.current !== requestId || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editor, documents.current)) return null;
+      if (activeLearningRequestId.current !== requestId || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current)) return null;
       lastLearningRequest.current = request;
       setLearningResult(result);
       setProgress(result.progress);
@@ -1040,7 +1039,7 @@ export function CodeView({
     try {
       const result = unwrap(await window.kaiDesktop.recordLearningLesson({
         projectId,
-        filePath: request.filePath,
+        ...(request.filePath ? { filePath: request.filePath } : {}),
         request,
         response,
       }));
@@ -1307,15 +1306,16 @@ function learningRequestStillCurrent(
   activePath: string | null,
   assistance: LearningAssistance,
   scope: LearningTutorScope,
-  editor: Monaco.editor.IStandaloneCodeEditor,
+  editor: Monaco.editor.IStandaloneCodeEditor | null,
   documents: ReadonlyMap<string, OpenDocument>,
 ): boolean {
   if (projectId !== request.projectId) return false;
-  if (activePath !== request.filePath || assistance !== request.assistance || scope !== (request.scope ?? 'project')) return false;
+  if ((activePath ?? undefined) !== request.filePath || assistance !== request.assistance || scope !== (request.scope ?? 'project')) return false;
+  if (!request.filePath) return true;
   const document = documents.get(request.filePath);
-  if (!document || document.version !== request.documentVersion) return false;
+  if (!document || (request.documentVersion !== undefined && document.version !== request.documentVersion)) return false;
   if (!request.selection) return true;
-  const selection = editor.getSelection();
+  const selection = editor?.getSelection();
   if (!selection) return false;
   if (
     selection.startLineNumber === request.selection.startLine

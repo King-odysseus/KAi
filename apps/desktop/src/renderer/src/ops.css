@@ -370,38 +370,42 @@
   gap: 4px;
 }
 
-.learning-controls {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.learning-scope-select {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 9px 10px 0;
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
-.learning-scope-select > span {
+.learning-composer-scope {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   color: var(--text-dim);
 }
 
-.learning-scope-select select {
-  min-width: 128px;
-  height: 27px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
+.learning-composer-scope > svg {
+  flex: 0 0 auto;
+}
+
+.learning-composer-scope select {
+  width: 118px;
+  min-width: 0;
+  height: 25px;
+  padding: 0 6px;
+  border: 1px solid var(--border-soft);
   border-radius: 6px;
   color: var(--text);
-  background: var(--bg-shell);
+  background: var(--bg-deep);
   font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.learning-composer-scope select:focus {
+  border-color: rgba(102, 227, 189, 0.62);
+  outline: 0;
+  box-shadow: 0 0 0 2px rgba(102, 227, 189, 0.1);
+}
+
+.learning-controls {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
 }
 
 .learning-title,
@@ -474,8 +478,30 @@
 }
 
 .learning-assistance button {
-  min-height: 25px;
-  padding: 3px 2px;
+  min-height: 45px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 3px;
+  line-height: 1.15;
+}
+
+.learning-assistance button > span {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.learning-assistance button > small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.learning-assistance button.active > small {
+  color: var(--text-muted);
 }
 
 .learning-assistance button:hover,
@@ -814,6 +840,7 @@
 .learning-project-context {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
   padding: 7px 8px;
@@ -829,8 +856,9 @@
   background: var(--bg-shell);
 }
 
-.learning-project-context > span {
+.learning-project-context-copy {
   display: grid;
+  flex: 1 1 130px;
   min-width: 0;
   gap: 1px;
 }
@@ -844,6 +872,27 @@
   overflow: hidden;
   color: var(--text-dim);
   font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.learning-context-evidence {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 20px;
+}
+
+.learning-context-evidence > span {
+  overflow: hidden;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--text-dim);
+  background: var(--bg-deep);
+  font-size: 8px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -882,6 +931,48 @@
   color: var(--text-dim);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.learning-starters {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-shell);
+}
+
+.learning-starters > span {
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.learning-starters > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.learning-starters button {
+  min-height: 25px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-deep);
+  font: inherit;
+  font-size: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.learning-starters button:hover {
+  border-color: rgba(102, 227, 189, 0.34);
+  color: var(--text);
+  background: var(--mint-soft);
 }
 
 .learning-selection-context {
@@ -929,8 +1020,7 @@
 }
 
 .learning-selection-context header > span,
-.learning-composer header > span,
-.learning-composer-heading-actions > span {
+.learning-composer header > span {
   flex: 0 0 auto;
   padding: 2px 6px;
   border-radius: 999px;
@@ -1245,13 +1335,45 @@
   border-bottom: 1px solid var(--border-soft);
 }
 
-.learning-section h3 {
+.learning-section h3,
+.learning-section-title {
   margin: 0 0 7px;
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.learning-section-toggle {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--text-dim);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.learning-section-toggle .learning-section-title {
+  margin: 0;
+}
+
+.learning-section-toggle:hover .learning-section-title {
+  color: var(--text);
+}
+
+.learning-section-toggle svg {
+  flex: 0 0 auto;
+}
+
+.learning-section-body {
+  padding-top: 7px;
 }
 
 .learning-section p,

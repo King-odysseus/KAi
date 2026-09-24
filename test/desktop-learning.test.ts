@@ -194,6 +194,17 @@ describe('desktop learning mode', () => {
     expect(bodies).toHaveLength(2);
     expect(JSON.stringify(bodies[1])).toContain('Scope: active file only');
     expect(JSON.stringify(bodies[1])).not.toContain('Project brief: kai-learning-fixture');
+
+    await tutor.evaluateDetailed({
+      ...tutorRequest('next-step', 'guided'),
+      filePath: undefined,
+      code: '',
+      scope: 'project',
+    });
+    expect(bodies).toHaveLength(3);
+    expect(JSON.stringify(bodies[2])).toContain('Scope: whole project');
+    expect(JSON.stringify(bodies[2])).toContain('No file is open.');
+    expect(JSON.stringify(bodies[2])).toContain('Project brief: kai-learning-fixture');
   });
 
   it('generates a reviewable teaching draft with the configured direct provider', async () => {

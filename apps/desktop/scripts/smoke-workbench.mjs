@@ -548,14 +548,40 @@ async function assertTutorTextareaStyled(page) {
 }
 
 async function verifyTutorScope(page) {
-  const scope = page.getByLabel('Tutor context scope');
+  const composer = page.locator('.learning-composer');
+  const scope = composer.getByLabel('Tutor context scope');
   await scope.waitFor();
+  if (await composer.getByLabel('Tutor context scope').count() !== 1) {
+    throw new Error('The tutor context selector must live inside the tutor prompt card.');
+  }
   if ((await scope.inputValue()) !== 'project') throw new Error('The tutor should default to whole-project guidance.');
-  await page.getByText('Whole-project guidance').waitFor();
+  await page.getByText('Whole-project guidance', { exact: true }).waitFor();
   await scope.selectOption('active-file');
   await page.getByText('Active-file focus').waitFor();
   await scope.selectOption('project');
-  await page.getByText('Whole-project guidance').waitFor();
+  await page.getByText('Whole-project guidance', { exact: true }).waitFor();
+
+  const starter = page.getByLabel('Suggested tutor prompts').getByRole('button', { name: "Explain this project's architecture." });
+  await starter.click();
+  if ((await page.getByLabel('Tutor question').inputValue()) !== "Explain this project's architecture.") {
+    throw new Error('A suggested tutor prompt did not populate the prompt field.');
+  }
+  await page.getByLabel('Tutor question').fill('');
+
+  await page.getByRole('button', { name: 'Close src/hello.ts' }).click();
+  await page.getByText('No file required', { exact: true }).waitFor();
+  const askTutor = composer.getByRole('button', { name: 'Ask tutor' });
+  if (await askTutor.isDisabled()) throw new Error('Whole-project tutoring should work without an open file.');
+  await scope.selectOption('active-file');
+  if (!(await askTutor.isDisabled())) throw new Error('File-context tutoring should require an open file.');
+  await scope.selectOption('project');
+  if (await askTutor.isDisabled()) throw new Error('Switching back to whole-project tutoring should re-enable the prompt.');
+
+  if (await page.getByRole('button', { name: 'hello.ts' }).count() === 0) {
+    await page.getByRole('button', { name: 'src', exact: true }).click();
+  }
+  await page.getByRole('button', { name: 'hello.ts' }).click();
+  await page.locator('.monaco-editor').first().waitFor();
 }
 
 async function verifyTutorCollapsibleSections(page) {
