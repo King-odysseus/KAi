@@ -73,7 +73,7 @@ import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
 import { promptDialog } from './AppDialog';
-import { AgentActivityStrip } from './AgentActivity';
+import { AgentActivityStrip, deriveAgentActivity } from './AgentActivity';
 
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
@@ -280,6 +280,7 @@ export function WorkspaceView({
   const [brainDraft, setBrainDraft] = useState<string | null>(null);
   const [fileChecks, setFileChecks] = useState<Record<string, FileVerificationState>>({});
   const [rawEventsOpen, setRawEventsOpen] = useState(false);
+  const [showRunDetails, setShowRunDetails] = useState(false);
   const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -795,6 +796,9 @@ export function WorkspaceView({
     .filter((event): event is Extract<PersistedEvent, { type: 'raw.fallback' }> => event.type === 'raw.fallback')
     .slice(-50)
     .reverse();
+  const recentEvents = (activeConversation?.events ?? []).slice(-40);
+  const runDetails = recentEvents.filter(isRunDetailEvent);
+  const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval);
 
   return (
     <div className="workspace-view">
@@ -927,12 +931,26 @@ export function WorkspaceView({
             {running && !streamingText && (
               <article className="thinking" role="status" aria-live="polite">
                 <span className="spinner" />
-                <span className="status-word">{paused ? 'Paused' : statusWord}</span>
+                <span className="thinking-copy"><span className="status-word">{paused ? 'Paused' : statusWord}</span><small>{activity.detail}</small></span>
                 <span className="status-timer">{elapsedSeconds}s</span>
                 <button type="button" className="secondary-button" onClick={paused ? onResume : onPause}>{paused ? <Play size={12} /> : <Pause size={12} />}<span>{paused ? 'Resume' : 'Pause'}</span></button>
               </article>
             )}
-            {activeConversation?.events.slice(-40).map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+            {recentEvents.filter((event) => !isRunDetailEvent(event)).map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+            {runDetails.length > 0 && (
+              <section className="run-details" aria-label="Run details">
+                <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
+                  <ChevronDown size={13} />
+                  <span>Run details</span>
+                  <small>{runDetails.length}</small>
+                </button>
+                {showRunDetails && (
+                  <div className="run-details-list">
+                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+                  </div>
+                )}
+              </section>
+            )}
             {compareResult && (
               <ComparePanel
                 result={compareResult}
@@ -961,7 +979,7 @@ export function WorkspaceView({
       </div>
 
       <div className="composer">
-        {activeConversation && <AgentActivityStrip
+        {activeConversation && (running || paused || awaitingApproval) && <AgentActivityStrip
           events={activeConversation.events}
           running={running}
           paused={paused}
@@ -1253,7 +1271,7 @@ export function WorkspaceView({
 }
 
 function RunEventCard({ event, projectId, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
-  const [changesExpanded, setChangesExpanded] = useState(true);
+  const [changesExpanded, setChangesExpanded] = useState(false);
   const [verification, setVerification] = useState<VerificationOverview | null>(null);
   useEffect(() => {
     if (event.type !== 'turn.changes' || !projectId) return;
@@ -1342,6 +1360,18 @@ function RunEventCard({ event, projectId, onReview, onUndo, onOpenVerification }
     );
   }
   return null;
+}
+
+function isRunDetailEvent(event: PersistedEvent): boolean {
+  if (event.type === 'turn.changes') return event.files.length === 0;
+  return event.type === 'tool.call'
+    || event.type === 'diff.proposal'
+    || event.type === 'file.edit.applied'
+    || event.type === 'file.change'
+    || event.type === 'memory.event'
+    || event.type === 'cost.update'
+    || event.type === 'plan.update'
+    || event.type === 'agent.lifecycle';
 }
 
 function ComparePanel({ result, onPick, onOpen, onDiscard }: { result: CompareRun; onPick: (id: string, side: 'left' | 'right') => Promise<void>; onOpen: (id: string, side: 'left' | 'right') => Promise<void>; onDiscard: (id: string) => Promise<void> }): ReactNode {

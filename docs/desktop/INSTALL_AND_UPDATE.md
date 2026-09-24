@@ -33,17 +33,22 @@ Settings, Configuration backups lists the backup made just before the update. Re
   passed (`567 passed`, `1 intentionally skipped`).
 - [x] Built the unsigned NSIS installer and installed it over the development
   installation with exit code 0.
-- [x] Installer: `apps/desktop/release/KAI-Setup-0.1.0.exe`, 205,431,333 bytes,
-  SHA-256 `8943223C4E2BD0DF1D0DC6ABB33D759F559D303523C90956E97D0FBC05DC7810`.
-- [x] Installed executable: `%LOCALAPPDATA%\Programs\KAI\KAI.exe`, 202,690,560
-  bytes, SHA-256 `6A113AF8A194439F5C14A4128C97539B14DF19402AF4EFF1A11FAF2C151C2F2E`.
-- [x] Confirmed the installed executable matches the packaged build and that the
-  bundled Cognitive1 1.0.0, Universal Agent Proxy 1.9.0 and `node-pty` Windows
-  x64 prebuilds are present.
+- [x] Installer: `apps/desktop/release/KAI-Setup-0.1.0.exe`, 205,434,289 bytes,
+  SHA-256 `4E952A014C239CDD73FFBB9AEC82E4A0D004ECD74A2A42545AFA9969442B8772`.
+- [x] Packaged and installed executable: `%LOCALAPPDATA%\Programs\KAI\KAI.exe`,
+  202,690,560 bytes, SHA-256
+  `096FD76D684A35BADCA3CB9C8271478A5C0BA1620DC581AE58E552DE16E00B97`.
+- [x] Confirmed the installed executable hash matches `release/win-unpacked/KAI.exe`
+  and that the bundled Cognitive1 1.0.0, Universal Agent Proxy 1.9.0 and
+  `node-pty` Windows x64 prebuilds are present.
 - [x] Passed the isolated source, unpacked-package and installed-app smoke
-  suites, including Learning Tutor light mode, resizable panes, editor autosave,
-  live preview and element handoff, independent windows, terminal, diagnostics,
+  suites, including project-aware Learning Tutor modes, collapsible tutor
+  controls and composer, the wider resizable tutor pane, editor autosave, live
+  preview and element handoff, independent windows, terminal, diagnostics,
   settings, shortcut customization and the model-menu stacking check.
+- [x] Confirmed composer diagnostics default to a collapsed **Run details**
+  control, zero-change checkpoint cards stay out of the conversation, and active
+  runs show a rotating status phrase plus the current agent activity.
 - [ ] Run the full checklist on a separate machine with no KAI data.
 - [ ] Publish a newer test release; confirm Check, Download and the release notes.
 - [ ] Install the published update; confirm the backup exists, KAI restarts, and

@@ -176,7 +176,7 @@
 }
 
 .code-view.learning-open {
-  grid-template-columns: clamp(160px, var(--code-file-pane-width, 230px), 420px) 5px minmax(0, 1fr) 5px clamp(280px, var(--code-learning-pane-width, 360px), 620px);
+  grid-template-columns: clamp(160px, var(--code-file-pane-width, 230px), 420px) 5px minmax(0, 1fr) 5px clamp(280px, var(--code-learning-pane-width, 360px), 760px);
 }
 
 .code-view.is-resizing,
@@ -354,6 +354,20 @@
   gap: 8px;
   padding: 10px 10px 9px;
   border-bottom: 1px solid var(--border-soft);
+}
+
+.learning-panel-head-actions,
+.learning-composer-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.learning-controls {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
 }
 
 .learning-title,
@@ -844,7 +858,8 @@
 }
 
 .learning-selection-context header > span,
-.learning-composer header > span {
+.learning-composer header > span,
+.learning-composer-heading-actions > span {
   flex: 0 0 auto;
   padding: 2px 6px;
   border-radius: 999px;
@@ -923,6 +938,21 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-shell);
+}
+
+.learning-composer-body {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.learning-composer.collapsed {
+  gap: 0;
+  padding: 8px 10px;
+}
+
+.learning-composer.collapsed header {
+  min-height: 20px;
 }
 
 .learning-panel > .learning-composer {
@@ -1084,6 +1114,59 @@
   color: var(--text);
   font-size: 15px;
   line-height: 1.3;
+}
+
+.learning-next-action {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 2px;
+  padding: 11px;
+  border: 1px solid rgba(102, 227, 189, 0.34);
+  border-radius: 8px;
+  background: var(--mint-soft);
+}
+
+.learning-next-action > div,
+.learning-next-action > small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.learning-next-action > div {
+  color: var(--mint-strong);
+  font-size: 10px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.learning-next-action strong {
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.learning-next-action p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.learning-next-action > small {
+  align-items: flex-start;
+  padding-top: 6px;
+  border-top: 1px solid rgba(102, 227, 189, 0.2);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.learning-next-action > small svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--mint-strong);
 }
 
 .learning-section {

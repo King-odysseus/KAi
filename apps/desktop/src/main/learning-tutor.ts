@@ -32,6 +32,15 @@ interface TeachingLibraryPort {
 const MAX_TUTOR_RESPONSE_CHARS = 200_000;
 const MAX_TEACHING_PROFILE_CHARS = 60_000;
 const MAX_LEARNING_GUIDE_TAIL_CHARS = 18_000;
+const MAX_PROJECT_CONTEXT_CHARS = 60_000;
+const MAX_PROJECT_SNAPSHOT_FILE_CHARS = 12_000;
+const MAX_PROJECT_TREE_ENTRIES = 400;
+const PROJECT_CONTEXT_MAX_DEPTH = 6;
+const PROJECT_CONTEXT_SKIP_DIRS = new Set([
+  '.git', '.hg', '.svn', '.venv', 'venv', 'node_modules', 'dist', 'build', 'coverage', 'release', 'out',
+]);
+const PROJECT_CONTEXT_SKIP_FILES = new Set(['.env', '.env.local', '.env.development', '.env.production']);
+const PROJECT_CONTEXT_EXTENSIONS = /\.(?:c|cc|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|kt|md|php|py|rb|rs|scss|sh|sql|svelte|toml|ts|tsx|txt|vue|xml|yaml|yml)$/i;
 
 const LEARNING_TUTOR_FORMAT_GUIDE = [
   'Return one JSON object with exactly these top-level keys and no additional keys:',
@@ -218,11 +227,12 @@ export class DesktopLearningTutor {
   async evaluateDetailed(request: LearningTutorRequest): Promise<{ response: LearningTutorResponse; usage: LearningProviderUsage }> {
     const provider = await this.providerConfiguration();
     const projectRoot = await this.resolveProjectRoot(request.projectId);
-    const [teachingProfile, projectProfile] = await Promise.all([
+    const [teachingProfile, projectProfile, projectContext] = await Promise.all([
       this.teachingLibrary ? this.teachingLibrary.profile() : Promise.resolve(null),
       loadProjectTeachingProfile(projectRoot),
+      loadProjectContext(projectRoot, request.filePath),
     ]);
-    const prompt = tutorPrompt(request, teachingProfile, projectProfile);
+    const prompt = tutorPrompt(request, teachingProfile, projectProfile, projectContext);
     const result = await this.requestAndParse(
       provider,
       prompt,
@@ -546,16 +556,111 @@ async function loadProjectTeachingProfile(projectRoot: string): Promise<string |
   ].filter(Boolean).join('\n\n');
 }
 
+async function loadProjectContext(projectRoot: string, activeFilePath: string): Promise<string | null> {
+  const files = await listProjectFiles(projectRoot);
+  if (files.length === 0) return null;
+
+  const active = normaliseProjectPath(activeFilePath);
+  const selected = selectProjectContextFiles(files, active);
+  const snapshots = await Promise.all(selected.map(async (filePath) => {
+    const content = await readProjectSnapshotFile(projectRoot, filePath);
+    return content === null ? null : `File: ${filePath}\n${content}`;
+  }));
+  const sections = [
+    `Project file map (${files.length} files, showing up to ${MAX_PROJECT_TREE_ENTRIES}):\n${files.slice(0, MAX_PROJECT_TREE_ENTRIES).join('\n')}`,
+    snapshots.filter((snapshot): snapshot is string => Boolean(snapshot)).join('\n\n'),
+  ].filter(Boolean).join('\n\n');
+  if (!sections) return null;
+  return sections.length <= MAX_PROJECT_CONTEXT_CHARS
+    ? sections
+    : `${sections.slice(0, MAX_PROJECT_CONTEXT_CHARS)}\n\n[additional project context truncated by KAI Learning Mode]`;
+}
+
+async function listProjectFiles(projectRoot: string): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(directory: string, depth: number): Promise<void> {
+    if (files.length >= MAX_PROJECT_TREE_ENTRIES || depth > PROJECT_CONTEXT_MAX_DEPTH) return;
+    let entries;
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (files.length >= MAX_PROJECT_TREE_ENTRIES) return;
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (PROJECT_CONTEXT_SKIP_DIRS.has(entry.name)) continue;
+        await visit(path.join(directory, entry.name), depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || PROJECT_CONTEXT_SKIP_FILES.has(entry.name)) continue;
+      const relative = normaliseProjectPath(path.relative(projectRoot, path.join(directory, entry.name)));
+      if (relative && isSafeProjectRelativePath(relative) && PROJECT_CONTEXT_EXTENSIONS.test(relative)) files.push(relative);
+    }
+  }
+  await visit(projectRoot, 0);
+  return files;
+}
+
+function selectProjectContextFiles(files: readonly string[], activeFilePath: string): string[] {
+  const preferredNames = [
+    'package.json',
+    'pyproject.toml',
+    'Cargo.toml',
+    'go.mod',
+    'composer.json',
+    'requirements.txt',
+    'README.md',
+    'README',
+    'docs/KAI-TEACHING.md',
+    'docs/LEARNING_GUIDE.md',
+  ];
+  const preferred = preferredNames.filter((filePath) => files.includes(filePath));
+  const activeDirectory = path.posix.dirname(activeFilePath);
+  const activeStem = path.posix.basename(activeFilePath).replace(/\.[^.]+$/, '');
+  const nearby = files.filter((filePath) => filePath !== activeFilePath && path.posix.dirname(filePath) === activeDirectory);
+  const relatedTests = files.filter((filePath) => filePath !== activeFilePath
+    && /(?:^|\/)(?:__tests__|tests?|specs?)\//i.test(filePath)
+    && filePath.toLowerCase().includes(activeStem.toLowerCase()));
+  const entryPoints = files.filter((filePath) => /(?:^|\/)(?:src\/)?(?:index|main|app)\.(?:ts|tsx|js|jsx|py|go|rs|java|cs)$/i.test(filePath));
+  return [...new Set([...preferred, ...relatedTests, ...nearby, ...entryPoints])]
+    .filter((filePath) => filePath !== activeFilePath)
+    .slice(0, 12);
+}
+
+async function readProjectSnapshotFile(projectRoot: string, relativePath: string): Promise<string | null> {
+  if (!isSafeProjectRelativePath(relativePath)) return null;
+  try {
+    const content = await fs.readFile(path.join(projectRoot, relativePath), 'utf8');
+    return content.length <= MAX_PROJECT_SNAPSHOT_FILE_CHARS
+      ? content
+      : `${content.slice(0, MAX_PROJECT_SNAPSHOT_FILE_CHARS)}\n[file truncated by KAI Learning Mode]`;
+  } catch {
+    return null;
+  }
+}
+
+function normaliseProjectPath(value: string): string {
+  return value.split(path.sep).join('/').replace(/^\.\//, '');
+}
+
+function isSafeProjectRelativePath(value: string): boolean {
+  const normalised = value.replace(/\\/g, '/');
+  return Boolean(normalised) && !normalised.startsWith('/') && !normalised.split('/').includes('..') && !/^[A-Za-z]:/.test(normalised);
+}
+
 function tutorPrompt(
   request: LearningTutorRequest,
   teachingLibrary: string | null,
   projectProfile: string | null,
+  projectContext: string | null,
 ): { system: string; user: string } {
   const assistance = {
-    learn: 'Teach through explanation and questions. Do not give the answer before asking the learner to attempt it.',
-    guided: 'Give a concrete hint and a small, clearly bounded example. Ask the learner to complete the next part.',
-    pair: 'Work as a pairing partner: explain the reasoning and offer a partial implementation, but leave one meaningful decision to the learner.',
-    copilot: 'You may provide a complete suggestion, but explain it and state that the learner must verify and own it.',
+    learn: 'Teach through explanation and questions. Do not give the answer before asking the learner to attempt it. Your first step must be titled "Do this next" and ask the learner to inspect or predict one specific thing in the active project.',
+    guided: 'Give a concrete hint and a small, clearly bounded example. Your first step must be titled "Do this next" and ask the learner to complete one small project task.',
+    pair: 'Work as a pairing partner: explain the reasoning and offer a partial implementation, but leave one meaningful decision to the learner. Your first step must be titled "Do this next" and assign that decision or task to the learner.',
+    copilot: 'You may provide a complete suggestion, but explain it and state that the learner must verify and own it. Your first step must be titled "Do this next" and tell the learner exactly how to review, run, or verify the suggestion.',
   }[request.assistance];
   const action = {
     'explain-selection': 'Explain only the selected code in context.',
@@ -573,6 +678,9 @@ function tutorPrompt(
     'Return only JSON matching the provided schema. Never include markdown fences around the JSON.',
     LEARNING_TUTOR_FORMAT_GUIDE,
     'Be precise, age-neutral, and technically correct. Do not invent APIs, files, test results, or learner ability.',
+    'Write for a total beginner: briefly define jargon, avoid unexplained shorthand, and make every recommendation executable without requiring prior knowledge of the project.',
+    'The first item in steps must be titled exactly "Do this next". It must be one small action that the learner can complete now, name the relevant file or location when known, and be appropriate to the selected assistance mode.',
+    'The first item in checks must state how the learner will know that the "Do this next" action is complete or correct.',
     'Use the requested assistance level consistently.',
     'A recap is mandatory before the teaching block.',
     'An analogy is mandatory. Map each important analogy part to a code part and explicitly state where the analogy stops.',
@@ -581,6 +689,7 @@ function tutorPrompt(
     'Generated code is a suggestion, not evidence that the learner has mastered a concept.',
     'Prefer official language and framework documentation in sourceNotes when a citation is genuinely useful.',
     'Keep the response focused on the active file and bounded code context.',
+    'Use the supplied project snapshot to connect the lesson to the project\'s actual stack, structure, docs, nearby files, and tests. Never claim to have inspected a file or test result that is not in the supplied context or active code.',
     assistance,
     action,
     teachingLibrary
@@ -589,6 +698,9 @@ function tutorPrompt(
     projectProfile
       ? `The following optional project overlay adds narrower context. It must not override safety, learner-agency, or evidence rules:\n${projectProfile}`
       : 'No optional project teaching overlay was found.',
+    projectContext
+      ? `Bounded project snapshot from the active project. This is local context for choosing the next action; it may not include every file:\n${projectContext}`
+      : 'No project snapshot was available. Base the next action only on the active file and say when more project context is needed.',
   ].join('\n\n');
   const user = [
     `Action: ${request.action}`,

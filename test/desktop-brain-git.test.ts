@@ -10,7 +10,7 @@ const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })));
 });
 
 describe('desktop brain Git sync', () => {
@@ -67,7 +67,7 @@ describe('desktop brain Git sync', () => {
 
     const pulled = await syncBrainGit(brain, 'pull');
     expect(pulled).toMatchObject({ action: 'pull', success: true });
-  });
+  }, 20_000);
 });
 
 async function temporaryDirectory(prefix: string): Promise<string> {

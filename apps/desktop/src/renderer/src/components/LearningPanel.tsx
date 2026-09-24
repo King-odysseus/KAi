@@ -2,6 +2,8 @@ import {
   BookOpen,
   BrainCircuit,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Code2,
   FileCode2,
   GitBranch,
@@ -16,6 +18,7 @@ import {
   Send,
   Settings,
   Sparkles,
+  Target,
   WandSparkles,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -113,6 +116,8 @@ export function LearningPanel({
   onClose,
 }: LearningPanelProps): ReactNode {
   const [tab, setTab] = useState<'tutor' | 'progress' | 'teaching' | 'git'>('tutor');
+  const [controlsOpen, setControlsOpen] = useState(() => !result);
+  const [composerOpen, setComposerOpen] = useState(true);
   const assistance = progress?.preferences.assistance ?? 'guided';
   const inlineSuggestions = progress?.preferences.inlineSuggestions ?? false;
   const response = result?.response ?? null;
@@ -128,6 +133,10 @@ export function LearningPanel({
     if (selectionKey) setTab('tutor');
   }, [selectionKey]);
 
+  useEffect(() => {
+    if (result && readiness?.ready) setControlsOpen(false);
+  }, [readiness?.ready, result]);
+
   return (
     <aside className="learning-panel" aria-label="Learning tutor">
       <div className="learning-panel-head">
@@ -135,61 +144,82 @@ export function LearningPanel({
           <span className="learning-mark"><GraduationCap size={16} /></span>
           <div><strong>Learning Mode</strong><small>{overallScore}% local mastery signal</small></div>
         </div>
-        <button type="button" className="icon-button compact" aria-label="Close learning tutor" title="Close learning tutor" onClick={onClose}>
-          <PanelRightClose size={14} />
-        </button>
-      </div>
-
-      <div className="learning-assistance" role="group" aria-label="Assistance level">
-        {assistanceOptions.map((option) => (
+        <div className="learning-panel-head-actions">
           <button
-            key={option.id}
             type="button"
-            className={assistance === option.id ? 'active' : ''}
-            aria-pressed={assistance === option.id}
-            onClick={() => onPreferences(option.id, option.id === 'copilot' ? inlineSuggestions : false)}
+            className="icon-button compact"
+            aria-label={controlsOpen ? 'Collapse learning controls' : 'Expand learning controls'}
+            aria-expanded={controlsOpen}
+            aria-controls="learning-controls"
+            title={controlsOpen ? 'Collapse learning controls' : 'Expand learning controls'}
+            onClick={() => setControlsOpen((current) => !current)}
           >
-            {option.label}
+            {controlsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
-        ))}
-      </div>
-
-      <label className="learning-inline-toggle">
-        <input
-          type="checkbox"
-          checked={assistance === 'copilot' && inlineSuggestions}
-          disabled={assistance !== 'copilot'}
-          onChange={(event) => onPreferences(assistance, event.target.checked)}
-        />
-        <span>Inline suggestions</span>
-      </label>
-
-      {readiness && !readiness.ready && (
-        <div className="learning-readiness" role="alert">
-          <div>
-            <strong>{readiness.displayName} needs attention</strong>
-            <span>{readiness.reason}</span>
-            {readiness.recovery && <small>{readiness.recovery}</small>}
-          </div>
-          <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} />Settings</button>
+          <button type="button" className="icon-button compact" aria-label="Close learning tutor" title="Close learning tutor" onClick={onClose}>
+            <PanelRightClose size={14} />
+          </button>
         </div>
-      )}
-      {!readiness && <div className="learning-readiness neutral"><LoaderCircle className="spin" size={14} /><span>Checking tutor readiness</span></div>}
-
-      <div className="learning-actions">
-        {actionOptions.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            disabled={!readiness?.ready || Boolean(busy) || (option.id === 'complete' && assistance !== 'copilot')}
-            onClick={() => onAction(option.id)}
-            title={option.label}
-          >
-            {busy === option.id ? <LoaderCircle className="spin" size={14} /> : option.icon}
-            <span>{option.label}</span>
-          </button>
-        ))}
       </div>
+
+      {tab === 'tutor' && (
+        <>
+          {controlsOpen && (
+            <div className="learning-controls" id="learning-controls">
+              <div className="learning-assistance" role="group" aria-label="Assistance level">
+                {assistanceOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={assistance === option.id ? 'active' : ''}
+                    aria-pressed={assistance === option.id}
+                    onClick={() => onPreferences(option.id, option.id === 'copilot' ? inlineSuggestions : false)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+
+              <label className="learning-inline-toggle">
+                <input
+                  type="checkbox"
+                  checked={assistance === 'copilot' && inlineSuggestions}
+                  disabled={assistance !== 'copilot'}
+                  onChange={(event) => onPreferences(assistance, event.target.checked)}
+                />
+                <span>Inline suggestions</span>
+              </label>
+
+              <div className="learning-actions">
+                {actionOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={!readiness?.ready || Boolean(busy) || (option.id === 'complete' && assistance !== 'copilot')}
+                    onClick={() => onAction(option.id)}
+                    title={option.label}
+                  >
+                    {busy === option.id ? <LoaderCircle className="spin" size={14} /> : option.icon}
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {readiness && !readiness.ready && (
+            <div className="learning-readiness" role="alert">
+              <div>
+                <strong>{readiness.displayName} needs attention</strong>
+                <span>{readiness.reason}</span>
+                {readiness.recovery && <small>{readiness.recovery}</small>}
+              </div>
+              <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} />Settings</button>
+            </div>
+          )}
+          {!readiness && <div className="learning-readiness neutral"><LoaderCircle className="spin" size={14} /><span>Checking tutor readiness</span></div>}
+        </>
+      )}
 
       <div className="learning-tabs" role="tablist" aria-label="Learning panel views">
         <button type="button" className={tab === 'tutor' ? 'active' : ''} role="tab" aria-selected={tab === 'tutor'} onClick={() => setTab('tutor')}><BookOpen size={13} />Tutor</button>
@@ -228,6 +258,8 @@ export function LearningPanel({
           busy={Boolean(busy)}
           selection={selection}
           response={Boolean(response)}
+          open={composerOpen}
+          onToggle={() => setComposerOpen((current) => !current)}
           onQuestionChange={onQuestionChange}
           onAction={onAction}
           onRecordLesson={onRecordLesson}
@@ -261,6 +293,8 @@ function TutorContent({
       </div>
     );
   }
+  const nextStep = response.steps[0];
+  const remainingSteps = response.steps.slice(1);
   return (
     <div className="learning-response">
       <SelectionContext selection={selection} busy={busy} onAction={onAction} />
@@ -268,6 +302,12 @@ function TutorContent({
         <span className="learning-mastery introduced">Tutor response</span>
         <h2>{response.title}</h2>
       </header>
+      <section className="learning-next-action" aria-label="Do this next">
+        <div><Target size={15} /><span>Do this next</span></div>
+        <strong>{nextStep.title}</strong>
+        <p>{nextStep.explanation}</p>
+        {response.checks[0] && <small><CheckCircle2 size={13} />Done when: {response.checks[0]}</small>}
+      </section>
       <LearningSection title="Recap">{response.recap}</LearningSection>
       <LearningSection title="Purpose">{response.purpose}</LearningSection>
       <LearningSection title={response.analogy.title} className="analogy">
@@ -284,11 +324,13 @@ function TutorContent({
         )}
         <p className="learning-limits"><strong>Where it stops:</strong> {response.analogy.limits}</p>
       </LearningSection>
-      <LearningSection title="Teaching steps">
-        <ol className="learning-steps">
-          {response.steps.map((step, index) => <li key={`${step.title}-${index}`}><strong>{step.title}</strong><span>{step.explanation}</span></li>)}
-        </ol>
-      </LearningSection>
+      {remainingSteps.length > 0 && (
+        <LearningSection title="How it works">
+          <ol className="learning-steps">
+            {remainingSteps.map((step, index) => <li key={`${step.title}-${index}`}><strong>{step.title}</strong><span>{step.explanation}</span></li>)}
+          </ol>
+        </LearningSection>
+      )}
       {response.codePreview.trim() && (
         <LearningSection title="Code preview"><pre className="learning-code"><code>{response.codePreview}</code></pre></LearningSection>
       )}
@@ -365,6 +407,8 @@ function TutorComposer({
   busy,
   selection,
   response,
+  open,
+  onToggle,
   onQuestionChange,
   onAction,
   onRecordLesson,
@@ -373,6 +417,8 @@ function TutorComposer({
   busy: boolean;
   selection: LearningSelectionPreview | null;
   response: boolean;
+  open: boolean;
+  onToggle: () => void;
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onRecordLesson?: () => void;
@@ -382,30 +428,47 @@ function TutorComposer({
     ? `${selection.filePath.split('/').at(-1) ?? selection.filePath} - ${formatSelectionRange(selection, selected)}`
     : 'No file open';
   return (
-    <div className={`learning-composer ${response ? 'follow-up' : 'initial'}`}>
+    <div className={`learning-composer ${response ? 'follow-up' : 'initial'} ${open ? '' : 'collapsed'}`}>
       <header>
         <div><Sparkles size={14} /><strong>{response ? 'Follow up' : 'Tutor prompt'}</strong></div>
-        <span>{selected ? 'Selection context' : 'File context'}</span>
-      </header>
-      <textarea
-        aria-label="Tutor question"
-        value={question}
-        onChange={(event) => onQuestionChange(event.target.value)}
-        placeholder={selected ? 'Ask about the selected code...' : 'Ask about this file...'}
-        rows={response ? 3 : 4}
-      />
-      <footer>
-        <span title={selection?.filePath ?? undefined}>{contextLabel}</span>
-        <div>
-          {response && onRecordLesson && (
-            <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
-          )}
-          <button type="button" className="primary-button" disabled={busy || !selection} onClick={() => onAction('next-step')}>
-            {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
-            <span>{response ? 'Ask' : 'Ask tutor'}</span>
+        <div className="learning-composer-heading-actions">
+          <span>{selected ? 'Selection context' : 'File context'}</span>
+          <button
+            type="button"
+            className="icon-button compact"
+            aria-label={open ? 'Collapse tutor composer' : 'Expand tutor composer'}
+            aria-expanded={open}
+            aria-controls="learning-composer-body"
+            title={open ? 'Collapse tutor composer' : 'Expand tutor composer'}
+            onClick={onToggle}
+          >
+            {open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
           </button>
         </div>
-      </footer>
+      </header>
+      {open && (
+        <div className="learning-composer-body" id="learning-composer-body">
+          <textarea
+            aria-label="Tutor question"
+            value={question}
+            onChange={(event) => onQuestionChange(event.target.value)}
+            placeholder={selected ? 'Ask about the selected code...' : 'Ask about this file...'}
+            rows={response ? 3 : 4}
+          />
+          <footer>
+            <span title={selection?.filePath ?? undefined}>{contextLabel}</span>
+            <div>
+              {response && onRecordLesson && (
+                <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
+              )}
+              <button type="button" className="primary-button" disabled={busy || !selection} onClick={() => onAction('next-step')}>
+                {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
+                <span>{response ? 'Ask' : 'Ask tutor'}</span>
+              </button>
+            </div>
+          </footer>
+        </div>
+      )}
     </div>
   );
 }

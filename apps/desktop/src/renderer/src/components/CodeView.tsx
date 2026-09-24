@@ -57,6 +57,7 @@ const POLL_MS = 3_000;
 const MAX_LEARNING_CODE = 120_000;
 const DEFAULT_FILE_PANE_WIDTH = 230;
 const DEFAULT_LEARNING_PANE_WIDTH = 360;
+const MAX_LEARNING_PANE_WIDTH = 760;
 
 function sameLearningSelection(
   left: LearningSelectionPreview | null,
@@ -238,7 +239,7 @@ export function CodeView({
   });
   const [learningPaneWidth, setLearningPaneWidth] = useState(() => {
     try {
-      return clampNumber(Number(window.localStorage.getItem('kai.learningPaneWidth')) || DEFAULT_LEARNING_PANE_WIDTH, 280, 620);
+      return clampNumber(Number(window.localStorage.getItem('kai.learningPaneWidth')) || DEFAULT_LEARNING_PANE_WIDTH, 280, MAX_LEARNING_PANE_WIDTH);
     } catch {
       return DEFAULT_LEARNING_PANE_WIDTH;
     }
@@ -359,7 +360,7 @@ export function CodeView({
     if (!origin) return;
     const delta = event.clientX - origin.x;
     if (origin.kind === 'files') setFilePaneWidth(clampNumber(origin.width + delta, 160, 420));
-    else setLearningPaneWidth(clampNumber(origin.width - delta, 280, 620));
+    else setLearningPaneWidth(clampNumber(origin.width - delta, 280, MAX_LEARNING_PANE_WIDTH));
   }
 
   function endCodeResize(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -375,10 +376,10 @@ export function CodeView({
     const current = kind === 'files' ? filePaneWidth : learningPaneWidth;
     let next = current;
     if (event.key === 'Home') next = kind === 'files' ? 160 : 280;
-    else if (event.key === 'End') next = kind === 'files' ? 420 : 620;
+    else if (event.key === 'End') next = kind === 'files' ? 420 : MAX_LEARNING_PANE_WIDTH;
     else if (kind === 'files') next += event.key === 'ArrowRight' ? step : -step;
     else next += event.key === 'ArrowLeft' ? step : -step;
-    next = clampNumber(next, kind === 'files' ? 160 : 280, kind === 'files' ? 420 : 620);
+    next = clampNumber(next, kind === 'files' ? 160 : 280, kind === 'files' ? 420 : MAX_LEARNING_PANE_WIDTH);
     if (kind === 'files') setFilePaneWidth(next);
     else setLearningPaneWidth(next);
   }
@@ -1230,7 +1231,7 @@ export function CodeView({
             aria-label="Resize learning tutor pane"
             aria-orientation="vertical"
             aria-valuemin={280}
-            aria-valuemax={620}
+            aria-valuemax={MAX_LEARNING_PANE_WIDTH}
             aria-valuenow={Math.round(learningPaneWidth)}
             tabIndex={0}
             onPointerDown={(event) => beginCodeResize('learning', event)}

@@ -5899,6 +5899,53 @@ code {
 .run-event.memory { border-left-color: var(--lavender); }
 .run-event.error { border-left-color: var(--red); background: rgba(189, 63, 77, 0.06); }
 
+.run-details {
+  display: flex;
+  align-self: stretch;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-details-toggle {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  padding: 3px 5px 3px 2px;
+  border: 0;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.run-details-toggle:hover {
+  color: var(--text);
+}
+
+.run-details-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.run-details-toggle[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+
+.run-details-toggle small {
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  text-align: center;
+}
+
+.run-details-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .changes-card {
   display: flex;
   width: 100%;
@@ -5913,6 +5960,23 @@ code {
 
 .changes-card.expanded {
   gap: 8px;
+}
+
+.changes-card:not(.expanded) .changes-summary {
+  padding-bottom: 2px;
+  border-bottom: 0;
+}
+
+.changes-card:not(.expanded) .changes-summary > div span {
+  display: none;
+}
+
+.changes-card:not(.expanded) .changes-head {
+  padding-top: 5px;
+}
+
+.changes-card:not(.expanded) .changes-actions {
+  margin-top: 5px;
 }
 
 .changes-summary {
@@ -6043,7 +6107,9 @@ code {
   border-radius: 50%;
   animation: spin 700ms linear infinite;
 }
-.thinking .status-word { min-width: 110px; color: var(--mint); font-weight: 650; }
+.thinking-copy { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.thinking .status-word { color: var(--mint); font-weight: 650; }
+.thinking .thinking-copy small { overflow: hidden; color: var(--text-dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .thinking .status-timer { margin-left: auto; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 .compare-panel {

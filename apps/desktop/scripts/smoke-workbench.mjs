@@ -76,6 +76,7 @@ async function verifyCodeEditor(page) {
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
   await page.getByText('export const hello').first().waitFor();
   await assertTutorTextareaStyled(page);
+  await verifyTutorCollapsibleSections(page);
   await verifyResizablePane(page, 'Resize project files pane', '.code-sidebar');
   await verifyResizablePane(page, 'Resize learning tutor pane', '.learning-panel');
   await page.screenshot({ path: path.join(outputDirectory, 'code-1440x920.png') });
@@ -543,6 +544,33 @@ async function assertTutorTextareaStyled(page) {
   if (style.caretColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
     throw new Error(`The tutor textarea lacks visible caret/background styling: ${JSON.stringify(style)}`);
   }
+}
+
+async function verifyTutorCollapsibleSections(page) {
+  const scroll = page.locator('.learning-scroll');
+  const controls = page.locator('#learning-controls');
+  await controls.waitFor();
+  const beforeControls = await scroll.boundingBox();
+  await page.getByRole('button', { name: 'Collapse learning controls' }).click();
+  await controls.waitFor({ state: 'detached' });
+  const afterControls = await scroll.boundingBox();
+  if (!beforeControls || !afterControls || afterControls.height < beforeControls.height + 70) {
+    throw new Error(`Collapsing learning controls did not expand the response area: ${JSON.stringify({ beforeControls, afterControls })}`);
+  }
+  await page.getByRole('button', { name: 'Expand learning controls' }).click();
+  await controls.waitFor();
+
+  const composer = page.getByLabel('Tutor question');
+  await composer.waitFor();
+  const beforeComposer = await scroll.boundingBox();
+  await page.getByRole('button', { name: 'Collapse tutor composer' }).click();
+  await composer.waitFor({ state: 'detached' });
+  const afterComposer = await scroll.boundingBox();
+  if (!beforeComposer || !afterComposer || afterComposer.height < beforeComposer.height + 50) {
+    throw new Error(`Collapsing the tutor composer did not expand the response area: ${JSON.stringify({ beforeComposer, afterComposer })}`);
+  }
+  await page.getByRole('button', { name: 'Expand tutor composer' }).click();
+  await composer.waitFor();
 }
 
 async function assertTutorTextareaLightTheme(page) {

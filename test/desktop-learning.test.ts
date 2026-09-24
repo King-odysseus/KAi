@@ -141,8 +141,16 @@ describe('desktop learning mode', () => {
     settings.learningTutor.baseUrl = `${baseUrl}/v1`;
     const root = await temporaryDirectory();
     await fs.mkdir(path.join(root, 'docs'));
+    await fs.mkdir(path.join(root, 'src'));
     await fs.writeFile(path.join(root, 'docs', 'KAI-TEACHING.md'), 'KAI project overlay: use short verification loops.\n', 'utf8');
     await fs.writeFile(path.join(root, 'docs', 'TEACH.md'), 'MONEY MATTERS MUST NOT LOAD AS A KAI POLICY.\n', 'utf8');
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'kai-learning-fixture', scripts: { test: 'vitest' } }), 'utf8');
+    await fs.writeFile(path.join(root, 'README.md'), '# Learning fixture\n\nRun the focused test before changing the source.\n', 'utf8');
+    await fs.writeFile(path.join(root, 'src', 'value.ts'), 'export const value = 1;\n', 'utf8');
+    await fs.writeFile(path.join(root, 'src', 'value.test.ts'), 'import { value } from "./value";\n', 'utf8');
+    await fs.mkdir(path.join(root, 'node_modules'));
+    await fs.writeFile(path.join(root, 'node_modules', 'ignored.ts'), 'PROJECT_CONTEXT_NODE_MODULE_SECRET\n', 'utf8');
+    await fs.writeFile(path.join(root, '.env'), 'PROJECT_CONTEXT_ENV_SECRET\n', 'utf8');
     const tutor = new DesktopLearningTutor(
       { load: async () => settings },
       {
@@ -173,7 +181,11 @@ describe('desktop learning mode', () => {
     expect(JSON.stringify(bodies[0]?.text)).toContain('"concepts"');
     expect(JSON.stringify(bodies[0])).toContain('KAI-owned library policy');
     expect(JSON.stringify(bodies[0])).toContain('KAI project overlay');
+    expect(JSON.stringify(bodies[0])).toContain('kai-learning-fixture');
+    expect(JSON.stringify(bodies[0])).toContain('src/value.test.ts');
     expect(JSON.stringify(bodies[0])).not.toContain('MONEY MATTERS MUST NOT LOAD');
+    expect(JSON.stringify(bodies[0])).not.toContain('PROJECT_CONTEXT_NODE_MODULE_SECRET');
+    expect(JSON.stringify(bodies[0])).not.toContain('PROJECT_CONTEXT_ENV_SECRET');
   });
 
   it('generates a reviewable teaching draft with the configured direct provider', async () => {
