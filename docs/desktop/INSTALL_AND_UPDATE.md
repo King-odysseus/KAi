@@ -10,7 +10,7 @@ KAI is for personal, noncommercial use, so the Windows build is **not code signe
 
 ## How updates work
 
-KAI reads releases from GitHub (`King-odysseus/KAi`) with `electron-updater`. Every step is yours to take:
+KAI reads releases from GitHub (`King-odysseus/KAi`) with `electron-updater`. The release feed must be public: installed builds check it anonymously, so a private repository or an unpublished release is reported as an unavailable feed rather than an authentication failure. Every step is yours to take:
 
 - **Check** happens after startup and every few hours if *Check automatically* is on in Settings, or when you press *Check for updates*. It only looks; it downloads nothing.
 - **Download** starts when you press it. Release notes are shown first.

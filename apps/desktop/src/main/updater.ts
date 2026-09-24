@@ -1,6 +1,18 @@
 import { normalizeReleaseNotes, type UpdateState } from '@kai/contracts';
 import { redactText } from '@kai/runtime';
 
+export const NO_UPDATE_FEED_MESSAGE = 'No accessible update release is available yet. Publish a GitHub release with latest.yml, the installer and blockmap before checking from installed builds.';
+
+const MISSING_RELEASE_FEED_PATTERN = /(?:releases\.atom|releases\/latest|latest\.yml|No published versions on GitHub|ERR_UPDATER_(?:LATEST_VERSION_NOT_FOUND|CHANNEL_FILE_NOT_FOUND|NO_PUBLISHED_VERSIONS))/i;
+
+function updateFailure(error: unknown): { status: 'none' | 'error'; message: string } {
+  const message = redactText(error instanceof Error ? error.message : String(error)).slice(0, 400);
+  if (/\b404\b|not found/i.test(message) && MISSING_RELEASE_FEED_PATTERN.test(message)) {
+    return { status: 'none', message: NO_UPDATE_FEED_MESSAGE };
+  }
+  return { status: 'error', message };
+}
+
 /** The part of electron-updater's `autoUpdater` this controller uses, so tests can stand in for it. */
 export interface UpdaterPort {
   autoDownload: boolean;
@@ -50,7 +62,8 @@ export class UpdateController {
       this.set('ready', { percent: 100, message: 'Ready to install. KAI will restart.' });
     });
     port.on('error', (error: unknown) => {
-      this.set('error', { message: redactText(error instanceof Error ? error.message : String(error)).slice(0, 400), percent: null });
+      const failure = updateFailure(error);
+      this.set(failure.status, { message: failure.message, percent: null, checkedAt: this.now().toISOString() });
     });
   }
 
@@ -67,7 +80,8 @@ export class UpdateController {
     try {
       await this.port.checkForUpdates();
     } catch (error) {
-      this.set('error', { message: redactText(error instanceof Error ? error.message : String(error)).slice(0, 400) });
+      const failure = updateFailure(error);
+      this.set(failure.status, { message: failure.message, checkedAt: this.now().toISOString() });
     }
     return this.state;
   }

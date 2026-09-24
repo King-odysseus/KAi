@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { appSettingsV1Schema, createDefaultSettings, normalizeReleaseNotes, type UpdateState } from '../packages/contracts/src';
-import { UpdateController, type UpdaterPort } from '../apps/desktop/src/main/updater';
+import { NO_UPDATE_FEED_MESSAGE, UpdateController, type UpdaterPort } from '../apps/desktop/src/main/updater';
 
 class FakeUpdater implements UpdaterPort {
   autoDownload = true;
@@ -109,6 +109,19 @@ describe('update controller', () => {
     port.failCheck = null;
     await controller.check();
     expect(port.calls.filter((call) => call === 'check')).toHaveLength(2);
+  });
+
+  it('reports a private or unpublished release feed as no update, not an authentication failure', async () => {
+    const { port, controller } = harness();
+    port.failCheck = new Error('404 "method: GET url: https://github.com/King-odysseus/KAi/releases.atom\n\nPlease double check that your authentication token is correct."');
+
+    await controller.check();
+
+    expect(controller.getState()).toMatchObject({
+      status: 'none',
+      message: NO_UPDATE_FEED_MESSAGE,
+      checkedAt: '2026-09-24T12:00:00.000Z',
+    });
   });
 
   it('keeps a downloaded update when checked again, and reports being up to date', async () => {
