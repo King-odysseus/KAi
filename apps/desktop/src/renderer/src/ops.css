@@ -107,8 +107,14 @@
 
 .recovery-banner,
 .compaction-banner {
-  margin: 8px 16px 0;
-  width: auto;
+  width: 100%;
+  margin: 0;
+}
+
+.recovery-banner {
+  min-height: 34px;
+  padding-top: 5px;
+  padding-bottom: 5px;
 }
 
 .compaction-banner {
@@ -368,6 +374,34 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
+}
+
+.learning-scope-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 9px 10px 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.learning-scope-select > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+
+.learning-scope-select select {
+  min-width: 128px;
+  height: 27px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--bg-shell);
+  font: inherit;
 }
 
 .learning-title,
@@ -775,6 +809,43 @@
 .learning-tutor-start {
   display: grid;
   gap: 10px;
+}
+
+.learning-project-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid rgba(111, 168, 255, 0.22);
+  border-radius: 7px;
+  color: var(--blue);
+  background: rgba(111, 168, 255, 0.07);
+}
+
+.learning-project-context.active-file {
+  border-color: var(--border-soft);
+  color: var(--text-dim);
+  background: var(--bg-shell);
+}
+
+.learning-project-context > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.learning-project-context strong {
+  color: var(--text);
+  font-size: 10.5px;
+}
+
+.learning-project-context small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .learning-start-intro {

@@ -22,6 +22,7 @@ import type {
   LearningEvaluationResult,
   LearningProgress,
   LearningReadiness,
+  LearningTutorScope,
   LearningTutorRequest,
   OpenedFile,
   ProjectFileEntry,
@@ -230,6 +231,13 @@ export function CodeView({
       return true;
     }
   });
+  const [learningScope, setLearningScope] = useState<LearningTutorScope>(() => {
+    try {
+      return window.localStorage.getItem('kai.learningTutorScope') === 'active-file' ? 'active-file' : 'project';
+    } catch {
+      return 'project';
+    }
+  });
   const [filePaneWidth, setFilePaneWidth] = useState(() => {
     try {
       return clampNumber(Number(window.localStorage.getItem('kai.codeFilePaneWidth')) || DEFAULT_FILE_PANE_WIDTH, 160, 420);
@@ -292,13 +300,13 @@ export function CodeView({
   const autoSaveInFlight = useRef(new Set<string>());
   const autoSaveConfigRef = useRef({ enabled: autoSave, delayMs: autoSaveDelayMs });
   const diskChangedRef = useRef<string | null>(diskChanged);
-  const learningStateRef = useRef({ projectId, filePath: activePath, assistance, inlineSuggestions, progress });
+  const learningStateRef = useRef({ projectId, filePath: activePath, assistance, scope: learningScope, inlineSuggestions, progress });
   activeRef.current = activePath;
   openPathsRef.current = openPaths;
   projectIdRef.current = projectId;
   autoSaveConfigRef.current = { enabled: autoSave, delayMs: autoSaveDelayMs };
   diskChangedRef.current = diskChanged;
-  learningStateRef.current = { projectId, filePath: activePath, assistance, inlineSuggestions, progress };
+  learningStateRef.current = { projectId, filePath: activePath, assistance, scope: learningScope, inlineSuggestions, progress };
 
   function clearAutoSaveTimer(path?: string): void {
     if (path) {
@@ -933,6 +941,7 @@ export function CodeView({
         },
       } : {}),
       language: document.language,
+      scope: learningScope,
       action,
       assistance,
       code: boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1),
@@ -947,7 +956,7 @@ export function CodeView({
     setLearningError(null);
     try {
       const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
-      if (activeLearningRequestId.current !== requestId || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, editor, documents.current)) return null;
+      if (activeLearningRequestId.current !== requestId || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editor, documents.current)) return null;
       lastLearningRequest.current = request;
       setLearningResult(result);
       setProgress(result.progress);
@@ -1005,7 +1014,7 @@ export function CodeView({
     const monaco = monacoRef.current;
     if (!suggestion || !editor || !document || !monaco) return;
     const request = lastLearningRequest.current;
-    if (!request || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, editor, documents.current)) {
+    if (!request || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editor, documents.current)) {
       setNotice('The tutor suggestion was ignored because the file or selection changed.');
       return;
     }
@@ -1242,9 +1251,11 @@ export function CodeView({
             onKeyDown={(event) => resizeCodePaneWithKeyboard('learning', event)}
           />
           <LearningPanel
+            projectName={activeProject?.name ?? null}
             progress={progress}
             readiness={readiness}
             result={learningResult}
+            scope={learningScope}
             selection={learningSelection}
             gitInfo={gitInfo}
             busy={learningBusy}
@@ -1253,6 +1264,14 @@ export function CodeView({
             question={question}
             onQuestionChange={setQuestion}
             onAction={(action) => void runLearningAction(action)}
+            onScopeChange={(nextScope) => {
+              setLearningScope(nextScope);
+              try {
+                window.localStorage.setItem('kai.learningTutorScope', nextScope);
+              } catch {
+                // A remembered tutor scope is a convenience only.
+              }
+            }}
             onPreferences={(nextAssistance, nextInline) => void updatePreferences(nextAssistance, nextInline)}
             onInsertSuggestion={insertSuggestion}
             onRecordLesson={() => void recordLesson()}
@@ -1276,9 +1295,10 @@ function learningState(
   projectId: string | null,
   filePath: string | null,
   assistance: LearningAssistance,
+  scope: LearningTutorScope,
   inlineSuggestions: boolean,
-): { projectId: string; filePath: string; assistance: LearningAssistance; inlineSuggestions: boolean } | null {
-  return projectId && filePath ? { projectId, filePath, assistance, inlineSuggestions } : null;
+): { projectId: string; filePath: string; assistance: LearningAssistance; scope: LearningTutorScope; inlineSuggestions: boolean } | null {
+  return projectId && filePath ? { projectId, filePath, assistance, scope, inlineSuggestions } : null;
 }
 
 function learningRequestStillCurrent(
@@ -1286,11 +1306,12 @@ function learningRequestStillCurrent(
   projectId: string | null,
   activePath: string | null,
   assistance: LearningAssistance,
+  scope: LearningTutorScope,
   editor: Monaco.editor.IStandaloneCodeEditor,
   documents: ReadonlyMap<string, OpenDocument>,
 ): boolean {
   if (projectId !== request.projectId) return false;
-  if (activePath !== request.filePath || assistance !== request.assistance) return false;
+  if (activePath !== request.filePath || assistance !== request.assistance || scope !== (request.scope ?? 'project')) return false;
   const document = documents.get(request.filePath);
   if (!document || document.version !== request.documentVersion) return false;
   if (!request.selection) return true;

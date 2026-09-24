@@ -76,6 +76,7 @@ async function verifyCodeEditor(page) {
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
   await page.getByText('export const hello').first().waitFor();
   await assertTutorTextareaStyled(page);
+  await verifyTutorScope(page);
   await verifyTutorCollapsibleSections(page);
   await verifyResizablePane(page, 'Resize project files pane', '.code-sidebar');
   await verifyResizablePane(page, 'Resize learning tutor pane', '.learning-panel');
@@ -544,6 +545,17 @@ async function assertTutorTextareaStyled(page) {
   if (style.caretColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
     throw new Error(`The tutor textarea lacks visible caret/background styling: ${JSON.stringify(style)}`);
   }
+}
+
+async function verifyTutorScope(page) {
+  const scope = page.getByLabel('Tutor context scope');
+  await scope.waitFor();
+  if ((await scope.inputValue()) !== 'project') throw new Error('The tutor should default to whole-project guidance.');
+  await page.getByText('Whole-project guidance').waitFor();
+  await scope.selectOption('active-file');
+  await page.getByText('Active-file focus').waitFor();
+  await scope.selectOption('project');
+  await page.getByText('Whole-project guidance').waitFor();
 }
 
 async function verifyTutorCollapsibleSections(page) {

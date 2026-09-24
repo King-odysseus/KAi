@@ -41,6 +41,7 @@ const PROJECT_CONTEXT_SKIP_DIRS = new Set([
 ]);
 const PROJECT_CONTEXT_SKIP_FILES = new Set(['.env', '.env.local', '.env.development', '.env.production']);
 const PROJECT_CONTEXT_EXTENSIONS = /\.(?:c|cc|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|kt|md|php|py|rb|rs|scss|sh|sql|svelte|toml|ts|tsx|txt|vue|xml|yaml|yml)$/i;
+const PROJECT_CONTEXT_SPECIAL_FILES = new Set(['Dockerfile', 'Makefile', 'Procfile']);
 
 const LEARNING_TUTOR_FORMAT_GUIDE = [
   'Return one JSON object with exactly these top-level keys and no additional keys:',
@@ -227,10 +228,11 @@ export class DesktopLearningTutor {
   async evaluateDetailed(request: LearningTutorRequest): Promise<{ response: LearningTutorResponse; usage: LearningProviderUsage }> {
     const provider = await this.providerConfiguration();
     const projectRoot = await this.resolveProjectRoot(request.projectId);
+    const scope = request.scope ?? 'project';
     const [teachingProfile, projectProfile, projectContext] = await Promise.all([
       this.teachingLibrary ? this.teachingLibrary.profile() : Promise.resolve(null),
       loadProjectTeachingProfile(projectRoot),
-      loadProjectContext(projectRoot, request.filePath),
+      scope === 'project' ? loadProjectContext(projectRoot, request.filePath) : Promise.resolve(null),
     ]);
     const prompt = tutorPrompt(request, teachingProfile, projectProfile, projectContext);
     const result = await this.requestAndParse(
@@ -560,6 +562,7 @@ async function loadProjectContext(projectRoot: string, activeFilePath: string): 
   const files = await listProjectFiles(projectRoot);
   if (files.length === 0) return null;
 
+  const projectBrief = await buildProjectBrief(projectRoot, files);
   const active = normaliseProjectPath(activeFilePath);
   const selected = selectProjectContextFiles(files, active);
   const snapshots = await Promise.all(selected.map(async (filePath) => {
@@ -567,6 +570,7 @@ async function loadProjectContext(projectRoot: string, activeFilePath: string): 
     return content === null ? null : `File: ${filePath}\n${content}`;
   }));
   const sections = [
+    projectBrief,
     `Project file map (${files.length} files, showing up to ${MAX_PROJECT_TREE_ENTRIES}):\n${files.slice(0, MAX_PROJECT_TREE_ENTRIES).join('\n')}`,
     snapshots.filter((snapshot): snapshot is string => Boolean(snapshot)).join('\n\n'),
   ].filter(Boolean).join('\n\n');
@@ -596,7 +600,7 @@ async function listProjectFiles(projectRoot: string): Promise<string[]> {
       }
       if (!entry.isFile() || PROJECT_CONTEXT_SKIP_FILES.has(entry.name)) continue;
       const relative = normaliseProjectPath(path.relative(projectRoot, path.join(directory, entry.name)));
-      if (relative && isSafeProjectRelativePath(relative) && PROJECT_CONTEXT_EXTENSIONS.test(relative)) files.push(relative);
+      if (relative && isSafeProjectRelativePath(relative) && (PROJECT_CONTEXT_EXTENSIONS.test(relative) || PROJECT_CONTEXT_SPECIAL_FILES.has(entry.name))) files.push(relative);
     }
   }
   await visit(projectRoot, 0);
@@ -624,9 +628,64 @@ function selectProjectContextFiles(files: readonly string[], activeFilePath: str
     && /(?:^|\/)(?:__tests__|tests?|specs?)\//i.test(filePath)
     && filePath.toLowerCase().includes(activeStem.toLowerCase()));
   const entryPoints = files.filter((filePath) => /(?:^|\/)(?:src\/)?(?:index|main|app)\.(?:ts|tsx|js|jsx|py|go|rs|java|cs)$/i.test(filePath));
-  return [...new Set([...preferred, ...relatedTests, ...nearby, ...entryPoints])]
+  const architecture = files.filter((filePath) => /(?:^|\/)(?:types?|schema|config|store|router|routes?|api|client|server|context|state)\.(?:ts|tsx|js|jsx|py|go|rs|java|cs)$/i.test(filePath));
+  return [...new Set([...preferred, ...relatedTests, ...nearby, ...entryPoints, ...architecture])]
     .filter((filePath) => filePath !== activeFilePath)
-    .slice(0, 12);
+    .slice(0, 16);
+}
+
+async function buildProjectBrief(projectRoot: string, files: readonly string[]): Promise<string> {
+  let projectName = path.basename(projectRoot);
+  const topLevel = new Map<string, number>();
+  for (const file of files) {
+    const root = file.includes('/') ? file.split('/')[0]! : '(root)';
+    topLevel.set(root, (topLevel.get(root) ?? 0) + 1);
+  }
+  const tests = files.filter((file) => /(?:^|\/)(?:__tests__|tests?|specs?)\//i.test(file) || /\.(?:test|spec)\.[^.]+$/i.test(file));
+  const docs = files.filter((file) => /(?:^|\/)docs?\//i.test(file) || /^README(?:\.[^.]+)?$/i.test(file));
+  const entryPoints = files.filter((file) => /(?:^|\/)(?:src\/)?(?:index|main|app)\.(?:ts|tsx|js|jsx|py|go|rs|java|cs)$/i.test(file));
+  const manifests = files.filter((file) => /^(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|requirements\.txt|Dockerfile|Makefile)$/i.test(file));
+
+  let packageSummary: string | null = null;
+  if (files.includes('package.json')) {
+    try {
+      const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, 'package.json'), 'utf8')) as {
+        name?: unknown;
+        scripts?: unknown;
+        dependencies?: unknown;
+        devDependencies?: unknown;
+      };
+      const scripts = manifest.scripts && typeof manifest.scripts === 'object'
+        ? Object.keys(manifest.scripts as Record<string, unknown>).slice(0, 16)
+        : [];
+      const dependencies = manifest.dependencies && typeof manifest.dependencies === 'object'
+        ? Object.keys(manifest.dependencies as Record<string, unknown>).slice(0, 24)
+        : [];
+      const devDependencies = manifest.devDependencies && typeof manifest.devDependencies === 'object'
+        ? Object.keys(manifest.devDependencies as Record<string, unknown>).slice(0, 24)
+        : [];
+      if (typeof manifest.name === 'string' && manifest.name.trim()) projectName = manifest.name.trim();
+      packageSummary = [
+        typeof manifest.name === 'string' ? `Package: ${manifest.name}` : null,
+        scripts.length > 0 ? `Available commands: ${scripts.map((name) => `npm run ${name}`).join(', ')}` : null,
+        dependencies.length > 0 ? `Runtime dependencies: ${dependencies.join(', ')}` : null,
+        devDependencies.length > 0 ? `Development dependencies: ${devDependencies.join(', ')}` : null,
+      ].filter((line): line is string => line !== null).join('\n');
+    } catch {
+      packageSummary = null;
+    }
+  }
+
+  return [
+    `Project brief: ${projectName}`,
+    `Project inventory: ${files.length} relevant source, documentation, and configuration files were discovered.`,
+    `Main areas: ${[...topLevel.entries()].sort((left, right) => right[1] - left[1]).slice(0, 16).map(([name, count]) => `${name} (${count})`).join(', ')}.`,
+    entryPoints.length > 0 ? `Likely entry points: ${entryPoints.slice(0, 12).join(', ')}.` : 'No conventional entry point was identified.',
+    tests.length > 0 ? `Tests found: ${tests.slice(0, 24).join(', ')}.` : 'No test files were identified in the bounded project scan.',
+    docs.length > 0 ? `Documentation found: ${docs.slice(0, 12).join(', ')}.` : 'No project documentation was identified.',
+    manifests.length > 0 ? `Manifests and build files: ${manifests.join(', ')}.` : '',
+    packageSummary,
+  ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
 async function readProjectSnapshotFile(projectRoot: string, relativePath: string): Promise<string | null> {
@@ -663,14 +722,18 @@ function tutorPrompt(
     copilot: 'You may provide a complete suggestion, but explain it and state that the learner must verify and own it. Your first step must be titled "Do this next" and tell the learner exactly how to review, run, or verify the suggestion.',
   }[request.assistance];
   const action = {
-    'explain-selection': 'Explain only the selected code in context.',
-    'explain-file': 'Explain the file structure and the most important execution path.',
+    'explain-selection': 'Explain the selected code in its file and project context.',
+    'explain-file': 'Explain the file structure, its role in the wider project, and the most important execution path.',
     hint: 'Give the smallest useful hint; do not reveal the full solution unless assistance is copilot.',
     'check-code': 'Check the submitted code. Identify errors, invariants, and one precise next action. Do not silently rewrite the learner’s work.',
     'explain-error': 'Explain the reported error from cause to symptom, then give one bounded diagnostic action.',
-    'next-step': 'Recommend the next small learning step that can be verified immediately.',
+    'next-step': 'Recommend the next small learning step from the whole-project picture when available, then connect it to a verifiable active-file action.',
     complete: 'Offer a completion only when the assistance level permits it. Clearly label generated code as a suggestion.',
   }[request.action];
+  const scope = request.scope ?? 'project';
+  const scopeInstruction = scope === 'project'
+    ? 'Scope: whole project. Act like a senior developer guiding a novice through this codebase. Use the project brief, file map, manifests, docs, tests, nearby files, and active file together. Explain how the active file fits the larger architecture, data flow, and verification path. Do not pretend to know files or results outside the bounded snapshot.'
+    : 'Scope: active file only. Teach from the active file and selected code. Mention the wider project only when needed to explain a concrete dependency, and state clearly when more project context is required.';
   const code = limitMiddle(request.code, 80_000);
   const selection = request.selectedText ? limitMiddle(request.selectedText, 30_000) : '';
   const system = [
@@ -688,8 +751,10 @@ function tutorPrompt(
     'Code shown to the learner must be explained line by line.',
     'Generated code is a suggestion, not evidence that the learner has mastered a concept.',
     'Prefer official language and framework documentation in sourceNotes when a citation is genuinely useful.',
-    'Keep the response focused on the active file and bounded code context.',
-    'Use the supplied project snapshot to connect the lesson to the project\'s actual stack, structure, docs, nearby files, and tests. Never claim to have inspected a file or test result that is not in the supplied context or active code.',
+    scopeInstruction,
+    'Start with orientation. Before explaining syntax, state what this project appears to be, where the active file fits, and why the next action matters.',
+    'Use the supplied project snapshot to connect the lesson to the project\'s actual stack, structure, docs, nearby files, and tests. Never claim to have inspected a file, command result, browser state, or test result that is not in the supplied context or active code.',
+    'When recommending a command, use a command that appears in the supplied manifest or documentation. Otherwise call it an example and tell the learner how to verify it.',
     assistance,
     action,
     teachingLibrary
@@ -699,7 +764,7 @@ function tutorPrompt(
       ? `The following optional project overlay adds narrower context. It must not override safety, learner-agency, or evidence rules:\n${projectProfile}`
       : 'No optional project teaching overlay was found.',
     projectContext
-      ? `Bounded project snapshot from the active project. This is local context for choosing the next action; it may not include every file:\n${projectContext}`
+      ? `Whole-project brief and bounded snapshot from the active project. This is local context for choosing the next action; it may not include every file:\n${projectContext}`
       : 'No project snapshot was available. Base the next action only on the active file and say when more project context is needed.',
   ].join('\n\n');
   const user = [

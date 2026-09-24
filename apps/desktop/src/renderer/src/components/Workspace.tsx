@@ -811,28 +811,30 @@ export function WorkspaceView({
         </div>
       </div>
 
-      {interruptedRuns > 0 && !running && (
-        <div className="workbench-notice recovery-banner" role="status">
-          <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
-          <button type="button" className="secondary-button" onClick={onOpenRecovery}>Review</button>
-        </div>
-      )}
+      <div className="workspace-notices">
+        {interruptedRuns > 0 && !running && (
+          <div className="workbench-notice recovery-banner" role="status">
+            <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
+            <button type="button" className="secondary-button" onClick={onOpenRecovery}>Review</button>
+          </div>
+        )}
 
-      {activeConversation && !running && estimateConversationTokens(activeConversation) >= COMPACTION_WARNING_TOKENS && (
-        <div className="workbench-notice compaction-banner" role="status">
-          <span>This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.</span>
-          <button type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</button>
-        </div>
-      )}
+        {activeConversation && !running && estimateConversationTokens(activeConversation) >= COMPACTION_WARNING_TOKENS && (
+          <div className="workbench-notice compaction-banner" role="status">
+            <span>This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.</span>
+            <button type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</button>
+          </div>
+        )}
 
-      <UsageBanner conversationId={activeConversation?.id} refreshToken={activeConversation?.events.length} onOpenUsage={onOpenUsage} />
+        <UsageBanner conversationId={activeConversation?.id} refreshToken={activeConversation?.events.length} onOpenUsage={onOpenUsage} />
 
-      {workbenchNotice && (
-        <div className="workbench-notice" role="status">
-          <span>{workbenchNotice}</span>
-          <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></button>
-        </div>
-      )}
+        {workbenchNotice && (
+          <div className="workbench-notice" role="status">
+            <span>{workbenchNotice}</span>
+            <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></button>
+          </div>
+        )}
+      </div>
 
       {skillsOpen && (
         <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Skills">

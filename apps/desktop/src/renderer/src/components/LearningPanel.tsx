@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Code2,
   FileCode2,
+  FolderTree,
   GitBranch,
   GraduationCap,
   Lightbulb,
@@ -30,6 +31,7 @@ import type {
   LearningMastery,
   LearningProgress,
   LearningReadiness,
+  LearningTutorScope,
   TeachingDraft,
   TeachingDraftGenerateInput,
   TeachingLibrary,
@@ -39,9 +41,11 @@ import type {
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
 
 interface LearningPanelProps {
+  projectName: string | null;
   progress: LearningProgress | null;
   readiness: LearningReadiness | null;
   result: LearningEvaluationResult | null;
+  scope: LearningTutorScope;
   selection: LearningSelectionPreview | null;
   gitInfo: GitFileInfo | null;
   busy: LearningAction | 'record' | null;
@@ -50,6 +54,7 @@ interface LearningPanelProps {
   question: string;
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
+  onScopeChange: (scope: LearningTutorScope) => void;
   onPreferences: (assistance: LearningAssistance, inlineSuggestions: boolean) => void;
   onInsertSuggestion: () => void;
   onRecordLesson: () => void;
@@ -91,9 +96,11 @@ const actionOptions: Array<{ id: LearningAction; label: string; icon: ReactNode;
 ];
 
 export function LearningPanel({
+  projectName,
   progress,
   readiness,
   result,
+  scope,
   selection,
   gitInfo,
   busy,
@@ -102,6 +109,7 @@ export function LearningPanel({
   question,
   onQuestionChange,
   onAction,
+  onScopeChange,
   onPreferences,
   onInsertSuggestion,
   onRecordLesson,
@@ -166,6 +174,18 @@ export function LearningPanel({
         <>
           {controlsOpen && (
             <div className="learning-controls" id="learning-controls">
+              <label className="learning-scope-select">
+                <span><FolderTree size={13} />Tutor context</span>
+                <select
+                  aria-label="Tutor context scope"
+                  value={scope}
+                  onChange={(event) => onScopeChange(event.target.value === 'active-file' ? 'active-file' : 'project')}
+                >
+                  <option value="project">Whole project</option>
+                  <option value="active-file">Active file</option>
+                </select>
+              </label>
+
               <div className="learning-assistance" role="group" aria-label="Assistance level">
                 {assistanceOptions.map((option) => (
                   <button
@@ -235,6 +255,8 @@ export function LearningPanel({
             response={response}
             selection={selection}
             busy={Boolean(busy)}
+            projectName={projectName}
+            scope={scope}
             onAction={onAction}
             onInsertSuggestion={onInsertSuggestion}
           />
@@ -273,12 +295,16 @@ function TutorContent({
   response,
   selection,
   busy,
+  projectName,
+  scope,
   onAction,
   onInsertSuggestion,
 }: {
   response: LearningEvaluationResult['response'] | null;
   selection: LearningSelectionPreview | null;
   busy: boolean;
+  projectName: string | null;
+  scope: LearningTutorScope;
   onAction: (action: LearningAction) => void;
   onInsertSuggestion: () => void;
 }): ReactNode {
@@ -287,8 +313,9 @@ function TutorContent({
       <div className="learning-tutor-start">
         <div className="learning-start-intro">
           <span><Sparkles size={18} /></span>
-          <div><strong>Ask about this code</strong><p>Use the current selection or your whole file as context.</p></div>
+          <div><strong>Ask about this project</strong><p>KAI can guide from the whole project and use the active file as the starting point.</p></div>
         </div>
+        <ProjectContextMode projectName={projectName} scope={scope} filePath={selection?.filePath ?? null} />
         <SelectionContext selection={selection} busy={busy} onAction={onAction} />
       </div>
     );
@@ -297,6 +324,7 @@ function TutorContent({
   const remainingSteps = response.steps.slice(1);
   return (
     <div className="learning-response">
+      <ProjectContextMode projectName={projectName} scope={scope} filePath={selection?.filePath ?? null} />
       <SelectionContext selection={selection} busy={busy} onAction={onAction} />
       <header>
         <span className="learning-mastery introduced">Tutor response</span>
@@ -367,6 +395,19 @@ function TutorContent({
           <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
         </LearningSection>
       )}
+    </div>
+  );
+}
+
+function ProjectContextMode({ projectName, scope, filePath }: { projectName: string | null; scope: LearningTutorScope; filePath: string | null }): ReactNode {
+  const activeFile = filePath?.split(/[\\/]/).at(-1) ?? 'the active file';
+  return (
+    <div className={`learning-project-context ${scope}`}>
+      <FolderTree size={13} />
+      <span>
+        <strong>{scope === 'project' ? 'Whole-project guidance' : 'Active-file focus'}</strong>
+        <small>{scope === 'project' ? `${projectName ?? 'This project'} and ${activeFile}` : activeFile}</small>
+      </span>
     </div>
   );
 }

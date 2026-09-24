@@ -340,7 +340,7 @@ export function App(): ReactNode {
       ]);
       setBootstrap(nextBootstrap);
       setConversations(nextConversations);
-      setActiveConversationId(nextBootstrap.activeConversationId ?? nextConversations.find((conversation) => conversation.projectId === nextBootstrap.activeProjectId)?.id ?? null);
+      setActiveConversationId(preferredConversationId(nextBootstrap, nextConversations));
       setCredentials(nextCredentials);
       setLogs(nextLogs);
       setAgentCapabilities(nextAgentCapabilities);
@@ -517,7 +517,7 @@ export function App(): ReactNode {
     const next = await perform(() => window.kaiDesktop.openProject(id).then(unwrap), 'Opening project');
     if (next) {
       setBootstrap(next);
-      setActiveConversationId(next.activeConversationId);
+      setActiveConversationId(preferredConversationId(next, conversations));
     }
   }
 
@@ -1534,6 +1534,18 @@ function serviceFor(bootstrap: BootstrapPayload, kind: 'cognitive1' | 'universal
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'KAI encountered an unexpected error.';
+}
+
+function preferredConversationId(
+  bootstrap: BootstrapPayload,
+  conversations: readonly ConversationRecord[],
+): string | null {
+  if (bootstrap.activeConversationId && conversations.some((conversation) => conversation.id === bootstrap.activeConversationId)) {
+    return bootstrap.activeConversationId;
+  }
+  return conversations
+    .filter((conversation) => conversation.projectId === bootstrap.activeProjectId && !conversation.archived)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.id ?? null;
 }
 
 function serviceNeedsPolling(status: string): boolean {

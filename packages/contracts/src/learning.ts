@@ -4,6 +4,9 @@ import { timestampSchema } from './primitives';
 export const learningAssistanceSchema = z.enum(['learn', 'guided', 'pair', 'copilot']);
 export type LearningAssistance = z.infer<typeof learningAssistanceSchema>;
 
+export const learningTutorScopeSchema = z.enum(['active-file', 'project']);
+export type LearningTutorScope = z.infer<typeof learningTutorScopeSchema>;
+
 export const learningActionSchema = z.enum([
   'explain-selection',
   'explain-file',
@@ -87,6 +90,7 @@ export const learningTutorRequestSchema = z
       endColumn: z.number().int().min(1).max(1_000_000),
     }).strict().optional(),
     language: z.string().max(80).optional(),
+    scope: learningTutorScopeSchema.optional(),
     action: learningActionSchema,
     assistance: learningAssistanceSchema,
     code: z.string().max(120_000),

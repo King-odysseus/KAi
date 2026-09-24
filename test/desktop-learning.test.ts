@@ -182,10 +182,18 @@ describe('desktop learning mode', () => {
     expect(JSON.stringify(bodies[0])).toContain('KAI-owned library policy');
     expect(JSON.stringify(bodies[0])).toContain('KAI project overlay');
     expect(JSON.stringify(bodies[0])).toContain('kai-learning-fixture');
+    expect(JSON.stringify(bodies[0])).toContain('Project brief: kai-learning-fixture');
+    expect(JSON.stringify(bodies[0])).toContain('npm run test');
     expect(JSON.stringify(bodies[0])).toContain('src/value.test.ts');
+    expect(JSON.stringify(bodies[0])).toContain('Scope: whole project');
     expect(JSON.stringify(bodies[0])).not.toContain('MONEY MATTERS MUST NOT LOAD');
     expect(JSON.stringify(bodies[0])).not.toContain('PROJECT_CONTEXT_NODE_MODULE_SECRET');
     expect(JSON.stringify(bodies[0])).not.toContain('PROJECT_CONTEXT_ENV_SECRET');
+
+    await tutor.evaluateDetailed({ ...tutorRequest('explain-file', 'guided'), scope: 'active-file' });
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[1])).toContain('Scope: active file only');
+    expect(JSON.stringify(bodies[1])).not.toContain('Project brief: kai-learning-fixture');
   });
 
   it('generates a reviewable teaching draft with the configured direct provider', async () => {
@@ -502,6 +510,7 @@ function tutorRequest(action: LearningTutorRequest['action'], assistance: Learni
     projectId: 'project-test',
     filePath: 'src/value.ts',
     language: 'typescript',
+    scope: 'project',
     action,
     assistance,
     code: 'let total = 1;\ntotal = total + 2;\n',
