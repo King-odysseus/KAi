@@ -44,6 +44,7 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('editor:documents-saved', handler);
     return () => ipcRenderer.removeListener('editor:documents-saved', handler);
   },
+  markLearningUnderstood: (projectId, lessonId) => ipcRenderer.invoke('learning:understood', { projectId, lessonId }),
   learningProgress: (projectId) => ipcRenderer.invoke('learning:progress', { projectId }),
   learningReadiness: () => ipcRenderer.invoke('learning:readiness', {}),
   updateLearningPreferences: (input) => ipcRenderer.invoke('learning:update-preferences', input),

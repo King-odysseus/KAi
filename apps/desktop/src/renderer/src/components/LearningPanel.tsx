@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   Code2,
+  Copy,
   FileCode2,
   FolderTree,
   GitBranch,
@@ -22,7 +23,7 @@ import {
   Target,
   WandSparkles,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   GitFileInfo,
   LearningAction,
@@ -38,9 +39,16 @@ import type {
   TeachingLibraryEntryInput,
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
+import { projectLessons } from './learning-path';
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
 
 interface LearningPanelProps {
+  projectFiles: string[];
+  onReference: (filePath: string, startLine?: number, endLine?: number) => void;
+  responseLessonId: string | null;
+  onLessonSelect: (lesson: NonNullable<LearningProgress['lessons']>[number]) => void;
+  onUnderstood: (lessonId: string) => void;
+  onRunCheck: () => Promise<string>;
   projectName: string | null;
   progress: LearningProgress | null;
   readiness: LearningReadiness | null;
@@ -52,12 +60,18 @@ interface LearningPanelProps {
   formatting: boolean;
   error: string | null;
   question: string;
+  submittedQuestion: string;
+  conversation: TutorConversationTurn[];
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onScopeChange: (scope: LearningTutorScope) => void;
-  onPreferences: (assistance: LearningAssistance, inlineSuggestions: boolean) => void;
+  onPreferences: (assistance: LearningAssistance, inlineSuggestions: boolean, modes?: LearningAssistance[]) => void;
   onInsertSuggestion: () => void;
-  onRecordLesson: () => void;
+  appliedSuggestionNeedsExplanation: boolean;
+  onExplainAppliedSuggestion: () => void;
+  onStuck: () => void;
+  canEscalateAssistance: boolean;
+  onRecordLesson?: () => void;
   onFormat: () => void;
   teachingLibrary: TeachingLibrary | null;
   teachingBusy: string | null;
@@ -78,6 +92,12 @@ export interface LearningSelectionPreview {
   text: string;
 }
 
+export interface TutorConversationTurn {
+  id: string;
+  question: string;
+  response: LearningEvaluationResult['response'];
+}
+
 const assistanceOptions: Array<{ id: LearningAssistance; label: string; description: string }> = [
   { id: 'learn', label: 'Learn', description: 'Step by step' },
   { id: 'guided', label: 'Guided', description: 'Hints only' },
@@ -95,15 +115,8 @@ const actionOptions: Array<{ id: LearningAction; label: string; icon: ReactNode;
   { id: 'complete', label: 'Complete', icon: <WandSparkles size={14} /> },
 ];
 
-const starterPrompts = [
-  "Explain this project's architecture.",
-  'What should I do next?',
-  'How do I run and test this project?',
-  'Find the riskiest area and explain why.',
-];
-
 export function LearningPanel({
-  projectName,
+  projectFiles, onReference, onUnderstood, onRunCheck, responseLessonId, onLessonSelect,
   progress,
   readiness,
   result,
@@ -114,11 +127,17 @@ export function LearningPanel({
   formatting,
   error,
   question,
+  submittedQuestion,
+  conversation,
   onQuestionChange,
   onAction,
   onScopeChange,
   onPreferences,
   onInsertSuggestion,
+  appliedSuggestionNeedsExplanation,
+  onExplainAppliedSuggestion,
+  onStuck,
+  canEscalateAssistance,
   onRecordLesson,
   onFormat,
   teachingLibrary,
@@ -130,10 +149,24 @@ export function LearningPanel({
   onOpenSettings,
   onClose,
 }: LearningPanelProps): ReactNode {
-  const [tab, setTab] = useState<'tutor' | 'progress' | 'teaching' | 'git'>('tutor');
-  const [controlsOpen, setControlsOpen] = useState(() => !result);
+  const [focus, setFocus] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkOutput, setCheckOutput] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const lessons = useMemo(() => projectLessons(projectFiles, progress), [projectFiles, progress]);
+  const responseUnderstood = progress?.lessons?.find((lesson) => lesson.id === responseLessonId)?.understood ?? false;
+  const reference = result?.response.sourceNotes.find((source) => source.filePath);
+  const runCheck = async (): Promise<void> => {
+    setChecking(true);
+    try { setCheckOutput(await onRunCheck()); }
+    catch (error) { setCheckOutput(error instanceof Error ? error.message : 'Check failed.'); }
+    finally { setChecking(false); }
+  };
+  const [tab, setTab] = useState<'tutor' | 'history' | 'progress' | 'teaching' | 'git'>('tutor');
+  const [controlsOpen, setControlsOpen] = useState(false);
   const [composerOpen, setComposerOpen] = useState(true);
   const assistance = progress?.preferences.assistance ?? 'guided';
+  const teachingModes = progress?.preferences.teachingModes ?? [assistance];
   const inlineSuggestions = progress?.preferences.inlineSuggestions ?? false;
   const response = result?.response ?? null;
   const concepts = progress?.concepts ?? [];
@@ -152,14 +185,22 @@ export function LearningPanel({
     if (result && readiness?.ready) setControlsOpen(false);
   }, [readiness?.ready, result]);
 
+  useEffect(() => {
+    if (tab !== 'tutor') return;
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    scroll.scrollTop = scroll.scrollHeight;
+  }, [tab, conversation.length, submittedQuestion, result]);
+
   return (
-    <aside className="learning-panel" aria-label="Learning tutor">
+    <aside className={`learning-panel ${focus ? 'learning-focus' : ''}`} aria-label="Learning tutor">
       <div className="learning-panel-head">
         <div className="learning-title">
           <span className="learning-mark"><GraduationCap size={16} /></span>
           <div><strong>Learning Mode</strong><small>{overallScore}% local mastery signal</small></div>
         </div>
         <div className="learning-panel-head-actions">
+          <button type="button" className="secondary-button learning-focus-toggle" aria-pressed={focus} onClick={() => { setFocus(!focus); setTab('tutor'); setComposerOpen(true); }}>{focus ? 'Exit focus' : 'Focus'}</button>
           <button
             type="button"
             className="icon-button compact"
@@ -179,24 +220,29 @@ export function LearningPanel({
 
       {tab === 'tutor' && (
         <>
-          {controlsOpen && (
+          {controlsOpen && !focus && (
             <div className="learning-controls" id="learning-controls">
               <div className="learning-assistance" role="group" aria-label="Assistance level">
                 {assistanceOptions.map((option) => (
                   <button
                     key={option.id}
                     type="button"
-                    className={assistance === option.id ? 'active' : ''}
-                    aria-pressed={assistance === option.id}
-                    onClick={() => onPreferences(option.id, option.id === 'copilot' ? inlineSuggestions : false)}
+                    className={teachingModes.includes(option.id) ? 'active' : ''}
+                    aria-pressed={teachingModes.includes(option.id)}
+                    title={`${option.label}: ${option.description}. Click to combine modes.`}
+                    onClick={() => {
+                      const modes = teachingModes.includes(option.id) ? teachingModes.filter((mode) => mode !== option.id) : [...teachingModes, option.id];
+                      if (!modes.length) return;
+                      const primary = assistanceOptions.find((candidate) => modes.includes(candidate.id))!.id;
+                      onPreferences(primary, primary === 'copilot' ? inlineSuggestions : false, modes);
+                    }}
                   >
-                    <span>{option.label}</span>
-                    <small>{option.description}</small>
+                    <span>{teachingModes.includes(option.id) && <CheckCircle2 size={11} aria-hidden="true" />}{option.label}</span>
                   </button>
                 ))}
               </div>
 
-              <label className="learning-inline-toggle">
+              <label className="learning-inline-toggle" title="Copilot only: pause typing or press Alt + Backslash for ghost text. Tab accepts; Escape dismisses. Combined teaching modes keep completion off.">
                 <input
                   type="checkbox"
                   checked={assistance === 'copilot' && inlineSuggestions}
@@ -213,10 +259,11 @@ export function LearningPanel({
                     type="button"
                     disabled={!readiness?.ready || Boolean(busy) || (!selection && option.id !== 'next-step') || (option.id === 'complete' && assistance !== 'copilot')}
                     onClick={() => onAction(option.id)}
+                    aria-label={option.label}
                     title={option.label}
                   >
                     {busy === option.id ? <LoaderCircle className="spin" size={14} /> : option.icon}
-                    <span>{option.label}</span>
+                    <span className="visually-hidden">{option.label}</span>
                   </button>
                 ))}
               </div>
@@ -239,25 +286,78 @@ export function LearningPanel({
 
       <div className="learning-tabs" role="tablist" aria-label="Learning panel views">
         <button type="button" className={tab === 'tutor' ? 'active' : ''} role="tab" aria-selected={tab === 'tutor'} onClick={() => setTab('tutor')}><BookOpen size={13} />Tutor</button>
+        <button type="button" role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</button>
         <button type="button" className={tab === 'progress' ? 'active' : ''} role="tab" aria-selected={tab === 'progress'} onClick={() => setTab('progress')}><GraduationCap size={13} />Progress</button>
         <button type="button" className={tab === 'teaching' ? 'active' : ''} role="tab" aria-selected={tab === 'teaching'} onClick={() => setTab('teaching')}><LibraryBig size={13} />Teaching</button>
         <button type="button" className={tab === 'git' ? 'active' : ''} role="tab" aria-selected={tab === 'git'} onClick={() => setTab('git')}><GitBranch size={13} />Git</button>
       </div>
 
-      <div className="learning-scroll">
+      <div className="learning-scroll" ref={scrollRef}>
+        {!focus && response && progress?.memory && <section className="learning-memory">
+          <strong>Last lesson: {progress.memory.lastLesson}</strong>
+          {progress.memory.filePath && <button type="button" onClick={() => onReference(progress.memory!.filePath!)}>{progress.memory.filePath}</button>}
+          <p>{progress.memory.unresolvedCheck ? `Unresolved check: ${progress.memory.unresolvedCheck}` : progress.memory.understood ? 'Marked understood (self-reported).' : 'No outstanding check.'}</p>
+          {progress.memory.recommendedNext && <button type="button" onClick={() => { onQuestionChange(progress.memory!.recommendedNext); setTab('tutor'); }}>Next: {progress.memory.recommendedNext}</button>}
+          {!progress.memory.understood && <button type="button" disabled={Boolean(busy)} onClick={() => onUnderstood(progress.memory!.lessonId)}>Mark understood</button>}
+        </section>}
+        {!focus && tab === 'progress' && <section className="learning-path">
+          <strong>Learning path</strong>
+          <p>Practice needs first, then project structure. Independent evidence advances the queue.</p>
+          {lessons.map((lesson, index) => <button key={lesson.id} type="button" onClick={() => { onQuestionChange(lesson.prompt); setTab('tutor'); }}><span>{index + 1}. {lesson.title}</span><small>{lesson.filePath ?? 'Based on learning evidence'}</small></button>)}
+          {!lessons.length && <p>Scan or open a project to build your lesson queue.</p>}
+        </section>}
+        {checkOutput && <pre className="learning-check-output" role="status">{checkOutput}</pre>}
         {error && <div className="learning-error" role="alert">{error}</div>}
         {tab === 'tutor' && (
-          <TutorContent
-            response={response}
-            selection={selection}
-            busy={Boolean(busy)}
-            projectName={projectName}
-            scope={scope}
-            onQuestionChange={onQuestionChange}
-            onAction={onAction}
-            onInsertSuggestion={onInsertSuggestion}
-          />
+          <>
+            {conversation.map((turn) => (
+              <div className="learning-conversation-turn" key={turn.id}>
+                <TutorQuestion question={turn.question} />
+                <TutorContent
+                  onReference={onReference}
+                  response={turn.response}
+                  selection={null}
+                  busy={false}
+                  onAction={onAction}
+                  onInsertSuggestion={onInsertSuggestion}
+                  canInsertSuggestion={false}
+                />
+              </div>
+            ))}
+            {submittedQuestion.trim() && <TutorQuestion question={submittedQuestion} />}
+            <TutorContent
+              onReference={onReference}
+              response={response}
+              selection={selection}
+              busy={Boolean(busy)}
+              onAction={onAction}
+              onInsertSuggestion={onInsertSuggestion}
+              canInsertSuggestion
+            />
+            {appliedSuggestionNeedsExplanation && <section className="learning-applied-suggestion-nudge" role="status">
+              <div><BrainCircuit size={14} /><strong>You applied Tutor code</strong></div>
+              <p>Before moving on, explain in your own words what it does and why it belongs here. KAI will use your explanation as learning evidence.</p>
+              <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={onExplainAppliedSuggestion}>Explain it back</button>
+            </section>}
+          </>
         )}
+        {response && tab === 'tutor' && <div className="learning-response-actions">
+          {reference?.filePath && <>
+            <button type="button" onClick={() => onReference(reference.filePath!)}>Open referenced file</button>
+            {reference.startLine && <button type="button" onClick={() => onReference(reference.filePath!, reference.startLine, reference.endLine)}>Select lines</button>}
+          </>}
+          <button type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</button>
+          <button type="button" disabled={Boolean(busy) || !responseLessonId || responseUnderstood} onClick={() => responseLessonId && onUnderstood(responseLessonId)}>{responseUnderstood ? 'Understood' : 'Mark understood'}</button>
+        </div>}
+        {tab === 'history' && <section className="learning-history">
+          <strong>Lesson history</strong><p>Last 30 lessons saved for this project.</p>
+          {!(progress?.lessons?.length) && <p>Your lessons will appear here after a tutor response.</p>}
+          {progress?.lessons?.map((lesson) => <button key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(lesson); setTab('tutor'); }}>
+            <strong>{lesson.response.title}</strong>
+            <small>{new Date(lesson.createdAt).toLocaleString()} - {lesson.filePath ?? 'Whole project'}</small>
+            <span>{lesson.understood ? 'Understood (self-reported)' : 'Review lesson'}</span>
+          </button>)}
+        </section>}
         {tab === 'progress' && <ProgressContent progress={progress} />}
         {tab === 'teaching' && (
           <TeachingLibraryPanel
@@ -274,15 +374,18 @@ export function LearningPanel({
       {tab === 'tutor' && (
         <TutorComposer
           question={question}
+          submittedQuestion={submittedQuestion}
           busy={Boolean(busy)}
           selection={selection}
           response={Boolean(response)}
           scope={scope}
-          open={composerOpen}
+          open={focus || composerOpen}
           onToggle={() => setComposerOpen((current) => !current)}
           onScopeChange={onScopeChange}
           onQuestionChange={onQuestionChange}
           onAction={onAction}
+          onStuck={onStuck}
+          canEscalateAssistance={canEscalateAssistance}
           onRecordLesson={onRecordLesson}
         />
       )}
@@ -291,50 +394,44 @@ export function LearningPanel({
 }
 
 function TutorContent({
+  onReference,
   response,
   selection,
   busy,
-  projectName,
-  scope,
-  onQuestionChange,
   onAction,
   onInsertSuggestion,
+  canInsertSuggestion = true,
 }: {
+  onReference: LearningPanelProps['onReference'];
   response: LearningEvaluationResult['response'] | null;
   selection: LearningSelectionPreview | null;
   busy: boolean;
-  projectName: string | null;
-  scope: LearningTutorScope;
-  onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onInsertSuggestion: () => void;
+  canInsertSuggestion?: boolean;
 }): ReactNode {
+  const [copied, setCopied] = useState(false);
   if (!response) {
-    return (
-      <div className="learning-tutor-start">
-        <div className="learning-start-intro">
-          <span><Sparkles size={18} /></span>
-          <div><strong>Ask about this project</strong><p>Use whole-project guidance, or switch the prompt to file context when you want a narrower answer.</p></div>
-        </div>
-        <ProjectContextMode projectName={projectName} scope={scope} filePath={selection?.filePath ?? null} />
-        <div className="learning-starters" aria-label="Suggested tutor prompts">
-          <span>Try asking</span>
-          <div>
-            {starterPrompts.map((prompt) => (
-              <button key={prompt} type="button" onClick={() => onQuestionChange(prompt)}>{prompt}</button>
-            ))}
-          </div>
-        </div>
-        <SelectionContext selection={selection} busy={busy} onAction={onAction} />
-      </div>
-    );
+    return null;
   }
   const nextStep = response.steps[0];
   const remainingSteps = response.steps.slice(1);
+  const suggestedLocation = response.sourceNotes.find((source) => source.filePath);
+  const applyLabel = response.suggestion?.replaceSelection && selection?.text.trim()
+    ? 'Apply to selected code'
+    : 'Insert at cursor';
+  const copySuggestion = async (): Promise<void> => {
+    if (!response.suggestion || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(response.suggestion.code);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
   return (
     <div className="learning-response">
-      <ProjectContextMode projectName={projectName} scope={scope} filePath={selection?.filePath ?? null} />
-      <SelectionContext selection={selection} busy={busy} onAction={onAction} />
+      {selection?.text.trim() && <SelectionContext selection={selection} busy={busy} onAction={onAction} />}
       <header>
         <span className="learning-mastery introduced">Tutor response</span>
         <h2>{response.title}</h2>
@@ -344,6 +441,12 @@ function TutorContent({
         <strong>{nextStep.title}</strong>
         <p>{nextStep.explanation}</p>
         {response.checks[0] && <small><CheckCircle2 size={13} />Done when: {response.checks[0]}</small>}
+      </section>
+      <section className="learning-ownership-brief" aria-label="What to understand before accepting this work">
+        <div><BrainCircuit size={14} /><strong>Own this change</strong></div>
+        <p><b>Architecture:</b> {response.purpose}</p>
+        <p><b>Check before accepting:</b> {response.checks[0] ?? 'Review the changed code and explain what it does in your own words.'}</p>
+        <small>Generated code is a suggestion. Understanding and verification are what make it yours.</small>
       </section>
       <LearningSection title="Recap">{response.recap}</LearningSection>
       <LearningSection title="Purpose">{response.purpose}</LearningSection>
@@ -394,36 +497,23 @@ function TutorContent({
           <div><Sparkles size={14} /><strong>Suggested change</strong></div>
           <p>{response.suggestion.explanation}</p>
           <pre><code>{response.suggestion.code}</code></pre>
+          <small className="learning-suggestion-target">
+            {response.suggestion.replaceSelection && selection?.text.trim()
+              ? 'This will replace the selected code.'
+              : 'This will insert at your current cursor position.'}
+          </small>
           <div className="learning-question-actions">
-            <button type="button" className="primary-button" onClick={onInsertSuggestion}><WandSparkles size={13} />Insert suggestion</button>
+            <button type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</button>
+            {suggestedLocation?.filePath && <button type="button" className="secondary-button" onClick={() => onReference(suggestedLocation.filePath!, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open target</button>}
+            {canInsertSuggestion && <button type="button" className="primary-button" onClick={onInsertSuggestion}><WandSparkles size={13} />{applyLabel}</button>}
           </div>
         </div>
       )}
       {response.sourceNotes.length > 0 && (
-        <LearningSection title="Sources" collapsible defaultOpen={false}>
-          <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
+        <LearningSection title="Sources" collapsible defaultOpen={true}>
+          <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.filePath ? <button type="button" onClick={() => onReference(source.filePath!, source.startLine, source.endLine)}>{source.label} - {source.filePath}{source.startLine ? `:${source.startLine}${source.endLine ? `-${source.endLine}` : ''}` : ''}</button> : source.url && /^https?:\/\//i.test(source.url) ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
         </LearningSection>
       )}
-    </div>
-  );
-}
-
-function ProjectContextMode({ projectName, scope, filePath }: { projectName: string | null; scope: LearningTutorScope; filePath: string | null }): ReactNode {
-  const activeFile = filePath?.split(/[\\/]/).at(-1) ?? null;
-  const detail = scope === 'project'
-    ? [projectName ?? 'This project', activeFile].filter(Boolean).join(' · ')
-    : activeFile ?? 'Open a file to use file context';
-  return (
-    <div className={`learning-project-context ${scope}`}>
-      <FolderTree size={13} />
-      <span className="learning-project-context-copy">
-        <strong>{scope === 'project' ? 'Whole-project guidance' : 'Active-file focus'}</strong>
-        <small>{detail}</small>
-      </span>
-      <div className="learning-context-evidence" aria-label="Context available to the tutor">
-        <span>{scope === 'project' ? 'Project scan' : 'Active file'}</span>
-        {activeFile ? <span>File: {activeFile}</span> : <span>No file required</span>}
-      </div>
     </div>
   );
 }
@@ -461,6 +551,7 @@ function SelectionContext({
 
 function TutorComposer({
   question,
+  submittedQuestion,
   busy,
   selection,
   response,
@@ -470,9 +561,12 @@ function TutorComposer({
   onScopeChange,
   onQuestionChange,
   onAction,
+  onStuck,
+  canEscalateAssistance,
   onRecordLesson,
 }: {
   question: string;
+  submittedQuestion: string;
   busy: boolean;
   selection: LearningSelectionPreview | null;
   response: boolean;
@@ -482,8 +576,29 @@ function TutorComposer({
   onScopeChange: (scope: LearningTutorScope) => void;
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
+  onStuck: () => void;
+  canEscalateAssistance: boolean;
   onRecordLesson?: () => void;
 }): ReactNode {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [progressTick, setProgressTick] = useState(0);
+  useEffect(() => {
+    if (!busy) {
+      setProgressTick(0);
+      return;
+    }
+    const timer = window.setInterval(() => setProgressTick((current) => current + 1), 3_500);
+    return () => window.clearInterval(timer);
+  }, [busy]);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const resize = (): void => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(input.parentElement!);
+    return () => observer.disconnect();
+  }, [question, open]);
   const selected = Boolean(selection?.text.trim());
   const fileLabel = selection
     ? `${selection.filePath.split('/').at(-1) ?? selection.filePath} - ${formatSelectionRange(selection, selected)}`
@@ -535,21 +650,24 @@ function TutorComposer({
       {open && (
         <div className="learning-composer-body" id="learning-composer-body">
           <textarea
+            ref={inputRef}
             aria-label="Tutor question"
             value={question}
             onChange={(event) => onQuestionChange(event.target.value)}
             placeholder={placeholder}
-            rows={response ? 3 : 4}
+            rows={1}
           />
+          {busy && <TutorProcessing tick={progressTick} />}
           <footer>
             <span title={selection?.filePath ?? undefined}>{contextLabel}</span>
             <div>
+              <button type="button" className="secondary-button" disabled={busy || !canEscalateAssistance || (scope === 'active-file' && !selection)} onClick={onStuck} title={canEscalateAssistance ? 'Get one level more help for this request only' : 'You are already using the highest level of help.'}><Lightbulb size={13} />I'm stuck</button>
               {response && onRecordLesson && (
                 <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
               )}
               <button type="button" className="primary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={() => onAction('next-step')}>
                 {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
-                <span>{response ? 'Ask' : 'Ask tutor'}</span>
+                <span>{busy ? 'Working...' : response ? 'Ask' : 'Ask tutor'}</span>
               </button>
             </div>
           </footer>
@@ -632,4 +750,34 @@ function masteryLabel(mastery: LearningMastery): string {
 function formatDate(value: string): string {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : value;
+}
+
+
+function TutorProcessing({ tick }: { tick: number }): ReactNode {
+  const messages = [
+    'Reading your project context...',
+    'Finding the most useful next step...',
+    'Why do programmers prefer dark mode? Light attracts bugs.',
+    'Turning the project scan into an answer...',
+    'A byte walks into a bar. The bartender asks: parity or no parity?',
+    'Still working — the answer is on its way.',
+  ];
+  return (
+    <div className="learning-composer-processing" role="status" aria-live="polite">
+      <LoaderCircle className="spin" size={15} />
+      <div>
+        <span>{messages[tick % messages.length]}</span>
+        <small>{tick * 3.5}s elapsed</small>
+      </div>
+    </div>
+  );
+}
+
+function TutorQuestion({ question }: { question: string }): ReactNode {
+  return (
+    <article className="learning-chat-question" aria-label="Your tutor question">
+      <small>You</small>
+      <p>{question}</p>
+    </article>
+  );
 }

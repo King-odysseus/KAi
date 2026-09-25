@@ -31,11 +31,18 @@ try {
     timeout: 30_000,
   });
   const page = await electronApp.firstWindow();
-  page.on('pageerror', (error) => rendererErrors.push(error.message));
+  page.on('pageerror', (error) => {
+    // Monaco cancels internal async decorations when the test rapidly changes models.
+    // Ignore only that library cancellation; retain all application errors.
+    if (error.name === 'Canceled' && error.message === 'Canceled' && /assets\/async-/.test(error.stack ?? '')) return;
+    rendererErrors.push(error.stack ?? error.message);
+  });
   await waitForProjectName(page, 'Sample Project');
   await verifyBuildIdentifier(page);
 
   await verifyCodeEditor(page);
+  await verifySettingsCheckboxRetention(page);
+  if (!process.env.KAI_TUTOR_SMOKE) {
   await verifyEditorAutosave(page);
   await verifyLivePreview(electronApp, page);
   await verifyGitAndTerminal(page);
@@ -43,6 +50,7 @@ try {
   await verifyTasksAndSettings(page);
   await verifyThemes(page);
   await verifyIndependentWindows(electronApp, page);
+  }
 
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
   console.log(`KAI workbench smoke passed. Screenshots: ${outputDirectory}`);
@@ -78,6 +86,8 @@ async function verifyCodeEditor(page) {
   await assertTutorTextareaStyled(page);
   await verifyTutorScope(page);
   await verifyTutorCollapsibleSections(page);
+  await verifyTutorCompactControls(page);
+  await verifyTutorInlineCompletion(page);
   await verifyResizablePane(page, 'Resize project files pane', '.code-sidebar');
   await verifyResizablePane(page, 'Resize learning tutor pane', '.learning-panel');
   await page.screenshot({ path: path.join(outputDirectory, 'code-1440x920.png') });
@@ -174,7 +184,7 @@ async function verifyEditorAutosave(page) {
   if (await autoSaveToggle.isChecked()) throw new Error('The autosave smoke expected autosave to start disabled.');
   await autoSaveToggle.check();
   await page.getByRole('button', { name: 'Save editor settings' }).click();
-  await page.getByText('Settings saved and shared with all open KAI windows.').waitFor();
+  await page.getByText('Code editor saved and shared with all open KAI windows.').waitFor();
 
   await navigation.getByRole('button', { name: 'Code', exact: true }).click();
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
@@ -261,7 +271,7 @@ async function verifyOperations(page) {
   await page.getByText('# KAI diagnostics').waitFor();
   const report = await page.locator('.verify-output').last().innerText();
   if (/Bearer\s+[A-Za-z0-9._-]{10,}/.test(report) || /sk-[A-Za-z0-9_-]{10,}/.test(report)) throw new Error('The diagnostics report contains something that looks like a credential.');
-  if (report.includes(process.env.USERNAME ?? ' ')) throw new Error('The diagnostics report contains the Windows user name.');
+  if (report.includes(process.env.USERNAME ?? '')) throw new Error('The diagnostics report contains the Windows user name.');
   await page.screenshot({ path: path.join(outputDirectory, 'diagnostics-1440x920.png') });
 
   await page.getByRole('tab', { name: 'Active work' }).click();
@@ -382,13 +392,13 @@ async function verifyIndependentWindows(application, page) {
   const secondWindowPromise = application.waitForEvent('window');
   await page.getByRole('button', { name: 'New window' }).click();
   const second = await secondWindowPromise;
-  second.on('pageerror', (error) => rendererErrors.push(error.message));
+  second.on('pageerror', (error) => rendererErrors.push(error.stack ?? error.message));
   await second.locator('.project-picker-button').getByText('No project', { exact: true }).waitFor({ timeout: 20_000 });
 
   const thirdWindowPromise = application.waitForEvent('window');
   await page.keyboard.press('Control+Shift+N');
   const third = await thirdWindowPromise;
-  third.on('pageerror', (error) => rendererErrors.push(error.message));
+  third.on('pageerror', (error) => rendererErrors.push(error.stack ?? error.message));
   await third.locator('.project-picker-button').getByText('No project', { exact: true }).waitFor({ timeout: 20_000 });
   await third.close();
 
@@ -539,7 +549,7 @@ async function assertTutorTextareaStyled(page) {
       backgroundColor: computed.backgroundColor,
     };
   });
-  if (style.minHeight < 100 || style.paddingTop < 12 || style.paddingLeft < 12 || style.borderRadius < 8) {
+  if (style.minHeight < 32 || style.minHeight > 48 || style.paddingTop < 8 || style.paddingLeft < 12 || style.borderRadius < 8) {
     throw new Error(`The tutor textarea style is incomplete: ${JSON.stringify(style)}`);
   }
   if (style.caretColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
@@ -561,9 +571,10 @@ async function verifyTutorScope(page) {
   await scope.selectOption('project');
   await page.getByText('Whole-project guidance', { exact: true }).waitFor();
 
-  const starter = page.getByLabel('Suggested tutor prompts').getByRole('button', { name: "Explain this project's architecture." });
+  const starter = page.getByLabel('Suggested tutor prompts').getByRole('button').first();
+  const starterText = await starter.innerText();
   await starter.click();
-  if ((await page.getByLabel('Tutor question').inputValue()) !== "Explain this project's architecture.") {
+  if ((await page.getByLabel('Tutor question').inputValue()) !== starterText) {
     throw new Error('A suggested tutor prompt did not populate the prompt field.');
   }
   await page.getByLabel('Tutor question').fill('');
@@ -658,4 +669,103 @@ async function verifyResizablePane(page, separatorName, paneSelector) {
   if (!reset || Math.abs(reset.width - before.width) > 18) {
     throw new Error(`The pane ${paneSelector} did not reset predictably: ${JSON.stringify({ before, reset })}`);
   }
+}
+
+
+async function verifyTutorCompactControls(page) {
+  const input = page.getByLabel('Tutor question');
+  await input.fill('');
+  const small = await input.boundingBox();
+  if (!small || small.height > 48) throw new Error('Tutor prompt must start as one line.');
+  await input.fill('Explain this line.\nAnd this part.\nAnd one more.\nWhat should I test?');
+  const expanded = await input.boundingBox();
+  if (!expanded || expanded.height <= small.height) throw new Error('Tutor prompt did not grow.');
+  await input.fill('');
+  const modes = page.getByRole('group', { name: 'Assistance level' });
+  const learn = modes.getByRole('button', { name: 'Learn', exact: true });
+  await learn.click();
+  await page.waitForFunction(() => document.querySelectorAll('.learning-assistance button[aria-pressed="true"]').length === 2);
+  if (await learn.getAttribute('aria-pressed') !== 'true') throw new Error('Learn did not stay selected.');
+  const hint = page.getByRole('button', { name: 'Hint', exact: true });
+  if (await hint.getAttribute('title') !== 'Hint') throw new Error('Compact action has no tooltip.');
+  const box = await hint.boundingBox();
+  if (!box || box.width > 40) throw new Error('Tutor action is not compact.');
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
+  await page.getByText('Lesson history', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: 'Tutor', exact: true }).click();
+  await page.getByRole('button', { name: 'Focus', exact: true }).click();
+  if (await page.getByRole('tab', { name: 'History', exact: true }).isVisible()) throw new Error('Focus mode still shows tabs.');
+  await input.waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'tutor-focus.png') });
+  await page.getByRole('button', { name: 'Exit focus', exact: true }).click();
+  await page.getByRole('tab', { name: 'History', exact: true }).waitFor();
+}
+
+
+async function verifyTutorInlineCompletion(page) {
+  const progress = await page.evaluate(async () => (await window.kaiDesktop.learningProgress('project-workbench-smoke')).data);
+  const response = { title: 'Smoke lesson', recap: 'Remember this lesson.', purpose: 'Inspect the project.', analogy: { title: 'Map', explanation: 'Files form a map.', mappings: [], limits: 'Read the code.' }, steps: [{ title: 'Do this next', explanation: 'Inspect the cited line.' }], concepts: [], codePreview: '', lineByLine: [], checks: ['Explain the line.'], sourceNotes: [{ label: 'Readme', filePath: 'README.md', startLine: 1, endLine: 1 }], followUpQuestion: '', suggestion: null };
+  await electronApp.evaluate(({ ipcMain }, { progress, response }) => {
+    ipcMain.removeHandler('learning:evaluate');
+    ipcMain.handle('learning:evaluate', async (_event, request) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (request.completionContext) return { ok: true, data: { progress, response: { ...response, suggestion: { code: '// INLINE_SMOKE', language: 'typescript', replaceSelection: false, explanation: 'Smoke completion' } } } };
+      return { ok: true, data: { response, progress: { ...progress, lessons: [{ id: 'smoke-lesson', createdAt: new Date().toISOString(), filePath: request.filePath, response, understood: false }], memory: { lessonId: 'smoke-lesson', lastLesson: response.title, filePath: request.filePath, unresolvedCheck: 'Explain the line.', recommendedNext: '', understood: false } } } };
+    });
+  }, { progress, response });
+  await page.getByRole('button', { name: 'Ask tutor', exact: true }).click();
+  await page.locator('.learning-composer-processing').waitFor();
+  await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Open referenced file', exact: true }).click();
+  await page.getByRole('button', { name: 'Close README.md', exact: true }).waitFor();
+  if (!(await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).isVisible())) throw new Error('Opening a file cleared the lesson.');
+  await page.getByRole('button', { name: 'Select lines', exact: true }).click();
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
+  await page.locator('.learning-history button').first().click();
+  await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Close README.md', exact: true }).click();
+  // The initial multi-selection is Learn + Guided. Leave only Copilot.
+  const modes = page.getByRole('group', { name: 'Assistance level' });
+  if (!(await modes.isVisible())) await page.getByRole('button', { name: 'Expand learning controls', exact: true }).click();
+  await modes.getByRole('button', { name: 'Copilot', exact: true }).click();
+  await modes.getByRole('button', { name: 'Learn', exact: true }).click();
+  await modes.getByRole('button', { name: 'Guided', exact: true }).click();
+  const inline = page.getByRole('checkbox', { name: 'Inline suggestions', exact: true });
+  await inline.check();
+  await page.getByRole('tab', { name: 'History', exact: true }).click();
+  await page.getByRole('tab', { name: 'Tutor', exact: true }).click();
+  if (!(await inline.isChecked())) throw new Error('Inline checkbox reverted.');
+  const saved = await page.evaluate(async () => (await window.kaiDesktop.learningProgress('project-workbench-smoke')).data);
+  if (!saved.preferences.inlineSuggestions) throw new Error('Inline checkbox was not persisted.');
+  await page.locator('.monaco-editor .view-lines').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.press('Alt+Backslash');
+  await page.locator('.ghost-text-decoration, .ghost-text').first().waitFor({ timeout: 15_000 });
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('.monaco-editor .view-lines')?.textContent?.includes('INLINE_SMOKE'));
+  await inline.uncheck();
+  await page.keyboard.press('Escape');
+}
+
+
+async function verifySettingsCheckboxRetention(page) {
+  await page.locator('.nav-rail').getByRole('button', { name: 'Settings', exact: true }).click();
+  const overwatch = page.getByRole('checkbox', { name: /Enable Overwatch/ });
+  await overwatch.check();
+  // An unrelated write broadcasts fresh settings to the open form.
+  await page.evaluate(async () => {
+    const current = (await window.kaiDesktop.getSettings()).data;
+    await window.kaiDesktop.updateSettings({ logRetentionEntries: current.logRetentionEntries + 1 });
+  });
+  await page.waitForTimeout(500);
+  if (!(await overwatch.isChecked())) throw new Error('Settings refresh discarded the Overwatch checkbox draft.');
+  await page.getByRole('button', { name: 'Save all changes' }).click();
+  await page.getByText('saved and shared with all open KAI windows.', { exact: false }).waitFor();
+  const saved = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data);
+  if (!saved.cognitive1.overwatch.enabled) throw new Error('Overwatch checkbox did not persist.');
+  await page.locator('.nav-rail').getByRole('button', { name: 'Code', exact: true }).click();
+  await page.locator('.nav-rail').getByRole('button', { name: 'Settings', exact: true }).click();
+  if (!(await overwatch.isChecked())) throw new Error('Overwatch checkbox reverted after navigation.');
+  await page.locator('.nav-rail').getByRole('button', { name: 'Code', exact: true }).click();
 }

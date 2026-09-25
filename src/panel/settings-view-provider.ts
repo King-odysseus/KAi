@@ -500,7 +500,7 @@ export class SettingsViewProvider {
 
       const kaiBase = kp.get<string>('targetBaseUrl', '');
       const legBase = lp.get<string>('targetBaseUrl', '');
-      const baseUrl = kaiBase || legBase || 'https://api.deepseek.com/anthropic';
+      const baseUrl = kaiBase || legBase || 'https://api.deepseek.com';
 
       const defaultModel = kp.get<string>('defaultModel', '') || lp.get<string>('defaultModel', '') || 'deepseek-v4-pro';
       const modelMap = nonEmptyRecord(kp.get<Record<string, string>>('modelMap', {}))
@@ -1067,4 +1067,3 @@ function nonEmptyRecord<T extends Record<string, unknown>>(r: T | undefined): T 
   if (!r || typeof r !== 'object') return undefined;
   return Object.keys(r).length > 0 ? r : undefined;
 }
-

@@ -1176,8 +1176,8 @@
 .learning-composer textarea {
   box-sizing: border-box;
   width: 100%;
-  min-height: 104px;
-  padding: 13px 14px;
+  min-height: 38px;
+  padding: 8px 12px;
   resize: vertical;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1194,7 +1194,7 @@
 }
 
 .learning-composer.follow-up textarea {
-  min-height: 88px;
+  min-height: 38px;
 }
 
 .learning-composer textarea::placeholder {
@@ -1594,6 +1594,11 @@
 
 .learning-suggestion p {
   margin: 0;
+}
+
+.learning-suggestion-target {
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 .learning-suggestion pre {
@@ -2594,3 +2599,80 @@
 .diagnostic-check small {
   color: var(--text-dim);
 }
+
+/* Tutor continuity, evidence actions, and focused reading. */
+.learning-composer textarea { max-height: 160px; resize: none; overflow-y: auto; }
+.learning-memory, .learning-path, .learning-pending { padding: 12px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.learning-memory p, .learning-path p { font-size: 12px; color: var(--text-dim); }
+.learning-path button { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; margin-top: 6px; }
+.learning-path small, .learning-pending small { display: block; color: var(--text-dim); font-size: 11px; }
+.learning-memory button, .learning-path button, .learning-response-actions button, .learning-sources button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; color: var(--text); background: var(--bg-input); cursor: pointer; overflow-wrap: anywhere; }
+.learning-response-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.learning-response-actions button:disabled { opacity: .5; cursor: default; }
+.learning-pending { display: flex; align-items: center; gap: 10px; }
+.learning-chat-question {
+  width: fit-content;
+  max-width: min(86%, 680px);
+  margin: 0 0 10px auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(111, 168, 255, 0.55);
+  border-radius: 9px 9px 2px 9px;
+  color: var(--text);
+  background: rgba(111, 168, 255, 0.14);
+}
+.learning-chat-question small { color: var(--blue); font-size: 10px; font-weight: 700; }
+.learning-chat-question p { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; }
+.learning-conversation-turn { margin-bottom: 18px; }
+.learning-conversation-turn .learning-response { opacity: 0.9; }
+.learning-composer-processing {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--mint);
+  border-radius: 7px;
+  background: var(--mint-soft);
+  color: var(--text);
+}
+.learning-composer-processing > div { display: grid; gap: 2px; min-width: 0; }
+.learning-composer-processing span,
+.learning-composer-processing small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.learning-composer-processing span { color: var(--mint-strong); font-size: 12px; }
+.learning-composer-processing small { color: var(--text-dim); font-size: 11px; }
+.learning-check-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.learning-focus > .learning-tabs,
+.learning-focus .learning-panel-head-actions > :not(.learning-focus-toggle),
+.learning-focus .learning-title,
+.learning-focus .learning-composer header,
+.learning-focus .learning-composer footer > span,
+.learning-focus .learning-composer .secondary-button,
+.learning-focus .learning-response > .learning-context-mode,
+.learning-focus .learning-response > .learning-selection-context { display: none; }
+.learning-focus .learning-panel-head { justify-content: flex-end; }
+.learning-focus > .learning-composer { flex-shrink: 0; margin-top: auto; }
+
+.learning-focus .learning-response > .learning-context-mode,
+.learning-focus .learning-response > .learning-selection { display: none; }
+
+.learning-assistance { padding: 3px; gap: 3px; }
+.learning-assistance button { min-height: 28px; padding: 5px 7px; }
+.learning-controls .learning-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.learning-controls .learning-actions button { display: inline-flex; width: 30px; height: 30px; min-height: 30px; align-items: center; justify-content: center; padding: 0; }
+.learning-controls { gap: 7px; }
+.learning-inline-toggle { margin: 0; }
+
+.learning-history { display: flex; flex-direction: column; gap: 8px; }
+.learning-history button { display: flex; flex-direction: column; gap: 5px; text-align: left; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-input); color: var(--text); overflow-wrap: anywhere; cursor: pointer; }
+.learning-history small, .learning-history p { color: var(--text-dim); }
+.learning-tabs { overflow-x: auto; flex-shrink: 0; }
+
+.learning-assistance button.active, .learning-assistance button.active:hover,
+.learning-tabs button.active, .learning-tabs button.active:hover {
+  color: var(--mint-strong); background: var(--mint-soft); box-shadow: inset 0 0 0 1px var(--mint);
+}
+.learning-assistance button > span { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+
+.learning-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.learning-tabs button { font-size: 10px; padding-inline: 3px; gap: 3px; }
+.learning-tabs button svg { display: none; }

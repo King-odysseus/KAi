@@ -18,6 +18,13 @@ afterEach(async () => {
 });
 
 describe('learning mode preference', () => {
+  it('persists combined teaching modes across projects and restarts', async () => {
+    const first = await store();
+    await first.store.updatePreferences({ projectId: 'p1', assistance: 'learn', inlineSuggestions: false, teachingModes: ['learn', 'guided', 'pair'] });
+    const second = await store(first.dir);
+    expect((await second.store.get('p2')).preferences.teachingModes).toEqual(['learn', 'guided', 'pair']);
+  });
+
   it('starts as Guided with inline suggestions off', async () => {
     const { store: learning } = await store();
     expect((await learning.get('p1')).preferences).toEqual({ assistance: 'guided', inlineSuggestions: false });

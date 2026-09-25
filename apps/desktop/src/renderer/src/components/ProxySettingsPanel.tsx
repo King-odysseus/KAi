@@ -31,6 +31,11 @@ const claudeAliases = [
 ];
 
 const agentPlaceholderModels = ['gpt-5.5', 'qwen-proxy', 'qwen-coder-plus', 'kimi-for-coding', 'kimi-k2.6'];
+const DEEPSEEK_MODELS = ['deepseek-flash', 'deepseek-v4-pro'];
+const CLAUDE_MODELS = ['deepseek-flash', 'deepseek-v4-pro', 'claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5'];
+const CODEX_MODELS = ['gpt-6-astra', 'gpt-5.5', ...DEEPSEEK_MODELS];
+const QWEN_MODELS = ['qwen-coder-plus', 'qwen-proxy', ...DEEPSEEK_MODELS];
+const KIMI_MODELS = ['kimi-for-coding', 'kimi-k2.6', ...DEEPSEEK_MODELS];
 
 function mapAliases(model: string): Record<string, string> {
   return Object.fromEntries([...claudeAliases, ...agentPlaceholderModels].map((alias) => [alias, model]));
@@ -254,6 +259,18 @@ export function ProxySettingsPanel({
           />
         </SettingsSection>
 
+        <SettingsSection title="Agent profiles" icon={<KeyRound size={16} />} wide>
+          <p className="settings-note">Each CLI keeps its own native sign-in. The proxy profile below controls only that agent’s routed runs; keys are credential IDs in the desktop vault.</p>
+          <AgentProfiles
+            draft={draft}
+            patch={patch}
+            credentialStatus={credentialStatus}
+            busy={busy}
+            onSaveCredential={onSaveCredential}
+            onSaveProfile={save}
+          />
+        </SettingsSection>
+
         <SettingsSection title="Service and main provider" icon={<Route size={16} />}>
           <ToggleField
             label="Enable Universal Proxy"
@@ -362,15 +379,6 @@ export function ProxySettingsPanel({
           <AgentPins draft={draft} patch={patch} />
           <NamedProviders draft={draft} patch={patch} />
           <FallbackProviders draft={draft} patch={patch} />
-        </SettingsSection>
-
-        <SettingsSection title="Agent backends" icon={<KeyRound size={16} />} wide>
-          <p className="settings-note">Backend overrides apply only to tagged agent traffic. API keys remain credential IDs in the desktop vault.</p>
-          <div className="proxy-agent-backends">
-            <AgentBackendFields title="Kimi Code" config={draft.kimiConfig} onChange={(kimiConfig) => patch({ kimiConfig })} />
-            <AgentBackendFields title="Qwen Code" config={draft.qwenConfig} onChange={(qwenConfig) => patch({ qwenConfig })} />
-            <AgentBackendFields title="Codex" config={draft.codexConfig} onChange={(codexConfig) => patch({ codexConfig })} />
-          </div>
         </SettingsSection>
 
         <SettingsSection title="Reliability" icon={<RefreshCw size={16} />}>
@@ -566,14 +574,103 @@ function AgentPins({ draft, patch }: { draft: ProxySettings; patch: (update: Par
   );
 }
 
-function AgentBackendFields({ title, config, onChange }: { title: string; config: AgentBackend; onChange: (config: AgentBackend) => void }): ReactNode {
+function AgentBackendFields({ title, config, models, onChange }: { title: string; config: AgentBackend; models: string[]; onChange: (config: AgentBackend) => void }): ReactNode {
   return (
     <div className="proxy-agent-backend">
       <ToggleField label={title} detail="Use this backend for tagged requests from the agent." checked={config.enabled} onChange={(enabled) => onChange({ ...config, enabled })} />
       <TextField label="Base URL" value={config.baseUrl} onChange={(baseUrl) => onChange({ ...config, baseUrl })} />
       <TextField label="Credential ID" value={config.credentialId ?? ''} onChange={(credentialId) => onChange(withOptional(config, 'credentialId', credentialId))} />
-      <TextField label="Default model" value={config.defaultModel} onChange={(defaultModel) => onChange({ ...config, defaultModel })} />
-      <TextField label="Client relay model" value={config.configModel ?? ''} onChange={(configModel) => onChange(withOptional(config, 'configModel', configModel))} />
+      <ModelField label="Default model" value={config.defaultModel} options={models} onChange={(defaultModel) => onChange({ ...config, defaultModel })} />
+      <ModelField label="Client relay model" value={config.configModel ?? ''} options={models} onChange={(configModel) => onChange(withOptional(config, 'configModel', configModel))} />
+    </div>
+  );
+}
+
+function AgentProfiles({
+  draft, patch, credentialStatus, busy, onSaveCredential, onSaveProfile,
+}: {
+  draft: ProxySettings;
+  patch: (update: Partial<ProxySettings>) => void;
+  credentialStatus: CredentialStatus;
+  busy: boolean;
+  onSaveCredential: (id: string, value: string) => Promise<void> | void;
+  onSaveProfile: () => Promise<void>;
+}): ReactNode {
+  const providerNames = Object.keys(draft.providers);
+  const pin = (agent: string): string => draft.agentRoutes[agent] ?? '__shared__';
+  const setPin = (agent: string, provider: string): void => patch({
+    agentRoutes: provider === '__shared__'
+      ? omitRecord(draft.agentRoutes, agent)
+      : { ...draft.agentRoutes, [agent]: provider },
+  });
+  const providerPicker = (agent: string): ReactNode => (
+    <label className="field">
+      <span>Proxy provider</span>
+      <select value={pin(agent)} onChange={(event) => setPin(agent, event.target.value)}>
+        <option value="__shared__">Shared upstream</option>
+        {providerNames.map((name) => <option key={name} value={name}>{name}</option>)}
+      </select>
+    </label>
+  );
+  const credentialState = (agent: string, backend?: AgentBackend): ReactNode => {
+    const pinned = draft.agentRoutes[agent];
+    const credentialId = backend?.enabled
+      ? backend.credentialId
+      : pinned
+        ? draft.providers[pinned]?.credentialId
+        : draft.credentialId;
+    const ready = Boolean(credentialId && credentialStatus.ids.includes(credentialId));
+    return <span className={`proxy-profile-credential ${ready ? 'ready' : 'missing'}`}>
+      {ready ? `Proxy credential ready · ${credentialId}` : `Missing proxy credential · ${credentialId || 'choose a credential ID'}`}
+    </span>;
+  };
+  const claudeProfile = draft.providers.claude ?? {
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    credentialId: 'provider.deepseek',
+    format: 'anthropic' as const,
+    defaultModel: 'deepseek-flash',
+    modelMap: {},
+  };
+  const updateClaudeProfile = (update: Partial<ProviderEntry>): void => patch({
+    providers: { ...draft.providers, claude: { ...claudeProfile, ...update } },
+    agentRoutes: { ...draft.agentRoutes, claude: 'claude' },
+  });
+  return (
+    <div className="proxy-agent-profiles">
+      <article className="proxy-agent-profile">
+        <header><div><strong>Claude Code</strong><span>Native account or DeepSeek Anthropic proxy</span></div><button type="button" className="secondary-button compact" title="Save Claude proxy profile" disabled={busy} onClick={() => void onSaveProfile()}><Check size={14} /><span>Save</span></button></header>
+        <p>Direct runs use your Claude login. Proxy runs use this saved Anthropic-compatible profile and preserve the KAI conversation context.</p>
+        <div className="field-grid">
+          <TextField label="Anthropic-compatible base URL" value={claudeProfile.baseUrl} onChange={(baseUrl) => updateClaudeProfile({ baseUrl })} />
+          <ModelField label="Claude proxy model" value={claudeProfile.defaultModel ?? ''} options={CLAUDE_MODELS} onChange={(defaultModel) => updateClaudeProfile({ defaultModel })} />
+          <TextField label="Vault credential ID" value={claudeProfile.credentialId ?? ''} onChange={(credentialId) => updateClaudeProfile({ credentialId })} />
+        </div>
+        <small className="settings-note">DeepSeek Anthropic endpoint: <code>https://api.deepseek.com/anthropic</code>. Select a DeepSeek model, save the API key below, then save this profile.</small>
+        <ProfileCredentialStore credentialId={claudeProfile.credentialId ?? ''} label="DeepSeek API key" busy={busy} onSave={onSaveCredential} />
+        {credentialState('claude')}
+        <ToggleField label="Route Claude Code" detail="Enable only from an explicit route action; this does not change your native login." checked={draft.routeClaudeCode} onChange={(routeClaudeCode) => patch({ routeClaudeCode })} />
+      </article>
+      <article className="proxy-agent-profile">
+        <header><div><strong>Codex</strong><span>Native account or override</span></div><button type="button" className="secondary-button compact" title="Save Codex proxy profile" disabled={busy} onClick={() => void onSaveProfile()}><Check size={14} /><span>Save</span></button></header>
+        <p>Direct runs use the Codex login. Enable an override only when routed Codex traffic needs a different provider.</p>
+        {providerPicker('codex')}
+        {credentialState('codex', draft.codexConfig)}
+        <details className="proxy-profile-details" open={draft.codexConfig.enabled}><summary>Dedicated Codex backend</summary><AgentBackendFields title="Use a dedicated Codex backend" config={draft.codexConfig} models={CODEX_MODELS} onChange={(codexConfig) => patch({ codexConfig })} /></details>
+      </article>
+      <article className="proxy-agent-profile">
+        <header><div><strong>Qwen Code</strong><span>Native account or override</span></div><button type="button" className="secondary-button compact" title="Save Qwen proxy profile" disabled={busy} onClick={() => void onSaveProfile()}><Check size={14} /><span>Save</span></button></header>
+        <p>Choose the shared provider or attach Qwen Code to its own OpenAI-compatible backend.</p>
+        {providerPicker('qwen')}
+        {credentialState('qwen', draft.qwenConfig)}
+        <details className="proxy-profile-details" open={draft.qwenConfig.enabled}><summary>Dedicated Qwen backend</summary><AgentBackendFields title="Use a dedicated Qwen backend" config={draft.qwenConfig} models={QWEN_MODELS} onChange={(qwenConfig) => patch({ qwenConfig })} /></details>
+      </article>
+      <article className="proxy-agent-profile">
+        <header><div><strong>Kimi Code</strong><span>Native account or override</span></div><button type="button" className="secondary-button compact" title="Save Kimi proxy profile" disabled={busy} onClick={() => void onSaveProfile()}><Check size={14} /><span>Save</span></button></header>
+        <p>Choose the shared provider or attach Kimi Code to its own coding endpoint.</p>
+        {providerPicker('kimi')}
+        {credentialState('kimi', draft.kimiConfig)}
+        <details className="proxy-profile-details" open={draft.kimiConfig.enabled}><summary>Dedicated Kimi backend</summary><AgentBackendFields title="Use a dedicated Kimi backend" config={draft.kimiConfig} models={KIMI_MODELS} onChange={(kimiConfig) => patch({ kimiConfig })} /></details>
+      </article>
     </div>
   );
 }
@@ -602,6 +699,33 @@ function SettingsSection({ title, icon, wide = false, children }: { title: strin
 
 function TextField({ label, value, type = 'text', onChange }: { label: string; value: string; type?: string; onChange: (value: string) => void }): ReactNode {
   return <label className="field"><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function ModelField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }): ReactNode {
+  const choices = Array.from(new Set([value, ...options].filter(Boolean)));
+  return <label className="field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{choices.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>;
+}
+
+function ProfileCredentialStore({ credentialId, label, busy, onSave }: {
+  credentialId: string;
+  label: string;
+  busy: boolean;
+  onSave: (id: string, value: string) => Promise<void> | void;
+}): ReactNode {
+  const [value, setValue] = useState('');
+  const [saved, setSaved] = useState(false);
+  async function store(): Promise<void> {
+    if (!credentialId.trim() || !value.trim()) return;
+    await onSave(credentialId.trim(), value);
+    setValue('');
+    setSaved(true);
+  }
+  return <div className="proxy-profile-secret">
+    <TextField label={label} type="password" value={value} onChange={(next) => { setValue(next); setSaved(false); }} />
+    <button type="button" className="secondary-button align-end" title="Save this API key securely in the OS vault" disabled={busy || !credentialId.trim() || !value.trim()} onClick={() => void store()}>
+      <KeyRound size={14} /><span>{saved ? 'Key saved' : 'Save API key'}</span>
+    </button>
+  </div>;
 }
 
 function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }): ReactNode {

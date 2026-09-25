@@ -85,7 +85,7 @@ describe('resolveProxyConfig', () => {
 
     const result = await resolveProxyConfig(kaiCfg, legacyCfg, secrets);
     expect(result.targetBaseUrl).toBe('https://api.deepseek.com');
-    expect(result.defaultModel).toBe('deepseek-chat');
+    expect(result.defaultModel).toBe('deepseek-v4-pro');
   });
 
   it('strips /anthropic suffix from legacy targetBaseUrl', async () => {

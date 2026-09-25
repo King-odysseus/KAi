@@ -65,6 +65,9 @@ export const learningTutorResponseSchema = z
     sourceNotes: z.array(z.object({
       label: z.string().min(1).max(200),
       url: z.string().url().nullable().optional(),
+      filePath: z.string().min(1).max(1_000).optional(),
+      startLine: z.number().int().min(1).max(1_000_000).optional(),
+      endLine: z.number().int().min(1).max(1_000_000).optional(),
     }).strict()).max(12),
     followUpQuestion: z.string().max(1_000),
     suggestion: z.object({
@@ -92,12 +95,15 @@ export const learningTutorRequestSchema = z
     language: z.string().max(80).optional(),
     scope: learningTutorScopeSchema.optional(),
     action: learningActionSchema,
+    teachingModes: z.array(learningAssistanceSchema).min(1).max(4).optional(),
     assistance: learningAssistanceSchema,
     code: z.string().max(120_000),
+    completionContext: z.object({ prefix: z.string().max(6_000), suffix: z.string().max(3_000) }).strict().optional(),
     selectedText: z.string().max(50_000).optional(),
     cursorLine: z.number().int().min(1).max(1_000_000).optional(),
     errorText: z.string().max(20_000).optional(),
     question: z.string().max(4_000).optional(),
+    conversationContext: z.string().max(16_000).optional(),
   })
   .strict();
 export type LearningTutorRequest = z.infer<typeof learningTutorRequestSchema>;
@@ -162,11 +168,27 @@ export const learningProgressSchema = z
     schemaVersion: z.literal(1),
     projectId: z.string().min(1),
     preferences: z.object({
+      teachingModes: z.array(learningAssistanceSchema).min(1).max(4).optional(),
       assistance: learningAssistanceSchema,
       inlineSuggestions: z.boolean(),
     }).strict(),
     concepts: z.array(learningConceptProgressSchema).max(500),
     recentEvidence: z.array(learningEvidenceSchema).max(100),
+    lessons: z.array(z.object({
+      id: z.string().min(1),
+      createdAt: timestampSchema,
+      filePath: z.string().optional(),
+      response: learningTutorResponseSchema,
+      understood: z.boolean(),
+    }).strict()).max(30).optional(),
+    memory: z.object({
+      lessonId: z.string().min(1),
+      lastLesson: z.string().max(200),
+      filePath: z.string().optional(),
+      unresolvedCheck: z.string().max(1_000),
+      recommendedNext: z.string().max(1_000),
+      understood: z.boolean(),
+    }).strict().optional(),
     updatedAt: timestampSchema,
   })
   .strict();
@@ -175,6 +197,7 @@ export type LearningProgress = z.infer<typeof learningProgressSchema>;
 export const learningPreferencesInputSchema = z
   .object({
     projectId: z.string().min(1),
+    teachingModes: z.array(learningAssistanceSchema).min(1).max(4).optional(),
     assistance: learningAssistanceSchema,
     inlineSuggestions: z.boolean(),
   })

@@ -36,6 +36,7 @@ const DEEPSEEK_MODEL_MIGRATIONS: Readonly<Record<string, string>> = {
   'deepseek-chat': 'deepseek-v4-pro',
   'deepseek-reasoner': 'deepseek-v4-pro',
   'deepseek-v4-flash': 'deepseek-flash',
+  'deepseek-v4-flash-vision-exp': 'deepseek-flash',
   'deepseek-v4.1-flash': 'deepseek-flash',
   'deepseek-v4.1-pro': 'deepseek-v4-pro',
   'deepseek-v4-pro-0813': 'deepseek-v4-pro',

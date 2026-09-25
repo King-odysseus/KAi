@@ -201,6 +201,15 @@ interface WorkflowDraftStep {
   error?: string;
 }
 
+type WorkflowStyle = 'fast' | 'safe' | 'security' | 'learning';
+
+const WORKFLOW_STYLES: ReadonlyArray<{ id: WorkflowStyle; label: string; detail: string }> = [
+  { id: 'fast', label: 'Fast', detail: 'One builder, then a focused review' },
+  { id: 'safe', label: 'Safe', detail: 'Plan, build, then review' },
+  { id: 'security', label: 'Security', detail: 'Architecture, build, security review, checks' },
+  { id: 'learning', label: 'Learning-first', detail: 'Plan in small steps and explain decisions' },
+];
+
 export function WorkflowsView({
   activeProject,
   agentCapabilities,
@@ -289,6 +298,48 @@ export function WorkflowsView({
       label: `Step ${current.length + 1}`,
       status: 'pending',
     }]);
+  }
+
+  function applyWorkflowStyle(style: WorkflowStyle): void {
+    const available = agentCapabilities.filter((agent) => agent.available).map((agent) => agent.id);
+    const agentAt = (index: number): AgentId => available[index % Math.max(available.length, 1)] ?? settings.defaultAgent;
+    const makeStep = (index: number, label: string, prompt: string): WorkflowDraftStep => ({ id: `step_${crypto.randomUUID()}`, agent: agentAt(index), label, prompt, status: 'pending' });
+    const styles: Record<WorkflowStyle, { title: string; autonomy: AutonomyMode; steps: WorkflowDraftStep[] }> = {
+      fast: {
+        title: 'Fast build and review', autonomy: 'autoEdit', steps: [
+          makeStep(0, 'Builder', 'Implement the requested change. Keep the change focused, explain important decisions, and run the most relevant checks.'),
+          makeStep(1, 'Reviewer', 'Review the preceding work. Check correctness, changed files, edge cases, and verification results. Report issues clearly; do not edit unless needed to fix a confirmed problem.'),
+        ],
+      },
+      safe: {
+        title: 'Plan, build, review', autonomy: 'ask', steps: [
+          makeStep(0, 'Planner', 'Inspect the project and produce a concrete implementation plan. Identify files, risks, architecture impact, and verification steps. Do not edit files.'),
+          makeStep(1, 'Builder', 'Use the approved plan from the preceding step. Implement the smallest correct change and run the relevant checks.'),
+          makeStep(2, 'Reviewer', 'Review the completed change against the plan. Check the diff, regressions, tests, and any remaining risks. Give a clear ship/no-ship recommendation.'),
+        ],
+      },
+      security: {
+        title: 'Security-sensitive change', autonomy: 'ask', steps: [
+          makeStep(0, 'Architecture reviewer', 'Inspect the requested change. Identify trust boundaries, data flows, permissions, secrets, and abuse cases. Produce a plan; do not edit files.'),
+          makeStep(1, 'Builder', 'Implement the approved plan with least-privilege access, validation, safe error handling, and relevant tests.'),
+          makeStep(2, 'Security reviewer', 'Review the change for authentication, authorization, input validation, secret handling, data exposure, dependency risk, and unsafe defaults. Do not edit files.'),
+          makeStep(3, 'Verifier', 'Run the relevant tests and inspect the final diff. State what was verified, what remains uncertain, and whether it is safe to ship.'),
+        ],
+      },
+      learning: {
+        title: 'Learning-first build', autonomy: 'ask', steps: [
+          makeStep(0, 'Teacher and planner', 'Explain the relevant architecture and security concepts in simple terms. Propose a small, staged plan and one question the learner can answer before building. Do not edit files.'),
+          makeStep(1, 'Pair builder', 'Implement only the next small stage. Explain what changed, why, and how it fits the architecture. Stop after that stage and leave a clear next step.'),
+          makeStep(2, 'Teacher reviewer', 'Review the change with the learner in mind. Explain the architecture, security implications, trade-offs, and a small way to verify understanding.'),
+        ],
+      },
+    };
+    const selection = styles[style];
+    setTitle(selection.title);
+    setSteps(selection.steps);
+    setAutonomy(selection.autonomy);
+    setLoopEnabled(false);
+    setError(null);
   }
 
   async function saveTemplate(): Promise<void> {
@@ -394,6 +445,12 @@ export function WorkflowsView({
         </div>
       )}
       <div className="workflow-builder">
+        <section className="workflow-styles" aria-label="Multi-agent work styles">
+          <div><strong>Choose a work style</strong><small>KAI assigns clear roles; you can edit every step before running.</small></div>
+          <div className="workflow-style-options">
+            {WORKFLOW_STYLES.map((style) => <button key={style.id} type="button" disabled={running} onClick={() => applyWorkflowStyle(style.id)}><strong>{style.label}</strong><small>{style.detail}</small></button>)}
+          </div>
+        </section>
         <div className="workflow-builder-head">
           <label className="workflow-field" htmlFor="workflow-title">
             <span>Workflow name</span>

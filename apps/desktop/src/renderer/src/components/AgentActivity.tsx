@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileCode2, Pause, Play, Search, Square, Terminal, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileCode2, Pause, Search, Terminal, Wrench } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { relativeTime } from '../types';
@@ -75,14 +75,11 @@ function describeEvent(event: PersistedEvent): string {
   return event.type.replaceAll('.', ' ');
 }
 
-export function AgentActivityStrip({ events, running, paused, awaitingApproval, onPause, onResume, onCancel }: {
+export function AgentActivityStrip({ events, running, paused, awaitingApproval }: {
   events: readonly PersistedEvent[];
   running: boolean;
   paused: boolean;
   awaitingApproval: boolean;
-  onPause: () => void;
-  onResume: () => void;
-  onCancel: () => void;
 }): ReactNode {
   const activity = deriveAgentActivity(events, running, paused, awaitingApproval);
   return (
@@ -93,12 +90,6 @@ export function AgentActivityStrip({ events, running, paused, awaitingApproval, 
         <span>{activity.detail}</span>
         {activity.lastAction && <small className="agent-activity-last" title={activity.lastAction}>Last: {activity.lastAction}</small>}
       </div>
-      {(running || awaitingApproval) && (
-        <div className="agent-activity-actions">
-          {running && !awaitingApproval && <button type="button" className="secondary-button" onClick={paused ? onResume : onPause} aria-label={paused ? 'Resume agent' : 'Pause agent'} title={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} /> : <Pause size={13} />}<span>{paused ? 'Resume' : 'Pause'}</span></button>}
-          <button type="button" className="secondary-button danger" onClick={onCancel} aria-label="Stop agent" title="Stop agent"><Square size={12} /><span>Stop</span></button>
-        </div>
-      )}
     </section>
   );
 }

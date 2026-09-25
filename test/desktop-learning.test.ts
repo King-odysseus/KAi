@@ -15,7 +15,7 @@ import { NodeFileSystem } from '../packages/runtime/src/node-file-system';
 import { formatProjectCode, projectGitFileInfo } from '../apps/desktop/src/main/code-tools';
 import { recordLearningLesson } from '../apps/desktop/src/main/learning-records';
 import { LearningProgressStore } from '../apps/desktop/src/main/learning-progress';
-import { DesktopLearningTutor, parseLearningTutorContent, parseTeachingDraftContent } from '../apps/desktop/src/main/learning-tutor';
+import { DesktopLearningTutor, groundedSourceNotes, parseLearningTutorContent, parseTeachingDraftContent } from '../apps/desktop/src/main/learning-tutor';
 import { TeachingLibraryStore } from '../apps/desktop/src/main/teaching-library';
 import { boundedCode } from '../apps/desktop/src/renderer/src/components/CodeView';
 import { LearningBudgetGuard, LearningUsageStore } from '../apps/desktop/src/main/learning-usage';
@@ -29,15 +29,87 @@ afterEach(async () => {
 });
 
 describe('desktop learning mode', () => {
+  it('requests a compact cursor insertion without scanning the project for inline completion', async () => {
+    const bodies: unknown[] = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        bodies.push(JSON.parse(raw));
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ output_text: JSON.stringify({ code: 'world' }) }));
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = createDefaultSettings();
+    settings.learningTutor = { ...settings.learningTutor, enabled: true, provider: 'openai', model: 'test-model', baseUrl: `${baseUrl}/v1` };
+    const tutor = new DesktopLearningTutor({ load: async () => settings }, { isAvailable: () => true, get: async () => 'test-key' }, async () => { throw new Error('Inline completion must not scan the project'); });
+    const request = { ...tutorRequest('complete', 'copilot'), code: '', teachingModes: ['copilot' as const], completionContext: { prefix: 'const greeting = "', suffix: '";' } };
+    const result = await tutor.evaluateDetailed(request);
+    expect(result.response.suggestion?.code).toBe('world');
+    expect(bodies).toHaveLength(1);
+    expect(JSON.stringify(bodies[0])).toContain('kai_inline_completion');
+    expect(JSON.stringify(bodies[0])).not.toContain('Whole-project brief');
+    await expect(tutor.evaluateDetailed({ ...request, assistance: 'guided' })).rejects.toThrow('requires Copilot');
+  });
+
+  it('remembers lessons across files and restarts without awarding mastery for self-report', async () => {
+    const root = await temporaryDirectory();
+    const store = new LearningProgressStore(root, new NodeFileSystem());
+    const request = tutorRequest('explain-file', 'guided');
+    const first = await store.recordEvaluation(request, tutorResponse());
+    const reloaded = await new LearningProgressStore(root, new NodeFileSystem()).get(request.projectId);
+    expect(reloaded.memory?.lastLesson).toBe(tutorResponse().title);
+    expect(reloaded.memory?.unresolvedCheck).toBe(tutorResponse().checks[0]);
+    const understood = await store.markUnderstood(request.projectId, first.memory!.lessonId);
+    expect(understood.memory).toMatchObject({ understood: true, unresolvedCheck: '' });
+    expect(understood.concepts).toEqual(first.concepts);
+    await store.recordEvaluation({ ...request, filePath: 'another.ts' }, tutorResponse());
+    const historical = await store.markUnderstood(request.projectId, first.memory!.lessonId);
+    expect(historical.memory?.filePath).toBe('another.ts');
+    expect(historical.memory?.understood).toBe(false);
+    expect(historical.lessons).toHaveLength(2);
+    expect(historical.lessons?.[1]?.understood).toBe(true);
+    await expect(store.markUnderstood(request.projectId, 'missing')).rejects.toThrow('no longer available');
+    expect((await store.get('separate-project')).memory).toBeUndefined();
+  });
+
+  it('grounds file citations in supplied context and drops unsupported line ranges', () => {
+    const request = { ...tutorRequest('explain-file', 'guided'), filePath: 'src/main.ts', code: 'one\ntwo' };
+    const notes = groundedSourceNotes([
+      { label: 'Code', filePath: 'src/main.ts', startLine: 2, endLine: 2 },
+      { label: 'Bad line', filePath: 'src/main.ts', startLine: 99 },
+      { label: 'Invented', filePath: 'missing.ts' },
+      { label: 'Escape', filePath: '../secret' },
+      { label: 'Test', filePath: 'test/main.test.ts', startLine: 1 },
+    ], request, 'File: test/main.test.ts\n1: test()');
+    expect(notes).toEqual([
+      { label: 'Code', filePath: 'src/main.ts', startLine: 2, endLine: 2 },
+      { label: 'Bad line', filePath: 'src/main.ts' },
+      { label: 'Test', filePath: 'test/main.test.ts', startLine: 1 },
+    ]);
+  });
+
   it('validates and parses structured tutor JSON, including fenced fallback output', () => {
     const parsed = parseLearningTutorContent(`\`\`\`json\n${JSON.stringify(tutorResponse())}\n\`\`\``);
     expect(parsed.title).toBe('Variables hold changing values');
     expect(parsed.concepts[0]).toMatchObject({ name: 'Variables', mastery: 'independent' });
-    expect(() => parseLearningTutorContent('{"title":"incomplete"}')).toThrow();
+    expect(() => parseLearningTutorContent('{"title":"incomplete"')).toThrow();
     expect(() => learningTutorResponseSchema.parse({
       ...tutorResponse(),
       concepts: [{ name: 'Variables', category: 'TypeScript', mastery: 'expert', evidence: 'No.' }],
     })).toThrow();
+  });
+
+  it('keeps a partial but valid provider reply readable by adding neutral empty fields', () => {
+    const parsed = parseLearningTutorContent(JSON.stringify({
+      title: 'What to inspect next',
+      purpose: 'Trace the entry point before changing the code.',
+    }));
+    expect(parsed.title).toBe('What to inspect next');
+    expect(parsed.steps[0]?.title).toBe('Do this next');
+    expect(parsed.analogy.limits).toContain('verify');
+    expect(parsed.codePreview).toBe('');
   });
 
   it('records evidence without promoting AI-generated completion to learner mastery', async () => {
@@ -205,6 +277,76 @@ describe('desktop learning mode', () => {
     expect(JSON.stringify(bodies[2])).toContain('Scope: whole project');
     expect(JSON.stringify(bodies[2])).toContain('No file is open.');
     expect(JSON.stringify(bodies[2])).toContain('Project brief: kai-learning-fixture');
+  });
+
+  it('retries chat completions when a compatible Responses endpoint returns an empty output', async () => {
+    const paths: string[] = [];
+    const server = http.createServer((request, response) => {
+      paths.push(request.url ?? '');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      if (request.url?.endsWith('/responses')) {
+        response.end(JSON.stringify({ status: 'completed', output: [] }));
+        return;
+      }
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(tutorResponse()) } }] }));
+    });
+    const baseUrl = await listen(server);
+    const settings = createDefaultSettings();
+    settings.learningTutor = { ...settings.learningTutor, enabled: true, provider: 'openai', model: 'test-model', baseUrl: `${baseUrl}/v1` };
+    const tutor = new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, get: async () => 'sk-test-secret' },
+      async () => temporaryDirectory(),
+    );
+    const result = await tutor.evaluateDetailed(tutorRequest('explain-file', 'guided'));
+    expect(result.response.title).toBe('Variables hold changing values');
+    expect(paths).toEqual(['/v1/responses', '/v1/chat/completions']);
+  });
+
+  it('retries without json_schema when a chat model returns empty structured content', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as Record<string, unknown>;
+        bodies.push(body);
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        const content = body.response_format ? '' : JSON.stringify(tutorResponse());
+        response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content, reasoning_content: 'thinking' } }] }));
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = createDefaultSettings();
+    settings.learningTutor = { ...settings.learningTutor, enabled: true, provider: 'deepseek', model: 'deepseek-flash', baseUrl };
+    const tutor = new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, get: async () => 'sk-test-secret' },
+      async () => temporaryDirectory(),
+    );
+    const result = await tutor.evaluateDetailed(tutorRequest('explain-file', 'guided'));
+    expect(result.response.title).toBe('Variables hold changing values');
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.response_format).toBeDefined();
+    expect(bodies[1]?.response_format).toBeUndefined();
+  });
+
+  it('explains why a chat model returned no tutor content', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: 'long thoughts' } }] }));
+    });
+    const baseUrl = await listen(server);
+    const settings = createDefaultSettings();
+    settings.learningTutor = { ...settings.learningTutor, enabled: true, provider: 'deepseek', model: 'deepseek-flash', baseUrl };
+    const tutor = new DesktopLearningTutor(
+      { load: async () => settings },
+      { isAvailable: () => true, get: async () => 'sk-test-secret' },
+      async () => temporaryDirectory(),
+    );
+    await expect(tutor.evaluateDetailed(tutorRequest('explain-file', 'guided')))
+      .rejects.toThrow('finish_reason: length; reasoning used the whole output budget');
   });
 
   it('generates a reviewable teaching draft with the configured direct provider', async () => {

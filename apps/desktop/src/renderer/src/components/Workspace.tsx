@@ -72,7 +72,7 @@ import { HunkReview, canReviewHunks } from './HunkReview';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
-import { promptDialog } from './AppDialog';
+import { confirmDialog, promptDialog } from './AppDialog';
 import { AgentActivityStrip, deriveAgentActivity } from './AgentActivity';
 
 export interface WorkspaceSendOptions {
@@ -110,9 +110,11 @@ interface WorkspaceViewProps {
   selectedRoute: RouteMode;
   selectedAutonomy: AutonomyMode;
   proxyReady: boolean;
+  proxyContinuationAgent: AgentId | null;
   onSelectExecution: (mode: ExecutionMode) => void;
   onSelectAgent: (agent: AgentId) => void;
   onSelectRoute: (route: RouteMode) => void;
+  onContinueViaProxy: (agent: AgentId) => void;
   onSelectAutonomy: (autonomy: AutonomyMode) => void;
   onUpdatePreferences: (preferences: ProjectPreferences) => Promise<void>;
   onUpdateConversation: (conversation: ConversationRecord) => Promise<void>;
@@ -148,6 +150,16 @@ interface QueuedPrompt {
   text: string;
   options: WorkspaceSendOptions;
 }
+
+type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn';
+
+const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
+  { id: 'ask', label: 'Ask', description: 'Understand an idea or get advice', placeholder: 'Ask KAI about this project or idea', starter: '' },
+  { id: 'plan', label: 'Plan', description: 'Inspect first; do not change files', placeholder: 'Describe the outcome you want to plan', starter: 'Plan this work. Inspect the project first. Do not change files. Explain the approach, affected areas, risks, and how you would verify it:\n\n' },
+  { id: 'build', label: 'Build', description: 'Make a safe, verified change', placeholder: 'Describe what you want KAI to build', starter: 'Build this safely. First state the plan, then make the smallest useful change and run relevant checks:\n\n' },
+  { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
+  { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
+];
 
 const STATUS_WORDS = [
   'Thinking',
@@ -224,9 +236,11 @@ export function WorkspaceView({
   selectedRoute,
   selectedAutonomy,
   proxyReady,
+  proxyContinuationAgent,
   onSelectExecution,
   onSelectAgent,
   onSelectRoute,
+  onContinueViaProxy,
   onSelectAutonomy,
   onUpdatePreferences,
   onUpdateConversation,
@@ -276,6 +290,8 @@ export function WorkspaceView({
   const [compareAgent, setCompareAgent] = useState<AgentId>('claude');
   const [compareResult, setCompareResult] = useState<CompareRun | null>(null);
   const [comparing, setComparing] = useState(false);
+  const [taskIntent, setTaskIntent] = useState<TaskIntent>('ask');
+  const [advancedComposerOpen, setAdvancedComposerOpen] = useState(false);
   const [checkpointReview, setCheckpointReview] = useState<CheckpointReview | null>(null);
   const [brainDraft, setBrainDraft] = useState<string | null>(null);
   const [fileChecks, setFileChecks] = useState<Record<string, FileVerificationState>>({});
@@ -296,6 +312,7 @@ export function WorkspaceView({
     ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
     : selectedCapability?.unavailableReason ?? 'No agent CLI is available.';
   const activeGoal = activeConversation?.goal ?? null;
+  const activeTaskIntent = TASK_INTENTS.find((intent) => intent.id === taskIntent) ?? TASK_INTENTS[0];
   const allContextChips: ContextChip[] = [
     ...selectedFiles.map((path) => ({ type: 'file' as const, path })),
     ...contextChips,
@@ -485,6 +502,25 @@ export function WorkspaceView({
     const modes: AutonomyMode[] = ['plan', 'ask', 'autoEdit', 'full'];
     const index = modes.indexOf(selectedAutonomy);
     onSelectAutonomy(modes[(index === -1 ? 0 : index + 1) % modes.length]);
+  }
+
+  function chooseTaskIntent(intent: TaskIntent): void {
+    const definition = TASK_INTENTS.find((item) => item.id === intent)!;
+    setTaskIntent(intent);
+    if (intent === 'plan' || intent === 'review' || intent === 'learn') onSelectAutonomy('plan');
+    if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy('autoEdit');
+    if (!prompt.trim() && definition.starter) setPrompt(definition.starter);
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }
+
+  async function confirmProxyContinuation(agent: AgentId): Promise<void> {
+    const budget = settings.usageBudget.monthlyUsd > 0 ? `$${settings.usageBudget.monthlyUsd.toFixed(2)} monthly KAI budget` : 'no KAI monthly budget set';
+    const confirmed = await confirmDialog({
+      title: 'Continue with paid API via proxy?',
+      detail: `The subscription-backed ${selectedCapability?.displayName ?? agent} run reached its limit. The next run will use ${settings.proxy.defaultModel} through ${settings.proxy.targetBaseUrl}. Your prompt and selected project context will be sent to that configured provider and may create API charges (${budget}).`,
+      confirmLabel: 'Continue via proxy',
+    });
+    if (confirmed) onContinueViaProxy(agent);
   }
 
   function commandFor(text: string): string | undefined {
@@ -935,7 +971,6 @@ export function WorkspaceView({
                 <span className="spinner" />
                 <span className="thinking-copy"><span className="status-word">{paused ? 'Paused' : statusWord}</span><small>{activity.detail}</small></span>
                 <span className="status-timer">{elapsedSeconds}s</span>
-                <button type="button" className="secondary-button" onClick={paused ? onResume : onPause}>{paused ? <Play size={12} /> : <Pause size={12} />}<span>{paused ? 'Resume' : 'Pause'}</span></button>
               </article>
             )}
             {recentEvents.filter((event) => !isRunDetailEvent(event)).map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
@@ -981,14 +1016,23 @@ export function WorkspaceView({
       </div>
 
       <div className="composer">
+        {proxyContinuationAgent === selectedAgent && !apiRun && effectiveRoute === 'direct' && (
+          <div className="composer-route-handoff" role="status">
+            <Route size={15} />
+            <div>
+              <strong>{selectedCapability?.displayName ?? 'This agent'} reached its account limit</strong>
+              <span>Keep this conversation and switch only its next run to {settings.proxy.defaultModel} through your configured Universal Proxy. KAI will show the provider and budget before any API request.</span>
+            </div>
+            <button type="button" className="primary-button" disabled={!proxyReady || busy} onClick={() => void confirmProxyContinuation(proxyContinuationAgent)}>
+              <Route size={13} /><span>{proxyReady ? 'Continue via proxy' : 'Start proxy first'}</span>
+            </button>
+          </div>
+        )}
         {activeConversation && (running || paused || awaitingApproval) && <AgentActivityStrip
           events={activeConversation.events}
           running={running}
           paused={paused}
           awaitingApproval={awaitingApproval}
-          onPause={onPause}
-          onResume={onResume}
-          onCancel={onCancel}
         />}
         {activeProject && !ready && (apiRun ? directApiCapability : selectedCapability) && (
           <div className="agent-setup-banner" role="status">
@@ -1060,6 +1104,13 @@ export function WorkspaceView({
             <span className="context-chip skill-chip" key={skill.name}>${skill.name}<button type="button" aria-label={`Remove ${skill.name}`} onClick={() => setSelectedSkills((current) => current.filter((item) => item.name !== skill.name))}><X size={11} /></button></span>
           ))}
         </div>
+        {contextChips.filter((chip): chip is Extract<ContextChip, { type: 'memory' }> => chip.type === 'memory').map((chip) => (
+          <div className="brain-brief" key={`brief:${chip.query}`} role="status">
+            <Brain size={14} />
+            <div><strong>Brain brief</strong><span>{chip.summary || `Memory search: ${chip.query}`}</span></div>
+            <button type="button" className="icon-button compact" aria-label="Remove Brain brief" title="Remove Brain brief" onClick={() => setContextChips((current) => current.filter((item) => item !== chip))}><X size={12} /></button>
+          </div>
+        ))}
         {contextPickerOpen && activeProject && (
           <div className="context-picker">
             <div className="context-picker-head">
@@ -1103,6 +1154,23 @@ export function WorkspaceView({
             if (file) void attachImageFile(file);
           }}
         />
+        <div className="task-intent-picker" role="group" aria-label="What would you like KAI to do?">
+          <span className="task-intent-label">I want to</span>
+          {TASK_INTENTS.map((intent) => (
+            <button
+              key={intent.id}
+              type="button"
+              className={taskIntent === intent.id ? 'active' : ''}
+              aria-pressed={taskIntent === intent.id}
+              title={intent.description}
+              onClick={() => chooseTaskIntent(intent.id)}
+              disabled={busy}
+            >
+              {intent.label}
+            </button>
+          ))}
+          <small>{activeTaskIntent.description}</small>
+        </div>
         <div className="composer-box">
           <textarea
             ref={promptRef}
@@ -1144,7 +1212,7 @@ export function WorkspaceView({
                 setContextPickerOpen(false);
               }
             }}
-            placeholder="Ask KAI, /goal for a target, $ for skills"
+            placeholder={activeTaskIntent.placeholder}
             aria-label="Task prompt"
             disabled={!activeProject || (busy && !running) || !ready}
           />
@@ -1154,90 +1222,21 @@ export function WorkspaceView({
               <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add context" aria-label="Add context"><AtSign size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={() => imageInputRef.current?.click()} title="Attach an image" aria-label="Attach an image"><ImagePlus size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={() => setSkillsOpen(true)} title="Add a skill" aria-label="Add a skill"><Sparkles size={14} /></button>
-              <div className="mode-toggle" role="group" aria-label="Execution mode">
-                <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
-                <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
-              </div>
-              {apiRun ? (
-                <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}>
-                  <Cloud size={14} />
-                  <span className="truncate">{selectedRoute === 'proxy'
-                    ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}`
-                    : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span>
-                </button>
-              ) : (
-                <SelectMenu
-                  ariaLabel="Agent"
-                  className={`agent-select ${ready ? '' : 'unavailable'}`}
-                  disabled={busy}
-                  icon={<Cpu size={14} />}
-                  onChange={onSelectAgent}
-                  options={agentCapabilities.map((agent) => ({
-                    value: agent.id,
-                    label: `${agent.displayName}${setupSuffix(agent)}`,
-                  }))}
-                  title={selectedCapability?.unavailableReason}
-                  value={selectedAgent}
-                />
-              )}
-              <SelectMenu
-                ariaLabel="Model"
-                className="control-select model-select"
-                disabled={busy}
-                icon={<Sparkles size={14} />}
-                onChange={(value) => {
-                  if (value !== CUSTOM_MODEL) {
-                    onSelectModel(value);
-                    return;
-                  }
-                  void promptDialog({
-                    title: 'Use a custom model',
-                    label: 'Model name',
-                    initialValue: selectedModel,
-                    placeholder: 'provider/model-name',
-                    confirmLabel: 'Use model',
-                    validate: validateModelName,
-                  }).then((typed) => {
-                    if (typed) onSelectModel(typed);
-                  });
-                }}
-                options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)}
-                title={apiRun ? 'Model for this conversation. Default is the model set in Settings.' : 'Model the CLI is asked to use. Default lets the CLI choose its own.'}
-                value={selectedModel}
-              />
-              <SelectMenu
-                ariaLabel="Route"
-                className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`}
-                disabled={busy || !routeAvailable}
-                icon={<Route size={14} />}
-                onChange={onSelectRoute}
-                options={[
-                  { value: 'direct', label: 'Direct' },
-                  { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady },
-                ]}
-                title={!routeAvailable
-                  ? 'This agent does not support the Universal Proxy route'
-                  : proxyReady
-                    ? 'Choose direct provider access or the KAI Universal Proxy route'
-                    : 'Start Universal Proxy in Settings to use the proxy route'}
-                value={effectiveRoute}
-              />
-              <SelectMenu
-                ariaLabel="Autonomy"
-                className="control-select autonomy-select"
-                disabled={busy}
-                icon={<ShieldCheck size={14} />}
-                onChange={onSelectAutonomy}
-                options={[
-                  { value: 'plan', label: 'Plan' },
-                  { value: 'ask', label: 'Ask' },
-                  { value: 'autoEdit', label: 'Auto-edit' },
-                  { value: 'full', label: 'Full control' },
-                  { value: 'custom', label: 'Custom' },
-                ]}
-                title="Choose how much project access the active run has"
-                value={selectedAutonomy}
-              />
+              <button type="button" className={`composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}>
+                <Settings2 size={14} /><span>{advancedComposerOpen ? 'Hide controls' : 'Advanced'}</span>
+              </button>
+              {advancedComposerOpen && <div className="composer-advanced-controls">
+                <div className="mode-toggle" role="group" aria-label="Execution mode">
+                  <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
+                  <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
+                </div>
+                {apiRun ? (
+                  <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}><Cloud size={14} /><span className="truncate">{selectedRoute === 'proxy' ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}` : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span></button>
+                ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason} value={selectedAgent} />}
+                <SelectMenu ariaLabel="Model" className="control-select model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title={apiRun ? 'Model for this conversation. Default is the model set in Settings.' : 'Model the CLI is asked to use. Default lets the CLI choose its own.'} value={selectedModel} />
+                <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
+                <SelectMenu ariaLabel="Autonomy" className="control-select autonomy-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={[{ value: 'plan', label: 'Plan' }, { value: 'ask', label: 'Ask' }, { value: 'autoEdit', label: 'Auto-edit' }, { value: 'full', label: 'Full control' }, { value: 'custom', label: 'Custom' }]} title="Choose how much project access the active run has" value={selectedAutonomy} />
+              </div>}
             </div>
             <div className="composer-actions">
               <button type="button" className={`composer-icon-button ${compareMode ? 'active' : ''}`} onClick={() => setCompareMode((current) => !current)} title="Compare two agents" aria-pressed={compareMode}><GitCompare size={14} /></button>
@@ -1246,16 +1245,16 @@ export function WorkspaceView({
               <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>
               <button type="button" className={`composer-icon-button ${rawEventsOpen ? 'active' : ''}`} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw events"><Braces size={14} /></button>
-              {running ? (
+              {(running || paused || awaitingApproval) ? (
                 <>
-                  <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>
+                  {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
                   <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
                 </>
               ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
             </div>
           </div>
         </div>
-        {selectedAutonomy === 'custom' && activeProject && (
+        {advancedComposerOpen && selectedAutonomy === 'custom' && activeProject && (
           <div className="permission-grid">
             {PERMISSIONS.map((permission) => (
               <label key={permission.key} title={permission.description}>
@@ -1319,6 +1318,7 @@ function RunEventCard({ event, projectId, onReview, onUndo, onOpenVerification }
     const failed = latestFiles.some((file) => file.status === 'failed');
     const verified = latestFiles.length > 0 && latestFiles.every((file) => file.status === 'verified');
     const verificationLabel = !verification?.latest ? 'Not checked yet' : stale ? 'Checks stale after later edits' : failed ? 'Latest check failed' : verified ? 'Changed files verified' : 'Verification is partial';
+    const securityReview = securityReviewHint(event.files.map((file) => file.path));
     return (
       <section className={`changes-card ${changesExpanded ? 'expanded' : ''}`}>
         <div className="changes-summary">
@@ -1328,6 +1328,10 @@ function RunEventCard({ event, projectId, onReview, onUndo, onOpenVerification }
           </div>
           <VerificationBadge status={stale ? 'stale' : failed ? 'failed' : verified ? 'verified' : 'unverified'} />
           <small>{verificationLabel}{verification?.latest ? ` · ${relativeTime(verification.latest.startedAt)}` : ''}</small>
+        </div>
+        <div className={`change-safety-summary ${securityReview.level}`}>
+          <ShieldCheck size={14} />
+          <div><strong>{securityReview.title}</strong><span>{securityReview.detail}</span></div>
         </div>
         <button
           type="button"
@@ -1374,6 +1378,23 @@ function isRunDetailEvent(event: PersistedEvent): boolean {
     || event.type === 'cost.update'
     || event.type === 'plan.update'
     || event.type === 'agent.lifecycle';
+}
+
+function securityReviewHint(paths: string[]): { level: 'routine' | 'attention'; title: string; detail: string } {
+  const joined = paths.join(' ').toLowerCase();
+  const sensitive = /(?:auth|login|session|token|permission|role|user|account|secret|credential|password|env|api|route|middleware|database|schema|migration|config)/.test(joined);
+  if (sensitive) {
+    return {
+      level: 'attention',
+      title: 'Security review recommended',
+      detail: 'These changes may affect access, data, configuration, or trust boundaries. Review input validation, permissions, secrets, and tests before shipping.',
+    };
+  }
+  return {
+    level: 'routine',
+    title: 'Review before accepting',
+    detail: 'Check the diff and verification result. Run a security-focused workflow when this change touches user data, network access, permissions, or configuration.',
+  };
 }
 
 function ComparePanel({ result, onPick, onOpen, onDiscard }: { result: CompareRun; onPick: (id: string, side: 'left' | 'right') => Promise<void>; onOpen: (id: string, side: 'left' | 'right') => Promise<void>; onDiscard: (id: string) => Promise<void> }): ReactNode {

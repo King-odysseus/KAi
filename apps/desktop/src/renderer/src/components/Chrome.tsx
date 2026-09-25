@@ -24,6 +24,7 @@ import {
   Route,
   Search,
   Settings,
+  Terminal,
   Trash2,
   Wallet,
   Workflow,
@@ -37,20 +38,20 @@ import { shortcutLabel } from '../shortcuts';
 const themeLabel = (theme: ThemeMode): string => THEME_MODES.find((item) => item.id === theme)?.label ?? theme;
 const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.findIndex((item) => item.id === theme) + 1) % THEME_MODES.length]!.id;
 
-export const navigation: Array<{ id: ViewId; label: string; icon: typeof Brain }> = [
-  { id: 'workspace', label: 'Workspace', icon: Layers3 },
-  { id: 'projects', label: 'Projects', icon: FolderKanban },
-  { id: 'brain', label: 'C1 Brain', icon: Brain },
-  { id: 'rules', label: 'Execution Rules', icon: ListChecks },
-  { id: 'proxy', label: 'Universal Proxy', icon: Route },
-  { id: 'workflows', label: 'Workflows', icon: Workflow },
-  { id: 'history', label: 'History', icon: History },
-  { id: 'code', label: 'Code', icon: Code2 },
-  { id: 'tasks', label: 'Tasks', icon: Kanban },
-  { id: 'git', label: 'Git', icon: GitBranch },
-  { id: 'usage', label: 'Usage', icon: Wallet },
-  { id: 'operations', label: 'Operations', icon: Activity },
-  { id: 'settings', label: 'Settings', icon: Settings },
+export const navigation: Array<{ id: ViewId; label: string; group: 'Work' | 'Learn' | 'Project' | 'Brain' | 'Control'; icon: typeof Brain }> = [
+  { id: 'workspace', label: 'Workspace', group: 'Work', icon: Layers3 },
+  { id: 'workflows', label: 'Workflows', group: 'Work', icon: Workflow },
+  { id: 'history', label: 'History', group: 'Work', icon: History },
+  { id: 'tasks', label: 'Tasks', group: 'Work', icon: Kanban },
+  { id: 'code', label: 'Learn & Code', group: 'Learn', icon: Code2 },
+  { id: 'projects', label: 'Projects', group: 'Project', icon: FolderKanban },
+  { id: 'git', label: 'Git', group: 'Project', icon: GitBranch },
+  { id: 'brain', label: 'C1 Brain', group: 'Brain', icon: Brain },
+  { id: 'rules', label: 'Execution Rules', group: 'Brain', icon: ListChecks },
+  { id: 'proxy', label: 'Universal Proxy', group: 'Control', icon: Route },
+  { id: 'usage', label: 'Usage', group: 'Control', icon: Wallet },
+  { id: 'operations', label: 'Operations', group: 'Control', icon: Activity },
+  { id: 'settings', label: 'Settings', group: 'Control', icon: Settings },
 ];
 
 export interface CommandPaletteItem {
@@ -68,20 +69,23 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
     <aside className="nav-rail" aria-label="Primary navigation">
       <div className="brand-mark" aria-label="KAI">K</div>
       <nav className="nav-stack">
-        {navigation.map((item) => {
+        {navigation.map((item, index) => {
           const Icon = item.icon;
+          const previous = navigation[index - 1];
           return (
-            <button
-              key={item.id}
-              type="button"
-              className={`nav-button ${view === item.id ? 'active' : ''}`}
-              onClick={() => onChange(item.id)}
-              title={navigationShortcut(item.id, shortcuts) ? `${item.label} (${navigationShortcut(item.id, shortcuts)})` : item.label}
-              aria-label={item.label}
-              aria-current={view === item.id ? 'page' : undefined}
-            >
-              <Icon size={19} />
-            </button>
+            <Fragment key={item.id}>
+              {(!previous || previous.group !== item.group) && <div className="nav-group-label" title={item.group} aria-label={`${item.group} section`}>{item.group.slice(0, 1)}</div>}
+              <button
+                type="button"
+                className={`nav-button ${view === item.id ? 'active' : ''}`}
+                onClick={() => onChange(item.id)}
+                title={`${item.group}: ${navigationShortcut(item.id, shortcuts) ? `${item.label} (${navigationShortcut(item.id, shortcuts)})` : item.label}`}
+                aria-label={`${item.group}: ${item.label}`}
+                aria-current={view === item.id ? 'page' : undefined}
+              >
+                <Icon size={19} />
+              </button>
+            </Fragment>
           );
         })}
       </nav>
@@ -90,7 +94,7 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void }): ReactNode {
   const newWindowShortcut = shortcutLabel(shortcuts, 'new-window');
   const searchShortcut = shortcutLabel(shortcuts, 'command-palette');
   const threadsShortcut = shortcutLabel(shortcuts, 'threads');
@@ -117,6 +121,9 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         </button>
         <button type="button" className={`icon-button ${previewOpen ? 'active' : ''}`} title={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-label={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-pressed={previewOpen} onClick={onTogglePreview}>
           <MonitorPlay size={17} />
+        </button>
+        <button type="button" className={`icon-button ${terminalOpen ? 'active' : ''}`} title={terminalOpen ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)'} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} aria-pressed={terminalOpen} onClick={onToggleTerminal}>
+          <Terminal size={17} />
         </button>
         <button type="button" className="icon-button" title={`Keyboard shortcuts${sheetShortcut ? ` (${sheetShortcut})` : ''}`} aria-label="Open keyboard shortcuts" onClick={onOpenShortcuts}><Keyboard size={17} /></button>
       </div>

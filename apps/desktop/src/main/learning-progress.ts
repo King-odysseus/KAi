@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { z } from 'zod';
 import {
@@ -58,7 +58,7 @@ export class LearningProgressStore {
   }
 
   private async updatePreferencesUnlocked(input: LearningPreferencesInput): Promise<LearningProgress> {
-    const preferences = { assistance: input.assistance, inlineSuggestions: input.inlineSuggestions };
+    const preferences = { assistance: input.assistance, inlineSuggestions: input.inlineSuggestions, ...(input.teachingModes ? { teachingModes: input.teachingModes } : {}) };
     await this.sharedPreferencesStore().save({ schemaVersion: 1, preferences });
     const progress = await this.store(input.projectId).load();
     const updated = learningProgressSchema.parse({
@@ -104,6 +104,7 @@ export class LearningProgressStore {
     const progress = await this.get(request.projectId);
     const evaluation = evaluationEvidence(request);
     const createdAt = this.now().toISOString();
+    const lessonId = request.requestId ?? randomUUID();
     const evidence = response.concepts.map((concept): LearningEvidence => ({
       id: `evidence_${createHash('sha256').update(`${request.projectId}:${request.filePath ?? 'project'}:${request.action}:${concept.name}:${createdAt}`).digest('hex').slice(0, 24)}`,
       conceptName: concept.name,
@@ -152,10 +153,30 @@ export class LearningProgressStore {
       ...progress,
       concepts: concepts.sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt)).slice(0, 500),
       recentEvidence: [...evidence, ...progress.recentEvidence].slice(0, 100),
+      lessons: [{ id: lessonId, createdAt, ...(request.filePath ? { filePath: request.filePath } : {}), response, understood: false }, ...(progress.lessons ?? []).filter((lesson) => lesson.id !== lessonId)].slice(0, 30),
+      memory: {
+        lessonId,
+        lastLesson: response.title,
+        ...(request.filePath ? { filePath: request.filePath } : {}),
+        unresolvedCheck: response.checks[0] ?? '',
+        recommendedNext: response.followUpQuestion || response.steps[0]?.explanation.slice(0, 1_000) || '',
+        understood: false,
+      },
       updatedAt: createdAt,
     });
     await this.store(request.projectId).save(updated);
     return updated;
+  }
+
+  async markUnderstood(projectId: string, lessonId: string): Promise<LearningProgress> {
+    return this.serialiseWrite(async () => {
+      const progress = await this.get(projectId);
+      if (progress.memory?.lessonId !== lessonId && !progress.lessons?.some((lesson) => lesson.id === lessonId)) throw new Error('This lesson is no longer available.');
+      const updated = { ...progress, lessons: progress.lessons?.map((lesson) => lesson.id === lessonId ? { ...lesson, understood: true } : lesson), memory: progress.memory?.lessonId === lessonId ? { ...progress.memory, understood: true, unresolvedCheck: '' } : progress.memory, updatedAt: this.now().toISOString() };
+      // Self-report resolves the lesson check; it does not award demonstrated mastery.
+      await this.store(projectId).save(updated);
+      return updated;
+    });
   }
 
   private serialiseWrite<T>(operation: () => Promise<T>): Promise<T> {

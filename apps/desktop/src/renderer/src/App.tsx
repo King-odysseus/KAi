@@ -139,6 +139,7 @@ export function App(): ReactNode {
   const [streamingText, setStreamingText] = useState('');
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
+  const [proxyContinuationAgent, setProxyContinuationAgent] = useState<AgentId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
@@ -571,7 +572,7 @@ export function App(): ReactNode {
       setSelectedAgent(existing.activeAgent ?? bootstrap?.settings.defaultAgent ?? 'codex');
       const mode = existing.execution ?? 'cli';
       setExecutionMode(mode);
-      setSelectedRoute(mode === 'api' ? existing.route ?? bootstrap?.settings.defaultRoute ?? 'direct' : 'direct');
+      setSelectedRoute(existing.route ?? bootstrap?.settings.defaultRoute ?? 'direct');
       setSelectedAutonomy(existing.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
       setView('workspace');
       return;
@@ -586,7 +587,7 @@ export function App(): ReactNode {
     setSelectedAgent(conversation.activeAgent ?? bootstrap?.settings.defaultAgent ?? 'codex');
     const mode = conversation.execution ?? 'cli';
     setExecutionMode(mode);
-    setSelectedRoute(mode === 'api' ? conversation.route ?? bootstrap?.settings.defaultRoute ?? 'direct' : 'direct');
+    setSelectedRoute(conversation.route ?? bootstrap?.settings.defaultRoute ?? 'direct');
     setSelectedAutonomy(conversation.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
     setView('workspace');
   }
@@ -657,6 +658,7 @@ export function App(): ReactNode {
     }
 
     setAgentNotice(null);
+    setProxyContinuationAgent(null);
     setStreamingText('');
     setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     setRunningConversationId(conversation.id);
@@ -684,7 +686,14 @@ export function App(): ReactNode {
         result.conversation,
         ...current.filter((item) => item.id !== result.conversation.id),
       ]);
-      if (result.error) setError(result.error);
+      if (result.error) {
+        if (!apiRun && runRoute === 'direct' && capability?.supportsRoutes.includes('proxy') && looksLikeAccountLimit(result.error)) {
+          setProxyContinuationAgent(runAgentId);
+          setAgentNotice(`${capability.displayName} can continue through your Universal Proxy route.`);
+        } else {
+          setError(result.error);
+        }
+      }
     } finally {
       setRunningConversationId(null);
       setRunPaused(false);
@@ -1201,6 +1210,7 @@ export function App(): ReactNode {
             selectedRoute={selectedRoute}
             selectedAutonomy={selectedAutonomy}
             proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
+            proxyContinuationAgent={proxyContinuationAgent}
             streamingText={streamingText}
             running={runningConversationId === activeConversation?.id}
             paused={runPaused}
@@ -1218,7 +1228,19 @@ export function App(): ReactNode {
             }}
             onSelectRoute={(route) => {
               setSelectedRoute(route);
+              if (route === 'proxy') setProxyContinuationAgent(null);
               setAgentNotice(null);
+            }}
+            onContinueViaProxy={(agent) => {
+              if (serviceFor(bootstrap, 'universalProxy').status !== 'ready') {
+                setError('Start Universal Proxy before continuing this agent through its proxy route.');
+                return;
+              }
+              setExecutionMode('cli');
+              setSelectedAgent(agent);
+              setSelectedRoute('proxy');
+              setProxyContinuationAgent(null);
+              setAgentNotice(`${agentCapabilities.find((item) => item.id === agent)?.displayName ?? agent} now uses the proxy for the next message in this conversation.`);
             }}
             onSelectAutonomy={(autonomy) => {
               setSelectedAutonomy(autonomy);
@@ -1285,6 +1307,7 @@ export function App(): ReactNode {
         leftOpen={threadsOpen}
         rightOpen={contextOpen}
         previewOpen={previewOpen}
+        terminalOpen={terminalOpen}
         shortcuts={shortcuts}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
@@ -1295,6 +1318,7 @@ export function App(): ReactNode {
         onToggleThreads={() => setThreadsOpen((open) => !open)}
         onToggleContext={() => setContextOpen((open) => !open)}
         onTogglePreview={() => setPreviewOpen((open) => !open)}
+        onToggleTerminal={() => setTerminalOpen((open) => !open)}
       />
       <UrgentBanner />
       <UpdateBanner onOpen={() => setView('settings')} />
@@ -1519,6 +1543,10 @@ function ApprovalDialog({
       </section>
     </div>
   );
+}
+
+function looksLikeAccountLimit(message: string): boolean {
+  return /(?:credit|quota|usage(?:\s|-)?limit|monthly(?:\s|-)?limit|spending(?:\s|-)?limit|billing|balance|exhausted|out of tokens|reached (?:your )?limit|limit (?:has been )?reached)/i.test(message);
 }
 
 function serviceFor(bootstrap: BootstrapPayload, kind: 'cognitive1' | 'universalProxy') {

@@ -256,6 +256,7 @@ export const ipcChannels = [
   'editor:remove-document',
   'editor:update-window',
   'learning:progress',
+  'learning:understood',
   'learning:readiness',
   'learning:update-preferences',
   'learning:evaluate',
@@ -450,6 +451,7 @@ export const ipcInputSchemas = {
   'editor:update-document': editorDocumentStateSchema,
   'editor:remove-document': editorDocumentRemoveSchema,
   'editor:update-window': editorWindowSnapshotSchema,
+  'learning:understood': z.object({ projectId: z.string().min(1), lessonId: z.string().min(1) }).strict(),
   'learning:progress': z.object({ projectId: z.string().min(1) }).strict(),
   'learning:readiness': emptyInputSchema,
   'learning:update-preferences': learningPreferencesInputSchema,
@@ -773,6 +775,7 @@ export interface KaiDesktopBridge {
   removeEditorDocument(document: EditorDocumentRemove): Promise<IpcResponse<boolean>>;
   updateEditorWindow(snapshot: EditorWindowSnapshot): Promise<IpcResponse<boolean>>;
   onEditorDocumentsSaved(listener: (documents: EditorSavedDocument[]) => void): () => void;
+  markLearningUnderstood(projectId: string, lessonId: string): Promise<IpcResponse<LearningProgress>>;
   learningProgress(projectId: string): Promise<IpcResponse<LearningProgress>>;
   learningReadiness(): Promise<IpcResponse<LearningReadiness>>;
   updateLearningPreferences(input: LearningPreferencesInput): Promise<IpcResponse<LearningProgress>>;

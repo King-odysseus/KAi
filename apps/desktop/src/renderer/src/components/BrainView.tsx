@@ -53,6 +53,13 @@ const initialFilters: SearchFilters = {
   mode: 'lexical',
 };
 
+const BRAIN_SECTIONS: ReadonlyArray<{ label: string; detail: string; filters: Partial<SearchFilters> }> = [
+  { label: 'Architecture', detail: 'System shape and patterns', filters: { query: 'architecture', type: 'patterns' } },
+  { label: 'Security', detail: 'Trust, secrets, and access', filters: { query: 'security' } },
+  { label: 'Decisions', detail: 'What was chosen and why', filters: { query: '', type: 'decisions' } },
+  { label: 'Lessons', detail: 'Gotchas and past fixes', filters: { query: '', type: 'gotchas' } },
+];
+
 export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
   const [overview, setOverview] = useState<BrainOverview | null>(null);
   const [results, setResults] = useState<BrainEntry[]>([]);
@@ -265,6 +272,21 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
           <span>Loading brain state</span>
         </div>
       )}
+
+      <section className="brain-handbook" aria-label="Project handbook sections">
+        <div><strong>Your project handbook</strong><small>Open a section to check the knowledge agents should use before they work.</small></div>
+        <div className="brain-handbook-options">
+          {BRAIN_SECTIONS.map((section) => (
+            <button key={section.label} type="button" onClick={() => {
+              const next = { ...initialFilters, ...section.filters };
+              setFilters(next);
+              void runSearch(next);
+            }}>
+              <strong>{section.label}</strong><small>{section.detail}</small>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <form
         className="brain-search-form"

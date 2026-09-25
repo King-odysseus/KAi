@@ -35,7 +35,7 @@ import type {
 } from '@kai/contracts';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
-import { LearningPanel, type LearningSelectionPreview } from './LearningPanel';
+import { LearningPanel, type LearningSelectionPreview, type TutorConversationTurn } from './LearningPanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 
 interface TreeNode {
@@ -270,16 +270,21 @@ export function CodeView({
   const [optimisticPreferences, setOptimisticPreferences] = useState<LearningProgress['preferences'] | null>(null);
   const [progress, setProgress] = useState<LearningProgress | null>(null);
   const [readiness, setReadiness] = useState<LearningReadiness | null>(null);
+  const [responseLessonId, setResponseLessonId] = useState<string | null>(null);
   const [learningResult, setLearningResult] = useState<LearningEvaluationResult | null>(null);
   const [learningBusy, setLearningBusy] = useState<LearningAction | 'record' | null>(null);
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSelection, setLearningSelection] = useState<LearningSelectionPreview | null>(null);
   const [question, setQuestion] = useState('');
+  const [submittedQuestion, setSubmittedQuestion] = useState('');
+  const [tutorConversation, setTutorConversation] = useState<TutorConversationTurn[]>([]);
+  const [appliedSuggestionNeedsExplanation, setAppliedSuggestionNeedsExplanation] = useState(false);
   const [gitInfo, setGitInfo] = useState<GitFileInfo | null>(null);
   const [formatting, setFormatting] = useState(false);
   const [teachingLibrary, setTeachingLibrary] = useState<TeachingLibrary | null>(null);
   const [teachingBusy, setTeachingBusy] = useState<string | null>(null);
   const assistance = optimisticPreferences?.assistance ?? progress?.preferences.assistance ?? 'guided';
+  const teachingModes = optimisticPreferences?.teachingModes ?? progress?.preferences.teachingModes ?? [assistance];
   const inlineSuggestions = optimisticPreferences?.inlineSuggestions ?? progress?.preferences.inlineSuggestions ?? false;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -288,11 +293,12 @@ export function CodeView({
   const activeRef = useRef<string | null>(null);
   const openPathsRef = useRef<string[]>([]);
   const lastLearningRequest = useRef<LearningTutorRequest | null>(null);
-  const learningActionRef = useRef<(action: LearningAction) => Promise<LearningEvaluationResult | null>>(async () => null);
+  const learningActionRef = useRef<(action: LearningAction, inline?: boolean) => Promise<LearningEvaluationResult | null>>(async () => null);
   const projectIdRef = useRef<string | null>(projectId);
   const initializedProjectId = useRef<string | null>(null);
   const restoredEditorProject = useRef<string | null>(null);
   const preferenceRevision = useRef(0);
+  const inlineRequestRef = useRef<Promise<LearningEvaluationResult | null> | null>(null);
   const learningBusyRef = useRef(false);
   const activeLearningRequestId = useRef<string | null>(null);
   const codeResizeOrigin = useRef<{ kind: 'files' | 'learning'; x: number; width: number } | null>(null);
@@ -482,8 +488,12 @@ export function CodeView({
     preferenceRevision.current = 0;
     setOptimisticPreferences(null);
     setLearningResult(null);
+    setResponseLessonId(null);
     setLearningError(null);
     setQuestion('');
+    setSubmittedQuestion('');
+    setTutorConversation([]);
+    setAppliedSuggestionNeedsExplanation(false);
     setGitInfo(null);
     activeLearningRequestId.current = null;
     learningBusyRef.current = false;
@@ -497,6 +507,7 @@ export function CodeView({
     if (projectId) {
       const revisionAtLoad = preferenceRevision.current;
       void window.kaiDesktop.learningProgress(projectId).then(unwrap).then((loaded) => {
+        if (projectIdRef.current !== projectId) return;
         if (preferenceRevision.current === revisionAtLoad) confirmedPreferences.current = loaded.preferences;
         setProgress(chosenPreferences.current ? { ...loaded, preferences: chosenPreferences.current } : loaded);
       }).catch((caught) => {
@@ -521,7 +532,7 @@ export function CodeView({
         fontSize: 13,
         scrollBeyondLastLine: false,
         renderWhitespace: 'selection',
-        inlineSuggest: { enabled: true },
+        inlineSuggest: { enabled: true, showToolbar: 'always' },
       });
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void saveActive());
       editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Backslash, () => editor.trigger('keyboard', 'editor.action.inlineSuggest.trigger', {}));
@@ -582,8 +593,20 @@ export function CodeView({
             state = learningStateRef.current;
             if (!state.projectId || !state.filePath || state.assistance !== 'copilot' || !state.inlineSuggestions) return { items: [] };
           }
-          const result = await learningActionRef.current('complete');
-          if (token.isCancellationRequested || !result?.response.suggestion) return { items: [] };
+          // Coalesce typing while a provider request is in flight; the newest live
+          // Monaco request gets its own cursor snapshot once the previous one finishes.
+          while (inlineRequestRef.current) {
+            await inlineRequestRef.current;
+            if (token.isCancellationRequested) return { items: [] };
+          }
+          state = learningStateRef.current;
+          if (!state.inlineSuggestions || state.assistance !== 'copilot' || token.isCancellationRequested || editor.getModel() !== model || !editor.getSelection()?.isEmpty()) return { items: [] };
+          const pending = learningActionRef.current('complete', true);
+          inlineRequestRef.current = pending;
+          let result: LearningEvaluationResult | null;
+          try { result = await pending; }
+          finally { if (inlineRequestRef.current === pending) inlineRequestRef.current = null; }
+          if (token.isCancellationRequested || !learningStateRef.current.inlineSuggestions || learningStateRef.current.assistance !== 'copilot' || !result?.response.suggestion) return { items: [] };
           const selection = editor.getSelection();
           const range = selection && !selection.isEmpty()
             ? selection
@@ -773,8 +796,8 @@ export function CodeView({
     openPathsRef.current = nextOpenPaths;
     setOpenPaths(nextOpenPaths);
     reportWindow(currentProjectId, nextOpenPaths, path);
+    activeRef.current = path;
     setActivePath(path);
-    setLearningResult(null);
     setLearningError(null);
   }
 
@@ -898,7 +921,45 @@ export function CodeView({
     await openFile(path);
   }
 
-  async function runLearningAction(action: LearningAction): Promise<LearningEvaluationResult | null> {
+  async function openLearningReference(filePath: string, startLine?: number, endLine?: number): Promise<void> {
+    const originProject = projectIdRef.current;
+    await openFile(filePath);
+    const editor = editorRef.current;
+    if (projectIdRef.current !== originProject || activeRef.current !== filePath || !editor) return;
+    if (startLine) {
+      const model = editor.getModel();
+      if (!model || startLine > model.getLineCount() || (endLine ?? startLine) > model.getLineCount()) {
+        setLearningError('The cited lines no longer exist. The file may have changed since this lesson.');
+        return;
+      }
+      const lastLine = Math.max(startLine, endLine ?? startLine);
+      editor.setSelection({ startLineNumber: startLine, startColumn: 1, endLineNumber: lastLine, endColumn: model.getLineMaxColumn(lastLine) });
+      editor.revealLineInCenter(startLine);
+    }
+    editor.focus();
+  }
+
+  async function markUnderstood(lessonId: string): Promise<void> {
+    const id = projectId;
+    if (!id) return;
+    try {
+      const updated = unwrap(await window.kaiDesktop.markLearningUnderstood(id, lessonId));
+      if (projectIdRef.current === id) setProgress(updated);
+    } catch (error) { if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'Could not save understanding.'); }
+  }
+
+  async function runLearningCheck(): Promise<string> {
+    if (!projectId) throw new Error('Open a project first.');
+    const id = projectId;
+    const overview = unwrap(await window.kaiDesktop.verificationOverview(id));
+    const command = await promptDialog({ title: 'Run project check', label: 'Check command (runs saved files on disk)', initialValue: overview.suggestedCommand ?? '', confirmLabel: 'Run check' });
+    if (!command?.trim()) return 'Check cancelled.';
+    if (projectIdRef.current !== id) return 'Project changed; check cancelled.';
+    const run = unwrap(await window.kaiDesktop.runVerification(id, command));
+    return `${run.command}: ${run.passed ? 'Passed' : 'Failed'} (exit ${run.exitCode ?? 'unknown'})\n${run.outputTail}`;
+  }
+
+  async function runLearningAction(action: LearningAction, inline = false, temporaryAssistance?: LearningAssistance): Promise<LearningEvaluationResult | null> {
     if (learningBusyRef.current) return null;
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
@@ -908,7 +969,7 @@ export function CodeView({
       setLearningError(projectOnlyRequest ? 'Open a project before using Learning Mode.' : 'Open a file before using this Learning Mode action.');
       return null;
     }
-    setTutorOpen(true);
+    if (!inline) setTutorOpen(true);
     if (action === 'explain-selection' && (!editor || editor.getSelection()?.isEmpty())) {
       setLearningError('Select some code before asking for a selection explanation.');
       return null;
@@ -927,6 +988,11 @@ export function CodeView({
     const selection = editor?.getSelection();
     const selectedText = document && selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 50_000) : undefined;
     const requestId = `learning_${crypto.randomUUID()}`;
+    const requestAssistance = temporaryAssistance ?? assistance;
+    const explainingAppliedSuggestion = appliedSuggestionNeedsExplanation && /^I applied the Tutor suggestion/i.test(question.trim());
+    const priorTurns = learningResult?.response && submittedQuestion.trim()
+      ? [...tutorConversation, { id: 'current', question: submittedQuestion, response: learningResult.response }]
+      : tutorConversation;
     const request: LearningTutorRequest = {
       requestId,
       projectId,
@@ -942,27 +1008,54 @@ export function CodeView({
       ...(document ? { language: document.language } : {}),
       scope: learningScope,
       action,
-      assistance,
-      code: document ? boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1) : '',
+      assistance: requestAssistance,
+      teachingModes: temporaryAssistance ? [requestAssistance] : teachingModes,
+      code: !inline && document ? boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1) : '',
+      ...(inline && document && editor?.getPosition() ? { completionContext: {
+        prefix: document.model.getValue().slice(0, document.model.getOffsetAt(editor.getPosition()!)).slice(-6_000),
+        suffix: document.model.getValue().slice(document.model.getOffsetAt(editor.getPosition()!), document.model.getOffsetAt(editor.getPosition()!) + 3_000),
+      } } : {}),
       ...(selectedText ? { selectedText } : {}),
       ...(editor ? { cursorLine: editor.getPosition()?.lineNumber ?? 1 } : {}),
       ...(errorText ? { errorText } : {}),
       ...(question.trim() ? { question: question.trim().slice(0, 4_000) } : {}),
+      ...(!inline && priorTurns.length ? { conversationContext: tutorConversationContext(priorTurns) } : {}),
     };
     activeLearningRequestId.current = requestId;
     learningBusyRef.current = true;
     setLearningBusy(action);
+    if (!inline) {
+      if (learningResult?.response && submittedQuestion.trim()) {
+        setTutorConversation((current) => [...current, {
+          id: `turn_${crypto.randomUUID()}`,
+          question: submittedQuestion,
+          response: learningResult.response,
+        }].slice(-30));
+      }
+      setSubmittedQuestion(request.question ?? `Tutor action: ${action.replace(/-/g, ' ')}`);
+      setQuestion('');
+      setLearningResult(null);
+      setResponseLessonId(null);
+    }
     setLearningError(null);
     try {
       const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
-      if (activeLearningRequestId.current !== requestId || !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current)) return null;
+      if (activeLearningRequestId.current !== requestId || projectIdRef.current !== request.projectId || (action === 'complete' && !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current))) return null;
+      if (inline) {
+        if (!result.response.suggestion) setNotice('No inline suggestion for this cursor position.');
+        return result;
+      }
       lastLearningRequest.current = request;
       setLearningResult(result);
+      setResponseLessonId(result.progress.memory?.lessonId ?? null);
       setProgress(result.progress);
+      if (explainingAppliedSuggestion) setAppliedSuggestionNeedsExplanation(false);
       return result;
     } catch (caught) {
       if (activeLearningRequestId.current === requestId) {
-        setLearningError(caught instanceof Error ? caught.message : 'The tutor request failed.');
+        const message = caught instanceof Error ? caught.message : 'The tutor request failed.';
+        setLearningError(message);
+        if (inline) setNotice(`Inline suggestion: ${message}`);
       }
       return null;
     } finally {
@@ -974,22 +1067,23 @@ export function CodeView({
   }
   learningActionRef.current = runLearningAction;
 
-  async function updatePreferences(nextAssistance: LearningAssistance, nextInline: boolean): Promise<void> {
+  async function updatePreferences(nextAssistance: LearningAssistance, nextInline: boolean, modes: LearningAssistance[] = teachingModes): Promise<void> {
     if (!projectId) return;
-    const chosen = { assistance: nextAssistance, inlineSuggestions: nextInline };
+    const chosen = { assistance: nextAssistance, inlineSuggestions: nextInline, teachingModes: modes };
     const revision = preferenceRevision.current + 1;
     preferenceRevision.current = revision;
     chosenPreferences.current = chosen;
     setOptimisticPreferences(chosen);
     setLearningError(null);
     setProgress((current) => current
-      ? { ...current, preferences: { assistance: nextAssistance, inlineSuggestions: nextInline } }
+      ? { ...current, preferences: chosen }
       : current);
     try {
       const updated = unwrap(await window.kaiDesktop.updateLearningPreferences({
         projectId,
         assistance: nextAssistance,
         inlineSuggestions: nextInline,
+        teachingModes: modes,
       }));
       if (preferenceRevision.current !== revision) return;
       confirmedPreferences.current = updated.preferences;
@@ -1027,6 +1121,7 @@ export function CodeView({
           selection?.positionColumn ?? 1,
         );
     document.model.pushEditOperations([], [{ range, text: suggestion.code }], () => selection ? [selection] : null);
+    setAppliedSuggestionNeedsExplanation(true);
     setNotice('Inserted the tutor suggestion. Review it, run the relevant check, and save when you are satisfied.');
   }
 
@@ -1250,8 +1345,20 @@ export function CodeView({
             onKeyDown={(event) => resizeCodePaneWithKeyboard('learning', event)}
           />
           <LearningPanel
+            key={projectId}
+            projectFiles={files.map((file) => file.path)}
+            onReference={(filePath, startLine, endLine) => void openLearningReference(filePath, startLine, endLine)}
+            responseLessonId={responseLessonId}
+            onLessonSelect={(lesson) => {
+              if (!progress) return;
+              lastLearningRequest.current = null;
+              setLearningResult({ response: lesson.response, progress });
+              setResponseLessonId(lesson.id);
+            }}
+            onUnderstood={(lessonId) => void markUnderstood(lessonId)}
+            onRunCheck={runLearningCheck}
             projectName={activeProject?.name ?? null}
-            progress={progress}
+            progress={progress && optimisticPreferences ? { ...progress, preferences: optimisticPreferences } : progress}
             readiness={readiness}
             result={learningResult}
             scope={learningScope}
@@ -1261,6 +1368,8 @@ export function CodeView({
             formatting={formatting}
             error={learningError}
             question={question}
+            submittedQuestion={submittedQuestion}
+            conversation={tutorConversation}
             onQuestionChange={setQuestion}
             onAction={(action) => void runLearningAction(action)}
             onScopeChange={(nextScope) => {
@@ -1271,9 +1380,16 @@ export function CodeView({
                 // A remembered tutor scope is a convenience only.
               }
             }}
-            onPreferences={(nextAssistance, nextInline) => void updatePreferences(nextAssistance, nextInline)}
+            onPreferences={(nextAssistance, nextInline, modes) => void updatePreferences(nextAssistance, nextInline, modes)}
             onInsertSuggestion={insertSuggestion}
-            onRecordLesson={() => void recordLesson()}
+            appliedSuggestionNeedsExplanation={appliedSuggestionNeedsExplanation}
+            onExplainAppliedSuggestion={() => {
+              setQuestion('I applied the Tutor suggestion. I think it works because ');
+              setTutorOpen(true);
+            }}
+            onStuck={() => void runLearningAction('next-step', false, nextAssistanceLevel(assistance))}
+            canEscalateAssistance={assistance !== 'copilot'}
+            onRecordLesson={lastLearningRequest.current ? () => void recordLesson() : undefined}
             onFormat={() => void formatActive()}
             teachingLibrary={teachingLibrary}
             teachingBusy={teachingBusy}
@@ -1298,6 +1414,20 @@ function learningState(
   inlineSuggestions: boolean,
 ): { projectId: string; filePath: string; assistance: LearningAssistance; scope: LearningTutorScope; inlineSuggestions: boolean } | null {
   return projectId && filePath ? { projectId, filePath, assistance, scope, inlineSuggestions } : null;
+}
+
+function nextAssistanceLevel(current: LearningAssistance): LearningAssistance {
+  const levels: LearningAssistance[] = ['learn', 'guided', 'pair', 'copilot'];
+  const index = levels.indexOf(current);
+  return levels[Math.min(levels.length - 1, Math.max(0, index) + 1)]!;
+}
+
+function tutorConversationContext(turns: TutorConversationTurn[]): string {
+  const context = turns.slice(-6).map((turn) => [
+    `Learner: ${turn.question}`,
+    `Tutor: ${[turn.response.recap, turn.response.purpose, turn.response.steps[0]?.explanation].filter(Boolean).join(' ')}`,
+  ].join('\n')).join('\n\n');
+  return context.slice(-16_000);
 }
 
 function learningRequestStillCurrent(

@@ -477,6 +477,10 @@ export function registerIpc(context: IpcContext): void {
     await resolveProject(context, projectId, true);
     return context.learningProgress.get(projectId);
   });
+  handle(context, 'learning:understood', async ({ projectId, lessonId }) => {
+    await resolveProject(context, projectId, true);
+    return context.learningProgress.markUnderstood(projectId, lessonId);
+  });
   handle(context, 'learning:readiness', async () => context.learningTutor.readiness());
   handle(context, 'learning:update-preferences', async (input): Promise<LearningProgress> => {
     await resolveProject(context, input.projectId, true);
@@ -487,7 +491,7 @@ export function registerIpc(context: IpcContext): void {
     const settings = await context.settings.load();
     const readiness = await context.learningTutor.readiness();
     if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
-    const estimatedInputTokens = Math.ceil((request.code.length + (request.selectedText?.length ?? 0) + (request.question?.length ?? 0)) / 4) + 1_500;
+    const estimatedInputTokens = Math.ceil((request.code.length + (request.completionContext?.prefix.length ?? 0) + (request.completionContext?.suffix.length ?? 0) + (request.selectedText?.length ?? 0) + (request.question?.length ?? 0) + (request.conversationContext?.length ?? 0)) / 4) + 1_500;
     const reservation = context.learningBudget.reserve({
       projectId: request.projectId,
       provider: readiness.provider,
@@ -502,14 +506,15 @@ export function registerIpc(context: IpcContext): void {
       throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
     }
     try {
-      const detailed = await context.learningTutor.evaluateDetailed(request);
+      const remembered = await context.learningProgress.get(request.projectId);
+      const detailed = await context.learningTutor.evaluateDetailed(request, JSON.stringify({ memory: remembered.memory, concepts: remembered.concepts.slice(0, 20) }));
       await context.learningUsage.record({
         projectId: request.projectId,
         provider: readiness.provider,
         model: readiness.model,
         usage: detailed.usage,
       });
-      const progress = await context.learningProgress.recordEvaluation(request, detailed.response);
+      const progress = request.completionContext ? await context.learningProgress.get(request.projectId) : await context.learningProgress.recordEvaluation(request, detailed.response);
       return { response: detailed.response, progress, usage: detailed.usage };
     } finally {
       context.learningBudget.release(reservation.id);

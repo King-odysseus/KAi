@@ -9,3 +9,5 @@ apps/desktop/resources/engines/
 apps/desktop/test-results/
 .env
 .env.*
+.vscode/shared-memory/log/
+work/
