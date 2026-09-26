@@ -192,6 +192,20 @@ export function qwenProxySettings(proxyBaseUrl: string, model?: string): Record<
   };
 }
 
+/**
+ * Codex ignores OPENAI_BASE_URL and would send the proxy token to api.openai.com, so a proxied run names its own
+ * provider through config overrides. The key still comes from OPENAI_API_KEY in the environment.
+ */
+export function codexProxyProviderArgs(proxyBaseUrl: string): string[] {
+  return [
+    '-c', 'model_provider="kai-proxy"',
+    '-c', 'model_providers.kai-proxy.name="KAI Universal Proxy"',
+    '-c', `model_providers.kai-proxy.base_url=${JSON.stringify(proxyBaseUrl)}`,
+    '-c', 'model_providers.kai-proxy.env_key="OPENAI_API_KEY"',
+    '-c', 'model_providers.kai-proxy.wire_api="responses"',
+  ];
+}
+
 function writeQwenProxySettings(proxyBaseUrl: string, model?: string): string {
   const content = JSON.stringify(qwenProxySettings(proxyBaseUrl, model), null, 2);
   const directory = path.join(tmpdir(), 'kai-qwen-proxy');
@@ -358,8 +372,10 @@ export class DesktopAgentRuntime {
       }
     }
 
-    const proxyBaseUrl = request.route === 'proxy' && request.agent === 'qwen' ? environment.OPENAI_BASE_URL : undefined;
-    if (proxyBaseUrl) {
+    const proxyBaseUrl = request.route === 'proxy' && (request.agent === 'qwen' || request.agent === 'codex')
+      ? environment.OPENAI_BASE_URL
+      : undefined;
+    if (proxyBaseUrl && request.agent === 'qwen') {
       environment = { ...environment, QWEN_CODE_SYSTEM_SETTINGS_PATH: writeQwenProxySettings(proxyBaseUrl, model) };
     }
     const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model, proxyBaseUrl);
@@ -612,9 +628,11 @@ export function buildAgentArgs(
   // Every supported CLI takes the model as `--model <name>`; without one the CLI keeps its own default.
   const modelArgs = model ? ['--model', model] : [];
   if (request.agent === 'codex') {
-    if (resumeSessionId) return ['exec', 'resume', resumeSessionId, '--json', ...modelArgs, '-'];
+    const providerArgs = proxyBaseUrl ? codexProxyProviderArgs(proxyBaseUrl) : [];
+    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...modelArgs, '-'];
     return [
       'exec',
+      ...providerArgs,
       '--json',
       ...modelArgs,
       '--sandbox',

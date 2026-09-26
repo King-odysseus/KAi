@@ -7,6 +7,7 @@ import {
   agentInstallCommand,
   buildAgentArgs,
   cliProxyEnvironment,
+  codexProxyProviderArgs,
   DesktopAgentRuntime,
   isSignInError,
   kimiSignedIn,
@@ -442,6 +443,20 @@ describe('desktop agent runtime', () => {
     expect(resolveWindowsExecutable('missing', environment, 'win32')).toBeNull();
     expect(resolveWindowsExecutable(path.join(second, 'native.exe'), {}, 'win32')).toBe(path.join(second, 'native.exe'));
     expect(resolveWindowsExecutable('native', environment, 'linux')).toBeNull();
+  });
+
+  it('points Codex at the proxy with config overrides because it ignores OPENAI_BASE_URL', () => {
+    const url = 'http://127.0.0.1:8083/a/codex/v1';
+    const provider = codexProxyProviderArgs(url);
+    expect(provider).toContain(`model_providers.kai-proxy.base_url="${url}"`);
+    expect(provider).toContain('model_provider="kai-proxy"');
+    const request = { prompt: 'hi', autonomy: 'ask' as const, agent: 'codex' as const };
+    expect(buildAgentArgs(request, 'C:/repo', undefined, undefined, undefined, url).slice(0, 1 + provider.length))
+      .toEqual(['exec', ...provider]);
+    expect(buildAgentArgs(request, 'C:/repo', 'session-1', undefined, undefined, url))
+      .toEqual(['exec', ...provider, 'resume', 'session-1', '--json', '-']);
+    // Only the name of the key's environment variable is on the command line, never the key.
+    expect(provider).toContain('model_providers.kai-proxy.env_key="OPENAI_API_KEY"');
   });
 
   it('points Qwen at the proxy with a flag so its own settings file cannot override the route', () => {
