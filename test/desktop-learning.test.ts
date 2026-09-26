@@ -259,6 +259,7 @@ describe('desktop learning mode', () => {
     expect(JSON.stringify(bodies[0])).toContain('npm run test');
     expect(JSON.stringify(bodies[0])).toContain('src/value.test.ts');
     expect(JSON.stringify(bodies[0])).toContain('Scope: whole project');
+    expect(JSON.stringify(bodies[0])).toContain('Do not name a specific editor');
     expect(JSON.stringify(bodies[0])).not.toContain('MONEY MATTERS MUST NOT LOAD');
     expect(JSON.stringify(bodies[0])).not.toContain('PROJECT_CONTEXT_NODE_MODULE_SECRET');
     expect(JSON.stringify(bodies[0])).not.toContain('PROJECT_CONTEXT_ENV_SECRET');

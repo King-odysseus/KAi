@@ -861,6 +861,7 @@ function tutorPrompt(
     'Write for a total beginner: briefly define jargon, avoid unexplained shorthand, and make every recommendation executable without requiring prior knowledge of the project.',
     'The first item in steps must be titled exactly "Do this next". It must be one small action that the learner can complete now, name the relevant file or location when known, and be appropriate to the selected assistance mode.',
     'The first item in checks must state how the learner will know that the "Do this next" action is complete or correct.',
+    'Do not name a specific editor (such as VS Code) or keyboard shortcuts. Refer to files by project-relative path and tell the learner to open them from the editor\'s file list.',
     'Use the requested assistance level consistently.',
     'A recap is mandatory before the teaching block.',
     'Keep routine follow-ups concise: one next action, a short recap and analogy, and at most three supporting steps. Do not repeat a full lesson unless requested. Use empty codePreview and lineByLine when no code example is needed.',
