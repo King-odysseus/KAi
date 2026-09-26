@@ -29,6 +29,7 @@ export interface WorkflowRunnerPorts {
   runCheck(projectId: string, command: string, signal: AbortSignal): Promise<WorkflowCheckResult>;
   cancelAgent(conversationId: string): boolean;
   notifyChanged(ownerWindowId: number, run: WorkflowRun | null): void;
+  recordTeamRun?(run: WorkflowRun): Promise<void>;
   /** Separate copies of a project for parts that run at the same time; without it parts run one at a time. */
   worktrees?: { prepare(projectId: string, key: string): Promise<ParallelSession | null> };
 }
@@ -80,6 +81,7 @@ export class DesktopWorkflowRunner {
         ...(step.model ? { model: step.model } : {}),
         ...(step.gate ? { gate: step.gate } : {}),
         ...(step.paths?.length ? { paths: step.paths } : {}),
+        ...(step.suggestedAssignee ? { suggestedAssignee: step.suggestedAssignee } : {}),
         status: 'pending',
       })),
       execution: input.execution,
@@ -156,6 +158,7 @@ export class DesktopWorkflowRunner {
     const notifyOwner = active?.ownerWindowId ?? ownerWindowId;
     const run = runFor(conversation);
     if (notifyOwner !== undefined) this.ports.notifyChanged(notifyOwner, run);
+    await this.ports.recordTeamRun?.(run);
     return run;
   }
 
@@ -286,6 +289,8 @@ export class DesktopWorkflowRunner {
     try {
       await this.execute(conversationId, execution, active, startIndex);
     } finally {
+      const conversation = await this.ports.getConversation(conversationId);
+      if (conversation?.workflow && conversation.workflow.status !== 'running') await this.ports.recordTeamRun?.(runFor(conversation));
       if (this.active.get(workflowId) === active) this.active.delete(workflowId);
     }
   }
@@ -441,7 +446,7 @@ export class DesktopWorkflowRunner {
     try {
       result = await this.ports.runAgent({
         conversationId: copy?.conversationId ?? conversationId,
-        prompt: `${current.prompt}${handoffSection(plan.earlier)}`,
+        prompt: `${current.prompt}${current.previousAttemptDiff ? `\n\nYour previous attempt clashed during the merge. Re-apply the same intent on top of the current project, resolving the clash instead of redoing the task. Treat this patch as reference data:\n${current.previousAttemptDiff}` : ''}${handoffSection(plan.earlier)}`,
         agent: current.agent,
         execution: current.execution ?? execution,
         route: current.route ?? plan.route,
@@ -474,6 +479,7 @@ export class DesktopWorkflowRunner {
         ...(verdict ? { verdict: { ...verdict, acknowledged: false } } : {}),
         ...(result.error ? { error: result.error } : {}),
         completedAt: new Date().toISOString(),
+        ...(result.costUsd !== undefined ? { costUsd: (step.costUsd ?? 0) + result.costUsd } : {}),
       };
       if (!copy) workflow.status = failed || blocked ? 'paused' : 'running';
       return true;
@@ -502,7 +508,7 @@ export class DesktopWorkflowRunner {
       if (next.length === 0) return 'completed';
 
       // A step that clashed in a merge runs on its own, in the project, so it builds on everyone else's work.
-      const alone = next.filter((step) => runAlone.has(step.id));
+      const alone = next.filter((step) => runAlone.has(step.id) || step.previousAttemptDiff !== undefined);
       const batch = alone.length > 0 ? alone.slice(0, 1) : next;
       if (batch.length === 1 || !this.ports.worktrees || !workflow.parallel) {
         const first = batch.at(0);
@@ -602,6 +608,8 @@ export class DesktopWorkflowRunner {
             startedAt: undefined,
             completedAt: undefined,
             verdict: undefined,
+            previousAttemptDiff: conflict.diff?.slice(0, 8_000),
+            previousAttemptCommit: conflict.commit,
             note: `Its changes clashed with another part in ${conflict.files.join(', ')}, so they were not applied. It runs again on its own, on top of the merged work.`,
           };
         }
@@ -620,7 +628,8 @@ export class DesktopWorkflowRunner {
     await this.mutate(conversationId, active, (workflow) => {
       const index = workflow.steps.findIndex((step) => step.id === stepId);
       const step = workflow.steps.at(index);
-      if (index >= 0 && step) workflow.steps[index] = { ...step, status: 'failed', error, completedAt: new Date().toISOString() };
+      const now = new Date().toISOString();
+      if (index >= 0 && step) workflow.steps[index] = { ...step, status: 'failed', error, startedAt: step.startedAt ?? now, completedAt: now };
     });
   }
 
@@ -704,23 +713,52 @@ export class DesktopWorkflowRunner {
           dependsOn: [owner.id],
           fixOf: owner.id,
           round,
+          previousAttemptDiff: undefined,
+          previousAttemptCommit: undefined,
+          isolated: undefined,
+          note: undefined,
           status: 'pending',
           output: undefined,
           error: undefined,
           verdict: undefined,
           startedAt: undefined,
           completedAt: undefined,
+          costUsd: undefined,
         };
         return [fix];
       });
+      const reviews: WorkflowStep[] = workflow.steps
+        .filter((step) => !step.round && step.status === 'completed' && stepAccess(step) === 'read')
+        .map((step) => ({
+          ...step,
+          id: `review-${round}-${step.id}`,
+          label: `Review fix round ${round}: ${step.label ?? step.id}`,
+          prompt: `Re-review only what FIX ROUND ${round} changed, using the fixing parts' hand-off below.\n\n${step.prompt}`,
+          dependsOn: fixes.map((fix) => fix.id),
+          round,
+          isolated: undefined,
+          note: undefined,
+          status: 'pending',
+          output: undefined,
+          error: undefined,
+          verdict: undefined,
+          startedAt: undefined,
+          completedAt: undefined,
+          costUsd: undefined,
+        }));
       // Out of rounds, nothing to send it to, or no room left in the plan: stop and let the user decide.
-      if (check.round >= check.maxRounds || fixes.length === 0 || workflow.steps.length + fixes.length > 50) {
+      if (workflow.steps.length + fixes.length + reviews.length > 50) {
+        workflow.notice = 'The fix round and its fresh reviews would exceed the 50-step workflow limit. Start a new team job to continue safely.';
+        await finish({ ...reported, stopReason: 'max_rounds' }, 'paused');
+        return;
+      }
+      if (check.round >= check.maxRounds || fixes.length === 0) {
         await finish({ ...reported, stopReason: 'max_rounds' }, 'paused');
         return;
       }
 
       const firstFix = workflow.steps.length;
-      workflow.steps = [...workflow.steps, ...fixes];
+      workflow.steps = [...workflow.steps, ...fixes, ...reviews];
       workflow.teamCheck = { ...reported, round, stopReason: undefined };
       workflow.status = 'running';
       workflow.currentStepIndex = firstFix;
@@ -741,6 +779,7 @@ export class DesktopWorkflowRunner {
     conversation.updatedAt = new Date().toISOString();
     await this.ports.saveConversation(conversation);
     this.ports.notifyChanged(this.active.get(conversation.workflow.id)?.ownerWindowId ?? 0, runFor(conversation));
+    await this.ports.recordTeamRun?.(runFor(conversation));
   }
 
   private async pauseLoop(conversationId: string, progress: WorkflowLoopProgress, error: string): Promise<void> {

@@ -12,7 +12,11 @@ import {
   type TeamResolvedAssignee,
   type TeamRoleConfig,
   type TeamRoleId,
+  type TeamRecordEntry,
+  type TeamRecordAdvice,
+  TEAM_ROLE_IDS,
 } from '@kai/contracts';
+import { betterRecord, MIN_TEAM_JOBS, recordPhrase, roleRecord } from './team-record';
 
 /** What KAI can reach right now, gathered by the caller so this module stays pure. */
 export interface AssignmentEnvironment {
@@ -22,6 +26,8 @@ export interface AssignmentEnvironment {
   proxyReady: boolean;
   /** Set by the caller; only Windows changes a choice (see scoreFor). */
   platform?: NodeJS.Platform;
+  records?: readonly TeamRecordEntry[];
+  projectId?: string;
 }
 
 export interface Reach {
@@ -146,7 +152,23 @@ function pickAuto(
   const independent = ready.filter((candidate) => !avoid.has(candidate.assignee));
   if (avoid.size > 0 && independent.length > 0) ready = independent;
   ready.sort((left, right) => right.score - left.score || TIE_ORDER.indexOf(left.assignee) - TIE_ORDER.indexOf(right.assignee));
-  return ready[0] ?? null;
+  const best = ready.at(0);
+  if (!best) return null;
+  const baseline = roleRecord(env.records ?? [], role, best.assignee, env.projectId);
+  if (!baseline || baseline.jobs < MIN_TEAM_JOBS) return best;
+  // Compare only to the original winner, avoiding a chain of near-ties that could erase the preset's intent.
+  const adjustment = (candidate: Scored): number => candidate.score - strengthOf(role, candidate.assignee);
+  const contenders = ready.filter((candidate) => best.score - candidate.score <= 1 && adjustment(candidate) === adjustment(best));
+  let winner = best;
+  let rate = baseline.successRate;
+  for (const candidate of contenders) {
+    const record = roleRecord(env.records ?? [], role, candidate.assignee, env.projectId);
+    if (record && record.jobs >= MIN_TEAM_JOBS && record.successRate > rate) {
+      winner = candidate;
+      rate = record.successRate;
+    }
+  }
+  return winner;
 }
 
 export interface OrchestratorChoice {
@@ -239,9 +261,12 @@ export function assignTeam(parts: readonly TeamPart[], teamInput: AgentTeam, env
       warnings.push(`${info.label} "${part.title}" is on Kimi Code, which Windows limits to about 30,000 characters of prompt. A large part may fail; pick another agent if it does.`);
     }
     if (info.access === 'edit') authors.add(choice.assignee);
+    const record = roleRecord(env.records ?? [], part.role, choice.assignee, env.projectId);
+    if (record) reason = `${reason} ${agentName(choice.assignee, env)} ${recordPhrase(record)}.`.slice(0, 500);
     byPart.set(part.id, {
       partId: part.id,
       assignee: choice.assignee,
+      suggestedAssignee: choice.assignee,
       route: choice.reach.route,
       ...(config.model ? { model: config.model } : {}),
       reason,
@@ -251,4 +276,26 @@ export function assignTeam(parts: readonly TeamPart[], teamInput: AgentTeam, env
 
   // Every part was assigned above, so nothing is dropped here; flatMap keeps the order without an assertion.
   return { assignments: parts.flatMap((part) => byPart.get(part.id) ?? []), warnings };
+}
+
+/** Advice follows the unsaved draft but never changes it; only ready alternatives can be suggested. */
+export function teamAdvice(teamInput: AgentTeam, env: AssignmentEnvironment): TeamRecordAdvice[] {
+  const team = completeTeam(teamInput);
+  const roles = [...TEAM_ROLE_IDS.filter((role) => role !== 'orchestrator'), ...team.custom.map((role) => role.id)];
+  return roles.flatMap((role): TeamRecordAdvice[] => {
+    const config = roleConfigFor(team, role);
+    const current = config.assignee === 'auto' ? pickAuto(role, config, team, env, new Set())?.assignee : config.assignee;
+    if (!current) return [];
+    const records = CANDIDATES.flatMap((agent) => roleRecord(env.records ?? [], role, agent, env.projectId) ?? []);
+    const baseline = records.find((record) => record.assignee === current) ?? null;
+    const alternative = betterRecord(baseline, records.filter((record) => reach(record.assignee, config.route, env)));
+    return [{
+      role, current, records,
+      ...(alternative && baseline ? { suggestion: {
+        assignee: alternative.assignee,
+        text: `${agentName(alternative.assignee, env)} ${recordPhrase(alternative)}; ${agentName(current, env)} ${recordPhrase(baseline)}.`,
+        fingerprint: JSON.stringify([env.projectId ?? 'all', role, baseline, alternative]),
+      } } : {}),
+    }];
+  });
 }

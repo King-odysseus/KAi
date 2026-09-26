@@ -132,6 +132,13 @@ export async function changedFiles(directory: string, from: string, to: string):
   return changes;
 }
 
+/** A bounded patch gives a clashing part its earlier intent without flooding its next prompt. */
+export async function attemptDiff(directory: string, snapshot: string, commit: string): Promise<string> {
+  const diff = await git(directory, ['diff', '--no-ext-diff', '--no-textconv', snapshot, commit, '--']);
+  const note = '\n[diff shortened to 8,000 characters]';
+  return diff.length > 8_000 ? `${diff.slice(0, 8_000 - note.length)}${note}` : diff;
+}
+
 export interface ApplyResult {
   applied: string[];
   /** Files the user changed after the snapshot; these are left exactly as the user has them. */
@@ -207,4 +214,85 @@ async function isLinkedDirectory(candidate: string, root: string): Promise<boole
 
 async function exists(target: string): Promise<boolean> {
   return fs.access(target).then(() => true, () => false);
+}
+
+const inside = (base: string, candidate: string): boolean => {
+  const relative = path.relative(base, candidate);
+  return relative.length > 0 && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
+/** Only visit real directories; unlink dependency links before any recursive removal. */
+async function unlinkDependencyLinks(directory: string): Promise<void> {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    const stat = await fs.lstat(target);
+    if (stat.isSymbolicLink()) {
+      if (entry.name === 'node_modules') await fs.unlink(target);
+    } else if (stat.isDirectory() && entry.name !== '.git') {
+      await unlinkDependencyLinks(target);
+    }
+  }
+}
+
+/** Startup recovery is restricted to KAI's temporary copies, even if git lists other worktrees. */
+export async function cleanupParallelWorktrees(
+  projects: readonly string[],
+  options: { baseDirectory?: string; activeDirectories?: () => readonly string[]; now?: number; log?: (message: string) => void } = {},
+): Promise<void> {
+  const base = path.resolve(options.baseDirectory ?? path.join(os.tmpdir(), 'kai-parallel'));
+  const baseStat = await fs.lstat(base).catch(() => null);
+  if (baseStat?.isSymbolicLink()) return;
+  const realBase = await fs.realpath(base).catch(() => base);
+  // Git can return a long Windows path while the running wave still holds its 8.3 temporary path.
+  const canonical = (candidate: string): string => inside(base, candidate) ? path.join(realBase, path.relative(base, candidate)) : candidate;
+  const active = (candidate: string): boolean => {
+    const target = canonical(candidate);
+    return (options.activeDirectories?.() ?? []).some((item) => {
+      const resolved = canonical(path.resolve(item));
+      return resolved === target || inside(resolved, target) || inside(target, resolved);
+    });
+  };
+  const safe = async (candidate: string): Promise<boolean> => {
+    if (!inside(base, candidate) && !inside(realBase, candidate)) return false;
+    // Resolve the nearest existing ancestor as well, so a missing checkout below a junction is never removed.
+    let ancestor = candidate;
+    for (;;) {
+      const resolved = await fs.realpath(ancestor).catch(() => null);
+      if (resolved) return resolved === realBase || inside(realBase, resolved);
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) return false;
+      ancestor = parent;
+    }
+  };
+  for (const project of projects) {
+    try {
+      const repository = await repositoryFor(project);
+      if (!repository) continue;
+      await git(repository.root, ['worktree', 'prune']);
+      const listing = await git(repository.root, ['worktree', 'list', '--porcelain', '-z']);
+      for (const field of listing.split('\0')) {
+        if (!field.startsWith('worktree ')) continue;
+        const candidate = path.resolve(field.slice(9));
+        if (!(await safe(candidate)) || active(candidate)) continue;
+        const stat = await fs.lstat(candidate).catch(() => null);
+        if (stat?.isSymbolicLink()) continue;
+        if (stat) await unlinkDependencyLinks(candidate);
+        if (active(candidate)) continue;
+        await removeWorktree(repository.root, candidate);
+        options.log?.(`Removed leftover parallel worktree: ${candidate}`);
+      }
+    } catch (error) {
+      options.log?.(`Could not clean parallel copies for ${project}: ${String(error)}`);
+    }
+  }
+  const cutoff = (options.now ?? Date.now()) - 60 * 60_000;
+  for (const entry of await fs.readdir(base, { withFileTypes: true }).catch(() => [])) {
+    const candidate = path.join(base, entry.name);
+    const stat = await fs.lstat(candidate).catch(() => null);
+    if (!stat?.isDirectory() || stat.isSymbolicLink() || stat.mtimeMs >= cutoff || !(await safe(candidate)) || active(candidate)) continue;
+    await unlinkDependencyLinks(candidate);
+    if (active(candidate)) continue;
+    await fs.rm(candidate, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    options.log?.(`Removed old parallel folder: ${candidate}`);
+  }
 }

@@ -67,6 +67,7 @@ try {
   await verifyCustomRoleAndProjectTeam(page);
   await verifySideBySide(page);
   await verifyNarrowWindow(page);
+  await verifyTrackRecord(page);
 
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
   console.log(`KAI team smoke passed. Screenshots: ${outputDirectory}`);
@@ -110,6 +111,65 @@ async function verifySettingsCard(page) {
   await section.getByLabel('Docs writer agent').selectOption('auto');
   await save.click();
   await page.getByText('All changes saved').waitFor({ timeout: 10_000 });
+}
+
+async function verifyTrackRecord(page) {
+  await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  const section = page.locator('section.settings-section[aria-label="Agent team"]');
+  await section.scrollIntoViewIfNeeded();
+  const record = section.locator('.team-track-record-line').first();
+  await record.waitFor({ timeout: 15_000 });
+  if (!/\d+ jobs?, \d+ passed first time/.test(await record.innerText())) throw new Error('The team card did not show the completed jobs in its track record.');
+  await assertControlsDoNotWrap(page, 'settings-track-record');
+  await assertTogglesCompact(page, 'settings-track-record');
+  await page.screenshot({ path: path.join(outputDirectory, 'settings-track-record.png') });
+
+  // Seed enough jobs to exercise advice without paying for ten more agent runs.
+  const file = path.join(userData, 'team-record.json');
+  const history = JSON.parse(await readFile(file, 'utf8'));
+  const seed = (assignee, index) => ({
+    id: `advice-${assignee}-${index}`, projectId: 'project-team-smoke', role: 'backend', custom: false,
+    assignee, route: 'direct', startedAt: new Date().toISOString(), durationMs: 240_000,
+    outcome: assignee === 'qwen' ? 'completed' : 'failed', neededFix: false, blockedByReview: false, overridden: false,
+  });
+  history.entries.push(...['codex', 'qwen'].flatMap((assignee) => Array.from({ length: 5 }, (_, index) => seed(assignee, index))));
+  await writeFile(file, JSON.stringify(history), 'utf8');
+  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('codex');
+  const backend = section.locator('fieldset.team-role').filter({ has: page.getByLabel('Backend coder agent', { exact: true }) });
+  const use = backend.getByRole('button', { name: 'Use Qwen Code', exact: true });
+  await use.waitFor({ timeout: 15_000 });
+  await assertControlsDoNotWrap(page, 'settings-track-record-suggestion');
+  await assertTogglesCompact(page, 'settings-track-record-suggestion');
+  await backend.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await use.waitFor({ state: 'hidden' });
+  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('auto');
+  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('codex');
+  await waitForPage(page, async () => {
+    const records = (await window.kaiDesktop.teamRecord({ team: (await window.kaiDesktop.getSettings()).data.agentTeam, projectId: 'project-team-smoke' })).data;
+    return records.some((record) => record.role === 'backend' && record.records.some((item) => item.jobs >= 5));
+  });
+  if (await use.isVisible()) throw new Error('Dismissed advice returned without a change in the numbers.');
+  history.entries.push(seed('qwen', 5));
+  await writeFile(file, JSON.stringify(history), 'utf8');
+  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('claude');
+  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('codex');
+  await use.waitFor({ timeout: 15_000 });
+  const savedBefore = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data.agentTeam);
+  await use.click();
+  if (await section.getByLabel('Backend coder agent', { exact: true }).inputValue() !== 'qwen') throw new Error('Use did not update the draft role.');
+  const savedAfter = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data.agentTeam);
+  if (JSON.stringify(savedAfter) !== JSON.stringify(savedBefore)) throw new Error('Use saved the team without the user saving the card.');
+
+  await section.getByRole('button', { name: 'Clear track record', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Clear track record?' });
+  await assertControlsDoNotWrap(page, 'clear-track-record-confirmation');
+  await assertTogglesCompact(page, 'clear-track-record-confirmation');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  if (!JSON.parse(await readFile(file, 'utf8')).entries.length) throw new Error('Cancel cleared the track record.');
+  await section.getByRole('button', { name: 'Clear track record', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Clear track record', exact: true }).click();
+  await record.waitFor({ state: 'hidden', timeout: 15_000 });
+  if (JSON.parse(await readFile(file, 'utf8')).entries.length) throw new Error('Confirmed clear left track record entries.');
 }
 
 async function verifyLmStudioProvider(page) {
@@ -217,9 +277,16 @@ async function runAndStopAtSecurityReview(page) {
 
 async function continueAndFinish(page) {
   await page.getByRole('button', { name: 'Continue anyway' }).click();
+  await waitForPage(page, async () => {
+    const runs = (await window.kaiDesktop.listWorkflowRuns('project-team-smoke')).data;
+    return runs.some((run) => run.workflow.status === 'paused' && run.workflow.steps.some((step) => step.round === 1 && step.gate === 'security' && step.verdict?.result === 'block' && !step.verdict.acknowledged));
+  }, undefined, { timeoutMs: 90_000, message: 'The fix was not stopped at a fresh security review.' });
+  const calls = await readCalls();
+  if (calls.some((call) => /Re-review/.test(call.prompt) && /Code reviewer/.test(call.prompt))) throw new Error('The fresh code review ran past a blocked security re-review.');
+  await page.getByRole('button', { name: 'Continue anyway' }).click();
   await page.locator('.workflow-run-list .workflow-status.completed').first().waitFor({ timeout: 90_000 });
   await page.locator('section.team-decision').waitFor({ state: 'detached' });
-  await page.getByText('Security: blocked, continued by you').waitFor();
+  if (await page.getByText('Security: blocked, continued by you', { exact: true }).count() !== 2) throw new Error('Both security decisions should remain visible.');
   await verifyCheckRoundTrip(page);
   await assertControlsDoNotWrap(page, 'team-finished');
   await page.screenshot({ path: path.join(outputDirectory, 'team-finished.png') });
@@ -233,7 +300,10 @@ async function verifyCheckRoundTrip(page) {
   if (!/node check\.js/.test(text) || !/passed/.test(text) || !/fix round 1 of 2/.test(text)) throw new Error(`Unexpected check progress: ${text}`);
   const fixPrompt = await page.getByLabel('Step 5 prompt').inputValue();
   if (!fixPrompt.includes('FIX ROUND 1') || !fixPrompt.includes('src/api/login.ts')) throw new Error(`Step 5 should be the backend fix round: ${fixPrompt.slice(0, 200)}`);
-  if (await page.getByLabel('Step 6 prompt').count()) throw new Error('Only one fix step should have been added.');
+  const security = await page.getByLabel('Step 6 prompt').inputValue();
+  const review = await page.getByLabel('Step 7 prompt').inputValue();
+  if (!security.startsWith('Re-review') || !security.includes('Security reviewer') || !review.startsWith('Re-review') || !review.includes('Code reviewer')) throw new Error('The fix round should be followed by fresh security and code reviews.');
+  if (await page.getByLabel('Step 8 prompt').count()) throw new Error('Only one fix and its two reviews should have been added.');
   await assertControlsDoNotWrap(page, 'a finished team job with a check');
 }
 
@@ -257,7 +327,7 @@ async function verifyCallsMadeByTheTeam() {
   if (review.agent !== 'qwen' || !review.args.join(' ').includes('--approval-mode plan')) throw new Error(`The code review should run on Qwen, read-only: ${JSON.stringify(review.args)}`);
   if (!/\n/.test(review.prompt) || !review.prompt.includes('Overall goal:')) throw new Error('A multi-line prompt must reach the agent whole.');
   // The failed check went back to the backend part's own agent, once, with what the check printed.
-  const fixes = calls.filter((call) => /FIX ROUND/.test(call.prompt));
+  const fixes = calls.filter((call) => /FIX ROUND/.test(call.prompt) && !/Re-review/.test(call.prompt));
   if (fixes.length !== 1 || fixes[0].agent !== 'codex' || !fixes[0].prompt.includes('src/api/login.ts:12:5')) throw new Error(`Expected one backend fix on Codex: ${JSON.stringify(fixes.map((call) => call.agent))}`);
   // Each part starts a new agent session instead of continuing the previous agent's.
   if (calls.some((call) => call.args.includes('--resume') || call.args.includes('resume'))) throw new Error('Team parts must never resume another part\'s session.');

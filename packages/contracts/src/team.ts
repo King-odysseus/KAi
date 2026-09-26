@@ -141,6 +141,7 @@ export const teamAssignmentSchema = z
   .object({
     partId: z.string().min(1).max(40),
     assignee: teamResolvedAssigneeSchema,
+    suggestedAssignee: teamResolvedAssigneeSchema.optional(),
     route: routeModeSchema,
     model: teamModelNameSchema.optional(),
     // Why KAI picked this agent, in plain words, shown on the plan card.

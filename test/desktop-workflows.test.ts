@@ -108,6 +108,27 @@ describe('desktop workflow runner', () => {
     });
   });
 
+  it.each(['completed', 'paused', 'aborted'] as const)('records team parts when a job is %s', async (status) => {
+    const recorded: WorkflowRun[] = [];
+    let release: (() => void) | undefined;
+    const { runner } = harness({
+      recordTeamRun: (run) => { recorded.push(structuredClone(run)); return Promise.resolve(); },
+      runAgent: async (request) => {
+        if (status === 'aborted') await new Promise<void>((resolve) => { release = resolve; });
+        return { conversation: conversation(request.conversationId), status: status === 'paused' ? 'failed' : 'completed', output: 'done', costUsd: 0.2 };
+      },
+      cancelAgent: () => { release?.(); return true; },
+    });
+    const run = await runner.start(startInput({ steps: [{ id: 'part', agent: 'qwen', suggestedAssignee: 'codex', prompt: 'Build', role: 'frontend' }] }), 1);
+    if (status === 'aborted') {
+      await waitFor(() => Promise.resolve(Boolean(release)));
+      await runner.stop(run.workflow.id);
+    }
+    await waitFor(() => Promise.resolve(recorded.some((value) => value.workflow.status === status)));
+    expect(recorded.at(-1)?.workflow.steps[0]?.suggestedAssignee).toBe('codex');
+    if (status !== 'aborted') expect(recorded.at(-1)?.workflow.steps[0]?.costUsd).toBe(0.2);
+  });
+
   it('stops the active step and does not start later steps', async () => {
     let releaseFirst!: (value: AgentRunResult) => void;
     let firstStarted!: () => void;
@@ -517,10 +538,13 @@ describe('desktop workflow runner', () => {
 
     const workflow = (await runner.list('project-1'))[0]!.workflow;
     expect(checks.commands).toEqual(['npm test', 'npm test']);
-    expect(workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api']);
+    expect(workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api', 'review-1-review']);
     expect(workflow.steps[3]).toMatchObject({ fixOf: 'api', round: 1, role: 'backend', agent: 'codex', dependsOn: ['api'], status: 'completed' });
-    // The frontend part did not run again: agents were claude, codex, gemini, then codex once more.
-    expect(agents.map((request) => request.agent)).toEqual(['claude', 'codex', 'gemini', 'codex']);
+    // Only the owning part fixes the failure, then the reviewer checks that fix.
+    expect(agents.map((request) => request.agent)).toEqual(['claude', 'codex', 'gemini', 'codex', 'gemini']);
+    expect(agents[4]?.prompt).toContain('Re-review only what FIX ROUND 1 changed');
+    expect(agents[4]?.prompt).toContain('### Fix round 1: Backend: API (codex)');
+    expect(workflow.steps[4]).toMatchObject({ round: 1, dependsOn: ['fix-1-api'] });
     const fix = agents[3]!;
     expect(fix).toMatchObject({ autonomy: 'autoEdit', freshSession: true });
     expect(fix.prompt).toContain('FIX ROUND 1');
@@ -544,8 +568,8 @@ describe('desktop workflow runner', () => {
     await runner.start(checkedInput(), 1);
     await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
 
-    expect((await runner.list('project-1'))[0]!.workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-ui', 'fix-1-api']);
-    expect(agents.slice(3)).toEqual(['claude', 'codex']);
+    expect((await runner.list('project-1'))[0].workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-ui', 'fix-1-api', 'review-1-review']);
+    expect(agents.slice(3)).toEqual(['claude', 'codex', 'gemini']);
   });
 
   it('falls back to the backend part when a failure names no file it can match', async () => {
@@ -555,7 +579,7 @@ describe('desktop workflow runner', () => {
     await runner.start(checkedInput(), 1);
     await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
 
-    expect((await runner.list('project-1'))[0]!.workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api']);
+    expect((await runner.list('project-1'))[0].workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api', 'review-1-review']);
   });
 
   it('pauses when the fix rounds run out, and Resume allows exactly one more', async () => {
@@ -566,7 +590,7 @@ describe('desktop workflow runner', () => {
     await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
 
     const paused = (await runner.list('project-1'))[0]!.workflow;
-    expect(paused.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api']);
+    expect(paused.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api', 'review-1-review']);
     expect(paused.teamCheck).toMatchObject({ round: 1, maxRounds: 1, lastPassed: false, stopReason: 'max_rounds' });
     expect(checks.commands).toHaveLength(2);
 
@@ -574,7 +598,7 @@ describe('desktop workflow runner', () => {
     await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
 
     const finished = (await runner.list('project-1'))[0]!.workflow;
-    expect(finished.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api', 'fix-2-api']);
+    expect(finished.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api', 'review-1-review', 'fix-2-api', 'review-2-review']);
     expect(finished.teamCheck).toMatchObject({ round: 2, maxRounds: 2, lastPassed: true, stopReason: 'passed' });
     expect(checks.commands).toHaveLength(4);
   });
@@ -628,10 +652,54 @@ describe('desktop workflow runner', () => {
     await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
 
     const workflow = (await runner.list('project-1'))[0]!.workflow;
-    expect(workflow.steps.map((step) => step.id)).toEqual(['ui', 'db', 'audit', 'fix-1-db']);
+    expect(workflow.steps.map((step) => step.id)).toEqual(['ui', 'db', 'audit', 'fix-1-db', 'review-1-audit']);
     expect(workflow.steps[3]).toMatchObject({ role: 'custom-database', access: 'edit', agent: 'qwen', fixOf: 'db' });
     // The read-only custom role is never asked to fix anything.
-    expect(agents).toEqual(['claude', 'qwen', 'gemini', 'qwen']);
+    expect(agents).toEqual(['claude', 'qwen', 'gemini', 'qwen', 'gemini']);
+  });
+
+  it.each([true, false])('runs fix reviews before checking again, respecting a fresh security block (%s)', async (blocks) => {
+    const order: string[] = [];
+    const { runner } = harness({
+      runCheck: () => {
+        const passed = order.includes('check');
+        order.push('check');
+        return Promise.resolve({ passed, exitCode: passed ? 0 : 1, output: passed ? 'OK' : 'FAIL' });
+      },
+      runAgent: (request) => {
+        const fresh = request.prompt.startsWith('Re-review');
+        order.push(fresh ? 're-review' : request.agent);
+        return Promise.resolve({ conversation: conversation(request.conversationId), status: 'completed', output: fresh && blocks ? 'VERDICT: BLOCK - new injection' : 'VERDICT: PASS' });
+      },
+    });
+    await runner.start(checkedInput({ steps: [
+      { id: 'api', agent: 'codex', prompt: 'Build', role: 'backend' },
+      { id: 'security', agent: 'claude', prompt: 'Review', role: 'securityReviewer', gate: 'security', autonomy: 'plan' },
+    ] }), 1);
+    await waitFor(async () => (await runner.list())[0]?.workflow.status === (blocks ? 'paused' : 'completed'));
+    expect(order).toEqual(['codex', 'claude', 'check', 'codex', 're-review', ...(blocks ? [] : ['check'])]);
+    expect((await runner.list())[0]?.workflow.steps.at(-1)?.verdict).toMatchObject({ result: blocks ? 'block' : 'pass', acknowledged: false });
+  });
+
+  it('adds no reviews to a job without reviewers', async () => {
+    const checks = scriptedChecks(['FAIL', '']);
+    const { runner } = harness({ runCheck: checks.runCheck });
+    await runner.start(checkedInput({ steps: [{ id: 'api', agent: 'codex', prompt: 'Build', role: 'backend' }] }), 1);
+    await waitFor(async () => (await runner.list())[0]?.workflow.status === 'completed');
+    expect((await runner.list())[0]?.workflow.steps.map((step) => step.id)).toEqual(['api', 'fix-1-api']);
+  });
+
+  it('pauses rather than exceeding 50 steps with fixes and fresh reviews', async () => {
+    const checks = scriptedChecks(['FAIL']);
+    const { runner } = harness({ runCheck: checks.runCheck });
+    await runner.start(checkedInput({ steps: [
+      { id: 'api', agent: 'codex', prompt: 'Build', role: 'backend' },
+      ...Array.from({ length: 25 }, (_, index) => ({ id: `review-${index}`, agent: 'claude' as const, prompt: 'Review', role: 'codeReviewer' as const })),
+    ] }), 1);
+    await waitFor(async () => (await runner.list())[0]?.workflow.status === 'paused');
+    expect((await runner.list())[0]?.workflow.steps).toHaveLength(26);
+    expect((await runner.list())[0]?.workflow.notice).toContain('50-step');
+    expect(checks.commands).toHaveLength(1);
   });
 
   it('pauses instead of looping when a failing check has no editing part to send it to', async () => {
@@ -656,7 +724,7 @@ describe('desktop workflow runner', () => {
 
     /** A copy-and-merge layer that records what the runner asked for and merges however a test says. */
     function fakeWorktrees(options: {
-      conflicts?: (commits: Array<{ stepId: string; commit: string }>) => Array<{ stepId: string; files: string[] }>;
+      conflicts?: (commits: Array<{ stepId: string; commit: string }>) => Array<{ stepId: string; files: string[]; diff?: string }>;
       skipped?: string[];
       unavailable?: boolean;
     } = {}): { port: NonNullable<WorkflowRunnerPorts['worktrees']>; log: FakeSessionLog } {
@@ -779,7 +847,7 @@ describe('desktop workflow runner', () => {
 
     it('runs a part whose changes clashed again on its own, on top of the merged work', async () => {
       const agents = timedAgents();
-      const worktrees = fakeWorktrees({ conflicts: (commits) => (commits.length > 1 ? [{ stepId: 'api', files: ['src/shared.ts'] }] : []) });
+      const worktrees = fakeWorktrees({ conflicts: (commits) => (commits.length > 1 ? [{ stepId: 'api', files: ['src/shared.ts'], diff: '+const previousIntent = true;' }] : []) });
       const { runner } = harness({ runAgent: agents.runAgent, worktrees: worktrees.port });
 
       await runner.start(teamInput(), 1);
@@ -794,6 +862,10 @@ describe('desktop workflow runner', () => {
       const api = workflow.steps.find((step) => step.id === 'api')!;
       expect(api.status).toBe('completed');
       expect(api.note).toContain('clashed with another part in src/shared.ts');
+      expect(api.previousAttemptDiff).toBe('+const previousIntent = true;');
+      const retry = agents.calls.filter((call) => call.request.agent === 'codex').at(-1);
+      expect(retry?.request.prompt).toContain('+const previousIntent = true;');
+      expect(retry?.request.prompt).toContain('resolving the clash instead of redoing the task');
       // The review came last, after the rerun.
       expect(agents.calls.at(-1)!.request.agent).toBe('gemini');
     });

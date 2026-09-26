@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   addWorktree,
+  attemptDiff,
   applyToWorkingTree,
   changedFiles,
   commitWorktree,
@@ -15,7 +16,7 @@ import {
 
 export interface IntegrationResult {
   /** Parts whose changes clashed with an earlier part's; their work was not applied. */
-  conflicts: Array<{ stepId: string; files: string[] }>;
+  conflicts: Array<{ stepId: string; files: string[]; diff?: string; commit?: string }>;
   applied: string[];
   /** Files changed in the real project while the parts worked; the user's version was kept. */
   skipped: string[];
@@ -36,6 +37,11 @@ export interface ParallelSession {
 }
 
 const safeName = (value: string): string => value.replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 60) || 'part';
+const activeDirectories = new Set<string>();
+
+export function activeParallelDirectories(): string[] {
+  return [...activeDirectories];
+}
 
 /**
  * Starts a wave for a project: a snapshot of its working tree now, and a folder of checkouts outside the project.
@@ -49,9 +55,16 @@ export async function createParallelSession(
   const repository = await repositoryFor(projectPath);
   if (!repository) return null;
   const directory = path.join(baseDirectory, safeName(key));
-  // A wave that crashed before cleaning up may have left its checkouts behind; start from nothing.
-  await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  const snapshot = await snapshotWorkingTree(repository.root);
+  activeDirectories.add(path.resolve(directory));
+  let snapshot: string;
+  try {
+    // A wave that crashed before cleaning up may have left its checkouts behind; start from nothing.
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    snapshot = await snapshotWorkingTree(repository.root);
+  } catch (error) {
+    activeDirectories.delete(path.resolve(directory));
+    throw error;
+  }
   const checkouts = new Map<string, string>();
   const workFolder = (checkout: string): string => (repository.prefix ? path.join(checkout, repository.prefix) : checkout);
 
@@ -77,7 +90,7 @@ export async function createParallelSession(
       for (const { stepId, commit } of commits) {
         if (commit === snapshot) continue;
         const merged = await mergeCommit(integration, commit, `KAI: merge ${stepId}`);
-        if (!merged.ok) conflicts.push({ stepId, files: merged.files });
+        if (!merged.ok) conflicts.push({ stepId, files: merged.files, commit, diff: await attemptDiff(repository.root, snapshot, commit) });
       }
       const integrationCommit = await headCommit(integration);
       const changes = await changedFiles(integration, snapshot, integrationCommit);
@@ -89,6 +102,7 @@ export async function createParallelSession(
       for (const folder of checkouts.values()) await removeWorktree(repository.root, folder).catch(() => undefined);
       checkouts.clear();
       await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
+      activeDirectories.delete(path.resolve(directory));
     },
   };
 }

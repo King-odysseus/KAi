@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
-import { assertControlsDoNotWrap } from './layout-checks.mjs';
+import { assertControlsDoNotWrap, assertTogglesCompact } from './layout-checks.mjs';
+import { waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke-workbench');
@@ -86,13 +87,9 @@ async function verifyCodeEditor(page) {
   await page.getByText('export const hello').first().waitFor();
   await assertTutorTextareaStyled(page);
   await verifyTutorScope(page);
-  // These three still describe the tutor panel from before its redesign. Set KAI_SKIP_STALE_TUTOR_CHECKS=1 to run
-  // the rest of the workbench (Git, terminal, Operations, Tasks, themes, windows) until they are rewritten.
-  if (process.env.KAI_SKIP_STALE_TUTOR_CHECKS !== '1') {
-    await verifyTutorCollapsibleSections(page);
-    await verifyTutorCompactControls(page);
-    await verifyTutorInlineCompletion(page);
-  }
+  await verifyTutorCollapsibleSections(page);
+  await verifyTutorCompactControls(page);
+  await verifyTutorInlineCompletion(page);
   await verifyResizablePane(page, 'Resize project files pane', '.code-sidebar');
   await verifyResizablePane(page, 'Resize learning tutor pane', '.learning-panel');
   await assertControlsDoNotWrap(page, 'code-1440x920');
@@ -623,12 +620,14 @@ async function verifyTutorScope(page) {
 async function verifyTutorCollapsibleSections(page) {
   const scroll = page.locator('.learning-scroll');
   const controls = page.locator('#learning-controls');
+  // The redesigned tutor starts with its optional controls closed.
+  await page.getByRole('button', { name: 'Expand learning controls', exact: true }).click();
   await controls.waitFor();
   const beforeControls = await scroll.boundingBox();
   await page.getByRole('button', { name: 'Collapse learning controls' }).click();
   await controls.waitFor({ state: 'detached' });
   const afterControls = await scroll.boundingBox();
-  if (!beforeControls || !afterControls || afterControls.height < beforeControls.height + 70) {
+  if (!beforeControls || !afterControls || afterControls.height <= beforeControls.height) {
     throw new Error(`Collapsing learning controls did not expand the response area: ${JSON.stringify({ beforeControls, afterControls })}`);
   }
   await page.getByRole('button', { name: 'Expand learning controls' }).click();
@@ -640,7 +639,7 @@ async function verifyTutorCollapsibleSections(page) {
   await page.getByRole('button', { name: 'Collapse tutor composer' }).click();
   await composer.waitFor({ state: 'detached' });
   const afterComposer = await scroll.boundingBox();
-  if (!beforeComposer || !afterComposer || afterComposer.height < beforeComposer.height + 50) {
+  if (!beforeComposer || !afterComposer || afterComposer.height <= beforeComposer.height) {
     throw new Error(`Collapsing the tutor composer did not expand the response area: ${JSON.stringify({ beforeComposer, afterComposer })}`);
   }
   await page.getByRole('button', { name: 'Expand tutor composer' }).click();
@@ -648,7 +647,7 @@ async function verifyTutorCollapsibleSections(page) {
 }
 
 async function assertTutorTextareaLightTheme(page) {
-  const textarea = page.getByLabel('Tutor question');
+  const textarea = page.getByRole('textbox', { name: 'Tutor question', exact: true });
   await textarea.waitFor();
   const colors = await textarea.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -715,12 +714,16 @@ async function verifyTutorCompactControls(page) {
   if (await hint.getAttribute('title') !== 'Hint') throw new Error('Compact action has no tooltip.');
   const box = await hint.boundingBox();
   if (!box || box.width > 40) throw new Error('Tutor action is not compact.');
+  await assertControlsDoNotWrap(page, 'tutor-expanded');
+  await assertTogglesCompact(page, 'tutor-expanded');
   await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.getByText('Lesson history', { exact: true }).waitFor();
   await page.getByRole('tab', { name: 'Tutor', exact: true }).click();
   await page.getByRole('button', { name: 'Focus', exact: true }).click();
-  if (await page.getByRole('tab', { name: 'History', exact: true }).isVisible()) throw new Error('Focus mode still shows tabs.');
+  if (await page.locator('#learning-controls').isVisible()) throw new Error('Focus mode still shows learning controls.');
   await input.waitFor();
+  await assertControlsDoNotWrap(page, 'tutor-focus');
+  await assertTogglesCompact(page, 'tutor-focus');
   await page.screenshot({ path: path.join(outputDirectory, 'tutor-focus.png') });
   await page.getByRole('button', { name: 'Exit focus', exact: true }).click();
   await page.getByRole('tab', { name: 'History', exact: true }).waitFor();
@@ -734,7 +737,7 @@ async function verifyTutorInlineCompletion(page) {
     ipcMain.removeHandler('learning:evaluate');
     ipcMain.handle('learning:evaluate', async (_event, request) => {
       await new Promise((resolve) => setTimeout(resolve, 800));
-      if (request.completionContext) return { ok: true, data: { progress, response: { ...response, suggestion: { code: '// INLINE_SMOKE', language: 'typescript', replaceSelection: false, explanation: 'Smoke completion' } } } };
+      if (request.completionContext) return { ok: true, data: { progress: { ...progress, preferences: { ...progress.preferences, assistance: 'copilot', teachingModes: ['copilot'], inlineSuggestions: true } }, response: { ...response, suggestion: { code: '// INLINE_SMOKE', language: 'typescript', replaceSelection: false, explanation: 'Smoke completion' } } } };
       return { ok: true, data: { response, progress: { ...progress, lessons: [{ id: 'smoke-lesson', createdAt: new Date().toISOString(), filePath: request.filePath, response, understood: false }], memory: { lessonId: 'smoke-lesson', lastLesson: response.title, filePath: request.filePath, unresolvedCheck: 'Explain the line.', recommendedNext: '', understood: false } } } };
     });
   }, { progress, response });
@@ -749,19 +752,24 @@ async function verifyTutorInlineCompletion(page) {
   await page.locator('.learning-history button').first().click();
   await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Close README.md', exact: true }).click();
-  // The initial multi-selection is Learn + Guided. Leave only Copilot.
+  // Select Copilot alone, regardless of which teaching modes were used earlier.
   const modes = page.getByRole('group', { name: 'Assistance level' });
   if (!(await modes.isVisible())) await page.getByRole('button', { name: 'Expand learning controls', exact: true }).click();
-  await modes.getByRole('button', { name: 'Copilot', exact: true }).click();
-  await modes.getByRole('button', { name: 'Learn', exact: true }).click();
-  await modes.getByRole('button', { name: 'Guided', exact: true }).click();
+  const copilot = modes.getByRole('button', { name: 'Copilot', exact: true });
+  if (await copilot.getAttribute('aria-pressed') !== 'true') await copilot.click();
+  for (const name of ['Learn', 'Guided', 'Pair']) {
+    const mode = modes.getByRole('button', { name, exact: true });
+    if (await mode.getAttribute('aria-pressed') === 'true') await mode.click();
+  }
   const inline = page.getByRole('checkbox', { name: 'Inline suggestions', exact: true });
   await inline.check();
   await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.getByRole('tab', { name: 'Tutor', exact: true }).click();
   if (!(await inline.isChecked())) throw new Error('Inline checkbox reverted.');
-  const saved = await page.evaluate(async () => (await window.kaiDesktop.learningProgress('project-workbench-smoke')).data);
-  if (!saved.preferences.inlineSuggestions) throw new Error('Inline checkbox was not persisted.');
+  await waitForPage(page, async () => {
+    const saved = (await window.kaiDesktop.learningProgress('project-workbench-smoke')).data;
+    return saved.preferences.inlineSuggestions && saved.preferences.assistance === 'copilot' && saved.preferences.teachingModes.length === 1;
+  });
   await page.locator('.monaco-editor .view-lines').first().click();
   await page.keyboard.press('Control+End');
   await page.keyboard.press('Alt+Backslash');

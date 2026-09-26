@@ -22,6 +22,7 @@ export * from './search';
 export * from './setup';
 export * from './tasks';
 export * from './team';
+export * from './team-record';
 export * from './updates';
 export * from './terminal';
 export * from './verification';

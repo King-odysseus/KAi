@@ -36,7 +36,9 @@ import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
-import { createParallelSession } from './parallel-session';
+import { TeamRecordStore } from './team-record-store';
+import { activeParallelDirectories, createParallelSession } from './parallel-session';
+import { cleanupParallelWorktrees } from './git-worktrees';
 import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
 import { PreviewRuntime } from './preview-runtime';
@@ -55,6 +57,7 @@ let desktopShell: DesktopShell | null = null;
 let quitting = false;
 const desktopWindows = new DesktopWindowRegistry();
 const forceClosing = new Set<number>();
+let parallelCleanupStarted = false;
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -126,6 +129,7 @@ async function startApplication(): Promise<void> {
   const settings = new SettingsService(paths.settings, fileSystem);
   const projects = new ProjectStore(paths.projects, fileSystem);
   const preferences = new ProjectPreferenceStore(paths.preferences, fileSystem);
+  const teamRecord = new TeamRecordStore(path.join(paths.root, 'team-record.json'), fileSystem);
   const conversations = new ConversationStore(paths.conversations, fileSystem);
   const credentials = new CredentialVault(paths.credentials, fileSystem);
   await repairProviderSettings(settings, credentials);
@@ -250,6 +254,7 @@ async function startApplication(): Promise<void> {
     settings,
     projects,
     preferences,
+    teamRecord,
     conversations,
     credentials,
     services: serviceController,
@@ -319,6 +324,7 @@ async function startApplication(): Promise<void> {
     return conversation;
   }
   workflowRunner = new DesktopWorkflowRunner({
+    recordTeamRun: (run) => teamRecord.record(run).catch((error: unknown) => { logger.error('internal', 'Could not save team track record', undefined, error); }),
     listConversations: () => conversations.list(),
     getConversation: (id) => conversations.get(id),
     saveConversation: (conversation) => conversations.save(conversation),
@@ -344,6 +350,7 @@ async function startApplication(): Promise<void> {
   });
   ipcContext.workflows = workflowRunner;
   teamPlanner = new DesktopTeamPlanner({
+    teamRecords: () => teamRecord.list(),
     settings: () => settings.load(),
     projectTeam: async (projectId) => (await preferences.get(projectId))?.agentTeam ?? null,
     agentCapabilities: () => agents.capabilities(),
@@ -523,7 +530,16 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
   const session = desktopWindows.register(window, projectId);
 
   if (isFirstWindow && settings.windowBounds?.maximized) window.maximize();
-  window.once('ready-to-show', () => window.show());
+  window.once('ready-to-show', () => {
+    window.show();
+    if (parallelCleanupStarted || !ipcContext) return;
+    parallelCleanupStarted = true;
+    const context = ipcContext;
+    void context.projects.list().then((projects) => cleanupParallelWorktrees(projects.map((project) => project.path), {
+      activeDirectories: activeParallelDirectories,
+      log: (message) => { context.logger.info('internal', message); },
+    })).catch((error: unknown) => { context.logger.error('internal', 'Parallel copy cleanup failed', undefined, error); });
+  });
   window.on('close', (event) => {
     if (forceClosing.has(session.id)) return;
     if (desktopShell?.shouldHideOnClose()) {

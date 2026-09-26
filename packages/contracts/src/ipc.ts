@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
 import {
   agentCapabilitySchema,
   agentApprovalResponseInputSchema,
@@ -289,6 +290,8 @@ export const ipcChannels = [
   'workflows:delete-template',
   'team:plan',
   'team:start',
+  'team:record',
+  'team:clear-record',
   'proxy:overview',
   'proxy:history',
   'proxy:history-detail',
@@ -494,6 +497,8 @@ export const ipcInputSchemas = {
   'workflows:delete-template': z.object({ id: z.string().min(1) }).strict(),
   'team:plan': teamPlanInputSchema,
   'team:start': teamStartInputSchema,
+  'team:record': teamRecordQuerySchema,
+  'team:clear-record': z.object({}).strict(),
   'proxy:overview': emptyInputSchema,
   'proxy:history': proxyHistoryQuerySchema,
   'proxy:history-detail': z.object({ id: z.string().min(1) }).strict(),
@@ -816,6 +821,8 @@ export interface KaiDesktopBridge {
   planTeam(request: TeamPlanInput): Promise<IpcResponse<TeamPlanDraft>>;
   /** Starts the approved plan as a workflow, one part at a time. */
   startTeam(request: TeamStartInput): Promise<IpcResponse<WorkflowRun>>;
+  teamRecord(request: TeamRecordQuery): Promise<IpcResponse<TeamRecordAdvice[]>>;
+  clearTeamRecord(): Promise<IpcResponse<null>>;
   stopWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   resumeWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   onWorkflowChanged(listener: (run: WorkflowRun) => void): () => void;

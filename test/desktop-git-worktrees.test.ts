@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, access, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile, access, symlink, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import {
   addWorktree,
   applyToWorkingTree,
   changedFiles,
+  cleanupParallelWorktrees,
   commitWorktree,
   mergeCommit,
   removeWorktree,
@@ -53,6 +54,48 @@ const read = (...parts: string[]): Promise<string> => readFile(path.join(...part
 const exists = (target: string): Promise<boolean> => access(target).then(() => true, () => false);
 
 describe('git worktrees for parallel parts', () => {
+  it('cleans stale registered copies and old folders, preserving outside worktrees, active copies and linked dependencies', async () => {
+    const root = await repository();
+    const base = await temporary('cleanup');
+    const outside = path.join(await temporary('outside'), 'checkout');
+    await mkdir(path.join(root, 'node_modules'), { recursive: true });
+    await writeFile(path.join(root, 'node_modules', 'keep.txt'), 'keep');
+    const snapshot = await snapshotWorkingTree(root);
+    const stale = path.join(base, 'stale-wave', 'part');
+    const active = path.join(base, 'active-wave', 'part');
+    await addWorktree(root, stale, snapshot);
+    await addWorktree(root, outside, snapshot);
+    await addWorktree(root, active, snapshot);
+    const old = path.join(base, 'old-wave');
+    const fresh = path.join(base, 'fresh-wave');
+    await mkdir(old);
+    await mkdir(fresh);
+    await symlink(path.join(root, 'node_modules'), path.join(old, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    const past = new Date(Date.now() - 2 * 60 * 60_000);
+    await utimes(old, past, past);
+    const log: string[] = [];
+    await cleanupParallelWorktrees([root], { baseDirectory: base, activeDirectories: () => [path.dirname(active)], log: (message) => log.push(message) });
+    expect(await exists(stale)).toBe(false);
+    expect(await exists(old)).toBe(false);
+    expect(await exists(fresh)).toBe(true);
+    expect(await exists(active)).toBe(true);
+    expect(await exists(outside)).toBe(true);
+    expect(await read(root, 'node_modules', 'keep.txt')).toBe('keep');
+    expect(await git(root, 'worktree', 'list')).not.toContain('stale-wave');
+    expect(log.filter((message) => message.startsWith('Removed'))).toHaveLength(2);
+    await removeWorktree(root, active);
+    await removeWorktree(root, outside);
+  });
+
+  it('does not follow a linked cleanup root outside the temporary area', async () => {
+    const outside = await temporary('protected');
+    const parent = await temporary('linked');
+    const base = path.join(parent, 'kai-parallel');
+    await writeFile(path.join(outside, 'keep.txt'), 'keep');
+    await symlink(outside, base, process.platform === 'win32' ? 'junction' : 'dir');
+    await cleanupParallelWorktrees([], { baseDirectory: base });
+    expect(await read(outside, 'keep.txt')).toBe('keep');
+  });
   it('finds the repository a project lives in, including a subfolder of a bigger one, and refuses anything else', async () => {
     const plain = await temporary('plain');
     expect(await repositoryFor(plain)).toBeNull();

@@ -71,6 +71,7 @@ export const workflowLoopProgressSchema = z
 
 // Per-step settings a team plan uses. A plain workflow leaves them out, so every step follows the workflow's own.
 const workflowStepOverrides = {
+  suggestedAssignee: z.enum(['claude', 'codex', 'qwen', 'gemini', 'kimi', 'api']).optional(),
   role: teamPartRoleSchema.optional(),
   // Whether the part changes files. Set for every team part, including custom roles the runner knows nothing about.
   access: z.enum(['read', 'edit']).optional(),
@@ -103,6 +104,8 @@ export const workflowStepSchema = z
     ...workflowStepOverrides,
     // Set on a step KAI added to fix a failed check: the part it repairs and the round it belongs to.
     fixOf: z.string().min(1).optional(),
+    previousAttemptDiff: z.string().max(8_000).optional(),
+    previousAttemptCommit: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
     // The step ran in its own copy of the project alongside others, and its changes were merged back.
     isolated: z.boolean().optional(),
     // Something the user should know about this step, such as a merge clash that made it run again.
@@ -114,6 +117,7 @@ export const workflowStepSchema = z
     output: z.string().optional(),
     startedAt: timestampSchema.optional(),
     completedAt: timestampSchema.optional(),
+    costUsd: z.number().nonnegative().optional(),
   })
   .strict();
 

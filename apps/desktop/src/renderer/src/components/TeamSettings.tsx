@@ -1,6 +1,9 @@
 import { CLI_MODEL_SUGGESTIONS, DEFAULT_AUTO_ADD, MAX_CUSTOM_ROLES, TEAM_ROLE_INFO, TEAM_ROLE_IDS, roleAutoAdd, type AgentTeam, type CustomRole, type TeamAssignee, type TeamAutoAdd, type TeamPreset, type TeamRoleId, type TeamRouteChoice } from '@kai/contracts';
 import { Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import type { TeamRecordAdvice, TeamResolvedAssignee } from '@kai/contracts';
+import { unwrap } from '../types';
+import { confirmDialog } from './AppDialog';
 
 const PRESETS: Array<{ id: TeamPreset; label: string; detail: string }> = [
   { id: 'quality', label: 'Quality', detail: 'The strongest ready agent for every role, whatever the limits.' },
@@ -33,8 +36,35 @@ const AUTO_ADD_OPTIONS: Array<{ value: TeamAutoAdd; label: string }> = [
 const MODEL_PATTERN = /^[A-Za-z0-9][\w.:/@[\]-]*$/;
 
 /** Who plans and who does each part when a job is handed to the agent team. */
-export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (team: AgentTeam) => void }): ReactNode {
+export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; onChange: (team: AgentTeam) => void; projectId?: string }): ReactNode {
   const preset = PRESETS.find((item) => item.id === team.preset) ?? PRESETS[1]!;
+  const [advice, setAdvice] = useState<TeamRecordAdvice[]>([]);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [clearing, setClearing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void window.kaiDesktop.teamRecord({ team, ...(projectId ? { projectId } : {}) }).then(unwrap).then((value) => {
+        if (!cancelled) { setAdvice(value); setRecordError(null); }
+      }).catch((error: unknown) => {
+        if (!cancelled) setRecordError(error instanceof Error ? error.message : 'Could not read the track record.');
+      });
+    }, 150);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [team, projectId, revision]);
+
+  async function clearRecord(): Promise<void> {
+    if (!(await confirmDialog({ title: 'Clear track record?', detail: 'Remove the local agent track record across all projects? Your team choices and conversations stay as they are.', confirmLabel: 'Clear track record', destructive: true }))) return;
+    setClearing(true);
+    try {
+      unwrap(await window.kaiDesktop.clearTeamRecord());
+      setAdvice([]);
+      setRevision((value) => value + 1);
+    } catch (error) {
+      setRecordError(error instanceof Error ? error.message : 'Could not clear the track record.');
+    } finally { setClearing(false); }
+  }
 
   function update(role: TeamRoleId, patch: Partial<AgentTeam['roles'][TeamRoleId] & object>): void {
     const current = team.roles[role] ?? { assignee: 'auto' as const, route: 'auto' as const, instructions: '' };
@@ -74,6 +104,10 @@ export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (t
         </label>
       </div>
       <p className="settings-note team-preset-detail">{preset.detail} A preset only guides Auto; a role you pin always keeps your choice.</p>
+      <div className="button-row align-start">
+        <button type="button" className="secondary-button" disabled={clearing} onClick={() => void clearRecord()}>Clear track record</button>
+      </div>
+      {recordError && <p className="settings-feedback error" role="alert">{recordError}</p>}
       <div className="team-roles">
         {TEAM_ROLE_IDS.map((role) => {
           const info = TEAM_ROLE_INFO[role];
@@ -87,6 +121,7 @@ export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (t
                 <span className={`team-access ${info.access}`}>{info.access === 'read' ? 'Read-only' : 'Edits files'}</span>
               </legend>
               <p className="team-role-detail">{info.description}</p>
+              <RoleTrackRecord advice={advice.find((item) => item.role === role)} scope={projectId ?? 'all'} onUse={(assignee) => { update(role, { assignee }); }} />
               <div className="field-grid">
                 <label className="field">
                   <span>Agent</span>
@@ -187,6 +222,7 @@ export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (t
                   <Trash2 size={14} /><span>Remove this role</span>
                 </button>
               </div>
+              <RoleTrackRecord advice={advice.find((item) => item.role === role.id)} scope={projectId ?? 'all'} onUse={(assignee) => { updateCustom(role.id, { assignee }); }} />
             </fieldset>
           );
         })}
@@ -250,7 +286,7 @@ export function AgentTeamCard({
       </div>
       {scope === 'all' && (
         <>
-          <TeamSettings team={globalTeam} onChange={onGlobalChange} />
+          <TeamSettings team={globalTeam} onChange={onGlobalChange} projectId={projectId ?? undefined} />
           {globalSaveSlot}
         </>
       )}
@@ -258,7 +294,7 @@ export function AgentTeamCard({
         ? (
           <>
             <p className="settings-note">{project.name} has its own team. Plans for this project use it instead of the team from Settings.</p>
-            <TeamSettings team={draft} onChange={setDraft} />
+            <TeamSettings team={draft} onChange={setDraft} projectId={project.id} />
             <div className="button-row align-start">
               <button type="button" className="primary-button" disabled={busy || saving || !dirty} onClick={() => void save(draft)}>
                 <span>{saving ? 'Saving' : `Save the team for ${project.name}`}</span>
@@ -280,4 +316,32 @@ export function AgentTeamCard({
         ))}
     </div>
   );
+}
+
+function RoleTrackRecord({ advice, scope, onUse }: { advice?: TeamRecordAdvice; scope: string; onUse: (assignee: TeamResolvedAssignee) => void }): ReactNode {
+  const key = `kai.teamSuggestion.${scope}.${advice?.role ?? ''}`;
+  const [dismissed, setDismissed] = useState('');
+  useEffect(() => {
+    try { setDismissed(window.localStorage.getItem(key) ?? ''); }
+    catch { setDismissed(''); }
+  }, [key]);
+  if (!advice) return null;
+  const name = (assignee: TeamResolvedAssignee): string => TEAM_AGENT_OPTIONS.find((option) => option.value === assignee)?.label ?? assignee;
+  const suggestion = advice.suggestion;
+  return <div className="team-track-record">
+    {advice.records.map((record) => {
+      const text = `${name(record.assignee)}: ${record.jobs} ${record.jobs === 1 ? 'job' : 'jobs'}, ${record.passed} passed first time, about ${Math.max(1, Math.round(record.medianDurationMs / 60_000))} min each (${record.scope === 'project' ? 'here' : 'all projects'})`;
+      return <p key={record.assignee} className="team-track-record-line" title={text}>{text}</p>;
+    })}
+    {suggestion && suggestion.fingerprint !== dismissed && <div className="team-track-suggestion">
+      <p className="settings-note">{suggestion.text}</p>
+      <div className="button-row align-start">
+        <button type="button" className="secondary-button" onClick={() => { onUse(suggestion.assignee); }}>Use {name(suggestion.assignee)}</button>
+        <button type="button" className="secondary-button" onClick={() => {
+          setDismissed(suggestion.fingerprint);
+          try { window.localStorage.setItem(key, suggestion.fingerprint); } catch { /* The in-memory dismissal still works when storage is unavailable. */ }
+        }}>Dismiss</button>
+      </div>
+    </div>}
+  </div>;
 }

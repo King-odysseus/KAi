@@ -108,7 +108,10 @@ describe('a side-by-side session on a real repository', () => {
         { stepId: 'first', commit: await session.commit('first', 'first') },
         { stepId: 'second', commit: await session.commit('second', 'second') },
       ]);
-      expect(result.conflicts).toEqual([{ stepId: 'second', files: ['app/src/ui.ts'] }]);
+      expect(result.conflicts).toEqual([expect.objectContaining({ stepId: 'second', files: ['app/src/ui.ts'] })]);
+      expect(result.conflicts[0]?.diff).toContain('+export const ui = "second";');
+      expect(result.conflicts[0]?.diff).not.toContain('+export const ui = "first";');
+      expect(result.conflicts[0]?.commit).toMatch(/^[a-f0-9]{40}$/);
       expect(await readFile(path.join(root, 'app', 'src', 'ui.ts'), 'utf8')).toBe('export const ui = "first";\n');
     } finally {
       await session.dispose();

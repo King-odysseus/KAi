@@ -5180,6 +5180,38 @@ code {
   gap: 8px;
 }
 
+.team-track-record {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* One line per agent; a long line is cut with an ellipsis and shown in full as a tooltip. */
+.team-track-record-line {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-track-suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(102, 227, 189, 0.3);
+  border-radius: 8px;
+  background: var(--mint-soft);
+}
+
+.team-track-suggestion .settings-note {
+  color: var(--text);
+}
+
 .team-custom {
   display: flex;
   flex-direction: column;

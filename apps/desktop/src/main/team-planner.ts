@@ -16,8 +16,11 @@ import {
   type TeamStartInput,
   type WorkflowRun,
   type WorkflowStartInput,
+  type TeamRecordEntry,
+  type TeamRecordAdvice,
+  type TeamRecordQuery,
 } from '@kai/contracts';
-import { assignTeam, completeTeam, reach, resolveOrchestrator, type AssignmentEnvironment } from './team-assign';
+import { assignTeam, completeTeam, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
 import {
   applyGuardrails,
   buildOrchestratorPrompt,
@@ -37,6 +40,7 @@ export interface TeamPlannerPorts {
   settings(): Promise<AppSettings>;
   /** The team saved for one project, when it has its own; null when it uses the team from Settings. */
   projectTeam?(projectId: string): Promise<AgentTeam | null>;
+  teamRecords?(): Promise<TeamRecordEntry[]>;
   agentCapabilities(): Promise<AgentCapability[]>;
   directApi(): Promise<{ available: boolean; displayName: string; unavailableReason?: string; local?: boolean }>;
   proxyReady(): Promise<boolean>;
@@ -55,7 +59,7 @@ export class DesktopTeamPlanner {
   async plan(input: TeamPlanInput, ownerWindowId: number): Promise<TeamPlanDraft> {
     const settings = await this.ports.settings();
     const { team, scope } = await this.teamFor(input.projectId, settings);
-    const env = await this.environment();
+    const env = await this.environment(input.projectId);
     const orchestrator = resolveOrchestrator(team, env);
     if (!orchestrator) {
       throw new Error('No agent is ready to plan. Install and sign in to a CLI agent, or set up Direct API in Settings.');
@@ -107,7 +111,7 @@ export class DesktopTeamPlanner {
     const byPart = new Map<string, TeamAssignment>(input.assignments.map((assignment) => [assignment.partId, assignment]));
 
     // Availability can change between planning and approval, so check again before anything runs.
-    const env = await this.environment();
+    const env = await this.environment(input.projectId);
     const planned = ordered.map((part) => {
       const assignment = byPart.get(part.id);
       if (!assignment) throw new Error(`"${part.title}" has no agent assigned.`);
@@ -149,6 +153,7 @@ export class DesktopTeamPlanner {
       prompt: buildStepPrompt(input.goal, part, config, info),
       ...(part.dependsOn.length > 0 ? { dependsOn: part.dependsOn } : {}),
       role: part.role,
+      suggestedAssignee: assignment.suggestedAssignee ?? assignment.assignee,
       access: info.access,
       execution: assignment.assignee === 'api' ? 'api' : 'cli',
       route: assignment.route,
@@ -172,12 +177,17 @@ export class DesktopTeamPlanner {
     return Promise.resolve(parseTeamPlan(result.output, team));
   }
 
-  private async environment(): Promise<AssignmentEnvironment> {
-    const [capabilities, api, proxyReady] = await Promise.all([
+  async advice(input: TeamRecordQuery): Promise<TeamRecordAdvice[]> {
+    return teamAdvice(input.team, await this.environment(input.projectId));
+  }
+
+  private async environment(projectId?: string): Promise<AssignmentEnvironment> {
+    const [capabilities, api, proxyReady, records] = await Promise.all([
       this.ports.agentCapabilities(),
       this.ports.directApi(),
       this.ports.proxyReady(),
+      this.ports.teamRecords?.() ?? Promise.resolve([]),
     ]);
-    return { capabilities, api, proxyReady, platform: process.platform };
+    return { capabilities, api, proxyReady, platform: process.platform, records, projectId };
   }
 }

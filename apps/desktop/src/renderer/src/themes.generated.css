@@ -621,6 +621,9 @@ html[data-theme="purple"]:root .history-row {
 html[data-theme="purple"]:root .section-title {
   color: #dfdeed;
 }
+html[data-theme="purple"]:root .team-track-suggestion {
+  border: 1px solid rgba(251, 205, 0, 0.3);
+}
 html[data-theme="purple"]:root .team-access.read {
   border-color: rgba(246, 178, 95, 0.4);
 }
@@ -1540,6 +1543,9 @@ html[data-theme="navy"]:root .history-row {
 }
 html[data-theme="navy"]:root .section-title {
   color: #d7e0f3;
+}
+html[data-theme="navy"]:root .team-track-suggestion {
+  border: 1px solid rgba(109, 187, 255, 0.3);
 }
 html[data-theme="navy"]:root .team-access.read {
   border-color: rgba(246, 174, 95, 0.4);

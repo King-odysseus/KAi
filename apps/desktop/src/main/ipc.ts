@@ -89,6 +89,7 @@ import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
+import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
 import { buildSetupStatus } from './setup-status';
@@ -155,6 +156,7 @@ export interface IpcContext {
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
   teamPlanner: DesktopTeamPlanner;
+  teamRecord: TeamRecordStore;
   runControl: DesktopRunControl;
   notifications: NotificationCenter;
   recovery: RecoveryStore;
@@ -282,6 +284,8 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
   handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, ownerWindowId(context, request)));
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, ownerWindowId(context, request)));
+  handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
+  handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });
   handle(context, 'proxy:overview', async () => context.proxy.overview());
   handle(context, 'proxy:history', async (query) => context.proxy.history(query));
   handle(context, 'proxy:history-detail', async ({ id }) => context.proxy.historyDetail(id));
