@@ -2607,6 +2607,11 @@
 .learning-path button { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; margin-top: 6px; }
 .learning-path small, .learning-pending small { display: block; color: var(--text-dim); font-size: 11px; }
 .learning-memory button, .learning-path button, .learning-response-actions button, .learning-sources button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; color: var(--text); background: var(--bg-input); cursor: pointer; overflow-wrap: anywhere; }
+/* These buttons carry lesson sentences, so they wrap instead of keeping the global one-line button rule. */
+.learning-memory button, .learning-path button, .learning-sources button { max-width: 100%; text-align: left; white-space: normal; }
+.learning-memory { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.learning-memory > * { max-width: 100%; margin-top: 0; margin-bottom: 0; }
+.learning-scroll { overflow-x: hidden; }
 .learning-response-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .learning-response-actions button:disabled { opacity: .5; cursor: default; }
 .learning-pending { display: flex; align-items: center; gap: 10px; }

@@ -8892,3 +8892,105 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/*
+ * Compact conversation: smaller type and tighter padding, a centred reading column, and a lighter composer.
+ * Kept last so it wins over the earlier surface rules; themes only recolour these selectors.
+ */
+.conversation-canvas {
+  gap: 10px;
+  padding: 16px max(16px, calc((100% - 820px) / 2));
+}
+
+.message-role {
+  margin-bottom: 3px;
+  font-size: 9.5px;
+}
+
+.message-body {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.message.user {
+  max-width: min(600px, 80%);
+}
+
+.message.user .message-role {
+  display: none;
+}
+
+.message.user .message-body {
+  padding: 7px 12px;
+  border-color: transparent;
+  border-radius: 14px;
+  background: var(--bg-raised);
+}
+
+.thinking {
+  padding: 6px 11px;
+  font-size: 11.5px;
+}
+
+.run-event {
+  padding: 5px 8px;
+}
+
+.composer {
+  gap: 5px;
+  padding: 4px max(14px, calc((100% - 820px) / 2)) 12px;
+  border-top: 0;
+  background: transparent;
+}
+
+.task-intent-picker {
+  margin: 0;
+  gap: 4px;
+}
+
+.task-intent-picker button,
+.composer-advanced-toggle {
+  min-height: 22px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
+.task-intent-label,
+.task-intent-picker small {
+  font-size: 10.5px;
+}
+
+.composer-box {
+  border-radius: 14px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+}
+
+.composer-box:focus-within {
+  box-shadow: 0 0 0 2px rgba(102, 227, 189, 0.08), 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.composer-box textarea,
+.composer textarea {
+  min-height: 42px;
+  padding: 9px 12px 2px;
+  border-radius: 14px 14px 0 0;
+  resize: none;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.composer-toolbar {
+  padding: 2px 6px 5px;
+  border-top: 0;
+  background: transparent;
+}
+
+.composer-icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.composer-actions .send-button {
+  width: 26px;
+  height: 26px;
+}
