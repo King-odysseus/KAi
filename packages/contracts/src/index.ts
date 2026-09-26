@@ -21,6 +21,7 @@ export * from './rules';
 export * from './search';
 export * from './setup';
 export * from './tasks';
+export * from './team';
 export * from './updates';
 export * from './terminal';
 export * from './verification';

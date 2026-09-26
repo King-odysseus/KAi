@@ -13,6 +13,7 @@ import {
   windowBoundsSchema,
 } from './primitives';
 import { notificationSettingsSchema } from './notifications';
+import { agentTeamSchema, createDefaultAgentTeam } from './team';
 import { updateSettingsSchema } from './updates';
 import { usageBudgetSchema } from './usage';
 import {
@@ -308,6 +309,8 @@ export const appSettingsV1Schema = z
     setupCompletedAt: z.string().datetime().nullable().default(null),
     // Model each CLI agent is asked to use. A missing entry means the CLI uses its own configured default.
     agentModels: z.record(agentIdSchema, cliModelNameSchema).default({}),
+    // Who plans and who does each part when a job is handed to the agent team.
+    agentTeam: agentTeamSchema.default(createDefaultAgentTeam),
   })
   .strict();
 

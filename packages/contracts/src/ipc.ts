@@ -187,6 +187,15 @@ import {
   type TeachingLibraryEntryInput,
   type TeachingLibrarySaveInput,
 } from './learning';
+import {
+  teamPlanDraftSchema,
+  teamPlanInputSchema,
+  teamStartInputSchema,
+  agentTeamSchema,
+  type TeamPlanDraft,
+  type TeamPlanInput,
+  type TeamStartInput,
+} from './team';
 import { recoveryRecapSchema, recoveryRecordSchema, recoveryResumeSchema, type RecoveryRecap, type RecoveryRecord, type RecoveryResume } from './recovery';
 import { notificationSettingsSchema, viewReportSchema, type OpenConversationEvent } from './notifications';
 import { usageBudgetSchema, usageSummarySchema, type UsageSummary } from './usage';
@@ -278,6 +287,8 @@ export const ipcChannels = [
   'workflows:resume',
   'workflows:save-template',
   'workflows:delete-template',
+  'team:plan',
+  'team:start',
   'proxy:overview',
   'proxy:history',
   'proxy:history-detail',
@@ -415,6 +426,7 @@ export const ipcInputSchemas = {
       notifications: notificationSettingsSchema.partial().strict().optional(),
       updates: updateSettingsSchema.partial().strict().optional(),
       agentModels: z.record(agentIdSchema, cliModelNameSchema).optional(),
+      agentTeam: agentTeamSchema.optional(),
       shortcuts: z.record(z.string().min(1).max(100), z.string().min(1).max(80)).optional(),
       setupCompletedAt: z.string().datetime().nullable().optional(),
     })
@@ -480,6 +492,8 @@ export const ipcInputSchemas = {
   'workflows:resume': workflowControlInputSchema,
   'workflows:save-template': workflowTemplateSaveInputSchema,
   'workflows:delete-template': z.object({ id: z.string().min(1) }).strict(),
+  'team:plan': teamPlanInputSchema,
+  'team:start': teamStartInputSchema,
   'proxy:overview': emptyInputSchema,
   'proxy:history': proxyHistoryQuerySchema,
   'proxy:history-detail': z.object({ id: z.string().min(1) }).strict(),
@@ -612,6 +626,7 @@ export const gitDiffStatResponseSchema = gitDiffStatResultSchema;
 export const attachmentResultSchema = contextChipSchema;
 export const workflowTemplateListResponseSchema = z.array(workflowTemplateSchema);
 export const workflowRunListResponseSchema = z.array(workflowRunSchema);
+export const teamPlanResponseSchema = teamPlanDraftSchema;
 export const checkpointReviewResponseSchema = checkpointReviewSchema;
 export const checkpointRestoreResponseSchema = checkpointRestoreResultSchema;
 export const compareRunResponseSchema = compareRunSchema;
@@ -727,6 +742,7 @@ export interface SettingsUpdate {
   notifications?: Partial<AppSettings['notifications']>;
   updates?: Partial<AppSettings['updates']>;
   agentModels?: AppSettings['agentModels'];
+  agentTeam?: AppSettings['agentTeam'];
   shortcuts?: AppSettings['shortcuts'];
   setupCompletedAt?: AppSettings['setupCompletedAt'];
 }
@@ -796,6 +812,10 @@ export interface KaiDesktopBridge {
   listWorkflowTemplates(projectId?: string): Promise<IpcResponse<WorkflowTemplate[]>>;
   listWorkflowRuns(projectId?: string): Promise<IpcResponse<WorkflowRun[]>>;
   startWorkflow(request: WorkflowStartInput): Promise<IpcResponse<WorkflowRun>>;
+  /** Asks the orchestrator to split a goal into parts and assigns an agent to each. Runs nothing. */
+  planTeam(request: TeamPlanInput): Promise<IpcResponse<TeamPlanDraft>>;
+  /** Starts the approved plan as a workflow, one part at a time. */
+  startTeam(request: TeamStartInput): Promise<IpcResponse<WorkflowRun>>;
   stopWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   resumeWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   onWorkflowChanged(listener: (run: WorkflowRun) => void): () => void;

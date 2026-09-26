@@ -9,6 +9,7 @@ import type {
   WorkflowStartInput,
   WorkflowStep,
 } from '@kai/contracts';
+import { handoffSection, parseVerdict } from './team-plan';
 
 export interface WorkflowCheckResult {
   passed: boolean;
@@ -35,7 +36,7 @@ interface ActiveWorkflow {
   done: Promise<void>;
 }
 
-type StepOutcome = 'completed' | 'failed' | 'stopped';
+type StepOutcome = 'completed' | 'failed' | 'stopped' | 'blocked';
 
 /** Main-process workflow ownership. Renderer navigation never owns or drives a running workflow. */
 export class DesktopWorkflowRunner {
@@ -62,6 +63,13 @@ export class DesktopWorkflowRunner {
         agent: step.agent,
         prompt: step.prompt,
         label: step.label ?? `Step ${index + 1}`,
+        ...(step.dependsOn?.length ? { dependsOn: step.dependsOn } : {}),
+        ...(step.role ? { role: step.role } : {}),
+        ...(step.execution ? { execution: step.execution } : {}),
+        ...(step.route ? { route: step.route } : {}),
+        ...(step.autonomy ? { autonomy: step.autonomy } : {}),
+        ...(step.model ? { model: step.model } : {}),
+        ...(step.gate ? { gate: step.gate } : {}),
         status: 'pending',
       })),
       execution: input.execution,
@@ -116,7 +124,10 @@ export class DesktopWorkflowRunner {
     }
     const conversation = await this.findConversationForWorkflow(workflowId);
     if (!conversation) throw new Error('Workflow not found.');
-    if (conversation.workflow?.status === 'running') {
+    // A job waiting on a blocked security review has nothing running, but "Stop" must still end it.
+    const awaitingDecision = conversation.workflow?.status === 'paused'
+      && conversation.workflow.steps.some((step) => step.verdict?.result === 'block' && !step.verdict.acknowledged);
+    if (conversation.workflow?.status === 'running' || (conversation.workflow && awaitingDecision)) {
       conversation.workflow.status = 'aborted';
       conversation.workflow.steps = conversation.workflow.steps.map((step) => step.status === 'running'
         ? { ...step, status: 'failed', error: 'Stopped by the user.', completedAt: new Date().toISOString() }
@@ -139,7 +150,23 @@ export class DesktopWorkflowRunner {
     if (!conversation?.workflow) throw new Error('Workflow not found.');
     if (conversation.workflow.status === 'completed') throw new Error('This workflow is already complete.');
     const loop = conversation.workflow.loop ?? { enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' };
+    // "Continue anyway" on a blocked security review: remember the decision so the workflow does not ask again.
+    const unacknowledged = (step: WorkflowStep): boolean => step.verdict?.result === 'block' && !step.verdict.acknowledged;
+    const acknowledgedGate = conversation.workflow.steps.some(unacknowledged);
+    conversation.workflow.steps = conversation.workflow.steps.map((step) => (
+      step.verdict && unacknowledged(step) ? { ...step, verdict: { ...step.verdict, acknowledged: true } } : step
+    ));
     let resumeIndex = conversation.workflow.steps.findIndex((step) => step.status !== 'completed');
+    if (resumeIndex < 0 && acknowledgedGate && !(loop.enabled && conversation.workflow.loopProgress)) {
+      // The blocked review was the last step: continuing means the job is finished.
+      conversation.updatedAt = new Date().toISOString();
+      await this.ports.saveConversation(conversation);
+      await this.complete(conversation.id);
+      const finished = await this.ports.getConversation(conversation.id);
+      const run = runFor(finished ?? conversation);
+      this.ports.notifyChanged(ownerWindowId, run);
+      return run;
+    }
     if (loop.enabled && conversation.workflow.loopProgress) {
       const nextRound = conversation.workflow.loopProgress.round + 1;
       if (nextRound > loop.maxRounds) throw new Error(`The ${loop.maxRounds}-round limit was reached. Raise the round limit before resuming.`);
@@ -148,6 +175,7 @@ export class DesktopWorkflowRunner {
         status: 'pending',
         error: undefined,
         output: undefined,
+        verdict: undefined,
         startedAt: undefined,
         completedAt: undefined,
       }));
@@ -262,6 +290,7 @@ export class DesktopWorkflowRunner {
         status: 'pending',
         error: undefined,
         output: undefined,
+        verdict: undefined,
         startedAt: undefined,
         completedAt: undefined,
       }));
@@ -328,16 +357,26 @@ export class DesktopWorkflowRunner {
       await this.ports.saveConversation(conversation);
       this.ports.notifyChanged(active.ownerWindowId, runFor(conversation));
 
+      // A team part follows its own agent, route and access, and sees what its dependencies produced.
+      const allSteps = conversation.workflow.steps;
+      const earlier = (current.dependsOn ?? []).flatMap((id) => {
+        const dependency = allSteps.find((step) => step.id === id);
+        return dependency?.status === 'completed'
+          ? [{ label: dependency.label ?? dependency.id, agent: dependency.agent, output: dependency.output }]
+          : [];
+      });
+      const stepModel = current.model ?? conversation.workflow.model;
       let result: AgentRunResult;
       try {
         result = await this.ports.runAgent({
           conversationId,
-          prompt: current.prompt,
+          prompt: `${current.prompt}${handoffSection(earlier)}`,
           agent: current.agent,
-          execution,
-          route: conversation.workflow.route,
-          autonomy: conversation.workflow.autonomy,
-          ...(conversation.workflow.model ? { model: conversation.workflow.model } : {}),
+          execution: current.execution ?? execution,
+          route: current.route ?? conversation.workflow.route,
+          autonomy: current.autonomy ?? conversation.workflow.autonomy,
+          ...(stepModel ? { model: stepModel } : {}),
+          ...(current.role ? { freshSession: true } : {}),
         }, active.ownerWindowId);
       } catch (error) {
         result = {
@@ -352,18 +391,23 @@ export class DesktopWorkflowRunner {
       conversation = await this.ports.getConversation(conversationId) ?? result.conversation;
       if (!conversation.workflow) return 'stopped';
       const failed = result.status === 'failed' || Boolean(result.error);
+      // A security review that blocks stops the job and waits for the user; passing lets it carry on.
+      const verdict = !failed && current.gate === 'security' ? parseVerdict(result.output) : undefined;
+      const blocked = verdict?.result === 'block';
       conversation.workflow.steps[index] = {
         ...conversation.workflow.steps[index]!,
         status: failed ? 'failed' : 'completed',
         output: result.output,
+        ...(verdict ? { verdict: { ...verdict, acknowledged: false } } : {}),
         ...(result.error ? { error: result.error } : {}),
         completedAt: new Date().toISOString(),
       };
-      conversation.workflow.status = failed ? 'paused' : 'running';
+      conversation.workflow.status = failed || blocked ? 'paused' : 'running';
       conversation.updatedAt = new Date().toISOString();
       await this.ports.saveConversation(conversation);
       this.ports.notifyChanged(active.ownerWindowId, runFor(conversation));
       if (failed) return 'failed';
+      if (blocked) return 'blocked';
     }
     return 'completed';
   }

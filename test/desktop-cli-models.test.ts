@@ -38,7 +38,9 @@ describe('CLI model selection', () => {
     );
     const qwen = buildAgentArgs({ ...base, agent: 'qwen' }, 'C:/repo', undefined, undefined, 'qwen3.8-max');
     expect(qwen).toEqual(expect.arrayContaining(['--model', 'qwen3.8-max']));
-    expect(qwen.at(-1)).toBe('Fix the bug');
+    // The prompt travels on stdin, so the arguments carry only the short "-p" note.
+    expect(qwen.slice(-2)).toEqual(['-p', 'Carry out the request above.']);
+    expect(qwen).not.toContain('Fix the bug');
     const gemini = buildAgentArgs({ ...base, agent: 'gemini' }, 'C:/repo', 'resume-1', undefined, 'gemini-3.8-pro');
     expect(gemini).toEqual(expect.arrayContaining(['--model', 'gemini-3.8-pro', '--resume', 'resume-1']));
   });

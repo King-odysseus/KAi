@@ -88,6 +88,7 @@ import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
 import type { DesktopWorkflowRunner } from './workflow-runner';
+import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
 import { buildSetupStatus } from './setup-status';
@@ -153,6 +154,7 @@ export interface IpcContext {
   learningUsage: LearningUsageStore;
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
+  teamPlanner: DesktopTeamPlanner;
   runControl: DesktopRunControl;
   notifications: NotificationCenter;
   recovery: RecoveryStore;
@@ -278,6 +280,8 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'workflows:resume', async ({ workflowId }, request) => context.workflows.resume(workflowId, ownerWindowId(context, request)));
   handle(context, 'workflows:save-template', async (template) => context.workflowTemplates.save(template));
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
+  handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, ownerWindowId(context, request)));
+  handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, ownerWindowId(context, request)));
   handle(context, 'proxy:overview', async () => context.proxy.overview());
   handle(context, 'proxy:history', async (query) => context.proxy.history(query));
   handle(context, 'proxy:history-detail', async ({ id }) => context.proxy.historyDetail(id));
@@ -724,6 +728,7 @@ export async function runConversationAgent(
   const previousExecution = conversation.execution ?? 'cli';
   const now = new Date().toISOString();
   const canResume =
+    !request.freshSession &&
     conversation.activeAgent === request.agent &&
     conversation.route === request.route &&
     (conversation.execution ?? 'cli') === executionMode;

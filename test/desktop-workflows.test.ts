@@ -296,6 +296,170 @@ describe('desktop workflow runner', () => {
     }
   });
 
+  it('runs a team step with its own agent, route and access, a fresh session, and what its dependencies produced', async () => {
+    const requests: AgentRunRequest[] = [];
+    const { runner } = harness({
+      runAgent: async (request) => {
+        requests.push(request);
+        return { conversation: conversation(request.conversationId), status: 'completed', output: `output of ${request.agent}` };
+      },
+    });
+
+    await runner.start(startInput({
+      execution: 'cli',
+      route: 'direct',
+      model: undefined,
+      autonomy: 'autoEdit',
+      steps: [
+        { id: 'api', agent: 'codex', prompt: 'Build the API', label: 'Backend: API', role: 'backend' },
+        { id: 'review', agent: 'claude', prompt: 'Review it', label: 'Code review', role: 'codeReviewer', dependsOn: ['api'], route: 'proxy', autonomy: 'plan', execution: 'api', model: 'deepseek-chat' },
+      ],
+    }), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect(requests[0]).toMatchObject({ agent: 'codex', execution: 'cli', route: 'direct', autonomy: 'autoEdit', freshSession: true });
+    expect(requests[0]!.prompt).toBe('Build the API');
+    expect(requests[1]).toMatchObject({ agent: 'claude', execution: 'api', route: 'proxy', autonomy: 'plan', model: 'deepseek-chat', freshSession: true });
+    expect(requests[1]!.prompt).toContain('Review it');
+    expect(requests[1]!.prompt).toContain('### Backend: API (codex)\noutput of codex');
+  });
+
+  it('leaves an ordinary workflow step exactly as before: no hand-off and a resumable session', async () => {
+    const requests: AgentRunRequest[] = [];
+    const { runner } = harness({
+      runAgent: async (request) => {
+        requests.push(request);
+        return { conversation: conversation(request.conversationId), status: 'completed', output: 'done' };
+      },
+    });
+
+    await runner.start(startInput(), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect(requests.map((request) => request.prompt)).toEqual(['Inspect the project', 'Implement the change']);
+    expect(requests.every((request) => request.freshSession === undefined)).toBe(true);
+  });
+
+  function gatedInput(): WorkflowStartInput {
+    return startInput({
+      execution: 'cli',
+      route: 'direct',
+      autonomy: 'autoEdit',
+      steps: [
+        { id: 'code', agent: 'codex', prompt: 'Write it', role: 'backend' },
+        { id: 'security', agent: 'claude', prompt: 'Review it', role: 'securityReviewer', gate: 'security', dependsOn: ['code'], autonomy: 'plan' },
+        { id: 'docs', agent: 'kimi', prompt: 'Document it', role: 'docs' },
+      ],
+    });
+  }
+
+  it('stops and asks when the security review blocks, then carries on once the user continues', async () => {
+    const prompts: string[] = [];
+    const { runner } = harness({
+      runAgent: async (request) => {
+        prompts.push(request.prompt.split('\n')[0]!);
+        const output = request.agent === 'claude' ? 'Found a committed key.\nVERDICT: BLOCK - the API key is in the repo' : 'ok';
+        return { conversation: conversation(request.conversationId), status: 'completed', output };
+      },
+    });
+
+    const run = await runner.start(gatedInput(), 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    const paused = (await runner.list('project-1'))[0]!.workflow;
+    expect(paused.steps.map((step) => step.status)).toEqual(['completed', 'completed', 'pending']);
+    expect(paused.steps[1]!.verdict).toEqual({ result: 'block', reason: 'the API key is in the repo', acknowledged: false });
+    expect(prompts).not.toContain('Document it');
+    expect(runner.isActive(run.workflow.id)).toBe(false);
+
+    await runner.resume(run.workflow.id, 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+    const finished = (await runner.list('project-1'))[0]!.workflow;
+    expect(finished.steps[1]!.verdict).toMatchObject({ result: 'block', acknowledged: true });
+    expect(prompts).toContain('Document it');
+    // The reviewer was not run a second time: continuing means carrying on, not reviewing again.
+    expect(prompts.filter((prompt) => prompt === 'Review it')).toHaveLength(1);
+  });
+
+  it('ends a job that is waiting on a blocked security review when the user chooses Stop', async () => {
+    const { runner } = harness({
+      runAgent: async (request) => ({
+        conversation: conversation(request.conversationId),
+        status: 'completed',
+        output: request.agent === 'claude' ? 'VERDICT: BLOCK - exposed secret' : 'ok',
+      }),
+    });
+
+    const run = await runner.start(gatedInput(), 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    const stopped = await runner.stop(run.workflow.id);
+
+    expect(stopped.workflow.status).toBe('aborted');
+    expect(stopped.workflow.steps.map((step) => step.status)).toEqual(['completed', 'completed', 'pending']);
+  });
+
+  it('lets the job carry on without asking when the security review passes', async () => {
+    const { runner } = harness({
+      runAgent: async (request) => ({
+        conversation: conversation(request.conversationId),
+        status: 'completed',
+        output: request.agent === 'claude' ? 'Nothing serious.\nVERDICT: PASS' : 'ok',
+      }),
+    });
+
+    await runner.start(gatedInput(), 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect((await runner.list('project-1'))[0]!.workflow.steps[1]!.verdict).toMatchObject({ result: 'pass' });
+  });
+
+  it('treats a security review with no clear verdict as a block', async () => {
+    const { runner } = harness({
+      runAgent: async (request) => ({ conversation: conversation(request.conversationId), status: 'completed', output: 'Seems okay to me.' }),
+    });
+
+    await runner.start(gatedInput(), 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    expect((await runner.list('project-1'))[0]!.workflow.steps[1]!.verdict).toMatchObject({ result: 'block' });
+  });
+
+  it('finishes the job when the user continues past a blocked review that was the last step', async () => {
+    const prompts: string[] = [];
+    const { runner } = harness({
+      runAgent: async (request) => {
+        prompts.push(request.prompt);
+        return { conversation: conversation(request.conversationId), status: 'completed', output: request.agent === 'claude' ? 'VERDICT: BLOCK - injection' : 'ok' };
+      },
+    });
+
+    const run = await runner.start(startInput({
+      execution: 'cli',
+      route: 'direct',
+      steps: [
+        { id: 'code', agent: 'codex', prompt: 'Write it', role: 'backend' },
+        { id: 'security', agent: 'claude', prompt: 'Review it', role: 'securityReviewer', gate: 'security', dependsOn: ['code'] },
+      ],
+    }), 4);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    const resumed = await runner.resume(run.workflow.id, 4);
+
+    expect(resumed.workflow.status).toBe('completed');
+    expect(resumed.workflow.steps[1]!.verdict).toMatchObject({ acknowledged: true });
+    expect(prompts).toHaveLength(2);
+  });
+
+  it('does not gate a step that has no gate, whatever its output says', async () => {
+    const { runner } = harness({
+      runAgent: async (request) => ({ conversation: conversation(request.conversationId), status: 'completed', output: 'VERDICT: BLOCK - nope' }),
+    });
+
+    await runner.start(startInput({ steps: [{ id: 'a', agent: 'codex', prompt: 'One' }, { id: 'b', agent: 'codex', prompt: 'Two' }] }), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+  });
+
   it('transfers a running workflow and its future updates when its owner window closes', async () => {
     let release!: (value: AgentRunResult) => void;
     let firstStarted!: () => void;

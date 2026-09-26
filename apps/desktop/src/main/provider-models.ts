@@ -1,5 +1,6 @@
 import {
   directProviderPreset,
+  isLocalProvider,
   providerModelCatalogSchema,
   type ProviderId,
   type ProviderModelCatalog,
@@ -29,7 +30,7 @@ export async function listProviderModels(
   } catch (error) {
     return fallback(`The stored credential could not be read: ${messageOf(error)}`);
   }
-  if (!apiKey && request.provider !== 'openrouter' && !isLocalEndpoint(request.baseUrl)) {
+  if (!apiKey && request.provider !== 'openrouter' && !isLocalProvider(request.provider) && !isLocalEndpoint(request.baseUrl)) {
     return fallback(`Save a credential for ${request.credentialId} before refreshing this provider's models.`);
   }
 
@@ -52,6 +53,9 @@ export async function listProviderModels(
       error: null,
     });
   } catch (error) {
+    if (isLocalProvider(request.provider)) {
+      return fallback(`${preset.displayName} is not reachable at ${request.baseUrl}. Open it, start its local server and load a model, then refresh. (${messageOf(error)})`);
+    }
     return fallback(`The provider model list could not be refreshed: ${messageOf(error)}`);
   }
 }

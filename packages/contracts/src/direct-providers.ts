@@ -202,6 +202,18 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
       'accounts/fireworks/models/kimi-k3',
     ],
   },
+  lmstudio: {
+    id: 'lmstudio',
+    displayName: 'LM Studio (local models)',
+    protocol: 'chat-completions',
+    // 127.0.0.1 rather than "localhost": on Windows "localhost" can resolve to IPv6 first, which LM Studio may not serve.
+    defaultBaseUrl: 'http://127.0.0.1:1234/v1',
+    // Empty on purpose: the models are whatever the user has downloaded, listed live from the running server.
+    defaultModel: '',
+    credentialId: 'provider.lmstudio',
+    supportsTools: true,
+    models: [],
+  },
   'openai-compatible': {
     id: 'openai-compatible',
     displayName: 'Custom OpenAI-compatible API',
@@ -225,8 +237,28 @@ export const DIRECT_PROVIDER_ORDER: readonly ProviderId[] = [
   'xai',
   'together',
   'fireworks',
+  'lmstudio',
   'openai-compatible',
 ];
+
+/** Providers that run on the user's own machine or network: no API key is needed and nothing is billed. */
+export const LOCAL_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['lmstudio']);
+
+export function isLocalProvider(provider: ProviderId): boolean {
+  return LOCAL_PROVIDERS.has(provider);
+}
+
+/** Sent as the bearer value when a local server wants one and the user stored none. LM Studio ignores it. */
+export const LOCAL_PROVIDER_PLACEHOLDER_KEY = 'lm-studio';
+
+/**
+ * The model to select first from a local server's list: a coding model if one is downloaded, and never an
+ * embedding model, which cannot chat.
+ */
+export function pickLocalModel(models: readonly string[]): string {
+  const chat = models.filter((model) => !/embed/i.test(model));
+  return chat.find((model) => /coder/i.test(model)) ?? chat.at(0) ?? '';
+}
 
 export function directProviderPreset(provider: ProviderId): DirectProviderPreset {
   return DIRECT_PROVIDER_PRESETS[provider];

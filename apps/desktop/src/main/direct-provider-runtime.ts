@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { directProviderPreset } from '@kai/contracts';
+import { directProviderPreset, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, type ProviderId } from '@kai/contracts';
 import type {
   AppSettings,
   AgentRunRequest,
@@ -8,6 +8,7 @@ import type {
   PersistedEvent,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
+import { probeLocalServer, type LocalServerProbe } from './local-provider';
 import {
   DesktopProjectToolRuntime,
   projectToolDefinitions,
@@ -23,7 +24,9 @@ function costFields(
   inputTokens: number | undefined,
   outputTokens: number | undefined,
 ): { provider: string; model?: string; amountUsd?: number } {
-  const amountUsd = model ? estimateCostUsd(model, inputTokens, outputTokens) : null;
+  // A model on the user's own machine costs nothing, whatever its name looks like: without this a local
+  // "gpt-oss" would be priced as a paid GPT and count against the budget.
+  const amountUsd = isLocalProvider(provider as ProviderId) ? 0 : model ? estimateCostUsd(model, inputTokens, outputTokens) : null;
   return {
     provider,
     ...(model ? { model } : {}),
@@ -116,6 +119,8 @@ export interface DirectProviderRuntimeOptions {
   retryBaseDelayMs?: number;
   resolveProxyRoute?: (request: AgentRunRequest) => Promise<DirectApiProxyRoute>;
   waitIfPaused?: (conversationId: string, signal: AbortSignal) => Promise<void>;
+  /** Asks a local server (LM Studio) which models it offers; replaced in tests. */
+  probeLocalServer?: (baseUrl: string) => Promise<LocalServerProbe>;
 }
 
 export class DesktopDirectProviderRuntime {
@@ -133,7 +138,8 @@ export class DesktopDirectProviderRuntime {
     const directApi = settings.directApi;
     const preset = directProviderPreset(directApi.provider);
     const displayName = preset.displayName;
-    const credentialStored = await this.credentials.has(directApi.credentialId);
+    const local = isLocalProvider(directApi.provider);
+    const credentialStored = await this.credentials.has(directApi.credentialId).catch(() => false);
     const base = {
       enabled: directApi.enabled,
       provider: directApi.provider,
@@ -151,6 +157,25 @@ export class DesktopDirectProviderRuntime {
     }
     if (!directApi.model.trim()) {
       return { ...base, available: false, unavailableReason: 'Set a direct API model in Settings.' };
+    }
+    if (local) {
+      // A local server needs no key, but it has to be running and have a model to offer.
+      const probe = await (this.options.probeLocalServer ?? probeLocalServer)(directApi.baseUrl);
+      if (!probe.reachable) {
+        return {
+          ...base,
+          available: false,
+          unavailableReason: `${displayName} is not reachable at ${directApi.baseUrl}. Open LM Studio, start its local server (Developer tab), load a model, then refresh.`,
+        };
+      }
+      if (probe.models.length === 0) {
+        return {
+          ...base,
+          available: false,
+          unavailableReason: `${displayName} is running but has no models. Download one in LM Studio (for example Qwen2.5 Coder) and try again.`,
+        };
+      }
+      return { ...base, available: true };
     }
     if (!this.credentials.isAvailable()) {
       return {
@@ -208,11 +233,18 @@ export class DesktopDirectProviderRuntime {
       if (!capability.available) {
         return immediateFailure(request, capability.unavailableReason || 'Direct API mode is unavailable.');
       }
-      const directApiKey = await this.credentials.get(capability.credentialId);
-      if (!directApiKey) {
+      const local = isLocalProvider(capability.provider);
+      // A key is optional for a local server (LM Studio can be set to require one); use it when one is stored.
+      let directApiKey: string | undefined;
+      try {
+        directApiKey = await this.credentials.get(capability.credentialId);
+      } catch (error) {
+        if (!local) throw error;
+      }
+      if (!directApiKey && !local) {
         return immediateFailure(request, `Credential ${capability.credentialId} is not available.`);
       }
-      apiKey = directApiKey;
+      apiKey = directApiKey ?? LOCAL_PROVIDER_PLACEHOLDER_KEY;
     }
 
     const protocol = directProviderPreset(capability.provider).protocol;

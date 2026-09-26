@@ -3,8 +3,11 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { brainGitStatus, syncBrainGit } from '../apps/desktop/src/main/brain-git';
+
+// Spawning git is slow on Windows when the whole suite runs at once.
+vi.setConfig({ testTimeout: 90_000 });
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];

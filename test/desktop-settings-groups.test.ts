@@ -30,10 +30,21 @@ describe('per-card settings saves', () => {
     const draft = createDefaultSettings();
     expect(Object.keys(updateForGroups(draft, ['proxy', 'editor'])).sort()).toEqual(['editor', 'proxy']);
     expect(Object.keys(updateForGroups(draft, SETTINGS_GROUP_NAMES)).sort()).toEqual([
-      'agentModels', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
+      'agentModels', 'agentTeam', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
       'directApi', 'editor', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'notifications', 'proxy',
       'shortcuts', 'theme',
     ]);
+  });
+
+  it('saves the agent team on its own card without touching the other cards', () => {
+    const saved = createDefaultSettings();
+    const draft = { ...saved, agentTeam: { ...saved.agentTeam, preset: 'budget' as const } };
+
+    expect(changedGroups(draft, saved)).toEqual(['agentTeam']);
+    expect(updateForGroups(draft, ['agentTeam'])).toEqual({ agentTeam: draft.agentTeam });
+    // Editing a role's key order alone is not a change.
+    const reordered = { ...saved, agentTeam: { roles: saved.agentTeam.roles, preset: saved.agentTeam.preset } };
+    expect(changedGroups(reordered, saved)).toEqual([]);
   });
 
   it('does not read a rebuilt settings refresh as an unsaved change', () => {

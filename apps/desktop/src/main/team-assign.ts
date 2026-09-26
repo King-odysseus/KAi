@@ -1,0 +1,244 @@
+import {
+  TEAM_ROLE_INFO,
+  createDefaultAgentTeam,
+  type AgentCapability,
+  type AgentTeam,
+  type RouteMode,
+  type TeamAssignment,
+  type TeamBilling,
+  type TeamPart,
+  type TeamResolvedAssignee,
+  type TeamRoleConfig,
+  type TeamRoleId,
+} from '@kai/contracts';
+
+/** What KAI can reach right now, gathered by the caller so this module stays pure. */
+export interface AssignmentEnvironment {
+  capabilities: ReadonlyArray<Pick<AgentCapability, 'id' | 'displayName' | 'available' | 'state' | 'supportsRoutes' | 'unavailableReason'>>;
+  /** `local` means a model on this machine (LM Studio): free per request, and fine for routine parts. */
+  api: { available: boolean; displayName: string; unavailableReason?: string; local?: boolean };
+  proxyReady: boolean;
+  /** Set by the caller; only Windows changes a choice (see scoreFor). */
+  platform?: NodeJS.Platform;
+}
+
+export interface Reach {
+  route: RouteMode;
+  /** Set when the agent could only be reached by falling back to the proxy. */
+  note?: string;
+}
+
+/**
+ * How good each agent is at each role, 0-10. Starting points KAI can be corrected on, not benchmarks: the
+ * Balanced preset only uses them to break ties between agents that are all ready.
+ */
+const STRENGTH: Record<TeamRoleId, Record<TeamResolvedAssignee, number>> = {
+  orchestrator: { claude: 9, codex: 8, gemini: 7, qwen: 6, kimi: 6, api: 7 },
+  frontend: { claude: 9, gemini: 7, codex: 7, kimi: 6, qwen: 6, api: 6 },
+  backend: { codex: 9, claude: 8, qwen: 6, kimi: 6, gemini: 6, api: 6 },
+  tests: { codex: 8, claude: 8, qwen: 7, kimi: 6, gemini: 6, api: 6 },
+  securityReviewer: { claude: 9, codex: 8, gemini: 6, kimi: 5, qwen: 5, api: 6 },
+  codeReviewer: { claude: 9, codex: 8, gemini: 7, kimi: 6, qwen: 6, api: 6 },
+  docs: { claude: 8, kimi: 8, qwen: 7, gemini: 7, codex: 6, api: 6 },
+};
+
+/** Agents whose limits are worth saving for the hard parts of a job. */
+const PREMIUM: ReadonlySet<TeamResolvedAssignee> = new Set(['claude', 'codex']);
+/** Order used when two agents score the same, so a plan is the same every time. */
+const TIE_ORDER: readonly TeamResolvedAssignee[] = ['claude', 'codex', 'gemini', 'qwen', 'kimi', 'api'];
+const CANDIDATES: readonly TeamResolvedAssignee[] = TIE_ORDER;
+
+export function billingFor(assignee: TeamResolvedAssignee, route: RouteMode, localApi = false): TeamBilling {
+  if (assignee === 'api') return localApi && route === 'direct' ? 'local' : 'api';
+  return route === 'proxy' ? 'proxy' : 'subscription';
+}
+
+/** Fill any role the saved settings are missing, so older settings files and hand edits never break a plan. */
+export function completeTeam(team: AgentTeam | undefined): AgentTeam {
+  const defaults = createDefaultAgentTeam();
+  return {
+    preset: team?.preset ?? defaults.preset,
+    roles: { ...defaults.roles, ...(team?.roles ?? {}) },
+  };
+}
+
+function roleConfig(team: AgentTeam, role: TeamRoleId): TeamRoleConfig {
+  return completeTeam(team).roles[role] as TeamRoleConfig;
+}
+
+export function agentName(assignee: TeamResolvedAssignee, env: AssignmentEnvironment): string {
+  if (assignee === 'api') return env.api.displayName;
+  return env.capabilities.find((capability) => capability.id === assignee)?.displayName ?? assignee;
+}
+
+/** Whether an agent can run right now, and over which route. Null when it cannot. */
+export function reach(
+  assignee: TeamResolvedAssignee,
+  routeChoice: TeamRoleConfig['route'],
+  env: AssignmentEnvironment,
+): Reach | null {
+  if (assignee === 'api') {
+    if (!env.api.available) return null;
+    if (routeChoice === 'proxy') return env.proxyReady ? { route: 'proxy' } : null;
+    return { route: 'direct' };
+  }
+  const capability = env.capabilities.find((candidate) => candidate.id === assignee);
+  if (!capability) return null;
+  const proxyCapable = capability.supportsRoutes.includes('proxy');
+  if (routeChoice === 'proxy') return proxyCapable && env.proxyReady && capability.state !== 'not_installed' && capability.state !== 'unavailable' ? { route: 'proxy' } : null;
+  if (capability.available) return { route: 'direct' };
+  // The proxy carries its own key, so a signed-out CLI can still work through it.
+  if (routeChoice === 'auto' && capability.state === 'signed_out' && proxyCapable && env.proxyReady) {
+    return { route: 'proxy', note: `${capability.displayName} is signed out, so it runs through your proxy (per-token charges).` };
+  }
+  return null;
+}
+
+function whyUnreachable(assignee: TeamResolvedAssignee, env: AssignmentEnvironment): string {
+  if (assignee === 'api') return env.api.unavailableReason ?? `${env.api.displayName} is not set up`;
+  const capability = env.capabilities.find((candidate) => candidate.id === assignee);
+  return capability?.unavailableReason ?? `${assignee} is not available`;
+}
+
+interface Scored {
+  assignee: TeamResolvedAssignee;
+  reach: Reach;
+  score: number;
+}
+
+function scoreFor(role: TeamRoleId, assignee: TeamResolvedAssignee, team: AgentTeam, env: AssignmentEnvironment): number {
+  const info = TEAM_ROLE_INFO[role];
+  let score = STRENGTH[role][assignee];
+  const premium = PREMIUM.has(assignee);
+  if (team.preset === 'balanced' && premium && info.routine) score -= 2;
+  if (team.preset === 'budget' && premium) score -= info.access === 'read' ? 2 : 4;
+  // Kimi Code only takes its prompt as a command-line argument, which Windows caps far below KAI's prompts.
+  if (assignee === 'kimi' && env.platform === 'win32') score -= 4;
+  // The Budget preset exists to spare paid limits, so a free local model takes routine parts.
+  if (assignee === 'api' && env.api.local && team.preset === 'budget' && info.routine) score += 3;
+  return score;
+}
+
+function pickAuto(
+  role: TeamRoleId,
+  config: TeamRoleConfig,
+  team: AgentTeam,
+  env: AssignmentEnvironment,
+  avoid: ReadonlySet<TeamResolvedAssignee>,
+): Scored | null {
+  let ready: Scored[] = [];
+  for (const assignee of CANDIDATES) {
+    const found = reach(assignee, config.route, env);
+    if (!found) continue;
+    ready.push({ assignee, reach: found, score: scoreFor(role, assignee, team, env) });
+  }
+  // A reviewer must not mark its own homework: skip the agents that wrote code, unless nobody else is ready.
+  const independent = ready.filter((candidate) => !avoid.has(candidate.assignee));
+  if (avoid.size > 0 && independent.length > 0) ready = independent;
+  ready.sort((left, right) => right.score - left.score || TIE_ORDER.indexOf(left.assignee) - TIE_ORDER.indexOf(right.assignee));
+  return ready[0] ?? null;
+}
+
+export interface OrchestratorChoice {
+  assignee: TeamResolvedAssignee;
+  route: RouteMode;
+  reason: string;
+  warnings: string[];
+}
+
+/** Who plans the job. KAI's own API mode by default, falling back to the best ready CLI. */
+export function resolveOrchestrator(teamInput: AgentTeam, env: AssignmentEnvironment): OrchestratorChoice | null {
+  const team = completeTeam(teamInput);
+  const config = roleConfig(team, 'orchestrator');
+  const warnings: string[] = [];
+  if (config.assignee !== 'auto') {
+    const pinned = config.assignee;
+    const found = reach(pinned, config.route, env);
+    if (found) {
+      return { assignee: pinned, route: found.route, reason: `You chose ${agentName(pinned, env)} to plan.`, warnings: found.note ? [found.note] : [] };
+    }
+    warnings.push(`${agentName(pinned, env)} cannot plan right now (${whyUnreachable(pinned, env)}), so KAI chose another agent.`);
+  }
+  // Prefer KAI's own API mode when it is set up: it is quick, and it does not spend a CLI account's limits.
+  const api = reach('api', config.route === 'proxy' ? 'proxy' : 'direct', env);
+  if (api) {
+    return { assignee: 'api', route: api.route, reason: `${env.api.displayName} plans by default.`, warnings };
+  }
+  const picked = pickAuto('orchestrator', { ...config, assignee: 'auto' }, team, { ...env, api: { ...env.api, available: false } }, new Set());
+  if (!picked) return null;
+  return {
+    assignee: picked.assignee,
+    route: picked.reach.route,
+    reason: `${agentName(picked.assignee, env)} is the strongest ready agent for planning.`,
+    warnings: [...warnings, ...(picked.reach.note ? [picked.reach.note] : [])],
+  };
+}
+
+export interface AssignmentResult {
+  assignments: TeamAssignment[];
+  warnings: string[];
+}
+
+/**
+ * Choose an agent for every part. Editing parts are decided first, so a reviewer can be steered away from the
+ * agent that wrote the code it is reviewing.
+ */
+export function assignTeam(parts: readonly TeamPart[], teamInput: AgentTeam, env: AssignmentEnvironment): AssignmentResult {
+  const team = completeTeam(teamInput);
+  const warnings: string[] = [];
+  const byPart = new Map<string, TeamAssignment>();
+  const authors = new Set<TeamResolvedAssignee>();
+  const ordered = [
+    ...parts.filter((part) => TEAM_ROLE_INFO[part.role].access === 'edit'),
+    ...parts.filter((part) => TEAM_ROLE_INFO[part.role].access === 'read'),
+  ];
+
+  for (const part of ordered) {
+    const info = TEAM_ROLE_INFO[part.role];
+    const config = roleConfig(team, part.role);
+    let choice: Scored | null = null;
+    let reason = '';
+
+    if (config.assignee !== 'auto') {
+      const found = reach(config.assignee, config.route, env);
+      if (found) {
+        choice = { assignee: config.assignee, reach: found, score: 0 };
+        reason = `You chose ${agentName(config.assignee, env)} for ${info.label}.`;
+      } else {
+        warnings.push(`${info.label}: ${agentName(config.assignee, env)} is not ready (${whyUnreachable(config.assignee, env)}), so KAI picked another agent.`);
+      }
+    }
+    if (!choice) {
+      choice = pickAuto(part.role, config, team, env, info.access === 'read' ? authors : new Set());
+      if (choice) {
+        const bits = [`Best ready fit for ${info.label} on the ${team.preset} preset.`];
+        if (info.access === 'read') {
+          bits.push(authors.has(choice.assignee) ? 'Warning: it also wrote some of this code.' : 'It did not write the code it reviews.');
+        }
+        reason = bits.join(' ');
+        if (info.access === 'read' && authors.has(choice.assignee)) {
+          warnings.push(`${info.label} "${part.title}" is ${agentName(choice.assignee, env)}, which also wrote some of the code. Pick a different agent if you want an independent review.`);
+        }
+      }
+    }
+    if (!choice) {
+      throw new Error(`No agent is ready for ${info.label} ("${part.title}"). Install and sign in to a CLI agent, or set up Direct API in Settings.`);
+    }
+    if (choice.reach.note) warnings.push(`${info.label}: ${choice.reach.note}`);
+    if (choice.assignee === 'kimi' && env.platform === 'win32') {
+      warnings.push(`${info.label} "${part.title}" is on Kimi Code, which Windows limits to about 30,000 characters of prompt. A large part may fail; pick another agent if it does.`);
+    }
+    if (info.access === 'edit') authors.add(choice.assignee);
+    byPart.set(part.id, {
+      partId: part.id,
+      assignee: choice.assignee,
+      route: choice.reach.route,
+      ...(config.model ? { model: config.model } : {}),
+      reason,
+      billing: billingFor(choice.assignee, choice.reach.route, env.api.local),
+    });
+  }
+
+  // Every part was assigned above, so nothing is dropped here; flatMap keeps the order without an assertion.
+  return { assignments: parts.flatMap((part) => byPart.get(part.id) ?? []), warnings };
+}

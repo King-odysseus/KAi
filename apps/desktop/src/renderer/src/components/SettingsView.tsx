@@ -1,9 +1,10 @@
 import { reconcileSettingsDraft } from './settings-draft';
-import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
+import { TeamSettings } from './TeamSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
-import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
 import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
@@ -21,6 +22,7 @@ interface SettingsFeedback { kind: FeedbackKind; message: string }
 /** What each card is called in the save bar. */
 const GROUP_LABELS: Record<SettingsGroup, string> = {
   agentDefaults: 'Agent defaults',
+  agentTeam: 'Agent team',
   editor: 'Code editor',
   shortcuts: 'Keyboard shortcuts',
   learningTutor: 'Learning Tutor API',
@@ -92,6 +94,8 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   };
   const updateDirectProvider = (provider: AppSettings['directApi']['provider']): void => {
     const preset = directProviderPreset(provider);
+    // A local server has nothing to configure but a model, so list what it has right away.
+    if (isLocalProvider(provider)) void refreshProviderModels('direct', { provider, baseUrl: preset.defaultBaseUrl, credentialId: preset.credentialId });
     setCredentialId(preset.credentialId);
     setProviderModels((current) => ({ ...current, direct: null }));
     setModelFeedback((current) => ({ ...current, direct: null }));
@@ -108,6 +112,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
   };
   const updateLearningProvider = (provider: AppSettings['learningTutor']['provider']): void => {
     const preset = directProviderPreset(provider);
+    if (isLocalProvider(provider)) void refreshProviderModels('learning', { provider, baseUrl: preset.defaultBaseUrl, credentialId: preset.credentialId });
     setProviderModels((current) => ({ ...current, learning: null }));
     setModelFeedback((current) => ({ ...current, learning: null }));
     setDraft((current) => ({
@@ -149,8 +154,11 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     }
   }
 
-  async function refreshProviderModels(scope: ProviderScope): Promise<void> {
-    const configuration = scope === 'direct' ? draft.directApi : draft.learningTutor;
+  async function refreshProviderModels(
+    scope: ProviderScope,
+    override?: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string },
+  ): Promise<void> {
+    const configuration = override ?? (scope === 'direct' ? draft.directApi : draft.learningTutor);
     setRefreshingModels(scope);
     setModelFeedback((current) => ({ ...current, [scope]: { kind: 'pending', message: 'Refreshing provider models...' } }));
     try {
@@ -166,6 +174,13 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           ? { kind: 'success', message: `Loaded ${catalog.models.length} live models from ${directProviderPreset(configuration.provider).displayName}.` }
           : { kind: 'error', message: catalog.error ?? 'Live model refresh was unavailable; using the bundled catalog.' },
       }));
+      // With nothing chosen yet, start from a coding model the server already has (never an embedding model).
+      if (catalog.source === 'live' && isLocalProvider(configuration.provider)) {
+        const key = scope === 'direct' ? 'directApi' : 'learningTutor';
+        setDraft((current) => (current[key].provider === configuration.provider && !current[key].model.trim()
+          ? { ...current, [key]: { ...current[key], model: pickLocalModel(catalog.models) } }
+          : current));
+      }
     } catch (caught) {
       setModelFeedback((current) => ({ ...current, [scope]: { kind: 'error', message: messageOf(caught) } }));
     } finally {
@@ -384,6 +399,12 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           {cardSave('agentDefaults', 'Save agent defaults', ['agentDefaults'])}
         </section>
 
+        <section className="settings-section" aria-label="Agent team">
+          <div className="section-title"><Users size={17} /><span>Agent team</span></div>
+          <TeamSettings team={draft.agentTeam} onChange={(agentTeam) => setDraft({ ...draft, agentTeam })} />
+          {cardSave('agentTeam', 'Save agent team', ['agentTeam'])}
+        </section>
+
         <section className="settings-section">
           <div className="section-title"><Code2 size={17} /><span>Code editor</span></div>
           <p className="settings-note">Autosave writes after a short pause when the file has not changed elsewhere. Conflicting external edits are never overwritten.</p>
@@ -427,7 +448,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           icon={<GraduationCap size={17} />}
           detail="Dedicated provider connection for Learn, Guided, Pair, and Copilot. It stays independent from Compose and Direct API mode."
           toggleLabel="Enable Learning Tutor API"
-          toggleHint="Uses its own provider and OS-vault credential"
+          toggleHint={isLocalProvider(draft.learningTutor.provider) ? 'Uses the LM Studio server on this computer; no key needed' : 'Uses its own provider and OS-vault credential'}
           enabled={draft.learningTutor.enabled}
           provider={draft.learningTutor.provider}
           model={draft.learningTutor.model}
@@ -460,7 +481,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
           icon={<Cloud size={17} />}
           detail="Provider connection used by Compose when execution is set to API. Changing it does not change Learning Tutor."
           toggleLabel="Enable direct API mode"
-          toggleHint="Uses a provider key from the OS vault"
+          toggleHint={isLocalProvider(draft.directApi.provider) ? 'Uses the LM Studio server on this computer; no key needed' : 'Uses a provider key from the OS vault'}
           enabled={draft.directApi.enabled}
           provider={draft.directApi.provider}
           model={draft.directApi.model}
@@ -793,6 +814,7 @@ function ProviderConnectionSection({
   onClearKey: () => void;
 }): ReactNode {
   const preset = directProviderPreset(provider);
+  const local = isLocalProvider(provider);
   return (
     <section className="settings-section">
       <div className="section-title">{icon}<span>{title}</span></div>
@@ -812,13 +834,16 @@ function ProviderConnectionSection({
         </button>
         <span className="settings-note">
           {catalog?.source === 'live'
-            ? `${catalog.models.length} live provider models. Refreshed ${formatRefreshTime(catalog.fetchedAt)}.`
-            : 'Bundled model catalog. Refresh uses the stored credential without exposing it.'}
+            ? `${catalog.models.length} ${local ? 'models on this computer' : 'live provider models'}. Refreshed ${formatRefreshTime(catalog.fetchedAt)}.`
+            : local
+              ? 'Refresh lists the models you have downloaded in LM Studio.'
+              : 'Bundled model catalog. Refresh uses the stored credential without exposing it.'}
         </span>
       </div>
       <FeedbackMessage feedback={modelFeedback} />
+      {local && <p className="settings-note local-provider-note">Runs on your computer, so there is no key and nothing is billed. In LM Studio open the Developer tab, start the local server and load a model (for example Qwen2.5 Coder), then refresh here. Only add a key below if you switched on API-token protection in LM Studio.</p>}
       <div className="credential-form">
-        <TextField label="API key" value={credentialValue} type="password" onChange={onCredentialValueChange} />
+        <TextField label={local ? 'API key (optional)' : 'API key'} value={credentialValue} type="password" onChange={onCredentialValueChange} />
         <div className="button-row align-start">
           <button type="button" className="secondary-button" disabled={!credentialValue.trim() || !vaultAvailable || busy} onClick={onSaveKey}>
             <KeyRound size={15} />
@@ -828,7 +853,7 @@ function ProviderConnectionSection({
             <Trash2 size={15} />
             <span>Remove key</span>
           </button>
-          <span className="settings-note">{credentialStored ? 'Credential stored in the OS vault.' : 'No credential stored for this ID.'}</span>
+          <span className="settings-note">{credentialStored ? 'Credential stored in the OS vault.' : local ? 'No key stored, which is fine for a local server.' : 'No credential stored for this ID.'}</span>
         </div>
       </div>
       <FeedbackMessage feedback={credentialFeedback} />

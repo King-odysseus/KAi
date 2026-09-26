@@ -337,6 +337,23 @@ export class DesktopAgentRuntime {
 
     const proxyBaseUrl = request.route === 'proxy' && request.agent === 'qwen' ? environment.OPENAI_BASE_URL : undefined;
     const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model, proxyBaseUrl);
+    // Its prompt is an argument. Behind a Windows .cmd shim only the first line would arrive, and Windows caps a
+    // command line at a few thousand characters, so say so plainly instead of failing with "command line too long".
+    if (request.agent === 'kimi' && process.platform === 'win32') {
+      const native = resolveWindowsExecutable(this.commandFor('kimi'), environment);
+      const promptIndex = args.indexOf('-p') + 1;
+      const kimiPrompt = args[promptIndex];
+      if (!native && promptIndex > 0 && kimiPrompt) args[promptIndex] = singleLinePrompt(kimiPrompt);
+      const limit = native ? KIMI_WINDOWS_NATIVE_LIMIT : KIMI_WINDOWS_SHIM_LIMIT;
+      const needed = args.reduce((total, argument) => total + argument.length + 3, 0);
+      if (needed > limit) {
+        return this.immediateFailure(
+          request,
+          `Kimi Code takes its prompt as a command-line argument, and Windows allows about ${limit.toLocaleString('en-US')} characters (this run needs ${needed.toLocaleString('en-US')}). `
+          + (native ? 'Use another agent for this part.' : 'Install the native Kimi Code with its PowerShell installer to raise the limit to about 30,000, or use another agent for this part.'),
+        );
+      }
+    }
     const controller = new AbortController();
     const active: ActiveAgentRun = { controller, child: null, paused: false };
     this.activeRuns.set(request.conversationId, active);
@@ -518,6 +535,46 @@ export class DesktopAgentRuntime {
   }
 }
 
+/**
+ * Qwen Code and Gemini CLI take the prompt on stdin and append `-p` to it ("Appended to input on stdin"). A
+ * multi-line prompt cannot travel as a Windows command-line argument: cmd.exe ends the command at the first
+ * newline, so the agent would receive only the first line.
+ */
+const STDIN_PROMPT_NOTE = 'Carry out the request above.';
+
+/** What a whole command line may hold on Windows: about 32,000 for a native program, about 8,000 behind cmd.exe. */
+export const KIMI_WINDOWS_NATIVE_LIMIT = 30_000;
+export const KIMI_WINDOWS_SHIM_LIMIT = 7_500;
+
+/** Newlines flattened to a visible marker, for a CLI that can only receive its prompt as one command-line argument. */
+export function singleLinePrompt(prompt: string): string {
+  return prompt.replace(/[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*/g, ' \u23CE ');
+}
+
+/**
+ * The real executable behind a command name on Windows, when it is a native .exe or .com. Those can be started
+ * directly, so arguments reach them exactly; npm's .cmd shims cannot and still need cmd.exe.
+ */
+export function resolveWindowsExecutable(
+  command: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform !== 'win32') return null;
+  const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path');
+  const directories = /[\\/]/.test(command) ? [''] : (pathKey ? environment[pathKey] ?? '' : '').split(';').filter(Boolean);
+  const extensions = path.extname(command) ? [''] : ['.com', '.exe', '.bat', '.cmd'];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = directory ? path.join(directory, `${command}${extension}`) : `${command}${extension}`;
+      if (!existsSync(candidate)) continue;
+      // cmd.exe would run whichever of these it finds first, so a .cmd shim found first means no direct start.
+      return /\.(?:exe|com)$/i.test(candidate) ? candidate : null;
+    }
+  }
+  return null;
+}
+
 export function buildAgentArgs(
   request: Pick<AgentRunRequest, 'agent' | 'prompt' | 'autonomy'>,
   cwd: string,
@@ -556,7 +613,7 @@ export function buildAgentArgs(
     const args = ['--output-format', 'stream-json', '--approval-mode', qwenApproval(request.autonomy), ...modelArgs];
     if (proxyBaseUrl) args.push('--auth-type', 'openai', '--openai-base-url', proxyBaseUrl);
     if (resumeSessionId) args.push('--resume', resumeSessionId);
-    args.push(request.prompt);
+    args.push('-p', STDIN_PROMPT_NOTE);
     return args;
   }
 
@@ -568,7 +625,7 @@ export function buildAgentArgs(
 
   const args = [
     '-p',
-    request.prompt,
+    STDIN_PROMPT_NOTE,
     '--output-format',
     'stream-json',
     '--approval-mode',
@@ -581,7 +638,8 @@ export function buildAgentArgs(
 }
 
 function inputFor(request: Pick<AgentRunRequest, 'agent' | 'prompt'>): string | undefined {
-  return request.agent === 'codex' || request.agent === 'claude' ? request.prompt : undefined;
+  // Kimi Code is the only CLI here that still takes its prompt as an argument (see run()).
+  return request.agent === 'kimi' ? undefined : request.prompt;
 }
 
 function codexSandbox(
@@ -856,8 +914,9 @@ async function* streamProcess(
   environment: NodeJS.ProcessEnv = process.env,
   onSpawn?: (child: ChildProcess) => void,
 ): AsyncIterable<ProcessChunk | ProcessResult> {
-  const useShell = process.platform === 'win32';
-  const child = spawn(useShell ? quoteWinArg(command) : command, useShell ? args.map(quoteWinArg) : args, {
+  const executable = resolveWindowsExecutable(command, environment);
+  const useShell = process.platform === 'win32' && !executable;
+  const child = spawn(executable ?? (useShell ? quoteWinArg(command) : command), useShell ? args.map(quoteWinArg) : args, {
     cwd,
     shell: useShell,
     windowsHide: true,

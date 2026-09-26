@@ -7,6 +7,7 @@ import {
   routeModeSchema,
   timestampSchema,
 } from './primitives';
+import { teamWorkerRoleIdSchema } from './team';
 
 export const goalInputSchema = z
   .object({
@@ -68,6 +69,26 @@ export const workflowLoopProgressSchema = z
   })
   .strict();
 
+// Per-step settings a team plan uses. A plain workflow leaves them out, so every step follows the workflow's own.
+const workflowStepOverrides = {
+  role: teamWorkerRoleIdSchema.optional(),
+  execution: executionModeSchema.optional(),
+  route: routeModeSchema.optional(),
+  autonomy: autonomyModeSchema.optional(),
+  model: z.string().trim().max(240).optional(),
+  // A gated step can stop the workflow and ask the user before the next step starts.
+  gate: z.literal('security').optional(),
+};
+
+export const workflowStepVerdictSchema = z
+  .object({
+    result: z.enum(['pass', 'block']),
+    reason: z.string().max(1_000).default(''),
+    // Set once the user chose "Continue anyway", so the workflow does not ask again.
+    acknowledged: z.boolean().default(false),
+  })
+  .strict();
+
 export const workflowStepSchema = z
   .object({
     id: z.string().min(1),
@@ -75,6 +96,8 @@ export const workflowStepSchema = z
     prompt: z.string().trim().min(1).max(20_000),
     label: z.string().max(200).optional(),
     dependsOn: z.array(z.string().min(1)).optional(),
+    ...workflowStepOverrides,
+    verdict: workflowStepVerdictSchema.optional(),
     status: workflowStepStatusSchema,
     error: z.string().optional(),
     output: z.string().optional(),
@@ -144,6 +167,8 @@ export const workflowStartStepSchema = z
     agent: agentIdSchema,
     prompt: z.string().trim().min(1).max(20_000),
     label: z.string().max(200).optional(),
+    dependsOn: z.array(z.string().min(1).max(160)).max(12).optional(),
+    ...workflowStepOverrides,
   })
   .strict();
 
@@ -306,6 +331,7 @@ export type Workflow = z.infer<typeof workflowSchema>;
 export type WorkflowLoopSettings = z.infer<typeof workflowLoopSettingsSchema>;
 export type WorkflowLoopProgress = z.infer<typeof workflowLoopProgressSchema>;
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
+export type WorkflowStepVerdict = z.infer<typeof workflowStepVerdictSchema>;
 export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 export type WorkflowTemplateSaveInput = z.input<typeof workflowTemplateSaveInputSchema>;

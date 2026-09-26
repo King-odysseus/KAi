@@ -9,6 +9,7 @@ import { _electron as electron } from '@playwright/test';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { assertControlsDoNotWrap } from './layout-checks.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke');
@@ -143,6 +144,7 @@ try {
 
   const desktopSize = await resizeWindow(electronApp, 1440, 920);
   assertSize(desktopSize, 1440, 920);
+  await assertControlsDoNotWrap(page, 'workspace-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'workspace-1440x920.png') });
   if (usesAgentProject) await verifyCodeLearningWorkspace(electronApp, page);
 
@@ -188,6 +190,7 @@ try {
   }
   await assertNoErrorBanner(page);
   await assertPageContentFillsWidth(page, '.settings-grid');
+  await assertControlsDoNotWrap(page, 'settings-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
   await page.getByRole('button', { name: 'Workflows' }).click();
@@ -196,6 +199,7 @@ try {
   await page.getByLabel('Step 1 prompt').waitFor();
   await assertNoHorizontalOverflow(page);
   await assertPageContentFillsWidth(page, '.workflow-builder');
+  await assertControlsDoNotWrap(page, 'workflows-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'workflows-1440x920.png') });
 
   await page.getByRole('button', { name: 'Add step' }).click();
@@ -207,6 +211,7 @@ try {
   await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
   await assertPageContentFillsWidth(page, '.history-search');
   await assertPageContentFillsWidth(page, '.history-table');
+  await assertControlsDoNotWrap(page, 'history-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'history-1440x920.png') });
 
   const settingsMinimumSize = await resizeWindow(electronApp, 960, 640);
@@ -215,20 +220,25 @@ try {
   await page.getByRole('heading', { name: 'Workflows', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
   await assertPageContentFillsWidth(page, '.workflow-builder');
+  await assertControlsDoNotWrap(page, 'workflows-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'workflows-960x640.png') });
 
   await page.getByRole('button', { name: 'History' }).click();
   await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
   await assertPageContentFillsWidth(page, '.history-search');
   await assertPageContentFillsWidth(page, '.history-table');
+  await assertControlsDoNotWrap(page, 'history-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'history-960x640.png') });
 
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
   await assertPageContentFillsWidth(page, '.settings-grid');
+  await assertControlsDoNotWrap(page, 'settings-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-960x640.png') });
+  await verifyControlsOnEveryPage(page, '960x640');
   await resizeWindow(electronApp, 1440, 920);
+  await verifyControlsOnEveryPage(page, '1440x920');
 
   await page.getByRole('button', { name: 'Workspace' }).click();
   await page.getByRole('button', { name: 'Show context panel' }).waitFor();
@@ -241,6 +251,7 @@ try {
 
   const minimumSize = await resizeWindow(electronApp, 960, 640);
   assertSize(minimumSize, 960, 640);
+  await assertControlsDoNotWrap(page, 'workspace-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'workspace-960x640.png') });
 
   if (rendererErrors.length > 0) {
@@ -317,6 +328,11 @@ async function verifyAgentCapabilities(page) {
 }
 
 async function verifyWorkspaceControls(page) {
+  // The agent, model, route and autonomy menus live behind the composer's Advanced toggle.
+  if (await page.getByRole('button', { name: 'Agent', exact: true }).count() === 0) {
+    await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+    await page.getByRole('button', { name: 'Agent', exact: true }).waitFor();
+  }
   const agents = [
     ['claude', 'Claude'],
     ['codex', 'Codex'],
@@ -472,6 +488,17 @@ async function verifyCommandPalette(page) {
   await page.getByLabel('Task prompt').waitFor();
 }
 
+/** Opens every page in the navigation rail and checks that none of its controls wrap their text. */
+async function verifyControlsOnEveryPage(page, size) {
+  const labels = await page.locator('.nav-rail button[aria-label]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+  for (const label of labels) {
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await page.waitForTimeout(400);
+    await assertControlsDoNotWrap(page, `${label} at ${size}`);
+  }
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+}
+
 async function selectMenuOption(page, triggerLabel, optionName) {
   await openSelectMenu(page, triggerLabel);
   const listbox = page.getByRole('listbox', { name: triggerLabel, exact: true });
@@ -501,10 +528,24 @@ async function verifyMenuContrast(page, label) {
 
 async function openSelectMenu(page, label) {
   const trigger = page.getByRole('button', { name: label, exact: true });
-  await page.waitForFunction((name) => {
-    const button = Array.from(document.querySelectorAll('button')).find((element) => element.getAttribute('aria-label') === name);
-    return button instanceof HTMLButtonElement && !button.disabled;
-  }, label);
+  try {
+    await page.waitForFunction((name) => {
+      const button = Array.from(document.querySelectorAll('button')).find((element) => element.getAttribute('aria-label') === name);
+      return button instanceof HTMLButtonElement && !button.disabled;
+    }, label);
+  } catch (error) {
+    const state = await page.evaluate((name) => {
+      const buttons = Array.from(document.querySelectorAll('button')).filter((element) => element.getAttribute('aria-label') === name);
+      return {
+        matching: buttons.map((button) => ({ disabled: button.disabled, text: button.textContent })),
+        activity: document.querySelector('.thinking, .status-word')?.textContent ?? null,
+        view: document.querySelector('h1')?.textContent ?? null,
+        notice: document.querySelector('.agent-setup-banner, .rules-error, .error-banner')?.textContent?.slice(0, 200) ?? null,
+      };
+    }, label).catch(() => null);
+    await page.screenshot({ path: path.join(outputDirectory, `menu-${label.toLowerCase()}-unavailable.png`) }).catch(() => undefined);
+    throw new Error(`The "${label}" menu never became available: ${JSON.stringify(state)}`, { cause: error });
+  }
   const listbox = page.getByRole('listbox', { name: label, exact: true });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await trigger.click({ force: true });

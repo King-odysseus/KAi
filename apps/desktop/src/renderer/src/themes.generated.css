@@ -621,6 +621,9 @@ html[data-theme="purple"]:root .history-row {
 html[data-theme="purple"]:root .section-title {
   color: #dfdeed;
 }
+html[data-theme="purple"]:root .team-access.read {
+  border-color: rgba(246, 178, 95, 0.4);
+}
 html[data-theme="purple"]:root .field input, html[data-theme="purple"]:root .field textarea, html[data-theme="purple"]:root .field select {
   border: 1px solid #413f63;
   background: #16152d;
@@ -1537,6 +1540,9 @@ html[data-theme="navy"]:root .history-row {
 }
 html[data-theme="navy"]:root .section-title {
   color: #d7e0f3;
+}
+html[data-theme="navy"]:root .team-access.read {
+  border-color: rgba(246, 174, 95, 0.4);
 }
 html[data-theme="navy"]:root .field input, html[data-theme="navy"]:root .field textarea, html[data-theme="navy"]:root .field select {
   border: 1px solid #314471;

@@ -37,6 +37,9 @@ export const agentRunRequestSchema = z
     contextChips: z.array(contextChipSchema).max(50).optional(),
     // Model for this run only. Without it the run uses the model from Settings (or the CLI's own default).
     model: cliModelNameSchema.optional(),
+    // Start a new agent session even if the conversation could resume one. Team parts use this so a reviewer
+    // never inherits the session of the agent that wrote the code.
+    freshSession: z.boolean().optional(),
   })
   .strict();
 

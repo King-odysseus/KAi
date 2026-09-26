@@ -19,10 +19,11 @@ import {
   Save,
   Search,
   Settings,
+  ShieldAlert,
   Square,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   AgentCapability,
   AgentId,
@@ -39,6 +40,7 @@ import type {
 } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
+import { TeamPanel } from './TeamPanel';
 
 export function ProjectsView({
   projects,
@@ -199,6 +201,8 @@ interface WorkflowDraftStep {
   status: WorkflowStep['status'];
   output?: string;
   error?: string;
+  role?: WorkflowStep['role'];
+  verdict?: WorkflowStep['verdict'];
 }
 
 type WorkflowStyle = 'fast' | 'safe' | 'security' | 'learning';
@@ -240,7 +244,17 @@ export function WorkflowsView({
   const [error, setError] = useState<string | null>(null);
   const activeRun = runs.find((run) => run.workflow.id === activeRunId) ?? null;
   const running = activeRun?.workflow.status === 'running';
-  const resumable = Boolean(activeRun && activeRun.workflow.status !== 'completed' && activeRun.workflow.status !== 'running'
+  // A blocked security review waits for the user's decision instead of offering a plain Resume.
+  const blockedStep = activeRun?.workflow.status === 'paused'
+    ? activeRun.workflow.steps.find((step) => step.verdict?.result === 'block' && !step.verdict.acknowledged)
+    : undefined;
+  const decisionRef = useRef<HTMLElement | null>(null);
+  const blockedStepId = blockedStep?.id;
+  // The decision sits at the top of the page; bring it into view so a job that stopped is never missed.
+  useEffect(() => {
+    if (blockedStepId) decisionRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [blockedStepId]);
+  const resumable = !blockedStep && Boolean(activeRun && activeRun.workflow.status !== 'completed' && activeRun.workflow.status !== 'running'
     && (activeRun.workflow.steps.some((step) => step.status !== 'completed')
       || (activeRun.workflow.loop.enabled && (activeRun.workflow.loopProgress?.round ?? 0) < activeRun.workflow.loop.maxRounds)));
 
@@ -287,6 +301,8 @@ export function WorkflowsView({
       status: step.status,
       ...(step.output ? { output: step.output } : {}),
       ...(step.error ? { error: step.error } : {}),
+      ...(step.role ? { role: step.role } : {}),
+      ...(step.verdict ? { verdict: step.verdict } : {}),
     })));
   }, [activeRun]);
 
@@ -434,6 +450,32 @@ export function WorkflowsView({
         <button type="button" className="primary-button" disabled={busy || running || !activeProject || !steps.some((step) => step.prompt.trim())} onClick={() => void startWorkflow()}><Play size={15} /><span>{running ? 'Running' : 'Run workflow'}</span></button>
       </PageHeader>
       {error && <div className="rules-error"><span>{error}</span></div>}
+      {blockedStep?.verdict && (
+        <section className="team-decision" role="alert" aria-label="Security review decision" ref={decisionRef}>
+          <ShieldAlert size={20} />
+          <div className="team-decision-copy">
+            <strong>The security review stopped this job</strong>
+            <span>{blockedStep.verdict.reason || 'The reviewer found a serious problem.'}</span>
+            <small>{blockedStep.label ?? 'Security review'} was done by {blockedStep.agent}. Nothing after it has run.</small>
+            {blockedStep.output && <details><summary>Read the full review</summary><pre>{blockedStep.output}</pre></details>}
+          </div>
+          <div className="team-decision-actions">
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => void stopWorkflow()}><Square size={13} /><span>Stop the job</span></button>
+            <button type="button" className="primary-button" disabled={busy} onClick={() => void resumeWorkflow()}><Play size={14} /><span>Continue anyway</span></button>
+          </div>
+        </section>
+      )}
+      <TeamPanel
+        activeProject={activeProject}
+        agentCapabilities={agentCapabilities}
+        settings={settings}
+        busy={busy}
+        running={running}
+        onStarted={(run) => {
+          reconcileRun(run);
+          setActiveRunId(run.workflow.id);
+        }}
+      />
       {runs.length > 0 && (
         <div className="workflow-run-list" aria-label="Workflow runs">
           {runs.slice(0, 8).map((run) => (
@@ -529,6 +571,7 @@ export function WorkflowsView({
               </label>
               <div className="workflow-step-state">
                 <span className={`workflow-status ${step.status}`}>{step.status}</span>
+                {step.verdict && <small className={`workflow-verdict ${step.verdict.result}`}>{step.verdict.result === 'pass' ? 'Security: passed' : step.verdict.acknowledged ? 'Security: blocked, continued by you' : 'Security: blocked'}</small>}
                 {step.error && <small className="workflow-step-error" title={step.error}>{step.error}</small>}
                 {step.output && <small className="workflow-step-output" title={step.output}>{step.output.slice(0, 180)}</small>}
               </div>

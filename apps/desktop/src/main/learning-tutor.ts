@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { jsonrepair } from 'jsonrepair';
 import {
   directProviderPreset,
+  isLocalProvider,
+  LOCAL_PROVIDER_PLACEHOLDER_KEY,
   learningTutorResponseSchema,
   teachingDraftSchema,
   type AppSettings,
@@ -301,9 +303,17 @@ export class DesktopLearningTutor {
     if (!learningTutor.enabled) throw new Error('Enable the Learning Tutor API in Settings before using Learning Mode.');
     const preset = directProviderPreset(learningTutor.provider);
     if (!learningTutor.model.trim()) throw new Error('Set a Learning Tutor model in Settings before using Learning Mode.');
-    if (!this.credentials.isAvailable()) throw new Error('OS credential encryption is unavailable; Learning Mode will not use a plaintext API key.');
-    const apiKey = await this.credentials.get(learningTutor.credentialId);
-    if (!apiKey) throw new Error(`Save the ${learningTutor.credentialId} credential in Learning Tutor settings before using Learning Mode.`);
+    const local = isLocalProvider(learningTutor.provider);
+    if (!local && !this.credentials.isAvailable()) throw new Error('OS credential encryption is unavailable; Learning Mode will not use a plaintext API key.');
+    // A local server (LM Studio) needs no key; use one only if the user stored it.
+    let storedKey: string | undefined;
+    try {
+      storedKey = await this.credentials.get(learningTutor.credentialId);
+    } catch (error) {
+      if (!local) throw error;
+    }
+    if (!storedKey && !local) throw new Error(`Save the ${learningTutor.credentialId} credential in Learning Tutor settings before using Learning Mode.`);
+    const apiKey = storedKey ?? LOCAL_PROVIDER_PLACEHOLDER_KEY;
     return {
       baseUrl: learningTutor.baseUrl,
       model: learningTutor.model,

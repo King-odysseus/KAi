@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, directProviderPreset, migrateDeepSeekModel } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, directProviderPreset, isLocalProvider, migrateDeepSeekModel } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
@@ -35,6 +35,7 @@ import { TeachingLibraryStore } from './teaching-library';
 import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
+import { DesktopTeamPlanner } from './team-planner';
 import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
 import { PreviewRuntime } from './preview-runtime';
@@ -236,6 +237,7 @@ async function startApplication(): Promise<void> {
   shell.apply((await settings.load()).notifications);
   const editorSessions = new EditorSessionManager();
   let workflowRunner!: DesktopWorkflowRunner;
+  let teamPlanner!: DesktopTeamPlanner;
 
   ipcContext = {
     appName: 'KAI',
@@ -272,6 +274,7 @@ async function startApplication(): Promise<void> {
     learningUsage,
     learningBudget,
     workflows: workflowRunner,
+    teamPlanner,
     runControl,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
@@ -294,30 +297,31 @@ async function startApplication(): Promise<void> {
     getMainWindow: () => desktopWindows.focused()?.window ?? null,
     createWindow: () => createMainWindow(null),
   };
+  async function createBlankConversation(projectId: string, firstPrompt: string) {
+    const now = new Date().toISOString();
+    const conversation = {
+      schemaVersion: 1 as const,
+      id: `conv_${crypto.randomUUID()}`,
+      projectId,
+      title: firstPrompt.trim().slice(0, 64) || 'Workflow',
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+      unread: false,
+      activeAgent: null,
+      route: null,
+      autonomy: null,
+      turns: [],
+      events: [],
+    };
+    await conversations.save(conversation);
+    return conversation;
+  }
   workflowRunner = new DesktopWorkflowRunner({
     listConversations: () => conversations.list(),
     getConversation: (id) => conversations.get(id),
     saveConversation: (conversation) => conversations.save(conversation),
-    createConversation: async (projectId, firstPrompt) => {
-      const now = new Date().toISOString();
-      const conversation = {
-        schemaVersion: 1 as const,
-        id: `conv_${crypto.randomUUID()}`,
-        projectId,
-        title: firstPrompt.trim().slice(0, 64) || 'Workflow',
-        createdAt: now,
-        updatedAt: now,
-        archived: false,
-        unread: false,
-        activeAgent: null,
-        route: null,
-        autonomy: null,
-        turns: [],
-        events: [],
-      };
-      await conversations.save(conversation);
-      return conversation;
-    },
+    createConversation: createBlankConversation,
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
     runCheck: async (projectId, command, signal) => {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
@@ -332,6 +336,24 @@ async function startApplication(): Promise<void> {
     },
   });
   ipcContext.workflows = workflowRunner;
+  teamPlanner = new DesktopTeamPlanner({
+    settings: () => settings.load(),
+    agentCapabilities: () => agents.capabilities(),
+    directApi: async () => {
+      const capability = await directApi.capability();
+      return {
+        available: capability.available,
+        displayName: capability.displayName,
+        local: isLocalProvider(capability.provider),
+        ...(capability.unavailableReason ? { unavailableReason: capability.unavailableReason } : {}),
+      };
+    },
+    proxyReady: async () => (await serviceController!.status()).some((service) => service.kind === 'universalProxy' && service.status === 'ready'),
+    createConversation: createBlankConversation,
+    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    startWorkflow: (input, ownerWindowId) => workflowRunner.start(input, ownerWindowId),
+  });
+  ipcContext.teamPlanner = teamPlanner;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);
@@ -381,7 +403,8 @@ async function repairProviderSettings(
   let directApi = current.directApi;
   let changed = false;
 
-  if (!model || deprecatedDeepSeekModel) {
+  // A local provider has no key by design, so an empty model there is not a broken setup to repair.
+  if ((!model || deprecatedDeepSeekModel) && !isLocalProvider(current.directApi.provider)) {
     if (storedCredentials.has(current.directApi.credentialId)) {
       directApi = {
         ...current.directApi,

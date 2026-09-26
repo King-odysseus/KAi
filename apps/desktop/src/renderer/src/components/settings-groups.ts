@@ -6,6 +6,7 @@ import type { AppSettings, SettingsUpdate } from '@kai/contracts';
  * accident. The whole set is still saveable at once from the bar at the top of the page.
  */
 export const SETTINGS_GROUPS = {
+  agentTeam: ['agentTeam'],
   agentDefaults: ['defaultAgent', 'defaultRoute', 'defaultAutonomy', 'theme', 'logRetentionEntries', 'diagnosticsEnabled', 'notifications', 'agentModels'],
   editor: ['editor'],
   shortcuts: ['shortcuts'],

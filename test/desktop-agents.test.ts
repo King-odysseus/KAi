@@ -10,6 +10,8 @@ import {
   DesktopAgentRuntime,
   isSignInError,
   kimiSignedIn,
+  resolveWindowsExecutable,
+  singleLinePrompt,
 } from '../apps/desktop/src/main/agent-runtime';
 
 const temporaryDirectories: string[] = [];
@@ -341,11 +343,12 @@ describe('desktop agent runtime', () => {
       'stream-json',
       '--approval-mode',
       'plan',
-      'Review this repository',
+      '-p',
+      'Carry out the request above.',
     ]);
     expect(buildAgentArgs({ ...base, agent: 'gemini' }, 'C:/repo')).toEqual([
       '-p',
-      'Review this repository',
+      'Carry out the request above.',
       '--output-format',
       'stream-json',
       '--approval-mode',
@@ -372,6 +375,65 @@ describe('desktop agent runtime', () => {
     ]);
   });
 
+  it.each(['qwen', 'gemini'] as const)('sends a multi-line %s prompt on stdin, untouched, and keeps it out of the command line', async (agent) => {
+    const root = await temporaryDirectory();
+    const resultFile = path.join(root, 'invocation.json');
+    const command = await fakeAgent(root, { resultFile, lines: [{ type: 'result', result: 'ok' }] });
+    const runtime = new DesktopAgentRuntime({ [agent]: command });
+    const prompt = 'Goal: fix "auth"\n\n- item & more\n- 100% | done\n```js\nconst x = 1;\n```';
+
+    const result = await runtime.run({ ...runRequest(), agent, prompt }, root);
+
+    expect(result.status).toBe('completed');
+    const invocation = JSON.parse(await fs.readFile(resultFile, 'utf8')) as { args: string[]; stdin: string };
+    expect(invocation.stdin).toBe(prompt);
+    expect(invocation.args.join(' ')).not.toContain('Goal');
+    expect(invocation.args).toContain('Carry out the request above.');
+  });
+
+  it('flattens newlines for a prompt that must travel as one argument, and leaves other text alone', () => {
+    expect(singleLinePrompt('One\nTwo\r\nThree')).toBe('One \u23CE Two \u23CE Three');
+    expect(singleLinePrompt('A\n\n\nB  \n  C')).toBe('A \u23CE B \u23CE C');
+    expect(singleLinePrompt('no newline, "quotes" & more')).toBe('no newline, "quotes" & more');
+    expect(singleLinePrompt('')).toBe('');
+  });
+
+  it.runIf(process.platform === 'win32')('runs a short Kimi prompt behind a .cmd shim as one line, and refuses one that cannot fit a Windows command line', async () => {
+    const root = await temporaryDirectory();
+    const resultFile = path.join(root, 'kimi-invocation.json');
+    const command = await fakeAgent(root, { resultFile, lines: [{ role: 'assistant', content: 'kimi ok' }] });
+    const runtime = new DesktopAgentRuntime({ kimi: command });
+
+    const short = await withKimiHome(root, () => runtime.run({ ...runRequest(), agent: 'kimi', prompt: 'First line\nSecond line' }, root));
+    expect(short).toMatchObject({ status: 'completed', output: 'kimi ok' });
+    const invocation = JSON.parse(await fs.readFile(resultFile, 'utf8')) as { args: string[] };
+    expect(invocation.args[invocation.args.indexOf('-p') + 1]).toBe('First line \u23CE Second line');
+
+    const long = await withKimiHome(root, () => runtime.run({ ...runRequest(), agent: 'kimi', prompt: 'x'.repeat(9_000) }, root));
+    expect(long.status).toBe('failed');
+    expect(long.error).toMatch(/command-line argument, and Windows allows about 7,500 characters/);
+    expect(long.error).toMatch(/Install the native Kimi Code/);
+  });
+
+  it('starts a native Windows executable directly but leaves an npm .cmd shim on cmd.exe', async () => {
+    const root = await temporaryDirectory();
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    await fs.mkdir(first);
+    await fs.mkdir(second);
+    await fs.writeFile(path.join(first, 'shimmed.cmd'), '@echo off\r\n');
+    await fs.writeFile(path.join(second, 'shimmed.exe'), '');
+    await fs.writeFile(path.join(second, 'native.exe'), '');
+    const environment = { Path: `${first};${second}` };
+
+    expect(resolveWindowsExecutable('native', environment, 'win32')).toBe(path.join(second, 'native.exe'));
+    // cmd.exe would run the earlier .cmd, so the later .exe must not be used.
+    expect(resolveWindowsExecutable('shimmed', environment, 'win32')).toBeNull();
+    expect(resolveWindowsExecutable('missing', environment, 'win32')).toBeNull();
+    expect(resolveWindowsExecutable(path.join(second, 'native.exe'), {}, 'win32')).toBe(path.join(second, 'native.exe'));
+    expect(resolveWindowsExecutable('native', environment, 'linux')).toBeNull();
+  });
+
   it('points Qwen at the proxy with a flag so its own settings file cannot override the route', () => {
     const args = buildAgentArgs(
       { prompt: 'hi', autonomy: 'ask', agent: 'qwen' },
@@ -390,7 +452,8 @@ describe('desktop agent runtime', () => {
       'openai',
       '--openai-base-url',
       'http://127.0.0.1:8083/a/qwen/v1',
-      'hi',
+      '-p',
+      'Carry out the request above.',
     ]);
     // The key travels in the environment, never on the command line.
     expect(args.join(' ')).not.toMatch(/api-key/);

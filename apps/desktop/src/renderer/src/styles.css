@@ -61,6 +61,37 @@ button {
   color: inherit;
 }
 
+/*
+ * Controls keep their text on one line. Only prose (hints, descriptions, textareas) wraps; a control that runs
+ * out of room truncates with an ellipsis or reflows into another row, it never breaks a label in two.
+ */
+button,
+select,
+summary,
+legend {
+  white-space: nowrap;
+}
+
+/* A description inside a button or summary is prose and may wrap. */
+button small,
+button p,
+summary small {
+  white-space: normal;
+}
+
+select,
+input:not([type='checkbox']):not([type='radio']) {
+  text-overflow: ellipsis;
+}
+
+.field > span,
+.workflow-field > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 select {
   color-scheme: dark;
   color: var(--text);
@@ -5068,6 +5099,74 @@ code {
   line-height: 1.45;
 }
 
+.team-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-role {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+}
+
+.team-role legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.team-role-detail {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.team-access {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.team-access.read {
+  border-color: rgba(246, 174, 95, 0.4);
+  color: var(--amber);
+}
+
+.field-error {
+  color: var(--red);
+  font-size: 11px;
+}
+
+.team-role .field-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .team-role .field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -8078,6 +8177,274 @@ code {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-subtle) 82%, transparent);
+}
+
+/* Auto team: goal, editable plan, and the security decision */
+.team-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.team-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.team-panel-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.team-panel-head small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.team-panel-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--mint);
+  background: var(--mint-soft);
+}
+
+.team-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-panel-actions small,
+.team-plan-footer small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.team-notice {
+  padding: 8px 10px;
+  border: 1px solid rgba(102, 227, 189, 0.32);
+  border-radius: 8px;
+  color: var(--mint);
+  background: var(--mint-soft);
+  font-size: 12px;
+}
+
+.team-plan {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.team-plan-summary {
+  display: grid;
+  gap: 2px;
+}
+
+.team-plan-summary small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.team-warnings {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(246, 174, 95, 0.28);
+  border-radius: 8px;
+  background: rgba(246, 174, 95, 0.07);
+  list-style: none;
+}
+
+.team-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.team-warnings svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--amber);
+}
+
+.team-parts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.team-part {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.team-part-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-part-title {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 1px;
+}
+
+.team-part-title small,
+.team-reason {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.team-part-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.team-part-controls .workflow-field {
+  min-width: 150px;
+}
+
+.team-billing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.team-billing.local {
+  border-color: rgba(102, 227, 189, 0.38);
+  color: var(--mint);
+  background: var(--mint-soft);
+}
+
+.team-billing.proxy,
+.team-billing.api {
+  border-color: rgba(246, 174, 95, 0.4);
+  color: var(--amber);
+  background: rgba(246, 174, 95, 0.08);
+}
+
+.team-part-prompt summary {
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.team-part-prompt textarea {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.team-plan-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+
+.team-plan-footer small {
+  flex: 1 1 260px;
+}
+
+.team-autonomy {
+  min-width: 150px;
+}
+
+.team-decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(236, 108, 121, 0.45);
+  border-radius: 10px;
+  background: rgba(117, 37, 49, 0.2);
+}
+
+.team-decision > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.team-decision-copy {
+  display: grid;
+  flex: 1 1 320px;
+  min-width: 0;
+  gap: 3px;
+}
+
+.team-decision-copy small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.team-decision-copy pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-inset);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.team-decision-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflow-verdict {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workflow-verdict.pass {
+  color: var(--mint);
+}
+
+.workflow-verdict.block {
+  color: var(--red);
 }
 
 .workflow-styles {
