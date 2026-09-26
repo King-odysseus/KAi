@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   Archive,
   ArchiveRestore,
   Brain,
@@ -203,6 +204,8 @@ interface WorkflowDraftStep {
   error?: string;
   role?: WorkflowStep['role'];
   verdict?: WorkflowStep['verdict'];
+  isolated?: boolean;
+  note?: string;
 }
 
 type WorkflowStyle = 'fast' | 'safe' | 'security' | 'learning';
@@ -258,6 +261,7 @@ export function WorkflowsView({
   const checkExhausted = activeRun?.workflow.teamCheck?.stopReason === 'max_rounds' && activeRun.workflow.status === 'paused';
   const resumable = !blockedStep && Boolean(activeRun && activeRun.workflow.status !== 'completed' && activeRun.workflow.status !== 'running'
     && (checkExhausted
+      || Boolean(activeRun.workflow.notice)
       || activeRun.workflow.steps.some((step) => step.status !== 'completed')
       || (activeRun.workflow.loop.enabled && (activeRun.workflow.loopProgress?.round ?? 0) < activeRun.workflow.loop.maxRounds)));
 
@@ -306,6 +310,8 @@ export function WorkflowsView({
       ...(step.error ? { error: step.error } : {}),
       ...(step.role ? { role: step.role } : {}),
       ...(step.verdict ? { verdict: step.verdict } : {}),
+      ...(step.isolated ? { isolated: true } : {}),
+      ...(step.note ? { note: step.note } : {}),
     })));
   }, [activeRun]);
 
@@ -468,6 +474,12 @@ export function WorkflowsView({
           </div>
         </section>
       )}
+      {activeRun?.workflow.notice && (
+        <div className="workflow-notice" role="status">
+          <AlertTriangle size={16} />
+          <span>{activeRun.workflow.notice}</span>
+        </div>
+      )}
       <TeamPanel
         activeProject={activeProject}
         agentCapabilities={agentCapabilities}
@@ -583,6 +595,8 @@ export function WorkflowsView({
               </label>
               <div className="workflow-step-state">
                 <span className={`workflow-status ${step.status}`}>{step.status}</span>
+                {step.isolated && <small className="workflow-isolated" title="This part ran in its own copy of the project at the same time as others, and its changes were merged back.">Ran side by side</small>}
+                {step.note && <small className="workflow-step-note" title={step.note}>{step.note}</small>}
                 {step.verdict && <small className={`workflow-verdict ${step.verdict.result}`}>{step.verdict.result === 'pass' ? 'Security: passed' : step.verdict.acknowledged ? 'Security: blocked, continued by you' : 'Security: blocked'}</small>}
                 {step.error && <small className="workflow-step-error" title={step.error}>{step.error}</small>}
                 {step.output && <small className="workflow-step-output" title={step.output}>{step.output.slice(0, 180)}</small>}

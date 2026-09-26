@@ -1,6 +1,8 @@
 // Drives the Auto team feature end to end in the real app: five fake CLIs stand in for the agents, so the whole
 // path (plan, review, approve, run each part on its own agent, stop at a blocked security review, continue) is
 // exercised without a model or a network call.
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import http from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -8,7 +10,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
-import { assertControlsDoNotWrap } from './layout-checks.mjs';
+import { assertControlsDoNotWrap, assertTogglesCompact } from './layout-checks.mjs';
+import { waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke-team');
@@ -62,6 +65,7 @@ try {
   await continueAndFinish(page);
   await verifyCallsMadeByTheTeam();
   await verifyCustomRoleAndProjectTeam(page);
+  await verifySideBySide(page);
   await verifyNarrowWindow(page);
 
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
@@ -284,10 +288,10 @@ async function verifyCustomRoleAndProjectTeam(page) {
   await assertControlsDoNotWrap(page, 'project team with a custom role');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-project-team.png') });
   await card.getByRole('button', { name: 'Save the team for Team Smoke Project' }).click();
-  await page.waitForFunction(async () => {
+  await waitForPage(page, async () => {
     const saved = await window.kaiDesktop.getPreferences('project-team-smoke');
     return saved.ok && saved.data?.agentTeam?.custom?.length === 1;
-  }, undefined, { timeout: 15_000 });
+  }, undefined, { message: 'The project team was not saved.' });
 
   // Plan with it: the orchestrator now sees the role and may use it, and the plan says whose team it used.
   await writeFile(planFile, JSON.stringify({
@@ -312,15 +316,84 @@ async function verifyCustomRoleAndProjectTeam(page) {
   await card.scrollIntoViewIfNeeded();
   await card.getByRole('tab', { name: /^Just Team Smoke Project/ }).click();
   await card.getByRole('button', { name: 'Use the team from Settings again' }).click();
-  await page.waitForFunction(async () => {
+  await waitForPage(page, async () => {
     const saved = await window.kaiDesktop.getPreferences('project-team-smoke');
     return saved.ok && !saved.data?.agentTeam;
-  }, undefined, { timeout: 15_000 });
+  }, undefined, { message: 'The project team was not removed.' });
   await openWorkflows(page);
   await page.getByLabel('Goal').fill('Add an orders table');
   await page.getByRole('button', { name: /^(Plan the job|Plan again)$/ }).click();
   await page.locator('.rules-error').getByText(/not one of the team's roles/).waitFor({ timeout: 60_000 });
 
+  await writeFile(planFile, JSON.stringify(originalPlan()), 'utf8');
+}
+
+/**
+ * Two independent parts run at the same time in their own copies of a real git project, their results land in the
+ * project, the review runs in the project afterwards, and no copy is left behind.
+ */
+async function verifySideBySide(page) {
+  const gitIn = (...args) => execFileSync('git', ['-c', 'user.email=smoke@example.test', '-c', 'user.name=Smoke', '-c', 'core.autocrlf=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+  gitIn('init', '-q');
+  gitIn('add', '-A');
+  gitIn('commit', '-q', '-m', 'smoke project');
+  const goal = 'Build the profile page';
+  await writeFile(planFile, JSON.stringify({
+    summary: 'A profile card and the endpoint it reads.',
+    parts: [
+      { id: 'card', title: 'Profile card', role: 'frontend', prompt: 'Build the profile card.', dependsOn: [], paths: ['src/ui'] },
+      { id: 'endpoint', title: 'Profile endpoint', role: 'backend', prompt: 'Add GET /profile.', dependsOn: [], paths: ['src/api'] },
+    ],
+  }), 'utf8');
+  const before = (await readCalls()).length;
+
+  await page.getByRole('button', { name: 'Work: Workflows', exact: true }).click();
+  await page.locator('section.team-panel').waitFor();
+  await page.getByLabel('Goal').fill(goal);
+  await page.getByRole('button', { name: /^(Plan the job|Plan again)$/ }).click();
+  await page.locator('.team-plan').waitFor({ timeout: 60_000 });
+  await page.getByLabel('Run independent parts at the same time').check();
+  const order = await page.getByLabel('Run order').innerText();
+  if (order !== 'Runs in 2 steps: Profile card + Profile endpoint, then Code review.') throw new Error(`Unexpected run order: ${order}`);
+  await assertControlsDoNotWrap(page, 'a plan set to run side by side');
+  await assertTogglesCompact(page, 'a plan set to run side by side');
+  await page.screenshot({ path: path.join(outputDirectory, 'team-plan-side-by-side.png') });
+  await page.getByRole('button', { name: /^Run team/ }).click();
+
+  const finished = await waitForPage(page, async (title) => {
+    const runs = await window.kaiDesktop.listWorkflowRuns('project-team-smoke');
+    const run = runs.ok ? runs.data.find((candidate) => candidate.workflow.title.includes(title)) : undefined;
+    return run && ['completed', 'paused', 'aborted'].includes(run.workflow.status) ? run.workflow : null;
+  }, goal, { timeoutMs: 120_000, intervalMs: 500, message: 'The side-by-side run did not finish within two minutes.' });
+  if (finished.status !== 'completed') throw new Error(`The side-by-side run ended ${finished.status}: ${finished.notice ?? JSON.stringify(finished.steps.map((step) => [step.id, step.status, step.error]))}`);
+
+  // Both parts ran in separate copies at the same time, and the review ran in the project itself afterwards.
+  const calls = (await readCalls()).slice(before).filter((call) => !/orchestrator of a team/.test(call.prompt));
+  const card = calls.find((call) => /Your part - Profile card/.test(call.prompt) && !/Code reviewer/.test(call.prompt));
+  const endpoint = calls.find((call) => /Your part - Profile endpoint/.test(call.prompt));
+  const review = calls.find((call) => /Code reviewer/.test(call.prompt));
+  if (!card || !endpoint || !review) throw new Error(`A part did not run: ${JSON.stringify(calls.map((call) => call.agent))}`);
+  const sameFolder = (left, right) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+  if (sameFolder(card.cwd, projectPath) || sameFolder(endpoint.cwd, projectPath) || sameFolder(card.cwd, endpoint.cwd)) {
+    throw new Error(`Each part should have worked in its own copy: ${card.cwd} / ${endpoint.cwd}`);
+  }
+  if (!(card.started < endpoint.ended && endpoint.started < card.ended)) throw new Error('The two parts did not run at the same time.');
+  if (!sameFolder(review.cwd, projectPath)) throw new Error(`The review should run in the project: ${review.cwd}`);
+  if (review.started < Math.max(card.ended, endpoint.ended)) throw new Error('The review started before the parts were merged.');
+
+  // Both results are in the real project, and git's own history was not touched.
+  for (const file of ['src/ui/profile.ts', 'src/api/profile.ts']) {
+    const text = await readFile(path.join(projectPath, file), 'utf8');
+    if (!text.includes(goal)) throw new Error(`${file} did not reach the project: ${text}`);
+  }
+  if (gitIn('log', '--oneline').trim().split('\n').length !== 1) throw new Error('The run committed to the user\'s branch.');
+  if (gitIn('worktree', 'list').trim().split('\n').length !== 1) throw new Error('A copy of the project was left registered with git.');
+  if (existsSync(path.join(tmpdir(), 'kai-parallel', `${finished.id}-wave-1`))) throw new Error('A copy of the project was left on disk.');
+
+  const badges = await page.locator('.workflow-isolated').count();
+  if (badges !== 2) throw new Error(`Expected two parts marked as run side by side, saw ${badges}.`);
+  await assertControlsDoNotWrap(page, 'a finished side-by-side run');
+  await page.screenshot({ path: path.join(outputDirectory, 'team-side-by-side-finished.png') });
   await writeFile(planFile, JSON.stringify(originalPlan()), 'utf8');
 }
 
@@ -424,7 +497,17 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { stdin += chunk; });
 process.stdin.on('end', () => {
   const prompt = agent === 'kimi' ? (args[args.indexOf('-p') + 1] ?? '') : stdin;
-  fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ agent, args, prompt }) + '\\n');
+  const started = Date.now();
+  // The profile parts write a real file where they run, and take a moment, so running side by side is visible.
+  const profileFiles = { 'Profile card': 'src/ui/profile.ts', 'Profile endpoint': 'src/api/profile.ts' };
+  const part = (/Your part - ([^:\\n]*)/.exec(prompt) ?? [])[1];
+  if (part && profileFiles[part] && !/Code reviewer/.test(prompt)) {
+    const goal = (/Overall goal: (.*)/.exec(prompt) ?? [])[1] ?? '';
+    fs.mkdirSync(profileFiles[part].split('/').slice(0, -1).join('/'), { recursive: true });
+    fs.writeFileSync(profileFiles[part], '// ' + goal + '\\n');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+  }
+  fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ agent, args, prompt, cwd: process.cwd(), started, ended: Date.now() }) + '\\n');
   // A fix round repairs what the project's check was complaining about.
   if (/FIX ROUND/.test(prompt)) fs.writeFileSync('.fixed', '1');
   let reply;

@@ -79,3 +79,18 @@ export async function assertControlsDoNotWrap(page, where) {
   }
   throw new Error(`Controls must not wrap their text (${where}):\n${detail}`);
 }
+
+/**
+ * Throws when a toggle row (a label, a hint and a switch) is much taller than its text needs: a sign that a flex
+ * rule meant for a row stretched it in a column.
+ */
+export async function assertTogglesCompact(page, where) {
+  const tall = await page.evaluate(() => [...document.querySelectorAll('.toggle-row')].flatMap((row) => {
+    const box = row.getBoundingClientRect();
+    if (box.height === 0) return [];
+    const content = [...row.children].reduce((most, child) => Math.max(most, child.getBoundingClientRect().height), 0);
+    const text = [...row.querySelectorAll('strong, small')].reduce((total, item) => total + item.getBoundingClientRect().height, 0);
+    return box.height > Math.max(content, text) + 60 ? [`"${(row.textContent ?? '').trim().slice(0, 50)}" is ${Math.round(box.height)}px tall`] : [];
+  }));
+  if (tall.length > 0) throw new Error(`Toggle rows are stretched (${where}): ${tall.join('; ')}`);
+}

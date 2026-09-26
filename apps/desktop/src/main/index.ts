@@ -36,6 +36,7 @@ import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
+import { createParallelSession } from './parallel-session';
 import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
 import { PreviewRuntime } from './preview-runtime';
@@ -322,7 +323,13 @@ async function startApplication(): Promise<void> {
     getConversation: (id) => conversations.get(id),
     saveConversation: (conversation) => conversations.save(conversation),
     createConversation: createBlankConversation,
-    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    runAgent: (request, ownerWindowId, options) => runConversationAgent(ipcContext!, request, ownerWindowId, options),
+    worktrees: {
+      prepare: async (projectId, key) => {
+        const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+        return project ? createParallelSession(project.path, key) : null;
+      },
+    },
     runCheck: async (projectId, command, signal) => {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
       if (!project) throw new Error('The workflow project is no longer available.');

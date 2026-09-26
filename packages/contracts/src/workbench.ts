@@ -103,6 +103,10 @@ export const workflowStepSchema = z
     ...workflowStepOverrides,
     // Set on a step KAI added to fix a failed check: the part it repairs and the round it belongs to.
     fixOf: z.string().min(1).optional(),
+    // The step ran in its own copy of the project alongside others, and its changes were merged back.
+    isolated: z.boolean().optional(),
+    // Something the user should know about this step, such as a merge clash that made it run again.
+    note: z.string().max(1_000).optional(),
     round: z.number().int().min(1).optional(),
     verdict: workflowStepVerdictSchema.optional(),
     status: workflowStepStatusSchema,
@@ -140,6 +144,10 @@ export const workflowSchema = z
     loop: workflowLoopSettingsSchema.default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
     loopProgress: workflowLoopProgressSchema.optional(),
     teamCheck: workflowTeamCheckSchema.optional(),
+    // Independent steps run at the same time, each in its own copy of the project, up to this many at once.
+    parallel: z.object({ maxConcurrent: z.number().int().min(2).max(4) }).strict().optional(),
+    // Why the workflow stopped when no single step explains it, for example files left alone after a merge.
+    notice: z.string().max(2_000).optional(),
     status: workflowStatusSchema,
     currentStepIndex: z.number().int().nonnegative(),
     createdAt: timestampSchema,
@@ -204,6 +212,7 @@ export const workflowStartInputSchema = z
     autonomy: autonomyModeSchema,
     loop: workflowLoopSettingsSchema.optional().default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
     teamCheck: z.object({ command: z.string().trim().min(1).max(1_000), maxRounds: z.number().int().min(1).max(5) }).strict().optional(),
+    parallel: z.object({ maxConcurrent: z.number().int().min(2).max(4) }).strict().optional(),
   })
   .strict();
 

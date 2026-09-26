@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { stepAccess } from '@kai/contracts';
+import { planWaves, stepAccess } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -11,6 +11,7 @@ import type {
   WorkflowStep,
 } from '@kai/contracts';
 import { buildFixPrompt, handoffSection, parseVerdict, routeFailure } from './team-plan';
+import type { ParallelSession } from './parallel-session';
 
 export interface WorkflowCheckResult {
   passed: boolean;
@@ -23,10 +24,13 @@ export interface WorkflowRunnerPorts {
   getConversation(id: string): Promise<ConversationRecord | null>;
   saveConversation(conversation: ConversationRecord): Promise<void>;
   createConversation(projectId: string, firstPrompt: string): Promise<ConversationRecord>;
-  runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;
+  /** `cwd` runs the agent in a separate copy of the project instead of the project itself. */
+  runAgent(request: AgentRunRequest, ownerWindowId: number, options?: { cwd?: string }): Promise<AgentRunResult>;
   runCheck(projectId: string, command: string, signal: AbortSignal): Promise<WorkflowCheckResult>;
   cancelAgent(conversationId: string): boolean;
   notifyChanged(ownerWindowId: number, run: WorkflowRun | null): void;
+  /** Separate copies of a project for parts that run at the same time; without it parts run one at a time. */
+  worktrees?: { prepare(projectId: string, key: string): Promise<ParallelSession | null> };
 }
 
 interface ActiveWorkflow {
@@ -35,6 +39,8 @@ interface ActiveWorkflow {
   cancelled: boolean;
   controller: AbortController;
   done: Promise<void>;
+  /** Conversations of parts running side by side, so Stop can cancel each of them. */
+  children: Set<string>;
 }
 
 type StepOutcome = 'completed' | 'failed' | 'stopped' | 'blocked';
@@ -42,6 +48,7 @@ type StepOutcome = 'completed' | 'failed' | 'stopped' | 'blocked';
 /** Main-process workflow ownership. Renderer navigation never owns or drives a running workflow. */
 export class DesktopWorkflowRunner {
   private readonly active = new Map<string, ActiveWorkflow>();
+  private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(private readonly ports: WorkflowRunnerPorts) {}
 
@@ -80,6 +87,7 @@ export class DesktopWorkflowRunner {
       ...(input.model?.trim() ? { model: input.model.trim() } : {}),
       autonomy: input.autonomy,
       loop,
+      ...(input.parallel && !loop.enabled ? { parallel: input.parallel } : {}),
       ...(input.teamCheck
         ? { teamCheck: { command: input.teamCheck.command, maxRounds: input.teamCheck.maxRounds, round: 0, lastPassed: null, lastOutput: '' } }
         : {}),
@@ -112,6 +120,7 @@ export class DesktopWorkflowRunner {
       cancelled: false,
       controller: new AbortController(),
       done: Promise.resolve(),
+      children: new Set(),
     };
     this.active.set(workflow.id, active);
     const run = runFor(conversation);
@@ -126,6 +135,7 @@ export class DesktopWorkflowRunner {
       active.cancelled = true;
       active.controller.abort(new Error('The workflow was stopped.'));
       this.ports.cancelAgent(active.conversationId);
+      for (const child of active.children) this.ports.cancelAgent(child);
       await active.done.catch(() => undefined);
     }
     const conversation = await this.findConversationForWorkflow(workflowId);
@@ -158,7 +168,9 @@ export class DesktopWorkflowRunner {
     const loop = conversation.workflow.loop ?? { enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' };
     // "Continue anyway" on a blocked security review: remember the decision so the workflow does not ask again.
     const unacknowledged = (step: WorkflowStep): boolean => step.verdict?.result === 'block' && !step.verdict.acknowledged;
-    const acknowledgedGate = conversation.workflow.steps.some(unacknowledged);
+    // Continuing past a notice (files left alone after a merge) is a decision, just like past a blocked review.
+    const acknowledgedGate = conversation.workflow.steps.some(unacknowledged) || Boolean(conversation.workflow.notice);
+    conversation.workflow.notice = undefined;
     conversation.workflow.steps = conversation.workflow.steps.map((step) => (
       step.verdict && unacknowledged(step) ? { ...step, verdict: { ...step.verdict, acknowledged: true } } : step
     ));
@@ -179,6 +191,7 @@ export class DesktopWorkflowRunner {
         cancelled: false,
         controller: new AbortController(),
         done: Promise.resolve(),
+        children: new Set(),
       };
       this.active.set(workflowId, extra);
       const run = runFor(conversation);
@@ -233,6 +246,7 @@ export class DesktopWorkflowRunner {
       cancelled: false,
       controller: new AbortController(),
       done: Promise.resolve(),
+      children: new Set(),
     };
     this.active.set(workflowId, active);
     const run = runFor(conversation);
@@ -286,7 +300,9 @@ export class DesktopWorkflowRunner {
     if (!conversation?.workflow) return;
     const loop = conversation.workflow.loop ?? { enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' };
     if (!loop.enabled) {
-      const outcome = await this.executeSteps(conversationId, execution, active, startIndex ?? conversation.workflow.currentStepIndex);
+      const outcome = conversation.workflow.parallel
+        ? await this.executeWaves(conversationId, execution, active)
+        : await this.executeSteps(conversationId, execution, active, startIndex ?? conversation.workflow.currentStepIndex);
       if (outcome === 'completed') {
         if (conversation.workflow.teamCheck) await this.verifyTeam(conversationId, execution, active);
         else await this.complete(conversationId);
@@ -381,67 +397,260 @@ export class DesktopWorkflowRunner {
       if (!conversation?.workflow) return 'stopped';
       const current = conversation.workflow.steps[index];
       if (!current || current.status === 'completed') continue;
-      const startedAt = new Date().toISOString();
-      conversation.workflow.currentStepIndex = index;
-      conversation.workflow.status = 'running';
-      conversation.workflow.steps[index] = { ...current, status: 'running', startedAt, error: undefined };
-      conversation.updatedAt = startedAt;
-      await this.ports.saveConversation(conversation);
-      this.ports.notifyChanged(active.ownerWindowId, runFor(conversation));
+      const outcome = await this.runStep(conversationId, current.id, execution, active, onCost);
+      if (outcome !== 'completed') return outcome;
+    }
+    return 'completed';
+  }
 
+  /**
+   * Runs one step and records the result. In place (no `copy`), the step runs in the project in the workflow's own
+   * conversation and pauses the workflow when it fails or is blocked. In a copy it runs in its own conversation and
+   * folder, and the wave that started it decides what happens next.
+   */
+  private async runStep(
+    conversationId: string,
+    stepId: string,
+    execution: 'cli' | 'api',
+    active: ActiveWorkflow,
+    onCost?: (costUsd: number) => void,
+    copy?: { cwd: string; conversationId: string },
+  ): Promise<StepOutcome> {
+    const startedAt = new Date().toISOString();
+    const started = await this.mutate(conversationId, active, (workflow) => {
+      const index = workflow.steps.findIndex((step) => step.id === stepId);
+      const current = workflow.steps.at(index);
+      if (index < 0 || !current) return null;
+      if (!copy) workflow.currentStepIndex = index;
+      workflow.status = 'running';
+      workflow.steps[index] = { ...current, status: 'running', startedAt, error: undefined, ...(copy ? { isolated: true } : {}) };
       // A team part follows its own agent, route and access, and sees what its dependencies produced.
-      const allSteps = conversation.workflow.steps;
       const earlier = (current.dependsOn ?? []).flatMap((id) => {
-        const dependency = allSteps.find((step) => step.id === id);
+        const dependency = workflow.steps.find((step) => step.id === id);
         return dependency?.status === 'completed'
           ? [{ label: dependency.label ?? dependency.id, agent: dependency.agent, output: dependency.output }]
           : [];
       });
-      const stepModel = current.model ?? conversation.workflow.model;
-      let result: AgentRunResult;
-      try {
-        result = await this.ports.runAgent({
-          conversationId,
-          prompt: `${current.prompt}${handoffSection(earlier)}`,
-          agent: current.agent,
-          execution: current.execution ?? execution,
-          route: current.route ?? conversation.workflow.route,
-          autonomy: current.autonomy ?? conversation.workflow.autonomy,
-          ...(stepModel ? { model: stepModel } : {}),
-          ...(current.role ? { freshSession: true } : {}),
-        }, active.ownerWindowId);
-      } catch (error) {
-        result = {
-          conversation,
-          status: 'failed',
-          output: '',
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-      if (result.costUsd) onCost?.(result.costUsd);
-      if (active.cancelled) return 'stopped';
-      conversation = await this.ports.getConversation(conversationId) ?? result.conversation;
-      if (!conversation.workflow) return 'stopped';
-      const failed = result.status === 'failed' || Boolean(result.error);
-      // A security review that blocks stops the job and waits for the user; passing lets it carry on.
-      const verdict = !failed && current.gate === 'security' ? parseVerdict(result.output) : undefined;
-      const blocked = verdict?.result === 'block';
-      conversation.workflow.steps[index] = {
-        ...conversation.workflow.steps[index]!,
+      return { current, earlier, route: workflow.route, autonomy: workflow.autonomy, model: workflow.model };
+    });
+    const plan = started?.value;
+    if (!plan) return 'stopped';
+    const { current } = plan;
+    const stepModel = current.model ?? plan.model;
+    let result: AgentRunResult;
+    try {
+      result = await this.ports.runAgent({
+        conversationId: copy?.conversationId ?? conversationId,
+        prompt: `${current.prompt}${handoffSection(plan.earlier)}`,
+        agent: current.agent,
+        execution: current.execution ?? execution,
+        route: current.route ?? plan.route,
+        autonomy: current.autonomy ?? plan.autonomy,
+        ...(stepModel ? { model: stepModel } : {}),
+        ...(current.role ? { freshSession: true } : {}),
+      }, active.ownerWindowId, copy ? { cwd: copy.cwd } : undefined);
+    } catch (error) {
+      result = {
+        conversation: started.conversation,
+        status: 'failed',
+        output: '',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (result.costUsd) onCost?.(result.costUsd);
+    if (active.cancelled) return 'stopped';
+    const failed = result.status === 'failed' || Boolean(result.error);
+    // A security review that blocks stops the job and waits for the user; passing lets it carry on.
+    const verdict = !failed && current.gate === 'security' ? parseVerdict(result.output) : undefined;
+    const blocked = verdict?.result === 'block';
+    const saved = await this.mutate(conversationId, active, (workflow) => {
+      const index = workflow.steps.findIndex((step) => step.id === stepId);
+      const step = workflow.steps.at(index);
+      if (index < 0 || !step) return false;
+      workflow.steps[index] = {
+        ...step,
         status: failed ? 'failed' : 'completed',
         output: result.output,
         ...(verdict ? { verdict: { ...verdict, acknowledged: false } } : {}),
         ...(result.error ? { error: result.error } : {}),
         completedAt: new Date().toISOString(),
       };
-      conversation.workflow.status = failed || blocked ? 'paused' : 'running';
+      if (!copy) workflow.status = failed || blocked ? 'paused' : 'running';
+      return true;
+    });
+    if (!saved?.value) return 'stopped';
+    if (failed) return 'failed';
+    if (blocked) return 'blocked';
+    return 'completed';
+  }
+
+  /**
+   * Runs the remaining steps a wave at a time. A wave of one runs in the project as usual; a larger wave runs each
+   * step in its own copy at the same time, then merges the copies and applies the result to the project. A step
+   * whose changes clash with another's runs again afterwards, on top of the merged work.
+   */
+  private async executeWaves(conversationId: string, execution: 'cli' | 'api', active: ActiveWorkflow): Promise<StepOutcome> {
+    const runAlone = new Set<string>();
+    let wave = 0;
+    for (;;) {
+      if (active.cancelled) return 'stopped';
+      const conversation = await this.ports.getConversation(conversationId);
+      const workflow = conversation?.workflow;
+      if (!conversation || !workflow) return 'stopped';
+      const remaining = workflow.steps.filter((step) => step.status !== 'completed');
+      const next = planWaves(remaining).at(0) ?? [];
+      if (next.length === 0) return 'completed';
+
+      // A step that clashed in a merge runs on its own, in the project, so it builds on everyone else's work.
+      const alone = next.filter((step) => runAlone.has(step.id));
+      const batch = alone.length > 0 ? alone.slice(0, 1) : next;
+      if (batch.length === 1 || !this.ports.worktrees || !workflow.parallel) {
+        const first = batch.at(0);
+        if (!first) return 'completed';
+        runAlone.delete(first.id);
+        const outcome = await this.runStep(conversationId, first.id, execution, active);
+        if (outcome !== 'completed') return outcome;
+        continue;
+      }
+
+      wave += 1;
+      let session: ParallelSession | null = null;
+      try {
+        session = await this.ports.worktrees.prepare(conversation.projectId ?? '', `${workflow.id}-wave-${wave}`);
+      } catch (error) {
+        await this.mutate(conversationId, active, (target) => {
+          target.notice = `Parts are running one at a time: KAI could not prepare separate copies of the project (${error instanceof Error ? error.message : String(error)}).`;
+        });
+      }
+      if (!session) {
+        // Not a git project with a commit (or copies failed): the steps are in dependency order, so run them in turn.
+        if (!workflow.notice) {
+          await this.mutate(conversationId, active, (target) => {
+            target.notice = 'Parts ran one at a time: running them side by side needs a git project with at least one commit.';
+          });
+        }
+        const firstIndex = workflow.steps.findIndex((step) => step.status !== 'completed');
+        return this.executeSteps(conversationId, execution, active, Math.max(firstIndex, 0));
+      }
+
+      const openSession = session;
+      const firstIndex = workflow.steps.findIndex((step) => step.id === batch[0]?.id);
+      await this.mutate(conversationId, active, (target) => {
+        target.currentStepIndex = Math.max(firstIndex, 0);
+        target.status = 'running';
+      });
+      const outcomes = new Map<string, { outcome: StepOutcome; commit?: string }>();
+      let integration: Awaited<ReturnType<ParallelSession['integrate']>> | null = null;
+      try {
+        await runPool(batch, workflow.parallel.maxConcurrent, async (step) => {
+          if (active.cancelled) return;
+          let cwd: string;
+          try {
+            cwd = await openSession.checkout(step.id);
+          } catch (error) {
+            await this.failStep(conversationId, active, step.id, `KAI could not make a separate copy of the project for this part: ${error instanceof Error ? error.message : String(error)}`);
+            outcomes.set(step.id, { outcome: 'failed' });
+            return;
+          }
+          const child = await this.ports.createConversation(conversation.projectId ?? '', `Part: ${step.label ?? step.id}`);
+          // Each part gets its own conversation so runs never share a session or overwrite each other's record.
+          await this.ports.saveConversation({ ...child, archived: true });
+          active.children.add(child.id);
+          const outcome = await this.runStep(conversationId, step.id, execution, active, undefined, { cwd, conversationId: child.id });
+          active.children.delete(child.id);
+          let commit: string | undefined;
+          if ((outcome === 'completed' || outcome === 'blocked') && stepAccess(step) === 'edit') {
+            try {
+              commit = await openSession.commit(step.id, `KAI: ${step.label ?? step.id}`);
+            } catch (error) {
+              await this.failStep(conversationId, active, step.id, `KAI could not record this part's changes: ${error instanceof Error ? error.message : String(error)}`);
+              outcomes.set(step.id, { outcome: 'failed' });
+              return;
+            }
+          }
+          outcomes.set(step.id, { outcome, ...(commit ? { commit } : {}) });
+        });
+        if (isCancelled(active)) return 'stopped';
+        const commits = batch.flatMap((step) => {
+          const commit = outcomes.get(step.id)?.commit;
+          return commit ? [{ stepId: step.id, commit }] : [];
+        });
+        if (commits.length > 0) integration = await openSession.integrate(commits);
+      } catch (error) {
+        await this.mutate(conversationId, active, (target) => {
+          target.status = 'paused';
+          target.notice = `KAI could not merge the parts' work: ${error instanceof Error ? error.message : String(error)}. Your project was not changed by this wave.`;
+        });
+        return 'failed';
+      } finally {
+        await openSession.dispose().catch(() => undefined);
+      }
+
+      const merged = integration;
+      const anyFailed = batch.some((step) => outcomes.get(step.id)?.outcome === 'failed');
+      const anyBlocked = batch.some((step) => outcomes.get(step.id)?.outcome === 'blocked');
+      const skipped = merged?.skipped ?? [];
+      await this.mutate(conversationId, active, (target) => {
+        for (const conflict of merged?.conflicts ?? []) {
+          const index = target.steps.findIndex((step) => step.id === conflict.stepId);
+          const step = target.steps.at(index);
+          if (index < 0 || !step) continue;
+          runAlone.add(step.id);
+          target.steps[index] = {
+            ...step,
+            status: 'pending',
+            startedAt: undefined,
+            completedAt: undefined,
+            verdict: undefined,
+            note: `Its changes clashed with another part in ${conflict.files.join(', ')}, so they were not applied. It runs again on its own, on top of the merged work.`,
+          };
+        }
+        if (skipped.length > 0) {
+          const short = merged?.integrationCommit.slice(0, 10) ?? '';
+          target.notice = `These files changed in your project while the parts worked, so KAI kept your version: ${skipped.join(', ')}. The team's version is in commit ${short} (for example: git show ${short}:${skipped[0]}). Resume to carry on.`;
+        }
+        target.status = anyFailed || anyBlocked || skipped.length > 0 ? 'paused' : 'running';
+      });
+      if (anyFailed || skipped.length > 0) return 'failed';
+      if (anyBlocked) return 'blocked';
+    }
+  }
+
+  private async failStep(conversationId: string, active: ActiveWorkflow, stepId: string, error: string): Promise<void> {
+    await this.mutate(conversationId, active, (workflow) => {
+      const index = workflow.steps.findIndex((step) => step.id === stepId);
+      const step = workflow.steps.at(index);
+      if (index >= 0 && step) workflow.steps[index] = { ...step, status: 'failed', error, completedAt: new Date().toISOString() };
+    });
+  }
+
+  /**
+   * Changes a workflow under a per-conversation lock, then saves and announces it. Steps running side by side
+   * finish at their own times; without the lock one could save over another's result.
+   */
+  private async mutate<T>(
+    conversationId: string,
+    active: ActiveWorkflow,
+    change: (workflow: Workflow) => T,
+  ): Promise<{ conversation: ConversationRecord; value: T } | null> {
+    const previous = this.locks.get(conversationId) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.then(() => mine);
+    this.locks.set(conversationId, queued);
+    await previous;
+    try {
+      const conversation = await this.ports.getConversation(conversationId);
+      if (!conversation?.workflow) return null;
+      const value = change(conversation.workflow);
       conversation.updatedAt = new Date().toISOString();
       await this.ports.saveConversation(conversation);
       this.ports.notifyChanged(active.ownerWindowId, runFor(conversation));
-      if (failed) return 'failed';
-      if (blocked) return 'blocked';
+      return { conversation, value };
+    } finally {
+      release();
+      if (this.locks.get(conversationId) === queued) this.locks.delete(conversationId);
     }
-    return 'completed';
   }
 
   /**
@@ -561,4 +770,22 @@ function runFor(conversation: ConversationRecord): WorkflowRun {
     projectId: conversation.projectId,
     workflow: conversation.workflow,
   };
+}
+
+/** Runs `work` for every item, at most `limit` at a time. `work` must not throw. */
+async function runPool<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const lanes = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      if (item !== undefined) await work(item);
+    }
+  });
+  await Promise.all(lanes);
+}
+
+/** Read through a call so a check after an await is not narrowed away: Stop sets this from another path. */
+function isCancelled(active: ActiveWorkflow): boolean {
+  return active.cancelled;
 }

@@ -8440,12 +8440,62 @@ code {
   gap: 10px 14px;
 }
 
-.team-plan-footer small {
+/* Direct children only: a hint nested in a column (the side-by-side toggle) must not grow 260px tall. */
+.team-plan-footer > small {
   flex: 1 1 260px;
 }
 
 .team-autonomy {
   min-width: 150px;
+}
+
+.team-parallel {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.team-parallel-toggle {
+  flex: 1 1 100%;
+}
+
+.team-waves {
+  flex: 1 1 240px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workflow-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(246, 174, 95, 0.4);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(246, 174, 95, 0.08);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workflow-notice > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--amber);
+}
+
+.workflow-isolated {
+  color: var(--lavender);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workflow-step-note {
+  color: var(--amber);
+  font-size: 11px;
 }
 
 .team-check {

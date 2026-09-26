@@ -674,6 +674,8 @@ export async function runConversationAgent(
   context: IpcContext,
   request: AgentRunRequest,
   ownerWindowId: number | null = null,
+  // Main-process only, never from the renderer: run in a separate copy of the project (a part running side by side).
+  options: { cwd?: string } = {},
 ): Promise<AgentRunResult> {
   const conversation = await context.conversations.get(request.conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
@@ -682,6 +684,8 @@ export async function runConversationAgent(
   const projectId = conversation.projectId ?? settings.activeProjectId;
   const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
   if (!project) throw new NotFoundError('Open a project before sending a message.');
+  // Where the agent works and reads files. The project itself stays the identity for memory, claims and checks.
+  const workRoot = options.cwd ?? project.path;
 
   let authoritativeRules: string;
   try {
@@ -712,16 +716,16 @@ export async function runConversationAgent(
   const chipPaths = (request.contextChips ?? [])
     .filter((chip): chip is Extract<ContextChip, { type: 'file' }> => chip.type === 'file')
     .map((chip) => chip.path);
-  const selectedPaths = await resolveSelectedProjectPaths(project.path, [
+  const selectedPaths = await resolveSelectedProjectPaths(workRoot, [
     ...(request.selectedPaths ?? []),
     ...chipPaths,
   ]);
   const chipContext = await renderContextChips(
-    project.path,
+    workRoot,
     context.paths.attachments,
     request.contextChips ?? [],
   );
-  const availableSkills = await discoverDesktopSkills(project.path);
+  const availableSkills = await discoverDesktopSkills(workRoot);
   const selectedSkills = availableSkills.filter((skill) => request.skills?.includes(skill.name));
   const activeGoal = goalForRequest(request.goal, conversation.goal ?? null);
   const previousAgent = conversation.activeAgent;
@@ -738,8 +742,8 @@ export async function runConversationAgent(
   conversation.autonomy = request.autonomy;
   if (request.goal) conversation.goal = activeGoal;
   conversation.updatedAt = now;
-  const checkpoint = (await isGitRepo(project.path))
-    ? await createCheckpoint(project.path).catch(() => null)
+  const checkpoint = (await isGitRepo(workRoot))
+    ? await createCheckpoint(workRoot).catch(() => null)
     : null;
   const userTurn: ConversationRecord['turns'][number] = {
     id: `turn_${crypto.randomUUID()}`,
@@ -815,7 +819,7 @@ export async function runConversationAgent(
   const contextText = executionMode === 'api'
     ? (await buildConversationContext(
         context,
-        project.path,
+        workRoot,
         project.name,
         conversation,
         request.prompt,
@@ -825,7 +829,7 @@ export async function runConversationAgent(
       )).text
     : (await buildConversationContext(
         context,
-        project.path,
+        workRoot,
         project.name,
         conversation,
         request.prompt,
@@ -868,7 +872,7 @@ export async function runConversationAgent(
     execution = executionMode === 'api'
       ? await context.directApi.run(
           executionRequest,
-          project.path,
+          workRoot,
           resumeSessionId,
           emit,
           approvals,
@@ -876,7 +880,7 @@ export async function runConversationAgent(
           apiHistory,
           preferences?.customPermissions,
         )
-      : await context.agents.run(executionRequest, project.path, resumeSessionId, emit, preferences?.customPermissions, request.model ?? settings.agentModels[request.agent]);
+      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? settings.agentModels[request.agent]);
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
@@ -900,7 +904,7 @@ export async function runConversationAgent(
   }
   conversation.updatedAt = new Date().toISOString();
   if (checkpoint) {
-    const files = await diffFromCheckpoint(project.path, checkpoint).catch(() => []);
+    const files = await diffFromCheckpoint(workRoot, checkpoint).catch(() => []);
     userTurn.fileChanges = files;
     execution.events.push({
       schemaVersion: 1,

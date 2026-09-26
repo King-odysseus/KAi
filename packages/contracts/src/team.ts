@@ -192,6 +192,9 @@ export const teamStartInputSchema = z
     // it names, up to maxRounds times. Empty means no check.
     checkCommand: z.string().trim().max(1_000).default(''),
     maxRounds: z.number().int().min(1).max(5).default(2),
+    // Run parts that do not depend on each other at the same time, each in its own copy of the project.
+    parallel: z.boolean().default(false),
+    maxConcurrent: z.number().int().min(2).max(4).default(3),
   })
   .strict();
 
@@ -255,6 +258,34 @@ export function roleConfigFor(team: TeamLike | undefined, id: string): TeamRoleC
 export function stepAccess(step: { role?: string; access?: 'read' | 'edit' }): 'read' | 'edit' | undefined {
   if (step.access) return step.access;
   return step.role && isBuiltInRole(step.role) ? TEAM_ROLE_INFO[step.role].access : undefined;
+}
+
+/**
+ * Groups steps into waves: every step in a wave only needs steps from earlier waves, so a wave's steps can run at
+ * the same time. A dependency on a step not in the list (one already done) is already met. Order within a wave
+ * follows the list, and a dependency loop cannot hang: after as many passes as there are steps it stops.
+ */
+export function planWaves<T extends { id: string; dependsOn?: readonly string[] }>(steps: readonly T[]): T[][] {
+  const ids = new Set(steps.map((step) => step.id));
+  const level = new Map<string, number>(steps.map((step) => [step.id, 0]));
+  for (let pass = 0; pass < steps.length; pass += 1) {
+    let changed = false;
+    for (const step of steps) {
+      const needs = (step.dependsOn ?? []).filter((id) => ids.has(id) && id !== step.id);
+      const next = needs.length === 0 ? 0 : Math.min(steps.length, 1 + Math.max(...needs.map((id) => level.get(id) ?? 0)));
+      if (next !== level.get(step.id)) {
+        level.set(step.id, next);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  const waves: T[][] = [];
+  for (const step of steps) {
+    const index = level.get(step.id) ?? 0;
+    (waves[index] ??= []).push(step);
+  }
+  return waves.filter((wave) => wave.length > 0);
 }
 
 /** The team a new install starts with: KAI plans, and every other role is left to Auto on the Balanced preset. */

@@ -30,7 +30,8 @@ import {
 } from './team-plan';
 
 /** The check and its rounds are optional for a caller; a missing check means the job has none. */
-export type TeamStartRequest = Omit<TeamStartInput, 'checkCommand' | 'maxRounds'> & Partial<Pick<TeamStartInput, 'checkCommand' | 'maxRounds'>>;
+export type TeamStartRequest = Omit<TeamStartInput, 'checkCommand' | 'maxRounds' | 'parallel' | 'maxConcurrent'>
+  & Partial<Pick<TeamStartInput, 'checkCommand' | 'maxRounds' | 'parallel' | 'maxConcurrent'>>;
 
 export interface TeamPlannerPorts {
   settings(): Promise<AppSettings>;
@@ -125,6 +126,7 @@ export class DesktopTeamPlanner {
       autonomy: input.autonomy,
       loop: { enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' },
       ...(input.checkCommand?.trim() ? { teamCheck: { command: input.checkCommand.trim(), maxRounds: input.maxRounds ?? 2 } } : {}),
+      ...(input.parallel ? { parallel: { maxConcurrent: input.maxConcurrent ?? 3 } } : {}),
       steps: planned.map(({ part, assignment }) => this.stepFor(part, assignment, input, settings, team)),
     }, ownerWindowId);
   }

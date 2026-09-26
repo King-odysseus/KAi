@@ -2,6 +2,7 @@ import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet } from 'lucide-reac
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   isLocalProvider,
+  planWaves,
   resolveRole,
   type AgentTeam,
   type AgentCapability,
@@ -56,6 +57,8 @@ export function TeamPanel({
   const [autonomy, setAutonomy] = useState<AutonomyMode>('autoEdit');
   const [checkCommand, setCheckCommand] = useState('');
   const [fixRounds, setFixRounds] = useState(2);
+  const [sideBySide, setSideBySide] = useState(false);
+  const [maxConcurrent, setMaxConcurrent] = useState(3);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // A project can have its own team; the plan card and the orchestrator line follow whichever applies.
@@ -120,6 +123,8 @@ export function TeamPanel({
         autonomy,
         checkCommand: checkCommand.trim(),
         maxRounds: fixRounds,
+        parallel: sideBySide,
+        maxConcurrent,
       }));
       writeCheck(draft.projectId, { command: checkCommand.trim(), rounds: fixRounds });
       setDraft(null);
@@ -270,6 +275,26 @@ export function TeamPanel({
               </label>
               <small>If the check fails, only the part that owns the files it names goes back to fix it.</small>
             </div>
+            <div className="team-parallel">
+              <label className="toggle-row team-parallel-toggle">
+                <span>
+                  <strong>Run independent parts at the same time</strong>
+                  <small>Each part works in its own copy of the project; KAI merges the copies and runs a part again if its changes clash. Needs a git project with at least one commit.</small>
+                </span>
+                <input type="checkbox" aria-label="Run independent parts at the same time" checked={sideBySide} disabled={disabled} onChange={(event) => setSideBySide(event.target.checked)} />
+              </label>
+              {sideBySide && (
+                <>
+                  <label className="workflow-field team-rounds">
+                    <span>At most</span>
+                    <select aria-label="Parts at once" value={maxConcurrent} disabled={disabled} onChange={(event) => setMaxConcurrent(Number(event.target.value))}>
+                      {[2, 3, 4].map((count) => <option key={count} value={count}>{count} at once</option>)}
+                    </select>
+                  </label>
+                  <small className="team-waves" aria-label="Run order">{waveSummary(draft.parts)}</small>
+                </>
+              )}
+            </div>
             <small>Reviewers always read only. A security review that finds a serious problem stops the job and asks you.{perTokenParts > 0 ? ` ${perTokenParts} ${perTokenParts === 1 ? 'part uses' : 'parts use'} per-token billing.` : ''}</small>
             <button type="button" className="primary-button" disabled={disabled || draft.parts.length === 0} onClick={() => void start()}>
               {starting ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
@@ -280,6 +305,13 @@ export function TeamPanel({
       )}
     </section>
   );
+}
+
+/** "Login form + Auth endpoint, then Tests, then Security review + Code review". */
+function waveSummary(parts: readonly TeamPart[]): string {
+  const waves = planWaves(parts);
+  if (waves.every((wave) => wave.length === 1)) return 'Every part here needs the one before it, so they will still run one at a time.';
+  return `Runs in ${waves.length} ${waves.length === 1 ? 'step' : 'steps'}: ${waves.map((wave) => wave.map((part) => part.title).join(' + ')).join(', then ')}.`;
 }
 
 function checkKey(projectId: string | undefined): string {

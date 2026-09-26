@@ -645,6 +645,281 @@ describe('desktop workflow runner', () => {
     expect(checks.commands).toHaveLength(1);
   });
 
+  describe('parts running side by side', () => {
+    interface FakeSessionLog {
+      prepared: string[];
+      checkouts: string[];
+      commits: string[];
+      integrated: Array<Array<{ stepId: string; commit: string }>>;
+      disposed: number;
+    }
+
+    /** A copy-and-merge layer that records what the runner asked for and merges however a test says. */
+    function fakeWorktrees(options: {
+      conflicts?: (commits: Array<{ stepId: string; commit: string }>) => Array<{ stepId: string; files: string[] }>;
+      skipped?: string[];
+      unavailable?: boolean;
+    } = {}): { port: NonNullable<WorkflowRunnerPorts['worktrees']>; log: FakeSessionLog } {
+      const log: FakeSessionLog = { prepared: [], checkouts: [], commits: [], integrated: [], disposed: 0 };
+      let skippedOnce = options.skipped;
+      return {
+        log,
+        port: {
+          prepare: async (_projectId, key) => {
+            log.prepared.push(key);
+            if (options.unavailable) return null;
+            return {
+              checkout: async (stepId) => {
+                log.checkouts.push(stepId);
+                return `/copies/${stepId}`;
+              },
+              commit: async (stepId) => {
+                log.commits.push(stepId);
+                return `commit-${stepId}`;
+              },
+              integrate: async (commits) => {
+                log.integrated.push([...commits]);
+                const skipped = skippedOnce ?? [];
+                skippedOnce = undefined;
+                return { conflicts: options.conflicts?.(commits) ?? [], applied: commits.map((commit) => commit.stepId), skipped, integrationCommit: 'abcdef1234567890' };
+              },
+              dispose: async () => {
+                log.disposed += 1;
+              },
+            };
+          },
+        },
+      };
+    }
+
+    /** An agent runner that takes a little while and counts how many runs overlap. */
+    function timedAgents(output: (request: AgentRunRequest) => string = (request) => `done by ${request.agent}`, delayMs = 40) {
+      const calls: Array<{ request: AgentRunRequest; cwd?: string }> = [];
+      let running = 0;
+      let most = 0;
+      return {
+        calls,
+        mostAtOnce: () => most,
+        runAgent: async (request: AgentRunRequest, _owner: number, options?: { cwd?: string }): Promise<AgentRunResult> => {
+          calls.push({ request, ...(options?.cwd ? { cwd: options.cwd } : {}) });
+          running += 1;
+          most = Math.max(most, running);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          running -= 1;
+          return { conversation: conversation(request.conversationId), status: 'completed', output: output(request) };
+        },
+      };
+    }
+
+    function teamInput(overrides: Partial<WorkflowStartInput> = {}): WorkflowStartInput {
+      return startInput({
+        execution: 'cli',
+        route: 'direct',
+        autonomy: 'autoEdit',
+        parallel: { maxConcurrent: 3 },
+        steps: [
+          { id: 'ui', agent: 'claude', prompt: 'Build the UI', label: 'Frontend: UI', role: 'frontend', access: 'edit', paths: ['src/ui'] },
+          { id: 'api', agent: 'codex', prompt: 'Build the API', label: 'Backend: API', role: 'backend', access: 'edit', paths: ['src/api'] },
+          { id: 'review', agent: 'gemini', prompt: 'Review it', label: 'Code review', role: 'codeReviewer', access: 'read', dependsOn: ['ui', 'api'], autonomy: 'plan' },
+        ],
+        ...overrides,
+      });
+    }
+
+    const statusOf = async (runner: DesktopWorkflowRunner) => (await runner.list('project-1'))[0]?.workflow.status;
+
+    it('runs independent parts at the same time, each in its own copy and conversation, then merges them', async () => {
+      const agents = timedAgents();
+      const worktrees = fakeWorktrees();
+      const { runner, records } = harness({ runAgent: agents.runAgent, worktrees: worktrees.port });
+
+      const run = await runner.start(teamInput(), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+
+      expect(agents.mostAtOnce()).toBe(2);
+      const ui = agents.calls.find((call) => call.request.agent === 'claude')!;
+      const api = agents.calls.find((call) => call.request.agent === 'codex')!;
+      expect(ui.cwd).toBe('/copies/ui');
+      expect(api.cwd).toBe('/copies/api');
+      // Each part used its own conversation, kept out of the sidebar, never the workflow's own.
+      expect(ui.request.conversationId).not.toBe(run.conversationId);
+      expect(ui.request.conversationId).not.toBe(api.request.conversationId);
+      expect(records.get(ui.request.conversationId)?.archived).toBe(true);
+      // Only the two editing parts were committed and merged, in plan order.
+      expect(worktrees.log.commits.sort()).toEqual(['api', 'ui']);
+      expect(worktrees.log.integrated).toEqual([[{ stepId: 'ui', commit: 'commit-ui' }, { stepId: 'api', commit: 'commit-api' }]]);
+      expect(worktrees.log.disposed).toBe(1);
+      // The review ran after the merge, in the project itself, and saw both parts' results.
+      const review = agents.calls.find((call) => call.request.agent === 'gemini')!;
+      expect(review.cwd).toBeUndefined();
+      expect(review.request.conversationId).toBe(run.conversationId);
+      expect(review.request.prompt).toContain('### Frontend: UI (claude)\ndone by claude');
+      expect(review.request.prompt).toContain('### Backend: API (codex)\ndone by codex');
+      const workflow = (await runner.list('project-1'))[0]!.workflow;
+      expect(workflow.steps.map((step) => [step.id, step.status, step.isolated ?? false])).toEqual([
+        ['ui', 'completed', true],
+        ['api', 'completed', true],
+        ['review', 'completed', false],
+      ]);
+    });
+
+    it('never runs more parts at once than the limit', async () => {
+      const agents = timedAgents();
+      const { runner } = harness({ runAgent: agents.runAgent, worktrees: fakeWorktrees().port });
+
+      await runner.start(teamInput({
+        parallel: { maxConcurrent: 2 },
+        steps: ['a', 'b', 'c', 'd'].map((id) => ({ id, agent: 'codex' as const, prompt: `Part ${id}`, role: 'backend', access: 'edit' as const })),
+      }), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+
+      expect(agents.calls).toHaveLength(4);
+      expect(agents.mostAtOnce()).toBe(2);
+    });
+
+    it('runs a part whose changes clashed again on its own, on top of the merged work', async () => {
+      const agents = timedAgents();
+      const worktrees = fakeWorktrees({ conflicts: (commits) => (commits.length > 1 ? [{ stepId: 'api', files: ['src/shared.ts'] }] : []) });
+      const { runner } = harness({ runAgent: agents.runAgent, worktrees: worktrees.port });
+
+      await runner.start(teamInput(), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+
+      const apiRuns = agents.calls.filter((call) => call.request.agent === 'codex');
+      expect(apiRuns).toHaveLength(2);
+      expect(apiRuns[0]!.cwd).toBe('/copies/api');
+      // The second run was in the project itself, after the clash.
+      expect(apiRuns[1]!.cwd).toBeUndefined();
+      const workflow = (await runner.list('project-1'))[0]!.workflow;
+      const api = workflow.steps.find((step) => step.id === 'api')!;
+      expect(api.status).toBe('completed');
+      expect(api.note).toContain('clashed with another part in src/shared.ts');
+      // The review came last, after the rerun.
+      expect(agents.calls.at(-1)!.request.agent).toBe('gemini');
+    });
+
+    it('stops with a notice when files changed in the project during the wave, and Resume carries on', async () => {
+      const agents = timedAgents();
+      const { runner } = harness({ runAgent: agents.runAgent, worktrees: fakeWorktrees({ skipped: ['src/ui/app.ts'] }).port });
+
+      const run = await runner.start(teamInput(), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'paused');
+
+      const paused = (await runner.list('project-1'))[0]!.workflow;
+      expect(paused.notice).toContain('src/ui/app.ts');
+      expect(paused.notice).toContain('git show abcdef1234:src/ui/app.ts');
+      expect(agents.calls.some((call) => call.request.agent === 'gemini')).toBe(false);
+
+      await runner.resume(run.workflow.id, 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+      const finished = (await runner.list('project-1'))[0]!.workflow;
+      expect(finished.notice).toBeUndefined();
+      expect(agents.calls.filter((call) => call.request.agent === 'gemini')).toHaveLength(1);
+    });
+
+    it('runs the parts one at a time, and says why, when the project cannot be copied', async () => {
+      const agents = timedAgents();
+      const { runner } = harness({ runAgent: agents.runAgent, worktrees: fakeWorktrees({ unavailable: true }).port });
+
+      await runner.start(teamInput(), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+
+      expect(agents.mostAtOnce()).toBe(1);
+      expect(agents.calls.every((call) => call.cwd === undefined)).toBe(true);
+      expect((await runner.list('project-1'))[0]!.workflow.notice).toContain('needs a git project with at least one commit');
+    });
+
+    it('keeps the work of parts that finished when another fails, and Resume reruns only the failed one', async () => {
+      let apiAttempts = 0;
+      const agents = timedAgents();
+      const worktrees = fakeWorktrees();
+      const { runner } = harness({
+        worktrees: worktrees.port,
+        runAgent: async (request, owner, options) => {
+          if (request.agent === 'codex' && (apiAttempts += 1) === 1) {
+            return { conversation: conversation(request.conversationId), status: 'failed', output: '', error: 'api blew up' };
+          }
+          return agents.runAgent(request, owner, options);
+        },
+      });
+
+      const run = await runner.start(teamInput(), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'paused');
+
+      const paused = (await runner.list('project-1'))[0]!.workflow;
+      expect(paused.steps.map((step) => step.status)).toEqual(['completed', 'failed', 'pending']);
+      // The frontend part's work was still merged; the failed part had nothing to merge.
+      expect(worktrees.log.integrated).toEqual([[{ stepId: 'ui', commit: 'commit-ui' }]]);
+
+      await runner.resume(run.workflow.id, 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+      expect(agents.calls.filter((call) => call.request.agent === 'claude')).toHaveLength(1);
+      expect(apiAttempts).toBe(2);
+    });
+
+    it('stops every part running side by side when the user presses Stop', async () => {
+      const cancelled: string[] = [];
+      const releases: Array<() => void> = [];
+      const worktrees = fakeWorktrees();
+      const { runner } = harness({
+        worktrees: worktrees.port,
+        runAgent: (request) => new Promise<AgentRunResult>((resolve) => {
+          releases.push(() => resolve({ conversation: conversation(request.conversationId), status: 'failed', output: '', error: 'cancelled' }));
+        }),
+        cancelAgent: (conversationId) => {
+          cancelled.push(conversationId);
+          releases.splice(0).forEach((release) => release());
+          return true;
+        },
+      });
+
+      const run = await runner.start(teamInput(), 1);
+      await waitFor(() => releases.length === 2);
+      const stopped = await runner.stop(run.workflow.id);
+
+      // The workflow's own conversation and both parts' conversations were each cancelled.
+      expect(new Set(cancelled).size).toBe(3);
+      expect(stopped.workflow.status).toBe('aborted');
+      expect(worktrees.log.disposed).toBe(1);
+    });
+
+    it('pauses for the user when a security review in a side-by-side wave blocks', async () => {
+      const agents = timedAgents((request) => (request.agent === 'claude' ? 'Found an exposed key.\nVERDICT: BLOCK - key in code' : 'ok'));
+      const worktrees = fakeWorktrees();
+      const { runner } = harness({ runAgent: agents.runAgent, worktrees: worktrees.port });
+
+      await runner.start(teamInput({
+        steps: [
+          { id: 'api', agent: 'codex', prompt: 'Build the API', role: 'backend', access: 'edit' },
+          { id: 'security', agent: 'claude', prompt: 'Security review', role: 'securityReviewer', access: 'read', gate: 'security', dependsOn: ['api'], autonomy: 'plan' },
+          { id: 'review', agent: 'gemini', prompt: 'Code review', role: 'codeReviewer', access: 'read', dependsOn: ['api'], autonomy: 'plan' },
+          { id: 'docs', agent: 'qwen', prompt: 'Write docs', role: 'docs', access: 'edit', dependsOn: ['security'] },
+        ],
+      }), 1);
+      await waitFor(async () => (await statusOf(runner)) === 'paused');
+
+      const workflow = (await runner.list('project-1'))[0]!.workflow;
+      expect(workflow.steps.find((step) => step.id === 'security')!.verdict).toMatchObject({ result: 'block', reason: 'key in code' });
+      expect(agents.calls.some((call) => call.request.agent === 'qwen')).toBe(false);
+      // Both reviews ran side by side, and neither was committed: they only read.
+      expect(worktrees.log.checkouts.sort()).toEqual(['review', 'security']);
+      expect(worktrees.log.commits).toEqual([]);
+    });
+
+    it('leaves a workflow without the option exactly as before: one at a time, no copies', async () => {
+      const agents = timedAgents();
+      const worktrees = fakeWorktrees();
+      const { runner } = harness({ runAgent: agents.runAgent, worktrees: worktrees.port });
+
+      const { parallel: _off, ...sequential } = teamInput();
+      await runner.start(sequential, 1);
+      await waitFor(async () => (await statusOf(runner)) === 'completed');
+
+      expect(agents.mostAtOnce()).toBe(1);
+      expect(worktrees.log.prepared).toEqual([]);
+    });
+  });
+
   it('transfers a running workflow and its future updates when its owner window closes', async () => {
     let release!: (value: AgentRunResult) => void;
     let firstStarted!: () => void;

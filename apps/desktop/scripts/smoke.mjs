@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { assertControlsDoNotWrap } from './layout-checks.mjs';
+import { waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke');
@@ -399,10 +400,10 @@ async function verifyThemeToggle(page) {
   if (!await page.evaluate(() => document.documentElement.dataset.theme === 'light')) {
     throw new Error('The title-bar theme control did not cycle to light mode.');
   }
-  await page.waitForFunction(async () => {
+  await waitForPage(page, async () => {
     const response = await window.kaiDesktop.getSettings();
     return response.ok && response.data.theme === 'light';
-  });
+  }, undefined, { message: 'The light theme was not saved.' });
   await assertNoHorizontalOverflow(page);
   await verifyMenuContrast(page, 'Agent');
   await page.screenshot({ path: path.join(outputDirectory, 'theme-light.png') });
