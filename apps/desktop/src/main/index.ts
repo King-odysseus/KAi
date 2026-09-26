@@ -159,10 +159,14 @@ async function startApplication(): Promise<void> {
     kaiRoot,
     resourcesPath: engineResourcesPath,
     proxyLauncherPath,
+    onProxyStarted: async (port) => {
+      const moved = await proxyRouting.followPort(port);
+      for (const file of moved) logger.info('internal', `Agent proxy route moved to port ${port}`, file);
+    },
   });
   const cognitive1 = new Cognitive1Client({ access: serviceController });
   const proxy = new UniversalProxyClient({ access: serviceController });
-  const proxyRouting = new DesktopProxyRouting({
+  const proxyRouting: DesktopProxyRouting = new DesktopProxyRouting({
     locateEngine: () => serviceController!.engineInstallation('universalProxy'),
     loopbackAccess: () => serviceController!.loopbackAccess('universalProxy'),
     loadSettings: () => settings.load(),

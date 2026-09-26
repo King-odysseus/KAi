@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import type { AppSettings, ProxyAgentId, ProxyAgentRoute, ProxyRoutingAction, ProxyRoutingResult } from '@kai/contracts';
@@ -76,9 +77,43 @@ export class DesktopProxyRouting {
     });
     const result = await runner.execute(adapter, action);
     if (result.success && (action === 'route' || action === 'direct')) {
-      await this.options.saveSettings(syncRouteOwnership(settings, agent, action, routeUntil));
+      const owned = syncRouteOwnership(settings, agent, action, routeUntil);
+      await this.options.saveSettings(
+        action === 'route' ? { ...owned, proxy: { ...owned.proxy, routedPort: settings.proxy.port } } : owned,
+      );
     }
     return result;
+  }
+
+  /**
+   * Moves every agent config KAI routed on its previous port over to `port`. Only URLs on the port KAI itself
+   * routed are touched, so a different proxy that owns the old port keeps its own agents. Returns changed files.
+   */
+  async followPort(port: number): Promise<string[]> {
+    const settings = await this.options.loadSettings();
+    const previous = settings.proxy.routedPort;
+    if (previous === port) return [];
+    const changed: string[] = [];
+    if (previous) {
+      const { routing } = await this.loadModules();
+      for (const adapter of routing.createRoutingTransactionAdapters(adapterDeps(settings), port)) {
+        const file = adapter.configPath();
+        let content: string;
+        try {
+          content = await fs.readFile(file, 'utf8');
+        } catch {
+          continue;
+        }
+        const next = retargetProxyPort(content, adapter.agentId, previous, port);
+        if (next === content) continue;
+        const temporary = `${file}.kai-${process.pid}.tmp`;
+        await fs.writeFile(temporary, next);
+        await fs.rename(temporary, file);
+        changed.push(file);
+      }
+    }
+    await this.options.saveSettings({ ...settings, proxy: { ...settings.proxy, routedPort: port } });
+    return changed;
   }
 
   private loadModules(): Promise<EngineModules> {
@@ -148,6 +183,12 @@ function createRouteVerifier(
       }
     },
   };
+}
+
+/** Rewrites this agent's loopback proxy URLs from one port to another, leaving every other URL alone. */
+export function retargetProxyPort(content: string, agent: ProxyAgentId, from: number, to: number): string {
+  const pattern = new RegExp(`(https?://(?:127\\.0\\.0\\.1|localhost)):${from}(/a/${agent}(?![\\w-]))`, 'gi');
+  return content.replace(pattern, `$1:${to}$2`);
 }
 
 export function proxyAgentBaseUrl(settings: AppSettings, agent: ProxyAgentId): string {

@@ -157,6 +157,8 @@ export const proxyServiceSettingsSchema = z
   .object({
     enabled: z.boolean(),
     port: z.number().int().min(1024).max(65535),
+    /** The port KAI last pointed agent config files at, so a port change can carry those routes along. */
+    routedPort: z.number().int().min(1024).max(65535).optional(),
     targetBaseUrl: z.string().url(),
     defaultModel: z.string().min(1),
     credentialId: z.string().min(1),

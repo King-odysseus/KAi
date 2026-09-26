@@ -100,6 +100,8 @@ export interface ServiceControllerOptions {
   restartPolicy?: import('@kai/integrations').RestartPolicyOptions;
   /** Loopback port probe. Overridden in tests so port conflicts do not depend on the machine running them. */
   isPortFree?: (port: number) => Promise<boolean>;
+  /** Runs after Universal Proxy starts on `port`, including after a restart or a move off a busy port. */
+  onProxyStarted?: (port: number) => Promise<void>;
 }
 
 export interface ServiceLoopbackAccess {
@@ -198,6 +200,13 @@ export class DesktopServiceController {
       throw explained === messageOf(error) ? error : new Error(explained);
     }
     if (persistEnabled) await this.persistEnabled(kind, true);
+    if (kind === 'universalProxy' && this.options.onProxyStarted) {
+      try {
+        await this.options.onProxyStarted(settings.proxy.port);
+      } catch (error) {
+        this.options.logger.error('service_error', 'Could not move agent routes to the Universal Proxy port', messageOf(error));
+      }
+    }
     return this.status();
   }
 

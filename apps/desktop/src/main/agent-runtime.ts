@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type {
@@ -179,6 +179,29 @@ export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess, mode
   throw new Error(`${agent} does not support Universal Proxy routing.`);
 }
 
+/**
+ * Qwen ignores --openai-base-url when the model name matches a `modelProviders` entry in ~/.qwen/settings.json,
+ * and other proxy tools rewrite those entries to their own ports. System settings outrank the user's file, so this
+ * run gets a provider entry of its own that points at KAI's proxy. The file holds no secrets; the token stays in the env.
+ */
+export function qwenProxySettings(proxyBaseUrl: string, model?: string): Record<string, unknown> {
+  const id = model || 'qwen-proxy';
+  return {
+    modelProviders: { openai: [{ id, name: id, baseUrl: proxyBaseUrl, envKey: 'OPENAI_API_KEY' }] },
+    model: { name: id },
+  };
+}
+
+function writeQwenProxySettings(proxyBaseUrl: string, model?: string): string {
+  const content = JSON.stringify(qwenProxySettings(proxyBaseUrl, model), null, 2);
+  const directory = path.join(tmpdir(), 'kai-qwen-proxy');
+  // Named by content, so concurrent runs with the same route share a file and never overwrite each other's.
+  const file = path.join(directory, `${createHash('sha256').update(content).digest('hex').slice(0, 16)}.json`);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(file, content);
+  return file;
+}
+
 /** True when an agent's error text means its CLI has no signed-in account. */
 export function isSignInError(message: string): boolean {
   return /not (?:logged|signed) in|please (?:run )?\/?log ?in|run [`'"]?\w+ (?:auth )?login|login required|no authentication method configured|authentication required|invalid api key|oauth token (?:has )?expired|credentials? (?:are |is )?(?:missing|expired)/i.test(message);
@@ -336,6 +359,9 @@ export class DesktopAgentRuntime {
     }
 
     const proxyBaseUrl = request.route === 'proxy' && request.agent === 'qwen' ? environment.OPENAI_BASE_URL : undefined;
+    if (proxyBaseUrl) {
+      environment = { ...environment, QWEN_CODE_SYSTEM_SETTINGS_PATH: writeQwenProxySettings(proxyBaseUrl, model) };
+    }
     const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model, proxyBaseUrl);
     // Its prompt is an argument. Behind a Windows .cmd shim only the first line would arrive, and Windows caps a
     // command line at a few thousand characters, so say so plainly instead of failing with "command line too long".

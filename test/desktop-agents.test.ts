@@ -10,6 +10,7 @@ import {
   DesktopAgentRuntime,
   isSignInError,
   kimiSignedIn,
+  qwenProxySettings,
   resolveWindowsExecutable,
   singleLinePrompt,
 } from '../apps/desktop/src/main/agent-runtime';
@@ -47,6 +48,15 @@ describe('desktop agent runtime', () => {
     });
     expect(cliProxyEnvironment('kimi', access, 'kimi-k2').KIMI_MODEL_NAME).toBe('kimi-k2');
     expect(() => cliProxyEnvironment('gemini', access)).toThrow(/does not support/);
+  });
+
+  it('gives a proxied Qwen run its own provider entry so ~/.qwen/settings.json cannot redirect it', () => {
+    const url = 'http://127.0.0.1:8083/a/qwen/v1';
+    expect(qwenProxySettings(url)).toEqual({
+      modelProviders: { openai: [{ id: 'qwen-proxy', name: 'qwen-proxy', baseUrl: url, envKey: 'OPENAI_API_KEY' }] },
+      model: { name: 'qwen-proxy' },
+    });
+    expect(qwenProxySettings(url, 'qwen3-coder')).toMatchObject({ model: { name: 'qwen3-coder' } });
   });
 
   it('offers the proxy route for Claude, Codex, Qwen and Kimi only', async () => {
