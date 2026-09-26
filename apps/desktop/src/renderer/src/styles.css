@@ -5138,6 +5138,68 @@ code {
   font-size: 11px;
 }
 
+.team-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.team-scope-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.team-scope-tabs button {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.team-scope-tabs button.active {
+  color: var(--text);
+  background: var(--bg-raised);
+}
+
+.team-scope-tabs button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.team-scope-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.team-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.team-custom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.team-custom-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .team-access {
   padding: 1px 7px;
   border: 1px solid var(--border);
@@ -8384,6 +8446,53 @@ code {
 
 .team-autonomy {
   min-width: 150px;
+}
+
+.team-check {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.team-check-command {
+  flex: 1 1 260px;
+}
+
+.team-rounds {
+  width: 110px;
+}
+
+.team-check small {
+  flex: 1 1 100%;
+}
+
+.team-check-progress {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.team-check-progress pre {
+  max-height: 180px;
+  margin: 6px 0 0;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.team-check-progress code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-inset);
+}
+
+.team-check-progress.failed {
+  border-color: rgba(236, 108, 121, 0.4);
 }
 
 .team-decision {

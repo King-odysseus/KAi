@@ -338,6 +338,7 @@ async function startApplication(): Promise<void> {
   ipcContext.workflows = workflowRunner;
   teamPlanner = new DesktopTeamPlanner({
     settings: () => settings.load(),
+    projectTeam: async (projectId) => (await preferences.get(projectId))?.agentTeam ?? null,
     agentCapabilities: () => agents.capabilities(),
     directApi: async () => {
       const capability = await directApi.capability();

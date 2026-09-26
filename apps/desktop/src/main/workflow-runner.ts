@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import { stepAccess } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -9,7 +10,7 @@ import type {
   WorkflowStartInput,
   WorkflowStep,
 } from '@kai/contracts';
-import { handoffSection, parseVerdict } from './team-plan';
+import { buildFixPrompt, handoffSection, parseVerdict, routeFailure } from './team-plan';
 
 export interface WorkflowCheckResult {
   passed: boolean;
@@ -65,11 +66,13 @@ export class DesktopWorkflowRunner {
         label: step.label ?? `Step ${index + 1}`,
         ...(step.dependsOn?.length ? { dependsOn: step.dependsOn } : {}),
         ...(step.role ? { role: step.role } : {}),
+        ...(step.access ? { access: step.access } : {}),
         ...(step.execution ? { execution: step.execution } : {}),
         ...(step.route ? { route: step.route } : {}),
         ...(step.autonomy ? { autonomy: step.autonomy } : {}),
         ...(step.model ? { model: step.model } : {}),
         ...(step.gate ? { gate: step.gate } : {}),
+        ...(step.paths?.length ? { paths: step.paths } : {}),
         status: 'pending',
       })),
       execution: input.execution,
@@ -77,6 +80,9 @@ export class DesktopWorkflowRunner {
       ...(input.model?.trim() ? { model: input.model.trim() } : {}),
       autonomy: input.autonomy,
       loop,
+      ...(input.teamCheck
+        ? { teamCheck: { command: input.teamCheck.command, maxRounds: input.teamCheck.maxRounds, round: 0, lastPassed: null, lastOutput: '' } }
+        : {}),
       ...(loop.enabled
         ? {
             loopProgress: {
@@ -157,6 +163,29 @@ export class DesktopWorkflowRunner {
       step.verdict && unacknowledged(step) ? { ...step, verdict: { ...step.verdict, acknowledged: true } } : step
     ));
     let resumeIndex = conversation.workflow.steps.findIndex((step) => step.status !== 'completed');
+    const teamCheck = conversation.workflow.teamCheck;
+    if (resumeIndex < 0 && teamCheck && (acknowledgedGate || teamCheck.lastPassed === false) && !(loop.enabled && conversation.workflow.loopProgress)) {
+      // Every step is done but the check has not passed: either it never ran (the user just continued past a
+      // blocked review) or it failed and used its rounds. Run it, with one more fix round if it had failed.
+      conversation.workflow.teamCheck = teamCheck.lastPassed === false
+        ? { ...teamCheck, maxRounds: teamCheck.round + 1, stopReason: undefined }
+        : teamCheck;
+      conversation.workflow.status = 'running';
+      conversation.updatedAt = new Date().toISOString();
+      await this.ports.saveConversation(conversation);
+      const extra: ActiveWorkflow = {
+        ownerWindowId,
+        conversationId: conversation.id,
+        cancelled: false,
+        controller: new AbortController(),
+        done: Promise.resolve(),
+      };
+      this.active.set(workflowId, extra);
+      const run = runFor(conversation);
+      this.ports.notifyChanged(ownerWindowId, run);
+      extra.done = this.trackExecution(workflowId, extra, conversation.id, conversation.execution ?? 'cli', conversation.workflow.steps.length);
+      return run;
+    }
     if (resumeIndex < 0 && acknowledgedGate && !(loop.enabled && conversation.workflow.loopProgress)) {
       // The blocked review was the last step: continuing means the job is finished.
       conversation.updatedAt = new Date().toISOString();
@@ -258,7 +287,10 @@ export class DesktopWorkflowRunner {
     const loop = conversation.workflow.loop ?? { enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' };
     if (!loop.enabled) {
       const outcome = await this.executeSteps(conversationId, execution, active, startIndex ?? conversation.workflow.currentStepIndex);
-      if (outcome === 'completed') await this.complete(conversationId);
+      if (outcome === 'completed') {
+        if (conversation.workflow.teamCheck) await this.verifyTeam(conversationId, execution, active);
+        else await this.complete(conversationId);
+      }
       return;
     }
 
@@ -410,6 +442,85 @@ export class DesktopWorkflowRunner {
       if (blocked) return 'blocked';
     }
     return 'completed';
+  }
+
+  /**
+   * Runs a team job's check. On failure the output is matched to the parts that own the files it names, and only
+   * those parts run again with the failure in front of them, until it passes or the fix rounds run out.
+   */
+  private async verifyTeam(conversationId: string, execution: 'cli' | 'api', active: ActiveWorkflow): Promise<void> {
+    for (;;) {
+      if (active.cancelled) return;
+      const conversation = await this.ports.getConversation(conversationId);
+      const workflow = conversation?.workflow;
+      const check = workflow?.teamCheck;
+      if (!conversation || !workflow || !check) {
+        await this.complete(conversationId);
+        return;
+      }
+      let result: WorkflowCheckResult;
+      try {
+        result = await this.ports.runCheck(conversation.projectId ?? '', check.command, active.controller.signal);
+      } catch (error) {
+        if (active.controller.signal.aborted) return;
+        result = { passed: false, exitCode: null, output: error instanceof Error ? error.message : String(error) };
+      }
+      const reported = { ...check, lastPassed: result.passed, lastOutput: result.output.slice(-4_000) };
+      const finish = async (teamCheck: typeof check, status: 'paused' | 'complete'): Promise<void> => {
+        workflow.teamCheck = teamCheck;
+        if (status === 'paused') workflow.status = 'paused';
+        conversation.updatedAt = new Date().toISOString();
+        await this.ports.saveConversation(conversation);
+        if (status === 'complete') await this.complete(conversationId);
+        else this.ports.notifyChanged(active.ownerWindowId, runFor(conversation));
+      };
+      if (result.passed) {
+        await finish({ ...reported, stopReason: 'passed' }, 'complete');
+        return;
+      }
+
+      const owners = workflow.steps
+        .filter((step) => !step.fixOf && step.role && stepAccess(step) === 'edit')
+        .map((step) => ({ step, id: step.id, role: step.role ?? '', paths: step.paths ?? [] }));
+      const route = routeFailure(result.output, owners);
+      const round = check.round + 1;
+      const fixes = route.ownerIds.flatMap((id) => {
+        const owner = owners.find((candidate) => candidate.id === id)?.step;
+        if (!owner) return [];
+        const fix: WorkflowStep = {
+          ...owner,
+          id: `fix-${round}-${owner.id}`,
+          label: `Fix round ${round}: ${owner.label ?? owner.id}`,
+          prompt: buildFixPrompt(owner.prompt, check.command, round, result.output),
+          dependsOn: [owner.id],
+          fixOf: owner.id,
+          round,
+          status: 'pending',
+          output: undefined,
+          error: undefined,
+          verdict: undefined,
+          startedAt: undefined,
+          completedAt: undefined,
+        };
+        return [fix];
+      });
+      // Out of rounds, nothing to send it to, or no room left in the plan: stop and let the user decide.
+      if (check.round >= check.maxRounds || fixes.length === 0 || workflow.steps.length + fixes.length > 50) {
+        await finish({ ...reported, stopReason: 'max_rounds' }, 'paused');
+        return;
+      }
+
+      const firstFix = workflow.steps.length;
+      workflow.steps = [...workflow.steps, ...fixes];
+      workflow.teamCheck = { ...reported, round, stopReason: undefined };
+      workflow.status = 'running';
+      workflow.currentStepIndex = firstFix;
+      conversation.updatedAt = new Date().toISOString();
+      await this.ports.saveConversation(conversation);
+      this.ports.notifyChanged(active.ownerWindowId, runFor(conversation));
+      const outcome = await this.executeSteps(conversationId, execution, active, firstFix);
+      if (outcome !== 'completed') return;
+    }
   }
 
   private async complete(conversationId: string, progress?: WorkflowLoopProgress, stopReason?: WorkflowLoopProgress['stopReason']): Promise<void> {

@@ -254,8 +254,11 @@ export function WorkflowsView({
   useEffect(() => {
     if (blockedStepId) decisionRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [blockedStepId]);
+  // A team whose check ran out of fix rounds has no unfinished step, but can still be given one more round.
+  const checkExhausted = activeRun?.workflow.teamCheck?.stopReason === 'max_rounds' && activeRun.workflow.status === 'paused';
   const resumable = !blockedStep && Boolean(activeRun && activeRun.workflow.status !== 'completed' && activeRun.workflow.status !== 'running'
-    && (activeRun.workflow.steps.some((step) => step.status !== 'completed')
+    && (checkExhausted
+      || activeRun.workflow.steps.some((step) => step.status !== 'completed')
       || (activeRun.workflow.loop.enabled && (activeRun.workflow.loopProgress?.round ?? 0) < activeRun.workflow.loop.maxRounds)));
 
   function reconcileRun(run: WorkflowRun): void {
@@ -543,6 +546,15 @@ export function WorkflowsView({
               <label className="workflow-field"><span>Maximum cost (USD, 0 = off)</span><input type="number" min={0} max={10000} step="0.01" value={loopCost} onChange={(event) => setLoopCost(clampNumber(event.target.value, 0, 10_000, 0))} /></label>
               <label className="workflow-field"><span>Maximum minutes</span><input type="number" min={1} max={1440} value={loopMinutes} onChange={(event) => setLoopMinutes(clampNumber(event.target.value, 1, 1440, 30))} /></label>
               <label className="workflow-field workflow-loop-check"><span>Check command</span><input value={loopCheck} onChange={(event) => setLoopCheck(event.target.value)} placeholder="npm test" /></label>
+            </div>
+          )}
+          {activeRun?.workflow.teamCheck && (
+            <div className={`workflow-loop-progress team-check-progress ${activeRun.workflow.teamCheck.lastPassed === false ? 'failed' : ''}`} role="status">
+              <span>Check <code>{activeRun.workflow.teamCheck.command}</code></span>
+              {' · '}{activeRun.workflow.teamCheck.lastPassed === null ? 'not run yet' : activeRun.workflow.teamCheck.lastPassed ? 'passed' : 'failed'}
+              {' · '}fix round {activeRun.workflow.teamCheck.round} of {activeRun.workflow.teamCheck.maxRounds}
+              {activeRun.workflow.teamCheck.stopReason === 'max_rounds' ? ' · out of rounds. Resume allows one more.' : ''}
+              {activeRun.workflow.teamCheck.lastPassed === false && activeRun.workflow.teamCheck.lastOutput && <pre>{activeRun.workflow.teamCheck.lastOutput}</pre>}
             </div>
           )}
           {activeRun?.workflow.loopProgress && (

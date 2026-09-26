@@ -2,7 +2,7 @@ import { reconcileSettingsDraft } from './settings-draft';
 import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
-import { TeamSettings } from './TeamSettings';
+import { AgentTeamCard } from './TeamSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
 import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
@@ -42,7 +42,7 @@ const SERVICE_STATES: Record<ServiceState['status'], string> = {
   not_configured: 'Off',
 };
 
-export function SettingsView({ settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService }: { settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void }): ReactNode {
+export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService }: { activeProject: { id: string; name: string } | null; projectTeam: AppSettings['agentTeam'] | null; onSaveProjectTeam: (team: AppSettings['agentTeam'] | null) => Promise<boolean>; settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void }): ReactNode {
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
@@ -401,8 +401,15 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
 
         <section className="settings-section" aria-label="Agent team">
           <div className="section-title"><Users size={17} /><span>Agent team</span></div>
-          <TeamSettings team={draft.agentTeam} onChange={(agentTeam) => setDraft({ ...draft, agentTeam })} />
-          {cardSave('agentTeam', 'Save agent team', ['agentTeam'])}
+          <AgentTeamCard
+            globalTeam={draft.agentTeam}
+            onGlobalChange={(agentTeam) => setDraft({ ...draft, agentTeam })}
+            globalSaveSlot={cardSave('agentTeam', 'Save agent team', ['agentTeam'])}
+            project={activeProject}
+            projectTeam={projectTeam}
+            onSaveProjectTeam={onSaveProjectTeam}
+            busy={busy}
+          />
         </section>
 
         <section className="settings-section">

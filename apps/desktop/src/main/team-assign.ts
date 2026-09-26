@@ -1,6 +1,8 @@
 import {
-  TEAM_ROLE_INFO,
   createDefaultAgentTeam,
+  isBuiltInRole,
+  resolveRole,
+  roleConfigFor,
   type AgentCapability,
   type AgentTeam,
   type RouteMode,
@@ -59,11 +61,19 @@ export function completeTeam(team: AgentTeam | undefined): AgentTeam {
   return {
     preset: team?.preset ?? defaults.preset,
     roles: { ...defaults.roles, ...(team?.roles ?? {}) },
+    custom: team?.custom ?? [],
   };
 }
 
-function roleConfig(team: AgentTeam, role: TeamRoleId): TeamRoleConfig {
-  return completeTeam(team).roles[role] as TeamRoleConfig;
+function roleConfig(team: AgentTeam, role: string): TeamRoleConfig {
+  return roleConfigFor(team, role);
+}
+
+/** A role the user defined has no built-in track record, so no agent is favoured for it: readiness and preset decide. */
+const NEUTRAL_STRENGTH = 6;
+
+function strengthOf(role: string, assignee: TeamResolvedAssignee): number {
+  return isBuiltInRole(role) ? STRENGTH[role][assignee] : NEUTRAL_STRENGTH;
 }
 
 export function agentName(assignee: TeamResolvedAssignee, env: AssignmentEnvironment): string {
@@ -106,9 +116,9 @@ interface Scored {
   score: number;
 }
 
-function scoreFor(role: TeamRoleId, assignee: TeamResolvedAssignee, team: AgentTeam, env: AssignmentEnvironment): number {
-  const info = TEAM_ROLE_INFO[role];
-  let score = STRENGTH[role][assignee];
+function scoreFor(role: string, assignee: TeamResolvedAssignee, team: AgentTeam, env: AssignmentEnvironment): number {
+  const info = resolveRole(team, role);
+  let score = strengthOf(role, assignee);
   const premium = PREMIUM.has(assignee);
   if (team.preset === 'balanced' && premium && info.routine) score -= 2;
   if (team.preset === 'budget' && premium) score -= info.access === 'read' ? 2 : 4;
@@ -120,7 +130,7 @@ function scoreFor(role: TeamRoleId, assignee: TeamResolvedAssignee, team: AgentT
 }
 
 function pickAuto(
-  role: TeamRoleId,
+  role: string,
   config: TeamRoleConfig,
   team: AgentTeam,
   env: AssignmentEnvironment,
@@ -189,12 +199,12 @@ export function assignTeam(parts: readonly TeamPart[], teamInput: AgentTeam, env
   const byPart = new Map<string, TeamAssignment>();
   const authors = new Set<TeamResolvedAssignee>();
   const ordered = [
-    ...parts.filter((part) => TEAM_ROLE_INFO[part.role].access === 'edit'),
-    ...parts.filter((part) => TEAM_ROLE_INFO[part.role].access === 'read'),
+    ...parts.filter((part) => resolveRole(team, part.role).access === 'edit'),
+    ...parts.filter((part) => resolveRole(team, part.role).access === 'read'),
   ];
 
   for (const part of ordered) {
-    const info = TEAM_ROLE_INFO[part.role];
+    const info = resolveRole(team, part.role);
     const config = roleConfig(team, part.role);
     let choice: Scored | null = null;
     let reason = '';

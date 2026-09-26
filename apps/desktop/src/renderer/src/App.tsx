@@ -2,6 +2,7 @@ import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type {
   AgentCapability,
+  AgentTeam,
   AgentId,
   AutonomyMode,
   BootstrapPayload,
@@ -978,6 +979,17 @@ export function App(): ReactNode {
     if (saved) setProjectPreferences(saved);
   }
 
+  /** Saves (or, with null, removes) the team just for the open project; true when it was stored. */
+  async function saveProjectTeam(team: AgentTeam | null): Promise<boolean> {
+    if (!activeProject) return false;
+    const base: ProjectPreferences = projectPreferences ?? { schemaVersion: 1, projectId: activeProject.id };
+    const { agentTeam: _previous, ...rest } = base;
+    const next: ProjectPreferences = team ? { ...rest, agentTeam: team } : rest;
+    const saved = await perform(() => window.kaiDesktop.updatePreferences(next).then(unwrap), 'Saving the project team');
+    if (saved) setProjectPreferences(saved);
+    return Boolean(saved);
+  }
+
   async function saveConversationRecord(conversation: ConversationRecord): Promise<void> {
     const saved = await perform(
       () => window.kaiDesktop.saveConversation(conversation).then(unwrap),
@@ -1240,6 +1252,9 @@ export function App(): ReactNode {
       case 'settings':
         return (
           <SettingsView
+            activeProject={activeProject ? { id: activeProject.id, name: activeProject.name } : null}
+            projectTeam={projectPreferences?.agentTeam ?? null}
+            onSaveProjectTeam={(team) => saveProjectTeam(team)}
             settings={bootstrap.settings}
             credentialStatus={credentials}
             dataLocations={bootstrap.dataLocations}

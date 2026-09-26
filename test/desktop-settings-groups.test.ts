@@ -43,7 +43,7 @@ describe('per-card settings saves', () => {
     expect(changedGroups(draft, saved)).toEqual(['agentTeam']);
     expect(updateForGroups(draft, ['agentTeam'])).toEqual({ agentTeam: draft.agentTeam });
     // Editing a role's key order alone is not a change.
-    const reordered = { ...saved, agentTeam: { roles: saved.agentTeam.roles, preset: saved.agentTeam.preset } };
+    const reordered = { ...saved, agentTeam: { custom: saved.agentTeam.custom, roles: saved.agentTeam.roles, preset: saved.agentTeam.preset } };
     expect(changedGroups(reordered, saved)).toEqual([]);
   });
 

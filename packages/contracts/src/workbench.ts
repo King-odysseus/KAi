@@ -7,7 +7,7 @@ import {
   routeModeSchema,
   timestampSchema,
 } from './primitives';
-import { teamWorkerRoleIdSchema } from './team';
+import { teamPartRoleSchema } from './team';
 
 export const goalInputSchema = z
   .object({
@@ -71,13 +71,17 @@ export const workflowLoopProgressSchema = z
 
 // Per-step settings a team plan uses. A plain workflow leaves them out, so every step follows the workflow's own.
 const workflowStepOverrides = {
-  role: teamWorkerRoleIdSchema.optional(),
+  role: teamPartRoleSchema.optional(),
+  // Whether the part changes files. Set for every team part, including custom roles the runner knows nothing about.
+  access: z.enum(['read', 'edit']).optional(),
   execution: executionModeSchema.optional(),
   route: routeModeSchema.optional(),
   autonomy: autonomyModeSchema.optional(),
   model: z.string().trim().max(240).optional(),
   // A gated step can stop the workflow and ask the user before the next step starts.
   gate: z.literal('security').optional(),
+  // The folders or files this part owns. A failed check is sent back to whichever part owns the files it names.
+  paths: z.array(z.string().min(1).max(300)).max(20).optional(),
 };
 
 export const workflowStepVerdictSchema = z
@@ -97,6 +101,9 @@ export const workflowStepSchema = z
     label: z.string().max(200).optional(),
     dependsOn: z.array(z.string().min(1)).optional(),
     ...workflowStepOverrides,
+    // Set on a step KAI added to fix a failed check: the part it repairs and the round it belongs to.
+    fixOf: z.string().min(1).optional(),
+    round: z.number().int().min(1).optional(),
     verdict: workflowStepVerdictSchema.optional(),
     status: workflowStepStatusSchema,
     error: z.string().optional(),
@@ -107,6 +114,19 @@ export const workflowStepSchema = z
   .strict();
 
 export const workflowStatusSchema = z.enum(['ready', 'running', 'paused', 'completed', 'aborted']);
+
+/** A team job's check (for example the test command) and how many times failures may be sent back to be fixed. */
+export const workflowTeamCheckSchema = z
+  .object({
+    command: z.string().trim().min(1).max(1_000),
+    maxRounds: z.number().int().min(1).max(5),
+    // Fix rounds used so far; 0 until the first failure.
+    round: z.number().int().min(0),
+    lastPassed: z.boolean().nullable().default(null),
+    lastOutput: z.string().default(''),
+    stopReason: z.enum(['passed', 'max_rounds']).optional(),
+  })
+  .strict();
 
 export const workflowSchema = z
   .object({
@@ -119,6 +139,7 @@ export const workflowSchema = z
     autonomy: autonomyModeSchema,
     loop: workflowLoopSettingsSchema.default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
     loopProgress: workflowLoopProgressSchema.optional(),
+    teamCheck: workflowTeamCheckSchema.optional(),
     status: workflowStatusSchema,
     currentStepIndex: z.number().int().nonnegative(),
     createdAt: timestampSchema,
@@ -182,6 +203,7 @@ export const workflowStartInputSchema = z
     model: z.string().trim().max(240).optional(),
     autonomy: autonomyModeSchema,
     loop: workflowLoopSettingsSchema.optional().default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
+    teamCheck: z.object({ command: z.string().trim().min(1).max(1_000), maxRounds: z.number().int().min(1).max(5) }).strict().optional(),
   })
   .strict();
 
@@ -332,6 +354,7 @@ export type WorkflowLoopSettings = z.infer<typeof workflowLoopSettingsSchema>;
 export type WorkflowLoopProgress = z.infer<typeof workflowLoopProgressSchema>;
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type WorkflowStepVerdict = z.infer<typeof workflowStepVerdictSchema>;
+export type WorkflowTeamCheck = z.infer<typeof workflowTeamCheckSchema>;
 export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 export type WorkflowTemplateSaveInput = z.input<typeof workflowTemplateSaveInputSchema>;

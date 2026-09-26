@@ -460,6 +460,191 @@ describe('desktop workflow runner', () => {
     await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
   });
 
+  function checkedInput(overrides: Partial<WorkflowStartInput> = {}): WorkflowStartInput {
+    return startInput({
+      execution: 'cli',
+      route: 'direct',
+      autonomy: 'autoEdit',
+      teamCheck: { command: 'npm test', maxRounds: 2 },
+      steps: [
+        { id: 'ui', agent: 'claude', prompt: 'Build the UI', label: 'Frontend: UI', role: 'frontend', paths: ['src/ui'] },
+        { id: 'api', agent: 'codex', prompt: 'Build the API', label: 'Backend: API', role: 'backend', paths: ['src/api'] },
+        { id: 'review', agent: 'gemini', prompt: 'Review it', label: 'Code review', role: 'codeReviewer', dependsOn: ['ui', 'api'], autonomy: 'plan' },
+      ],
+      ...overrides,
+    });
+  }
+
+  /** A check that returns each output in turn (a passing one is an empty string) and records every command. */
+  function scriptedChecks(outputs: string[]): { runCheck: WorkflowRunnerPorts['runCheck']; commands: string[] } {
+    const commands: string[] = [];
+    return {
+      commands,
+      runCheck: async (_project, command) => {
+        commands.push(command);
+        const output = outputs[Math.min(commands.length - 1, outputs.length - 1)] ?? '';
+        return { passed: output === '', exitCode: output === '' ? 0 : 1, output };
+      },
+    };
+  }
+
+  it('finishes a team job after its check passes, without sending anything back', async () => {
+    const checks = scriptedChecks(['']);
+    const { runner } = harness({ runCheck: checks.runCheck });
+
+    await runner.start(checkedInput(), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    const workflow = (await runner.list('project-1'))[0]!.workflow;
+    expect(checks.commands).toEqual(['npm test']);
+    expect(workflow.steps).toHaveLength(3);
+    expect(workflow.teamCheck).toMatchObject({ lastPassed: true, round: 0, stopReason: 'passed' });
+  });
+
+  it('sends a failed check only to the part that owns the files it names, with the failure in front of it', async () => {
+    const agents: AgentRunRequest[] = [];
+    const checks = scriptedChecks(['FAIL src/api/login.test.ts\n  Expected 200, received 500\n    at src/api/login.ts:12:5', '']);
+    const { runner } = harness({
+      runCheck: checks.runCheck,
+      runAgent: async (request) => {
+        agents.push(request);
+        return { conversation: conversation(request.conversationId), status: 'completed', output: `output of ${request.agent}` };
+      },
+    });
+
+    await runner.start(checkedInput(), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    const workflow = (await runner.list('project-1'))[0]!.workflow;
+    expect(checks.commands).toEqual(['npm test', 'npm test']);
+    expect(workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api']);
+    expect(workflow.steps[3]).toMatchObject({ fixOf: 'api', round: 1, role: 'backend', agent: 'codex', dependsOn: ['api'], status: 'completed' });
+    // The frontend part did not run again: agents were claude, codex, gemini, then codex once more.
+    expect(agents.map((request) => request.agent)).toEqual(['claude', 'codex', 'gemini', 'codex']);
+    const fix = agents[3]!;
+    expect(fix).toMatchObject({ autonomy: 'autoEdit', freshSession: true });
+    expect(fix.prompt).toContain('FIX ROUND 1');
+    expect(fix.prompt).toContain('Expected 200, received 500');
+    expect(fix.prompt).toContain('Build the API');
+    expect(fix.prompt).toContain('### Backend: API (codex)\noutput of codex');
+    expect(workflow.teamCheck).toMatchObject({ round: 1, lastPassed: true, stopReason: 'passed' });
+  });
+
+  it('sends a failure to every part that owns a file it names', async () => {
+    const agents: string[] = [];
+    const checks = scriptedChecks(['error in C:\\work\\project\\src\\ui\\App.tsx:3\nand src/api/routes.ts:9', '']);
+    const { runner } = harness({
+      runCheck: checks.runCheck,
+      runAgent: async (request) => {
+        agents.push(request.agent);
+        return { conversation: conversation(request.conversationId), status: 'completed', output: 'ok' };
+      },
+    });
+
+    await runner.start(checkedInput(), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect((await runner.list('project-1'))[0]!.workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-ui', 'fix-1-api']);
+    expect(agents.slice(3)).toEqual(['claude', 'codex']);
+  });
+
+  it('falls back to the backend part when a failure names no file it can match', async () => {
+    const checks = scriptedChecks(['Test suite failed to run', '']);
+    const { runner } = harness({ runCheck: checks.runCheck });
+
+    await runner.start(checkedInput(), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect((await runner.list('project-1'))[0]!.workflow.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api']);
+  });
+
+  it('pauses when the fix rounds run out, and Resume allows exactly one more', async () => {
+    const checks = scriptedChecks(['FAIL src/api/a.ts', 'FAIL src/api/a.ts', 'FAIL src/api/a.ts', '']);
+    const { runner } = harness({ runCheck: checks.runCheck });
+
+    const run = await runner.start(checkedInput({ teamCheck: { command: 'npm test', maxRounds: 1 } }), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    const paused = (await runner.list('project-1'))[0]!.workflow;
+    expect(paused.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api']);
+    expect(paused.teamCheck).toMatchObject({ round: 1, maxRounds: 1, lastPassed: false, stopReason: 'max_rounds' });
+    expect(checks.commands).toHaveLength(2);
+
+    await runner.resume(run.workflow.id, 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    const finished = (await runner.list('project-1'))[0]!.workflow;
+    expect(finished.steps.map((step) => step.id)).toEqual(['ui', 'api', 'review', 'fix-1-api', 'fix-2-api']);
+    expect(finished.teamCheck).toMatchObject({ round: 2, maxRounds: 2, lastPassed: true, stopReason: 'passed' });
+    expect(checks.commands).toHaveLength(4);
+  });
+
+  it('runs the check after the user continues past a blocked security review that was the last step', async () => {
+    const checks = scriptedChecks(['']);
+    const { runner } = harness({
+      runCheck: checks.runCheck,
+      runAgent: async (request) => ({
+        conversation: conversation(request.conversationId),
+        status: 'completed',
+        output: request.agent === 'claude' ? 'VERDICT: BLOCK - injection' : 'ok',
+      }),
+    });
+
+    const run = await runner.start(checkedInput({
+      steps: [
+        { id: 'api', agent: 'codex', prompt: 'Build the API', label: 'Backend: API', role: 'backend', paths: ['src/api'] },
+        { id: 'security', agent: 'claude', prompt: 'Review it', label: 'Security review', role: 'securityReviewer', gate: 'security', dependsOn: ['api'], autonomy: 'plan' },
+      ],
+    }), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+    // The check has not run: the job stopped for the security decision first.
+    expect(checks.commands).toEqual([]);
+
+    await runner.resume(run.workflow.id, 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    expect(checks.commands).toEqual(['npm test']);
+    expect((await runner.list('project-1'))[0]!.workflow.teamCheck).toMatchObject({ lastPassed: true, stopReason: 'passed' });
+  });
+
+  it('sends a failed check to a custom editing role that owns the file, using the access stored on its step', async () => {
+    const checks = scriptedChecks(['error in db/schema.sql:4', '']);
+    const agents: string[] = [];
+    const { runner } = harness({
+      runCheck: checks.runCheck,
+      runAgent: async (request) => {
+        agents.push(request.agent);
+        return { conversation: conversation(request.conversationId), status: 'completed', output: 'ok' };
+      },
+    });
+
+    await runner.start(checkedInput({
+      steps: [
+        { id: 'ui', agent: 'claude', prompt: 'Build the UI', label: 'Frontend: UI', role: 'frontend', paths: ['src/ui'] },
+        { id: 'db', agent: 'qwen', prompt: 'Create the table', label: 'Database: orders', role: 'custom-database', access: 'edit', paths: ['db'] },
+        { id: 'audit', agent: 'gemini', prompt: 'Audit it', label: 'Accessibility', role: 'custom-a11y', access: 'read', autonomy: 'plan' },
+      ],
+    }), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'completed');
+
+    const workflow = (await runner.list('project-1'))[0]!.workflow;
+    expect(workflow.steps.map((step) => step.id)).toEqual(['ui', 'db', 'audit', 'fix-1-db']);
+    expect(workflow.steps[3]).toMatchObject({ role: 'custom-database', access: 'edit', agent: 'qwen', fixOf: 'db' });
+    // The read-only custom role is never asked to fix anything.
+    expect(agents).toEqual(['claude', 'qwen', 'gemini', 'qwen']);
+  });
+
+  it('pauses instead of looping when a failing check has no editing part to send it to', async () => {
+    const checks = scriptedChecks(['FAIL']);
+    const { runner } = harness({ runCheck: checks.runCheck });
+
+    await runner.start(checkedInput({ steps: [{ id: 'review', agent: 'gemini', prompt: 'Review it', label: 'Code review', role: 'codeReviewer', autonomy: 'plan' }] }), 1);
+    await waitFor(async () => (await runner.list('project-1'))[0]?.workflow.status === 'paused');
+
+    expect((await runner.list('project-1'))[0]!.workflow.teamCheck).toMatchObject({ lastPassed: false, stopReason: 'max_rounds' });
+    expect(checks.commands).toHaveLength(1);
+  });
+
   it('transfers a running workflow and its future updates when its owner window closes', async () => {
     let release!: (value: AgentRunResult) => void;
     let firstStarted!: () => void;

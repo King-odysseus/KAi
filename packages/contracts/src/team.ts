@@ -16,6 +16,16 @@ export const teamRoleIdSchema = z.enum(TEAM_ROLE_IDS);
 /** Roles that can own a part of the plan (everything except the orchestrator). */
 export const teamWorkerRoleIdSchema = z.enum(['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'docs']);
 
+/**
+ * A role the user defines. Its id is fixed when it is created, so renaming it never orphans a plan or a running job.
+ */
+export const customRoleIdSchema = z
+  .string()
+  .max(40)
+  .regex(/^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'A custom role id looks like custom-database.');
+/** The role of one part of a plan: a built-in worker role or a custom one. */
+export const teamPartRoleSchema = z.union([teamWorkerRoleIdSchema, customRoleIdSchema]);
+
 /** A specific CLI, KAI's own API mode, or "auto" to let KAI choose. */
 export const teamAssigneeSchema = z.union([agentIdSchema, z.literal('api'), z.literal('auto')]);
 /** A concrete choice once KAI has decided. */
@@ -30,20 +40,42 @@ const teamModelNameSchema = z
   .max(100)
   .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.5 or claude-sonnet-5.');
 
+/** When KAI adds this role to a job on its own: every job, only when the job touches sensitive areas, or never. */
+export const teamAutoAddSchema = z.enum(['always', 'sensitive', 'never']);
+
 export const teamRoleConfigSchema = z
   .object({
     assignee: teamAssigneeSchema,
     route: teamRouteChoiceSchema,
     model: teamModelNameSchema.optional(),
+    // Left out, the role follows DEFAULT_AUTO_ADD. "never" still lets the orchestrator plan the role itself.
+    autoAdd: teamAutoAddSchema.optional(),
     // Extra guidance appended to this role's tasks, for example "check the OWASP Top 10".
     instructions: z.string().max(2_000).default(''),
   })
   .strict();
 
+export const customRoleSchema = z
+  .object({
+    id: customRoleIdSchema,
+    label: z.string().trim().min(1).max(60),
+    description: z.string().trim().max(300).default(''),
+    // Reviewers and auditors read; everything else edits. Fixed by the user, never guessed.
+    access: z.enum(['read', 'edit']),
+    assignee: teamAssigneeSchema,
+    route: teamRouteChoiceSchema,
+    model: teamModelNameSchema.optional(),
+    instructions: z.string().max(2_000).default(''),
+  })
+  .strict();
+
+export const MAX_CUSTOM_ROLES = 8;
+
 export const agentTeamSchema = z
   .object({
     preset: teamPresetSchema,
     roles: z.record(teamRoleIdSchema, teamRoleConfigSchema),
+    custom: z.array(customRoleSchema).max(MAX_CUSTOM_ROLES).default([]),
   })
   .strict();
 
@@ -51,7 +83,7 @@ export const teamPartSchema = z
   .object({
     id: z.string().min(1).max(40),
     title: z.string().trim().min(1).max(120),
-    role: teamWorkerRoleIdSchema,
+    role: teamPartRoleSchema,
     prompt: z.string().trim().min(1).max(6_000),
     dependsOn: z.array(z.string().min(1).max(40)).max(12).default([]),
     // Folders or files this part may touch, as the orchestrator reported them.
@@ -77,6 +109,23 @@ export const TEAM_ROLE_INFO: Record<TeamRoleId, TeamRoleInfo> = {
   codeReviewer: { label: 'Code reviewer', description: 'Read-only review of correctness and quality across all parts.', access: 'read', routine: false },
   docs: { label: 'Docs writer', description: 'README, comments and user-facing documentation.', access: 'edit', routine: true },
 };
+
+export type TeamAutoAdd = z.infer<typeof teamAutoAddSchema>;
+
+/** A code review of every job, and a security review when the job is sensitive; nothing else is added unasked. */
+export const DEFAULT_AUTO_ADD: Record<TeamRoleId, TeamAutoAdd> = {
+  orchestrator: 'never',
+  frontend: 'never',
+  backend: 'never',
+  tests: 'never',
+  securityReviewer: 'sensitive',
+  codeReviewer: 'always',
+  docs: 'never',
+};
+
+export function roleAutoAdd(config: { autoAdd?: TeamAutoAdd } | undefined, role: TeamRoleId): TeamAutoAdd {
+  return config?.autoAdd ?? DEFAULT_AUTO_ADD[role];
+}
 
 export const teamPlanSchema = z
   .object({
@@ -116,6 +165,8 @@ export const teamPlanDraftSchema = z
         reason: z.string().max(500),
       })
       .strict(),
+    // Which team planned this: the one saved for the project, or the team from Settings.
+    teamScope: z.enum(['project', 'settings']).default('settings'),
     // Things the user should read before approving, for example an added security review.
     warnings: z.array(z.string().max(500)).max(20),
     createdAt: timestampSchema,
@@ -137,6 +188,10 @@ export const teamStartInputSchema = z
     assignments: z.array(teamAssignmentSchema).min(1).max(12),
     // How much the editing roles may change. Reviewers always run read-only, whatever this says.
     autonomy: autonomyModeSchema,
+    // Run after the team finishes (for example "npm test"). A failure goes back to the part that owns the files
+    // it names, up to maxRounds times. Empty means no check.
+    checkCommand: z.string().trim().max(1_000).default(''),
+    maxRounds: z.number().int().min(1).max(5).default(2),
   })
   .strict();
 
@@ -148,6 +203,7 @@ export type TeamRouteChoice = z.infer<typeof teamRouteChoiceSchema>;
 export type TeamPreset = z.infer<typeof teamPresetSchema>;
 export type TeamRoleConfig = z.infer<typeof teamRoleConfigSchema>;
 export type AgentTeam = z.infer<typeof agentTeamSchema>;
+export type CustomRole = z.infer<typeof customRoleSchema>;
 export type TeamPart = z.infer<typeof teamPartSchema>;
 export type TeamPlan = z.infer<typeof teamPlanSchema>;
 export type TeamBilling = z.infer<typeof teamBillingSchema>;
@@ -156,11 +212,57 @@ export type TeamPlanDraft = z.infer<typeof teamPlanDraftSchema>;
 export type TeamPlanInput = z.infer<typeof teamPlanInputSchema>;
 export type TeamStartInput = z.infer<typeof teamStartInputSchema>;
 
+/** What a role looks like to the code that plans and runs a job, whether it is built in or the user's own. */
+export interface ResolvedRole extends TeamRoleInfo {
+  id: string;
+  custom: boolean;
+}
+
+/** Enough of a team to look roles up; hand-built teams and older settings may leave the custom list out. */
+export interface TeamLike {
+  roles?: AgentTeam['roles'];
+  custom?: AgentTeam['custom'];
+}
+
+const hasOwn = (record: object, key: string): boolean => Object.prototype.hasOwnProperty.call(record, key);
+
+export function isBuiltInRole(id: string): id is TeamRoleId {
+  return hasOwn(TEAM_ROLE_INFO, id);
+}
+
+/**
+ * The label, description and access of a role. A role id nothing defines (a custom role deleted after a plan was
+ * drafted) is read-only: the safe side, since it can then change nothing.
+ */
+export function resolveRole(team: TeamLike | undefined, id: string): ResolvedRole {
+  if (isBuiltInRole(id)) return { ...TEAM_ROLE_INFO[id], id, custom: false };
+  const custom = team?.custom?.find((role) => role.id === id);
+  if (custom) return { id, label: custom.label, description: custom.description, access: custom.access, routine: false, custom: true };
+  return { id, label: id, description: '', access: 'read', routine: false, custom: true };
+}
+
+/** The agent, route, model and instructions chosen for a role; Auto when the team says nothing about it. */
+export function roleConfigFor(team: TeamLike | undefined, id: string): TeamRoleConfig {
+  const fallback: TeamRoleConfig = { assignee: 'auto', route: 'auto', instructions: '' };
+  if (isBuiltInRole(id)) return team?.roles?.[id] ?? fallback;
+  const custom = team?.custom?.find((role) => role.id === id);
+  return custom
+    ? { assignee: custom.assignee, route: custom.route, instructions: custom.instructions, ...(custom.model ? { model: custom.model } : {}) }
+    : fallback;
+}
+
+/** Whether a workflow step edits files: what it was given, or what its built-in role implies. */
+export function stepAccess(step: { role?: string; access?: 'read' | 'edit' }): 'read' | 'edit' | undefined {
+  if (step.access) return step.access;
+  return step.role && isBuiltInRole(step.role) ? TEAM_ROLE_INFO[step.role].access : undefined;
+}
+
 /** The team a new install starts with: KAI plans, and every other role is left to Auto on the Balanced preset. */
 export function createDefaultAgentTeam(): AgentTeam {
   const auto = { assignee: 'auto', route: 'auto', instructions: '' } as const;
   return {
     preset: 'balanced',
+    custom: [],
     roles: {
       orchestrator: { assignee: 'api', route: 'direct', instructions: '' },
       frontend: { ...auto },

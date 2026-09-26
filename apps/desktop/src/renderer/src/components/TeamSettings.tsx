@@ -1,5 +1,6 @@
-import { CLI_MODEL_SUGGESTIONS, TEAM_ROLE_INFO, TEAM_ROLE_IDS, type AgentTeam, type TeamAssignee, type TeamPreset, type TeamRoleId, type TeamRouteChoice } from '@kai/contracts';
-import type { ReactNode } from 'react';
+import { CLI_MODEL_SUGGESTIONS, DEFAULT_AUTO_ADD, MAX_CUSTOM_ROLES, TEAM_ROLE_INFO, TEAM_ROLE_IDS, roleAutoAdd, type AgentTeam, type CustomRole, type TeamAssignee, type TeamAutoAdd, type TeamPreset, type TeamRoleId, type TeamRouteChoice } from '@kai/contracts';
+import { Plus, Trash2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 const PRESETS: Array<{ id: TeamPreset; label: string; detail: string }> = [
   { id: 'quality', label: 'Quality', detail: 'The strongest ready agent for every role, whatever the limits.' },
@@ -23,6 +24,12 @@ const ROUTE_OPTIONS: Array<{ value: TeamRouteChoice; label: string }> = [
   { value: 'proxy', label: 'Proxy' },
 ];
 
+const AUTO_ADD_OPTIONS: Array<{ value: TeamAutoAdd; label: string }> = [
+  { value: 'never', label: 'Only if the orchestrator plans it' },
+  { value: 'sensitive', label: 'When the job touches sensitive areas' },
+  { value: 'always', label: 'Every job' },
+];
+
 const MODEL_PATTERN = /^[A-Za-z0-9][\w.:/@[\]-]*$/;
 
 /** Who plans and who does each part when a job is handed to the agent team. */
@@ -34,6 +41,22 @@ export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (t
     const next = { ...current, ...patch };
     if (next.model !== undefined && !next.model.trim()) delete next.model;
     onChange({ ...team, roles: { ...team.roles, [role]: next } });
+  }
+
+  function updateCustom(id: string, patch: Partial<CustomRole>): void {
+    onChange({ ...team, custom: team.custom.map((role) => {
+      if (role.id !== id) return role;
+      const next = { ...role, ...patch };
+      if (next.model !== undefined && !next.model.trim()) delete next.model;
+      return next;
+    }) });
+  }
+
+  function addCustom(): void {
+    // The id is fixed here and never follows the name, so renaming a role later cannot orphan a plan.
+    let id = 'custom-new-role';
+    for (let count = 2; team.custom.some((role) => role.id === id); count += 1) id = `custom-new-role-${count}`;
+    onChange({ ...team, custom: [...team.custom, { id, label: 'New role', description: '', access: 'edit', assignee: 'auto', route: 'auto', instructions: '' }] });
   }
 
   return (
@@ -84,6 +107,14 @@ export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (t
                   {modelInvalid && <small className="field-error">Use a model name such as gpt-5.5, without spaces or a leading dash.</small>}
                 </label>
               </div>
+              {role !== 'orchestrator' && (
+                <label className="field">
+                  <span>Added to a job</span>
+                  <select aria-label={`${info.label} added to a job`} value={roleAutoAdd(config, role)} onChange={(event) => update(role, { autoAdd: event.target.value as TeamAutoAdd })}>
+                    {AUTO_ADD_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}{DEFAULT_AUTO_ADD[role] === option.value ? ' (default)' : ''}</option>)}
+                  </select>
+                </label>
+              )}
               <label className="field">
                 <span>Extra instructions</span>
                 <textarea aria-label={`${info.label} instructions`} rows={2} maxLength={2000} value={config.instructions} placeholder={role === 'securityReviewer' ? 'For example: check the OWASP Top 10 and flag any secret in code.' : 'Optional guidance added to every task this role gets.'} onChange={(event) => update(role, { instructions: event.target.value })} />
@@ -92,6 +123,161 @@ export function TeamSettings({ team, onChange }: { team: AgentTeam; onChange: (t
           );
         })}
       </div>
+      <div className="team-custom">
+        <div className="team-custom-head">
+          <strong>Your own roles</strong>
+          <button type="button" className="secondary-button" disabled={team.custom.length >= MAX_CUSTOM_ROLES} onClick={addCustom}>
+            <Plus size={14} /><span>Add a role</span>
+          </button>
+        </div>
+        <p className="settings-note">A role for work the built-in seven do not cover, such as a database specialist or an accessibility auditor. The orchestrator can plan parts for it; you decide whether it edits files or only reads.</p>
+        {team.custom.map((role) => {
+          const modelInvalid = Boolean(role.model) && (role.model!.length > 100 || !MODEL_PATTERN.test(role.model!));
+          const suggestions = role.assignee !== 'auto' && role.assignee !== 'api' ? CLI_MODEL_SUGGESTIONS[role.assignee] : [];
+          return (
+            <fieldset className="team-role" key={role.id}>
+              <legend>
+                <strong>{role.label.trim() || 'Unnamed role'}</strong>
+                <span className={`team-access ${role.access}`}>{role.access === 'read' ? 'Read-only' : 'Edits files'}</span>
+              </legend>
+              <div className="field-grid">
+                <label className="field">
+                  <span>Name</span>
+                  <input aria-label={`${role.id} name`} value={role.label} maxLength={60} aria-invalid={!role.label.trim()} onChange={(event) => updateCustom(role.id, { label: event.target.value })} />
+                  {!role.label.trim() && <small className="field-error">Give the role a name.</small>}
+                </label>
+                <label className="field">
+                  <span>Access</span>
+                  <select aria-label={`${role.label} access`} value={role.access} onChange={(event) => updateCustom(role.id, { access: event.target.value as CustomRole['access'] })}>
+                    <option value="edit">Edits files</option>
+                    <option value="read">Read-only</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>What it does</span>
+                  <input aria-label={`${role.label} description`} value={role.description} maxLength={300} placeholder="Shown to the orchestrator" onChange={(event) => updateCustom(role.id, { description: event.target.value })} />
+                </label>
+              </div>
+              <div className="field-grid">
+                <label className="field">
+                  <span>Agent</span>
+                  <select aria-label={`${role.label} agent`} value={role.assignee} onChange={(event) => updateCustom(role.id, { assignee: event.target.value as TeamAssignee })}>
+                    {TEAM_AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Route</span>
+                  <select aria-label={`${role.label} route`} value={role.route} onChange={(event) => updateCustom(role.id, { route: event.target.value as TeamRouteChoice })}>
+                    {ROUTE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Model</span>
+                  <input aria-label={`${role.label} model`} value={role.model ?? ''} placeholder="Agent default" list={`team-models-${role.id}`} aria-invalid={modelInvalid} onChange={(event) => updateCustom(role.id, { model: event.target.value.trim() })} />
+                  <datalist id={`team-models-${role.id}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
+                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.5, without spaces or a leading dash.</small>}
+                </label>
+              </div>
+              <label className="field">
+                <span>Extra instructions</span>
+                <textarea aria-label={`${role.label} instructions`} rows={2} maxLength={2000} value={role.instructions} placeholder="Optional guidance added to every task this role gets." onChange={(event) => updateCustom(role.id, { instructions: event.target.value })} />
+              </label>
+              <div className="team-custom-actions">
+                <button type="button" className="secondary-button" onClick={() => onChange({ ...team, custom: team.custom.filter((item) => item.id !== role.id) })}>
+                  <Trash2 size={14} /><span>Remove this role</span>
+                </button>
+              </div>
+            </fieldset>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The team card: the team from Settings, or a team just for the open project. A project team starts as a copy of
+ * the Settings team and from then on stands alone; removing it returns the project to the Settings team.
+ */
+export function AgentTeamCard({
+  globalTeam,
+  onGlobalChange,
+  globalSaveSlot,
+  project,
+  projectTeam,
+  onSaveProjectTeam,
+  busy,
+}: {
+  globalTeam: AgentTeam;
+  onGlobalChange: (team: AgentTeam) => void;
+  globalSaveSlot: ReactNode;
+  project: { id: string; name: string } | null;
+  projectTeam: AgentTeam | null;
+  onSaveProjectTeam: (team: AgentTeam | null) => Promise<boolean>;
+  busy: boolean;
+}): ReactNode {
+  const [scope, setScope] = useState<'all' | 'project'>('all');
+  const [draft, setDraft] = useState<AgentTeam | null>(projectTeam);
+  const [saving, setSaving] = useState(false);
+  const projectId = project?.id ?? null;
+  const savedJson = JSON.stringify(projectTeam);
+
+  // Follow what is saved: a different project, or the result of a save, replaces the working copy.
+  useEffect(() => {
+    setDraft(projectTeam);
+    if (!projectId) setScope('all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, savedJson]);
+
+  const dirty = JSON.stringify(draft) !== savedJson;
+
+  async function save(next: AgentTeam | null): Promise<void> {
+    setSaving(true);
+    try {
+      await onSaveProjectTeam(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="team-scope">
+      <div className="team-scope-tabs" role="tablist" aria-label="Which team to edit">
+        <button type="button" role="tab" aria-selected={scope === 'all'} className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All projects</button>
+        <button type="button" role="tab" aria-selected={scope === 'project'} className={scope === 'project' ? 'active' : ''} disabled={!project} title={project ? undefined : 'Open a project to give it its own team'} onClick={() => setScope('project')}>
+          {project ? `Just ${project.name}` : 'One project'}
+        </button>
+      </div>
+      {scope === 'all' && (
+        <>
+          <TeamSettings team={globalTeam} onChange={onGlobalChange} />
+          {globalSaveSlot}
+        </>
+      )}
+      {scope === 'project' && project && (draft
+        ? (
+          <>
+            <p className="settings-note">{project.name} has its own team. Plans for this project use it instead of the team from Settings.</p>
+            <TeamSettings team={draft} onChange={setDraft} />
+            <div className="button-row align-start">
+              <button type="button" className="primary-button" disabled={busy || saving || !dirty} onClick={() => void save(draft)}>
+                <span>{saving ? 'Saving' : `Save the team for ${project.name}`}</span>
+              </button>
+              <button type="button" className="secondary-button" disabled={busy || saving || !projectTeam} onClick={() => void save(null)}>
+                <span>Use the team from Settings again</span>
+              </button>
+              {!projectTeam && <button type="button" className="secondary-button" disabled={saving} onClick={() => setDraft(null)}><span>Discard</span></button>}
+            </div>
+          </>
+        )
+        : (
+          <div className="team-scope-empty">
+            <p className="settings-note">{project.name} uses the team from Settings. Give it its own team when this project needs different agents or roles.</p>
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => setDraft(structuredClone(globalTeam))}>
+              <span>Create a team for {project.name}</span>
+            </button>
+          </div>
+        ))}
     </div>
   );
 }

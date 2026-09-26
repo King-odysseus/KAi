@@ -61,6 +61,7 @@ try {
   await runAndStopAtSecurityReview(page);
   await continueAndFinish(page);
   await verifyCallsMadeByTheTeam();
+  await verifyCustomRoleAndProjectTeam(page);
   await verifyNarrowWindow(page);
 
   if (rendererErrors.length > 0) throw new Error(`Renderer errors: ${rendererErrors.join(' | ')}`);
@@ -190,6 +191,7 @@ async function verifyPlan(page) {
 
 async function verifyEditingAPart(page) {
   // The user can hand a part to a different agent before approving.
+  await page.getByLabel('Check command').fill('node check.js');
   await page.getByLabel('Code review agent').selectOption('qwen');
   const reason = await page.locator('.team-part', { hasText: 'Code review' }).locator('.team-reason').innerText();
   if (!reason.includes('You chose Qwen Code')) throw new Error(`The override was not reflected: ${reason}`);
@@ -214,8 +216,21 @@ async function continueAndFinish(page) {
   await page.locator('.workflow-run-list .workflow-status.completed').first().waitFor({ timeout: 90_000 });
   await page.locator('section.team-decision').waitFor({ state: 'detached' });
   await page.getByText('Security: blocked, continued by you').waitFor();
+  await verifyCheckRoundTrip(page);
   await assertControlsDoNotWrap(page, 'team-finished');
   await page.screenshot({ path: path.join(outputDirectory, 'team-finished.png') });
+}
+
+async function verifyCheckRoundTrip(page) {
+  // The check failed once, named src/api/login.ts, and only the backend part went back to fix it.
+  const progress = page.locator('.team-check-progress');
+  await progress.waitFor();
+  const text = await progress.innerText();
+  if (!/node check\.js/.test(text) || !/passed/.test(text) || !/fix round 1 of 2/.test(text)) throw new Error(`Unexpected check progress: ${text}`);
+  const fixPrompt = await page.getByLabel('Step 5 prompt').inputValue();
+  if (!fixPrompt.includes('FIX ROUND 1') || !fixPrompt.includes('src/api/login.ts')) throw new Error(`Step 5 should be the backend fix round: ${fixPrompt.slice(0, 200)}`);
+  if (await page.getByLabel('Step 6 prompt').count()) throw new Error('Only one fix step should have been added.');
+  await assertControlsDoNotWrap(page, 'a finished team job with a check');
 }
 
 async function verifyCallsMadeByTheTeam() {
@@ -237,8 +252,76 @@ async function verifyCallsMadeByTheTeam() {
   // The reviewer the user chose (Qwen) also got its whole multi-line prompt on stdin, and only read.
   if (review.agent !== 'qwen' || !review.args.join(' ').includes('--approval-mode plan')) throw new Error(`The code review should run on Qwen, read-only: ${JSON.stringify(review.args)}`);
   if (!/\n/.test(review.prompt) || !review.prompt.includes('Overall goal:')) throw new Error('A multi-line prompt must reach the agent whole.');
+  // The failed check went back to the backend part's own agent, once, with what the check printed.
+  const fixes = calls.filter((call) => /FIX ROUND/.test(call.prompt));
+  if (fixes.length !== 1 || fixes[0].agent !== 'codex' || !fixes[0].prompt.includes('src/api/login.ts:12:5')) throw new Error(`Expected one backend fix on Codex: ${JSON.stringify(fixes.map((call) => call.agent))}`);
   // Each part starts a new agent session instead of continuing the previous agent's.
   if (calls.some((call) => call.args.includes('--resume') || call.args.includes('resume'))) throw new Error('Team parts must never resume another part\'s session.');
+}
+
+/** What the fake orchestrator answers with unless a step changes it. */
+function originalPlan() {
+  return {
+  summary: 'Add a login page and the endpoint it calls.',
+  parts: [
+    { id: 'ui', title: 'Login form', role: 'frontend', prompt: 'Build the login form in src/ui.', dependsOn: [], paths: ['src/ui'] },
+    { id: 'api', title: 'Auth endpoint', role: 'backend', prompt: 'Add POST /login in src/api.', dependsOn: [], paths: ['src/api'] },
+  ],
+  };
+}
+
+/** A team just for this project, with a role of its own: planned with, then removed and refused. */
+async function verifyCustomRoleAndProjectTeam(page) {
+  await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  const card = page.locator('section.settings-section[aria-label="Agent team"]');
+  await card.scrollIntoViewIfNeeded();
+  await card.getByRole('tab', { name: /^Just Team Smoke Project/ }).click();
+  await card.getByText(/uses the team from Settings/).waitFor();
+  await card.getByRole('button', { name: 'Create a team for Team Smoke Project' }).click();
+  await card.getByRole('button', { name: 'Add a role' }).click();
+  await card.getByLabel('custom-new-role name').fill('Database specialist');
+  await card.getByLabel('Database specialist agent').selectOption('codex');
+  await assertControlsDoNotWrap(page, 'project team with a custom role');
+  await page.screenshot({ path: path.join(outputDirectory, 'settings-project-team.png') });
+  await card.getByRole('button', { name: 'Save the team for Team Smoke Project' }).click();
+  await page.waitForFunction(async () => {
+    const saved = await window.kaiDesktop.getPreferences('project-team-smoke');
+    return saved.ok && saved.data?.agentTeam?.custom?.length === 1;
+  }, undefined, { timeout: 15_000 });
+
+  // Plan with it: the orchestrator now sees the role and may use it, and the plan says whose team it used.
+  await writeFile(planFile, JSON.stringify({
+    summary: 'Add the orders table.',
+    parts: [{ id: 'orders', title: 'Orders table', role: 'custom-new-role', prompt: 'Create the orders table.', dependsOn: [], paths: ['db/'] }],
+  }), 'utf8');
+  await openWorkflows(page);
+  await page.getByLabel('Goal').fill('Add an orders table');
+  await page.getByRole('button', { name: /^(Plan the job|Plan again)$/ }).click();
+  await page.locator('.team-plan').waitFor({ timeout: 60_000 });
+  const first = page.locator('.team-part').first();
+  await first.getByText(/Database specialist/).first().waitFor();
+  if (await page.getByLabel('Orders table agent').inputValue() !== 'codex') throw new Error('The custom role should run on the agent it was given.');
+  await page.getByText(/this project's own team/).waitFor();
+  const orchestratorCall = (await readCalls()).filter((call) => /orchestrator of a team/.test(call.prompt)).at(-1);
+  if (!orchestratorCall.prompt.includes('"custom-new-role": Database specialist (edits files)')) throw new Error('The orchestrator was not told about the custom role.');
+  await assertControlsDoNotWrap(page, 'a plan with a custom role');
+  await page.screenshot({ path: path.join(outputDirectory, 'team-plan-custom-role.png') });
+
+  // Remove the project team: the same plan now names a role nobody has, and is refused instead of run.
+  await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await card.scrollIntoViewIfNeeded();
+  await card.getByRole('tab', { name: /^Just Team Smoke Project/ }).click();
+  await card.getByRole('button', { name: 'Use the team from Settings again' }).click();
+  await page.waitForFunction(async () => {
+    const saved = await window.kaiDesktop.getPreferences('project-team-smoke');
+    return saved.ok && !saved.data?.agentTeam;
+  }, undefined, { timeout: 15_000 });
+  await openWorkflows(page);
+  await page.getByLabel('Goal').fill('Add an orders table');
+  await page.getByRole('button', { name: /^(Plan the job|Plan again)$/ }).click();
+  await page.locator('.rules-error').getByText(/not one of the team's roles/).waitFor({ timeout: 60_000 });
+
+  await writeFile(planFile, JSON.stringify(originalPlan()), 'utf8');
 }
 
 async function verifyNarrowWindow(page) {
@@ -268,14 +351,16 @@ async function createFixtures() {
   await mkdir(binDirectory, { recursive: true });
   await mkdir(userData, { recursive: true });
   await writeFile(path.join(projectPath, 'src', 'app.ts'), 'export const app = "team smoke";\n', 'utf8');
+  // The team's check: it fails, naming a backend file, until a fake agent has run a "fix round" (which drops .fixed).
+  await writeFile(path.join(projectPath, 'check.js'), [
+    "const fs = require('node:fs');",
+    "if (fs.existsSync('.fixed')) process.exit(0);",
+    "console.log('FAIL src/api/login.test.ts');",
+    "console.log('    at src/api/login.ts:12:5');",
+    'process.exit(1);',
+  ].join('\n'), 'utf8');
   await writeFile(path.join(kimiHome, 'credentials', 'kimi-code.json'), '{}', 'utf8');
-  await writeFile(planFile, JSON.stringify({
-    summary: 'Add a login page and the endpoint it calls.',
-    parts: [
-      { id: 'ui', title: 'Login form', role: 'frontend', prompt: 'Build the login form in src/ui.', dependsOn: [], paths: ['src/ui'] },
-      { id: 'api', title: 'Auth endpoint', role: 'backend', prompt: 'Add POST /login in src/api.', dependsOn: [], paths: ['src/api'] },
-    ],
-  }), 'utf8');
+  await writeFile(planFile, JSON.stringify(originalPlan()), 'utf8');
   await writeFile(path.join(binDirectory, 'fake-cli.mjs'), fakeCliSource(), 'utf8');
   for (const agent of ['claude', 'codex', 'qwen', 'gemini', 'kimi']) {
     if (process.platform === 'win32') {
@@ -340,8 +425,10 @@ process.stdin.on('data', (chunk) => { stdin += chunk; });
 process.stdin.on('end', () => {
   const prompt = agent === 'kimi' ? (args[args.indexOf('-p') + 1] ?? '') : stdin;
   fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ agent, args, prompt }) + '\\n');
+  // A fix round repairs what the project's check was complaining about.
+  if (/FIX ROUND/.test(prompt)) fs.writeFileSync('.fixed', '1');
   let reply;
-  if (/orchestrator of a team/.test(prompt)) reply = fs.readFileSync(process.env.FAKE_PLAN, 'utf8');
+  if (/orchestrator of a team|previous reply could not be used/.test(prompt)) reply = fs.readFileSync(process.env.FAKE_PLAN, 'utf8');
   else if (/Security reviewer/.test(prompt)) reply = 'Reviewed every change.\\n' + process.env.FAKE_VERDICT;
   else if (/Code reviewer/.test(prompt)) reply = 'Looks correct.';
   else reply = 'Done: ' + ((/Your part - ([^:\\n]*)/.exec(prompt) ?? [])[1] ?? 'the task');

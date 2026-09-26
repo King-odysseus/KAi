@@ -1,8 +1,9 @@
 import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
-  TEAM_ROLE_INFO,
   isLocalProvider,
+  resolveRole,
+  type AgentTeam,
   type AgentCapability,
   type AppSettings,
   type AutonomyMode,
@@ -16,6 +17,8 @@ import {
   type WorkflowRun,
 } from '@kai/contracts';
 import { unwrap } from '../types';
+import { conflictDetail, teamPaths } from '../team-paths';
+import { confirmDialog } from './AppDialog';
 
 const AUTONOMY_OPTIONS: Array<{ value: AutonomyMode; label: string }> = [
   { value: 'autoEdit', label: 'Auto-edit' },
@@ -51,10 +54,31 @@ export function TeamPanel({
   const [planning, setPlanning] = useState(false);
   const [starting, setStarting] = useState(false);
   const [autonomy, setAutonomy] = useState<AutonomyMode>('autoEdit');
+  const [checkCommand, setCheckCommand] = useState('');
+  const [fixRounds, setFixRounds] = useState(2);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const orchestrator = settings.agentTeam.roles.orchestrator;
+  // A project can have its own team; the plan card and the orchestrator line follow whichever applies.
+  const [projectTeam, setProjectTeam] = useState<AgentTeam | null>(null);
+  const team = projectTeam ?? settings.agentTeam;
+  const orchestrator = team.roles.orchestrator;
   const localApi = isLocalProvider(settings.directApi.provider);
+
+  // Each project remembers the check it last used, since it is usually the same command every time.
+  const projectId = activeProject?.id;
+  useEffect(() => {
+    let cancelled = false;
+    setProjectTeam(null);
+    if (projectId) {
+      void window.kaiDesktop.getPreferences(projectId).then(unwrap).then((preferences) => {
+        if (!cancelled) setProjectTeam(preferences?.agentTeam ?? null);
+      }).catch(() => undefined);
+    }
+    const saved = readCheck(projectId);
+    setCheckCommand(saved.command);
+    setFixRounds(saved.rounds);
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   async function plan(): Promise<void> {
     if (!activeProject || !goal.trim()) return;
@@ -76,13 +100,28 @@ export function TeamPanel({
     setStarting(true);
     setError(null);
     try {
+      // Warn, never block, when another agent has claimed a file the team is about to change.
+      const paths = teamPaths(draft.parts);
+      if (paths.length > 0) {
+        const check = await window.kaiDesktop.coordinationPreflight(draft.projectId, paths).then(unwrap).catch(() => null);
+        if (check && check.conflicts.length > 0 && !(await confirmDialog({
+          title: 'Files are already claimed',
+          detail: `Another agent is working on files this team will change:\n\n${conflictDetail(check.conflicts)}\n\nRun the team anyway?`,
+          confirmLabel: 'Run anyway',
+        }))) {
+          return;
+        }
+      }
       const run = unwrap(await window.kaiDesktop.startTeam({
         projectId: draft.projectId,
         goal: draft.goal,
         parts: draft.parts,
         assignments: draft.assignments,
         autonomy,
+        checkCommand: checkCommand.trim(),
+        maxRounds: fixRounds,
       }));
+      writeCheck(draft.projectId, { command: checkCommand.trim(), rounds: fixRounds });
       setDraft(null);
       setGoal('');
       setNotice('The team is working. Follow it in the run list above.');
@@ -158,7 +197,7 @@ export function TeamPanel({
         <div className="team-plan" aria-label="Team plan">
           <div className="team-plan-summary">
             <strong>{draft.summary || 'Plan'}</strong>
-            <small>Planned by {nameOf(draft.orchestrator.assignee, agentCapabilities)}. {draft.orchestrator.reason}</small>
+            <small>Planned by {nameOf(draft.orchestrator.assignee, agentCapabilities)}. {draft.orchestrator.reason} Using {draft.teamScope === 'project' ? "this project's own team" : 'the team from Settings'}.</small>
           </div>
           {draft.warnings.length > 0 && (
             <ul className="team-warnings" aria-label="Plan notes">
@@ -168,7 +207,7 @@ export function TeamPanel({
           <ol className="team-parts">
             {draft.parts.map((part, index) => {
               const assignment = draft.assignments.find((item) => item.partId === part.id);
-              const info = TEAM_ROLE_INFO[part.role];
+              const info = resolveRole(team, part.role);
               if (!assignment) return null;
               const proxyCapable = assignment.assignee === 'api' || agentCapabilities.find((agent) => agent.id === assignment.assignee)?.supportsRoutes.includes('proxy');
               return (
@@ -218,6 +257,19 @@ export function TeamPanel({
                 {AUTONOMY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
+            <div className="team-check">
+              <label className="workflow-field team-check-command">
+                <span>Check after the team finishes (optional)</span>
+                <input aria-label="Check command" value={checkCommand} disabled={disabled} maxLength={1000} placeholder="npm test" onChange={(event) => setCheckCommand(event.target.value)} />
+              </label>
+              <label className="workflow-field team-rounds">
+                <span>Fix rounds</span>
+                <select aria-label="Fix rounds" value={fixRounds} disabled={disabled || !checkCommand.trim()} onChange={(event) => setFixRounds(Number(event.target.value))}>
+                  {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
+                </select>
+              </label>
+              <small>If the check fails, only the part that owns the files it names goes back to fix it.</small>
+            </div>
             <small>Reviewers always read only. A security review that finds a serious problem stops the job and asks you.{perTokenParts > 0 ? ` ${perTokenParts} ${perTokenParts === 1 ? 'part uses' : 'parts use'} per-token billing.` : ''}</small>
             <button type="button" className="primary-button" disabled={disabled || draft.parts.length === 0} onClick={() => void start()}>
               {starting ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
@@ -228,6 +280,31 @@ export function TeamPanel({
       )}
     </section>
   );
+}
+
+function checkKey(projectId: string | undefined): string {
+  return `kai.teamCheck.${projectId ?? 'none'}`;
+}
+
+function readCheck(projectId: string | undefined): { command: string; rounds: number } {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(checkKey(projectId)) ?? '{}') as { command?: unknown; rounds?: unknown };
+    const rounds = Number(value.rounds);
+    return {
+      command: typeof value.command === 'string' ? value.command.slice(0, 1000) : '',
+      rounds: Number.isInteger(rounds) && rounds >= 1 && rounds <= 5 ? rounds : 2,
+    };
+  } catch {
+    return { command: '', rounds: 2 };
+  }
+}
+
+function writeCheck(projectId: string, value: { command: string; rounds: number }): void {
+  try {
+    window.localStorage.setItem(checkKey(projectId), JSON.stringify(value));
+  } catch {
+    // Remembering the check is a convenience only.
+  }
 }
 
 function billingFor(assignee: TeamResolvedAssignee, route: RouteMode, localApi: boolean): TeamBilling {

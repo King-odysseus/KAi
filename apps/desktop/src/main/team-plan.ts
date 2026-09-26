@@ -1,6 +1,12 @@
 import {
   TEAM_ROLE_INFO,
+  isBuiltInRole,
+  resolveRole,
+  roleAutoAdd,
   teamPlanSchema,
+  type AgentTeam,
+  type ResolvedRole,
+  type TeamLike,
   type TeamPart,
   type TeamPlan,
   type TeamRoleConfig,
@@ -13,8 +19,10 @@ const STEP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 const WORKER_ROLES: readonly TeamWorkerRoleId[] = ['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'docs'];
 
-export function buildOrchestratorPrompt(goal: string): string {
-  const roles = WORKER_ROLES.map((role) => `- "${role}": ${TEAM_ROLE_INFO[role].label}. ${TEAM_ROLE_INFO[role].description}`).join('\n');
+export function buildOrchestratorPrompt(goal: string, team?: TeamLike): string {
+  const builtIn = WORKER_ROLES.map((role) => `- "${role}": ${TEAM_ROLE_INFO[role].label}. ${TEAM_ROLE_INFO[role].description}`);
+  const custom = (team?.custom ?? []).map((role) => `- "${role.id}": ${role.label} (${role.access === 'read' ? 'read-only' : 'edits files'}). ${role.description}`.trim());
+  const roles = [...builtIn, ...custom].join('\n');
   return [
     'You are the orchestrator of a team of coding agents. Split the goal below into parts, one per teammate.',
     'You may read files in this project to understand it. Do not create, edit or delete anything.',
@@ -47,7 +55,7 @@ export function buildRepairPrompt(error: string): string {
 export type ParsedTeamPlan = { ok: true; plan: TeamPlan } | { ok: false; error: string };
 
 /** Reads the orchestrator's reply. Accepts fenced or chatty replies, but never a plan that does not hold together. */
-export function parseTeamPlan(output: string): ParsedTeamPlan {
+export function parseTeamPlan(output: string, team?: TeamLike): ParsedTeamPlan {
   const json = extractJsonObject(output);
   if (!json) return { ok: false, error: 'the reply did not contain a JSON object' };
   let value: unknown;
@@ -62,6 +70,8 @@ export function parseTeamPlan(output: string): ParsedTeamPlan {
     return { ok: false, error: `${issue.path.join('.') || 'the plan'}: ${issue.message}` };
   }
   const plan = parsed.data;
+  const unknown = plan.parts.find((part) => !isBuiltInRole(part.role) && !team?.custom?.some((role) => role.id === part.role));
+  if (unknown) return { ok: false, error: `part "${unknown.id}" uses the role "${unknown.role}", which is not one of the team's roles` };
   if (plan.parts.length > MAX_ORCHESTRATOR_PARTS) return { ok: false, error: `it returned ${plan.parts.length} parts; the limit is ${MAX_ORCHESTRATOR_PARTS}` };
   const structure = checkStructure(plan.parts);
   return structure ? { ok: false, error: structure } : { ok: true, plan };
@@ -126,12 +136,49 @@ export interface GuardedParts {
   warnings: string[];
 }
 
-/** KAI's own safeguards: a security review when the job touches sensitive areas, and a code review always. */
-export function applyGuardrails(goal: string, parts: readonly TeamPart[]): GuardedParts {
+interface AddedPart {
+  id: string;
+  title: string;
+  /** How the part is named in a note: "Added a security review because ...". */
+  noun: string;
+  prompt: (topics: string[]) => string;
+}
+
+// What KAI can add to a job by itself, in the order it does so. Reviewers come last so they see everything.
+const ADDED_PARTS: ReadonlyArray<readonly [TeamWorkerRoleId, AddedPart]> = [
+  ['tests', {
+    id: 'tests',
+    title: 'Tests',
+    noun: 'test part',
+    prompt: () => 'Write or update tests for the changes made by the earlier parts, run them, and report exactly what passed and failed.',
+  }],
+  ['docs', {
+    id: 'docs',
+    title: 'Documentation',
+    noun: 'documentation part',
+    prompt: () => 'Update the documentation (README, comments, usage notes) so it matches the changes made by the earlier parts. Do not change code.',
+  }],
+  ['securityReviewer', {
+    id: 'security-review',
+    title: 'Security review',
+    noun: 'security review',
+    prompt: (topics) => `Review every change made by the earlier parts for security problems.${topics.length > 0 ? ` This job touches: ${topics.join(', ')}.` : ''} Look for missing input checks, injection, broken access control, unsafe storage or logging of secrets, and insecure defaults.`,
+  }],
+  ['codeReviewer', {
+    id: 'code-review',
+    title: 'Code review',
+    noun: 'code review',
+    prompt: () => 'Review all changes made by the earlier parts for correctness, missed requirements, edge cases and quality. Say clearly what is wrong and where.',
+  }],
+];
+
+/**
+ * KAI's own safeguards, set per role in the team settings. By default a code review is added to every job and a
+ * security review to jobs that touch sensitive areas; a role set to "never" is left to the orchestrator.
+ */
+export function applyGuardrails(goal: string, parts: readonly TeamPart[], team?: Pick<AgentTeam, 'roles'>): GuardedParts {
   const result = [...parts];
   const warnings: string[] = [];
-  const editing = result.filter((part) => TEAM_ROLE_INFO[part.role].access === 'edit');
-  const dependsOn = editing.map((part) => part.id);
   const topics = sensitiveTopics(goal, ...result.flatMap((part) => [part.title, part.prompt, ...part.paths]));
   const freeId = (base: string): string => {
     let id = base;
@@ -139,34 +186,31 @@ export function applyGuardrails(goal: string, parts: readonly TeamPart[]): Guard
     return id;
   };
 
-  if (!result.some((part) => part.role === 'securityReviewer') && topics.length > 0 && editing.length > 0) {
+  for (const [role, added] of ADDED_PARTS) {
+    if (result.some((part) => part.role === role)) continue;
+    const mode = roleAutoAdd(team?.roles[role], role);
+    const wanted = mode === 'always' || (mode === 'sensitive' && topics.length > 0);
+    // Whatever the earlier parts changed is what this part works on; with nothing changed there is nothing to add.
+    const editing = result.filter((part) => resolveRole(team, part.role).access === 'edit');
+    if (!wanted || editing.length === 0) continue;
     result.push({
-      id: freeId('security-review'),
-      title: 'Security review',
-      role: 'securityReviewer',
-      prompt: `Review every change made by the earlier parts for security problems. This job touches: ${topics.join(', ')}. Look for missing input checks, injection, broken access control, unsafe storage or logging of secrets, and insecure defaults.`,
-      dependsOn,
+      id: freeId(added.id),
+      title: added.title,
+      role,
+      prompt: added.prompt(topics),
+      dependsOn: editing.map((part) => part.id),
       paths: [],
     });
-    warnings.push(`Added a security review because this job touches: ${topics.join(', ')}.`);
-  }
-  if (!result.some((part) => part.role === 'codeReviewer') && editing.length > 0) {
-    result.push({
-      id: freeId('code-review'),
-      title: 'Code review',
-      role: 'codeReviewer',
-      prompt: 'Review all changes made by the earlier parts for correctness, missed requirements, edge cases and quality. Say clearly what is wrong and where.',
-      dependsOn,
-      paths: [],
-    });
-    warnings.push('Added a code review of the finished work.');
+    warnings.push(mode === 'sensitive'
+      ? `Added a ${added.noun} because this job touches: ${topics.join(', ')}.`
+      : `Added a ${added.noun}: your team settings add one to every job.`);
   }
   return { parts: result, warnings };
 }
 
 /** The full instruction one agent receives for its part of the job. */
-export function buildStepPrompt(goal: string, part: TeamPart, config: TeamRoleConfig | undefined): string {
-  const info = TEAM_ROLE_INFO[part.role];
+export function buildStepPrompt(goal: string, part: TeamPart, config: TeamRoleConfig | undefined, role?: ResolvedRole): string {
+  const info = role ?? resolveRole(undefined, part.role);
   const lines = [
     `You are the ${info.label} on a team of coding agents working on one project. Do only your part; teammates handle the rest.`,
     '',
@@ -210,6 +254,70 @@ export function parseVerdict(output: string): ReviewVerdict {
     }
   }
   return { result: 'block', reason: 'The reviewer did not end with a clear PASS or BLOCK verdict.' };
+}
+
+/** A part that edits files, as the runner sees it when a check fails. */
+export interface OwnerStep {
+  id: string;
+  role: string;
+  paths: readonly string[];
+}
+
+// Bare file names count only with a code-like extension, so "1.5" or "e.g." in test output is not taken for a file.
+const FILE_EXTENSIONS = 'ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|cs|php|css|scss|html|json|md|vue|svelte|sql|yml|yaml|toml|c|cc|cpp|h|swift';
+const PATH_TOKEN = new RegExp(`[\\w@.~-]+(?:[\\\\/][\\w@.~-]+)+\\.\\w{1,6}|[\\w-]+\\.(?:${FILE_EXTENSIONS})\\b`, 'g');
+
+const normalizePath = (value: string): string => value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+
+/** The file paths a check's output mentions, normalised to forward slashes. */
+export function failingPaths(output: string): string[] {
+  return [...new Set((output.match(PATH_TOKEN) ?? []).map(normalizePath))];
+}
+
+function pathMatches(candidate: string, ownerPath: string): boolean {
+  const owned = normalizePath(ownerPath);
+  if (!owned) return false;
+  return candidate === owned || candidate.endsWith(`/${owned}`) || candidate.startsWith(`${owned}/`) || candidate.includes(`/${owned}/`);
+}
+
+const FIX_PRIORITY: readonly string[] = ['backend', 'frontend', 'tests', 'docs'];
+
+export interface FailureRoute {
+  ownerIds: string[];
+  /** "paths" when the output named files a part owns; "fallback" when it named none KAI could match. */
+  reason: 'paths' | 'fallback';
+}
+
+/**
+ * Who should fix a failed check. Every part that owns a file the output names; when none does, the first editing
+ * part by role (backend, then frontend, tests, docs), since a failure with no clear owner is most often the logic.
+ */
+export function routeFailure(output: string, owners: readonly OwnerStep[]): FailureRoute {
+  const mentioned = failingPaths(output);
+  const matched = owners.filter((owner) => owner.paths.some((owned) => mentioned.some((path) => pathMatches(path, owned))));
+  if (matched.length > 0) return { ownerIds: matched.map((owner) => owner.id), reason: 'paths' };
+  for (const role of FIX_PRIORITY) {
+    const owner = owners.find((candidate) => candidate.role === role);
+    if (owner) return { ownerIds: [owner.id], reason: 'fallback' };
+  }
+  // No built-in editing role: a custom editing role is the only thing left to send the failure to.
+  const first = owners.at(0);
+  return { ownerIds: first ? [first.id] : [], reason: 'fallback' };
+}
+
+/** The instruction a fixing part receives: its original task, then what the check said. */
+export function buildFixPrompt(original: string, command: string, round: number, output: string): string {
+  const tail = output.trim().length > 4_000 ? `[earlier output left out]\n${output.trim().slice(-4_000)}` : output.trim();
+  return [
+    `FIX ROUND ${round}. The check "${command}" failed after the team's work. Repair the problems in your own area.`,
+    'If the failure clearly belongs to a different area, say so and change nothing there.',
+    '',
+    'What the check printed:',
+    tail || '(no output)',
+    '',
+    'Your original task, for reference:',
+    original,
+  ].join('\n');
 }
 
 /** The earlier work a later part is shown, so agents that cannot share a session still share results. */

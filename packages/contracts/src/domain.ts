@@ -319,6 +319,8 @@ export const projectPreferencesV1Schema = z
     schemaVersion: schemaVersionSchema,
     projectId: z.string().min(1),
     agent: agentIdSchema.optional(),
+    // A team just for this project; without it the project uses the team from Settings.
+    agentTeam: agentTeamSchema.optional(),
     route: routeModeSchema.optional(),
     autonomy: autonomyModeSchema.optional(),
     customPermissions: z.record(permissionKeySchema, z.boolean()).optional(),
