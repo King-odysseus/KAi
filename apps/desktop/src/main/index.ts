@@ -41,6 +41,7 @@ import { activeParallelDirectories, createParallelSession } from './parallel-ses
 import { cleanupParallelWorktrees } from './git-worktrees';
 import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
+import { reloadShortcut } from './reload-shortcut';
 import { PreviewRuntime } from './preview-runtime';
 
 app.setName('KAI');
@@ -597,6 +598,17 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
   });
   window.webContents.on('will-navigate', (event, url) => {
     if (!isApplicationUrl(url)) event.preventDefault();
+  });
+  window.webContents.on('before-input-event', (event, input) => {
+    const kind = reloadShortcut(input);
+    if (!kind) return;
+    event.preventDefault();
+    void (async () => {
+      if (ipcContext && !(await confirmEditorNavigation(ipcContext, session, 'reload the window'))) return;
+      if (window.isDestroyed()) return;
+      if (kind === 'force') window.webContents.reloadIgnoringCache();
+      else window.webContents.reload();
+    })();
   });
   window.webContents.on('render-process-gone', (_event, details) => {
     ipcContext?.logger.error('renderer_error', 'Renderer process exited', details.reason);
