@@ -242,6 +242,7 @@ describe('desktop learning mode', () => {
     expect(bodies[0]).toMatchObject({
       model: 'test-model',
       store: false,
+      max_output_tokens: 8_192,
       text: {
         format: {
           type: 'json_schema',
@@ -329,7 +330,9 @@ describe('desktop learning mode', () => {
     expect(result.response.title).toBe('Variables hold changing values');
     expect(bodies).toHaveLength(2);
     expect(bodies[0]?.response_format).toBeDefined();
+    expect(bodies[0]?.max_tokens).toBe(8_192);
     expect(bodies[1]?.response_format).toBeUndefined();
+    expect(bodies[1]?.max_tokens).toBe(8_192);
   });
 
   it('explains why a chat model returned no tutor content', async () => {

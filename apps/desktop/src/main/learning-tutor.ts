@@ -33,6 +33,10 @@ interface TeachingLibraryPort {
 }
 
 const MAX_TUTOR_RESPONSE_CHARS = 200_000;
+// Reasoning-capable tutor models may consume part of the completion allowance
+// before producing the required JSON. Keep this aligned with the Direct API
+// runtime's completion ceiling so ordinary tutor requests do not end early.
+const TUTOR_MAX_OUTPUT_TOKENS = 8_192;
 const MAX_TEACHING_PROFILE_CHARS = 60_000;
 const MAX_LEARNING_GUIDE_TAIL_CHARS = 18_000;
 const MAX_PROJECT_CONTEXT_CHARS = 60_000;
@@ -387,7 +391,7 @@ export class DesktopLearningTutor {
       body: JSON.stringify({
         model,
         system: prompt.system,
-        max_tokens: 6_000,
+        max_tokens: TUTOR_MAX_OUTPUT_TOKENS,
         messages: [{ role: 'user', content: prompt.user }],
       }),
       signal: AbortSignal.timeout(this.requestTimeoutMs),
@@ -415,7 +419,7 @@ export class DesktopLearningTutor {
         systemInstruction: { parts: [{ text: prompt.system }] },
         contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
         generationConfig: {
-          maxOutputTokens: 6_000,
+          maxOutputTokens: TUTOR_MAX_OUTPUT_TOKENS,
           responseMimeType: 'application/json',
         },
       }),
@@ -444,7 +448,7 @@ export class DesktopLearningTutor {
         model,
         store: false,
         input: `${prompt.system}\n\n${prompt.user}`,
-        max_output_tokens: 6_000,
+        max_output_tokens: TUTOR_MAX_OUTPUT_TOKENS,
         text: {
           format: {
             type: 'json_schema',
@@ -516,7 +520,7 @@ export class DesktopLearningTutor {
             { role: 'system', content: prompt.system },
             { role: 'user', content: prompt.user },
           ],
-          max_tokens: 6_000,
+          max_tokens: TUTOR_MAX_OUTPUT_TOKENS,
           ...(structured ? {
             response_format: {
               type: 'json_schema',

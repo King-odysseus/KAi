@@ -654,12 +654,18 @@ function TutorComposer({
             aria-label="Tutor question"
             value={question}
             onChange={(event) => onQuestionChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                if (!busy && !(scope === 'active-file' && !selection)) onAction('next-step');
+              }
+            }}
             placeholder={placeholder}
             rows={1}
           />
           {busy && <TutorProcessing tick={progressTick} />}
           <footer>
-            <span title={selection?.filePath ?? undefined}>{contextLabel}</span>
+            <span title={selection?.filePath ?? undefined}>{contextLabel} · Enter to ask · Shift+Enter for a new line</span>
             <div>
               <button type="button" className="secondary-button" disabled={busy || !canEscalateAssistance || (scope === 'active-file' && !selection)} onClick={onStuck} title={canEscalateAssistance ? 'Get one level more help for this request only' : 'You are already using the highest level of help.'}><Lightbulb size={13} />I'm stuck</button>
               {response && onRecordLesson && (
