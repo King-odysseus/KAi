@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type {
   AgentCapability,
@@ -54,9 +56,36 @@ const AGENTS: Record<
     signInCommand: 'gemini',
     installUrl: 'https://github.com/google-gemini/gemini-cli',
   },
+  kimi: {
+    displayName: 'Kimi Code',
+    command: 'kimi',
+    // Kimi Code has no auth-status command; sign-in is read from its config directory instead (see kimiSignedIn).
+    authArgs: [],
+    signInArgs: ['login'],
+    signInCommand: 'kimi login',
+    installUrl: 'https://moonshotai.github.io/kimi-code/en/',
+  },
 };
 
-export const AGENT_ORDER: AgentId[] = ['claude', 'codex', 'qwen', 'gemini'];
+export const AGENT_ORDER: AgentId[] = ['claude', 'codex', 'qwen', 'gemini', 'kimi'];
+
+/** Each CLI's official install, as its own docs give it. The npm ones need Node.js 18 or newer. */
+export function agentInstallCommand(id: AgentId, platform: NodeJS.Platform = process.platform): string {
+  switch (id) {
+    case 'claude':
+      return 'npm install -g @anthropic-ai/claude-code';
+    case 'codex':
+      return 'npm install -g @openai/codex';
+    case 'qwen':
+      return 'npm install -g @qwen-code/qwen-code@latest';
+    case 'gemini':
+      return 'npm install -g @google/gemini-cli';
+    case 'kimi':
+      return platform === 'win32'
+        ? 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://code.kimi.com/kimi-code/install.ps1 | iex"'
+        : 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash';
+  }
+}
 
 export interface AgentExecutionResult {
   status: 'completed' | 'failed';
@@ -65,6 +94,8 @@ export interface AgentExecutionResult {
   events: PersistedEvent[];
   sessionId?: string;
   error?: string;
+  /** The run failed because the CLI is signed out; the caller should offer Sign in. */
+  signInRequired?: boolean;
 }
 
 interface ProcessChunk {
@@ -90,14 +121,17 @@ interface SignInLaunchOptions {
 }
 
 type SignInLauncher = (command: string, args: string[], options: SignInLaunchOptions) => Promise<void>;
+type InstallLauncher = (commandLine: string, options: SignInLaunchOptions) => Promise<void>;
 
 export interface DesktopAgentRuntimeOptions {
   resolveProxyEnvironment?: (
     agent: AgentId,
     request: AgentRunRequest,
+    model?: string,
   ) => Promise<NodeJS.ProcessEnv | null>;
   suspendProcess?: (pid: number) => Promise<void>;
   resumeProcess?: (pid: number) => Promise<void>;
+  installLauncher?: InstallLauncher;
 }
 
 export interface CliProxyAccess {
@@ -106,7 +140,7 @@ export interface CliProxyAccess {
 }
 
 /** Environment-only routing keeps the CLI's own configuration and credentials untouched. */
-export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess): NodeJS.ProcessEnv {
+export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess, model?: string): NodeJS.ProcessEnv {
   const baseUrl = `${access.endpoint.replace(/\/+$/, '')}/a/${agent}`;
   if (agent === 'claude') {
     return {
@@ -124,7 +158,30 @@ export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess): Nod
       CODEX_API_KEY: access.token,
     };
   }
+  if (agent === 'qwen') {
+    // buildAgentArgs also passes the base URL as a flag, because ~/.qwen/settings.json can override the environment.
+    return {
+      ...process.env,
+      OPENAI_BASE_URL: `${baseUrl}/v1`,
+      OPENAI_API_KEY: access.token,
+    };
+  }
+  if (agent === 'kimi') {
+    // KIMI_MODEL_* makes Kimi Code build a temporary provider for this run without writing its config files.
+    return {
+      ...process.env,
+      KIMI_MODEL_NAME: model || 'kimi-for-coding',
+      KIMI_MODEL_API_KEY: access.token,
+      KIMI_MODEL_PROVIDER_TYPE: 'kimi',
+      KIMI_MODEL_BASE_URL: `${baseUrl}/v1`,
+    };
+  }
   throw new Error(`${agent} does not support Universal Proxy routing.`);
+}
+
+/** True when an agent's error text means its CLI has no signed-in account. */
+export function isSignInError(message: string): boolean {
+  return /not (?:logged|signed) in|please (?:run )?\/?log ?in|run [`'"]?\w+ (?:auth )?login|login required|no authentication method configured|authentication required|invalid api key|oauth token (?:has )?expired|credentials? (?:are |is )?(?:missing|expired)/i.test(message);
 }
 
 interface ActiveAgentRun {
@@ -159,17 +216,20 @@ export class DesktopAgentRuntime {
         state: notInstalled ? 'not_installed' : 'unavailable',
         version: info.version,
         unavailableReason: notInstalled
-          ? `${definition.displayName} is not installed. Open the setup guide, then restart KAI.`
+          ? `${definition.displayName} is not installed. Use Install to set it up, then KAI picks it up automatically.`
           : `${definition.displayName} could not start: ${info.detail || 'unknown command error'}`,
         command,
         signInCommand: definition.signInCommand,
+        installCommand: agentInstallCommand(id),
         installUrl: definition.installUrl,
         supportsRoutes: supportsProxy(id) ? ['direct', 'proxy'] : ['direct'],
         supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
       };
     }
 
-    const auth = await commandInfo(id, command, definition.authArgs);
+    const auth = id === 'kimi'
+      ? { available: kimiSignedIn() }
+      : await commandInfo(id, command, definition.authArgs);
     return {
       id,
       displayName: definition.displayName,
@@ -185,6 +245,27 @@ export class DesktopAgentRuntime {
       supportsRoutes: supportsProxy(id) ? ['direct', 'proxy'] : ['direct'],
       supportsAutonomy: ['plan', 'ask', 'autoEdit', 'full', 'custom'],
     };
+  }
+
+  async install(id: AgentId): Promise<AgentSignInResult> {
+    const definition = AGENTS[id];
+    const command = agentInstallCommand(id);
+    const capability = await this.capability(id);
+    if (capability.state !== 'not_installed') {
+      return { agent: id, started: false, command, message: `${definition.displayName} is already installed.` };
+    }
+    try {
+      await (this.options.installLauncher ?? launchInstallTerminal)(command, { cwd: homedir(), env: process.env });
+      return {
+        agent: id,
+        started: true,
+        command,
+        message: `${definition.displayName} is installing in a separate window. KAI will notice when it finishes.`,
+      };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { agent: id, started: false, command, message: `KAI could not open the installer: ${detail}. Run it yourself: ${command}` };
+    }
   }
 
   async signIn(id: AgentId): Promise<AgentSignInResult> {
@@ -231,7 +312,9 @@ export class DesktopAgentRuntime {
   ): Promise<AgentExecutionResult> {
     const definition = AGENTS[request.agent];
     const capability = await this.capability(request.agent);
-    if (!capability.available) {
+    // The proxy supplies its own credentials, so a CLI that is installed but signed out can still run through it.
+    const proxyWithoutAccount = request.route === 'proxy' && capability.state === 'signed_out' && supportsProxy(request.agent);
+    if (!capability.available && !proxyWithoutAccount) {
       return this.immediateFailure(
         request,
         `${definition.displayName} is unavailable: ${capability.unavailableReason || 'command not found'}`,
@@ -243,7 +326,7 @@ export class DesktopAgentRuntime {
         return this.immediateFailure(request, `${definition.displayName} does not have a Universal Proxy route in this KAI build.`);
       }
       try {
-        environment = await this.options.resolveProxyEnvironment(request.agent, request) ?? process.env;
+        environment = await this.options.resolveProxyEnvironment(request.agent, request, model) ?? process.env;
       } catch (error) {
         return this.immediateFailure(
           request,
@@ -252,7 +335,8 @@ export class DesktopAgentRuntime {
       }
     }
 
-    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model);
+    const proxyBaseUrl = request.route === 'proxy' && request.agent === 'qwen' ? environment.OPENAI_BASE_URL : undefined;
+    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model, proxyBaseUrl);
     const controller = new AbortController();
     const active: ActiveAgentRun = { controller, child: null, paused: false };
     this.activeRuns.set(request.conversationId, active);
@@ -358,6 +442,8 @@ export class DesktopAgentRuntime {
       events,
       sessionId,
       error,
+      // A proxy run failing on credentials is the proxy's key, not the CLI's account.
+      ...(failed && request.route !== 'proxy' && [error ?? '', ...errors].some(isSignInError) ? { signInRequired: true } : {}),
     };
 
     function consumeLine(line: string): void {
@@ -438,6 +524,7 @@ export function buildAgentArgs(
   resumeSessionId?: string,
   customPermissions?: Partial<Record<PermissionKey, boolean>>,
   model?: string,
+  proxyBaseUrl?: string,
 ): string[] {
   // Every supported CLI takes the model as `--model <name>`; without one the CLI keeps its own default.
   const modelArgs = model ? ['--model', model] : [];
@@ -467,8 +554,15 @@ export function buildAgentArgs(
 
   if (request.agent === 'qwen') {
     const args = ['--output-format', 'stream-json', '--approval-mode', qwenApproval(request.autonomy), ...modelArgs];
+    if (proxyBaseUrl) args.push('--auth-type', 'openai', '--openai-base-url', proxyBaseUrl);
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     args.push(request.prompt);
+    return args;
+  }
+
+  if (request.agent === 'kimi') {
+    const args = ['-p', request.prompt, '--output-format', 'stream-json', ...kimiApproval(request.autonomy), ...modelArgs];
+    if (resumeSessionId) args.push('--session', resumeSessionId);
     return args;
   }
 
@@ -517,6 +611,12 @@ function qwenApproval(autonomy: AutonomyMode): 'plan' | 'auto-edit' | 'yolo' {
   return 'plan';
 }
 
+function kimiApproval(autonomy: AutonomyMode): string[] {
+  if (autonomy === 'custom' || autonomy === 'autoEdit') return ['--yolo'];
+  if (autonomy === 'full') return ['--auto'];
+  return ['--plan'];
+}
+
 function geminiApproval(autonomy: AutonomyMode): 'plan' | 'auto_edit' | 'yolo' {
   if (autonomy === 'custom') return 'auto_edit';
   if (autonomy === 'autoEdit') return 'auto_edit';
@@ -559,6 +659,14 @@ function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
       return { sessionId, text: textFromClaudeMessage(value.message) };
     }
     return { sessionId, error: errorText(value) };
+  }
+
+  if (agent === 'kimi') {
+    // Kimi Code prints one chat message per line; only assistant messages are reply text (tool results are not).
+    const error = errorText(value);
+    if (error) return { error };
+    if (value.role !== 'assistant') return { sessionId: commonSessionId(value) };
+    return { sessionId: commonSessionId(value), text: textFromFlatValue(value.content) ?? textFromClaudeMessage(value) };
   }
 
   const error = errorText(value);
@@ -631,6 +739,24 @@ function isCommandMissing(...values: Array<string | undefined>): boolean {
   return /(?:not recognized|command not found|no such file or directory|is not installed|cannot find the (?:path|file))/i.test(
     detail,
   );
+}
+
+/** A visible terminal that stays open, so the user can read the installer's output and any error. */
+async function launchInstallTerminal(commandLine: string, options: SignInLaunchOptions): Promise<void> {
+  const [command, args, extra] = process.platform === 'win32'
+    // Verbatim so cmd, not Node, parses the line; the Kimi pipe sits inside quotes and reaches PowerShell intact.
+    ? ['cmd.exe', ['/d', '/c', `start "KAI install" cmd.exe /k ${commandLine}`], { windowsVerbatimArguments: true }]
+    : process.platform === 'darwin'
+      ? ['osascript', ['-e', `tell application "Terminal" to do script ${JSON.stringify(commandLine)}`], {}]
+      : ['x-terminal-emulator', ['-e', 'sh', '-c', `${commandLine}; exec sh`], {}];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { ...extra, cwd: options.cwd, env: options.env, detached: true, stdio: 'ignore', windowsHide: false });
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+    child.once('error', reject);
+  });
 }
 
 async function launchDetachedSignIn(
@@ -782,7 +908,19 @@ async function* streamProcess(
 }
 
 function supportsProxy(agent: AgentId): boolean {
-  return agent === 'claude' || agent === 'codex';
+  return agent === 'claude' || agent === 'codex' || agent === 'qwen' || agent === 'kimi';
+}
+
+/** Kimi Code keeps OAuth credentials and configured providers under KIMI_CODE_HOME (default ~/.kimi-code). */
+export function kimiSignedIn(home = process.env.KIMI_CODE_HOME || path.join(homedir(), '.kimi-code')): boolean {
+  try {
+    const credentials = path.join(home, 'credentials');
+    if (existsSync(credentials) && readdirSync(credentials).length > 0) return true;
+    const config = path.join(home, 'config.toml');
+    return existsSync(config) && /^\s*\[providers\./m.test(readFileSync(config, 'utf8'));
+  } catch {
+    return false;
+  }
 }
 
 async function suspendProcessTree(pid: number): Promise<void> {

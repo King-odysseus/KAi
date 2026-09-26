@@ -76,6 +76,8 @@ describe('desktop contracts', () => {
     expect(parseIpcInput('projects:open', { id: 'project-1' })).toEqual({ id: 'project-1' });
     expect(parseIpcInput('agents:cancel', { conversationId: 'conv-1' })).toEqual({ conversationId: 'conv-1' });
     expect(parseIpcInput('agents:sign-in', { agent: 'codex' })).toEqual({ agent: 'codex' });
+    expect(parseIpcInput('agents:install', { agent: 'kimi' })).toEqual({ agent: 'kimi' });
+    expect(() => parseIpcInput('agents:install', { agent: 'unknown' })).toThrow();
     expect(parseIpcInput('settings:update', { directApi: { provider: 'openrouter' } })).toMatchObject({
       directApi: { provider: 'openrouter' },
     });

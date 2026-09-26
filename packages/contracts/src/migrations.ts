@@ -25,7 +25,7 @@ const legacySettingsSchema = z
   .passthrough();
 
 function migrateAgent(value: unknown): AppSettings['defaultAgent'] {
-  return value === 'claude' || value === 'qwen' || value === 'gemini' ? value : 'codex';
+  return value === 'claude' || value === 'qwen' || value === 'gemini' || value === 'kimi' ? value : 'codex';
 }
 
 function migrateAutonomy(value: unknown): AppSettings['defaultAutonomy'] {
@@ -115,7 +115,7 @@ export function migrateConversation(input: unknown): ConversationRecord {
     updatedAt: legacy.updatedAt ?? now,
     archived: legacy.archived ?? false,
     unread: legacy.unread ?? false,
-    activeAgent: agent === 'claude' || agent === 'codex' || agent === 'qwen' || agent === 'gemini' ? agent : null,
+    activeAgent: agent === 'claude' || agent === 'codex' || agent === 'qwen' || agent === 'gemini' || agent === 'kimi' ? agent : null,
     route: legacy.route === 'proxy' || legacy.route === 'direct' ? legacy.route : null,
     autonomy:
       legacy.autonomy === 'plan' ||

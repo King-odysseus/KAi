@@ -328,6 +328,7 @@ export const ipcChannels = [
   'agents:pause',
   'agents:resume',
   'agents:sign-in',
+  'agents:install',
   'agents:approval-response',
   'agents:api-capability',
   'context:preview',
@@ -535,6 +536,7 @@ export const ipcInputSchemas = {
   'agents:pause': agentCancelInputSchema,
   'agents:resume': agentCancelInputSchema,
   'agents:sign-in': agentSignInInputSchema,
+  'agents:install': agentSignInInputSchema,
   'agents:approval-response': agentApprovalResponseInputSchema,
   'agents:api-capability': emptyInputSchema,
   'context:preview': contextPreviewInputSchema,
@@ -857,6 +859,8 @@ export interface KaiDesktopBridge {
   pauseAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   resumeAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   signInAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;
+  /** Opens a terminal window running the CLI's official install command. */
+  installAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;
   respondToApproval(request: AgentApprovalResponseInput): Promise<IpcResponse<boolean>>;
   onAgentEvent(listener: (payload: AgentRunEvent) => void): () => void;
   usageSummary(conversationId?: string): Promise<IpcResponse<UsageSummary>>;

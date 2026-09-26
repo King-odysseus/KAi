@@ -47,6 +47,7 @@ import {
 import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
 import { shouldHandleAgentEvent } from './agent-events';
+import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from './agent-memory';
 import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
 import { matchingShortcutAction, shortcutLabel, shortcutsWithDefaults } from './shortcuts';
@@ -76,6 +77,7 @@ export function App(): ReactNode {
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
+  const signInAttempt = useRef(0);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('cli');
   const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
@@ -339,18 +341,24 @@ export function App(): ReactNode {
         window.kaiDesktop.directApiCapability().then(unwrap),
         window.kaiDesktop.setupStatus().then(unwrap),
       ]);
+      const startConversationId = preferredConversationId(nextBootstrap, nextConversations);
+      const startChoice = startupAgentChoice(
+        nextConversations.find((conversation) => conversation.id === startConversationId),
+        rememberedAgentChoice(),
+        { agent: nextBootstrap.settings.defaultAgent, route: 'direct' },
+      );
       setBootstrap(nextBootstrap);
       setConversations(nextConversations);
-      setActiveConversationId(preferredConversationId(nextBootstrap, nextConversations));
+      setActiveConversationId(startConversationId);
       setCredentials(nextCredentials);
       setLogs(nextLogs);
       setAgentCapabilities(nextAgentCapabilities);
       setDirectApiCapability(nextDirectApiCapability);
       setSetupStatus(nextSetupStatus);
       setSetupOpen(!nextSetupStatus.complete);
-      setSelectedAgent(nextBootstrap.settings.defaultAgent);
+      setSelectedAgent(startChoice.agent);
       setExecutionMode('cli');
-      setSelectedRoute('direct');
+      setSelectedRoute(startChoice.route);
       setSelectedAutonomy(nextBootstrap.settings.defaultAutonomy);
       setAgentNotice(null);
       setError(null);
@@ -430,6 +438,13 @@ export function App(): ReactNode {
   useEffect(() => {
     void window.kaiDesktop.reportView(view, activeConversationId).catch(() => undefined);
   }, [view, activeConversationId]);
+
+  const applicationLoaded = bootstrap !== null;
+  useEffect(() => {
+    // Wait for startup to restore the choice, so the placeholder state never overwrites it.
+    if (!applicationLoaded || executionMode !== 'cli') return;
+    rememberAgentChoice({ agent: selectedAgent, route: selectedRoute });
+  }, [applicationLoaded, executionMode, selectedAgent, selectedRoute]);
 
   useEffect(() => {
     try {
@@ -626,7 +641,9 @@ export function App(): ReactNode {
     const capability = agentCapabilities.find((agent) => agent.id === runAgentId);
     const requestedRoute = options.route ?? selectedRoute;
     const runRoute = !apiRun && !capability?.supportsRoutes.includes('proxy') ? 'direct' : requestedRoute;
-    if (!apiRun && !capability?.available) {
+    // The proxy supplies its own key, so a signed-out CLI can still run through it.
+    const proxyWithoutAccount = runRoute === 'proxy' && capability?.state === 'signed_out';
+    if (!apiRun && !capability?.available && !proxyWithoutAccount) {
       setError(capability?.unavailableReason ?? `${runAgentId} CLI is not available.`);
       return;
     }
@@ -686,7 +703,9 @@ export function App(): ReactNode {
         result.conversation,
         ...current.filter((item) => item.id !== result.conversation.id),
       ]);
-      if (result.error) {
+      if (result.signInRequired && capability) {
+        markSignedOut(capability);
+      } else if (result.error) {
         if (!apiRun && runRoute === 'direct' && capability?.supportsRoutes.includes('proxy') && looksLikeAccountLimit(result.error)) {
           setProxyContinuationAgent(runAgentId);
           setAgentNotice(`${capability.displayName} can continue through your Universal Proxy route.`);
@@ -830,12 +849,61 @@ export function App(): ReactNode {
       : selected?.unavailableReason ?? 'Agent status was refreshed.');
   }
 
+  function markSignedOut(capability: AgentCapability): void {
+    const reason = `${capability.displayName} is not signed in. Use Sign in to connect your account, then send your message again.`;
+    setAgentCapabilities((current) => current.map((item) => (item.id === capability.id
+      ? { ...item, available: false, state: 'signed_out', unavailableReason: reason }
+      : item)));
+    setAgentNotice(reason);
+  }
+
   async function signInAgent(agent: AgentId): Promise<void> {
     const result = await perform(
       () => window.kaiDesktop.signInAgent(agent).then(unwrap),
       `Opening ${agent} sign-in`,
     );
-    if (result) setAgentNotice(result.message);
+    if (!result) return;
+    setAgentNotice(result.message);
+    if (result.started) await watchAgentSetup(agent, (state) => state === 'ready', 'is signed in and ready.', 180_000);
+  }
+
+  async function installAgent(agent: AgentId): Promise<void> {
+    const result = await perform(
+      () => window.kaiDesktop.installAgent(agent).then(unwrap),
+      `Opening ${agent} installer`,
+    );
+    if (!result) return;
+    setAgentNotice(result.message);
+    if (!result.started) return;
+    await watchAgentSetup(
+      agent,
+      (state) => state !== 'not_installed',
+      'is installed.',
+      600_000,
+      (capability) => (capability.state === 'signed_out' ? ' Use Sign in to connect your account.' : ''),
+    );
+  }
+
+  /** Re-checks one agent until an install or sign-in window finishes, so the user does not have to press Refresh. */
+  async function watchAgentSetup(
+    agent: AgentId,
+    done: (state: AgentCapability['state']) => boolean,
+    doneMessage: string,
+    limitMs: number,
+    followUp: (capability: AgentCapability) => string = () => '',
+  ): Promise<void> {
+    const attempt = ++signInAttempt.current;
+    for (let elapsed = 0; elapsed < limitMs && attempt === signInAttempt.current; elapsed += 4_000) {
+      await new Promise((resolve) => window.setTimeout(resolve, 4_000));
+      const capabilities = await window.kaiDesktop.agentCapabilities().then(unwrap).catch(() => null);
+      const current = capabilities?.find((item) => item.id === agent);
+      if (!capabilities || !current || attempt !== signInAttempt.current) continue;
+      if (done(current.state)) {
+        setAgentCapabilities(capabilities);
+        setAgentNotice(`${current.displayName} ${doneMessage}${followUp(current)}`);
+        return;
+      }
+    }
   }
 
   async function deleteConversation(id: string): Promise<void> {
@@ -889,11 +957,13 @@ export function App(): ReactNode {
   }
 
   async function saveSettings(update: SettingsUpdate): Promise<boolean> {
+    const previousDefault = bootstrap?.settings.defaultAgent;
     const settings = await perform(() => window.kaiDesktop.updateSettings(update).then(unwrap), 'Saving settings');
     if (settings) {
       const services = await window.kaiDesktop.serviceStatus().then(unwrap);
       setBootstrap((current) => (current ? { ...current, settings, services } : current));
-      if (!activeConversation) setSelectedAgent(settings.defaultAgent);
+      // Saving an unrelated settings card must not swap the agent you picked.
+      if (!activeConversation && settings.defaultAgent !== previousDefault) setSelectedAgent(settings.defaultAgent);
       await refreshDirectApiStatus();
       return true;
     }
@@ -1258,6 +1328,7 @@ export function App(): ReactNode {
             onPause={() => void pauseConversation()}
             onResume={() => void resumeConversation()}
             onSignIn={(agent) => void signInAgent(agent)}
+            onInstall={(agent) => void installAgent(agent)}
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
             onOpenUsage={() => setView('usage')}
@@ -1360,7 +1431,6 @@ export function App(): ReactNode {
                 onCollapse={() => setThreadsOpen(false)}
                 onNew={() => {
                   setActiveConversationId(null);
-                  setSelectedAgent(bootstrap.settings.defaultAgent);
                   setExecutionMode('cli');
                   setStreamingText('');
                   setView('workspace');

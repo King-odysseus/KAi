@@ -139,6 +139,7 @@ const bridge: KaiDesktopBridge = {
   pauseAgent: (conversationId) => ipcRenderer.invoke('agents:pause', { conversationId }),
   resumeAgent: (conversationId) => ipcRenderer.invoke('agents:resume', { conversationId }),
   signInAgent: (agent) => ipcRenderer.invoke('agents:sign-in', { agent }),
+  installAgent: (agent) => ipcRenderer.invoke('agents:install', { agent }),
   respondToApproval: (request) => ipcRenderer.invoke('agents:approval-response', request),
   onAgentEvent: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: AgentRunEvent): void => listener(payload);

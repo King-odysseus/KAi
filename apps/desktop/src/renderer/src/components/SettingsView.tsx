@@ -76,7 +76,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
     : learningPreset.models;
   const overwatchCredentialReady = credentialStatus.ids.includes(draft.cognitive1.overwatch.credentialId);
   const shortcutConflictList = shortcutConflicts(draft.shortcuts);
-  const setAgentModel = (agent: 'claude' | 'codex' | 'qwen' | 'gemini', value: string): void => {
+  const setAgentModel = (agent: AppSettings['defaultAgent'], value: string): void => {
     setDraft((current) => {
       const next = { ...current.agentModels };
       if (value.trim()) next[agent] = value.trim();
@@ -357,7 +357,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
         <section className="settings-section">
           <div className="section-title"><Cpu size={17} /><span>Agent defaults</span></div>
           <div className="field-grid">
-            <SelectField label="Agent" value={draft.defaultAgent} onChange={(value) => setDraft({ ...draft, defaultAgent: value as AppSettings['defaultAgent'] })} options={['codex', 'claude', 'qwen', 'gemini']} />
+            <SelectField label="Agent" value={draft.defaultAgent} onChange={(value) => setDraft({ ...draft, defaultAgent: value as AppSettings['defaultAgent'] })} options={['codex', 'claude', 'qwen', 'gemini', 'kimi']} />
             <SelectField label="Route" value={draft.defaultRoute} onChange={(value) => setDraft({ ...draft, defaultRoute: value as AppSettings['defaultRoute'] })} options={['direct', 'proxy']} />
             <SelectField label="Autonomy" value={draft.defaultAutonomy} onChange={(value) => setDraft({ ...draft, defaultAutonomy: value as AppSettings['defaultAutonomy'] })} options={['plan', 'ask', 'autoEdit', 'full', 'custom']} />
             <SelectField label="Theme" value={draft.theme} onChange={(value) => setDraft({ ...draft, theme: value as AppSettings['theme'] })} options={THEME_MODES.map((item) => ({ value: item.id, label: item.label }))} />
@@ -368,7 +368,7 @@ export function SettingsView({ settings, credentialStatus, dataLocations, logs, 
             <div className="settings-subsection-title"><span>CLI models</span></div>
             <p className="settings-note">The model each CLI agent is asked to use. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>
             <div className="field-grid">
-              {(['claude', 'codex', 'qwen', 'gemini'] as const).map((agent) => (
+              {(['claude', 'codex', 'qwen', 'gemini', 'kimi'] as const).map((agent) => (
                 <label key={agent} className="field"><span>{agent} model</span><input value={draft.agentModels[agent] ?? ''} placeholder="CLI default" list={`cli-models-${agent}`} onChange={(event) => setAgentModel(agent, event.target.value)} /><datalist id={`cli-models-${agent}`}>{CLI_MODEL_SUGGESTIONS[agent].map((name) => <option key={name} value={name} />)}</datalist></label>
               ))}
             </div>

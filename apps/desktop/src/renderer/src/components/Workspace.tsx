@@ -9,7 +9,9 @@ import {
   Check,
   Circle,
   Cloud,
+  Copy,
   Cpu,
+  Download,
   Eye,
   File,
   FileSearch,
@@ -133,6 +135,7 @@ interface WorkspaceViewProps {
   onPause: () => void;
   onResume: () => void;
   onSignIn: (agent: AgentId) => void;
+  onInstall: (agent: AgentId) => void;
   onRefreshAgents: () => void;
   onOpenSettings: () => void;
   onOpenUsage: () => void;
@@ -259,6 +262,7 @@ export function WorkspaceView({
   onPause,
   onResume,
   onSignIn,
+  onInstall,
   onRefreshAgents,
   onOpenSettings,
   onOpenUsage,
@@ -307,7 +311,10 @@ export function WorkspaceView({
   const cliProxySupported = Boolean(selectedCapability?.supportsRoutes.includes('proxy'));
   const routeAvailable = apiRun || (cliProxySupported && proxyReady);
   const effectiveRoute = apiRun || cliProxySupported ? selectedRoute : 'direct';
-  const ready = apiRun ? Boolean(directApiCapability?.available) : Boolean(selectedCapability?.available);
+  // A signed-out CLI can still run through the proxy, which supplies its own key.
+  const ready = apiRun
+    ? Boolean(directApiCapability?.available)
+    : Boolean(selectedCapability?.available || (effectiveRoute === 'proxy' && selectedCapability?.state === 'signed_out'));
   const unavailableReason = apiRun
     ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
     : selectedCapability?.unavailableReason ?? 'No agent CLI is available.';
@@ -1034,13 +1041,28 @@ export function WorkspaceView({
           paused={paused}
           awaitingApproval={awaitingApproval}
         />}
-        {activeProject && !ready && (apiRun ? directApiCapability : selectedCapability) && (
+        {/* A missing CLI is explained even before a project is open, so the user knows how to get it. */}
+        {(activeProject || (!apiRun && selectedCapability?.state === 'not_installed')) && !ready && (apiRun ? directApiCapability : selectedCapability) && (
           <div className="agent-setup-banner" role="status">
             <div className="agent-setup-copy">
               <strong>{apiRun ? 'API setup required' : setupTitle(selectedCapability!)}</strong>
               <span>{notice ?? unavailableReason}</span>
+              {!apiRun && selectedCapability?.state === 'not_installed' && selectedCapability.installCommand && (
+                <div className="agent-install-command">
+                  <code title="Official install command">{selectedCapability.installCommand}</code>
+                  <button type="button" className="icon-button" title="Copy install command" aria-label="Copy install command" onClick={() => void navigator.clipboard.writeText(selectedCapability.installCommand!).catch(() => undefined)}>
+                    <Copy size={13} />
+                  </button>
+                </div>
+              )}
             </div>
             <div className="agent-setup-actions">
+              {!apiRun && selectedCapability?.state === 'not_installed' && (
+                <button type="button" className="primary-button" onClick={() => onInstall(selectedAgent)} disabled={busy}>
+                  <Download size={14} />
+                  <span>Install</span>
+                </button>
+              )}
               {!apiRun && selectedCapability?.state === 'signed_out' && (
                 <button type="button" className="secondary-button" onClick={() => onSignIn(selectedAgent)} disabled={busy}>
                   <LogIn size={14} />

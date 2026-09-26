@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const schemaVersionSchema = z.literal(1);
-export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini']);
+export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini', 'kimi']);
 export const executionModeSchema = z.enum(['cli', 'api']);
 export const themeModeSchema = z.enum(['dark', 'navy', 'purple', 'light']);
 

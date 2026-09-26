@@ -1140,6 +1140,25 @@ button:disabled {
   line-height: 1.4;
 }
 
+.agent-install-command {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.agent-install-command code {
+  overflow-x: auto;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .agent-setup-actions {
   display: flex;
   flex: 0 0 auto;

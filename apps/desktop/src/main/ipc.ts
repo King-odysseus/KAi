@@ -423,6 +423,7 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
   handle(context, 'agents:resume', async ({ conversationId }) => context.runControl.resume(conversationId));
   handle(context, 'agents:sign-in', async ({ agent }) => context.agents.signIn(agent));
+  handle(context, 'agents:install', async ({ agent }) => context.agents.install(agent));
   handle(context, 'agents:approval-response', async ({ conversationId, requestId, approved }, request) => {
     const pending = context.pendingApprovals.get(requestId);
     if (!pending || pending.conversationId !== conversationId) return false;
@@ -950,6 +951,7 @@ export async function runConversationAgent(
     status: execution.status,
     output: execution.output,
     error: execution.error,
+    ...('signInRequired' in execution && execution.signInRequired ? { signInRequired: true } : {}),
     ...costResult(execution.events),
   };
 }

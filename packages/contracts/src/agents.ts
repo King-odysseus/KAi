@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { cliModelNameSchema, conversationRecordV1Schema } from './domain';
 import { contextChipSchema } from './context';
 import { persistedEventV1Schema } from './events';
-import { agentIdSchema, autonomyModeSchema, executionModeSchema, providerIdSchema, routeModeSchema } from './primitives';
+import { type AgentId, agentIdSchema, autonomyModeSchema, executionModeSchema, providerIdSchema, routeModeSchema } from './primitives';
 import { goalInputSchema } from './workbench';
 
 export const agentCapabilitySchema = z
@@ -15,6 +15,8 @@ export const agentCapabilitySchema = z
     unavailableReason: z.string().optional(),
     command: z.string().min(1),
     signInCommand: z.string().min(1),
+    // The official one-line install for this machine's OS, shown when the CLI is missing.
+    installCommand: z.string().min(1).optional(),
     installUrl: z.string().url(),
     supportsRoutes: z.array(routeModeSchema),
     supportsAutonomy: z.array(autonomyModeSchema),
@@ -39,7 +41,7 @@ export const agentRunRequestSchema = z
   .strict();
 
 // Suggestions only; any model name the CLI accepts can be typed.
-export const CLI_MODEL_SUGGESTIONS: Record<'claude' | 'codex' | 'qwen' | 'gemini', readonly string[]> = {
+export const CLI_MODEL_SUGGESTIONS: Record<AgentId, readonly string[]> = {
   claude: [
     'claude-opus-5.5',
     'claude-opus-5',
@@ -78,6 +80,9 @@ export const CLI_MODEL_SUGGESTIONS: Record<'claude' | 'codex' | 'qwen' | 'gemini
     'pro',
     'flash',
   ],
+  kimi: [
+    'kimi-for-coding',
+  ],
 };
 
 export const agentRunResultSchema = z
@@ -86,6 +91,8 @@ export const agentRunResultSchema = z
     status: z.enum(['completed', 'failed']),
     output: z.string(),
     error: z.string().optional(),
+    // The CLI reported that it is signed out; the UI offers Sign in.
+    signInRequired: z.boolean().optional(),
     costUsd: z.number().nonnegative().optional(),
   })
   .strict();

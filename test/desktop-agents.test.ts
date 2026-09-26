@@ -3,7 +3,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRunRequest } from '../packages/contracts/src';
-import { buildAgentArgs, cliProxyEnvironment, DesktopAgentRuntime } from '../apps/desktop/src/main/agent-runtime';
+import {
+  agentInstallCommand,
+  buildAgentArgs,
+  cliProxyEnvironment,
+  DesktopAgentRuntime,
+  isSignInError,
+  kimiSignedIn,
+} from '../apps/desktop/src/main/agent-runtime';
 
 const temporaryDirectories: string[] = [];
 
@@ -26,7 +33,97 @@ describe('desktop agent runtime', () => {
       OPENAI_API_KEY: 'loopback-token',
       CODEX_API_KEY: 'loopback-token',
     });
-    expect(() => cliProxyEnvironment('qwen', access)).toThrow(/does not support/);
+    expect(cliProxyEnvironment('qwen', access)).toMatchObject({
+      OPENAI_BASE_URL: 'http://127.0.0.1:8082/a/qwen/v1',
+      OPENAI_API_KEY: 'loopback-token',
+    });
+    expect(cliProxyEnvironment('kimi', access)).toMatchObject({
+      KIMI_MODEL_NAME: 'kimi-for-coding',
+      KIMI_MODEL_API_KEY: 'loopback-token',
+      KIMI_MODEL_PROVIDER_TYPE: 'kimi',
+      KIMI_MODEL_BASE_URL: 'http://127.0.0.1:8082/a/kimi/v1',
+    });
+    expect(cliProxyEnvironment('kimi', access, 'kimi-k2').KIMI_MODEL_NAME).toBe('kimi-k2');
+    expect(() => cliProxyEnvironment('gemini', access)).toThrow(/does not support/);
+  });
+
+  it('offers the proxy route for Claude, Codex, Qwen and Kimi only', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, {});
+    const runtime = new DesktopAgentRuntime({ claude: command, codex: command, qwen: command, gemini: command, kimi: command });
+
+    const routes = Object.fromEntries((await runtime.capabilities()).map((agent) => [agent.id, agent.supportsRoutes]));
+
+    expect(routes).toEqual({
+      claude: ['direct', 'proxy'],
+      codex: ['direct', 'proxy'],
+      qwen: ['direct', 'proxy'],
+      gemini: ['direct'],
+      kimi: ['direct', 'proxy'],
+    });
+  });
+
+  it('runs a signed-out CLI through the proxy, which supplies its own key', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, { authenticated: false, reply: 'via proxy' });
+    const runtime = new DesktopAgentRuntime({ codex: command }, undefined, {
+      resolveProxyEnvironment: async (agent) => cliProxyEnvironment(agent, { endpoint: 'http://127.0.0.1:8083', token: 't' }),
+    });
+
+    const result = await runtime.run({ ...runRequest(), route: 'proxy' }, root);
+
+    expect(result).toMatchObject({ status: 'completed', output: 'via proxy' });
+  });
+
+  it('flags a direct run that failed because the CLI is signed out', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, { fail: true });
+    const runtime = new DesktopAgentRuntime({ codex: command });
+
+    await expect(runtime.run(runRequest(), root)).resolves.toMatchObject({ status: 'failed', signInRequired: true });
+  });
+
+  it('recognises CLI sign-in errors without matching ordinary failures', () => {
+    for (const message of [
+      'Not logged in · Please run /login',
+      'Invalid API key · Please run /login',
+      'Error: not signed in. Run `codex login` first.',
+      'No authentication method configured.',
+      'OAuth token has expired',
+    ]) expect(isSignInError(message), message).toBe(true);
+    for (const message of ['Rate limit reached', 'TypeError: cannot read properties of undefined', 'Build failed with 2 errors']) {
+      expect(isSignInError(message), message).toBe(false);
+    }
+  });
+
+  it('reads Kimi Code sign-in from its credentials or configured providers', async () => {
+    const empty = await temporaryDirectory();
+    expect(kimiSignedIn(empty)).toBe(false);
+
+    const oauth = await temporaryDirectory();
+    await fs.mkdir(path.join(oauth, 'credentials'));
+    await fs.writeFile(path.join(oauth, 'credentials', 'kimi-code.json'), '{}');
+    expect(kimiSignedIn(oauth)).toBe(true);
+
+    const provider = await temporaryDirectory();
+    await fs.writeFile(path.join(provider, 'config.toml'), '[providers.moonshot]\ntype = "kimi"\n');
+    expect(kimiSignedIn(provider)).toBe(true);
+  });
+
+  it('reads Kimi Code assistant messages and ignores tool output', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, {
+      lines: [
+        { role: 'assistant', content: '', tool_calls: [{ id: 't1', function: { name: 'Shell' } }] },
+        { role: 'tool', tool_call_id: 't1', content: 'secret tool output' },
+        { role: 'assistant', content: 'kimi reply' },
+      ],
+    });
+    const runtime = new DesktopAgentRuntime({ kimi: command });
+
+    const result = await withKimiHome(root, () => runtime.run({ ...runRequest(), agent: 'kimi' }, root));
+
+    expect(result).toMatchObject({ status: 'completed', output: 'kimi reply' });
   });
 
   it('detects an installed CLI through its version command', async () => {
@@ -85,7 +182,32 @@ describe('desktop agent runtime', () => {
     await expect(runtime.capability('codex')).resolves.toMatchObject({
       available: false,
       state: 'not_installed',
+      installCommand: 'npm install -g @openai/codex',
     });
+  });
+
+  it('opens the official installer for a missing CLI and refuses when it is already installed', async () => {
+    const root = await temporaryDirectory();
+    const installs: string[] = [];
+    const installLauncher = async (commandLine: string) => {
+      installs.push(commandLine);
+    };
+    const missing = new DesktopAgentRuntime({ qwen: path.join(root, 'missing-agent') }, undefined, { installLauncher });
+
+    await expect(missing.install('qwen')).resolves.toMatchObject({ started: true, command: 'npm install -g @qwen-code/qwen-code@latest' });
+    expect(installs).toEqual(['npm install -g @qwen-code/qwen-code@latest']);
+
+    const installed = new DesktopAgentRuntime({ qwen: await fakeAgent(root, {}) }, undefined, { installLauncher });
+    await expect(installed.install('qwen')).resolves.toMatchObject({ started: false, message: 'Qwen Code is already installed.' });
+    expect(installs).toHaveLength(1);
+  });
+
+  it('gives every CLI an install command for the current OS', () => {
+    for (const agent of ['claude', 'codex', 'qwen', 'gemini', 'kimi'] as const) {
+      expect(agentInstallCommand(agent)).toMatch(/\S/);
+    }
+    expect(agentInstallCommand('kimi', 'win32')).toContain('install.ps1');
+    expect(agentInstallCommand('kimi', 'darwin')).toContain('install.sh');
   });
 
   it('launches the official CLI sign-in flow without embedding credentials', async () => {
@@ -230,6 +352,48 @@ describe('desktop agent runtime', () => {
       'plan',
       '--skip-trust',
     ]);
+    expect(buildAgentArgs({ ...base, agent: 'kimi' }, 'C:/repo')).toEqual([
+      '-p',
+      'Review this repository',
+      '--output-format',
+      'stream-json',
+      '--plan',
+    ]);
+    expect(buildAgentArgs({ ...base, agent: 'kimi', autonomy: 'full' }, 'C:/repo', 'kimi-session', undefined, 'kimi-for-coding')).toEqual([
+      '-p',
+      'Review this repository',
+      '--output-format',
+      'stream-json',
+      '--auto',
+      '--model',
+      'kimi-for-coding',
+      '--session',
+      'kimi-session',
+    ]);
+  });
+
+  it('points Qwen at the proxy with a flag so its own settings file cannot override the route', () => {
+    const args = buildAgentArgs(
+      { prompt: 'hi', autonomy: 'ask', agent: 'qwen' },
+      'C:/repo',
+      undefined,
+      undefined,
+      undefined,
+      'http://127.0.0.1:8083/a/qwen/v1',
+    );
+    expect(args).toEqual([
+      '--output-format',
+      'stream-json',
+      '--approval-mode',
+      'plan',
+      '--auth-type',
+      'openai',
+      '--openai-base-url',
+      'http://127.0.0.1:8083/a/qwen/v1',
+      'hi',
+    ]);
+    // The key travels in the environment, never on the command line.
+    expect(args.join(' ')).not.toMatch(/api-key/);
   });
 });
 
@@ -241,6 +405,20 @@ function runRequest(): AgentRunRequest {
     route: 'direct',
     autonomy: 'ask',
   };
+}
+
+async function withKimiHome<T>(root: string, task: () => Promise<T>): Promise<T> {
+  const home = path.join(root, 'kimi-home');
+  await fs.mkdir(path.join(home, 'credentials'), { recursive: true });
+  await fs.writeFile(path.join(home, 'credentials', 'kimi-code.json'), '{}');
+  const previous = process.env.KIMI_CODE_HOME;
+  process.env.KIMI_CODE_HOME = home;
+  try {
+    return await task();
+  } finally {
+    if (previous === undefined) delete process.env.KIMI_CODE_HOME;
+    else process.env.KIMI_CODE_HOME = previous;
+  }
 }
 
 async function temporaryDirectory(): Promise<string> {

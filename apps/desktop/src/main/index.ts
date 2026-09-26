@@ -163,13 +163,13 @@ async function startApplication(): Promise<void> {
     saveSettings: (next) => settings.save(next),
   });
   const agents = new DesktopAgentRuntime(undefined, undefined, {
-    resolveProxyEnvironment: async (agent) => {
+    resolveProxyEnvironment: async (agent, _request, model) => {
       const controller = serviceController;
       if (!controller) throw new Error('The managed service controller is unavailable.');
       const service = (await controller.status()).find((candidate) => candidate.kind === 'universalProxy');
       if (service?.status !== 'ready') throw new Error('Start Universal Proxy before using its CLI route.');
       const access = await controller.loopbackAccess('universalProxy');
-      return cliProxyEnvironment(agent, access);
+      return cliProxyEnvironment(agent, access, model);
     },
   });
   const runControl = new DesktopRunControl({

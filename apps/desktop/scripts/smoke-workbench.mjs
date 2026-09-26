@@ -71,7 +71,7 @@ try {
 }
 
 async function verifyCodeEditor(page) {
-  await page.getByRole('button', { name: 'Code', exact: true }).click();
+  await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
   await page.getByLabel('Project files', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'src', exact: true }).click();
   const file = page.getByRole('button', { name: 'hello.ts' });
@@ -109,9 +109,9 @@ async function verifyCodeEditor(page) {
   await page.getByText('changed elsewhere').first().waitFor();
 
   // Ordinary page navigation keeps the editor session alive instead of deleting and recreating the model.
-  await page.getByRole('button', { name: 'Usage', exact: true }).click();
+  await page.getByRole('button', { name: 'Control: Usage', exact: true }).click();
   await page.getByRole('heading', { name: 'Usage', level: 1 }).waitFor();
-  await page.getByRole('button', { name: 'Code', exact: true }).click();
+  await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
   await page.locator('.monaco-editor').first().waitFor();
   await page.getByText('changed elsewhere').first().waitFor();
 
@@ -177,7 +177,7 @@ async function verifyLivePreview(application, page) {
 
 async function verifyEditorAutosave(page) {
   const navigation = page.locator('.nav-rail');
-  await navigation.getByRole('button', { name: 'Settings', exact: true }).click();
+  await navigation.getByRole('button', { name: 'Control: Settings', exact: true }).click();
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   const autoSaveToggle = page.getByRole('checkbox', { name: /Autosave edited files/ });
   await autoSaveToggle.waitFor();
@@ -186,7 +186,7 @@ async function verifyEditorAutosave(page) {
   await page.getByRole('button', { name: 'Save editor settings' }).click();
   await page.getByText('Code editor saved and shared with all open KAI windows.').waitFor();
 
-  await navigation.getByRole('button', { name: 'Code', exact: true }).click();
+  await navigation.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
   await page.locator('.monaco-editor .view-lines').first().click();
   await page.keyboard.press('Control+End');
@@ -198,7 +198,7 @@ async function verifyEditorAutosave(page) {
 }
 
 async function verifyGitAndTerminal(page) {
-  await page.getByRole('button', { name: 'Git', exact: true }).click();
+  await page.getByRole('button', { name: 'Project: Git', exact: true }).click();
   await page.getByRole('heading', { name: 'Git', level: 1 }).waitFor();
   await page.getByText('Recent commits').waitFor();
   // The Code test left src/hello.ts modified; stage and commit it through the UI.
@@ -239,7 +239,7 @@ async function verifyGitAndTerminal(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'terminal-dock-960x640.png') });
   await resizeWindow(electronApp, 1440, 920);
   // The panel and its output survive a page change, then hide again.
-  await page.getByRole('button', { name: 'Usage', exact: true }).click();
+  await page.getByRole('button', { name: 'Control: Usage', exact: true }).click();
   await page.waitForFunction(
     () => document.querySelector('.terminal-dock .xterm-rows')?.textContent?.includes('KAI_TERMINAL_OK') ?? false,
   );
@@ -279,12 +279,12 @@ async function verifyOperations(page) {
 }
 
 async function verifyTasksAndSettings(page) {
-  await page.getByRole('button', { name: 'Tasks', exact: true }).click();
+  await page.getByRole('button', { name: 'Work: Tasks', exact: true }).click();
   await page.getByRole('heading', { name: 'Tasks', level: 1 }).waitFor();
   await page.getByText(/Cognitive1 is not running/).waitFor();
   await assertNoHorizontalOverflow(page);
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await page.getByText('Updates', { exact: true }).waitFor();
   if (packagedExecutable) {
@@ -310,7 +310,7 @@ async function verifyTasksAndSettings(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
   // The composer offers a per-conversation model next to agent, route and autonomy.
-  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
   const titlebar = page.locator('.titlebar-actions');
   await titlebar.getByRole('button', { name: 'Show threads panel' }).waitFor();
   if (await page.locator('.conversation-column').count() > 0) {
@@ -359,12 +359,12 @@ async function verifyThemes(page) {
   const order = ['navy', 'purple', 'light', 'dark'];
   for (const theme of order) {
     await setTheme(page, theme);
-    for (const [button, heading] of [['Usage', 'Usage'], ['Code', null], ['Workspace', null], ['Settings', 'Settings']]) {
+    for (const [button, heading] of [['Control: Usage', 'Usage'], ['Learn: Learn & Code', null], ['Work: Workspace', null], ['Control: Settings', 'Settings']]) {
       await page.getByRole('button', { name: button, exact: true }).click();
       if (heading) await page.getByRole('heading', { name: heading, level: 1 }).waitFor();
       await page.waitForTimeout(500);
-      if (theme === 'light' && button === 'Code') await assertTutorTextareaLightTheme(page);
-      await page.screenshot({ path: path.join(outputDirectory, `theme-${theme}-${button.toLowerCase()}.png`) });
+      if (theme === 'light' && button === 'Learn: Learn & Code') await assertTutorTextareaLightTheme(page);
+      await page.screenshot({ path: path.join(outputDirectory, `theme-${theme}-${button.split(': ').pop().toLowerCase().replace(/[^a-z]+/g, '-')}.png`) });
     }
   }
 }
@@ -386,7 +386,7 @@ async function setTheme(page, target) {
 }
 
 async function verifyIndependentWindows(application, page) {
-  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
   await waitForProjectName(page, 'Sample Project');
 
   const secondWindowPromise = application.waitForEvent('window');
@@ -750,7 +750,7 @@ async function verifyTutorInlineCompletion(page) {
 
 
 async function verifySettingsCheckboxRetention(page) {
-  await page.locator('.nav-rail').getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
   const overwatch = page.getByRole('checkbox', { name: /Enable Overwatch/ });
   await overwatch.check();
   // An unrelated write broadcasts fresh settings to the open form.
@@ -764,8 +764,8 @@ async function verifySettingsCheckboxRetention(page) {
   await page.getByText('saved and shared with all open KAI windows.', { exact: false }).waitFor();
   const saved = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data);
   if (!saved.cognitive1.overwatch.enabled) throw new Error('Overwatch checkbox did not persist.');
-  await page.locator('.nav-rail').getByRole('button', { name: 'Code', exact: true }).click();
-  await page.locator('.nav-rail').getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.nav-rail').getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+  await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
   if (!(await overwatch.isChecked())) throw new Error('Overwatch checkbox reverted after navigation.');
-  await page.locator('.nav-rail').getByRole('button', { name: 'Code', exact: true }).click();
+  await page.locator('.nav-rail').getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
 }

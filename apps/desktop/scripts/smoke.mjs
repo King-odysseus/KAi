@@ -291,7 +291,7 @@ async function verifyLiveAgent(page) {
 async function verifyAgentCapabilities(page) {
   const response = await page.evaluate(() => window.kaiDesktop.agentCapabilities());
   if (!response.ok) throw new Error(response.error.message);
-  const expected = ['claude', 'codex', 'qwen', 'gemini'];
+  const expected = ['claude', 'codex', 'qwen', 'gemini', 'kimi'];
   const ids = response.data.map((agent) => agent.id);
   if (expected.some((id) => !ids.includes(id))) {
     throw new Error(`Agent capability discovery is incomplete: ${ids.join(', ')}.`);
@@ -322,6 +322,7 @@ async function verifyWorkspaceControls(page) {
     ['codex', 'Codex'],
     ['qwen', 'Qwen Code'],
     ['gemini', 'Gemini CLI'],
+    ['kimi', 'Kimi Code'],
   ];
   for (const [agent, label] of agents) {
     await selectMenuOption(page, 'Agent', label);
