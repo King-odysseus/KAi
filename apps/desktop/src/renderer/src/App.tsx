@@ -1116,29 +1116,24 @@ export function App(): ReactNode {
         return <RulesView />;
       case 'proxy':
         return (
-          <ServiceView
-            service={serviceFor(bootstrap, 'universalProxy')}
-            kind="proxy"
-            busy={Boolean(busy)}
-            onConfigure={() => setView('settings')}
-            onStart={() => void controlService('universalProxy', 'start')}
-            onStop={() => void controlService('universalProxy', 'stop')}
-            onRestart={() => void controlService('universalProxy', 'restart')}
-            onCopyToken={() => void copyServiceToken('universalProxy')}
-            onRotateToken={() => void rotateServiceToken('universalProxy')}
-          >
+          <div className="page-view">
             <ProxyPanel
               service={serviceFor(bootstrap, 'universalProxy')}
               settings={bootstrap.settings}
               busy={Boolean(busy)}
               logs={logs}
               credentialStatus={credentials}
-              onSave={(update) => void saveSettings(update)}
-              onSaveCredential={(id, value) => void saveCredential(id, value)}
-              onClearCredential={(id) => void clearCredential(id)}
+              onSave={(update) => saveSettings(update)}
+              onSaveCredential={(id, value) => saveCredential(id, value)}
+              onClearCredential={(id) => clearCredential(id)}
               onReload={loadApplication}
+              onStart={() => void controlService('universalProxy', 'start')}
+              onStop={() => void controlService('universalProxy', 'stop')}
+              onRestart={() => void controlService('universalProxy', 'restart')}
+              onCopyToken={() => void copyServiceToken('universalProxy')}
+              onRotateToken={() => void rotateServiceToken('universalProxy')}
             />
-          </ServiceView>
+          </div>
         );
       case 'workflows':
         return (

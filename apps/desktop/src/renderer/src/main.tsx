@@ -5,6 +5,7 @@ import './styles.css';
 import './ops.css';
 import './themes.css';
 import './themes.generated.css';
+import './uap-dashboard.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
