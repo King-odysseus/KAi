@@ -42,7 +42,7 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type {
   AgentCapability,
   AgentId,
@@ -53,6 +53,7 @@ import type {
   ConversationRecord,
   ContextChip,
   ContextPreview,
+  ConversationTurn,
   DirectApiCapability,
   FileVerificationState,
   ExecutionMode,
@@ -726,14 +727,16 @@ export function WorkspaceView({
     }
   }
 
-  async function reviewTurnChanges(turnId: string): Promise<void> {
+  // Every run event card takes this as a prop. A fresh function each render would defeat their memoisation and put
+  // the whole transcript back in the keystroke path, so its identity has to survive typing.
+  const reviewTurnChanges = useCallback(async (turnId: string): Promise<void> => {
     if (!activeConversation) return;
     try {
       setCheckpointReview(await onReviewCheckpoint(activeConversation.id, turnId));
     } catch (caught) {
       setWorkbenchNotice(messageOf(caught));
     }
-  }
+  }, [activeConversation, onReviewCheckpoint]);
 
   async function rejectReviewedFile(filePath: string): Promise<void> {
     if (!checkpointReview) return;
@@ -768,7 +771,7 @@ export function WorkspaceView({
     }
   }
 
-  async function restoreTurnChanges(turnId: string): Promise<void> {
+  const restoreTurnChanges = useCallback(async (turnId: string): Promise<void> => {
     if (!activeConversation) return;
     try {
       await onRestoreCheckpoint(activeConversation.id, turnId);
@@ -777,7 +780,7 @@ export function WorkspaceView({
     } catch (caught) {
       setWorkbenchNotice(messageOf(caught));
     }
-  }
+  }, [activeConversation, onRestoreCheckpoint]);
 
   async function saveGoal(start: boolean): Promise<void> {
     if (!goalEditor?.outcome.trim() || !activeProject) return;
@@ -970,7 +973,7 @@ export function WorkspaceView({
         {activeConversation?.turns.length || streamingText ? (
           <>
             {activeConversation?.turns.map((turn) => (
-              <article key={turn.id} className={`message ${turn.role}`}><div className="message-role">{turn.role === 'user' ? 'You' : 'KAI'}{turn.role === 'assistant' && brainReady && <button type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => setBrainDraft(turn.text)}><BookmarkPlus size={12} /><span>Save to Brain</span></button>}</div><div className="message-body">{turn.text}</div></article>
+              <MessageTurn key={turn.id} turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} />
             ))}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
             {running && !streamingText && (
@@ -1293,7 +1296,28 @@ export function WorkspaceView({
   );
 }
 
-function RunEventCard({ event, projectId, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
+// The composer's prompt lives in Workspace state, so every keystroke re-renders it. Without memoising the two
+// components that repeat per message, each character redraws the entire transcript and typing lags behind the
+// keyboard. Their props are already stable: the turn and event objects are replaced only when the run changes.
+const RunEventCard = memo(RunEventCardBase);
+
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain }: { turn: ConversationTurn; brainReady: boolean; onSaveToBrain: (text: string) => void }): ReactNode {
+  return (
+    <article className={`message ${turn.role}`}>
+      <div className="message-role">
+        {turn.role === 'user' ? 'You' : 'KAI'}
+        {turn.role === 'assistant' && brainReady && (
+          <button type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => onSaveToBrain(turn.text)}>
+            <BookmarkPlus size={12} /><span>Save to Brain</span>
+          </button>
+        )}
+      </div>
+      <div className="message-body">{turn.text}</div>
+    </article>
+  );
+});
+
+function RunEventCardBase({ event, projectId, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);
   const [verification, setVerification] = useState<VerificationOverview | null>(null);
   useEffect(() => {
@@ -1724,6 +1748,7 @@ export function ContextPanel({ activeProject, conversation, services, contextPre
       {(contextPreview?.sections ?? []).map((section) => (
         <div className="context-section" key={section.kind}>
           <div className="context-label">{contextSectionIcon(section.kind)}<span>{section.label}</span><small>~{formatCompact(section.estimatedTokens)}</small></div>
+          {section.note && <div className="context-note">{section.note}</div>}
           {section.items.length > 0 ? (
             <div className="context-item-list">
               {section.items.map((item) => (
@@ -1748,7 +1773,6 @@ export function ContextPanel({ activeProject, conversation, services, contextPre
 }
 
 function contextSectionIcon(kind: ContextPreview['sections'][number]['kind']): ReactNode {
-          {section.note && <div className="context-note">{section.note}</div>}
   if (kind === 'memories') return <BrainIcon />;
   if (kind === 'skills') return <Sparkles size={14} />;
   return <FileDiff size={14} />;
