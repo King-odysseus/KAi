@@ -259,3 +259,30 @@ export function nodeAt(sim: Simulation, x: number, y: number, slack = 5): SimNod
   }
   return best;
 }
+
+/** Where the map is looking: a scale, and where the origin of the layout sits on screen. */
+export interface View {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+export const MIN_ZOOM = 0.4;
+export const MAX_ZOOM = 4;
+export const IDENTITY_VIEW: View = { scale: 1, x: 0, y: 0 };
+
+/** A point on screen as a position in the layout, undoing the current zoom and pan. */
+export function toWorld(view: View, point: { x: number; y: number }): { x: number; y: number } {
+  return { x: (point.x - view.x) / view.scale, y: (point.y - view.y) / view.scale };
+}
+
+/**
+ * Zoom by `factor` about a point on screen, so whatever is under that point stays under it. The scale is held between
+ * MIN_ZOOM and MAX_ZOOM, and a request that would leave it there changes nothing.
+ */
+export function zoomView(view: View, factor: number, cx: number, cy: number): View {
+  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.scale * factor));
+  if (scale === view.scale) return view;
+  const ratio = scale / view.scale;
+  return { scale, x: cx - (cx - view.x) * ratio, y: cy - (cy - view.y) * ratio };
+}

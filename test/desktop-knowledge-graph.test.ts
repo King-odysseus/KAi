@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  IDENTITY_VIEW,
+  MAX_ZOOM,
+  MIN_ZOOM,
   createSimulation,
   nodeAt,
   nodeRadius,
   parseKnowledgeGraph,
   settleSimulation,
   stepSimulation,
+  toWorld,
+  zoomView,
 } from '../apps/desktop/src/renderer/src/components/knowledge-graph';
 
 const raw = {
@@ -124,5 +129,48 @@ describe('knowledge graph layout', () => {
     const target = sim.nodes[2];
     expect(nodeAt(sim, target.x, target.y)?.id).toBe(target.id);
     expect(nodeAt(sim, -500, -500)).toBeNull();
+  });
+});
+
+describe('knowledge graph zoom', () => {
+  const screenOf = (view: { scale: number; x: number; y: number }, world: { x: number; y: number }) => ({
+    x: world.x * view.scale + view.x,
+    y: world.y * view.scale + view.y,
+  });
+
+  it('keeps the point under the cursor fixed while zooming in and out', () => {
+    let view = { ...IDENTITY_VIEW, x: 30, y: -12 };
+    const cursor = { x: 240, y: 130 };
+    const before = toWorld(view, cursor);
+    for (const factor of [1.35, 1.35, 0.6, 2, 0.5]) {
+      view = zoomView(view, factor, cursor.x, cursor.y);
+      const under = screenOf(view, before);
+      expect(under.x).toBeCloseTo(cursor.x, 6);
+      expect(under.y).toBeCloseTo(cursor.y, 6);
+    }
+  });
+
+  it('holds the scale between the limits and returns the same view when nothing changes', () => {
+    let view = IDENTITY_VIEW;
+    for (let i = 0; i < 30; i++) view = zoomView(view, 1.5, 100, 100);
+    expect(view.scale).toBe(MAX_ZOOM);
+    expect(zoomView(view, 1.5, 100, 100)).toBe(view);
+    for (let i = 0; i < 60; i++) view = zoomView(view, 0.6, 100, 100);
+    expect(view.scale).toBe(MIN_ZOOM);
+    expect(zoomView(view, 0.6, 100, 100)).toBe(view);
+  });
+
+  it('maps a screen point back to the layout after zooming and panning', () => {
+    const view = { scale: 2, x: 50, y: 20 };
+    expect(toWorld(view, { x: 250, y: 120 })).toEqual({ x: 100, y: 50 });
+    expect(toWorld(IDENTITY_VIEW, { x: 7, y: 9 })).toEqual({ x: 7, y: 9 });
+  });
+
+  it('finds a dot at its zoomed position when the pick is made in layout coordinates', () => {
+    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
+    const target = sim.nodes[1];
+    const view = zoomView(IDENTITY_VIEW, 2.5, 300, 180);
+    const world = toWorld(view, screenOf(view, target));
+    expect(nodeAt(sim, world.x, world.y, 5 / view.scale)?.id).toBe(target.id);
   });
 });

@@ -1,21 +1,28 @@
-import { Link2, Network, RefreshCw } from 'lucide-react';
+import { Link2, Maximize2, Minus, Network, Plus, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { unwrap } from '../types';
 import {
   GRAPH_TYPE_LABEL,
+  IDENTITY_VIEW,
+  MAX_ZOOM,
+  MIN_ZOOM,
   createSimulation,
   nodeAt,
   parseKnowledgeGraph,
   settleSimulation,
   stepSimulation,
+  toWorld,
+  zoomView,
   type GraphNodeType,
   type KnowledgeGraph,
   type Simulation,
+  type View,
 } from './knowledge-graph';
 
 const MAP_HEIGHT = 380;
 const NODE_LIMIT = 150;
 const TYPES: GraphNodeType[] = ['bugs', 'decisions', 'gotchas', 'patterns', 'other'];
+
 
 interface Palette {
   colours: Record<GraphNodeType, string>;
@@ -89,6 +96,7 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -96,6 +104,9 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
   const hoverRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const redrawRef = useRef<() => void>(() => undefined);
+  const viewRef = useRef<View>(IDENTITY_VIEW);
+  // Set by the drawing effect, so the buttons can zoom about the middle of the canvas.
+  const zoomRef = useRef<(factor: number | 'reset', cx?: number, cy?: number) => void>(() => undefined);
 
   const load = useCallback(async (): Promise<void> => {
     setBusy('loading');
@@ -170,6 +181,8 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
     const sim = createSimulation(visible, width, height);
     simRef.current = sim;
     if (reduced) settleSimulation(sim);
+    viewRef.current = IDENTITY_VIEW;
+    setZoom(1);
 
     const size = (): void => {
       const ratio = window.devicePixelRatio || 1;
@@ -198,6 +211,10 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
         context.fill();
       }
 
+      const view = viewRef.current;
+      context.save();
+      context.translate(view.x, view.y);
+      context.scale(view.scale, view.scale);
       const offset = (index: number, axis: number): number => (reduced ? 0 : Math.sin(time / 1900 + index * 1.7 + axis) * 1.4);
       const position = new Map(sim.nodes.map((node, index) => [node.id, { x: node.x + offset(index, 0), y: node.y + offset(index, 2) }]));
 
@@ -212,7 +229,7 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
         gradient.addColorStop(0, withAlpha(from, strength));
         gradient.addColorStop(1, withAlpha(to, strength));
         context.strokeStyle = gradient;
-        context.lineWidth = active ? 1.6 : 1;
+        context.lineWidth = (active ? 1.6 : 1) / view.scale;
         context.beginPath();
         context.moveTo(a.x, a.y);
         context.lineTo(b.x, b.y);
@@ -236,19 +253,23 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
         context.restore();
         if (node.id === selectedRef.current) {
           context.strokeStyle = palette.text;
-          context.lineWidth = 1.5;
+          context.lineWidth = 1.5 / view.scale;
           context.beginPath();
           context.arc(at.x, at.y, node.radius + 4, 0, Math.PI * 2);
           context.stroke();
         }
         if (node.id === focus || (!focus && biggest.has(node.id))) {
           const label = node.id.length > 34 ? `${node.id.slice(0, 33)}…` : node.id;
-          context.font = '11px "Segoe UI Variable", "Segoe UI", system-ui, sans-serif';
+          // Labels keep a readable size however far the map is zoomed, and stay inside the visible part of the canvas.
+          context.font = `${11 / view.scale}px "Segoe UI Variable", "Segoe UI", system-ui, sans-serif`;
           context.textAlign = 'center';
           context.fillStyle = withAlpha(palette.text, dim ? 0.3 : 0.92);
-          context.fillText(label, Math.min(width - 60, Math.max(60, at.x)), at.y - node.radius - 7);
+          const low = (60 - view.x) / view.scale;
+          const high = (width - 60 - view.x) / view.scale;
+          context.fillText(label, Math.min(high, Math.max(low, at.x)), at.y - node.radius - 7 / view.scale);
         }
       });
+      context.restore();
     };
 
     const tick = (time: number): void => {
@@ -260,6 +281,25 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
     redrawRef.current = () => draw(performance.now());
     if (reduced) draw(0);
     else frame = requestAnimationFrame(tick);
+
+    // Zoom about a point on screen, so the note under the pointer stays under it.
+    const applyZoom = (factor: number | 'reset', cx = width / 2, cy = height / 2): void => {
+      viewRef.current = factor === 'reset' ? IDENTITY_VIEW : zoomView(viewRef.current, factor, cx, cy);
+      hoverRef.current = null;
+      setHover(null);
+      setZoom(viewRef.current.scale);
+      if (reduced) draw(0);
+    };
+    zoomRef.current = applyZoom;
+
+    const onWheel = (event: WheelEvent): void => {
+      // A page that scrolls under the map would fight the zoom, so the map keeps the wheel while the pointer is on it.
+      event.preventDefault();
+      const box = canvas.getBoundingClientRect();
+      const step = Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0016));
+      applyZoom(step, event.clientX - box.left, event.clientY - box.top);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
 
     const observer = new ResizeObserver(() => {
       const next = Math.max(320, host.clientWidth);
@@ -286,7 +326,9 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
       cancelAnimationFrame(frame);
       observer.disconnect();
       themes.disconnect();
+      canvas.removeEventListener('wheel', onWheel);
       redrawRef.current = () => undefined;
+      zoomRef.current = () => undefined;
       if (simRef.current === sim) simRef.current = null;
     };
   }, [visible]);
@@ -296,28 +338,44 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
     return { x: event.clientX - (box?.left ?? 0), y: event.clientY - (box?.top ?? 0) };
   };
 
-  const dragRef = useRef<{ id: string; moved: boolean; startX: number; startY: number } | null>(null);
+  const dragRef = useRef<
+    | { kind: 'node'; id: string; moved: boolean; startX: number; startY: number }
+    | { kind: 'pan'; moved: boolean; startX: number; startY: number; lastX: number; lastY: number }
+    | null
+  >(null);
+
 
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>): void {
     const sim = simRef.current;
     if (!sim) return;
     const point = local(event);
     const drag = dragRef.current;
+    if (drag?.kind === 'pan') {
+      if (Math.hypot(point.x - drag.startX, point.y - drag.startY) > 4) drag.moved = true;
+      viewRef.current = { ...viewRef.current, x: viewRef.current.x + point.x - drag.lastX, y: viewRef.current.y + point.y - drag.lastY };
+      drag.lastX = point.x;
+      drag.lastY = point.y;
+      redrawRef.current();
+      return;
+    }
     if (drag) {
       const node = sim.nodes.find((item) => item.id === drag.id);
       if (node) {
         if (Math.hypot(point.x - drag.startX, point.y - drag.startY) > 4) drag.moved = true;
-        node.x = point.x;
-        node.y = point.y;
+        const world = toWorld(viewRef.current, point);
+        node.x = world.x;
+        node.y = world.y;
         sim.alpha = Math.max(sim.alpha, 0.3);
+        redrawRef.current();
       }
       return;
     }
-    const found = nodeAt(sim, point.x, point.y);
+    const world = toWorld(viewRef.current, point);
+    const found = nodeAt(sim, world.x, world.y, 5 / viewRef.current.scale);
     const id = found?.id ?? null;
     if (id !== hoverRef.current) {
       hoverRef.current = id;
-      setHover(found ? { id: found.id, x: found.x, y: found.y } : null);
+      setHover(found ? { id: found.id, x: point.x, y: point.y } : null);
       redrawRef.current();
     }
   }
@@ -326,13 +384,16 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
     const sim = simRef.current;
     if (!sim) return;
     const point = local(event);
-    const found = nodeAt(sim, point.x, point.y);
+    const world = toWorld(viewRef.current, point);
+    const found = nodeAt(sim, world.x, world.y, 5 / viewRef.current.scale);
     if (!found) {
-      setSelectedId(null);
+      // Dragging empty space moves the map; a plain click on it clears the selection when the pointer comes up.
+      dragRef.current = { kind: 'pan', moved: false, startX: point.x, startY: point.y, lastX: point.x, lastY: point.y };
+      event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
     found.pinned = true;
-    dragRef.current = { id: found.id, moved: false, startX: point.x, startY: point.y };
+    dragRef.current = { kind: 'node', id: found.id, moved: false, startX: point.x, startY: point.y };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
@@ -340,9 +401,13 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
-    const node = simRef.current?.nodes.find((item) => item.id === drag.id);
-    if (node) node.pinned = false;
-    if (!drag.moved) setSelectedId((current) => (current === drag.id ? null : drag.id));
+    if (drag.kind === 'pan') {
+      if (!drag.moved) setSelectedId(null);
+    } else {
+      const node = simRef.current?.nodes.find((item) => item.id === drag.id);
+      if (node) node.pinned = false;
+      if (!drag.moved) setSelectedId((current) => (current === drag.id ? null : drag.id));
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
@@ -413,7 +478,14 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerUp}
               onPointerLeave={onPointerLeave}
+              onDoubleClick={() => zoomRef.current('reset')}
             />
+            <div className="knowledge-map-zoom" role="group" aria-label="Zoom">
+              <button type="button" aria-label="Zoom in" title="Zoom in (or scroll up over the map)" disabled={zoom >= MAX_ZOOM} onClick={() => zoomRef.current(1.35)}><Plus size={13} /></button>
+              <button type="button" aria-label="Zoom out" title="Zoom out (or scroll down over the map)" disabled={zoom <= MIN_ZOOM} onClick={() => zoomRef.current(1 / 1.35)}><Minus size={13} /></button>
+              <button type="button" aria-label="Reset zoom" title="Reset the view (or double-click the map)" onClick={() => zoomRef.current('reset')}><Maximize2 size={12} /></button>
+              <span aria-live="polite">{Math.round(zoom * 100)}%</span>
+            </div>
             {hovered && hover && (
               <div className="knowledge-map-tip" style={{ left: Math.min(hover.x + 14, Math.max(0, (hostRef.current?.clientWidth ?? 600) - 250)), top: Math.max(6, hover.y - 46) }}>
                 <strong>{hovered.id}</strong>
@@ -445,7 +517,7 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
             </div>
           ) : topNotes.length > 0 && (
             <div className="knowledge-map-detail">
-              <small>Most connected notes. Click a dot, or one of these, to see what it links to.</small>
+              <small>Most connected notes. Click a dot, or one of these, to see what it links to. Scroll to zoom and drag empty space to move around.</small>
               <div className="knowledge-map-links">
                 {topNotes.map((node) => <button key={node.id} type="button" onClick={() => setSelectedId(node.id)}>{node.id} <b>{node.linkCount}</b></button>)}
               </div>
