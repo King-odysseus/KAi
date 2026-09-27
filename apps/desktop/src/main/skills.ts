@@ -42,9 +42,14 @@ export function skillSummaries(skills: readonly DesktopSkill[]): SkillSummary[] 
 
 export function buildSkillPrompt(skills: readonly DesktopSkill[], prompt: string): string {
   if (skills.length === 0) return prompt;
+  // Skills routinely reference bundled files by relative path ("run scripts/recalc.py", "read references/api.md").
+  // Those files sit next to SKILL.md on disk, but the instructions arrive here as plain text with no indication of
+  // where they came from, so the agent cannot resolve them. Naming the folder is what makes those references work.
   const blocks = skills.map((skill) => [
     `### $${skill.name}`,
     'Follow the instructions in this skill for the current task.',
+    `Skill folder: ${path.dirname(skill.path)}`,
+    'Resolve any relative path in this skill against that folder.',
     skill.instructions,
   ].join('\n'));
   return `[SELECTED SKILLS]\n${blocks.join('\n\n')}\n\n[USER REQUEST]\n${prompt}`;

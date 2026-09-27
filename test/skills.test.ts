@@ -51,4 +51,23 @@ describe('skill discovery', () => {
     expect(prompt).toContain('Follow the review checklist.');
     expect(prompt).toContain('[USER REQUEST]\nReview this patch');
   });
+
+  // Most real skills tell the agent to run scripts/x.py or read references/y.md. Those files ship next to SKILL.md,
+  // so the prompt has to say where that folder is or every relative path in the skill is a dead end.
+  it('names the skill folder so bundled scripts and references resolve', () => {
+    const skillPath = path.join('/repo', '.agents', 'skills', 'xlsx', 'SKILL.md');
+    const prompt = buildSkillPrompt([{
+      name: 'xlsx',
+      description: 'Edit spreadsheets',
+      path: skillPath,
+      root: path.join('/repo', '.agents', 'skills'),
+      scope: 'repo',
+      instructions: 'Recalculate with scripts/recalc.py.',
+    }], 'Fix the totals');
+
+    expect(prompt).toContain(`Skill folder: ${path.dirname(skillPath)}`);
+    expect(prompt).toContain('Resolve any relative path in this skill against that folder.');
+    // The folder has to come before the instructions, or the agent reads "scripts/recalc.py" with nowhere to put it.
+    expect(prompt.indexOf('Skill folder:')).toBeLessThan(prompt.indexOf('scripts/recalc.py'));
+  });
 });
