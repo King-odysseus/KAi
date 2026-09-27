@@ -30,6 +30,8 @@ interface ContextEntry {
 export interface BuildProjectContextOptions {
   selectedPaths?: readonly string[];
   memories?: readonly BrainEntry[];
+  /** What the recall did, shown beside the memories so an empty list is explained instead of silent. */
+  memoryNote?: string | null;
   authoritativeRules?: string;
 }
 
@@ -58,7 +60,7 @@ export async function buildProjectContext(
     makeSection('instructions', 'Instructions', instructions),
     makeSection('files', 'Selected files', files),
     makeSection('skills', 'Available skills', skills),
-    makeSection('memories', 'Recalled memories', memories),
+    makeSection('memories', 'Recalled memories', memories, options.memoryNote),
   ];
   const totalCharacters = sections.reduce((sum, section) => sum + section.characters, 0);
   const estimatedTokens = sections.reduce((sum, section) => sum + section.estimatedTokens, 0);
@@ -254,10 +256,12 @@ function makeSection(
   kind: ContextPreviewSection['kind'],
   label: string,
   entries: ContextEntry[],
+  note?: string | null,
 ): ContextPreviewSection {
   return {
     kind,
     label,
+    ...(note ? { note } : {}),
     items: entries.map((entry) => entry.item),
     characters: entries.reduce((sum, entry) => sum + entry.item.characters, 0),
     estimatedTokens: entries.reduce((sum, entry) => sum + entry.item.estimatedTokens, 0),

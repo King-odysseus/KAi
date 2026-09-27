@@ -21,6 +21,8 @@ export const contextPreviewSectionSchema = z
     items: z.array(contextPreviewItemSchema),
     characters: z.number().int().nonnegative(),
     estimatedTokens: z.number().int().nonnegative(),
+    // Why the section looks the way it does, such as a recall that came back empty because the brain has no such project.
+    note: z.string().optional(),
   })
   .strict();
 

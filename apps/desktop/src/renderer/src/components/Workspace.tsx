@@ -1748,6 +1748,7 @@ export function ContextPanel({ activeProject, conversation, services, contextPre
 }
 
 function contextSectionIcon(kind: ContextPreview['sections'][number]['kind']): ReactNode {
+          {section.note && <div className="context-note">{section.note}</div>}
   if (kind === 'memories') return <BrainIcon />;
   if (kind === 'skills') return <Sparkles size={14} />;
   return <FileDiff size={14} />;

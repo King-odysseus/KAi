@@ -62,6 +62,7 @@ export const cognitive1Operations = [
   'overwatch-heuristic-clean',
   'overwatch-distill-kernels',
   'overwatch-push-to-memory',
+  'overwatch-link',
   'integration-status',
   'deploy-c1',
   'project-update',

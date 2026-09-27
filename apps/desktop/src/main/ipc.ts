@@ -53,6 +53,7 @@ import {
 import type { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import type { CredentialVault } from './credential-vault';
 import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime';
+import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
@@ -779,7 +780,7 @@ export async function runConversationAgent(
 
   const memoryEvents: PersistedEvent[] = [];
   if (executionMode === 'api') {
-    const projectName = await memoryProjectName(project.path, project.name);
+    const projectName = await memoryProjectName(context, project.path, project.name);
     await prepareMemorySession(
       context,
       conversation,
@@ -863,7 +864,7 @@ export async function runConversationAgent(
   let execution: AgentExecutionResult;
   // CLI runs claim the project so other agents see the work; API runs are claimed by their memory session.
   const claimedProject = executionMode === 'cli' && (await cognitive1Ready(context))
-    ? await memoryProjectName(project.path, project.name)
+    ? await memoryProjectName(context, project.path, project.name)
     : null;
   if (claimedProject) {
     await context.cognitive1.operation({
@@ -980,7 +981,7 @@ async function logRegression(context: IpcContext, projectPath: string, projectNa
   if (counts.passed === null || !(await cognitive1Ready(context))) return;
   await context.cognitive1.tool({
     tool: 'regression_log',
-    arguments: { project: await memoryProjectName(projectPath, projectName), passed: counts.passed, failed: counts.failed ?? 0, notes: `${check.source}: ${check.command}`.slice(0, 300), agent: 'kai-desktop' },
+    arguments: { project: await memoryProjectName(context, projectPath, projectName), passed: counts.passed, failed: counts.failed ?? 0, notes: `${check.source}: ${check.command}`.slice(0, 300), agent: 'kai-desktop' },
   }).catch(() => undefined);
 }
 
@@ -1005,7 +1006,7 @@ async function coordinationPreflight(context: IpcContext, projectId: string, fil
   try {
     const result = await context.cognitive1.tool({
       tool: 'conflict_check',
-      arguments: { files: files.join(','), project: await memoryProjectName(project.path, project.name) },
+      arguments: { files: files.join(','), project: await memoryProjectName(context, project.path, project.name) },
     });
     return { checked: true, conflicts: parseConflictText(mcpText(result)) };
   } catch {
@@ -1134,10 +1135,11 @@ async function buildConversationContext(
   selectedPaths: readonly string[] = [],
   compaction?: ConversationRecord['compaction'],
 ) {
-  const memories = await recallScopedMemories(context, projectPath, projectName, prompt);
+  const recall = await recallScopedMemories(context, projectPath, projectName, prompt);
   const projectContext = await buildProjectContext(projectPath, {
     selectedPaths: [...new Set([...changedFilePaths(conversation), ...selectedPaths])].slice(-12),
-    memories,
+    memories: recall.memories,
+    memoryNote: recall.note,
     authoritativeRules,
   });
   if (!compaction) return projectContext;
@@ -1622,17 +1624,66 @@ async function recallScopedMemories(
   projectPath: string,
   fallbackProjectName: string,
   prompt: string,
-): Promise<BrainEntry[]> {
-  if (!(await cognitive1Ready(context))) return [];
+): Promise<{ memories: BrainEntry[]; note: string | null }> {
+  if (!(await cognitive1Ready(context))) return { memories: [], note: null };
   try {
-    return await context.cognitive1.search({
+    const resolution = await resolveProjectMemoryName(context, projectPath, fallbackProjectName);
+    const memories = await context.cognitive1.search({
       query: recallQuery(prompt),
-      project: await memoryProjectName(projectPath, fallbackProjectName),
+      project: resolution.name,
       maxResults: 8,
     });
+    if (memories.length === 0 && !resolution.matched) {
+      context.logger.info(
+        'internal',
+        `C1 has no project named "${resolution.name}"; recall returned nothing for ${projectPath}`,
+      );
+    }
+    return { memories, note: brainProjectNote(resolution, memories.length) };
   } catch (error) {
     context.logger.error('service_error', 'C1 scoped recall failed', undefined, error);
-    return [];
+    return { memories: [], note: 'Memory recall failed, so this run has no recalled memories.' };
+  }
+}
+
+/**
+ * The brain's own spelling of this project, preferring a name it already holds over the local manifest title.
+ * A brain that cannot be listed still resolves, it just cannot confirm the match.
+ */
+async function resolveProjectMemoryName(
+  context: IpcContext,
+  projectPath: string,
+  fallbackProjectName: string,
+): Promise<BrainProjectResolution> {
+  let known: KnownBrainProject[] = [];
+  try {
+    known = await context.cognitive1.knownProjects();
+  } catch (error) {
+    context.logger.warn('service_error', 'C1 project list unavailable for memory scoping', messageOf(error));
+  }
+  const manifest = await readProjectManifestNames(projectPath);
+  return resolveBrainProject(
+    {
+      projectPath,
+      projectName: fallbackProjectName,
+      packageName: manifest.name,
+      packageDisplayName: manifest.displayName,
+    },
+    known,
+  );
+}
+
+async function readProjectManifestNames(projectPath: string): Promise<{ name?: string; displayName?: string }> {
+  try {
+    const raw = await fs.readFile(path.join(projectPath, 'package.json'), 'utf8');
+    const value = JSON.parse(raw) as { displayName?: unknown; name?: unknown };
+    return {
+      name: typeof value.name === 'string' ? value.name : undefined,
+      displayName: typeof value.displayName === 'string' ? value.displayName : undefined,
+    };
+  } catch {
+    // A project does not need a package manifest to use the brain.
+    return {};
   }
 }
 
@@ -1703,16 +1754,9 @@ export async function closeMemorySessions(context: IpcContext): Promise<void> {
   }));
 }
 
-async function memoryProjectName(projectPath: string, fallback: string): Promise<string> {
-  try {
-    const raw = await fs.readFile(path.join(projectPath, 'package.json'), 'utf8');
-    const value = JSON.parse(raw) as { displayName?: unknown; name?: unknown };
-    if (typeof value.displayName === 'string' && value.displayName.trim()) return value.displayName.trim();
-    if (typeof value.name === 'string' && value.name.trim()) return value.name.trim();
-  } catch {
-    // A project does not need a package manifest to use its folder name.
-  }
-  return fallback;
+/** The name every read and write for this project uses, so what one agent files another can recall. */
+async function memoryProjectName(context: IpcContext, projectPath: string, fallback: string): Promise<string> {
+  return (await resolveProjectMemoryName(context, projectPath, fallback)).name;
 }
 
 function recallQuery(prompt: string): string {

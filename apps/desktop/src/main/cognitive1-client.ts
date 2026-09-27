@@ -25,6 +25,9 @@ import {
   type ProxyCostSummary,
 } from '@kai/contracts';
 import type { ServiceKind } from '@kai/contracts';
+import type { KnownBrainProject } from './brain-project';
+
+const KNOWN_PROJECTS_TTL_MS = 30_000;
 
 export interface Cognitive1LoopbackAccess {
   loopbackAccess(kind: ServiceKind): Promise<{ endpoint: string; token: string }>;
@@ -62,7 +65,18 @@ const rawStatusSchema = z.object({
       }),
     )
     .default([]),
-  projects: z.array(z.unknown()).default([]),
+  // Named projects the brain already files memories under, with the path its notes recorded when they have one.
+  projects: z
+    .array(
+      z
+        .object({
+          name: z.string().min(1),
+          path: z.string().optional().nullable(),
+        })
+        .passthrough(),
+    )
+    .catch([])
+    .default([]),
   recentEntries: z.array(rawRecallEntrySchema).default([]),
   brainHunger: z.object({
     daysSinceLearn: z.number().int().nonnegative(),
@@ -204,6 +218,8 @@ export class Cognitive1Client {
   private readonly timeoutMs: number;
   private mcpConnection: { fingerprint: string; client: Client } | undefined;
 
+  private knownProjectsCache: { at: number; projects: KnownBrainProject[] } | null = null;
+
   constructor(private readonly options: Cognitive1ClientOptions) {
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
@@ -236,6 +252,17 @@ export class Cognitive1Client {
       recentEntries: status.recentEntries.map(toBrainEntry),
       quality,
     });
+  }
+
+  /** Project names the brain already files memories under, so a recall can ask for one that exists. */
+  async knownProjects(): Promise<KnownBrainProject[]> {
+    // Every read and write of a run asks for the name, and the status scan walks the project notes, so share one answer.
+    const cached = this.knownProjectsCache;
+    if (cached && Date.now() - cached.at < KNOWN_PROJECTS_TTL_MS) return cached.projects;
+    const status = await this.requestJson('/api/status', undefined, rawStatusSchema);
+    const projects = status.projects.map((project) => ({ name: project.name, path: project.path ?? null }));
+    this.knownProjectsCache = { at: Date.now(), projects };
+    return projects;
   }
 
   async search(input: BrainSearchInput): Promise<BrainEntry[]> {
@@ -570,6 +597,7 @@ function operationRoute(
     case 'overwatch-heuristic-clean': return post('/api/overwatch/heuristic-clean', {});
     case 'overwatch-distill-kernels': return post('/api/overwatch/distill-kernels', {});
     case 'overwatch-push-to-memory': return post('/api/overwatch/push-to-memory', {});
+    case 'overwatch-link': return post('/api/overwatch/link', {});
     case 'integration-status': return get('/api/projects/integration-status', {});
     case 'deploy-c1': return post('/api/projects/deploy-c1', {});
     case 'project-update': return post('/api/project/update');
