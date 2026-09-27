@@ -36,6 +36,7 @@ import {
 import { confirmDialog, messageDialog } from './AppDialog';
 import { unwrap } from '../types';
 import { BrainPanel } from './BrainView';
+import { KnowledgeMap } from './KnowledgeMap';
 import {
   applyClassifications,
   countOverrules,
@@ -55,14 +56,14 @@ import {
 
 type Cognitive1Tab = 'review' | 'overwatch' | 'memory' | 'work' | 'recovery' | 'skills' | 'advanced';
 
-const tabs: Array<{ id: Cognitive1Tab; label: string }> = [
-  { id: 'review', label: 'Review' },
-  { id: 'overwatch', label: 'Overwatch' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'work', label: 'Work' },
-  { id: 'recovery', label: 'Recovery' },
-  { id: 'skills', label: 'Skills' },
-  { id: 'advanced', label: 'Advanced' },
+const tabs: Array<{ id: Cognitive1Tab; label: string; help: string }> = [
+  { id: 'review', label: 'Review', help: 'Notes that agents filed while working, waiting for your yes or no. Approve the ones worth remembering and reject the rest.' },
+  { id: 'overwatch', label: 'Overwatch', help: 'The AI reviewer itself: whether it is set up, what it has found lately, and buttons to run it by hand.' },
+  { id: 'memory', label: 'Memory', help: 'Search and add to what C1 remembers: bugs, decisions, gotchas and patterns from past sessions.' },
+  { id: 'work', label: 'Work', help: 'Tasks, handoffs and reviews between agents, plus recent regressions and Git status for the project.' },
+  { id: 'recovery', label: 'Recovery', help: 'Pick up where an interrupted session stopped, using the last saved recap.' },
+  { id: 'skills', label: 'Skills', help: 'Reusable instructions stored in C1 that any connected agent can load.' },
+  { id: 'advanced', label: 'Advanced', help: 'Raw service status and direct calls to the C1 API. Most people never need this.' },
 ];
 
 /** What each tab needs before it can draw itself. Review is first because its queue is what usually needs a person. */
@@ -185,8 +186,9 @@ export function Cognitive1Panel({
           <span className="eyebrow">Cognitive1 control centre</span>
           <h2>Review, Overwatch, and memory</h2>
           <p>
-            Drafts Overwatch has judged wait under Review. Its engine, findings and history live under Overwatch.
-            {headline.total > 0 && ` ${headline.total} draft(s) are in the queue right now.`}
+            C1 is the shared memory your AI agents write to. While they work they file <b>drafts</b> (candidate notes).
+            <b> Overwatch</b> is an AI reviewer that reads each draft and labels it keep, noise or borderline, so you only approve what is worth remembering.
+            {headline.total > 0 ? ` ${headline.total} draft(s) are waiting right now.` : ' Nothing is waiting right now.'}
           </p>
         </div>
         <button type="button" className="secondary-button" disabled={disabled} onClick={() => void refreshCore()}>
@@ -210,13 +212,15 @@ export function Cognitive1Panel({
         ))}
       </nav>
 
+      <p className="cognitive1-tab-help">{tabs.find((item) => item.id === tab)?.help}</p>
+
       {notice && <div className="proxy-notice success"><CheckCircle2 size={15} /><span>{notice}</span><button type="button" className="icon-button compact" aria-label="Dismiss C1 notice" onClick={() => setNotice(null)}><X size={14} /></button></div>}
       {error && <div className="proxy-error" role="alert"><AlertTriangle size={15} /><span>{error}</span><button type="button" className="icon-button compact" aria-label="Dismiss C1 error" onClick={() => setError(null)}><X size={14} /></button></div>}
       {busy && <div className="proxy-action-state"><RefreshCw size={14} className="spin" /><span>{busy}</span></div>}
 
       {tab === 'review' && <ReviewPanel data={data} projects={projects} disabled={disabled} onInvoke={invoke} onReload={reload} onNotice={setNotice} />}
       {tab === 'overwatch' && <OverwatchPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
-      {tab === 'memory' && <MemoryPanel data={data} projects={projects} disabled={disabled} onRun={run} service={service} />}
+      {tab === 'memory' && <MemoryPanel data={data} projects={projects} disabled={disabled} onRun={run} onNotice={setNotice} service={service} />}
       {tab === 'work' && <WorkPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
       {tab === 'recovery' && <RecoveryPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
       {tab === 'skills' && <SkillsPanel data={data} projects={projects} disabled={disabled} onRun={run} onInvoke={invoke} />}
@@ -629,6 +633,7 @@ function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-cross-ref-bugs', {}, 'Bug cross-reference completed.')}>Cross-reference bugs</button>
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Distill kernels</button>
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Push kernels to memory</button>
+            <button type="button" className="secondary-button" disabled={disabled} title="Compare every note and link the ones about the same thing, which is what fills the knowledge map" onClick={() => void onRun('overwatch-link', {}, 'Related notes linked. See the result on the Memory tab.')}>Link related notes</button>
             <button
               type="button"
               className="secondary-button danger-button"
@@ -748,13 +753,14 @@ function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
 }
 
 /** Memory: what C1 knows, how to add to it, and how to take things out. */
-function MemoryPanel({ data, projects, disabled, onRun, service }: PanelProps & { service: ServiceState }): ReactNode {
+function MemoryPanel({ data, projects, disabled, onRun, onNotice, service }: PanelProps & { service: ServiceState; onNotice: (message: string) => void }): ReactNode {
   const prunePreview = recordOf(data['brain-prune']);
   const prunableTotal = (Number(prunePreview.handoffs ?? 0)) + (Number(prunePreview.dailyLogs ?? 0)) + (Number(prunePreview.resolvedEntries ?? 0));
   const [pruneTitle, setPruneTitle] = useState('');
 
   return (
     <div className="cognitive1-page">
+      <KnowledgeMap disabled={disabled} onNotice={onNotice} />
       <div className="cognitive1-grid two">
         <BrainLearnCard projects={projects} disabled={disabled} onRun={onRun} />
 

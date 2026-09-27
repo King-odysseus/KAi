@@ -8994,3 +8994,327 @@ code {
   width: 26px;
   height: 26px;
 }
+
+/* History: a compact list with one-line rows and hover-revealed actions, kept to a readable width. */
+.page-view:has(> .history-table) > * {
+  max-width: 980px;
+  margin-inline: auto;
+}
+
+.page-view:has(> .history-table) .page-header {
+  margin-bottom: 12px;
+}
+
+.history-archive-filter {
+  gap: 10px;
+  padding: 5px 10px;
+}
+
+.history-archive-filter small {
+  display: none;
+}
+
+.history-search {
+  margin-bottom: 10px;
+}
+
+.history-search input {
+  height: 30px;
+  font-size: 12px;
+}
+
+.history-head,
+.history-row {
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 160px) 72px 100px;
+  gap: 10px;
+}
+
+.history-head {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.history-row {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.history-row > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-open {
+  min-width: 0;
+  padding: 7px 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.history-row.active .history-open {
+  color: var(--mint);
+}
+
+.history-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.history-row:hover .history-actions,
+.history-row:focus-within .history-actions,
+.history-row.active .history-actions {
+  opacity: 1;
+}
+
+.history-actions button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+}
+
+.history-actions button:hover {
+  color: var(--text);
+  background: var(--bg-raised);
+}
+
+.history-actions button[title="Delete"]:hover {
+  color: var(--red);
+}
+
+/* C1 Brain: an explanation of what each tab is for, and type that is readable at a glance */
+.cognitive1-control-heading p {
+  max-width: 720px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cognitive1-control-heading p b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cognitive1-tab-help {
+  margin: 2px 2px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cognitive1-tabs button {
+  min-height: 30px;
+  font-size: 12px;
+}
+
+.cognitive1-copy {
+  font-size: 11px;
+}
+
+.cognitive1-recap-lines li {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.context-note {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* Knowledge map */
+.knowledge-map-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.knowledge-map-actions select {
+  height: 30px;
+  max-width: 220px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.knowledge-map-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.knowledge-map-stage {
+  position: relative;
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background:
+    radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--mint) 7%, transparent), transparent 70%),
+    var(--bg-inset);
+}
+
+.knowledge-map-stage canvas {
+  display: block;
+  width: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.knowledge-map-stage canvas:active {
+  cursor: grabbing;
+}
+
+.knowledge-map-tip {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  max-width: 240px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-raised);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  font-size: 11px;
+}
+
+.knowledge-map-tip strong {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.knowledge-map-tip span {
+  color: var(--text-muted);
+}
+
+.knowledge-map-hint {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  left: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.knowledge-map-empty {
+  margin-top: 10px;
+  padding: 34px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.knowledge-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.knowledge-map-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.knowledge-map-key b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.knowledge-map-key i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 0 6px currentColor;
+}
+
+.knowledge-map-key.bugs i { background: var(--red); color: var(--red); }
+.knowledge-map-key.decisions i { background: var(--lavender); color: var(--lavender); }
+.knowledge-map-key.gotchas i { background: var(--amber); color: var(--amber); }
+.knowledge-map-key.patterns i { background: var(--mint); color: var(--mint); }
+
+.knowledge-map-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.knowledge-map-detail strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.knowledge-map-detail small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.knowledge-map-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.knowledge-map-links > span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.knowledge-map-links button {
+  max-width: 100%;
+  padding: 3px 9px;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--bg-input);
+  cursor: pointer;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.knowledge-map-links button:hover {
+  border-color: color-mix(in srgb, var(--mint) 55%, var(--border-soft));
+}
+
+.knowledge-map-links button b {
+  margin-left: 4px;
+  color: var(--mint);
+  font-weight: 600;
+}

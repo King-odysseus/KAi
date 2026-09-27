@@ -18,11 +18,17 @@ import { SaveToBrainDialog } from './SaveToBrain';
 
 type TasksTab = 'board' | 'reviews' | 'handoffs' | 'decisions';
 
-const TABS: Array<{ id: TasksTab; label: string }> = [
-  { id: 'board', label: 'Board' },
-  { id: 'reviews', label: 'Reviews' },
-  { id: 'handoffs', label: 'Handoffs' },
-  { id: 'decisions', label: 'Decisions' },
+const TABS: Array<{ id: TasksTab; label: string; help: string }> = [
+  { id: 'board', label: 'Board', help: 'The shared to-do list. Start a task to open it in a new conversation; complete it when it is finished so other agents know.' },
+  { id: 'reviews', label: 'Reviews', help: 'Second opinions on finished work. An agent asks for a review of a commit; another agent (or you) reads it and leaves feedback.' },
+  { id: 'handoffs', label: 'Handoffs', help: 'Work one agent could not finish and passed on, with notes on what to do next. Claim one to take it over.' },
+  { id: 'decisions', label: 'Decisions', help: 'A log of choices and the reasons behind them, so nobody has to re-argue them later.' },
+];
+
+const REVIEW_STATES: Array<{ id: 'pending' | 'claimed' | 'done'; label: string }> = [
+  { id: 'pending', label: 'Waiting for a reviewer' },
+  { id: 'claimed', label: 'Being reviewed' },
+  { id: 'done', label: 'Reviewed' },
 ];
 
 const COLUMNS: Array<{ id: TaskColumn; label: string }> = [
@@ -61,7 +67,7 @@ export function TasksView({ activeProject, cognitive1Ready, onStartTask }: {
       <header className="page-header">
         <div>
           <h1>Tasks</h1>
-          <p>Shared work items, reviews and handoffs from the C1 brain{activeProject ? ` · ${activeProject.name}` : ''}</p>
+          <p>Work shared between you and your AI agents, stored in the C1 brain{activeProject ? ` · ${activeProject.name}` : ''}</p>
         </div>
       </header>
       <div className="ops-tabs" role="tablist" aria-label="Task sections">
@@ -69,6 +75,7 @@ export function TasksView({ activeProject, cognitive1Ready, onStartTask }: {
           <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={`ops-tab ${tab === item.id ? 'active' : ''}`} onClick={() => setTab(item.id)}>{item.label}</button>
         ))}
       </div>
+      <p className="tasks-tab-help">{TABS.find((item) => item.id === tab)?.help}</p>
       {!cognitive1Ready && <div className="empty-list">Cognitive1 is not running. Start it from the C1 Brain page to use tasks, reviews and handoffs.</div>}
       {cognitive1Ready && message && <div className="workbench-notice" role="status"><span>{message}</span></div>}
       {cognitive1Ready && error && <div className="workbench-error" role="alert">{error}</div>}
@@ -201,24 +208,29 @@ function ReviewQueue({ activeProject, report }: { activeProject: ProjectRecord |
 
   return (
     <div className="ops-panel">
-      <label className="field"><span>Show</span><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="pending">Waiting for a reviewer</option><option value="claimed">Being reviewed</option><option value="done">Reviewed</option></select></label>
-      {reviews.length === 0 && <div className="empty-list">No reviews in this state</div>}
+      <div className="ops-segment" role="group" aria-label="Review state">
+        {REVIEW_STATES.map((item) => (
+          <button key={item.id} type="button" aria-pressed={status === item.id} className={status === item.id ? 'active' : ''} onClick={() => setStatus(item.id)}>{item.label}</button>
+        ))}
+      </div>
+      {reviews.length === 0 && <div className="empty-list">No reviews in this state{status === 'pending' ? '. Use "Request a review" below to ask for one.' : ''}</div>}
       {reviews.map((review) => (
         <section key={review.id} className="settings-section ops-card">
-          <div className="ops-card-head"><strong>{review.project} {review.commit && `· ${review.commit}`}</strong><span>{review.requestedBy}</span></div>
+          <div className="ops-card-head"><strong>{review.project}{review.commit && <code className="ops-chip">{review.commit}</code>}</strong><span>requested by {review.requestedBy}</span></div>
           <p className="settings-note">{review.summary}</p>
-          {review.files && <small className="ops-note">Files: {review.files}</small>}
+          {review.files && <small className="ops-note ops-files">Files: {review.files}</small>}
           {review.feedback && <p className="settings-note"><strong>Feedback:</strong> {review.feedback}</p>}
           {status !== 'done' && (
-            <div className="field-grid">
-              <label className="field"><span>Your feedback</span><input value={feedback[review.id] ?? ''} onChange={(event) => setFeedback({ ...feedback, [review.id]: event.target.value })} /></label>
-              <button type="button" className="primary-button align-end" disabled={!(feedback[review.id] ?? '').trim()} onClick={() => void report(async () => { await tool({ project: review.project, review_id: review.id, feedback: feedback[review.id], status: 'done' }); await load(); }, 'Review submitted.')}>Submit review</button>
+            <div className="ops-inline-form">
+              <label className="field"><span>Your feedback</span><input value={feedback[review.id] ?? ''} placeholder="What should change, or what looks good" onChange={(event) => setFeedback({ ...feedback, [review.id]: event.target.value })} /></label>
+              <button type="button" className="primary-button" disabled={!(feedback[review.id] ?? '').trim()} onClick={() => void report(async () => { await tool({ project: review.project, review_id: review.id, feedback: feedback[review.id], status: 'done' }); await load(); }, 'Review submitted.')}>Submit review</button>
             </div>
           )}
         </section>
       ))}
       <section className="settings-section">
         <div className="section-title"><span>Request a review</span></div>
+        <p className="settings-note">Ask another agent to check work that was just done. Give the commit or branch, and say what changed and why.</p>
         <div className="field-grid">
           <label className="field"><span>Commit or branch</span><input value={form.commit} onChange={(event) => setForm({ ...form, commit: event.target.value })} /></label>
           <label className="field"><span>Changed files (comma separated)</span><input value={form.files} onChange={(event) => setForm({ ...form, files: event.target.value })} /></label>
