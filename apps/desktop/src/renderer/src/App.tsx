@@ -76,6 +76,7 @@ export function App(): ReactNode {
   const [setupOpen, setSetupOpen] = useState(false);
   const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
+  const [codeOpenRequest, setCodeOpenRequest] = useState<{ path: string; nonce: number } | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
   const signInAttempt = useRef(0);
@@ -1441,6 +1442,12 @@ export function App(): ReactNode {
               <ConversationSidebar
                 conversations={conversations}
                 activeId={activeConversationId}
+                projectId={activeProject?.id ?? null}
+                filesRefreshKey={`${activeConversation?.id ?? ''}:${activeConversation?.updatedAt ?? ''}`}
+                onOpenFile={(path) => {
+                  setCodeOpenRequest({ path, nonce: Date.now() });
+                  setView('code');
+                }}
                 onOpen={(id) => void openConversation(id)}
                 onDelete={(id) => void deleteConversation(id)}
                 onCollapse={() => setThreadsOpen(false)}
@@ -1480,6 +1487,7 @@ export function App(): ReactNode {
                 autoSave={bootstrap.settings.editor.autoSave}
                 autoSaveDelayMs={bootstrap.settings.editor.autoSaveDelayMs}
                 onOpenSettings={() => setView('settings')}
+                openRequest={codeOpenRequest}
               />
             </div>
           </main>

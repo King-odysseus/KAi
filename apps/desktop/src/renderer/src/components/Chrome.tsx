@@ -34,6 +34,7 @@ import { THEME_MODES, type AppSettings, type ConversationRecord, type ProjectRec
 import type { ViewId } from '../types';
 import { relativeTime } from '../types';
 import { shortcutLabel } from '../shortcuts';
+import { ProjectFilesPanel } from './ProjectFilesPanel';
 
 const themeLabel = (theme: ThemeMode): string => THEME_MODES.find((item) => item.id === theme)?.label ?? theme;
 const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.findIndex((item) => item.id === theme) + 1) % THEME_MODES.length]!.id;
@@ -270,17 +271,40 @@ function ProjectPicker({ projects, activeProject, onChoose, onOpen }: { projects
   );
 }
 
-export function ConversationSidebar({ conversations, activeId, onOpen, onDelete, onNew, onCollapse }: { conversations: ConversationRecord[]; activeId: string | null; onOpen: (id: string) => void; onDelete: (id: string) => void; onNew: () => void; onCollapse: () => void }): ReactNode {
+type SidebarTab = 'threads' | 'files';
+
+function readSidebarTab(): SidebarTab {
+  try {
+    return window.localStorage.getItem('kai.sidebarTab') === 'files' ? 'files' : 'threads';
+  } catch {
+    return 'threads';
+  }
+}
+
+export function ConversationSidebar({ conversations, activeId, projectId, filesRefreshKey, onOpen, onDelete, onNew, onCollapse, onOpenFile }: { conversations: ConversationRecord[]; activeId: string | null; projectId: string | null; filesRefreshKey: string; onOpen: (id: string) => void; onDelete: (id: string) => void; onNew: () => void; onCollapse: () => void; onOpenFile: (path: string) => void }): ReactNode {
+  const [tab, setTabState] = useState<SidebarTab>(readSidebarTab);
+  const setTab = (next: SidebarTab): void => {
+    setTabState(next);
+    try {
+      window.localStorage.setItem('kai.sidebarTab', next);
+    } catch {
+      // The tab simply is not remembered.
+    }
+  };
   return (
     <aside className="conversation-sidebar">
       <div className="sidebar-heading">
-        <span>Threads</span>
+        <div className="sidebar-tabs" role="tablist" aria-label="Left panel">
+          <button type="button" role="tab" aria-selected={tab === 'threads'} className={tab === 'threads' ? 'active' : ''} onClick={() => setTab('threads')}>Threads</button>
+          <button type="button" role="tab" aria-selected={tab === 'files'} className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')} title="Project files, including what changed and what Git does not track yet">Files</button>
+        </div>
         <div className="sidebar-heading-actions">
           <button type="button" className="icon-button compact" onClick={onNew} title="New conversation" aria-label="New conversation"><Plus size={16} /></button>
           <button type="button" className="icon-button compact" onClick={onCollapse} title="Hide threads panel (Ctrl+Shift+B)" aria-label="Hide threads panel"><PanelLeftClose size={15} /></button>
         </div>
       </div>
-      <div className="conversation-list">
+      {tab === 'files' && <ProjectFilesPanel projectId={projectId} refreshKey={filesRefreshKey} onOpenFile={onOpenFile} />}
+      {tab === 'threads' && <div className="conversation-list">
         {conversations.length === 0 && <div className="empty-list">No conversations</div>}
         {conversations.map((conversation) => (
           <div key={conversation.id} className={`conversation-row ${conversation.id === activeId ? 'active' : ''}`}>
@@ -291,7 +315,7 @@ export function ConversationSidebar({ conversations, activeId, onOpen, onDelete,
             <button type="button" className="row-action" title="Delete conversation" aria-label={`Delete ${conversation.title}`} onClick={() => onDelete(conversation.id)}><Trash2 size={13} /></button>
           </div>
         ))}
-      </div>
+      </div>}
     </aside>
   );
 }

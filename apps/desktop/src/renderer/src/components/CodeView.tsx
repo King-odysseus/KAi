@@ -205,7 +205,10 @@ export function CodeView({
   autoSave,
   autoSaveDelayMs,
   onOpenSettings,
+  openRequest = null,
 }: {
+  /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
+  openRequest?: { path: string; nonce: number } | null;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
@@ -758,6 +761,16 @@ export function CodeView({
     });
     return () => { cancelled = true; };
   }, [projectId, activePath]);
+
+  const handledOpenRequest = useRef(0);
+  useEffect(() => {
+    // The editor may still be starting, so the request waits until it is ready and is then handled once.
+    if (!openRequest || !editorReady || !projectId || openRequest.nonce === handledOpenRequest.current) return;
+    handledOpenRequest.current = openRequest.nonce;
+    void openFile(openRequest.path);
+    // openFile reads the current editor through refs, so it does not need to be a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest, editorReady, projectId]);
 
   async function openFile(path: string): Promise<void> {
     const currentProjectId = projectIdRef.current;
