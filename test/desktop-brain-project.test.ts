@@ -35,6 +35,15 @@ describe('brain project resolution', () => {
     expect(resolved).toEqual({ name: 'ClaudeCode-Proxy', source: 'name', matched: true });
   });
 
+  it('picks the busier of two spellings that differ only by case', () => {
+    // The live brain holds both "Cognitive1" (9 entries) and "cognitive1" (18); agents mostly write the lower-case one.
+    const resolved = resolveBrainProject(
+      { projectPath: 'C:/code/Cognitive1', projectName: 'Cognitive1' },
+      [{ name: 'Cognitive1', count: 9 }, { name: 'cognitive1', count: 18 }],
+    );
+    expect(resolved).toEqual({ name: 'cognitive1', source: 'name', matched: true });
+  });
+
   it('honours an explicit override without consulting the brain', () => {
     const resolved = resolveBrainProject(
       { projectPath: 'C:\\code\\anything', projectName: 'Anything' },

@@ -11,6 +11,8 @@ export interface KnownBrainProject {
   name: string;
   /** Where the brain believes the project lives, when its notes record a path. */
   path?: string | null;
+  /** How many entries are filed under this spelling, used to pick between spellings that differ only by case or dashes. */
+  count?: number;
 }
 
 export interface BrainProjectCandidates {
@@ -68,11 +70,13 @@ export function resolveBrainProject(
   for (const candidate of ordered) {
     const normalized = candidate ? normalizeName(candidate) : '';
     if (!normalized) continue;
+    // The brain can hold "WorkSpace" and "workspace" as separate spellings; the busier one is the one agents use.
+    let best: KnownBrainProject | null = null;
     for (const entry of known) {
-      if (normalizeName(entry.name) === normalized) {
-        return { name: entry.name, source: 'name', matched: true };
-      }
+      if (normalizeName(entry.name) !== normalized) continue;
+      if (!best || (entry.count ?? 0) > (best.count ?? 0)) best = entry;
     }
+    if (best) return { name: best.name, source: 'name', matched: true };
   }
 
   const fallback = candidates.projectName.trim() || folder;

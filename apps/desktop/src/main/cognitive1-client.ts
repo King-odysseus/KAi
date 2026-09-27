@@ -77,6 +77,11 @@ const rawStatusSchema = z.object({
     )
     .catch([])
     .default([]),
+  // The names entries are really filed under, with how many each carries. Older engines do not send it.
+  entryProjects: z
+    .array(z.object({ name: z.string().min(1), count: z.number().int().nonnegative() }).passthrough())
+    .catch([])
+    .default([]),
   recentEntries: z.array(rawRecallEntrySchema).default([]),
   brainHunger: z.object({
     daysSinceLearn: z.number().int().nonnegative(),
@@ -260,7 +265,10 @@ export class Cognitive1Client {
     const cached = this.knownProjectsCache;
     if (cached && Date.now() - cached.at < KNOWN_PROJECTS_TTL_MS) return cached.projects;
     const status = await this.requestJson('/api/status', undefined, rawStatusSchema);
-    const projects = status.projects.map((project) => ({ name: project.name, path: project.path ?? null }));
+    const projects = mergeKnownProjects(
+      status.projects.map((project) => ({ name: project.name, path: project.path ?? null })),
+      status.entryProjects,
+    );
     this.knownProjectsCache = { at: Date.now(), projects };
     return projects;
   }
@@ -520,6 +528,21 @@ function isBrainEntryType(value: string): value is BrainEntryType {
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+/** Project notes carry a path and entries carry the names actually used; keep both, one row per exact spelling. */
+function mergeKnownProjects(
+  notes: readonly KnownBrainProject[],
+  used: ReadonlyArray<{ name: string; count: number }>,
+): KnownBrainProject[] {
+  const merged = new Map<string, KnownBrainProject>();
+  for (const project of notes) merged.set(project.name, { ...project });
+  for (const { name, count } of used) {
+    const existing = merged.get(name);
+    if (existing) existing.count = count;
+    else merged.set(name, { name, path: null, count });
+  }
+  return [...merged.values()];
 }
 
 function nonNegativeInteger(value: number): number {
