@@ -1,9 +1,10 @@
 /**
- * The data and layout behind the C1 knowledge map.
+ * The data and geometry behind the C1 knowledge map.
  *
- * C1's `/api/graph` returns the notes it remembers (nodes) and the `Related:` links between them (edges). Nothing here
- * touches the DOM: parsing is defensive because the daemon may be older or newer than the app, and the layout is a small
- * force simulation that a test can run to a settled state and inspect.
+ * C1's `/api/graph` returns the notes it remembers (nodes) and the `Related:` links between them (edges). The map draws
+ * them as an orb: every note sits on the surface of a sphere, notes that link to each other are pulled close together,
+ * and the whole sphere turns. Nothing here touches the DOM: parsing is defensive because the daemon may be older or
+ * newer than the app, and the layout and projection are plain maths a test can run and inspect.
  */
 
 export type GraphNodeType = 'bugs' | 'decisions' | 'gotchas' | 'patterns' | 'other';
@@ -93,26 +94,55 @@ export function parseKnowledgeGraph(raw: unknown): KnowledgeGraph {
   };
 }
 
-export interface SimNode extends GraphNode {
+export interface Vec3 {
   x: number;
   y: number;
-  vx: number;
-  vy: number;
+  z: number;
+}
+
+export interface OrbNode extends GraphNode {
+  /** A point on the unit sphere. */
+  p: Vec3;
   radius: number;
-  /** True while a pointer is holding the node, so the forces leave it where it is. */
-  pinned: boolean;
 }
 
-export interface Simulation {
-  nodes: SimNode[];
-  edges: Array<{ source: SimNode; target: SimNode }>;
+export interface Orb {
+  nodes: OrbNode[];
+  edges: Array<{ source: OrbNode; target: OrbNode }>;
   neighbours: Map<string, string[]>;
-  width: number;
-  height: number;
-  alpha: number;
+  /** Decorative particles spread evenly over the same sphere, so the orb reads as an orb whatever the data. */
+  shell: Vec3[];
 }
 
-/** A small seeded generator, so a given graph always starts from the same positions. */
+/** Bigger dots for notes that connect to more, so the ideas a project keeps returning to stand out. */
+export function nodeRadius(linkCount: number): number {
+  return Math.min(11, 3.2 + Math.sqrt(Math.max(0, linkCount)) * 2.1);
+}
+
+function length(v: Vec3): number {
+  return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+function normalized(v: Vec3): Vec3 {
+  const size = length(v) || 1;
+  return { x: v.x / size, y: v.y / size, z: v.z / size };
+}
+
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+/** `count` points spread evenly over the unit sphere, running pole to pole so neighbouring indices sit close together. */
+export function fibonacciSphere(count: number): Vec3[] {
+  const points: Vec3[] = [];
+  for (let i = 0; i < count; i++) {
+    const y = count === 1 ? 0 : 1 - (2 * i) / (count - 1);
+    const ring = Math.sqrt(Math.max(0, 1 - y * y));
+    const angle = GOLDEN_ANGLE * i;
+    points.push({ x: Math.cos(angle) * ring, y, z: Math.sin(angle) * ring });
+  }
+  return points;
+}
+
+/** A small seeded generator, so a given graph always settles into the same orb. */
 function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -132,31 +162,99 @@ function seedOf(graph: KnowledgeGraph): number {
   return hash >>> 0;
 }
 
-/** Bigger dots for notes that connect to more, so the ideas a project keeps returning to stand out. */
-export function nodeRadius(linkCount: number): number {
-  return Math.min(13, 4 + Math.sqrt(Math.max(0, linkCount)) * 2.4);
+/**
+ * Move linked notes together and unlinked ones apart while keeping every note on the sphere. Each step pushes points
+ * away from their neighbours, pulls linked pairs toward a resting distance, drops the sideways part of the move onto the
+ * surface, and puts the point back on it.
+ */
+function relax(nodes: OrbNode[], edges: Orb['edges'], iterations: number): void {
+  const count = nodes.length;
+  if (count < 2) return;
+  const index = new Map(nodes.map((node, position) => [node.id, position]));
+  const rest = Math.min(0.7, Math.max(0.14, 1.7 / Math.sqrt(count)));
+  const repel = 0.004;
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const cooling = 1 - iteration / iterations;
+    const limit = 0.06 * (0.2 + 0.8 * cooling);
+    const move = nodes.map((): Vec3 => ({ x: 0, y: 0, z: 0 }));
+
+    for (let i = 0; i < count; i++) {
+      for (let j = i + 1; j < count; j++) {
+        const a = nodes[i].p;
+        const b = nodes[j].p;
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dz = a.z - b.z;
+        const distanceSquared = dx * dx + dy * dy + dz * dz + 1e-4;
+        const push = repel / (distanceSquared * Math.sqrt(distanceSquared));
+        move[i].x += dx * push;
+        move[i].y += dy * push;
+        move[i].z += dz * push;
+        move[j].x -= dx * push;
+        move[j].y -= dy * push;
+        move[j].z -= dz * push;
+      }
+    }
+
+    for (const { source, target } of edges) {
+      const i = index.get(source.id);
+      const j = index.get(target.id);
+      if (i === undefined || j === undefined) continue;
+      const dx = target.p.x - source.p.x;
+      const dy = target.p.y - source.p.y;
+      const dz = target.p.z - source.p.z;
+      const distance = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 1e-4);
+      const pull = ((distance - rest) * 0.35) / distance;
+      move[i].x += dx * pull;
+      move[i].y += dy * pull;
+      move[i].z += dz * pull;
+      move[j].x -= dx * pull;
+      move[j].y -= dy * pull;
+      move[j].z -= dz * pull;
+    }
+
+    for (let i = 0; i < count; i++) {
+      const p = nodes[i].p;
+      const m = move[i];
+      // Only the part of the move along the surface counts; the rest would lift the note off the sphere.
+      const radial = m.x * p.x + m.y * p.y + m.z * p.z;
+      let tx = m.x - radial * p.x;
+      let ty = m.y - radial * p.y;
+      let tz = m.z - radial * p.z;
+      const size = Math.sqrt(tx * tx + ty * ty + tz * tz);
+      if (size > limit) {
+        tx = (tx / size) * limit;
+        ty = (ty / size) * limit;
+        tz = (tz / size) * limit;
+      }
+      nodes[i].p = normalized({ x: p.x + tx, y: p.y + ty, z: p.z + tz });
+    }
+  }
 }
 
-export function createSimulation(graph: KnowledgeGraph, width: number, height: number): Simulation {
+export const SHELL_PARTICLES = 240;
+
+/**
+ * Lay the notes out on a sphere. Notes from the same project start next to each other, then linked notes are pulled
+ * together, so a project's ideas end up as a patch of the orb and the links between projects cross between patches.
+ */
+export function createOrb(graph: KnowledgeGraph, shellCount = SHELL_PARTICLES): Orb {
   const random = mulberry32(seedOf(graph));
-  const cx = width / 2;
-  const cy = height / 2;
-  const spread = Math.max(40, Math.min(width, height) * 0.36);
-  const nodes: SimNode[] = graph.nodes.map((node) => {
-    const angle = random() * Math.PI * 2;
-    const distance = Math.sqrt(random()) * spread;
-    return {
-      ...node,
-      x: cx + Math.cos(angle) * distance,
-      y: cy + Math.sin(angle) * distance,
-      vx: 0,
-      vy: 0,
-      radius: nodeRadius(node.linkCount),
-      pinned: false,
-    };
+  const order = [...graph.nodes].sort((a, b) => a.project.localeCompare(b.project) || a.type.localeCompare(b.type) || a.id.localeCompare(b.id));
+  const start = fibonacciSphere(order.length);
+  const placed = new Map<string, Vec3>();
+  order.forEach((node, position) => {
+    const jitter = 0.02;
+    placed.set(node.id, normalized({
+      x: start[position].x + (random() - 0.5) * jitter,
+      y: start[position].y + (random() - 0.5) * jitter,
+      z: start[position].z + (random() - 0.5) * jitter,
+    }));
   });
+
+  const nodes: OrbNode[] = graph.nodes.map((node) => ({ ...node, p: placed.get(node.id) ?? { x: 0, y: 0, z: 1 }, radius: nodeRadius(node.linkCount) }));
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const edges: Simulation['edges'] = [];
+  const edges: Orb['edges'] = [];
   const neighbours = new Map<string, string[]>(nodes.map((node) => [node.id, []]));
   for (const edge of graph.edges) {
     const source = byId.get(edge.source);
@@ -166,123 +264,123 @@ export function createSimulation(graph: KnowledgeGraph, width: number, height: n
     neighbours.get(source.id)?.push(target.id);
     neighbours.get(target.id)?.push(source.id);
   }
-  return { nodes, edges, neighbours, width, height, alpha: 1 };
+  relax(nodes, edges, 240);
+  return { nodes, edges, neighbours, shell: fibonacciSphere(shellCount) };
 }
 
-export const SETTLED_ALPHA = 0.02;
+/** Where the orb is turned to and how close it is: rotation about the vertical axis, then about the horizontal one. */
+export interface OrbView {
+  yaw: number;
+  pitch: number;
+  zoom: number;
+}
+
+export const MIN_ZOOM = 0.6;
+export const MAX_ZOOM = 3;
+export const MAX_PITCH = 1.35;
+export const DEFAULT_VIEW: OrbView = { yaw: 0.5, pitch: 0.28, zoom: 1 };
+const CAMERA_DISTANCE = 3.4;
+
+export function clampZoom(zoom: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+}
+
+export function clampPitch(pitch: number): number {
+  return Math.min(MAX_PITCH, Math.max(-MAX_PITCH, pitch));
+}
+
+/** Turn a point: first about the vertical axis by `yaw`, then about the horizontal axis by `pitch`. */
+export function rotate(v: Vec3, yaw: number, pitch: number): Vec3 {
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+  const x1 = v.x * cosY + v.z * sinY;
+  const z1 = -v.x * sinY + v.z * cosY;
+  const cosP = Math.cos(pitch);
+  const sinP = Math.sin(pitch);
+  return { x: x1, y: v.y * cosP - z1 * sinP, z: v.y * sinP + z1 * cosP };
+}
+
+/** The turn that brings a point on the sphere to face the viewer. */
+export function focusView(p: Vec3): { yaw: number; pitch: number } {
+  const yaw = Math.atan2(-p.x, p.z);
+  const front = Math.sqrt(p.x * p.x + p.z * p.z);
+  return { yaw, pitch: clampPitch(Math.atan2(p.y, front)) };
+}
+
+export interface Projected {
+  x: number;
+  y: number;
+  /** How far toward the viewer the point faces: 1 is dead centre on the near side, -1 the far side. */
+  z: number;
+  /** Perspective scale, above 1 for points on the near side. */
+  scale: number;
+}
+
+/** The pixel radius of the orb itself for a canvas of this size. */
+export function orbRadius(width: number, height: number, zoom: number): number {
+  return Math.min(width, height) * 0.4 * zoom;
+}
+
+export function projectPoint(v: Vec3, view: OrbView, width: number, height: number): Projected {
+  const r = rotate(v, view.yaw, view.pitch);
+  const radius = orbRadius(width, height, view.zoom);
+  const scale = CAMERA_DISTANCE / (CAMERA_DISTANCE - r.z);
+  return { x: width / 2 + r.x * radius * scale, y: height / 2 - r.y * radius * scale, z: r.z, scale };
+}
+
+/** How large a note's dot is on screen, growing a little with zoom and with nearness. */
+export function nodeScreenRadius(node: OrbNode, projected: Projected, zoom: number): number {
+  return node.radius * projected.scale * (0.75 + 0.25 * zoom);
+}
 
 /**
- * Advance the layout one tick. Unconnected notes push apart, linked notes pull together, and everything is held near
- * the middle so the map never drifts out of view. `alpha` cools toward a floor, so a settled map stops moving.
+ * The note under a screen point. Notes on the far side of the orb are ignored so a click cannot land on something the
+ * viewer cannot see; where dots overlap, the nearer one wins.
  */
-export function stepSimulation(sim: Simulation): void {
-  const { nodes, edges, width, height } = sim;
-  const cx = width / 2;
-  const cy = height / 2;
-  const strength = Math.max(sim.alpha, SETTLED_ALPHA);
-  const repulsion = 2600;
-  const restLength = Math.max(34, Math.min(64, Math.sqrt((width * height) / Math.max(nodes.length, 1)) * 0.5));
-
-  for (let i = 0; i < nodes.length; i++) {
-    const a = nodes[i];
-    for (let j = i + 1; j < nodes.length; j++) {
-      const b = nodes[j];
-      let dx = a.x - b.x;
-      let dy = a.y - b.y;
-      let distanceSquared = dx * dx + dy * dy;
-      if (distanceSquared < 0.01) {
-        // Two notes on the same spot would never separate, so nudge one by a fixed amount.
-        dx = 0.1 * (i % 2 === 0 ? 1 : -1);
-        dy = 0.1;
-        distanceSquared = dx * dx + dy * dy;
-      }
-      if (distanceSquared > 90_000) continue;
-      const distance = Math.sqrt(distanceSquared);
-      // Repulsion keeps a floor of its own so a settled map still holds unlinked notes apart instead of clumping.
-      const push = (repulsion * Math.max(strength, 0.25)) / Math.max(distanceSquared, 64);
-      const fx = (dx / distance) * push;
-      const fy = (dy / distance) * push;
-      a.vx += fx;
-      a.vy += fy;
-      b.vx -= fx;
-      b.vy -= fy;
-    }
-  }
-
-  for (const { source, target } of edges) {
-    const dx = target.x - source.x;
-    const dy = target.y - source.y;
-    const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
-    const pull = (distance - restLength) * 0.05 * Math.max(strength, 0.25);
-    const fx = (dx / distance) * pull;
-    const fy = (dy / distance) * pull;
-    source.vx += fx;
-    source.vy += fy;
-    target.vx -= fx;
-    target.vy -= fy;
-  }
-
-  for (const node of nodes) {
-    if (node.pinned) {
-      node.vx = 0;
-      node.vy = 0;
-      continue;
-    }
-    node.vx += (cx - node.x) * 0.006 * Math.max(strength, 0.2);
-    node.vy += (cy - node.y) * 0.006 * Math.max(strength, 0.2);
-    node.vx *= 0.82;
-    node.vy *= 0.82;
-    node.x += node.vx;
-    node.y += node.vy;
-    const pad = node.radius + 6;
-    node.x = Math.min(width - pad, Math.max(pad, node.x));
-    node.y = Math.min(height - pad, Math.max(pad, node.y));
-  }
-  sim.alpha = Math.max(SETTLED_ALPHA, sim.alpha * 0.985);
-}
-
-/** Run enough ticks for the layout to settle, for reduced-motion users and for tests. */
-export function settleSimulation(sim: Simulation, ticks = 320): void {
-  for (let i = 0; i < ticks; i++) stepSimulation(sim);
-}
-
-/** The note under a point, preferring the closest one when dots overlap. */
-export function nodeAt(sim: Simulation, x: number, y: number, slack = 5): SimNode | null {
-  let best: SimNode | null = null;
-  let bestDistance = Infinity;
-  for (const node of sim.nodes) {
-    const distance = Math.hypot(node.x - x, node.y - y);
-    if (distance <= node.radius + slack && distance < bestDistance) {
+export function hitTest(orb: Orb, view: OrbView, width: number, height: number, x: number, y: number, slack = 4): OrbNode | null {
+  let best: OrbNode | null = null;
+  let bestDepth = -Infinity;
+  for (const node of orb.nodes) {
+    const projected = projectPoint(node.p, view, width, height);
+    if (projected.z < -0.1) continue;
+    if (Math.hypot(projected.x - x, projected.y - y) > nodeScreenRadius(node, projected, view.zoom) + slack) continue;
+    if (projected.z > bestDepth) {
       best = node;
-      bestDistance = distance;
+      bestDepth = projected.z;
     }
   }
   return best;
 }
 
-/** Where the map is looking: a scale, and where the origin of the layout sits on screen. */
-export interface View {
-  scale: number;
-  x: number;
-  y: number;
-}
-
-export const MIN_ZOOM = 0.4;
-export const MAX_ZOOM = 4;
-export const IDENTITY_VIEW: View = { scale: 1, x: 0, y: 0 };
-
-/** A point on screen as a position in the layout, undoing the current zoom and pan. */
-export function toWorld(view: View, point: { x: number; y: number }): { x: number; y: number } {
-  return { x: (point.x - view.x) / view.scale, y: (point.y - view.y) / view.scale };
-}
-
 /**
- * Zoom by `factor` about a point on screen, so whatever is under that point stays under it. The scale is held between
- * MIN_ZOOM and MAX_ZOOM, and a request that would leave it there changes nothing.
+ * Points along the curve joining two notes. The curve follows the sphere and bows outward in the middle, so links read
+ * as arcs floating over the orb instead of chords cutting through it.
  */
-export function zoomView(view: View, factor: number, cx: number, cy: number): View {
-  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.scale * factor));
-  if (scale === view.scale) return view;
-  const ratio = scale / view.scale;
-  return { scale, x: cx - (cx - view.x) * ratio, y: cy - (cy - view.y) * ratio };
+export function arcPoints(a: Vec3, b: Vec3, segments = 12, lift = 0.18): Vec3[] {
+  const dot = Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z));
+  const angle = Math.acos(dot);
+  const sine = Math.sin(angle);
+  const points: Vec3[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    let point: Vec3;
+    if (sine < 1e-4) {
+      point = normalized({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t });
+    } else {
+      const wa = Math.sin((1 - t) * angle) / sine;
+      const wb = Math.sin(t * angle) / sine;
+      point = { x: a.x * wa + b.x * wb, y: a.y * wa + b.y * wb, z: a.z * wa + b.z * wb };
+    }
+    const height = 1 + lift * Math.sin(Math.PI * t) * Math.min(1, angle / 1.2);
+    points.push({ x: point.x * height, y: point.y * height, z: point.z * height });
+  }
+  return points;
+}
+
+/** The shortest signed way round from one angle to another. */
+export function angleDelta(from: number, to: number): number {
+  let delta = (to - from) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return delta;
 }

@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
-  IDENTITY_VIEW,
+  DEFAULT_VIEW,
+  MAX_PITCH,
   MAX_ZOOM,
   MIN_ZOOM,
-  createSimulation,
-  nodeAt,
+  angleDelta,
+  arcPoints,
+  clampPitch,
+  clampZoom,
+  createOrb,
+  fibonacciSphere,
+  focusView,
+  hitTest,
   nodeRadius,
   parseKnowledgeGraph,
-  settleSimulation,
-  stepSimulation,
-  toWorld,
-  zoomView,
+  projectPoint,
+  rotate,
+  type Vec3,
 } from '../apps/desktop/src/renderer/src/components/knowledge-graph';
 
 const raw = {
@@ -29,11 +35,21 @@ const raw = {
   totalEdges: 2,
 };
 
-function distance(sim: ReturnType<typeof createSimulation>, a: string, b: string): number {
-  const first = sim.nodes.find((node) => node.id === a);
-  const second = sim.nodes.find((node) => node.id === b);
-  if (!first || !second) throw new Error(`No note named ${a} or ${b}`);
-  return Math.hypot(first.x - second.x, first.y - second.y);
+const size = (v: Vec3): number => Math.hypot(v.x, v.y, v.z);
+const chord = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+/** A larger graph: two tight clusters of linked notes plus loose ones. */
+function bigGraph(clusters = 2, perCluster = 12, loose = 20): unknown {
+  const nodes: Array<Record<string, unknown>> = [];
+  const edges: Array<Record<string, unknown>> = [];
+  for (let c = 0; c < clusters; c++) {
+    for (let i = 0; i < perCluster; i++) {
+      nodes.push({ id: `c${c}-n${i}`, type: 'patterns', project: `p${c}`, linkCount: 2 });
+      if (i > 0) edges.push({ source: `c${c}-n${i}`, target: `c${c}-n${i - 1}` });
+    }
+  }
+  for (let i = 0; i < loose; i++) nodes.push({ id: `loose-${i}`, type: 'bugs', project: `l${i % 3}`, linkCount: 0 });
+  return { nodes, edges };
 }
 
 describe('knowledge graph parsing', () => {
@@ -67,110 +83,141 @@ describe('knowledge graph parsing', () => {
   });
 });
 
-describe('knowledge graph layout', () => {
-  it('is the same every time for the same notes', () => {
-    const first = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    const second = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    settleSimulation(first);
-    settleSimulation(second);
-    expect(first.nodes.map((node) => [Math.round(node.x), Math.round(node.y)]))
-      .toEqual(second.nodes.map((node) => [Math.round(node.x), Math.round(node.y)]));
-  });
-
-  it('keeps every note inside the canvas with finite positions', () => {
-    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    settleSimulation(sim);
-    for (const node of sim.nodes) {
-      expect(Number.isFinite(node.x) && Number.isFinite(node.y)).toBe(true);
-      expect(node.x).toBeGreaterThanOrEqual(node.radius);
-      expect(node.x).toBeLessThanOrEqual(600 - node.radius);
-      expect(node.y).toBeGreaterThanOrEqual(node.radius);
-      expect(node.y).toBeLessThanOrEqual(360 - node.radius);
+describe('orb layout', () => {
+  it('always puts every note and every decorative particle on the surface of a sphere', () => {
+    for (const graph of [raw, bigGraph(), { nodes: [{ id: 'only' }], edges: [] }, { nodes: [], edges: [] }]) {
+      const orb = createOrb(parseKnowledgeGraph(graph));
+      for (const node of orb.nodes) expect(size(node.p)).toBeCloseTo(1, 6);
+      for (const point of orb.shell) expect(size(point)).toBeCloseTo(1, 6);
     }
   });
 
-  it('pulls linked notes together and pushes unlinked ones apart', () => {
-    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    settleSimulation(sim);
-    expect(distance(sim, 'Payslip print 502', 'Payslip print 406')).toBeLessThan(120);
-    expect(distance(sim, 'Unrelated island', 'Second island')).toBeGreaterThan(distance(sim, 'Payslip print 502', 'Payslip print 406'));
+  it('spreads decorative particles evenly, so the orb reads as a sphere whatever the data', () => {
+    const shell = fibonacciSphere(240);
+    expect(shell).toHaveLength(240);
+    const centroid = shell.reduce((sum, p) => ({ x: sum.x + p.x, y: sum.y + p.y, z: sum.z + p.z }), { x: 0, y: 0, z: 0 });
+    expect(size({ x: centroid.x / 240, y: centroid.y / 240, z: centroid.z / 240 })).toBeLessThan(0.02);
   });
 
-  it('separates two notes that start on the same spot', () => {
-    const sim = createSimulation(parseKnowledgeGraph({ nodes: [{ id: 'A' }, { id: 'B' }], edges: [] }), 400, 300);
-    sim.nodes[0].x = sim.nodes[1].x = 200;
-    sim.nodes[0].y = sim.nodes[1].y = 150;
-    settleSimulation(sim, 60);
-    expect(distance(sim, 'A', 'B')).toBeGreaterThan(5);
+  it('is the same every time for the same notes', () => {
+    const first = createOrb(parseKnowledgeGraph(bigGraph()));
+    const second = createOrb(parseKnowledgeGraph(bigGraph()));
+    expect(first.nodes.map((node) => node.p)).toEqual(second.nodes.map((node) => node.p));
   });
 
-  it('cools to a floor rather than to zero, so the map can keep drifting', () => {
-    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    settleSimulation(sim, 1000);
-    expect(sim.alpha).toBeGreaterThan(0);
-    stepSimulation(sim);
-    expect(sim.alpha).toBeGreaterThan(0);
+  it('keeps notes apart instead of stacking them', () => {
+    const orb = createOrb(parseKnowledgeGraph(bigGraph()));
+    let closest = Infinity;
+    for (let i = 0; i < orb.nodes.length; i++) {
+      for (let j = i + 1; j < orb.nodes.length; j++) closest = Math.min(closest, chord(orb.nodes[i].p, orb.nodes[j].p));
+    }
+    expect(closest).toBeGreaterThan(0.04);
   });
 
-  it('leaves a held note where the pointer put it', () => {
-    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    const held = sim.nodes[0];
-    held.pinned = true;
-    held.x = 100;
-    held.y = 100;
-    settleSimulation(sim, 50);
-    expect([held.x, held.y]).toEqual([100, 100]);
+  it('pulls linked notes closer together than unlinked ones', () => {
+    const orb = createOrb(parseKnowledgeGraph(bigGraph()));
+    const linked = orb.edges.map(({ source, target }) => chord(source.p, target.p));
+    const linkedKeys = new Set(orb.edges.map(({ source, target }) => [source.id, target.id].sort().join('|')));
+    const unlinked: number[] = [];
+    for (let i = 0; i < orb.nodes.length; i++) {
+      for (let j = i + 1; j < orb.nodes.length; j++) {
+        if (!linkedKeys.has([orb.nodes[i].id, orb.nodes[j].id].sort().join('|'))) unlinked.push(chord(orb.nodes[i].p, orb.nodes[j].p));
+      }
+    }
+    const mean = (values: number[]): number => values.reduce((a, b) => a + b, 0) / values.length;
+    expect(mean(linked)).toBeLessThan(mean(unlinked) * 0.6);
   });
 
-  it('scales dots with how connected the note is and finds the one under a point', () => {
+  it('scales dots with how connected the note is', () => {
     expect(nodeRadius(9)).toBeGreaterThan(nodeRadius(1));
-    expect(nodeRadius(10_000)).toBeLessThanOrEqual(13);
-    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    const target = sim.nodes[2];
-    expect(nodeAt(sim, target.x, target.y)?.id).toBe(target.id);
-    expect(nodeAt(sim, -500, -500)).toBeNull();
+    expect(nodeRadius(10_000)).toBeLessThanOrEqual(11);
   });
 });
 
-describe('knowledge graph zoom', () => {
-  const screenOf = (view: { scale: number; x: number; y: number }, world: { x: number; y: number }) => ({
-    x: world.x * view.scale + view.x,
-    y: world.y * view.scale + view.y,
-  });
-
-  it('keeps the point under the cursor fixed while zooming in and out', () => {
-    let view = { ...IDENTITY_VIEW, x: 30, y: -12 };
-    const cursor = { x: 240, y: 130 };
-    const before = toWorld(view, cursor);
-    for (const factor of [1.35, 1.35, 0.6, 2, 0.5]) {
-      view = zoomView(view, factor, cursor.x, cursor.y);
-      const under = screenOf(view, before);
-      expect(under.x).toBeCloseTo(cursor.x, 6);
-      expect(under.y).toBeCloseTo(cursor.y, 6);
+describe('orb view', () => {
+  it('turning to focus a note brings it to the front, centred', () => {
+    const orb = createOrb(parseKnowledgeGraph(bigGraph()));
+    for (const node of orb.nodes.slice(0, 12)) {
+      const { yaw, pitch } = focusView(node.p);
+      const turned = rotate(node.p, yaw, pitch);
+      if (Math.abs(node.p.y) < 0.97) {
+        expect(turned.x).toBeCloseTo(0, 6);
+        expect(turned.y).toBeCloseTo(0, 6);
+        expect(turned.z).toBeCloseTo(1, 6);
+      }
     }
   });
 
-  it('holds the scale between the limits and returns the same view when nothing changes', () => {
-    let view = IDENTITY_VIEW;
-    for (let i = 0; i < 30; i++) view = zoomView(view, 1.5, 100, 100);
-    expect(view.scale).toBe(MAX_ZOOM);
-    expect(zoomView(view, 1.5, 100, 100)).toBe(view);
-    for (let i = 0; i < 60; i++) view = zoomView(view, 0.6, 100, 100);
-    expect(view.scale).toBe(MIN_ZOOM);
-    expect(zoomView(view, 0.6, 100, 100)).toBe(view);
+  it('draws the near side larger than the far side and the front point at the centre', () => {
+    const front = projectPoint({ x: 0, y: 0, z: 1 }, { yaw: 0, pitch: 0, zoom: 1 }, 800, 400);
+    const back = projectPoint({ x: 0, y: 0, z: -1 }, { yaw: 0, pitch: 0, zoom: 1 }, 800, 400);
+    expect([front.x, front.y]).toEqual([400, 200]);
+    expect(front.scale).toBeGreaterThan(back.scale);
+    expect(front.z).toBeCloseTo(1, 6);
+    expect(back.z).toBeCloseTo(-1, 6);
   });
 
-  it('maps a screen point back to the layout after zooming and panning', () => {
-    const view = { scale: 2, x: 50, y: 20 };
-    expect(toWorld(view, { x: 250, y: 120 })).toEqual({ x: 100, y: 50 });
-    expect(toWorld(IDENTITY_VIEW, { x: 7, y: 9 })).toEqual({ x: 7, y: 9 });
+  it('zooming in spreads points further from the centre', () => {
+    const point = { x: 0.6, y: 0, z: 0.8 };
+    const near = projectPoint(point, { ...DEFAULT_VIEW, yaw: 0, pitch: 0, zoom: 1 }, 800, 400);
+    const closer = projectPoint(point, { ...DEFAULT_VIEW, yaw: 0, pitch: 0, zoom: 2 }, 800, 400);
+    expect(Math.abs(closer.x - 400)).toBeGreaterThan(Math.abs(near.x - 400));
   });
 
-  it('finds a dot at its zoomed position when the pick is made in layout coordinates', () => {
-    const sim = createSimulation(parseKnowledgeGraph(raw), 600, 360);
-    const target = sim.nodes[1];
-    const view = zoomView(IDENTITY_VIEW, 2.5, 300, 180);
-    const world = toWorld(view, screenOf(view, target));
-    expect(nodeAt(sim, world.x, world.y, 5 / view.scale)?.id).toBe(target.id);
+  it('holds zoom and pitch between their limits', () => {
+    expect(clampZoom(100)).toBe(MAX_ZOOM);
+    expect(clampZoom(0.01)).toBe(MIN_ZOOM);
+    expect(clampZoom(1.2)).toBe(1.2);
+    expect(clampPitch(9)).toBe(MAX_PITCH);
+    expect(clampPitch(-9)).toBe(-MAX_PITCH);
+  });
+
+  it('takes the short way round when turning toward a note', () => {
+    expect(angleDelta(0.1, 0.3)).toBeCloseTo(0.2, 9);
+    expect(angleDelta(3, -3)).toBeCloseTo(2 * Math.PI - 6, 9);
+    expect(Math.abs(angleDelta(0, 7))).toBeLessThan(Math.PI);
+  });
+});
+
+describe('picking', () => {
+  const orb = createOrb(parseKnowledgeGraph(raw));
+  const view = { yaw: 0, pitch: 0, zoom: 1 };
+
+  it('finds the note under the pointer on the near side', () => {
+    const near = orb.nodes.find((node) => rotate(node.p, view.yaw, view.pitch).z > 0.3);
+    expect(near).toBeDefined();
+    if (!near) return;
+    const at = projectPoint(near.p, view, 800, 400);
+    expect(hitTest(orb, view, 800, 400, at.x, at.y)?.id).toBe(near.id);
+  });
+
+  it('ignores notes on the far side, which the viewer cannot see', () => {
+    const far = orb.nodes.find((node) => rotate(node.p, view.yaw, view.pitch).z < -0.4);
+    if (!far) return;
+    const at = projectPoint(far.p, view, 800, 400);
+    const found = hitTest(orb, view, 800, 400, at.x, at.y);
+    expect(found?.id).not.toBe(far.id);
+  });
+
+  it('returns nothing where there is no note', () => {
+    expect(hitTest(orb, view, 800, 400, -500, -500)).toBeNull();
+  });
+});
+
+describe('link arcs', () => {
+  const a: Vec3 = { x: 1, y: 0, z: 0 };
+  const b: Vec3 = { x: 0, y: 0, z: 1 };
+
+  it('starts and ends on the two notes and bows outward in between', () => {
+    const points = arcPoints(a, b, 12, 0.2);
+    expect(points).toHaveLength(13);
+    expect(points[0]).toEqual(a);
+    expect(size(points[12])).toBeCloseTo(1, 6);
+    expect(size(points[6])).toBeGreaterThan(1.05);
+  });
+
+  it('copes with two notes on the same spot', () => {
+    const points = arcPoints(a, { ...a }, 6, 0.2);
+    expect(points.every((p) => Number.isFinite(p.x + p.y + p.z))).toBe(true);
   });
 });
