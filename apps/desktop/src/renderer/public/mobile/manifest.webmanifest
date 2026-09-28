@@ -1,0 +1,16 @@
+{
+  "name": "KAI Remote",
+  "short_name": "KAI",
+  "description": "Watch and steer KAI's work from a phone on the same network.",
+  "start_url": "/mobile/",
+  "scope": "/mobile/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#100f22",
+  "theme_color": "#100f22",
+  "icons": [
+    { "src": "/mobile/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/mobile/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/mobile/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

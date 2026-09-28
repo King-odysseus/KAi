@@ -49,6 +49,7 @@ import {
   type WorkflowRun,
   type WorkflowStartInput,
   parseIpcInput,
+  parseTasks,
   parseTestCounts,
   revertHunks,
   proxyServiceSettingsSchema,
@@ -122,6 +123,7 @@ import {
   worktreeDiffPatch,
 } from './worktrees';
 import type { PreviewRuntime } from './preview-runtime';
+import type { RemoteGateway } from './remote/server';
 
 export interface IpcContext {
   appName: string;
@@ -176,13 +178,30 @@ export interface IpcContext {
   updater: UpdateController;
   desktopShell: DesktopShell;
   getMainWindow: () => BrowserWindow | null;
-  createWindow: () => Promise<void>;
+  createWindow: (projectId?: string | null) => Promise<void>;
+  /** The LAN gateway the mobile console talks to. Its own auth, its own default-deny allowlist. */
+  remote: RemoteGateway;
 }
 
-interface IpcRequestContext {
-  event: Electron.IpcMainInvokeEvent;
+/**
+ * What every handler receives alongside its validated input. Deliberately free of Electron types so
+ * the remote gateway can build one without an IpcMainInvokeEvent.
+ */
+export interface IpcRequestContext {
   session: DesktopWindowSession | null;
-  ownerWindowId: number | null;
+  /** Resolved once, at dispatch time. Handlers must not recompute it. */
+  ownerWindowId: number;
+}
+
+/** A registered handler with its input type erased. Takes the raw payload and validates it itself. */
+export type IpcChannelHandler = (rawInput: unknown, request: IpcRequestContext) => Promise<unknown>;
+
+/** The channel table behind the renderer bridge, re-exposed so other surfaces can dispatch through it. */
+export interface IpcRegistry {
+  /** Channels that have a handler registered. */
+  channels(): IpcChannel[];
+  /** Validates `rawInput` for `channel`, then runs its handler. Throws on validation or handler error. */
+  dispatch(channel: IpcChannel, rawInput: unknown, request: IpcRequestContext): Promise<unknown>;
 }
 
 interface ActiveMemorySession {
@@ -202,7 +221,25 @@ export interface ActiveCompareRun {
   patchRight: string;
 }
 
-export function registerIpc(context: IpcContext): void {
+export function registerIpc(context: IpcContext): IpcRegistry {
+  const handlers = new Map<IpcChannel, IpcChannelHandler>();
+
+  // Shadows the module-level helper of the same name so the ~178 registrations below stay exactly as
+  // they were. Validation lives here, in the one place both the ipcMain path and dispatch() go
+  // through, so neither can reach a handler body with an unvalidated payload.
+  const handle = <TChannel extends IpcChannel>(
+    _context: IpcContext,
+    channel: TChannel,
+    handler: (
+      input: ReturnType<typeof parseIpcInput<TChannel>>,
+      request: IpcRequestContext,
+    ) => Promise<unknown>,
+  ): void => {
+    handlers.set(channel, (rawInput, request) =>
+      handler(parseIpcInput(channel, rawInput), request),
+    );
+  };
+
   handle(context, 'app:get-bootstrap', async (_input, request) => createBootstrap(context, request.session));
   handle(context, 'projects:choose', async (_input, request) => chooseProject(context, request.session));
   handle(context, 'projects:open', async ({ id }, request) => openProject(context, id, request.session));
@@ -218,6 +255,7 @@ export function registerIpc(context: IpcContext): void {
     if (!snapshot.previous) throw new Error('Settings could not be read.');
     const proxyChanged = update.proxy !== undefined && JSON.stringify(merged.proxy) !== JSON.stringify(snapshot.previous.proxy);
     const cognitive1Changed = update.cognitive1 !== undefined && JSON.stringify(merged.cognitive1) !== JSON.stringify(snapshot.previous.cognitive1);
+    const remoteChanged = JSON.stringify(merged.remote) !== JSON.stringify(snapshot.previous.remote);
     const services = await context.services.status();
     const proxyWasReady = services.some((service) => service.kind === 'universalProxy' && service.status === 'ready');
     const cognitive1WasReady = services.some((service) => service.kind === 'cognitive1' && service.status === 'ready');
@@ -232,6 +270,13 @@ export function registerIpc(context: IpcContext): void {
       else await context.services.stop('cognitive1');
     }
     await context.services.syncFromSettings(merged);
+    // A port that is already taken leaves the setting saved but the gateway down, so the failure is
+    // reported through `remote:status` rather than thrown: the rest of the save still succeeded.
+    if (remoteChanged) {
+      await context.remote.apply(merged.remote).catch((error: unknown) => {
+        context.logger.warn('internal', 'KAI Remote could not start', messageOf(error));
+      });
+    }
     await syncManagedCognitive1Mcp(context);
     await broadcastSharedState(context);
     return context.settings.load();
@@ -288,12 +333,12 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'attachments:save', async ({ name, dataUrl }) => saveAttachment(context, name, dataUrl));
   handle(context, 'workflows:list-templates', async ({ projectId }) => context.workflowTemplates.list(projectId));
   handle(context, 'workflows:list-runs', async ({ projectId }) => context.workflows.list(projectId));
-  handle(context, 'workflows:start', async (input, request) => context.workflows.start(input, ownerWindowId(context, request)));
-  handle(context, 'workflows:stop', async ({ workflowId }) => context.workflows.stop(workflowId));
-  handle(context, 'workflows:resume', async ({ workflowId }, request) => context.workflows.resume(workflowId, ownerWindowId(context, request)));
+  handle(context, 'workflows:start', async (input, request) => context.workflows.start(input, request.ownerWindowId));
+  handle(context, 'workflows:stop', async ({ workflowId }, request) => context.workflows.stop(workflowId, request.ownerWindowId));
+  handle(context, 'workflows:resume', async ({ workflowId }, request) => context.workflows.resume(workflowId, request.ownerWindowId));
   handle(context, 'workflows:save-template', async (template) => context.workflowTemplates.save(template));
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
-  handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, ownerWindowId(context, request)));
+  handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, request.ownerWindowId));
   handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
   handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
   handle(context, 'prompt-guide:refine', async (input) => context.promptGuide.refine(input));
@@ -329,7 +374,7 @@ export function registerIpc(context: IpcContext): void {
   // Both of these run agents, so the window that asked owns the run and sees its events.
   handle(context, 'studio:board-team-plan', async ({ projectId }) => context.teamPlanner.planFromBoard(projectId));
   handle(context, 'studio:board-work', async ({ projectId, maxCards, agent, model }, request) => {
-    const worked = await context.teamPlanner.workBoard(projectId, ownerWindowId(context, request), {
+    const worked = await context.teamPlanner.workBoard(projectId, request.ownerWindowId, {
       maxCards,
       ...(agent ? { agent } : {}),
       ...(model ? { model } : {}),
@@ -343,7 +388,7 @@ export function registerIpc(context: IpcContext): void {
     announceBoard(context, projectId, pulled.board);
     return pulled;
   });
-  handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, ownerWindowId(context, request)));
+  handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, request.ownerWindowId));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });
   handle(context, 'proxy:overview', async () => context.proxy.overview());
@@ -486,7 +531,7 @@ export function registerIpc(context: IpcContext): void {
     const project = await resolveProject(context, projectId, true);
     return context.preview.stop(project.id, project.path);
   });
-  handle(context, 'agents:run', async (request, ipcRequest) => runConversationAgent(context, request, ownerWindowId(context, ipcRequest)));
+  handle(context, 'agents:run', async (request, ipcRequest) => runConversationAgent(context, request, ipcRequest.ownerWindowId));
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
   handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
   handle(context, 'agents:resume', async ({ conversationId }) => context.runControl.resume(conversationId));
@@ -509,7 +554,7 @@ export function registerIpc(context: IpcContext): void {
       await context.learningUsage.runs(),
     ));
   handle(context, 'ui:report-view', async ({ view, conversationId }, request) => {
-    const owner = ownerWindowId(context, request);
+    const owner = request.ownerWindowId;
     const session = context.windows.get(owner);
     if (session) {
       session.view = view;
@@ -719,7 +764,7 @@ export function registerIpc(context: IpcContext): void {
     return currentSetupStatus(context);
   });
   handle(context, 'terminal:start', async ({ projectId, shell, cols, rows }, request) =>
-    context.terminal.start(projectId, await projectPath(projectId), shell, cols, rows, ownerWindowId(context, request)));
+    context.terminal.start(projectId, await projectPath(projectId), shell, cols, rows, request.ownerWindowId));
   handle(context, 'terminal:write', async ({ id, data }) => context.terminal.write(id, data));
   handle(context, 'terminal:resize', async ({ id, cols, rows }) => context.terminal.resize(id, cols, rows));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
@@ -782,10 +827,63 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'window:state', async (_input, request) => ({
     maximized: request.session?.window.isMaximized() ?? false,
   }));
-  handle(context, 'window:new', async () => {
-    await context.createWindow();
+  handle(context, 'window:new', async ({ projectId }) => {
+    await context.createWindow(projectId ?? null);
     return true;
   });
+  handle(context, 'remote:status', async () => context.remote.status());
+  handle(context, 'remote:windows', async () => context.remote.windows());
+  handle(context, 'remote:devices', async () => context.remote.devices());
+  handle(context, 'remote:pair-device', async ({ label }) => {
+    const result = await context.remote.pairDevice(label);
+    await broadcastSharedState(context);
+    return result;
+  });
+  handle(context, 'remote:revoke-device', async ({ id }) => {
+    const devices = await context.remote.revokeDevice(id);
+    await broadcastSharedState(context);
+    return devices;
+  });
+  /**
+   * The phone's task board, read-only by construction: the operation is fixed here and only the project
+   * filter travels, so no request can name a card to change. The desktop's Tasks page reaches the same
+   * brain through `cognitive1:operation`, which is generic — it also carries task-complete, brain-prune
+   * and the rest — and is deliberately not on the remote allowlist.
+   */
+  handle(context, 'remote:tasks', async ({ project }) =>
+    parseTasks(
+      await context.cognitive1.operation({
+        operation: 'tasks',
+        payload: { all: 'true', ...(project ? { project } : {}) },
+      }),
+    ),
+  );
+
+  for (const [channel, handler] of handlers) {
+    ipcMain.handle(channel, async (event, rawInput: unknown): Promise<IpcResponse<unknown>> => {
+      try {
+        assertTrustedSender(event.senderFrame?.url ?? '');
+        const session = context.windows.fromWebContentsId(event.sender.id);
+        const data = await handler(rawInput, {
+          session,
+          ownerWindowId: session?.id ?? event.sender.id,
+        });
+        return { ok: true, data };
+      } catch (error) {
+        context.logger.error('ipc_error', `IPC ${channel} failed`, undefined, error);
+        return failureFor(error);
+      }
+    });
+  }
+
+  return {
+    channels: () => [...handlers.keys()],
+    dispatch: async (channel, rawInput, request) => {
+      const handler = handlers.get(channel);
+      if (!handler) throw new Error(`No handler is registered for ${channel}.`);
+      return handler(rawInput, request);
+    },
+  };
 }
 
 async function restartCognitive1ForOverwatchCredential(context: IpcContext, credentialId: string): Promise<void> {
@@ -2155,40 +2253,10 @@ async function credentialStatus(context: IpcContext): Promise<CredentialStatus> 
   return { available: context.credentials.isAvailable(), ids: await context.credentials.status() };
 }
 
-function handle<TChannel extends IpcChannel>(
-  context: IpcContext,
-  channel: TChannel,
-  handler: (
-    input: ReturnType<typeof parseIpcInput<TChannel>>,
-    request: IpcRequestContext,
-  ) => Promise<unknown>,
-): void {
-  ipcMain.handle(channel, async (event, rawInput: unknown): Promise<IpcResponse<unknown>> => {
-    try {
-      assertTrustedSender(event.senderFrame?.url ?? '');
-      const input = parseIpcInput(channel, rawInput);
-      const session = context.windows.fromWebContentsId(event.sender.id);
-      const data = await handler(input, {
-        event,
-        session,
-        ownerWindowId: session?.id ?? null,
-      });
-      return { ok: true, data };
-    } catch (error) {
-      context.logger.error('ipc_error', `IPC ${channel} failed`, undefined, error);
-      return failureFor(error);
-    }
-  });
-}
-
 /** Every window redraws its board when a card moves, whichever window or agent moved it. */
 function announceBoard(context: IpcContext, projectId: string, board: StudioBoard): StudioBoard {
   context.windows.broadcast('studio:board-changed', { projectId, board });
   return board;
-}
-
-function ownerWindowId(context: IpcContext, request: IpcRequestContext): number {
-  return request.ownerWindowId ?? request.event.sender.id ?? context.windows.focused()?.id ?? 0;
 }
 
 function assertTrustedSender(url: string): void {
@@ -2198,7 +2266,7 @@ function assertTrustedSender(url: string): void {
   throw new Error('IPC request came from an untrusted renderer.');
 }
 
-function failureFor(error: unknown): IpcFailure {
+export function failureFor(error: unknown): IpcFailure {
   if (error instanceof NotFoundError) return { ok: false, error: { code: 'NOT_FOUND', message: error.message } };
   if (error instanceof ConflictError) return { ok: false, error: { code: 'CONFLICT', message: error.message } };
   if (error && typeof error === 'object' && 'name' in error && error.name === 'ZodError') {

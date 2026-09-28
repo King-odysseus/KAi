@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke.mjs",
     "smoke:workbench": "node scripts/smoke-workbench.mjs",
     "smoke:team": "node scripts/smoke-team.mjs",
+    "smoke:mobile": "node scripts/smoke-mobile.mjs",
     "stage:engines": "node scripts/stage-engines.mjs",
     "package": "npm run stage:engines && npm run build && electron-builder --win --dir",
     "dist": "npm run stage:engines && npm run build && electron-builder --win nsis"

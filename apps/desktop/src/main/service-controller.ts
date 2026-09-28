@@ -572,6 +572,7 @@ export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdat
     mcpServers: update.mcpServers ?? settings.mcpServers,
     cognitive1: { ...settings.cognitive1, ...update.cognitive1 },
     proxy: { ...settings.proxy, ...update.proxy },
+    remote: { ...settings.remote, ...update.remote },
     usageBudget: { ...settings.usageBudget, ...update.usageBudget },
     notifications: { ...settings.notifications, ...update.notifications },
     updates: { ...settings.updates, ...update.updates },

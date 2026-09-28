@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
@@ -54,6 +54,8 @@ import { DesktopRunControl } from './run-control';
 import { DesktopWindowRegistry } from './desktop-windows';
 import { reloadShortcut } from './reload-shortcut';
 import { PreviewRuntime } from './preview-runtime';
+import { RemoteDispatcher } from './remote/dispatch';
+import { RemoteGateway } from './remote/server';
 
 app.setName('KAI');
 if (process.env.KAI_DESKTOP_USER_DATA) {
@@ -64,6 +66,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let ipcContext: IpcContext | null = null;
 let serviceController: DesktopServiceController | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
+let remoteGateway: RemoteGateway | null = null;
 let shutdownPromise: Promise<void> | null = null;
 let desktopShell: DesktopShell | null = null;
 let quitting = false;
@@ -86,7 +89,11 @@ if (!hasSingleInstanceLock) {
 app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform === 'darwin') return;
+  // With the gateway up the phone is still attached, so losing the last window must not end the run.
+  // The listener is released on quit; the tray restores a window when the user wants one back.
+  if (remoteGateway?.isRunning()) return;
+  app.quit();
 });
 
 app.on('before-quit', (event) => {
@@ -109,6 +116,7 @@ app.on('before-quit', (event) => {
     .then(() => Promise.all([
       serviceController?.dispose() ?? Promise.resolve(),
       mcpRuntime?.dispose() ?? Promise.resolve(),
+      remoteGateway?.dispose() ?? Promise.resolve(),
     ]))
     .then(() => undefined)
     .catch((error) => {
@@ -123,6 +131,7 @@ app.on('before-quit', (event) => {
       }
       serviceController = null;
       mcpRuntime = null;
+      remoteGateway = null;
       desktopShell?.dispose();
       app.exit(0);
     });
@@ -283,6 +292,8 @@ async function startApplication(): Promise<void> {
   });
   shell.apply((await settings.load()).notifications);
   const editorSessions = new EditorSessionManager();
+  // Filled in after registerIpc returns the handler registry the gateway dispatches through.
+  let remote!: RemoteGateway;
   let workflowRunner!: DesktopWorkflowRunner;
   let teamPlanner!: DesktopTeamPlanner;
   let promptGuide!: DesktopPromptGuide;
@@ -349,7 +360,8 @@ async function startApplication(): Promise<void> {
     }),
     desktopShell: shell,
     getMainWindow: () => desktopWindows.focused()?.window ?? null,
-    createWindow: () => createMainWindow(null),
+    createWindow: (projectId) => createMainWindow(projectId),
+    remote,
   };
   async function createBlankConversation(projectId: string, firstPrompt: string) {
     const now = new Date().toISOString();
@@ -535,9 +547,27 @@ async function startApplication(): Promise<void> {
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);
-  registerIpc(ipcContext);
+  const registry = registerIpc(ipcContext);
+  remote = new RemoteGateway({
+    credentials,
+    dispatcher: new RemoteDispatcher(registry, desktopWindows),
+    describeWindows: () => describeRemoteWindows(projects, desktopWindows),
+    subscribeWindowEvents: (subscriber) => desktopWindows.subscribe(subscriber),
+    // The renderer build directory, not the mobile folder inside it: the phone's page sits in
+    // `mobile/` but its scripts and styles are the build's shared `/assets`, one level up.
+    mobileRoot: path.join(__dirname, '../renderer'),
+    appName: 'KAI',
+    version: app.getVersion(),
+    logger,
+    settings: async () => (await settings.load()).remote,
+  });
+  remoteGateway = remote;
+  ipcContext.remote = remote;
   installContentSecurityPolicy();
   await createMainWindow();
+  await remote.apply((await settings.load()).remote).catch((error: unknown) => {
+    logger.warn('internal', 'KAI Remote could not start', messageOf(error));
+  });
   // Look for a new version shortly after startup and every few hours, if the user allows it. Checking is
   // read-only; downloading and installing always wait for the user.
   const checkForUpdates = (): void => {
@@ -656,6 +686,23 @@ async function importLocalCognitive1Brain(context: IpcContext, kaiRoot: string):
       // Try the next known source; a missing source is expected on most machines.
     }
   }
+}
+
+/** What the phone is offered as a target: one entry per open window, with its project named. */
+async function describeRemoteWindows(
+  projects: ProjectStore,
+  windows: DesktopWindowRegistry,
+): Promise<RemoteWindowSummary[]> {
+  const names = new Map((await projects.list()).map((project) => [project.id, project.name]));
+  const focused = windows.focused();
+  return windows.live().map((session) => ({
+    id: session.id,
+    projectId: session.projectId,
+    projectName: session.projectId ? names.get(session.projectId) ?? null : null,
+    conversationId: session.conversationId,
+    view: session.view,
+    focused: session.id === focused?.id,
+  }));
 }
 
 async function createMainWindow(initialProjectId?: string | null): Promise<void> {

@@ -36,6 +36,19 @@ import {
   type BoardCard,
 } from './studio';
 import {
+  remoteAccessStatusSchema,
+  remoteAccessSettingsSchema,
+  remoteDeviceSchema,
+  remotePairDeviceInputSchema,
+  remoteTasksInputSchema,
+  remoteTokenResultSchema,
+  remoteWindowSummarySchema,
+  type RemoteAccessStatus,
+  type RemoteDeviceSummary,
+  type RemoteTokenResult,
+  type RemoteWindowSummary,
+} from './remote';
+import {
   promptGuideInputSchema,
   promptGuideSettingsSchema,
   teamPlanFromPartsInputSchema,
@@ -463,6 +476,14 @@ export const ipcChannels = [
   'diagnostics:recent-logs',
   'window:state',
   'window:new',
+  'remote:status',
+  'remote:windows',
+  'remote:devices',
+  'remote:pair-device',
+  'remote:revoke-device',
+  // The phone's own reads. Kept apart from the `remote:*` settings channels above, which belong to the
+  // desktop panel: these exist only so a paired phone can see a section the console shows.
+  'remote:tasks',
 ] as const;
 
 export type IpcChannel = (typeof ipcChannels)[number];
@@ -506,6 +527,7 @@ export const ipcInputSchemas = {
         .optional(),
       cognitive1: cognitive1ServiceSettingsSchema.partial().strict().optional(),
       proxy: proxyServiceSettingsSchema.partial().strict().optional(),
+      remote: remoteAccessSettingsSchema.partial().strict().optional(),
       usageBudget: usageBudgetSchema.partial().strict().optional(),
       notifications: notificationSettingsSchema.partial().strict().optional(),
       updates: updateSettingsSchema.partial().strict().optional(),
@@ -704,7 +726,13 @@ export const ipcInputSchemas = {
   'diagnostics:data-locations': emptyInputSchema,
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
   'window:state': emptyInputSchema,
-  'window:new': emptyInputSchema,
+  'window:new': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'remote:status': emptyInputSchema,
+  'remote:windows': emptyInputSchema,
+  'remote:devices': emptyInputSchema,
+  'remote:pair-device': remotePairDeviceInputSchema,
+  'remote:revoke-device': z.object({ id: z.string().min(1) }).strict(),
+  'remote:tasks': remoteTasksInputSchema,
 } satisfies Record<IpcChannel, z.ZodTypeAny>;
 
 export interface IpcSuccess<T> {
@@ -810,6 +838,10 @@ export const studioDesignPullResponseSchema = studioDesignPullSchema;
 export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
+export const remoteStatusResponseSchema = remoteAccessStatusSchema;
+export const remoteWindowsResponseSchema = z.array(remoteWindowSummarySchema);
+export const remoteTokenResponseSchema = remoteTokenResultSchema;
+export const remoteDeviceListResponseSchema = z.array(remoteDeviceSchema);
 
 export function parseIpcInput<TChannel extends IpcChannel>(
   channel: TChannel,
@@ -862,6 +894,7 @@ export interface SettingsUpdate {
   editor?: Partial<AppSettings['editor']>;
   cognitive1?: Partial<AppSettings['cognitive1']>;
   proxy?: Partial<AppSettings['proxy']>;
+  remote?: Partial<AppSettings['remote']>;
   usageBudget?: Partial<AppSettings['usageBudget']>;
   notifications?: Partial<AppSettings['notifications']>;
   updates?: Partial<AppSettings['updates']>;
@@ -1095,5 +1128,16 @@ export interface KaiDesktopBridge {
   dataLocations(): Promise<IpcResponse<DataLocation[]>>;
   recentLogs(count?: number): Promise<IpcResponse<LogEntry[]>>;
   windowState(): Promise<IpcResponse<{ maximized: boolean }>>;
-  newWindow(): Promise<IpcResponse<boolean>>;
+  /** Opens a new window, optionally already pointed at a project and its composer. */
+  newWindow(projectId?: string): Promise<IpcResponse<boolean>>;
+  /** How KAI Remote is doing: whether it is listening, on what, and how many phones are attached. */
+  remoteStatus(): Promise<IpcResponse<RemoteAccessStatus>>;
+  /** The desktop windows a phone can target, so its UI can offer a choice. */
+  remoteWindows(): Promise<IpcResponse<RemoteWindowSummary[]>>;
+  /** Pairs another device, returning its own token once so the user can hand it over on a link. */
+  pairRemoteDevice(label: string): Promise<IpcResponse<RemoteTokenResult>>;
+  /** The paired devices, without their tokens. */
+  remoteDevices(): Promise<IpcResponse<RemoteDeviceSummary[]>>;
+  /** Un-pairs one device. The rest keep working. */
+  revokeRemoteDevice(id: string): Promise<IpcResponse<RemoteDeviceSummary[]>>;
 }

@@ -229,7 +229,12 @@ const bridge: KaiDesktopBridge = {
   dataLocations: () => ipcRenderer.invoke('diagnostics:data-locations', {}),
   recentLogs: (count) => ipcRenderer.invoke('diagnostics:recent-logs', { count }),
   windowState: () => ipcRenderer.invoke('window:state', {}),
-  newWindow: () => ipcRenderer.invoke('window:new', {}),
+  newWindow: (projectId) => ipcRenderer.invoke('window:new', { projectId }),
+  remoteStatus: () => ipcRenderer.invoke('remote:status', {}),
+  remoteWindows: () => ipcRenderer.invoke('remote:windows', {}),
+  remoteDevices: () => ipcRenderer.invoke('remote:devices', {}),
+  pairRemoteDevice: (label) => ipcRenderer.invoke('remote:pair-device', { label }),
+  revokeRemoteDevice: (id) => ipcRenderer.invoke('remote:revoke-device', { id }),
 };
 
 contextBridge.exposeInMainWorld('kaiDesktop', bridge);

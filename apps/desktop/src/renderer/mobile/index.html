@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <!--
+      No external origins, no framing, no inline script: the page only ever talks to the gateway, and
+      the token it holds is only as safe as this policy. Styles allow inline because progress widths
+      and step counts are computed; scripts do not, which is the part that matters. `manifest-src` and
+      `worker-src` are named because both fall back to `default-src 'none'`, which would silently make
+      the app uninstallable and the offline shell impossible.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
+    <meta name="theme-color" content="#100f22" />
+    <link rel="manifest" href="/mobile/manifest.webmanifest" />
+    <!-- iOS takes the icon and the standalone flag from its own meta tags, not from the manifest. -->
+    <link rel="apple-touch-icon" href="/mobile/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="KAI" />
+    <title>KAI Remote</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

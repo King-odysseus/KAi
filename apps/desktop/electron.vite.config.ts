@@ -45,6 +45,11 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    // The phone's static shell — manifest, icons, service worker — lives here and nowhere else, because
+    // Vite copies `public/` to the bundle root verbatim. Importing them instead would give them hashed
+    // URLs, and both are fetched by a fixed path; the gateway publishes `/mobile/` and `/assets/` only,
+    // so `public/mobile/…` is exactly the prefix the phone needs.
+    publicDir: resolve(__dirname, 'src/renderer/public'),
     plugins: [react()],
     resolve: {
       alias: [
@@ -54,7 +59,11 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/renderer/index.html'),
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          // The phone console. A separate bundle, not the workbench made narrow — see Ground Rule 1.
+          mobile: resolve(__dirname, 'src/renderer/mobile/index.html'),
+        },
       },
     },
   },

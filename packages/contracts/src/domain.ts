@@ -15,6 +15,7 @@ import {
 import { notificationSettingsSchema } from './notifications';
 import { autoModelSettingsSchema, createDefaultAutoModel } from './model-tiers';
 import { createDefaultPromptGuide, promptGuideSettingsSchema } from './prompt-guide';
+import { createDefaultRemoteAccess, remoteAccessSettingsSchema } from './remote';
 import { agentTeamSchema, createDefaultAgentTeam } from './team';
 import { updateSettingsSchema } from './updates';
 import { usageBudgetSchema } from './usage';
@@ -336,6 +337,8 @@ export const appSettingsV1Schema = z
     autoModel: autoModelSettingsSchema.default(createDefaultAutoModel),
     // Who plans and who does each part when a job is handed to the agent team.
     agentTeam: agentTeamSchema.default(createDefaultAgentTeam),
+    // The phone-sized remote console. Off by default; enabling it opens a loopback-only port.
+    remote: remoteAccessSettingsSchema.default(createDefaultRemoteAccess),
   })
   .strict();
 

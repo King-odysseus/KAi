@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAI Remote — mobile mockup</title>
+<style>
+  /* Tokens lifted from apps/desktop/src/renderer/src/themes.css (Purple). */
+  :root {
+    --bg-deep: #100f22;
+    --bg-shell: #131327;
+    --bg-panel: #15152b;
+    --bg-raised: #191830;
+    --bg-inset: #0f0f20;
+    --bg-input: #191830;
+    --bg-subtle: #141429;
+    --bg-hover: #26244f;
+    --border: #35326a;
+    --border-soft: #23214a;
+    --text: #f1efff;
+    --text-muted: #a599e9;
+    --text-dim: #8a80d2;
+    --mint: #fad000;
+    --mint-soft: rgba(250, 208, 0, 0.13);
+    --lavender: #b362ff;
+    --lavender-soft: rgba(179, 98, 255, 0.18);
+    --amber: #ff9d00;
+    --red: #ff628c;
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0a14;
+    color: var(--text);
+    font-family: var(--font);
+    padding: 40px 32px 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page-title { font-size: 15px; color: var(--text-muted); margin-bottom: 4px; }
+  .page-sub { font-size: 13px; color: var(--text-dim); margin-bottom: 36px; }
+
+  .rack {
+    display: flex;
+    gap: 40px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .slot { display: flex; flex-direction: column; gap: 12px; }
+
+  .slot-label { font-size: 12px; color: var(--text-muted); letter-spacing: .04em; text-transform: uppercase; }
+  .slot-note { font-size: 11px; color: var(--text-dim); max-width: 320px; line-height: 1.5; }
+
+  /* ---------- phone shell ---------- */
+  .phone {
+    width: 390px;
+    height: 844px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 46px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  }
+
+  .island {
+    position: absolute;
+    top: 11px; left: 50%;
+    transform: translateX(-50%);
+    width: 118px; height: 33px;
+    background: #000;
+    border-radius: 20px;
+    z-index: 20;
+  }
+
+  .statusbar {
+    height: 54px;
+    padding: 0 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    flex: none;
+    z-index: 10;
+  }
+  .statusbar .right { display: flex; gap: 5px; align-items: center; font-size: 11px; color: var(--text-muted); }
+
+  /* ---------- app chrome ---------- */
+  .appbar {
+    padding: 4px 20px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .appbar h1 { font-size: 25px; font-weight: 700; letter-spacing: -.02em; }
+  .conn {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-muted);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-soft);
+    padding: 5px 10px;
+    border-radius: 100px;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); flex: none; }
+
+  .scroll { flex: 1; overflow-y: auto; padding: 16px 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .scroll::-webkit-scrollbar { width: 0; }
+
+  /* ---------- tabs ---------- */
+  .tabs {
+    flex: none;
+    display: flex;
+    border-top: 1px solid var(--border-soft);
+    background: var(--bg-shell);
+    padding: 10px 0 22px;
+  }
+  .tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 10px; color: var(--text-dim); position: relative;
+  }
+  .tab.on { color: var(--lavender); }
+  .tab .glyph { font-size: 17px; line-height: 1; }
+  .tab .badge {
+    position: absolute; top: -3px; left: 50%; margin-left: 6px;
+    background: var(--amber); color: #1a1200;
+    font-size: 9px; font-weight: 700;
+    min-width: 15px; height: 15px; border-radius: 100px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 4px;
+  }
+
+  /* ---------- cards ---------- */
+  .card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 13px 14px;
+  }
+  .card.alert { border-color: rgba(255,157,0,.5); background: linear-gradient(180deg, rgba(255,157,0,.08), transparent 70%), var(--bg-panel); }
+  .card.live { border-color: rgba(179,98,255,.45); }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .row + .row { margin-top: 9px; }
+
+  .chip {
+    font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 5px; white-space: nowrap; flex: none;
+  }
+  .chip.run   { background: var(--lavender-soft); color: #d9b3ff; }
+  .chip.wait  { background: rgba(255,157,0,.16); color: var(--amber); }
+  .chip.done  { background: var(--mint-soft); color: var(--mint); }
+  .chip.fail  { background: rgba(255,98,140,.16); color: var(--red); }
+  .chip.soft  { background: var(--bg-raised); color: var(--text-dim); font-weight: 600; letter-spacing: .02em; text-transform: none; }
+
+  .title { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+  .meta { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+  .mono { font-family: var(--mono); }
+
+  .section-head {
+    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--text-dim); padding: 6px 4px 0;
+  }
+
+  /* ---------- progress ---------- */
+  .bar { height: 3px; border-radius: 100px; background: var(--bg-inset); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; border-radius: 100px; background: var(--lavender); }
+  .bar.warn > i { background: var(--amber); }
+
+  .steps { display: flex; gap: 3px; margin-top: 10px; }
+  .steps > i { height: 3px; flex: 1; border-radius: 100px; background: var(--bg-inset); }
+  .steps > i.done { background: var(--mint); }
+  .steps > i.now { background: var(--lavender); }
+
+  /* ---------- buttons ---------- */
+  .btn {
+    border: 0; font-family: var(--font); font-size: 14px; font-weight: 600;
+    border-radius: 10px; padding: 12px 16px; cursor: pointer;
+  }
+  .btn.primary { background: var(--lavender); color: #fff; }
+  .btn.ghost { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border); }
+  .btn.danger { background: transparent; color: var(--red); border: 1px solid rgba(255,98,140,.4); }
+  .actions { display: flex; gap: 9px; margin-top: 12px; }
+  .actions > * { flex: 1; }
+
+  /* ---------- log tail ---------- */
+  .log {
+    background: var(--bg-inset);
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    padding: 12px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.65;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .log .ok { color: #7ee787; }
+  .log .no { color: var(--red); }
+  .log .hl { color: var(--mint); }
+  .log .dim { color: #5a5580; }
+
+  /* ---------- composer ---------- */
+  .composer {
+    flex: none;
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 14px 22px;
+    border-top: 1px solid var(--border-soft);
+    background: var(--bg-shell);
+  }
+  .composer .field {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 13px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .composer .send {
+    width: 40px; height: 40px; border-radius: 10px; flex: none;
+    background: var(--lavender); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .composer .field.typed { color: var(--text); }
+  .quick { display: flex; gap: 7px; padding: 0 14px 9px; flex-wrap: wrap; flex: none; }
+  .quick > span {
+    font-size: 11.5px; font-weight: 600; color: var(--text-muted);
+    background: var(--bg-raised); border: 1px solid var(--border-soft);
+    border-radius: 100px; padding: 6px 11px;
+  }
+
+  /* ---------- project scoping ---------- */
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; }
+  .filters > span {
+    font-size: 11.5px; font-weight: 600; color: var(--text-dim);
+    background: var(--bg-raised); border: 1px solid var(--border-soft);
+    border-radius: 100px; padding: 6px 12px;
+  }
+  .filters > span.on { background: var(--lavender-soft); border-color: rgba(179,98,255,.45); color: #d9b3ff; }
+  .switcher {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 13px; font-weight: 600; color: var(--text);
+    background: var(--bg-raised); border: 1px solid var(--border-soft);
+    padding: 7px 12px; border-radius: 100px;
+  }
+  .switcher .caret { color: var(--text-dim); font-size: 9px; }
+
+  /* ---------- detail header ---------- */
+  .detail-head { flex: none; padding: 6px 18px 16px; border-bottom: 1px solid var(--border-soft); }
+  .back { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; display: flex; align-items: center; gap: 5px; }
+  .kv { display: flex; gap: 18px; margin-top: 12px; }
+  .kv > div { display: flex; flex-direction: column; gap: 3px; }
+  .kv .k { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+  .kv .v { font-size: 13px; font-weight: 600; }
+
+  /* ---------- board ---------- */
+  .segbar { flex: none; display: flex; gap: 4px; padding: 12px 16px 0; }
+  .seg {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+    font-size: 11.5px; font-weight: 600; color: var(--text-dim);
+    background: var(--bg-raised); border: 1px solid var(--border-soft);
+    border-radius: 9px; padding: 9px 4px;
+  }
+  .seg.on { background: var(--lavender-soft); border-color: rgba(179,98,255,.45); color: #d9b3ff; }
+  .seg .n { font-size: 10px; color: var(--text-dim); background: var(--bg-inset); padding: 1px 6px; border-radius: 100px; font-weight: 600; }
+  .seg.on .n { color: #d9b3ff; background: rgba(0,0,0,.25); }
+
+  .mini { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: 12px; padding: 13px 14px; }
+  .mini .id { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+  .mini .t { font-size: 14px; font-weight: 600; margin-top: 6px; line-height: 1.35; }
+  .mini .foot { display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
+  .swipe-hint { text-align: center; font-size: 10.5px; color: var(--text-dim); padding: 6px 0 0; }
+
+  /* ---------- modal sheet ---------- */
+  .scrim {
+    position: absolute; inset: 0; z-index: 30;
+    background: rgba(6,6,16,.66);
+    backdrop-filter: blur(2px);
+    display: flex; align-items: flex-end;
+  }
+  .sheet {
+    width: 100%;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    border-radius: 22px 22px 0 0;
+    padding: 10px 18px 26px;
+    box-shadow: 0 -18px 50px rgba(0,0,0,.6);
+  }
+  .grabber { width: 36px; height: 4px; border-radius: 100px; background: var(--border); margin: 0 auto 16px; }
+  .sheet h2 { font-size: 19px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 6px; }
+  .sheet .lede { font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+  .cmd {
+    background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: 10px;
+    padding: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--mint);
+    margin: 14px 0; word-break: break-all; line-height: 1.5;
+  }
+  .why { border-left: 2px solid var(--border); padding-left: 12px; margin: 14px 0; }
+  .why .k { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); margin-bottom: 4px; }
+  .why .v { font-size: 12.5px; color: var(--text-muted); line-height: 1.55; }
+  .why.risk { border-left-color: rgba(255,98,140,.5); }
+  .why.risk .v { color: #ffa8bd; }
+</style>
+</head>
+<body>
+
+<div class="page-title">KAI Remote — phone mockup</div>
+<div class="page-sub">390 × 844 (iPhone logical) · Purple theme tokens from themes.css · lavender = running, amber = waiting on you, mint = done, red = failed<br>Every run belongs to a desktop <b>window</b>, and each window has its own project (DesktopWindowRegistry). The phone is cross-window by default and filters down.</div>
+
+<div class="rack">
+
+  <!-- ============ 1. NEEDS YOU ============ -->
+  <div class="slot">
+    <div class="slot-label">1 — Needs you</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right">KAI · 5G ▮</span></div>
+
+      <div class="appbar">
+        <h1>Needs you</h1>
+        <span class="conn"><span class="dot"></span>Desktop</span>
+      </div>
+
+      <div class="scroll">
+        <div class="card alert">
+          <div class="row">
+            <span class="chip wait">Approval</span>
+            <span class="meta" style="margin:0">KAi · 2m ago</span>
+          </div>
+          <div class="title" style="margin-top:9px">Remove worktree card-142</div>
+          <div class="meta">Codex · Feature build · step 4 of 5</div>
+          <div class="actions">
+            <button class="btn ghost">Deny</button>
+            <button class="btn primary">Approve</button>
+          </div>
+        </div>
+
+        <div class="section-head">Activity</div>
+
+        <div class="card live">
+          <div class="row">
+            <span class="chip run">Running</span>
+            <span class="meta mono" style="margin:0">4m 12s</span>
+          </div>
+          <div class="title" style="margin-top:9px">Add auth middleware</div>
+          <div class="meta">Claude · verifying</div>
+          <div class="steps"><i class="done"></i><i class="done"></i><i class="done"></i><i class="now"></i><i></i></div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip done">Done</span>
+            <span class="meta mono" style="margin:0">1m 48s</span>
+          </div>
+          <div class="title" style="margin-top:9px">Fix flaky desktop smoke</div>
+          <div class="meta">Codex · 2 files changed</div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip soft">Budget</span>
+            <span class="meta mono" style="margin:0">$4.12 / $5.00</span>
+          </div>
+          <div class="title" style="margin-top:9px">Session spend at 82%</div>
+          <div class="bar warn"><i style="width:82%"></i></div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip fail">Failed</span>
+            <span class="meta mono" style="margin:0">18m ago</span>
+          </div>
+          <div class="title" style="margin-top:9px">Migrate project prefs</div>
+          <div class="meta">Qwen · typecheck — 1 error, retries exhausted</div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab on"><span class="glyph">◎</span>Needs you<span class="badge">2</span></div>
+        <div class="tab"><span class="glyph">≡</span>Runs</div>
+        <div class="tab"><span class="glyph">▤</span>Board</div>
+      </div>
+    </div>
+    <div class="slot-note">The home screen. Alerts from <em>every</em> window, newest first — this is the screen that earns the app's existence, since iOS freezes background tabs.</div>
+  </div>
+
+  <!-- ============ 2. RUNS ============ -->
+  <div class="slot">
+    <div class="slot-label">2 — Runs</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right">KAI · 5G ▮</span></div>
+
+      <div class="appbar">
+        <h1>Runs</h1>
+        <span class="conn"><span class="dot"></span>3 active</span>
+      </div>
+
+      <div class="scroll">
+        <div class="filters">
+          <span class="on">All windows</span>
+          <span>KAi</span>
+          <span>cognitive1</span>
+          <span>Proxy</span>
+        </div>
+
+        <div class="card live">
+          <div class="row">
+            <span class="chip run">Running</span>
+            <span class="meta mono" style="margin:0">KAi · 4m 12s</span>
+          </div>
+          <div class="title" style="margin-top:9px">Add auth middleware</div>
+          <div class="meta">Claude · Opus · verifying · round 2 of 3</div>
+          <div class="bar"><i style="width:66%"></i></div>
+        </div>
+
+        <div class="card alert">
+          <div class="row">
+            <span class="chip wait">Waiting on you</span>
+            <span class="meta mono" style="margin:0">KAi · 2m</span>
+          </div>
+          <div class="title" style="margin-top:9px">Remove worktree card-142</div>
+          <div class="meta">Codex · Feature build · step 4 of 5</div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip done">Done</span>
+            <span class="meta mono" style="margin:0">cognitive1 · 1m 48s</span>
+          </div>
+          <div class="title" style="margin-top:9px">Fix flaky daemon smoke</div>
+          <div class="meta">Codex · 2 files changed · not committed</div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip fail">Failed</span>
+            <span class="meta mono" style="margin:0">Proxy · 18m</span>
+          </div>
+          <div class="title" style="margin-top:9px">Migrate routing prefs</div>
+          <div class="meta">Qwen · typecheck failed after 3 fix rounds</div>
+        </div>
+
+        <div class="section-head">Earlier today</div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip done">Done</span>
+            <span class="meta mono" style="margin:0">KAi · 7m 02s</span>
+          </div>
+          <div class="title" style="margin-top:9px">Team: Project Studio spec</div>
+          <div class="meta">5 steps · 3 agents · 1 fix round</div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="chip done">Done</span>
+            <span class="meta mono" style="margin:0">cognitive1 · 2m 31s</span>
+          </div>
+          <div class="title" style="margin-top:9px">Theme token regen</div>
+          <div class="meta">Gemini · 4 files changed</div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab"><span class="glyph">◎</span>Needs you</div>
+        <div class="tab on"><span class="glyph">≡</span>Runs</div>
+        <div class="tab"><span class="glyph">▤</span>Board</div>
+      </div>
+    </div>
+    <div class="slot-note">Every run across every window, grouped by project and filterable. State, agent, model, elapsed — enough to know at a glance whether anything needs you.</div>
+  </div>
+
+  <!-- ============ 3. RUN DETAIL ============ -->
+  <div class="slot">
+    <div class="slot-label">3 — Run detail</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right">KAI · 5G ▮</span></div>
+
+      <div class="detail-head">
+        <div class="back">‹ Runs</div>
+        <div class="row">
+          <h1 style="font-size:20px; font-weight:700; letter-spacing:-.02em">Add auth middleware</h1>
+          <span class="chip run">Running</span>
+        </div>
+        <div class="kv">
+          <div><span class="k">Agent</span><span class="v">Claude</span></div>
+          <div><span class="k">Elapsed</span><span class="v mono">4m 12s</span></div>
+          <div><span class="k">Step</span><span class="v">3 / 5</span></div>
+        </div>
+        <div class="steps"><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i></div>
+      </div>
+
+      <div class="scroll">
+        <div class="section-head">Output</div>
+        <div class="log"><span class="dim">$</span> npm run desktop:typecheck
+<span class="ok">✓</span> src/main/team-plan.ts
+<span class="ok">✓</span> src/main/workflow-runner.ts
+<span class="no">✗</span> src/main/team-record-store.ts:41
+  <span class="dim">Type 'string' is not assignable to 'TeamStepAccess'</span>
+
+<span class="hl">Next:</span> 1 error — fix round 2 of 3
+Waiting for fix agent…</div>
+
+        <div class="section-head">Git</div>
+        <div class="card">
+          <div class="row">
+            <span class="meta mono" style="margin:0">feat/auth-middleware</span>
+            <span class="chip soft">5 files</span>
+          </div>
+          <div class="row">
+            <span class="meta" style="margin:0">No commits yet</span>
+            <span class="meta mono" style="margin:0">worktree clean</span>
+          </div>
+        </div>
+
+        <div class="actions" style="margin-top:4px">
+          <button class="btn ghost">❚❚ Pause</button>
+          <button class="btn danger">■ Stop</button>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="field">Continue this run…</div>
+        <div class="send">↑</div>
+      </div>
+    </div>
+    <div class="slot-note">Read the tail, then steer. Pause/Stop map onto RunControlPort; the composer continues the conversation.</div>
+  </div>
+
+  <!-- ============ 4. BOARD ============ -->
+  <div class="slot">
+    <div class="slot-label">4 — Board</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right">KAI · 5G ▮</span></div>
+
+      <div class="appbar">
+        <h1>Board</h1>
+        <span class="switcher">KAi <span class="caret">▼</span></span>
+      </div>
+
+      <div class="segbar">
+        <div class="seg on">Ready <span class="n">3</span></div>
+        <div class="seg">Doing <span class="n">2</span></div>
+        <div class="seg">Done <span class="n">7</span></div>
+      </div>
+
+      <div class="scroll">
+        <div class="mini">
+          <div class="id">card-151</div>
+          <div class="t">Add rate limit to proxy routes</div>
+          <div class="foot"><span class="chip soft">api</span><span class="chip soft">route: claude</span></div>
+        </div>
+        <div class="mini">
+          <div class="id">card-154</div>
+          <div class="t">Surface budget warnings in the status bar</div>
+          <div class="foot"><span class="chip soft">ui</span></div>
+        </div>
+        <div class="mini">
+          <div class="id">card-149</div>
+          <div class="t">Worktree cleanup on run cancel</div>
+          <div class="foot"><span class="chip soft">git</span><span class="chip wait">stale</span></div>
+        </div>
+        <div class="swipe-hint">Tap a card for its story and acceptance · swipe to change list</div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab"><span class="glyph">◎</span>Needs you</div>
+        <div class="tab"><span class="glyph">≡</span>Runs</div>
+        <div class="tab on"><span class="glyph">▤</span>Board</div>
+      </div>
+    </div>
+    <div class="slot-note">One list at a time with a switcher — a kanban squeezed onto a phone is unreadable. Backed by get_board / move_task / claim_task; staleness and route are already computed by the kai-project MCP server.</div>
+  </div>
+
+  <!-- ============ 5. COMPOSER IN USE ============ -->
+  <div class="slot">
+    <div class="slot-label">5 — Composer in use</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right">KAI · 5G ▮</span></div>
+
+      <div class="detail-head">
+        <div class="back">‹ Runs</div>
+        <div class="row">
+          <h1 style="font-size:20px; font-weight:700; letter-spacing:-.02em">Add auth middleware</h1>
+          <span class="chip run">Running</span>
+        </div>
+        <div class="kv">
+          <div><span class="k">Agent</span><span class="v">Claude</span></div>
+          <div><span class="k">Elapsed</span><span class="v mono">4m 31s</span></div>
+          <div><span class="k">Step</span><span class="v">3 / 5</span></div>
+        </div>
+      </div>
+
+      <div class="scroll" style="justify-content:flex-end">
+        <div class="log"><span class="no">✗</span> src/main/team-record-store.ts:41
+  <span class="dim">Type 'string' is not assignable to 'TeamStepAccess'</span>
+
+<span class="hl">Next:</span> 1 error — fix round 2 of 3
+Waiting for fix agent…</div>
+
+        <div class="card" style="border-color: rgba(179,98,255,.45)">
+          <div class="row">
+            <span class="chip run">Queued</span>
+            <span class="meta mono" style="margin:0">sent 2s ago</span>
+          </div>
+          <div class="t" style="font-size:13.5px; font-weight:600; margin-top:8px; line-height:1.45">
+            why did the typecheck fail? fix it and rerun
+          </div>
+        </div>
+      </div>
+
+      <div class="quick">
+        <span>Explain failure</span>
+        <span>Retry step</span>
+        <span>Summarise</span>
+        <span>Stop</span>
+      </div>
+
+      <div class="composer">
+        <div class="field typed">Add the missing type…</div>
+        <div class="send">↑</div>
+      </div>
+    </div>
+    <div class="slot-note">What screen 3 becomes once you're typing. The quick-action row is the point: thumb-sized verbs that save you typing a sentence on glass — and your message appears in the run as a queued turn you can see was received.</div>
+  </div>
+
+  <!-- ============ 6. APPROVAL SHEET ============ -->
+  <div class="slot">
+    <div class="slot-label">6 — Approval sheet</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right">KAI · 5G ▮</span></div>
+
+      <div class="appbar" style="border-bottom:0">
+        <h1 style="color:var(--text-dim); font-size:19px">Runs</h1>
+        <span class="conn"><span class="dot"></span>Desktop</span>
+      </div>
+
+      <div class="scroll" style="opacity:.35">
+        <div class="card"><div class="row"><span class="chip run">Running</span></div>
+          <div class="title" style="margin-top:9px">Add auth middleware</div>
+          <div class="meta">Claude · verifying</div></div>
+        <div class="card"><div class="row"><span class="chip done">Done</span></div>
+          <div class="title" style="margin-top:9px">Fix flaky desktop smoke</div>
+          <div class="meta">Codex · 2 files changed</div></div>
+        <div class="card"><div class="row"><span class="chip fail">Failed</span></div>
+          <div class="title" style="margin-top:9px">Migrate project prefs</div>
+          <div class="meta">Qwen · typecheck failed</div></div>
+      </div>
+
+      <div class="scrim">
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="row">
+            <span class="chip wait">Approval</span>
+            <span class="meta" style="margin:0">Codex · step 4 of 5</span>
+          </div>
+          <h2 style="margin-top:12px">Run this command?</h2>
+          <div class="lede">The Feature build team wants to clean up the worktree it created for card-142.</div>
+
+          <div class="cmd">git worktree remove --force .kai/worktrees/card-142</div>
+
+          <div class="why">
+            <div class="k">Window</div>
+            <div class="v mono" style="font-size:11.5px">KAi · ~/Documents/WebDev Projects/KAi</div>
+          </div>
+
+          <div class="why">
+            <div class="k">Why</div>
+            <div class="v">Step 4 of 5 finished; the card is moving to review and the worktree is no longer needed.</div>
+          </div>
+
+          <div class="why risk">
+            <div class="k">Risk</div>
+            <div class="v">--force discards 2 uncommitted commits in that worktree. They are not on any branch.</div>
+          </div>
+
+          <div class="actions" style="margin-top:18px">
+            <button class="btn ghost">Deny</button>
+            <button class="btn primary">Approve</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="slot-note">The decision that stalls everything. Shows the literal command, why, and the risk — approve/deny big enough for a thumb.</div>
+  </div>
+
+</div>
+
+</body>
+</html>

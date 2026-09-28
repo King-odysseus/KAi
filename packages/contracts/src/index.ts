@@ -20,6 +20,7 @@ export * from './prompt-guide';
 export * from './preview';
 export * from './proxy';
 export * from './recovery';
+export * from './remote';
 export * from './rules';
 export * from './search';
 export * from './setup';
