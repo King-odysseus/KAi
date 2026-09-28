@@ -36,6 +36,8 @@ import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
+import { DesktopPromptGuide } from './prompt-guide';
+import { completeTeam } from './team-assign';
 import { TeamRecordStore } from './team-record-store';
 import { activeParallelDirectories, createParallelSession } from './parallel-session';
 import { cleanupParallelWorktrees } from './git-worktrees';
@@ -248,6 +250,7 @@ async function startApplication(): Promise<void> {
   const editorSessions = new EditorSessionManager();
   let workflowRunner!: DesktopWorkflowRunner;
   let teamPlanner!: DesktopTeamPlanner;
+  let promptGuide!: DesktopPromptGuide;
 
   ipcContext = {
     appName: 'KAI',
@@ -286,6 +289,7 @@ async function startApplication(): Promise<void> {
     learningBudget,
     workflows: workflowRunner,
     teamPlanner,
+    promptGuide,
     runControl,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
@@ -374,6 +378,19 @@ async function startApplication(): Promise<void> {
     startWorkflow: (input, ownerWindowId) => workflowRunner.start(input, ownerWindowId),
   });
   ipcContext.teamPlanner = teamPlanner;
+  promptGuide = new DesktopPromptGuide({
+    settings: () => settings.load(),
+    team: async (projectId) => completeTeam((await preferences.get(projectId))?.agentTeam ?? (await settings.load()).agentTeam),
+    projectRoot: async (projectId) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('Project not found.');
+      return project.path;
+    },
+    credentialStored: async (id) => Boolean(await credentials.has?.(id)),
+    vaultAvailable: () => credentials.isAvailable(),
+    requester: learningTutor,
+  });
+  ipcContext.promptGuide = promptGuide;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);

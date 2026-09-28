@@ -1,7 +1,8 @@
-import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet, Wand2, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   isLocalProvider,
+  partsFromGuide,
   planWaves,
   resolveRole,
   roleConfigFor,
@@ -10,6 +11,9 @@ import {
   type AgentCapability,
   type AppSettings,
   type AutonomyMode,
+  type PromptGuidePrompt,
+  type PromptGuideReadiness,
+  type PromptGuideResult,
   type ProjectRecord,
   type RouteMode,
   type TeamAssignment,
@@ -64,6 +68,12 @@ export function TeamPanel({
   const [maxConcurrent, setMaxConcurrent] = useState(3);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The Prompt Guide: a clarified goal, its open questions, and a prompt per teammate the user can edit.
+  const [guide, setGuide] = useState<PromptGuideResult | null>(null);
+  const [guidePrompts, setGuidePrompts] = useState<PromptGuidePrompt[]>([]);
+  const [guideAnswers, setGuideAnswers] = useState<Record<number, string>>({});
+  const [guiding, setGuiding] = useState(false);
+  const [guideReadiness, setGuideReadiness] = useState<PromptGuideReadiness | null>(null);
   // A project can have its own team; the plan card and the orchestrator line follow whichever applies.
   const [projectTeam, setProjectTeam] = useState<AgentTeam | null>(null);
   const team = projectTeam ?? settings.agentTeam;
@@ -85,6 +95,53 @@ export function TeamPanel({
     setFixRounds(saved.rounds);
     return () => { cancelled = true; };
   }, [projectId]);
+
+  // Readiness follows the Prompt Guide card in Settings, so turning it on there enables the button here.
+  const guideSettings = JSON.stringify(settings.promptGuide);
+  useEffect(() => {
+    let cancelled = false;
+    void window.kaiDesktop.promptGuideReadiness().then(unwrap).then((readiness) => {
+      if (!cancelled) setGuideReadiness(readiness);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [guideSettings]);
+
+  async function refineIdea(withAnswers: boolean): Promise<void> {
+    if (!activeProject || !goal.trim()) return;
+    setGuiding(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const answers = withAnswers && guide
+        ? guide.questions.map((question, index) => ({ question, answer: guideAnswers[index] ?? '' })).filter((item) => item.answer.trim())
+        : [];
+      const result = unwrap(await window.kaiDesktop.refineIdea({ projectId: activeProject.id, idea: goal.trim(), answers }));
+      setGuide(result);
+      setGuidePrompts(result.prompts);
+      setGuideAnswers({});
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The Prompt Guide could not refine this idea.');
+    } finally {
+      setGuiding(false);
+    }
+  }
+
+  async function planFromGuide(): Promise<void> {
+    if (!activeProject || !guide || guidePrompts.length === 0) return;
+    setPlanning(true);
+    setError(null);
+    setNotice(null);
+    setDraft(null);
+    try {
+      setDraft(unwrap(await window.kaiDesktop.planTeamFromParts({ projectId: activeProject.id, goal: guide.goal, parts: partsFromGuide(guidePrompts, team) })));
+      setGoal(guide.goal);
+      setGuide(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'KAI could not plan these prompts.');
+    } finally {
+      setPlanning(false);
+    }
+  }
 
   async function plan(): Promise<void> {
     if (!activeProject || !goal.trim()) return;
@@ -206,17 +263,89 @@ export function TeamPanel({
           {planning ? <Loader2 size={15} className="spin" /> : <Users size={15} />}
           <span>{planning ? 'Planning' : draft ? 'Plan again' : 'Plan the job'}</span>
         </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={disabled || guiding || !activeProject || !goal.trim() || !guideReadiness?.ready}
+          title={guideReadiness?.ready ? `Clarify the idea and write a prompt for each teammate with ${guideReadiness.displayName} (${guideReadiness.model})` : guideReadiness?.reason ?? 'Checking the Prompt Guide'}
+          onClick={() => void refineIdea(false)}
+        >
+          {guiding ? <Loader2 size={15} className="spin" /> : <Wand2 size={15} />}
+          <span>{guiding ? 'Refining' : 'Refine with Prompt Guide'}</span>
+        </button>
         {!activeProject && <small>Open a project first.</small>}
+        {activeProject && guideReadiness && !guideReadiness.ready && <small>{guideReadiness.reason}</small>}
         {planning && <small>The orchestrator is reading the project. This only reads; nothing is changed.</small>}
       </div>
       {error && <div className="rules-error" role="alert"><span>{error}</span></div>}
       {notice && <div className="team-notice" role="status">{notice}</div>}
 
+      {guide && (
+        <div className="prompt-guide" aria-label="Prompt Guide">
+          <div className="prompt-guide-head">
+            <Wand2 size={15} />
+            <strong>Prompt Guide</strong>
+            <small>Nothing has run. Edit anything below, then plan with these prompts.</small>
+            <button type="button" className="icon-button" aria-label="Close the Prompt Guide" onClick={() => setGuide(null)}><X size={14} /></button>
+          </div>
+          <section className="prompt-guide-goal">
+            <span className="prompt-guide-label">Clear goal</span>
+            <p>{guide.goal}</p>
+            <button type="button" className="secondary-button" disabled={goal.trim() === guide.goal} onClick={() => setGoal(guide.goal)}>Use as goal</button>
+          </section>
+          {guide.assumptions.length > 0 && (
+            <section>
+              <span className="prompt-guide-label">Assumed</span>
+              <ul className="prompt-guide-list">{guide.assumptions.map((item) => <li key={item}>{item}</li>)}</ul>
+            </section>
+          )}
+          {guide.questions.length > 0 && (
+            <section>
+              <span className="prompt-guide-label">To decide</span>
+              <div className="prompt-guide-questions">
+                {guide.questions.map((question, index) => (
+                  <label className="field" key={question}>
+                    <span>{question}</span>
+                    <input value={guideAnswers[index] ?? ''} placeholder="Your answer (optional)" onChange={(event) => setGuideAnswers({ ...guideAnswers, [index]: event.target.value })} />
+                  </label>
+                ))}
+              </div>
+              <button type="button" className="secondary-button" disabled={guiding || !Object.values(guideAnswers).some((answer) => answer.trim())} onClick={() => void refineIdea(true)}>
+                {guiding ? <Loader2 size={14} className="spin" /> : <Wand2 size={14} />}<span>Refine again with my answers</span>
+              </button>
+            </section>
+          )}
+          <section>
+            <span className="prompt-guide-label">Prompts for the team</span>
+            <ol className="prompt-guide-prompts">
+              {guidePrompts.map((item, index) => (
+                <li key={`${item.role}-${index}`}>
+                  <div className="prompt-guide-prompt-head">
+                    <span className="team-role-chip">{resolveRole(team, item.role).label}</span>
+                    <input aria-label={`Prompt ${index + 1} title`} value={item.title} maxLength={120} onChange={(event) => setGuidePrompts(guidePrompts.map((entry, at) => (at === index ? { ...entry, title: event.target.value } : entry)))} />
+                    <button type="button" className="icon-button" aria-label={`Remove prompt ${index + 1}`} disabled={guidePrompts.length === 1} onClick={() => setGuidePrompts(guidePrompts.filter((_, at) => at !== index))}><Trash2 size={13} /></button>
+                  </div>
+                  <textarea aria-label={`Prompt ${index + 1}`} value={item.prompt} maxLength={6000} onChange={(event) => setGuidePrompts(guidePrompts.map((entry, at) => (at === index ? { ...entry, prompt: event.target.value } : entry)))} />
+                  {item.paths.length > 0 && <small className="prompt-guide-paths">{item.paths.join(' · ')}</small>}
+                </li>
+              ))}
+            </ol>
+          </section>
+          <div className="team-panel-actions">
+            <button type="button" className="primary-button" disabled={disabled || planning || guidePrompts.some((item) => !item.title.trim() || !item.prompt.trim())} onClick={() => void planFromGuide()}>
+              {planning ? <Loader2 size={15} className="spin" /> : <Users size={15} />}
+              <span>Plan with these prompts</span>
+            </button>
+            <small>KAI assigns an agent to each prompt and adds the usual reviews. You approve the plan before anything runs.</small>
+          </div>
+        </div>
+      )}
+
       {draft && (
         <div className="team-plan" aria-label="Team plan">
           <div className="team-plan-summary">
             <strong>{draft.summary || 'Plan'}</strong>
-            <small>Planned by {nameOf(draft.orchestrator.assignee, agentCapabilities)}. {draft.orchestrator.reason} Using {draft.teamScope === 'project' ? "this project's own team" : 'the team from Settings'}.</small>
+            <small>{draft.source === 'prompt-guide' ? 'Planned from the Prompt Guide\'s prompts.' : `Planned by ${nameOf(draft.orchestrator.assignee, agentCapabilities)}. ${draft.orchestrator.reason}`} Using {draft.teamScope === 'project' ? "this project's own team" : 'the team from Settings'}.</small>
           </div>
           {draft.warnings.length > 0 && (
             <ul className="team-warnings" aria-label="Plan notes">

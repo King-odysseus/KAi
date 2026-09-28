@@ -171,6 +171,8 @@ export const teamPlanDraftSchema = z
       .strict(),
     // Which team planned this: the one saved for the project, or the team from Settings.
     teamScope: z.enum(['project', 'settings']).default('settings'),
+    // Who split the goal into parts: the orchestrator, or the user through the Prompt Guide.
+    source: z.enum(['orchestrator', 'prompt-guide']).default('orchestrator'),
     // Things the user should read before approving, for example an added security review.
     warnings: z.array(z.string().max(500)).max(20),
     createdAt: timestampSchema,

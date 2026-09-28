@@ -1,5 +1,14 @@
 import { z } from 'zod';
 import { autoModelSettingsSchema } from './model-tiers';
+import {
+  promptGuideInputSchema,
+  promptGuideSettingsSchema,
+  teamPlanFromPartsInputSchema,
+  type PromptGuideInput,
+  type PromptGuideReadiness,
+  type PromptGuideResult,
+  type TeamPlanFromPartsInput,
+} from './prompt-guide';
 import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
 import {
   agentCapabilitySchema,
@@ -300,6 +309,9 @@ export const ipcChannels = [
   'workflows:save-template',
   'workflows:delete-template',
   'team:plan',
+  'team:plan-from-parts',
+  'prompt-guide:readiness',
+  'prompt-guide:refine',
   'team:start',
   'team:record',
   'team:clear-record',
@@ -427,6 +439,7 @@ export const ipcInputSchemas = {
         .strict()
         .optional(),
       learningTutor: learningTutorSettingsSchema.partial().strict().optional(),
+      promptGuide: promptGuideSettingsSchema.partial().strict().optional(),
       editor: z
         .object({
           autoSave: z.boolean().optional(),
@@ -511,6 +524,9 @@ export const ipcInputSchemas = {
   'workflows:save-template': workflowTemplateSaveInputSchema,
   'workflows:delete-template': z.object({ id: z.string().min(1) }).strict(),
   'team:plan': teamPlanInputSchema,
+  'team:plan-from-parts': teamPlanFromPartsInputSchema,
+  'prompt-guide:readiness': emptyInputSchema,
+  'prompt-guide:refine': promptGuideInputSchema,
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
@@ -757,6 +773,7 @@ export interface SettingsUpdate {
   mcpServers?: AppSettings['mcpServers'];
   directApi?: Partial<AppSettings['directApi']>;
   learningTutor?: Partial<AppSettings['learningTutor']>;
+  promptGuide?: Partial<AppSettings['promptGuide']>;
   editor?: Partial<AppSettings['editor']>;
   cognitive1?: Partial<AppSettings['cognitive1']>;
   proxy?: Partial<AppSettings['proxy']>;
@@ -839,6 +856,11 @@ export interface KaiDesktopBridge {
   startWorkflow(request: WorkflowStartInput): Promise<IpcResponse<WorkflowRun>>;
   /** Asks the orchestrator to split a goal into parts and assigns an agent to each. Runs nothing. */
   planTeam(request: TeamPlanInput): Promise<IpcResponse<TeamPlanDraft>>;
+  /** Builds a plan from parts the user already has (from the Prompt Guide), skipping the orchestrator. Runs nothing. */
+  planTeamFromParts(request: TeamPlanFromPartsInput): Promise<IpcResponse<TeamPlanDraft>>;
+  promptGuideReadiness(): Promise<IpcResponse<PromptGuideReadiness>>;
+  /** Turns a rough idea into a clear goal, open questions and one prompt per teammate. */
+  refineIdea(request: PromptGuideInput): Promise<IpcResponse<PromptGuideResult>>;
   /** Starts the approved plan as a workflow, one part at a time. */
   startTeam(request: TeamStartInput): Promise<IpcResponse<WorkflowRun>>;
   teamRecord(request: TeamRecordQuery): Promise<IpcResponse<TeamRecordAdvice[]>>;

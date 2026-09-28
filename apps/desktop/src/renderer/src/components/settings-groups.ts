@@ -11,6 +11,7 @@ export const SETTINGS_GROUPS = {
   editor: ['editor'],
   shortcuts: ['shortcuts'],
   learningTutor: ['learningTutor'],
+  promptGuide: ['promptGuide'],
   directApi: ['directApi'],
   mcpServers: ['mcpServers'],
   cognitive1: ['cognitive1'],

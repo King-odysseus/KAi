@@ -1,5 +1,5 @@
 import { reconcileSettingsDraft } from './settings-draft';
-import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users , Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { AgentTeamCard } from './TeamSettings';
@@ -15,7 +15,9 @@ type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
 type StdioMcpServer = Extract<McpServer, { transport: 'stdio' }>;
 type McpServerPatch = Partial<HttpMcpServer> | Partial<StdioMcpServer>;
-type ProviderScope = 'direct' | 'learning';
+type ProviderScope = 'direct' | 'learning' | 'guide';
+/** The settings entry each provider card edits. */
+const SCOPE_KEY = { direct: 'directApi', learning: 'learningTutor', guide: 'promptGuide' } as const;
 type FeedbackScope = ProviderScope | 'generic' | 'overwatch';
 type FeedbackKind = 'success' | 'error' | 'pending';
 interface SettingsFeedback { kind: FeedbackKind; message: string }
@@ -27,6 +29,7 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   editor: 'Code editor',
   shortcuts: 'Keyboard shortcuts',
   learningTutor: 'Learning Tutor API',
+  promptGuide: 'Prompt Guide',
   directApi: 'Direct API',
   mcpServers: 'MCP servers',
   cognitive1: 'C1 Brain',
@@ -50,10 +53,11 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
   const [directCredentialValue, setDirectCredentialValue] = useState('');
   const [learningCredentialValue, setLearningCredentialValue] = useState('');
   const [overwatchCredentialValue, setOverwatchCredentialValue] = useState('');
-  const [providerModels, setProviderModels] = useState<Record<ProviderScope, ProviderModelCatalog | null>>({ direct: null, learning: null });
+  const [guideCredentialValue, setGuideCredentialValue] = useState('');
+  const [providerModels, setProviderModels] = useState<Record<ProviderScope, ProviderModelCatalog | null>>({ direct: null, learning: null, guide: null });
   const [refreshingModels, setRefreshingModels] = useState<ProviderScope | null>(null);
-  const [modelFeedback, setModelFeedback] = useState<Record<ProviderScope, SettingsFeedback | null>>({ direct: null, learning: null });
-  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, generic: null, overwatch: null });
+  const [modelFeedback, setModelFeedback] = useState<Record<ProviderScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null });
+  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null, generic: null, overwatch: null });
   const [backups, setBackups] = useState<ConfigBackup[]>([]);
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
@@ -77,6 +81,10 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
   const learningModels = providerModels.learning?.provider === draft.learningTutor.provider
     ? providerModels.learning.models
     : learningPreset.models;
+  const guidePreset = directProviderPreset(draft.promptGuide.provider);
+  const guideModels = providerModels.guide?.provider === draft.promptGuide.provider
+    ? providerModels.guide.models
+    : guidePreset.models;
   const overwatchCredentialReady = credentialStatus.ids.includes(draft.cognitive1.overwatch.credentialId);
   const shortcutConflictList = shortcutConflicts(draft.shortcuts);
   const setAgentModel = (agent: AppSettings['defaultAgent'], value: string): void => {
@@ -119,15 +127,16 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
       },
     }));
   };
-  const updateLearningProvider = (provider: AppSettings['learningTutor']['provider']): void => {
+  const updateLearningProvider = (provider: AppSettings['learningTutor']['provider'], scope: 'learning' | 'guide' = 'learning'): void => {
     const preset = directProviderPreset(provider);
-    if (isLocalProvider(provider)) void refreshProviderModels('learning', { provider, baseUrl: preset.defaultBaseUrl, credentialId: preset.credentialId });
-    setProviderModels((current) => ({ ...current, learning: null }));
-    setModelFeedback((current) => ({ ...current, learning: null }));
+    const key = SCOPE_KEY[scope];
+    if (isLocalProvider(provider)) void refreshProviderModels(scope, { provider, baseUrl: preset.defaultBaseUrl, credentialId: preset.credentialId });
+    setProviderModels((current) => ({ ...current, [scope]: null }));
+    setModelFeedback((current) => ({ ...current, [scope]: null }));
     setDraft((current) => ({
       ...current,
-      learningTutor: {
-        ...current.learningTutor,
+      [key]: {
+        ...current[key],
         provider,
         baseUrl: preset.defaultBaseUrl,
         model: preset.defaultModel,
@@ -167,7 +176,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
     scope: ProviderScope,
     override?: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string },
   ): Promise<void> {
-    const configuration = override ?? (scope === 'direct' ? draft.directApi : draft.learningTutor);
+    const configuration = override ?? draft[SCOPE_KEY[scope]];
     setRefreshingModels(scope);
     setModelFeedback((current) => ({ ...current, [scope]: { kind: 'pending', message: 'Refreshing provider models...' } }));
     try {
@@ -185,7 +194,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
       }));
       // With nothing chosen yet, start from a coding model the server already has (never an embedding model).
       if (catalog.source === 'live' && isLocalProvider(configuration.provider)) {
-        const key = scope === 'direct' ? 'directApi' : 'learningTutor';
+        const key = SCOPE_KEY[scope];
         setDraft((current) => (current[key].provider === configuration.provider && !current[key].model.trim()
           ? { ...current, [key]: { ...current[key], model: pickLocalModel(catalog.models) } }
           : current));
@@ -198,15 +207,14 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
   }
 
   async function saveProviderKey(scope: ProviderScope): Promise<void> {
-    const configuration = scope === 'direct' ? draft.directApi : draft.learningTutor;
-    const value = scope === 'direct' ? directCredentialValue : learningCredentialValue;
+    const configuration = draft[SCOPE_KEY[scope]];
+    const value = { direct: directCredentialValue, learning: learningCredentialValue, guide: guideCredentialValue }[scope];
     if (!value.trim()) return;
     setCredentialFeedback((current) => ({ ...current, [scope]: { kind: 'pending', message: 'Saving key in the OS vault...' } }));
-    const settingsSaved = await onSave(scope === 'direct' ? { directApi: configuration } : { learningTutor: configuration });
+    const settingsSaved = await onSave({ [SCOPE_KEY[scope]]: configuration });
     const keySaved = await onSaveCredential(configuration.credentialId, value);
     if (settingsSaved && keySaved) {
-      if (scope === 'direct') setDirectCredentialValue('');
-      else setLearningCredentialValue('');
+      ({ direct: setDirectCredentialValue, learning: setLearningCredentialValue, guide: setGuideCredentialValue })[scope]('');
       setCredentialFeedback((current) => ({
         ...current,
         [scope]: { kind: 'success', message: `${directProviderPreset(configuration.provider).displayName} key saved in the OS vault and this connection is ready to use.` },
@@ -225,7 +233,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
   }
 
   async function clearProviderCredential(scope: ProviderScope): Promise<void> {
-    const configuration = scope === 'direct' ? draft.directApi : draft.learningTutor;
+    const configuration = draft[SCOPE_KEY[scope]];
     const cleared = await onClearCredential(configuration.credentialId);
     setCredentialFeedback((current) => ({
       ...current,
@@ -509,6 +517,39 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
           onRefreshModels={() => void refreshProviderModels('learning')}
           onSaveKey={() => void saveProviderKey('learning')}
           onClearKey={() => void clearProviderCredential('learning')}
+          vaultAvailable={credentialStatus.available}
+        />
+
+        <ProviderConnectionSection
+          title="Prompt Guide"
+          icon={<Wand2 size={17} />}
+          detail="Turns a rough idea into a clear goal, the questions still open, and one prompt per teammate, from the Auto team card on Workflows. A small, cheap model is enough. It reads the project but never changes it."
+          toggleLabel="Enable the Prompt Guide"
+          toggleHint={isLocalProvider(draft.promptGuide.provider) ? 'Uses the LM Studio server on this computer; no key needed' : 'Uses its own provider and OS-vault credential'}
+          enabled={draft.promptGuide.enabled}
+          provider={draft.promptGuide.provider}
+          model={draft.promptGuide.model}
+          baseUrl={draft.promptGuide.baseUrl}
+          credentialId={draft.promptGuide.credentialId}
+          models={guideModels}
+          catalog={providerModels.guide}
+          modelFeedback={modelFeedback.guide}
+          refreshingModels={refreshingModels === 'guide'}
+          credentialValue={guideCredentialValue}
+          credentialStored={credentialStatus.ids.includes(draft.promptGuide.credentialId)}
+          credentialFeedback={credentialFeedback.guide}
+          busy={busy}
+          modelListId="prompt-guide-models"
+          saveSlot={cardSave('promptGuide', 'Save Prompt Guide settings', ['promptGuide'])}
+          onEnabledChange={(enabled) => setDraft({ ...draft, promptGuide: { ...draft.promptGuide, enabled } })}
+          onProviderChange={(provider) => updateLearningProvider(provider, 'guide')}
+          onModelChange={(model) => setDraft({ ...draft, promptGuide: { ...draft.promptGuide, model } })}
+          onBaseUrlChange={(baseUrl) => setDraft({ ...draft, promptGuide: { ...draft.promptGuide, baseUrl } })}
+          onCredentialIdChange={(id) => setDraft({ ...draft, promptGuide: { ...draft.promptGuide, credentialId: id } })}
+          onCredentialValueChange={setGuideCredentialValue}
+          onRefreshModels={() => void refreshProviderModels('guide')}
+          onSaveKey={() => void saveProviderKey('guide')}
+          onClearKey={() => void clearProviderCredential('guide')}
           vaultAvailable={credentialStatus.available}
         />
 

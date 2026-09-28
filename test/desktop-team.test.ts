@@ -288,6 +288,18 @@ describe('guardrails', () => {
   it('reviews documentation work too, because a docs writer edits files', () => {
     expect(applyGuardrails('Update the readme', [part('docs', 'docs')]).parts.map((item) => item.role)).toEqual(['docs', 'codeReviewer']);
   });
+
+  it('writes its own default prompt for every part it adds, so no agent runs on an empty instruction', () => {
+    const cfg = { assignee: 'auto' as const, route: 'auto' as const, instructions: '', autoAdd: 'always' as const };
+    const guarded = applyGuardrails('Add a login page', [part('ui', 'frontend')], { roles: team({ roles: { tests: cfg, docs: cfg } }).roles });
+    const added = guarded.parts.filter((item) => item.id !== 'ui');
+
+    expect(added.map((item) => item.role)).toEqual(['tests', 'docs', 'securityReviewer', 'codeReviewer']);
+    for (const item of added) expect(item.prompt.trim().length).toBeGreaterThan(0);
+    // A security review names what made the job sensitive; a code review says what to look for.
+    expect(added.find((item) => item.role === 'securityReviewer')?.prompt).toContain('This job touches:');
+    expect(added.find((item) => item.role === 'codeReviewer')?.prompt).toContain('correctness');
+  });
 });
 
 describe('step prompts and hand-offs', () => {
@@ -303,6 +315,19 @@ describe('step prompts and hand-offs', () => {
 
   it('asks an editing role to list what it changed', () => {
     expect(buildStepPrompt('Goal', part('ui', 'frontend'), undefined)).toContain('list the files you changed');
+  });
+
+  it('gives every built-in role its default prompt, even when the part brings none of its own', () => {
+    const roles: TeamPart['role'][] = ['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'docs'];
+    for (const role of roles) {
+      const info = resolveRole(undefined, role);
+      const prompt = buildStepPrompt('Ship the login page', part(role, role, { prompt: '' }), undefined);
+
+      expect(prompt).toContain(`You are the ${info.label} on a team of coding agents`);
+      expect(prompt).toContain('Overall goal: Ship the login page');
+      expect(prompt).toContain(`Your part - ${role} title:`);
+      expect(prompt).toContain(info.access === 'read' ? 'do not create, edit or delete any files' : 'list the files you changed');
+    }
   });
 
   it('reads verdicts, and treats a missing one as a block', () => {
@@ -547,6 +572,33 @@ describe('team planner service', () => {
     expect(draft.assignments).toHaveLength(4);
     expect(draft.warnings.join(' ')).toContain('security review');
     // Planning starts nothing.
+  });
+
+  it('plans from the Prompt Guide prompts without calling the orchestrator', async () => {
+    const { planner: service, requests } = planner([]);
+    const draft = await service.planFromParts({
+      projectId: 'p1',
+      goal: 'Add a login page',
+      parts: [
+        { id: 'ui', title: 'Login form', role: 'frontend', prompt: 'Build the form', dependsOn: [], paths: [] },
+        { id: 'tests', title: 'Tests', role: 'tests', prompt: 'Test the form', dependsOn: ['ui'], paths: [] },
+      ],
+    });
+    expect(requests).toHaveLength(0);
+    expect(draft.source).toBe('prompt-guide');
+    // The usual safeguards still apply: a code review is added and every part has an agent and a level.
+    expect(draft.parts.map((item) => item.role)).toEqual(['frontend', 'tests', 'securityReviewer', 'codeReviewer']);
+    expect(draft.assignments).toHaveLength(4);
+    expect(draft.parts.every((item) => item.effort)).toBe(true);
+  });
+
+  it('refuses guide prompts that do not hold together', async () => {
+    const { planner: service } = planner([]);
+    await expect(service.planFromParts({
+      projectId: 'p1',
+      goal: 'Loop',
+      parts: [{ id: 'a', title: 'A', role: 'backend', prompt: 'x', dependsOn: ['a'], paths: [] }],
+    })).rejects.toThrow(/cannot become a plan/);
   });
 
   it('asks the orchestrator once more when its first reply is unusable', async () => {

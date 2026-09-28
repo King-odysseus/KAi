@@ -14,6 +14,7 @@ import {
 } from './primitives';
 import { notificationSettingsSchema } from './notifications';
 import { autoModelSettingsSchema, createDefaultAutoModel } from './model-tiers';
+import { createDefaultPromptGuide, promptGuideSettingsSchema } from './prompt-guide';
 import { agentTeamSchema, createDefaultAgentTeam } from './team';
 import { updateSettingsSchema } from './updates';
 import { usageBudgetSchema } from './usage';
@@ -303,6 +304,8 @@ export const appSettingsV1Schema = z
     installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
     directApi: directApiSettingsSchema,
     learningTutor: learningTutorSettingsSchema,
+    // Turns a rough idea into a clear goal and one prompt per teammate, on its own provider connection.
+    promptGuide: promptGuideSettingsSchema.default(createDefaultPromptGuide),
     editor: editorSettingsSchema.default({}),
     mcpServers: z.array(mcpServerSettingsSchema),
     cognitive1: cognitive1ServiceSettingsSchema,

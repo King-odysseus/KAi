@@ -93,6 +93,7 @@ import { listProviderModels } from './provider-models';
 import { autoCliModel } from './auto-model';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
+import type { DesktopPromptGuide } from './prompt-guide';
 import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
@@ -160,6 +161,7 @@ export interface IpcContext {
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
   teamPlanner: DesktopTeamPlanner;
+  promptGuide: DesktopPromptGuide;
   teamRecord: TeamRecordStore;
   runControl: DesktopRunControl;
   notifications: NotificationCenter;
@@ -287,6 +289,9 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'workflows:save-template', async (template) => context.workflowTemplates.save(template));
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
   handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, ownerWindowId(context, request)));
+  handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
+  handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
+  handle(context, 'prompt-guide:refine', async (input) => context.promptGuide.refine(input));
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, ownerWindowId(context, request)));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });

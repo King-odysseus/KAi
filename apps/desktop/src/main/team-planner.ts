@@ -19,6 +19,7 @@ import {
   type TeamRecordEntry,
   type TeamRecordAdvice,
   type TeamRecordQuery,
+  type TeamPlanFromPartsInput,
 } from '@kai/contracts';
 import { assignTeam, completeTeam, partLevel, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
 import {
@@ -98,7 +99,38 @@ export class DesktopTeamPlanner {
       assignments: assigned.assignments,
       orchestrator: { assignee: orchestrator.assignee, route: orchestrator.route, reason: orchestrator.reason },
       teamScope: scope,
+      source: 'orchestrator',
       warnings: [...orchestrator.warnings, ...guarded.warnings, ...assigned.warnings],
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * A plan from parts the user already has (the Prompt Guide wrote them), so no orchestrator call is made. The same
+   * safeguards apply: reviews are added, parts are ordered and levelled, and every part gets a ready agent.
+   */
+  async planFromParts(input: TeamPlanFromPartsInput): Promise<TeamPlanDraft> {
+    const settings = await this.ports.settings();
+    const { team, scope } = await this.teamFor(input.projectId, settings);
+    const problem = checkStructure(input.parts);
+    if (problem) throw new Error(`These prompts cannot become a plan: ${problem}.`);
+    const env = await this.environment(input.projectId);
+    const guarded = applyGuardrails(input.goal, input.parts, team);
+    const ordered = (orderParts(guarded.parts) ?? guarded.parts)
+      .map((part) => ({ ...part, effort: partLevel(part, resolveRole(team, part.role).access) }));
+    const assigned = assignTeam(ordered, team, env);
+    return {
+      id: `team_${crypto.randomUUID()}`,
+      projectId: input.projectId,
+      goal: input.goal,
+      summary: 'Planned from the Prompt Guide.',
+      parts: ordered,
+      assignments: assigned.assignments,
+      // No orchestrator ran; the field still names who would have, for the plan card's label.
+      orchestrator: { assignee: 'api', route: 'direct', reason: 'The Prompt Guide wrote these prompts, so the orchestrator was not needed.' },
+      teamScope: scope,
+      source: 'prompt-guide',
+      warnings: [...guarded.warnings, ...assigned.warnings],
       createdAt: new Date().toISOString(),
     };
   }

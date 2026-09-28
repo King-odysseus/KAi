@@ -12,6 +12,7 @@ import {
   learningTutorResponseSchema,
   teachingDraftSchema,
   type AppSettings,
+  type ProviderId,
   type LearningExplainBackGrade,
   type LearningExplainBackHelp,
   type LearningExplainBackHelpKind,
@@ -84,6 +85,15 @@ const LEARNING_TUTOR_FORMAT_GUIDE = [
   'suggestion: null or { code: string, language: string, replaceSelection: boolean, explanation: string, placement?: { filePath: string, anchor: string, position: one of before|after|replace } }.',
   'Use empty arrays where an optional collection has no entries, but steps must contain at least one entry. Do not rename, wrap, or omit keys.',
 ].join('\n');
+
+/** Enough of a provider card in Settings to make a request with it. */
+export interface ProviderConnection {
+  enabled: boolean;
+  provider: ProviderId;
+  model: string;
+  baseUrl: string;
+  credentialId: string;
+}
 
 interface LearningProviderConfiguration {
   baseUrl: string;
@@ -403,28 +413,51 @@ export class DesktopLearningTutor {
 
   private async providerConfiguration(): Promise<LearningProviderConfiguration> {
     const settings = await this.settings.load();
-    const learningTutor = settings.learningTutor;
-    if (!learningTutor.enabled) throw new Error('Enable the Learning Tutor API in Settings before using Learning Mode.');
-    const preset = directProviderPreset(learningTutor.provider);
-    if (!learningTutor.model.trim()) throw new Error('Set a Learning Tutor model in Settings before using Learning Mode.');
-    const local = isLocalProvider(learningTutor.provider);
-    if (!local && !this.credentials.isAvailable()) throw new Error('OS credential encryption is unavailable; Learning Mode will not use a plaintext API key.');
+    return this.connectionConfiguration(settings.learningTutor, { feature: 'Learning Mode', card: 'Learning Tutor' });
+  }
+
+  private async connectionConfiguration(connection: ProviderConnection, names: { feature: string; card: string }): Promise<LearningProviderConfiguration> {
+    if (!connection.enabled) throw new Error(`Enable the ${names.card} API in Settings before using ${names.feature}.`);
+    const preset = directProviderPreset(connection.provider);
+    if (!connection.model.trim()) throw new Error(`Set a ${names.card} model in Settings before using ${names.feature}.`);
+    const local = isLocalProvider(connection.provider);
+    if (!local && !this.credentials.isAvailable()) throw new Error(`OS credential encryption is unavailable; ${names.feature} will not use a plaintext API key.`);
     // A local server (LM Studio) needs no key; use one only if the user stored it.
     let storedKey: string | undefined;
     try {
-      storedKey = await this.credentials.get(learningTutor.credentialId);
+      storedKey = await this.credentials.get(connection.credentialId);
     } catch (error) {
       if (!local) throw error;
     }
-    if (!storedKey && !local) throw new Error(`Save the ${learningTutor.credentialId} credential in Learning Tutor settings before using Learning Mode.`);
+    if (!storedKey && !local) throw new Error(`Save the ${connection.credentialId} credential in ${names.card} settings before using ${names.feature}.`);
     const apiKey = storedKey ?? LOCAL_PROVIDER_PLACEHOLDER_KEY;
     return {
-      baseUrl: learningTutor.baseUrl,
-      model: learningTutor.model,
+      baseUrl: connection.baseUrl,
+      model: connection.model,
       apiKey,
       protocol: preset.protocol,
-      openRouter: learningTutor.provider === 'openrouter',
+      openRouter: connection.provider === 'openrouter',
     };
+  }
+
+  /**
+   * One structured JSON request on a provider connection other than the tutor's own (the Prompt Guide uses it),
+   * with the same protocols, timeout and single repair attempt.
+   */
+  async structuredRequest<T>(
+    connection: ProviderConnection,
+    names: { feature: string; card: string },
+    prompt: { system: string; user: string },
+    schemaName: string,
+    schema: object,
+    parse: (content: string) => T,
+  ): Promise<T> {
+    const provider = await this.connectionConfiguration(connection, names);
+    const repair = (invalid: string, error: unknown): { system: string; user: string } => ({
+      system: prompt.system,
+      user: `${prompt.user}\n\nYour previous reply could not be used (${messageOf(error)}). Reply again with only the JSON object.\nPrevious reply:\n${invalid.slice(0, 4_000)}`,
+    });
+    return (await this.requestAndParse(provider, prompt, schemaName, schema, parse, repair)).value;
   }
 
   private async requestAndParse<T>(
@@ -732,7 +765,7 @@ function parseStructuredResponse<T>(schema: { safeParse(value: unknown): { succe
   throw new Error(`The provider ${label} JSON did not match the required format: ${issues || 'unknown schema error'}.`);
 }
 
-function parseJsonResponse(content: string, label: string): unknown {
+export function parseJsonResponse(content: string, label: string): unknown {
   const trimmed = content.trim();
   if (!trimmed) throw new Error(`The provider returned an empty ${label} response.`);
   if (trimmed.length > MAX_TUTOR_RESPONSE_CHARS) throw new Error(`The provider ${label} response was too large.`);
@@ -781,7 +814,7 @@ async function loadProjectTeachingProfile(projectRoot: string): Promise<string |
   ].filter(Boolean).join('\n\n');
 }
 
-async function loadProjectContext(projectRoot: string, activeFilePath?: string, maxCharacters = MAX_PROJECT_CONTEXT_CHARS): Promise<string | null> {
+export async function loadProjectContext(projectRoot: string, activeFilePath?: string, maxCharacters = MAX_PROJECT_CONTEXT_CHARS): Promise<string | null> {
   const files = await listProjectFiles(projectRoot);
   if (files.length === 0) return null;
 
