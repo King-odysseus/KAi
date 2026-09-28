@@ -6,6 +6,7 @@ import { confirmDialog } from './AppDialog';
 import { GitBadge } from './GitBadge';
 import { changeKindOf } from './project-files-tree';
 
+import { Select } from './ui/Select';
 const POLL_MS = 10_000;
 
 const STATE_WORDS: Record<string, string> = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', '?': 'new', U: 'conflict', '.': '' };
@@ -110,13 +111,13 @@ export function GitView({ activeProject }: { activeProject: ProjectRecord | null
       <div className="settings-grid">
         <section className="settings-section">
           <div className="section-title"><GitBranch size={16} /><span>Branches</span></div>
-          <div className="field-grid">
-            <label className="field"><span>Switch to</span><select value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)}>{overview.branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}{branch.current ? ' (current)' : ''}</option>)}</select></label>
-            <button type="button" className="secondary-button align-end" disabled={busy !== null || selectedBranch === overview.branch || !selectedBranch} onClick={() => void act('Switch branch', async () => unwrap(await window.kaiDesktop.gitCheckout(activeProject.id, selectedBranch)).output, `Switched to ${selectedBranch}.`)}>Switch</button>
+          <div className="field-with-action">
+            <label className="field"><span>Switch to</span><Select value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)}>{overview.branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}{branch.current ? ' (current)' : ''}</option>)}</Select></label>
+            <button type="button" className="secondary-button" disabled={busy !== null || selectedBranch === overview.branch || !selectedBranch} onClick={() => void act('Switch branch', async () => unwrap(await window.kaiDesktop.gitCheckout(activeProject.id, selectedBranch)).output, `Switched to ${selectedBranch}.`)}>Switch</button>
           </div>
-          <div className="field-grid">
+          <div className="field-with-action">
             <label className="field"><span>New branch</span><input value={newBranch} placeholder="feature/my-change" onChange={(event) => setNewBranch(event.target.value)} /></label>
-            <button type="button" className="secondary-button align-end" disabled={busy !== null || !newBranch.trim()} onClick={() => void act('Create branch', async () => {
+            <button type="button" className="secondary-button" disabled={busy !== null || !newBranch.trim()} onClick={() => void act('Create branch', async () => {
               unwrap(await window.kaiDesktop.gitCreateBranch(activeProject.id, newBranch.trim(), true));
               setSelectedBranch(newBranch.trim());
               setNewBranch('');

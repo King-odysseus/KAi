@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from '
 import type { ProjectRecord, TerminalSession, TerminalShell } from '@kai/contracts';
 import { unwrap } from '../types';
 
+import { Select } from './ui/Select';
 /** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
 export function TerminalView({ activeProject, open, height, onClose, onResizeStart }: {
   activeProject: ProjectRecord | null;
@@ -189,11 +190,11 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
       <div className="terminal-xterm" ref={hostRef} />
       <div className="terminal-input terminal-launch-row">
         {typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows') && (
-          <select aria-label="Shell" value={shell} onChange={(event) => setShell(event.target.value as TerminalShell)}>
+          <Select aria-label="Shell" value={shell} onChange={(event) => setShell(event.target.value as TerminalShell)}>
             <option value="default">Command Prompt</option>
             <option value="powershell">PowerShell</option>
             <option value="gitbash">Git Bash</option>
-          </select>
+          </Select>
         )}
         <span>{activeProject ? 'Type directly in the terminal. Prompts, interactive tools, and full-screen programs are supported.' : 'Open a project to start a shell.'}</span>
         <button type="button" className="primary-button" disabled={!activeProject || status === 'starting' || status === 'running'} onClick={() => void startSession(shell)}><Play size={14} /><span>Start</span></button>

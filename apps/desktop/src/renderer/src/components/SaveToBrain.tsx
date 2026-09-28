@@ -2,6 +2,7 @@ import { BookmarkPlus, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
 
+import { Select } from './ui/Select';
 type EntryType = 'bugs' | 'decisions' | 'gotchas' | 'patterns';
 
 const TYPES: Array<{ id: EntryType; label: string; hint: string }> = [
@@ -70,7 +71,7 @@ export function SaveToBrainDialog({ text, project, onClose, onSaved }: { text: s
         </div>
         <div className="brain-save-form">
           <div className="field-grid">
-            <label className="field"><span>Kind</span><select value={type} onChange={(event) => setType(event.target.value as EntryType)}>{TYPES.map((item) => <option key={item.id} value={item.id}>{item.label} — {item.hint}</option>)}</select></label>
+            <label className="field"><span>Kind</span><Select value={type} onChange={(event) => setType(event.target.value as EntryType)}>{TYPES.map((item) => <option key={item.id} value={item.id}>{item.label} — {item.hint}</option>)}</Select></label>
             <label className="field"><span>Project</span><input value={project} readOnly /></label>
           </div>
           <label className="field"><span>Title</span><input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>

@@ -4,6 +4,7 @@ import { DIRECT_PROVIDER_ORDER, directProviderPreset } from '@kai/contracts';
 import type { AppSettings, SettingsUpdate, UsageBudget, UsageLimitStatus, UsageSummary } from '@kai/contracts';
 import { unwrap } from '../types';
 
+import { Select } from './ui/Select';
 const REFRESH_MS = 15_000;
 
 export function formatUsd(value: number): string {
@@ -105,7 +106,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
           <div className="section-title"><Wallet size={17} /><span>Budget limits</span></div>
           <p className="settings-note">Set a limit to 0 to turn it off. Warn mode shows a banner at 80% and 100%. Block mode also stops new API requests at 100%, before anything is sent.</p>
           <div className="field-grid">
-            <label className="field"><span>Mode</span><select value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as UsageBudget['mode'] })}><option value="warn">warn</option><option value="block">block</option></select></label>
+            <label className="field"><span>Mode</span><Select value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as UsageBudget['mode'] })}><option value="warn">warn</option><option value="block">block</option></Select></label>
             <UsdField label="Per conversation (USD)" value={draft.perConversationUsd} onChange={(value) => setLimit('perConversationUsd', value)} />
             <UsdField label="Per day (USD)" value={draft.dailyUsd} onChange={(value) => setLimit('dailyUsd', value)} />
             <UsdField label="Per month (USD)" value={draft.monthlyUsd} onChange={(value) => setLimit('monthlyUsd', value)} />

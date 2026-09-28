@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
 import { assertControlsDoNotWrap, assertTogglesCompact } from './layout-checks.mjs';
-import { waitForPage } from './smoke-helpers.mjs';
+import { chooseOption, selectedValue, waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke-team');
@@ -94,21 +94,21 @@ async function verifySettingsCard(page) {
   const roles = await section.locator('fieldset.team-role').count();
   if (roles !== 7) throw new Error(`Expected 7 built-in roles in the Agent team card, saw ${roles}.`);
   await section.getByLabel('Orchestrator agent').waitFor();
-  if (await section.getByLabel('Orchestrator agent').inputValue() !== 'codex') throw new Error('The saved orchestrator choice was not shown.');
-  if (await section.getByLabel('Security reviewer agent').inputValue() !== 'auto') throw new Error('Reviewer roles should default to Auto.');
+  if (await selectedValue(section.getByLabel('Orchestrator agent')) !== 'codex') throw new Error('The saved orchestrator choice was not shown.');
+  if (await selectedValue(section.getByLabel('Security reviewer agent')) !== 'auto') throw new Error('Reviewer roles should default to Auto.');
   await assertControlsDoNotWrap(page, 'settings-agent-team');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-agent-team.png') });
 
   // A change marks the card as unsaved, saves on its own, and survives a reload of the settings.
-  await section.getByLabel('Team preset').selectOption('budget');
-  await section.getByLabel('Docs writer agent').selectOption('kimi');
+  await chooseOption(section.getByLabel('Team preset'), 'budget');
+  await chooseOption(section.getByLabel('Docs writer agent'), 'kimi');
   const save = section.getByRole('button', { name: 'Save agent team' });
   await save.click();
   await page.getByText('All changes saved').waitFor({ timeout: 10_000 });
   const saved = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data.agentTeam);
   if (saved.preset !== 'budget' || saved.roles.docs.assignee !== 'kimi') throw new Error(`The team settings were not saved: ${JSON.stringify(saved)}`);
-  await section.getByLabel('Team preset').selectOption('balanced');
-  await section.getByLabel('Docs writer agent').selectOption('auto');
+  await chooseOption(section.getByLabel('Team preset'), 'balanced');
+  await chooseOption(section.getByLabel('Docs writer agent'), 'auto');
   await save.click();
   await page.getByText('All changes saved').waitFor({ timeout: 10_000 });
 }
@@ -134,7 +134,7 @@ async function verifyTrackRecord(page) {
   });
   history.entries.push(...['codex', 'qwen'].flatMap((assignee) => Array.from({ length: 5 }, (_, index) => seed(assignee, index))));
   await writeFile(file, JSON.stringify(history), 'utf8');
-  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('codex');
+  await chooseOption(section.getByLabel('Backend coder agent', { exact: true }), 'codex');
   const backend = section.locator('fieldset.team-role').filter({ has: page.getByLabel('Backend coder agent', { exact: true }) });
   const use = backend.getByRole('button', { name: 'Use Qwen Code', exact: true });
   await use.waitFor({ timeout: 15_000 });
@@ -142,8 +142,8 @@ async function verifyTrackRecord(page) {
   await assertTogglesCompact(page, 'settings-track-record-suggestion');
   await backend.getByRole('button', { name: 'Dismiss', exact: true }).click();
   await use.waitFor({ state: 'hidden' });
-  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('auto');
-  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('codex');
+  await chooseOption(section.getByLabel('Backend coder agent', { exact: true }), 'auto');
+  await chooseOption(section.getByLabel('Backend coder agent', { exact: true }), 'codex');
   await waitForPage(page, async () => {
     const records = (await window.kaiDesktop.teamRecord({ team: (await window.kaiDesktop.getSettings()).data.agentTeam, projectId: 'project-team-smoke' })).data;
     return records.some((record) => record.role === 'backend' && record.records.some((item) => item.jobs >= 5));
@@ -151,12 +151,12 @@ async function verifyTrackRecord(page) {
   if (await use.isVisible()) throw new Error('Dismissed advice returned without a change in the numbers.');
   history.entries.push(seed('qwen', 5));
   await writeFile(file, JSON.stringify(history), 'utf8');
-  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('claude');
-  await section.getByLabel('Backend coder agent', { exact: true }).selectOption('codex');
+  await chooseOption(section.getByLabel('Backend coder agent', { exact: true }), 'claude');
+  await chooseOption(section.getByLabel('Backend coder agent', { exact: true }), 'codex');
   await use.waitFor({ timeout: 15_000 });
   const savedBefore = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data.agentTeam);
   await use.click();
-  if (await section.getByLabel('Backend coder agent', { exact: true }).inputValue() !== 'qwen') throw new Error('Use did not update the draft role.');
+  if (await selectedValue(section.getByLabel('Backend coder agent', { exact: true })) !== 'qwen') throw new Error('Use did not update the draft role.');
   const savedAfter = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data.agentTeam);
   if (JSON.stringify(savedAfter) !== JSON.stringify(savedBefore)) throw new Error('Use saved the team without the user saving the card.');
 
@@ -175,7 +175,7 @@ async function verifyTrackRecord(page) {
 async function verifyLmStudioProvider(page) {
   const direct = page.locator('section.settings-section').filter({ has: page.getByText('Direct API', { exact: true }) });
   await direct.scrollIntoViewIfNeeded();
-  await direct.locator('label.field:has(span:text-is("Provider")) > select').selectOption('lmstudio');
+  await chooseOption(direct.locator('label.field:has(span:text-is("Provider")) > .kai-select'), 'lmstudio');
   await direct.getByText(/Runs on your computer, so there is no key/).waitFor();
   await direct.getByText('API key (optional)').waitFor();
   await direct.getByText('Uses the LM Studio server on this computer; no key needed').waitFor();
@@ -233,7 +233,7 @@ async function verifyPlan(page) {
   const expected = ['Login form', 'Auth endpoint', 'Security review', 'Code review'];
   if (JSON.stringify(titles) !== JSON.stringify(expected)) throw new Error(`Unexpected plan parts: ${JSON.stringify(titles)}`);
   // Balanced + Auto with everything ready: Claude for the UI, Codex for the API, reviewers who did not write the code.
-  const agentOf = (title) => page.getByLabel(`${title} agent`).inputValue();
+  const agentOf = (title) => selectedValue(page.getByLabel(`${title} agent`));
   if (await agentOf('Login form') !== 'claude') throw new Error('Frontend should go to Claude.');
   if (await agentOf('Auth endpoint') !== 'codex') throw new Error('Backend should go to Codex.');
   for (const reviewer of ['Security review', 'Code review']) {
@@ -256,7 +256,7 @@ async function verifyPlan(page) {
 async function verifyEditingAPart(page) {
   // The user can hand a part to a different agent before approving.
   await page.getByLabel('Check command').fill('node check.js');
-  await page.getByLabel('Code review agent').selectOption('qwen');
+  await chooseOption(page.getByLabel('Code review agent'), 'qwen');
   const reason = await page.locator('.team-part', { hasText: 'Code review' }).locator('.team-reason').innerText();
   if (!reason.includes('You chose Qwen Code')) throw new Error(`The override was not reflected: ${reason}`);
 }
@@ -354,7 +354,7 @@ async function verifyCustomRoleAndProjectTeam(page) {
   await card.getByRole('button', { name: 'Create a team for Team Smoke Project' }).click();
   await card.getByRole('button', { name: 'Add a role' }).click();
   await card.getByLabel('custom-new-role name').fill('Database specialist');
-  await card.getByLabel('Database specialist agent').selectOption('codex');
+  await chooseOption(card.getByLabel('Database specialist agent'), 'codex');
   await assertControlsDoNotWrap(page, 'project team with a custom role');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-project-team.png') });
   await card.getByRole('button', { name: 'Save the team for Team Smoke Project' }).click();
@@ -374,7 +374,7 @@ async function verifyCustomRoleAndProjectTeam(page) {
   await page.locator('.team-plan').waitFor({ timeout: 60_000 });
   const first = page.locator('.team-part').first();
   await first.getByText(/Database specialist/).first().waitFor();
-  if (await page.getByLabel('Orders table agent').inputValue() !== 'codex') throw new Error('The custom role should run on the agent it was given.');
+  if (await selectedValue(page.getByLabel('Orders table agent')) !== 'codex') throw new Error('The custom role should run on the agent it was given.');
   await page.getByText(/this project's own team/).waitFor();
   const orchestratorCall = (await readCalls()).filter((call) => /orchestrator of a team/.test(call.prompt)).at(-1);
   if (!orchestratorCall.prompt.includes('"custom-new-role": Database specialist (edits files)')) throw new Error('The orchestrator was not told about the custom role.');

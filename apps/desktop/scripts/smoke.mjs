@@ -10,7 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { assertControlsDoNotWrap } from './layout-checks.mjs';
-import { waitForPage } from './smoke-helpers.mjs';
+import { chooseOption, optionLabels, selectedValue, waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke');
@@ -169,16 +169,16 @@ try {
   await overwatchHeading.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(outputDirectory, 'settings-overwatch-1440x920.png') });
   const directApiSection = page.locator('section.settings-section').filter({ has: page.getByText('Direct API', { exact: true }) });
-  const providerSelect = directApiSection.locator('label.field:has(span:text-is("Provider")) > select');
-  const providerOptions = await providerSelect.locator('option').allTextContents();
+  const providerSelect = directApiSection.locator('label.field:has(span:text-is("Provider")) > .kai-select');
+  const providerOptions = await optionLabels(providerSelect);
   if (!providerOptions.includes('OpenRouter') || !providerOptions.includes('DeepSeek API')) {
     throw new Error(`Direct API provider presets are incomplete: ${providerOptions.join(', ')}`);
   }
   const learningApiSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
   await learningApiSection.getByText('Dedicated provider connection for Learn, Guided, Pair, and Copilot.', { exact: false }).waitFor();
   await learningApiSection.getByRole('button', { name: 'Refresh models' }).waitFor();
-  const learningProviderSelect = learningApiSection.locator('label.field:has(span:text-is("Provider")) > select');
-  const learningProviderOptions = await learningProviderSelect.locator('option').allTextContents();
+  const learningProviderSelect = learningApiSection.locator('label.field:has(span:text-is("Provider")) > .kai-select');
+  const learningProviderOptions = await optionLabels(learningProviderSelect);
   if (!learningProviderOptions.includes('OpenRouter') || !learningProviderOptions.includes('DeepSeek API')) {
     throw new Error(`Learning Tutor provider presets are incomplete: ${learningProviderOptions.join(', ')}`);
   }
@@ -560,22 +560,22 @@ async function openSelectMenu(page, label) {
 }
 
 async function verifySelectContrast(select, label) {
-  const colors = await select.evaluate((element) => {
-    const control = getComputedStyle(element);
-    const option = Array.from(element.options).find((item) => !item.disabled) ?? element.options[0];
-    const optionStyle = option ? getComputedStyle(option) : control;
+  // KAI's dropdown draws its list in a layer of its own, so read the colours there while it is open.
+  await select.click();
+  const list = select.page().locator('.kai-select-list');
+  await list.locator('[role="option"]').first().waitFor();
+  const colors = await list.evaluate((element) => {
+    const option = element.querySelector('[role="option"]:not(.selected):not(:disabled)') ?? element.querySelector('[role="option"]');
     return {
-      background: control.backgroundColor,
-      color: control.color,
-      optionBackground: optionStyle.backgroundColor,
-      optionColor: optionStyle.color,
+      background: getComputedStyle(element).backgroundColor,
+      optionColor: option ? getComputedStyle(option).color : '',
     };
   });
-  const opaqueBackground = colors.optionBackground !== 'transparent'
-    && colors.optionBackground !== 'rgba(0, 0, 0, 0)';
-  if (!opaqueBackground || colors.optionColor === colors.optionBackground) {
+  await select.page().keyboard.press('Escape');
+  const opaqueBackground = colors.background !== 'transparent' && colors.background !== 'rgba(0, 0, 0, 0)';
+  if (!opaqueBackground || contrastRatio(colors.optionColor, colors.background) < 4.5) {
     throw new Error(
-      `${label} select has unsafe contrast: ${JSON.stringify(colors)}.`,
+      `${label} dropdown has unsafe contrast: ${JSON.stringify(colors)}.`,
     );
   }
 }
@@ -1107,8 +1107,8 @@ async function verifyBrainFlow(application, page, cognitive1Port) {
   await page.getByRole('heading', { name: 'Brain overview' }).waitFor();
   await page.getByRole('heading', { name: 'Brain Git sync' }).waitFor();
   await page.getByPlaceholder('Title, field, agent, or project').fill(marker);
-  await page.getByLabel('Search mode').selectOption('semantic');
-  if (await page.getByLabel('Search mode').inputValue() !== 'semantic') {
+  await chooseOption(page.getByLabel('Search mode'), 'semantic');
+  if (await selectedValue(page.getByLabel('Search mode')) !== 'semantic') {
     throw new Error('The brain search mode did not switch to semantic retrieval.');
   }
   await page.getByRole('button', { name: 'Search', exact: true }).click();

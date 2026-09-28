@@ -41,6 +41,7 @@ import {
   type ProxySettings,
 } from './proxy-dashboard-data';
 
+import { Select } from './ui/Select';
 type ProxyTab = 'overview' | 'agents' | 'providers' | 'traffic' | 'advanced';
 type StatusFilter = '' | '2xx' | '4xx' | '5xx';
 type CostPeriod = 'session' | 'daily' | 'weekly' | 'monthly';
@@ -749,19 +750,19 @@ export function ProxyPanel({
             </div>
             <form className="filter-row" onSubmit={(event) => void searchHistory(event)}>
               <input type="text" aria-label="Search history" placeholder="Search prompt, model, path…" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} />
-              <select aria-label="Filter history by agent" value={filters.agent} onChange={(event) => updateFilters({ agent: event.target.value as HistoryFilters['agent'] })}>
+              <Select aria-label="Filter history by agent" value={filters.agent} onChange={(event) => updateFilters({ agent: event.target.value as HistoryFilters['agent'] })}>
                 <option value="">All agents</option>
                 <option value="claude">Claude Code</option>
                 <option value="qwen">Qwen Code</option>
                 <option value="kimi">Kimi Code</option>
                 <option value="codex">Codex</option>
-              </select>
-              <select aria-label="Filter history by status" value={filters.status} onChange={(event) => updateFilters({ status: event.target.value as StatusFilter })}>
+              </Select>
+              <Select aria-label="Filter history by status" value={filters.status} onChange={(event) => updateFilters({ status: event.target.value as StatusFilter })}>
                 <option value="">All statuses</option>
                 <option value="2xx">2xx · Success</option>
                 <option value="4xx">4xx · Client error</option>
                 <option value="5xx">5xx · Upstream error</option>
-              </select>
+              </Select>
               <button type="submit" className="btn sec small" disabled={historyLoading}>Search</button>
               <span className="result-count" role="status" aria-live="polite">{historyLoading ? 'Loading…' : `${history.length} ${history.length === 1 ? 'request' : 'requests'}`}</span>
               {historyClearArmed ? (
@@ -945,9 +946,9 @@ function AgentCard({
       <div className="agent-select-grid">
         <div className="agent-select">
           <label htmlFor={`uap-card-provider-${agent}`}>Provider</label>
-          <select id={`uap-card-provider-${agent}`} value={providerKey} disabled={busy} onChange={(event) => onProvider(event.target.value)}>
+          <Select id={`uap-card-provider-${agent}`} value={providerKey} disabled={busy} onChange={(event) => onProvider(event.target.value)}>
             {providerOptions.map((key) => <option key={key} value={key}>{PROVIDER_LABELS[key] ?? key}</option>)}
-          </select>
+          </Select>
         </div>
         <div className="agent-select">
           <ModelSelect id={`uap-card-model-${agent}`} label="Model" providerKey={modelProviderKey} value={upstream.model} onChange={onModel} />

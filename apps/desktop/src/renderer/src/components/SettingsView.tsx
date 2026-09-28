@@ -10,6 +10,7 @@ import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
 
+import { Select } from './ui/Select';
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
 type StdioMcpServer = Extract<McpServer, { transport: 'stdio' }>;
@@ -888,8 +889,8 @@ function ProviderConnectionSection({
             <Trash2 size={15} />
             <span>Remove key</span>
           </button>
-          <span className="settings-note">{credentialStored ? 'Credential stored in the OS vault.' : local ? 'No key stored, which is fine for a local server.' : 'No credential stored for this ID.'}</span>
         </div>
+        <span className="settings-note credential-note">{credentialStored ? 'Credential stored in the OS vault.' : local ? 'No key stored, which is fine for a local server.' : 'No credential stored for this ID.'}</span>
       </div>
       <FeedbackMessage feedback={credentialFeedback} />
       <p className="settings-note">{preset.protocol === 'responses'
@@ -921,10 +922,10 @@ function NotificationToggle({ label, hint, checked, onChange }: { label: string;
 }
 
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => {
+  return <label className="field"><span>{label}</span><Select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => {
     const item = typeof option === 'string' ? { value: option, label: option } : option;
     return <option key={item.value} value={item.value}>{item.label}</option>;
-  })}</select></label>;
+  })}</Select></label>;
 }
 
 function TextField({ label, value, type = 'text', list, onChange }: { label: string; value: string; type?: string; list?: string; onChange: (value: string) => void }): ReactNode {

@@ -31,6 +31,7 @@ import {
   type ProxySettings,
 } from './proxy-dashboard-data';
 
+import { Select } from './ui/Select';
 export interface ConfigTabProps {
   draft: ProxySettings;
   patch: (update: Partial<ProxySettings>) => void;
@@ -279,10 +280,10 @@ export function ProvidersTab(props: ConfigTabProps & {
         <h2>Provider preset</h2>
         <div className="u-field">
           <label htmlFor="uap-provider-select">Select a provider to auto-fill all fields below</label>
-          <select id="uap-provider-select" value={mainPreset === 'custom' ? '' : mainPreset} onChange={(event) => { if (event.target.value) patch(applyMainPreset(draft, event.target.value)); }}>
+          <Select id="uap-provider-select" value={mainPreset === 'custom' ? '' : mainPreset} onChange={(event) => { if (event.target.value) patch(applyMainPreset(draft, event.target.value)); }}>
             <option value="">— choose a provider —</option>
             {MAIN_PRESET_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
+          </Select>
         </div>
       </div>
 
@@ -463,9 +464,9 @@ function DualApiSection(props: ConfigTabProps): ReactNode {
           <div className="row" style={{ marginTop: name === 'anthropic' ? 12 : 0 }} key={name}>
             <div className="u-field">
               <label htmlFor={`uap-${name}-preset`}>{name === 'anthropic' ? 'Anthropic preset' : 'OpenAI preset'}</label>
-              <select id={`uap-${name}-preset`} value={entry ? presetKeyForUrl('claude', entry.baseUrl) : name} onChange={(event) => setDualProvider(name, { presetKey: event.target.value })}>
+              <Select id={`uap-${name}-preset`} value={entry ? presetKeyForUrl('claude', entry.baseUrl) : name} onChange={(event) => setDualProvider(name, { presetKey: event.target.value })}>
                 <option value={name}>{name === 'anthropic' ? 'Anthropic API' : 'OpenAI API'}</option>
-              </select>
+              </Select>
             </div>
             <div className="u-field">
               <KeyField
@@ -484,9 +485,9 @@ function DualApiSection(props: ConfigTabProps): ReactNode {
             </div>
             <div className="u-field w240">
               <label htmlFor={`uap-${name}-model`}>{name === 'anthropic' ? 'Claude model' : 'OpenAI model'}</label>
-              <select id={`uap-${name}-model`} value={model} onChange={(event) => setDualProvider(name, { model: event.target.value })}>
+              <Select id={`uap-${name}-model`} value={model} onChange={(event) => setDualProvider(name, { model: event.target.value })}>
                 {catalogFor(name).map((candidate) => <option key={candidate.id} value={candidate.id}>{modelLabel(candidate.id)}</option>)}
-              </select>
+              </Select>
               <span className="hint">{describeCatalogModel(model)}</span>
             </div>
           </div>
@@ -502,7 +503,7 @@ function DualApiSection(props: ConfigTabProps): ReactNode {
         {AGENTS.map((agent) => (
           <div className="u-field" key={agent}>
             <label htmlFor={`uap-pin-${agent}`}>{AGENT_LABELS[agent]}</label>
-            <select
+            <Select
               id={`uap-pin-${agent}`}
               value={draft.agentRoutes[agent] ?? ''}
               onChange={(event) => patch({ agentRoutes: event.target.value ? { ...draft.agentRoutes, [agent]: event.target.value } : omitRecord(draft.agentRoutes, agent) })}
@@ -511,7 +512,7 @@ function DualApiSection(props: ConfigTabProps): ReactNode {
               {[...new Set([...pinOptions, ...Object.keys(draft.providers), ...(draft.agentRoutes[agent] ? [draft.agentRoutes[agent]!] : [])])].map((name) => (
                 <option key={name} value={name}>{name === 'anthropic' ? 'Anthropic' : name === 'openai' ? 'OpenAI' : name}</option>
               ))}
-            </select>
+            </Select>
           </div>
         ))}
       </div>
@@ -643,9 +644,9 @@ export function AdvancedTab(props: ConfigTabProps & {
             <div className="u-field w90"><TextField label="Currency" value={draft.costBudget.currency} onChange={(currency) => patch({ costBudget: { ...draft.costBudget, currency } })} /></div>
             <div className="u-field w90">
               <label htmlFor="uap-budget-mode">Mode</label>
-              <select id="uap-budget-mode" value={draft.costBudget.mode} onChange={(event) => patch({ costBudget: { ...draft.costBudget, mode: event.target.value as 'warn' | 'block' } })}>
+              <Select id="uap-budget-mode" value={draft.costBudget.mode} onChange={(event) => patch({ costBudget: { ...draft.costBudget, mode: event.target.value as 'warn' | 'block' } })}>
                 <option value="warn">warn</option><option value="block">block</option>
-              </select>
+              </Select>
             </div>
           </div>
           <div className="row">
@@ -670,9 +671,9 @@ export function AdvancedTab(props: ConfigTabProps & {
                 <TextField label="Vault credential ID" value={provider.credentialId ?? ''} onChange={(credentialId) => patch({ providers: { ...draft.providers, [name]: withOptional(provider, 'credentialId', credentialId) } })} />
                 <div className="u-field" style={{ flex: '0 0 110px' }}>
                   <label>Format</label>
-                  <select value={provider.format} onChange={(event) => patch({ providers: { ...draft.providers, [name]: { ...provider, format: event.target.value as ProxyProviderEntry['format'] } } })}>
+                  <Select value={provider.format} onChange={(event) => patch({ providers: { ...draft.providers, [name]: { ...provider, format: event.target.value as ProxyProviderEntry['format'] } } })}>
                     <option value="auto">auto</option><option value="anthropic">anthropic</option><option value="openai">openai</option>
-                  </select>
+                  </Select>
                 </div>
                 <button type="button" className="btn danger small" aria-label={`Remove provider ${name}`} onClick={() => patch({ providers: omitRecord(draft.providers, name) })}>✕</button>
               </div>
@@ -735,7 +736,7 @@ export function ModelSelect({ label, providerKey, value, onChange, id }: {
   return (
     <>
       <label htmlFor={selectId}>{label}</label>
-      <select
+      <Select
         id={selectId}
         value={value}
         onChange={(event) => {
@@ -750,7 +751,7 @@ export function ModelSelect({ label, providerKey, value, onChange, id }: {
         {!value && <option value="">Provider default</option>}
         {values.map((model) => <option key={model} value={model}>{modelLabel(model)}</option>)}
         <option value="__custom__">Custom model…</option>
-      </select>
+      </Select>
     </>
   );
 }
@@ -759,10 +760,10 @@ function PresetField({ agent, value, onChange }: { agent: ProxyAgentId; value: s
   return (
     <div className="u-field">
       <label htmlFor={`uap-${agent}-preset`}>Preset</label>
-      <select id={`uap-${agent}-preset`} value={value} onChange={(event) => { if (event.target.value) onChange(event.target.value); }}>
+      <Select id={`uap-${agent}-preset`} value={value} onChange={(event) => { if (event.target.value) onChange(event.target.value); }}>
         <option value="">— choose a preset —</option>
         {Object.keys(presetsFor(agent)).map((key) => <option key={key} value={key}>{PROVIDER_LABELS[key] ?? key}</option>)}
-      </select>
+      </Select>
     </div>
   );
 }

@@ -29,6 +29,7 @@ import type {
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
+import { Select } from './ui/Select';
 interface SearchFilters {
   query: string;
   tag: string;
@@ -308,7 +309,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
         </label>
         <label>
           <span>Type</span>
-          <select
+          <Select
             value={filters.type}
             onChange={(event) =>
               setFilters((current) => ({ ...current, type: event.target.value as SearchFilters['type'] }))
@@ -319,7 +320,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
             <option value="decisions">Decisions ({overview?.typeCounts.decisions ?? 0})</option>
             <option value="gotchas">Gotchas ({overview?.typeCounts.gotchas ?? 0})</option>
             <option value="patterns">Patterns ({overview?.typeCounts.patterns ?? 0})</option>
-          </select>
+          </Select>
         </label>
         <label>
           <span>Tag</span>
@@ -340,7 +341,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
         </label>
         <label>
           <span>Search mode</span>
-          <select
+          <Select
             value={filters.mode}
             onChange={(event) => setFilters((current) => ({
               ...current,
@@ -349,7 +350,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
           >
             <option value="lexical">Exact words</option>
             <option value="semantic">By meaning</option>
-          </select>
+          </Select>
         </label>
         <label className="brain-global-filter">
           <input

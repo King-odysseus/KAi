@@ -50,6 +50,7 @@ import { suggestionTarget } from '../learning-placement';
 import { projectLessons } from './learning-path';
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
 
+import { Select } from './ui/Select';
 interface LearningPanelProps {
   projectFiles: string[];
   onReference: (filePath: string, startLine?: number, endLine?: number) => void;
@@ -818,7 +819,7 @@ function TutorComposer({
           <label className="learning-composer-scope">
             <FolderTree size={13} aria-hidden="true" />
             <span className="visually-hidden">Tutor context scope</span>
-            <select
+            <Select
               aria-label="Tutor context scope"
               value={scope}
               title="Auto starts from the open file and searches the project for your question"
@@ -827,7 +828,7 @@ function TutorComposer({
               <option value="auto">Auto</option>
               <option value="project">Whole project</option>
               <option value="active-file">File context</option>
-            </select>
+            </Select>
           </label>
           <button
             type="button"

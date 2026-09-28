@@ -152,6 +152,7 @@
 .uap input[type="number"],
 .uap input[type="password"],
 .uap select,
+.uap .kai-select,
 .uap textarea {
   width: 100%;
   min-width: 0;
@@ -174,6 +175,7 @@
 
 .uap input:focus,
 .uap select:focus,
+.uap .kai-select:focus,
 .uap textarea:focus {
   border-color: var(--u-focus);
 }
@@ -181,6 +183,7 @@
 .uap button:focus-visible,
 .uap input:focus-visible,
 .uap select:focus-visible,
+.uap .kai-select:focus-visible,
 .uap summary:focus-visible {
   outline: 2px solid var(--u-focus);
   outline-offset: 1px;
@@ -901,7 +904,8 @@
   font-size: 0.78em;
 }
 
-.uap .filter-row select {
+.uap .filter-row select,
+.uap .filter-row .kai-select {
   width: auto;
   min-width: 118px;
   padding: 4px 8px;

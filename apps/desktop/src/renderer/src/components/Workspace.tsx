@@ -78,6 +78,7 @@ import { UsageBanner } from './UsageView';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { AgentActivityStrip, deriveAgentActivity } from './AgentActivity';
 
+import { Select } from './ui/Select';
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
   skills?: string[];
@@ -1265,7 +1266,7 @@ export function WorkspaceView({
             </div>
             <div className="composer-actions">
               <button type="button" className={`composer-icon-button ${compareMode ? 'active' : ''}`} onClick={() => setCompareMode((current) => !current)} title="Compare two agents" aria-pressed={compareMode}><GitCompare size={14} /></button>
-              {compareMode && <select value={compareAgent} onChange={(event) => setCompareAgent(event.target.value as AgentId)} aria-label="Comparison agent">{agentCapabilities.filter((agent) => agent.id !== selectedAgent).map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</select>}
+              {compareMode && <Select value={compareAgent} onChange={(event) => setCompareAgent(event.target.value as AgentId)} aria-label="Comparison agent">{agentCapabilities.filter((agent) => agent.id !== selectedAgent).map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>}
               <button type="button" className="composer-icon-button" disabled={!activeConversation || activeConversation.turns.length < 2 || running || busy} onClick={onCompactConversation} title="Compact conversation context" aria-label="Compact conversation context"><Minimize2 size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>

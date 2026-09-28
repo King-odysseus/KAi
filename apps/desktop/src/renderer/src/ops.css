@@ -392,7 +392,8 @@
   flex: 0 0 auto;
 }
 
-.learning-composer-scope select {
+.learning-composer-scope select,
+.learning-composer-scope .kai-select {
   width: 118px;
   min-width: 0;
   height: 25px;
@@ -406,7 +407,8 @@
   cursor: pointer;
 }
 
-.learning-composer-scope select:focus {
+.learning-composer-scope select:focus,
+.learning-composer-scope .kai-select:focus {
   border-color: rgba(102, 227, 189, 0.62);
   outline: 0;
   box-shadow: 0 0 0 2px rgba(102, 227, 189, 0.1);
@@ -2627,7 +2629,8 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
   font-size: 11px;
 }
 
-.terminal-launch-row select {
+.terminal-launch-row select,
+.terminal-launch-row .kai-select {
   min-width: 150px;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -2753,11 +2756,7 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-tabs button { font-size: 10px; padding-inline: 3px; gap: 3px; }
 .learning-tabs button svg { display: none; }
 
-/* Tasks: readable width, an explanation under each tab, and tidier review cards */
-.tasks-view > * {
-  max-width: 1100px;
-  margin-inline: auto;
-}
+/* Tasks: full width like every other page, an explanation under each tab, and tidier review cards */
 
 .tasks-tab-help {
   margin: 0 auto 12px;

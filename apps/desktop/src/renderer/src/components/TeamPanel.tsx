@@ -23,6 +23,7 @@ import { unwrap } from '../types';
 import { conflictDetail, teamPaths } from '../team-paths';
 import { confirmDialog } from './AppDialog';
 
+import { Select } from './ui/Select';
 const AUTONOMY_OPTIONS: Array<{ value: AutonomyMode; label: string }> = [
   { value: 'autoEdit', label: 'Auto-edit' },
   { value: 'ask', label: 'Ask first' },
@@ -241,20 +242,20 @@ export function TeamPanel({
                   <div className="team-part-controls">
                     <label className="workflow-field">
                       <span>Agent</span>
-                      <select aria-label={`${part.title} agent`} value={assignment.assignee} disabled={disabled} onChange={(event) => chooseAgent(part.id, event.target.value as TeamResolvedAssignee)}>
+                      <Select aria-label={`${part.title} agent`} value={assignment.assignee} disabled={disabled} onChange={(event) => chooseAgent(part.id, event.target.value as TeamResolvedAssignee)}>
                         {(['claude', 'codex', 'qwen', 'gemini', 'kimi', 'api'] as const).map((id) => {
                           const capability = agentCapabilities.find((agent) => agent.id === id);
                           const ready = id === 'api' || Boolean(capability?.available);
                           return <option key={id} value={id}>{nameOf(id, agentCapabilities)}{ready ? '' : ' (not ready)'}</option>;
                         })}
-                      </select>
+                      </Select>
                     </label>
                     <label className="workflow-field">
                       <span>Route</span>
-                      <select aria-label={`${part.title} route`} value={assignment.route} disabled={disabled} onChange={(event) => chooseRoute(part.id, event.target.value as RouteMode)}>
+                      <Select aria-label={`${part.title} route`} value={assignment.route} disabled={disabled} onChange={(event) => chooseRoute(part.id, event.target.value as RouteMode)}>
                         <option value="direct">Direct</option>
                         <option value="proxy" disabled={!proxyCapable}>Proxy</option>
-                      </select>
+                      </Select>
                     </label>
                     <span className={`team-billing ${assignment.billing}`} title="What this part is billed against"><Wallet size={12} />{BILLING_LABEL[assignment.billing]}</span>
                   </div>
@@ -271,9 +272,9 @@ export function TeamPanel({
           <div className="team-plan-footer">
             <label className="workflow-field team-autonomy">
               <span>Editing agents may</span>
-              <select aria-label="Team autonomy" value={autonomy} disabled={disabled} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}>
+              <Select aria-label="Team autonomy" value={autonomy} disabled={disabled} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}>
                 {AUTONOMY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
+              </Select>
             </label>
             <div className="team-check">
               <label className="workflow-field team-check-command">
@@ -282,9 +283,9 @@ export function TeamPanel({
               </label>
               <label className="workflow-field team-rounds">
                 <span>Fix rounds</span>
-                <select aria-label="Fix rounds" value={fixRounds} disabled={disabled || !checkCommand.trim()} onChange={(event) => setFixRounds(Number(event.target.value))}>
+                <Select aria-label="Fix rounds" value={fixRounds} disabled={disabled || !checkCommand.trim()} onChange={(event) => setFixRounds(Number(event.target.value))}>
                   {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
-                </select>
+                </Select>
               </label>
               <small>If the check fails, only the part that owns the files it names goes back to fix it.</small>
             </div>
@@ -300,9 +301,9 @@ export function TeamPanel({
                 <>
                   <label className="workflow-field team-rounds">
                     <span>At most</span>
-                    <select aria-label="Parts at once" value={maxConcurrent} disabled={disabled} onChange={(event) => setMaxConcurrent(Number(event.target.value))}>
+                    <Select aria-label="Parts at once" value={maxConcurrent} disabled={disabled} onChange={(event) => setMaxConcurrent(Number(event.target.value))}>
                       {[2, 3, 4].map((count) => <option key={count} value={count}>{count} at once</option>)}
-                    </select>
+                    </Select>
                   </label>
                   <small className="team-waves" aria-label="Run order">{waveSummary(draft.parts)}</small>
                 </>

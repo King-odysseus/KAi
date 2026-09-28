@@ -23,6 +23,7 @@ import {
   type OrbView,
 } from './knowledge-graph';
 
+import { Select } from './ui/Select';
 const MAP_HEIGHT = 440;
 const NODE_LIMIT = 150;
 const TYPES: GraphNodeType[] = ['bugs', 'decisions', 'gotchas', 'patterns', 'other'];
@@ -476,10 +477,10 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
           <RefreshCw size={13} className={busy === 'loading' ? 'spin' : undefined} /><span>Refresh</span>
         </button>
         {projects.length > 1 && (
-          <select aria-label="Show notes from" value={scope} onChange={(event) => { setScope(event.target.value); setSelectedId(null); }}>
+          <Select aria-label="Show notes from" value={scope} onChange={(event) => { setScope(event.target.value); setSelectedId(null); }}>
             <option value="">All projects ({graph?.nodes.length ?? 0})</option>
             {projects.map(([name, count]) => <option key={name} value={name}>{name} ({count})</option>)}
-          </select>
+          </Select>
         )}
         <span className="knowledge-map-count">{nodes.length} note{nodes.length === 1 ? '' : 's'} · {edges.length} connection{edges.length === 1 ? '' : 's'}</span>
       </div>

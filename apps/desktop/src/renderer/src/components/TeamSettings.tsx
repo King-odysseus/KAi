@@ -5,6 +5,7 @@ import type { TeamRecordAdvice, TeamResolvedAssignee } from '@kai/contracts';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
+import { Select } from './ui/Select';
 const PRESETS: Array<{ id: TeamPreset; label: string; detail: string }> = [
   { id: 'quality', label: 'Quality', detail: 'The strongest ready agent for every role, whatever the limits.' },
   { id: 'balanced', label: 'Balanced', detail: 'Strong agents where it matters; lighter ones for tests and docs to save your Claude and Codex limits.' },
@@ -98,9 +99,9 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
       <div className="field-grid">
         <label className="field">
           <span>Preset</span>
-          <select aria-label="Team preset" value={team.preset} onChange={(event) => onChange({ ...team, preset: event.target.value as TeamPreset })}>
+          <Select aria-label="Team preset" value={team.preset} onChange={(event) => onChange({ ...team, preset: event.target.value as TeamPreset })}>
             {PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
+          </Select>
         </label>
       </div>
       <p className="settings-note team-preset-detail">{preset.detail} A preset only guides Auto; a role you pin always keeps your choice.</p>
@@ -125,15 +126,15 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
               <div className="field-grid">
                 <label className="field">
                   <span>Agent</span>
-                  <select aria-label={`${info.label} agent`} value={config.assignee} onChange={(event) => update(role, { assignee: event.target.value as TeamAssignee })}>
+                  <Select aria-label={`${info.label} agent`} value={config.assignee} onChange={(event) => update(role, { assignee: event.target.value as TeamAssignee })}>
                     {TEAM_AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
+                  </Select>
                 </label>
                 <label className="field">
                   <span>Route</span>
-                  <select aria-label={`${info.label} route`} value={config.route} onChange={(event) => update(role, { route: event.target.value as TeamRouteChoice })}>
+                  <Select aria-label={`${info.label} route`} value={config.route} onChange={(event) => update(role, { route: event.target.value as TeamRouteChoice })}>
                     {ROUTE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
+                  </Select>
                 </label>
                 <label className="field">
                   <span>Model</span>
@@ -141,15 +142,15 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                   <datalist id={`team-models-${role}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
                   {modelInvalid && <small className="field-error">Use a model name such as gpt-5.5, without spaces or a leading dash.</small>}
                 </label>
+                {role !== 'orchestrator' && (
+                  <label className="field">
+                    <span>Added to a job</span>
+                    <Select aria-label={`${info.label} added to a job`} value={roleAutoAdd(config, role)} onChange={(event) => update(role, { autoAdd: event.target.value as TeamAutoAdd })}>
+                      {AUTO_ADD_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}{DEFAULT_AUTO_ADD[role] === option.value ? ' (default)' : ''}</option>)}
+                    </Select>
+                  </label>
+                )}
               </div>
-              {role !== 'orchestrator' && (
-                <label className="field">
-                  <span>Added to a job</span>
-                  <select aria-label={`${info.label} added to a job`} value={roleAutoAdd(config, role)} onChange={(event) => update(role, { autoAdd: event.target.value as TeamAutoAdd })}>
-                    {AUTO_ADD_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}{DEFAULT_AUTO_ADD[role] === option.value ? ' (default)' : ''}</option>)}
-                  </select>
-                </label>
-              )}
               <label className="field">
                 <span>Extra instructions</span>
                 <textarea aria-label={`${info.label} instructions`} rows={2} maxLength={2000} value={config.instructions} placeholder={role === 'securityReviewer' ? 'For example: check the OWASP Top 10 and flag any secret in code.' : 'Optional guidance added to every task this role gets.'} onChange={(event) => update(role, { instructions: event.target.value })} />
@@ -183,10 +184,10 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                 </label>
                 <label className="field">
                   <span>Access</span>
-                  <select aria-label={`${role.label} access`} value={role.access} onChange={(event) => updateCustom(role.id, { access: event.target.value as CustomRole['access'] })}>
+                  <Select aria-label={`${role.label} access`} value={role.access} onChange={(event) => updateCustom(role.id, { access: event.target.value as CustomRole['access'] })}>
                     <option value="edit">Edits files</option>
                     <option value="read">Read-only</option>
-                  </select>
+                  </Select>
                 </label>
                 <label className="field">
                   <span>What it does</span>
@@ -196,15 +197,15 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
               <div className="field-grid">
                 <label className="field">
                   <span>Agent</span>
-                  <select aria-label={`${role.label} agent`} value={role.assignee} onChange={(event) => updateCustom(role.id, { assignee: event.target.value as TeamAssignee })}>
+                  <Select aria-label={`${role.label} agent`} value={role.assignee} onChange={(event) => updateCustom(role.id, { assignee: event.target.value as TeamAssignee })}>
                     {TEAM_AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
+                  </Select>
                 </label>
                 <label className="field">
                   <span>Route</span>
-                  <select aria-label={`${role.label} route`} value={role.route} onChange={(event) => updateCustom(role.id, { route: event.target.value as TeamRouteChoice })}>
+                  <Select aria-label={`${role.label} route`} value={role.route} onChange={(event) => updateCustom(role.id, { route: event.target.value as TeamRouteChoice })}>
                     {ROUTE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
+                  </Select>
                 </label>
                 <label className="field">
                   <span>Model</span>

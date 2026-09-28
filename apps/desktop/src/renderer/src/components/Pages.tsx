@@ -43,6 +43,7 @@ import { relativeTime, statusLabel, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { TeamPanel } from './TeamPanel';
 
+import { Select } from './ui/Select';
 export function ProjectsView({
   projects,
   activeProjectId,
@@ -536,7 +537,7 @@ export function WorkflowsView({
           </label>
           <label className="workflow-field" htmlFor="workflow-template">
             <span>Saved template</span>
-            <select
+            <Select
               id="workflow-template"
               defaultValue=""
               disabled={templates.length === 0}
@@ -559,13 +560,13 @@ export function WorkflowsView({
             >
               <option value="">{templates.length > 0 ? 'Load a template' : 'No saved templates'}</option>
               {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-            </select>
+            </Select>
           </label>
         </div>
         <div className="workflow-builder-head workflow-run-options">
-          <label className="workflow-field" htmlFor="workflow-execution"><span>Default execution</span><select id="workflow-execution" value={execution} onChange={(event) => setExecution(event.target.value as ExecutionMode)}><option value="cli">CLI</option><option value="api">Direct API / Proxy</option></select></label>
-          <label className="workflow-field" htmlFor="workflow-route"><span>Default route</span><select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></select></label>
-          <label className="workflow-field" htmlFor="workflow-autonomy"><span>Autonomy</span><select id="workflow-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}><option value="plan">Plan</option><option value="ask">Ask</option><option value="autoEdit">Auto-edit</option><option value="full">Full control</option><option value="custom">Custom</option></select></label>
+          <label className="workflow-field" htmlFor="workflow-execution"><span>Default execution</span><Select id="workflow-execution" value={execution} onChange={(event) => setExecution(event.target.value as ExecutionMode)}><option value="cli">CLI</option><option value="api">Direct API / Proxy</option></Select></label>
+          <label className="workflow-field" htmlFor="workflow-route"><span>Default route</span><Select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></Select></label>
+          <label className="workflow-field" htmlFor="workflow-autonomy"><span>Autonomy</span><Select id="workflow-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}><option value="plan">Plan</option><option value="ask">Ask</option><option value="autoEdit">Auto-edit</option><option value="full">Full control</option><option value="custom">Custom</option></Select></label>
           <label className="workflow-field" htmlFor="workflow-model"><span>Model override</span><input id="workflow-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider or CLI model" /></label>
         </div>
         <div className="workflow-loop-panel">
@@ -610,13 +611,13 @@ export function WorkflowsView({
               <div className="workflow-agent-field">
                 <label className="workflow-field">
                   <span>Agent</span>
-                  <select aria-label={`Step ${index + 1} agent`} value={step.agent} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, agent: event.target.value as AgentId } : item))}>
+                  <Select aria-label={`Step ${index + 1} agent`} value={step.agent} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, agent: event.target.value as AgentId } : item))}>
                     {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.displayName}{agent.available ? '' : ' (unavailable)'}</option>)}
-                  </select>
+                  </Select>
                 </label>
                 <label className="workflow-field">
                   <span>Runs on</span>
-                  <select
+                  <Select
                     aria-label={`Step ${index + 1} runs on`}
                     value={runsOn}
                     disabled={running}
@@ -629,7 +630,7 @@ export function WorkflowsView({
                     <option value="cli:proxy" disabled={!cliProxy}>CLI via Universal Proxy{cliProxy ? '' : ' (not supported)'}</option>
                     <option value="api:direct">API (direct)</option>
                     <option value="api:proxy">API via Universal Proxy</option>
-                  </select>
+                  </Select>
                 </label>
               </div>
               <label className="workflow-field workflow-prompt-field">

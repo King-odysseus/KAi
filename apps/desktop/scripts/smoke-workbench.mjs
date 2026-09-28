@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
 import { assertControlsDoNotWrap, assertTogglesCompact } from './layout-checks.mjs';
-import { waitForPage } from './smoke-helpers.mjs';
+import { chooseOption, selectedValue, waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(appRoot, 'test-results', 'smoke-workbench');
@@ -208,8 +208,8 @@ async function verifyGitAndTerminal(page) {
   await page.getByRole('heading', { name: 'Git', level: 1 }).waitFor();
   await page.getByText('Recent commits').waitFor();
   // The Code test left src/hello.ts modified; stage and commit it through the UI.
-  // The box only flips once git has staged the file, so wait for the confirmation instead of check().
-  await page.getByRole('checkbox', { name: 'Stage src/hello.ts' }).click();
+  // The row only moves once git has staged the file, so wait for the confirmation.
+  await page.getByRole('button', { name: 'Stage src/hello.ts' }).click();
   await page.getByText('Staged src/hello.ts.').waitFor({ timeout: 20_000 });
   await page.getByPlaceholder('Describe what changed and why').fill('Update hello from the KAI smoke test');
   await page.getByRole('button', { name: /Commit 1 staged file/ }).click();
@@ -309,8 +309,8 @@ async function verifyTasksAndSettings(page) {
   await page.getByText('Tray and notifications').waitFor();
   await assertSettingsSectionsFullWidth(page);
   const learningSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
-  const learningProvider = learningSection.locator('label.field:has(span:text-is("Provider")) > select');
-  await learningProvider.selectOption('deepseek');
+  const learningProvider = learningSection.locator('label.field:has(span:text-is("Provider")) > .kai-select');
+  await chooseOption(learningProvider, 'deepseek');
   const learningModel = learningSection.locator('label.field:has(span:text-is("Model")) > input');
   if ((await learningModel.inputValue()) !== 'deepseek-v4-pro') {
     throw new Error(`The DeepSeek tutor default is stale: ${await learningModel.inputValue()}`);
@@ -588,11 +588,11 @@ async function verifyTutorScope(page) {
   if (await composer.getByLabel('Tutor context scope').count() !== 1) {
     throw new Error('The tutor context selector must live inside the tutor prompt card.');
   }
-  if ((await scope.inputValue()) !== 'project') throw new Error('The tutor should default to whole-project guidance.');
-  await contextLine(composer, /^Whole project/).waitFor();
-  await scope.selectOption('active-file');
+  if ((await selectedValue(scope)) !== 'auto') throw new Error('The tutor should default to Auto scope.');
+  await contextLine(composer, /^Auto/).waitFor();
+  await chooseOption(scope, 'active-file');
   await contextLine(composer, /^hello\.ts/).waitFor();
-  await scope.selectOption('project');
+  await chooseOption(scope, 'project');
   await contextLine(composer, /^Whole project/).waitFor();
 
   await page.getByLabel('Tutor question').fill('What does hello export?');
@@ -605,9 +605,9 @@ async function verifyTutorScope(page) {
   await contextLine(composer, /^Whole project · Enter/).waitFor();
   const askTutor = composer.getByRole('button', { name: 'Ask tutor' });
   if (await askTutor.isDisabled()) throw new Error('Whole-project tutoring should work without an open file.');
-  await scope.selectOption('active-file');
+  await chooseOption(scope, 'active-file');
   if (!(await askTutor.isDisabled())) throw new Error('File-context tutoring should require an open file.');
-  await scope.selectOption('project');
+  await chooseOption(scope, 'project');
   if (await askTutor.isDisabled()) throw new Error('Switching back to whole-project tutoring should re-enable the prompt.');
 
   if (await page.getByRole('button', { name: 'hello.ts' }).count() === 0) {

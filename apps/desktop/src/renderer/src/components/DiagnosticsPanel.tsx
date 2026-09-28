@@ -109,11 +109,10 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
           <button type="button" className="secondary-button" disabled={!c1Ready || running !== null} onClick={() => void tool('config_get')}>Show settings</button>
         </div>
         {results.config_get && <pre className="verify-output">{results.config_get}</pre>}
-        <div className="field-grid">
+        <div className="field-with-action two-fields">
           <label className="field"><span>Setting name</span><input value={configKey} placeholder="logLevel" onChange={(event) => setConfigKey(event.target.value)} /></label>
           <label className="field"><span>New value</span><input value={configValue} onChange={(event) => setConfigValue(event.target.value)} /></label>
-        </div>
-        <button type="button" className="primary-button align-end" disabled={!c1Ready || !configKey.trim() || !configValue.trim() || running !== null} onClick={() => void confirmDialog({
+        <button type="button" className="primary-button" disabled={!c1Ready || !configKey.trim() || !configValue.trim() || running !== null} onClick={() => void confirmDialog({
           title: 'Change Cognitive1 setting?',
           detail: `Change "${configKey.trim()}" to "${configValue.trim()}"? Cognitive1 validates the value and may need a restart to apply it.`,
           confirmLabel: 'Change setting',
@@ -124,6 +123,7 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
             .then((result) => { setMessage(textOf(result) || 'Setting saved.'); setConfigKey(''); setConfigValue(''); })
             .catch((caught) => setError(caught instanceof Error ? caught.message : 'The setting could not be changed.'));
         })}>Change setting</button>
+        </div>
       </section>
 
       <section className="settings-section">

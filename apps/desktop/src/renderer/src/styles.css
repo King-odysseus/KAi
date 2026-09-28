@@ -53,6 +53,7 @@ body {
 button,
 input,
 select,
+.kai-select,
 textarea {
   font: inherit;
 }
@@ -67,6 +68,7 @@ button {
  */
 button,
 select,
+.kai-select,
 summary,
 legend {
   white-space: nowrap;
@@ -80,6 +82,7 @@ summary small {
 }
 
 select,
+.kai-select,
 input:not([type='checkbox']):not([type='radio']) {
   text-overflow: ellipsis;
 }
@@ -92,25 +95,30 @@ input:not([type='checkbox']):not([type='radio']) {
   white-space: nowrap;
 }
 
-select {
+select,
+.kai-select {
   color-scheme: dark;
   color: var(--text);
   background-color: #0e1b2d;
 }
 
 select option,
-select optgroup {
+.kai-select option,
+select optgroup,
+.kai-select optgroup {
   color: #dce6f3;
   background: #0e1b2d;
 }
 
-select option:disabled {
+select option:disabled,
+.kai-select option:disabled {
   color: #66758b;
 }
 
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+.kai-select:focus-visible,
 textarea:focus-visible,
 [role="separator"]:focus-visible {
   outline: 2px solid var(--mint);
@@ -1933,7 +1941,8 @@ code {
 }
 
 .brain-search-form input:not([type="checkbox"]),
-.brain-search-form select {
+.brain-search-form select,
+.brain-search-form .kai-select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -1946,7 +1955,8 @@ code {
 }
 
 .brain-search-form input:focus,
-.brain-search-form select:focus {
+.brain-search-form select:focus,
+.brain-search-form .kai-select:focus {
   border-color: rgba(102, 227, 189, 0.65);
   box-shadow: 0 0 0 3px rgba(102, 227, 189, 0.07);
 }
@@ -2560,7 +2570,8 @@ code {
 }
 
 .proxy-search-form input,
-.proxy-search-form select {
+.proxy-search-form select,
+.proxy-search-form .kai-select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -2573,7 +2584,8 @@ code {
 }
 
 .proxy-search-form input:focus,
-.proxy-search-form select:focus {
+.proxy-search-form select:focus,
+.proxy-search-form .kai-select:focus {
   border-color: rgba(102, 227, 189, 0.65);
   box-shadow: 0 0 0 3px rgba(102, 227, 189, 0.07);
 }
@@ -4635,6 +4647,7 @@ code {
 
 .workflow-field input,
 .workflow-field select,
+.workflow-field .kai-select,
 .workflow-field textarea {
   width: 100%;
   min-width: 0;
@@ -4646,7 +4659,8 @@ code {
 }
 
 .workflow-field input,
-.workflow-field select {
+.workflow-field select,
+.workflow-field .kai-select {
   height: 36px;
   padding: 0 10px;
 }
@@ -4665,12 +4679,14 @@ code {
 
 .workflow-field input:focus,
 .workflow-field select:focus,
+.workflow-field .kai-select:focus,
 .workflow-field textarea:focus {
   border-color: rgba(102, 227, 189, 0.65);
   box-shadow: 0 0 0 3px rgba(102, 227, 189, 0.07);
 }
 
-.workflow-field select:disabled {
+.workflow-field select:disabled,
+.workflow-field .kai-select:disabled {
   color: var(--text-dim);
   background: var(--bg-inset);
 }
@@ -5276,7 +5292,8 @@ code {
 
 .field input,
 .field textarea,
-.field select {
+.field select,
+.field .kai-select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -5297,7 +5314,8 @@ code {
 
 .field input:focus,
 .field textarea:focus,
-.field select:focus {
+.field select:focus,
+.field .kai-select:focus {
   border-color: rgba(102, 227, 189, 0.65);
   box-shadow: 0 0 0 3px rgba(102, 227, 189, 0.07);
 }
@@ -6246,7 +6264,8 @@ code {
   margin-left: auto;
 }
 
-.composer-actions select {
+.composer-actions select,
+.composer-actions .kai-select {
   height: 27px;
   max-width: 118px;
   border: 1px solid var(--border);
@@ -7210,19 +7229,23 @@ code {
   --red: #bd3f4d;
 }
 
-:root[data-theme="light"] select {
+:root[data-theme="light"] select,
+:root[data-theme="light"] .kai-select {
   color-scheme: light;
   color: var(--text);
   background-color: var(--bg-input);
 }
 
 :root[data-theme="light"] select option,
-:root[data-theme="light"] select optgroup {
+:root[data-theme="light"] .kai-select option,
+:root[data-theme="light"] select optgroup,
+:root[data-theme="light"] .kai-select optgroup {
   color: var(--text);
   background: var(--bg-input);
 }
 
-:root[data-theme="light"] select option:disabled {
+:root[data-theme="light"] select option:disabled,
+:root[data-theme="light"] .kai-select option:disabled {
   color: var(--text-dim);
 }
 
@@ -7329,11 +7352,14 @@ code {
 :root[data-theme="light"] .field input,
 :root[data-theme="light"] .field textarea,
 :root[data-theme="light"] .field select,
+:root[data-theme="light"] .field .kai-select,
 :root[data-theme="light"] .brain-search-form input:not([type="checkbox"]),
 :root[data-theme="light"] .brain-search-form select,
+:root[data-theme="light"] .brain-search-form .kai-select,
 :root[data-theme="light"] .brain-field-form textarea,
 :root[data-theme="light"] .proxy-search-form input,
-:root[data-theme="light"] .proxy-search-form select {
+:root[data-theme="light"] .proxy-search-form select,
+:root[data-theme="light"] .proxy-search-form .kai-select {
   border-color: var(--border);
   background: var(--bg-input);
 }
@@ -9018,12 +9044,7 @@ code {
   height: 26px;
 }
 
-/* History: a compact list with one-line rows and hover-revealed actions, kept to a readable width. */
-.page-view:has(> .history-table) > * {
-  max-width: 980px;
-  margin-inline: auto;
-}
-
+/* History: a compact list with one-line rows and hover-revealed actions, full width like every other page. */
 .page-view:has(> .history-table) .page-header {
   margin-bottom: 12px;
 }
@@ -9169,7 +9190,8 @@ code {
   flex-wrap: wrap;
 }
 
-.knowledge-map-actions select {
+.knowledge-map-actions select,
+.knowledge-map-actions .kai-select {
   height: 30px;
   max-width: 220px;
   padding: 0 8px;

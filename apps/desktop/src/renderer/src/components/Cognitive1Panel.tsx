@@ -54,6 +54,7 @@ import {
   type MarkBook,
 } from './cognitive1-drafts';
 
+import { Select } from './ui/Select';
 type Cognitive1Tab = 'review' | 'overwatch' | 'memory' | 'work' | 'recovery' | 'skills' | 'advanced';
 
 const tabs: Array<{ id: Cognitive1Tab; label: string; help: string }> = [
@@ -844,7 +845,7 @@ function BrainLearnCard({ projects, disabled, onRun }: { projects: ProjectRecord
       <form className="cognitive1-form" onSubmit={(event) => void learn(event)}>
         <TextField label="Title" value={title} onChange={setTitle} />
         <div className="field-grid two">
-          <label className="field"><span>Type</span><select value={type} onChange={(event) => setType(event.target.value as BrainEntryType)}><option value="bugs">Bug</option><option value="decisions">Decision</option><option value="gotchas">Gotcha</option><option value="patterns">Pattern</option></select></label>
+          <label className="field"><span>Type</span><Select value={type} onChange={(event) => setType(event.target.value as BrainEntryType)}><option value="bugs">Bug</option><option value="decisions">Decision</option><option value="gotchas">Gotcha</option><option value="patterns">Pattern</option></Select></label>
           <ProjectPicker label="Project" value={project} projects={projects} onChange={setProject} />
           <TextField label="Agent" value={agent} onChange={setAgent} />
           <TextField label="Tags" value={tags} onChange={setTags} />
@@ -1098,7 +1099,7 @@ function AdvancedPanel({ data, disabled, onRun }: PanelProps): ReactNode {
         <SectionHeading eyebrow="Allowlisted API" title="Advanced C1 operation" icon={<KeyRound size={16} />} />
         <p className="cognitive1-copy">Run any allowlisted Cognitive1 operation with a JSON payload. The desktop never exposes an arbitrary URL or filesystem command.</p>
         <div className="cognitive1-advanced-grid">
-          <label className="field"><span>Operation</span><select value={operation} onChange={(event) => { const next = event.target.value as Cognitive1Operation; setOperation(next); setResult(data[next]); }}>{cognitive1Operations.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+          <label className="field"><span>Operation</span><Select value={operation} onChange={(event) => { const next = event.target.value as Cognitive1Operation; setOperation(next); setResult(data[next]); }}>{cognitive1Operations.map((item) => <option key={item} value={item}>{item}</option>)}</Select></label>
           <label className="field"><span>JSON payload {invalid && <em>Invalid JSON</em>}</span><textarea rows={10} value={payload} spellCheck={false} onChange={(event) => { const next = event.target.value; setPayload(next); try { const parsed = JSON.parse(next) as unknown; setInvalid(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)); } catch { setInvalid(true); } }} /></label>
         </div>
         <div className="cognitive1-actions"><button type="button" className="primary-button" disabled={disabled || invalid} onClick={async () => { const next = await onRun(operation, JSON.parse(payload) as Record<string, unknown>, `${operationLabel(operation)} completed.`); if (next !== null) setResult(next); }}>Run operation</button></div>
@@ -1109,7 +1110,7 @@ function AdvancedPanel({ data, disabled, onRun }: PanelProps): ReactNode {
         <SectionHeading eyebrow="Complete MCP registry" title="Run any Cognitive1 tool" icon={<Terminal size={16} />} />
         <p className="cognitive1-copy">Invoke the same allowlisted MCP tools that Cognitive1 exposes to coding agents. Arguments stay local and are validated by the managed engine.</p>
         <div className="cognitive1-advanced-grid">
-          <label className="field"><span>MCP tool</span><select value={tool} onChange={(event) => setTool(event.target.value as Cognitive1McpTool)}>{cognitive1McpTools.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+          <label className="field"><span>MCP tool</span><Select value={tool} onChange={(event) => setTool(event.target.value as Cognitive1McpTool)}>{cognitive1McpTools.map((item) => <option key={item} value={item}>{item}</option>)}</Select></label>
           <label className="field"><span>Tool arguments {toolInvalid && <em>Invalid JSON</em>}</span><textarea rows={10} value={toolArguments} spellCheck={false} onChange={(event) => { const next = event.target.value; setToolArguments(next); try { const parsed = JSON.parse(next) as unknown; setToolInvalid(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)); } catch { setToolInvalid(true); } }} /></label>
         </div>
         <div className="cognitive1-actions">
