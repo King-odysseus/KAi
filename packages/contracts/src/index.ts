@@ -12,6 +12,7 @@ export * from './host';
 export * from './ipc';
 export * from './learning';
 export * from './migrations';
+export * from './model-tiers';
 export * from './notifications';
 export * from './primitives';
 export * from './preview';

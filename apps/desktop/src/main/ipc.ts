@@ -90,6 +90,7 @@ import type { TeachingLibraryStore } from './teaching-library';
 import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
+import { autoCliModel } from './auto-model';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { TeamRecordStore } from './team-record-store';
@@ -926,6 +927,8 @@ export async function runConversationAgent(
         { ...historyTurns[historyTurns.length - 1], text: effectivePrompt },
       ]
     : undefined;
+  // A model picked for this run wins; otherwise KAI sizes the request, and the Settings model is the last resort.
+  const autoPick = executionMode === 'cli' && !request.model ? autoCliModel(request, settings, selectedPaths.length) : undefined;
   let execution: AgentExecutionResult;
   // CLI runs claim the project so other agents see the work; API runs are claimed by their memory session.
   const claimedProject = executionMode === 'cli' && (await cognitive1Ready(context))
@@ -950,7 +953,7 @@ export async function runConversationAgent(
           apiHistory,
           preferences?.customPermissions,
         )
-      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? settings.agentModels[request.agent]);
+      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note);
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);

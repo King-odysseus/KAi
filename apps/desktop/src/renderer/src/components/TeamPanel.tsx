@@ -4,6 +4,8 @@ import {
   isLocalProvider,
   planWaves,
   resolveRole,
+  roleConfigFor,
+  tierModelFor,
   type AgentTeam,
   type AgentCapability,
   type AppSettings,
@@ -150,13 +152,24 @@ export function TeamPanel({
     const proxyCapable = assignee === 'api' || agentCapabilities.find((agent) => agent.id === assignee)?.supportsRoutes.includes('proxy');
     const current = draft?.assignments.find((item) => item.partId === id);
     const route: RouteMode = current?.route === 'proxy' && proxyCapable ? 'proxy' : 'direct';
-    changeAssignment(id, { assignee, route, billing: billingFor(assignee, route, localApi), reason: `You chose ${nameOf(assignee, agentCapabilities)} for this part.` });
+    const model = modelFor(id, assignee, route);
+    changeAssignment(id, { assignee, route, model, billing: billingFor(assignee, route, localApi), reason: `You chose ${nameOf(assignee, agentCapabilities)} for this part.${model ? ` It runs on ${model}.` : ''}` });
   }
 
   function chooseRoute(id: string, route: RouteMode): void {
     const current = draft?.assignments.find((item) => item.partId === id);
     if (!current) return;
-    changeAssignment(id, { route, billing: billingFor(current.assignee, route, localApi) });
+    changeAssignment(id, { route, model: modelFor(id, current.assignee, route), billing: billingFor(current.assignee, route, localApi) });
+  }
+
+  /** The role's pinned model, else the one for the part's level; a model named for one agent never follows the part to another. */
+  function modelFor(id: string, assignee: TeamResolvedAssignee, route: RouteMode): string | undefined {
+    const part = draft?.parts.find((item) => item.id === id);
+    if (!part) return undefined;
+    const pinned = roleConfigFor(team, part.role).model;
+    if (pinned) return pinned;
+    if (assignee === 'api' || route !== 'direct') return undefined;
+    return tierModelFor(settings.autoModel, assignee, part.effort ?? 'standard');
   }
 
   function removePart(id: string): void {

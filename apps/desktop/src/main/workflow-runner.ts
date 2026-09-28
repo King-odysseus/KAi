@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { planWaves, stepAccess } from '@kai/contracts';
+import { classifyWork, planWaves, stepAccess } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -451,7 +451,8 @@ export class DesktopWorkflowRunner {
         execution: current.execution ?? execution,
         route: current.route ?? plan.route,
         autonomy: current.autonomy ?? plan.autonomy,
-        ...(stepModel ? { model: stepModel } : {}),
+        // Judged on the step's own prompt: the earlier steps' output appended to it would make every step look heavy.
+        ...(stepModel ? { model: stepModel } : { effort: classifyWork(current.prompt).level }),
         ...(current.role ? { freshSession: true } : {}),
       }, active.ownerWindowId, copy ? { cwd: copy.cwd } : undefined);
     } catch (error) {

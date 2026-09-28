@@ -39,9 +39,10 @@ export function buildOrchestratorPrompt(goal: string, team?: TeamLike): string {
     '- Include a "tests" part when code changes. Include "docs" only when behaviour users see changes or the goal asks for it.',
     '- Reviews are added automatically when needed, so you do not have to add them.',
     '- "paths" lists the folders or files a part should stay within.',
+    '- "effort" is "light" for small mechanical edits (renames, copy, styling, config), "heavy" for design, cross-cutting changes or hard bugs, and "standard" otherwise. KAI picks a smaller or larger model from it.',
     '',
     'Reply with ONLY a JSON object, no other text, in exactly this shape:',
-    '{"summary":"one sentence","parts":[{"id":"ui","title":"Login form","role":"frontend","prompt":"What to do, in full.","dependsOn":[],"paths":["src/components/"]}]}',
+    '{"summary":"one sentence","parts":[{"id":"ui","title":"Login form","role":"frontend","prompt":"What to do, in full.","dependsOn":[],"paths":["src/components/"],"effort":"standard"}]}',
   ].join('\n');
 }
 

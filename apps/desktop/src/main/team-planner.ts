@@ -20,7 +20,7 @@ import {
   type TeamRecordAdvice,
   type TeamRecordQuery,
 } from '@kai/contracts';
-import { assignTeam, completeTeam, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
+import { assignTeam, completeTeam, partLevel, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
 import {
   applyGuardrails,
   buildOrchestratorPrompt,
@@ -85,7 +85,9 @@ export class DesktopTeamPlanner {
     if (!parsed.ok) throw new Error(`The orchestrator did not return a usable plan (${parsed.error}). Try again, or pick a different orchestrator in Settings.`);
 
     const guarded = applyGuardrails(input.goal, parsed.plan.parts, team);
-    const ordered = orderParts(guarded.parts) ?? guarded.parts;
+    // Every part leaves with a level, so the plan card can pick the matching model when the user changes its agent.
+    const ordered = (orderParts(guarded.parts) ?? guarded.parts)
+      .map((part) => ({ ...part, effort: partLevel(part, resolveRole(team, part.role).access) }));
     const assigned = assignTeam(ordered, team, env);
     return {
       id: `team_${crypto.randomUUID()}`,
@@ -182,12 +184,13 @@ export class DesktopTeamPlanner {
   }
 
   private async environment(projectId?: string): Promise<AssignmentEnvironment> {
-    const [capabilities, api, proxyReady, records] = await Promise.all([
+    const [capabilities, api, proxyReady, records, settings] = await Promise.all([
       this.ports.agentCapabilities(),
       this.ports.directApi(),
       this.ports.proxyReady(),
       this.ports.teamRecords?.() ?? Promise.resolve([]),
+      this.ports.settings(),
     ]);
-    return { capabilities, api, proxyReady, platform: process.platform, records, projectId };
+    return { capabilities, api, proxyReady, platform: process.platform, records, projectId, autoModel: settings.autoModel };
   }
 }

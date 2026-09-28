@@ -1,10 +1,12 @@
 import {
+  classifyWork,
   createDefaultAgentTeam,
   isBuiltInRole,
   resolveRole,
   roleConfigFor,
   type AgentCapability,
   type AgentTeam,
+  type AutoModelSettings,
   type RouteMode,
   type TeamAssignment,
   type TeamBilling,
@@ -15,6 +17,9 @@ import {
   type TeamRecordEntry,
   type TeamRecordAdvice,
   TEAM_ROLE_IDS,
+  tierModelFor,
+  WORK_LEVEL_LABEL,
+  type WorkLevel,
 } from '@kai/contracts';
 import { betterRecord, MIN_TEAM_JOBS, recordPhrase, roleRecord } from './team-record';
 
@@ -28,6 +33,29 @@ export interface AssignmentEnvironment {
   platform?: NodeJS.Platform;
   records?: readonly TeamRecordEntry[];
   projectId?: string;
+  /** Models to use for light, standard and heavy parts; absent or disabled leaves the model to the agent. */
+  autoModel?: AutoModelSettings;
+}
+
+/** A reviewer that skims misses things, so a read-only part never runs on the light model. */
+export function partLevel(part: Pick<TeamPart, 'title' | 'prompt' | 'paths' | 'effort'>, access: 'read' | 'edit'): WorkLevel {
+  const level = part.effort ?? classifyWork(`${part.title}
+${part.prompt}`, { fileCount: part.paths.length }).level;
+  return access === 'read' && level === 'light' ? 'standard' : level;
+}
+
+/**
+ * The model a part runs on when its role has none pinned. Only CLIs on their own subscription are steered: the
+ * proxy maps models itself, and API mode uses the provider model from Settings.
+ */
+export function autoModelFor(
+  assignee: TeamResolvedAssignee,
+  route: RouteMode,
+  level: WorkLevel,
+  autoModel: AutoModelSettings | undefined,
+): string | undefined {
+  if (assignee === 'api' || route !== 'direct') return undefined;
+  return tierModelFor(autoModel, assignee, level);
 }
 
 export interface Reach {
@@ -262,13 +290,18 @@ export function assignTeam(parts: readonly TeamPart[], teamInput: AgentTeam, env
     }
     if (info.access === 'edit') authors.add(choice.assignee);
     const record = roleRecord(env.records ?? [], part.role, choice.assignee, env.projectId);
-    if (record) reason = `${reason} ${agentName(choice.assignee, env)} ${recordPhrase(record)}.`.slice(0, 500);
+    if (record) reason = `${reason} ${agentName(choice.assignee, env)} ${recordPhrase(record)}.`;
+    const level = partLevel(part, info.access);
+    const tierModel = config.model ? undefined : autoModelFor(choice.assignee, choice.reach.route, level, env.autoModel);
+    if (tierModel) reason = `${reason} ${WORK_LEVEL_LABEL[level]} work, so it runs on ${tierModel}.`;
+    const model = config.model ?? tierModel;
+    reason = reason.slice(0, 500);
     byPart.set(part.id, {
       partId: part.id,
       assignee: choice.assignee,
       suggestedAssignee: choice.assignee,
       route: choice.reach.route,
-      ...(config.model ? { model: config.model } : {}),
+      ...(model ? { model } : {}),
       reason,
       billing: billingFor(choice.assignee, choice.reach.route, env.api.local),
     });

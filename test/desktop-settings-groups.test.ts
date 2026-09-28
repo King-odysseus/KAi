@@ -30,7 +30,7 @@ describe('per-card settings saves', () => {
     const draft = createDefaultSettings();
     expect(Object.keys(updateForGroups(draft, ['proxy', 'editor'])).sort()).toEqual(['editor', 'proxy']);
     expect(Object.keys(updateForGroups(draft, SETTINGS_GROUP_NAMES)).sort()).toEqual([
-      'agentModels', 'agentTeam', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
+      'agentModels', 'agentTeam', 'autoModel', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
       'directApi', 'editor', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'notifications', 'proxy',
       'shortcuts', 'theme',
     ]);

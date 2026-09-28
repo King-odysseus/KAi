@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { cliModelNameSchema, conversationRecordV1Schema } from './domain';
 import { contextChipSchema } from './context';
+import { workLevelSchema } from './model-tiers';
 import { persistedEventV1Schema } from './events';
 import { type AgentId, agentIdSchema, autonomyModeSchema, executionModeSchema, providerIdSchema, routeModeSchema } from './primitives';
 import { goalInputSchema } from './workbench';
@@ -37,6 +38,9 @@ export const agentRunRequestSchema = z
     contextChips: z.array(contextChipSchema).max(50).optional(),
     // Model for this run only. Without it the run uses the model from Settings (or the CLI's own default).
     model: cliModelNameSchema.optional(),
+    // How heavy the work is, when the caller already knows (a workflow step judged on its own prompt). Without it,
+    // and without a model, KAI estimates it from the prompt to pick a model.
+    effort: workLevelSchema.optional(),
     // Start a new agent session even if the conversation could resume one. Team parts use this so a reviewer
     // never inherits the session of the agent that wrote the code.
     freshSession: z.boolean().optional(),

@@ -576,6 +576,7 @@ export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdat
     updates: { ...settings.updates, ...update.updates },
     // A model map replaces the old one, so clearing a field removes that agent's override.
     agentModels: update.agentModels ?? settings.agentModels,
+    autoModel: update.autoModel ?? settings.autoModel,
     agentTeam: update.agentTeam ?? settings.agentTeam,
   };
 }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { AgentTeamCard } from './TeamSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
-import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
 import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
@@ -84,6 +84,14 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
       if (value.trim()) next[agent] = value.trim();
       else delete next[agent];
       return { ...current, agentModels: next };
+    });
+  };
+  const setTierModel = (agent: AppSettings['defaultAgent'], level: (typeof WORK_LEVELS)[number], value: string): void => {
+    setDraft((current) => {
+      const tier = { ...current.autoModel.tiers[agent] };
+      if (value.trim()) tier[level] = value.trim();
+      else delete tier[level];
+      return { ...current, autoModel: { ...current.autoModel, tiers: { ...current.autoModel.tiers, [agent]: tier } } };
     });
   };
   const updateMcpServer = (index: number, patch: McpServerPatch): void => {
@@ -381,12 +389,26 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
           <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><input type="checkbox" checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>CLI models</span></div>
-            <p className="settings-note">The model each CLI agent is asked to use. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>
+            <p className="settings-note">The model each CLI agent is asked to use when Auto model has none for the job. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>
             <div className="field-grid">
               {(['claude', 'codex', 'qwen', 'gemini', 'kimi'] as const).map((agent) => (
                 <label key={agent} className="field"><span>{agent} model</span><input value={draft.agentModels[agent] ?? ''} placeholder="CLI default" list={`cli-models-${agent}`} onChange={(event) => setAgentModel(agent, event.target.value)} /><datalist id={`cli-models-${agent}`}>{CLI_MODEL_SUGGESTIONS[agent].map((name) => <option key={name} value={name} />)}</datalist></label>
               ))}
             </div>
+          </div>
+          <div className="settings-subsection">
+            <div className="settings-subsection-title"><span>Auto model</span></div>
+            <NotificationToggle label="Pick the model by the size of the job" hint="Small edits use a light model and design work a heavy one. A model you pick for a chat or a team role always wins. Direct CLI runs only." checked={draft.autoModel.enabled} onChange={(enabled) => setDraft({ ...draft, autoModel: { ...draft.autoModel, enabled } })} />
+            {draft.autoModel.enabled && <div className="auto-model-grid">
+              {(['claude', 'codex', 'qwen', 'gemini', 'kimi'] as const).map((agent) => (
+                <fieldset key={agent} className="auto-model-row">
+                  <legend>{agent}</legend>
+                  {WORK_LEVELS.map((level) => (
+                    <label key={level} className="field"><span>{WORK_LEVEL_LABEL[level]}</span><input aria-label={`${agent} ${level} model`} value={draft.autoModel.tiers[agent]?.[level] ?? ''} placeholder="Unchanged" list={`cli-models-${agent}`} onChange={(event) => setTierModel(agent, level, event.target.value)} /></label>
+                  ))}
+                </fieldset>
+              ))}
+            </div>}
           </div>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>Tray and notifications</span></div>

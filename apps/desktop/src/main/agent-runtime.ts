@@ -346,6 +346,8 @@ export class DesktopAgentRuntime {
     onEvent?: (event: PersistedEvent) => void,
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
     model?: string,
+    /** Why KAI chose the model, when it chose it; shown on the run's first line. */
+    modelNote?: string,
   ): Promise<AgentExecutionResult> {
     const definition = AGENTS[request.agent];
     const capability = await this.capability(request.agent);
@@ -400,7 +402,9 @@ export class DesktopAgentRuntime {
     const active: ActiveAgentRun = { controller, child: null, paused: false };
     this.activeRuns.set(request.conversationId, active);
 
-    const events: PersistedEvent[] = [lifecycleEvent(request, 'starting', `${definition.displayName} starting.`)];
+    const events: PersistedEvent[] = [lifecycleEvent(request, 'starting', model
+      ? `${definition.displayName} starting on ${model}${modelNote ? ` (${modelNote})` : ''}.`
+      : `${definition.displayName} starting.`)];
     const outputParts: string[] = [];
     const errors: string[] = [];
     let sessionId = resumeSessionId;

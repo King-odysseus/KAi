@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { workLevelSchema } from './model-tiers';
 import { agentIdSchema, autonomyModeSchema, routeModeSchema, timestampSchema } from './primitives';
 
 /** The built-in team roles. The orchestrator plans the job; every other role does or reviews one part of it. */
@@ -88,6 +89,8 @@ export const teamPartSchema = z
     dependsOn: z.array(z.string().min(1).max(40)).max(12).default([]),
     // Folders or files this part may touch, as the orchestrator reported them.
     paths: z.array(z.string().min(1).max(300)).max(20).default([]),
+    // How heavy the part is, as the orchestrator judged it; KAI picks the part's model from it.
+    effort: workLevelSchema.optional(),
   })
   .strict();
 
