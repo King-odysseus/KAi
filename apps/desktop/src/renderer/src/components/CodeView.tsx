@@ -15,12 +15,15 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type {
+  CodeFormatResult,
   GitFileInfo,
   EditorWindowSnapshot,
   LearningAction,
   LearningAssistance,
   LearningEvaluationResult,
   LearningExplainBackGrade,
+  LearningExplainBackHelp,
+  LearningExplainBackHelpKind,
   LearningProgress,
   LearningReadiness,
   LearningTutorScope,
@@ -34,6 +37,9 @@ import type {
   TeachingLibraryEntryInput,
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
+import { placeSuggestion } from '../learning-placement';
+import { GitBadge } from './GitBadge';
+import { changeMap, type FileChange } from './project-files-tree';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { LearningPanel, type LearningSelectionPreview, type TutorConversationTurn } from './LearningPanel';
@@ -205,6 +211,7 @@ export function CodeView({
   editorState,
   autoSave,
   autoSaveDelayMs,
+  formatOnSave = true,
   onOpenSettings,
   openRequest = null,
 }: {
@@ -214,6 +221,7 @@ export function CodeView({
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
   autoSaveDelayMs: number;
+  formatOnSave?: boolean;
   onOpenSettings: () => void;
 }): ReactNode {
   const projectId = activeProject?.id ?? null;
@@ -317,6 +325,38 @@ export function CodeView({
   openPathsRef.current = openPaths;
   projectIdRef.current = projectId;
   autoSaveConfigRef.current = { enabled: autoSave, delayMs: autoSaveDelayMs };
+  // Read through a ref: the Ctrl+S command is registered once, when the editor is created.
+  const formatOnSaveRef = useRef(formatOnSave);
+  formatOnSaveRef.current = formatOnSave;
+  // Languages whose missing formatter was already mentioned, so each save does not repeat it.
+  const missingFormatterNoted = useRef(new Set<string>());
+  // Git state for the file tree: what changed since the last commit and whether it is staged.
+  const [gitChanges, setGitChanges] = useState<ReadonlyMap<string, FileChange>>(new Map());
+  const refreshGitChanges = useCallback(async (): Promise<void> => {
+    const id = projectIdRef.current;
+    if (!id) {
+      setGitChanges(new Map());
+      return;
+    }
+    try {
+      const overview = unwrap(await window.kaiDesktop.gitOverview(id));
+      if (projectIdRef.current === id) setGitChanges(overview.isRepository ? changeMap(overview.changes) : new Map());
+    } catch {
+      // The badges are a convenience; a failed status check leaves the last known state.
+    }
+  }, []);
+  // How many changed files each folder holds, so a collapsed folder still shows something changed inside it.
+  const changedInFolder = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const path of gitChanges.keys()) {
+      const parts = path.split('/');
+      for (let index = 1; index < parts.length; index += 1) {
+        const folder = parts.slice(0, index).join('/');
+        counts.set(folder, (counts.get(folder) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [gitChanges]);
   diskChangedRef.current = diskChanged;
   learningStateRef.current = { projectId, filePath: activePath, assistance, scope: learningScope, inlineSuggestions, progress };
 
@@ -523,6 +563,20 @@ export function CodeView({
     }
   }, [loadTree, projectId]);
 
+  // Git state changes from outside the editor too (agents, the terminal, the Git page), so it is checked on a
+  // slow timer and whenever the window comes back into focus.
+  useEffect(() => {
+    setGitChanges(new Map());
+    void refreshGitChanges();
+    const timer = window.setInterval(() => void refreshGitChanges(), 10_000);
+    const onFocus = (): void => { void refreshGitChanges(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [projectId, refreshGitChanges]);
+
   // Create the editor once, on first use.
   useEffect(() => {
     let disposed = false;
@@ -572,6 +626,9 @@ export function CodeView({
       }));
 
       for (const action of ['explain-selection', 'explain-file', 'hint', 'check-code', 'next-step', 'complete'] as LearningAction[]) {
+        // Code-action commands are looked up globally, but addAction registers under an editor-prefixed id,
+        // so the lightbulb entries need their own global command to resolve to.
+        disposables.push(monaco.editor.registerCommand(`kai.learning.${action}`, () => void learningActionRef.current(action)));
         editor.addAction({
           id: `kai.learning.${action}`,
           label: `KAI Learning: ${action.replace('-', ' ')}`,
@@ -824,6 +881,9 @@ export function CodeView({
     if (!currentProjectId || !document) return;
     clearAutoSaveTimer(path);
     if (mode === 'auto') autoSaveInFlight.current.add(path);
+    // Only a save the learner asked for formats; autosave would reshuffle the file while they type.
+    const formatNote = mode === 'manual' && formatOnSaveRef.current ? await formatDocument(currentProjectId, path, document, 'save') : '';
+    if (projectIdRef.current !== currentProjectId || documents.current.get(path) !== document) return;
     const content = document.model.getValue();
     let saveConflict = false;
     try {
@@ -849,7 +909,8 @@ export function CodeView({
       const stillLatest = document.model.getValue() === content;
       setDirty((current) => ({ ...current, [path]: !stillLatest }));
       reportDocument(currentProjectId, path, document);
-      setNotice(`${mode === 'auto' ? 'Autosaved' : 'Saved'} ${path}`);
+      setNotice(`${mode === 'auto' ? 'Autosaved' : 'Saved'} ${path}${formatNote}`);
+      void refreshGitChanges();
       if (stillLatest) setDiskChanged(null);
     } finally {
       if (mode === 'auto') {
@@ -975,6 +1036,18 @@ export function CodeView({
       return result.grade;
     } catch (error) {
       if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'Could not check your explanation.');
+      return null;
+    }
+  }
+
+  async function explainBackHelp(lessonId: string, lessonQuestion: string, kind: LearningExplainBackHelpKind): Promise<LearningExplainBackHelp | null> {
+    const id = projectId;
+    if (!id) return null;
+    try {
+      const help = unwrap(await window.kaiDesktop.explainLearningBackHelp({ projectId: id, lessonId, question: lessonQuestion, kind }));
+      return projectIdRef.current === id ? help : null;
+    } catch (error) {
+      if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'The tutor could not help with that question.');
       return null;
     }
   }
@@ -1133,6 +1206,34 @@ export function CodeView({
     }
   }
 
+  /**
+   * Opens the file the tutor named and puts the code at its anchor. The anchor has to be found exactly once, which
+   * is what makes this safe after the file changed; otherwise nothing is edited and the learner is told why.
+   */
+  async function placeSuggestionInFile(): Promise<void> {
+    const suggestion = learningResult?.response.suggestion;
+    const placement = suggestion?.placement;
+    const originProject = projectIdRef.current;
+    if (!suggestion || !placement || !originProject) return;
+    if (activeRef.current !== placement.filePath) await openFile(placement.filePath);
+    const editor = editorRef.current;
+    const document = documents.current.get(placement.filePath);
+    const monaco = monacoRef.current;
+    if (projectIdRef.current !== originProject || activeRef.current !== placement.filePath || !editor || !document || !monaco) return;
+    const placed = placeSuggestion(document.model.getLinesContent(), placement, suggestion.code);
+    if (!placed.ok) {
+      setNotice(`${placed.reason} Put your cursor where it goes and use Insert at cursor instead.`);
+      return;
+    }
+    const { range, text, insertedLines } = placed.edit;
+    document.model.pushEditOperations([], [{ range: new monaco.Range(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn), text }], () => null);
+    editor.setSelection({ startLineNumber: insertedLines.start, startColumn: 1, endLineNumber: insertedLines.end, endColumn: document.model.getLineMaxColumn(insertedLines.end) });
+    editor.revealLinesInCenter(insertedLines.start, insertedLines.end);
+    editor.focus();
+    setAppliedSuggestionNeedsExplanation(true);
+    setNotice(`Put the tutor suggestion in ${placement.filePath} at line ${insertedLines.start}. Review it, run the relevant check, and save when you are satisfied.`);
+  }
+
   function insertSuggestion(): void {
     const suggestion = learningResult?.response.suggestion;
     const editor = editorRef.current;
@@ -1235,22 +1336,49 @@ export function CodeView({
     }
   }
 
+  /**
+   * Formats one open file in place, as a single undoable edit that keeps the cursor and scroll position. Returns a
+   * short note for the save message ('' when there is nothing to say). If the learner typed while the formatter
+   * ran, the result is dropped rather than overwriting what they typed.
+   */
+  async function formatDocument(currentProjectId: string, path: string, document: OpenDocument, reason: 'save' | 'button'): Promise<string> {
+    const version = document.model.getVersionId();
+    let result: CodeFormatResult;
+    try {
+      result = unwrap(await window.kaiDesktop.formatCode({ projectId: currentProjectId, filePath: path, content: document.model.getValue() }));
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'The file could not be formatted.';
+      return reason === 'save' ? `, not formatted. ${message}` : message;
+    }
+    if (result.skipped) {
+      if (reason === 'button') return result.skipped.reason;
+      // On save, only a missing tool is worth saying, and only once per file type.
+      const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
+      if (!result.skipped.missingTool || missingFormatterNoted.current.has(extension)) return '';
+      missingFormatterNoted.current.add(extension);
+      return `, not formatted. ${result.skipped.reason}`;
+    }
+    if (projectIdRef.current !== currentProjectId || documents.current.get(path) !== document || document.model.getVersionId() !== version) {
+      return reason === 'save' ? ', not formatted because the file changed while formatting' : 'The file changed while formatting, so it was left as it is.';
+    }
+    const formatter = /^[a-z]/.test(result.parser) ? `Prettier (${result.parser})` : result.parser;
+    if (!result.changed) return reason === 'save' ? '' : `${path} is already formatted.`;
+    const editor = editorRef.current;
+    const viewState = editor && editor.getModel() === document.model ? editor.saveViewState() : null;
+    document.model.pushEditOperations([], [{ range: document.model.getFullModelRange(), text: result.formatted }], () => null);
+    if (viewState && editor?.getModel() === document.model) editor.restoreViewState(viewState);
+    return reason === 'save' ? `, formatted with ${formatter}` : `Formatted ${path} with ${formatter}.`;
+  }
+
   async function formatActive(): Promise<void> {
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
-    if (!projectId || !path || !document) return;
+    const currentProjectId = projectIdRef.current;
+    if (!currentProjectId || !path || !document) return;
     setFormatting(true);
     setNotice(null);
     try {
-      const result = unwrap(await window.kaiDesktop.formatCode({ projectId, filePath: path, content: document.model.getValue() }));
-      if (!result.changed) {
-        setNotice(`${path} is already formatted.`);
-        return;
-      }
-      document.model.pushEditOperations([], [{ range: document.model.getFullModelRange(), text: result.formatted }], () => null);
-      setNotice(`Formatted ${path} with Prettier (${result.parser}).`);
-    } catch (caught) {
-      setNotice(caught instanceof Error ? caught.message : 'The file could not be formatted.');
+      setNotice(await formatDocument(currentProjectId, path, document, 'button'));
     } finally {
       setFormatting(false);
     }
@@ -1262,25 +1390,35 @@ export function CodeView({
     return needle ? files.filter((file) => file.path.toLowerCase().includes(needle)).slice(0, 200) : null;
   }, [files, query]);
 
+  /** One file in the tree: coloured by its Git state, with the badge, and a dot while it has unsaved edits. */
+  function renderFile(path: string, label: string, depth: number): ReactNode {
+    const change = gitChanges.get(path);
+    return (
+      <button key={path} type="button" className={`code-tree-item ${activePath === path ? 'active' : ''} ${change ? `git-${change.kind}` : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => void openFile(path)} title={path}>
+        <FileIcon size={12} /><span className="truncate">{label}</span>
+        {dirty[path] && <span className="code-dirty" aria-label="Unsaved changes">●</span>}
+        {change && <GitBadge change={change} />}
+      </button>
+    );
+  }
+
   function renderNode(node: TreeNode, depth: number): ReactNode {
     return sortedChildren(node).map((child) => {
       if (child.file) {
-        return (
-          <button key={child.path} type="button" className={`code-tree-item ${activePath === child.path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => void openFile(child.path)} title={child.path}>
-            <FileIcon size={12} /><span className="truncate">{child.name}</span>{dirty[child.path] && <span className="code-dirty" aria-label="Unsaved changes">●</span>}
-          </button>
-        );
+        return renderFile(child.path, child.name, depth);
       }
       const open = expanded.has(child.path);
+      const changedInside = changedInFolder.get(child.path) ?? 0;
       return (
         <div key={child.path}>
-          <button type="button" className="code-tree-item folder" style={{ paddingLeft: 8 + depth * 12 }} aria-expanded={open} onClick={() => setExpanded((current) => {
+          <button type="button" className={`code-tree-item folder ${changedInside > 0 ? 'has-changes' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} aria-expanded={open} onClick={() => setExpanded((current) => {
             const next = new Set(current);
             if (open) next.delete(child.path);
             else next.add(child.path);
             return next;
           })}>
             {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<Folder size={12} /><span className="truncate">{child.name}</span>
+            {changedInside > 0 && <b className="files-folder-count" title={`${changedInside} changed file${changedInside === 1 ? '' : 's'} in this folder`}>{changedInside}</b>}
           </button>
           {open && renderNode(child, depth + 1)}
         </div>
@@ -1307,11 +1445,11 @@ export function CodeView({
         <div className="code-sidebar-head">
           <label className="input-with-icon"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" aria-label="Search files" /></label>
           <button type="button" className="icon-button compact" title="New file" aria-label="New file" onClick={() => void createFile()}><FilePlus size={14} /></button>
-          <button type="button" className="icon-button compact" title="Refresh files" aria-label="Refresh files" onClick={() => void loadTree()}><RefreshCw size={14} /></button>
+          <button type="button" className="icon-button compact" title="Refresh files" aria-label="Refresh files" onClick={() => { void loadTree(); void refreshGitChanges(); }}><RefreshCw size={14} /></button>
         </div>
         <div className="code-tree">
           {filtered
-            ? filtered.map((file) => <button key={file.path} type="button" className={`code-tree-item ${activePath === file.path ? 'active' : ''}`} onClick={() => void openFile(file.path)} title={file.path}><FileIcon size={12} /><span className="truncate">{file.path}</span></button>)
+            ? filtered.map((file) => renderFile(file.path, file.path, 0))
             : renderNode(root, 0)}
           {files.length === 0 && <div className="empty-list">No editable files</div>}
           {truncated && <div className="settings-note">Showing the first {files.length} files.</div>}
@@ -1343,8 +1481,10 @@ export function CodeView({
           ))}
           <span className="code-tabs-spacer" />
           {autoSave && activePath && dirty[activePath] && <span className="code-autosave-status" role="status">Autosave on</span>}
-          <button type="button" className="icon-button compact" title="Format with Prettier" aria-label="Format with Prettier" disabled={!activePath || formatting} onClick={() => void formatActive()}><Braces size={14} /></button>
           <button type="button" className={`icon-button compact ${tutorOpen ? 'active' : ''}`} title={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} aria-label={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} onClick={() => setTutorOpen((current) => !current)}><PanelRightOpen size={14} /></button>
+          <button type="button" className="secondary-button" title={formatOnSave ? 'Format this file now (saving with Ctrl+S also formats it)' : 'Format this file now'} disabled={!activePath || formatting} onClick={() => void formatActive()}>
+            {formatting ? <RefreshCw size={13} className="spin" /> : <Braces size={13} />}<span>Format</span>
+          </button>
           <button type="button" className="secondary-button" disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></button>
         </div>
         {diskChanged && (
@@ -1391,6 +1531,7 @@ export function CodeView({
             }}
             onUnderstood={(lessonId) => void markUnderstood(lessonId)}
             onExplainBack={explainBack}
+            onExplainBackHelp={explainBackHelp}
             onRunCheck={runLearningCheck}
             projectName={activeProject?.name ?? null}
             progress={progress && optimisticPreferences ? { ...progress, preferences: optimisticPreferences } : progress}
@@ -1400,7 +1541,6 @@ export function CodeView({
             selection={learningSelection}
             gitInfo={gitInfo}
             busy={learningBusy}
-            formatting={formatting}
             error={learningError}
             question={question}
             submittedQuestion={submittedQuestion}
@@ -1417,6 +1557,7 @@ export function CodeView({
             }}
             onPreferences={(nextAssistance, nextInline, modes) => void updatePreferences(nextAssistance, nextInline, modes)}
             onInsertSuggestion={insertSuggestion}
+            onPlaceSuggestion={() => void placeSuggestionInFile()}
             appliedSuggestionNeedsExplanation={appliedSuggestionNeedsExplanation}
             onExplainAppliedSuggestion={() => {
               setQuestion('I applied the Tutor suggestion. I think it works because ');
@@ -1425,7 +1566,6 @@ export function CodeView({
             onStuck={() => void runLearningAction('next-step', false, Math.min(3, hintLevel + 1) as 1 | 2 | 3)}
             hintLevel={hintLevel}
             onRecordLesson={lastLearningRequest.current ? () => void recordLesson() : undefined}
-            onFormat={() => void formatActive()}
             teachingLibrary={teachingLibrary}
             teachingBusy={teachingBusy}
             onSaveTeachingEntry={saveTeachingEntry}

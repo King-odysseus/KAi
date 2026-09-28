@@ -161,6 +161,8 @@ import {
   codeFormatResultSchema,
   gitFileInfoSchema,
   learningEvaluationResultSchema,
+  learningExplainBackHelpInputSchema,
+  learningExplainBackHelpSchema,
   learningExplainBackInputSchema,
   learningExplainBackResultSchema,
   learningLessonRecordInputSchema,
@@ -178,6 +180,8 @@ import {
   type CodeFormatResult,
   type GitFileInfo,
   type LearningEvaluationResult,
+  type LearningExplainBackHelp,
+  type LearningExplainBackHelpInput,
   type LearningExplainBackInput,
   type LearningExplainBackResult,
   type LearningLessonRecordInput,
@@ -272,6 +276,7 @@ export const ipcChannels = [
   'learning:progress',
   'learning:understood',
   'learning:explain-back',
+  'learning:explain-back-help',
   'learning:readiness',
   'learning:update-preferences',
   'learning:evaluate',
@@ -425,6 +430,7 @@ export const ipcInputSchemas = {
         .object({
           autoSave: z.boolean().optional(),
           autoSaveDelayMs: z.number().int().min(300).max(10_000).optional(),
+          formatOnSave: z.boolean().optional(),
         })
         .strict()
         .optional(),
@@ -474,6 +480,7 @@ export const ipcInputSchemas = {
   'editor:update-window': editorWindowSnapshotSchema,
   'learning:understood': z.object({ projectId: z.string().min(1), lessonId: z.string().min(1) }).strict(),
   'learning:explain-back': learningExplainBackInputSchema,
+  'learning:explain-back-help': learningExplainBackHelpInputSchema,
   'learning:progress': z.object({ projectId: z.string().min(1) }).strict(),
   'learning:readiness': emptyInputSchema,
   'learning:update-preferences': learningPreferencesInputSchema,
@@ -677,6 +684,7 @@ export const learningProgressResponseSchema = learningProgressSchema;
 export const learningReadinessResponseSchema = learningReadinessSchema;
 export const learningEvaluationResponseSchema = learningEvaluationResultSchema;
 export const learningExplainBackResponseSchema = learningExplainBackResultSchema;
+export const learningExplainBackHelpResponseSchema = learningExplainBackHelpSchema;
 export const learningLessonRecordResponseSchema = learningLessonRecordResultSchema;
 export const teachingLibraryResponseSchema = teachingLibrarySchema;
 export const teachingDraftResponseSchema = teachingDraftSchema;
@@ -807,6 +815,7 @@ export interface KaiDesktopBridge {
   onEditorDocumentsSaved(listener: (documents: EditorSavedDocument[]) => void): () => void;
   markLearningUnderstood(projectId: string, lessonId: string): Promise<IpcResponse<LearningProgress>>;
   explainLearningBack(input: LearningExplainBackInput): Promise<IpcResponse<LearningExplainBackResult>>;
+  explainLearningBackHelp(input: LearningExplainBackHelpInput): Promise<IpcResponse<LearningExplainBackHelp>>;
   learningProgress(projectId: string): Promise<IpcResponse<LearningProgress>>;
   learningReadiness(): Promise<IpcResponse<LearningReadiness>>;
   updateLearningPreferences(input: LearningPreferencesInput): Promise<IpcResponse<LearningProgress>>;

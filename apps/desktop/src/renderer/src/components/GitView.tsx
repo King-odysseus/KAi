@@ -1,8 +1,10 @@
-import { ArrowDown, ArrowUp, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowUp, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { GitChange, GitOverview, GitSyncAction, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { GitBadge } from './GitBadge';
+import { changeKindOf } from './project-files-tree';
 
 const POLL_MS = 10_000;
 
@@ -23,6 +25,8 @@ export function GitView({ activeProject }: { activeProject: ProjectRecord | null
   const [newBranch, setNewBranch] = useState('');
   const [selectedBranch, setSelectedBranch] = useState('');
   const [diff, setDiff] = useState<{ path: string; text: string } | null>(null);
+  // The file being staged or unstaged, so its row shows a spinner until Git answers.
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [pr, setPr] = useState({ title: '', body: '' });
 
   const refresh = useCallback(async () => {
@@ -139,15 +143,44 @@ export function GitView({ activeProject }: { activeProject: ProjectRecord | null
                 <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => void act('Stage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, overview.changes.map((change) => change.path), true)).output, 'Staged everything.')}>Stage all</button>
                 <button type="button" className="secondary-button" disabled={busy !== null || staged.length === 0} onClick={() => void act('Unstage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, staged.map((change) => change.path), false)).output, 'Unstaged everything.')}>Unstage all</button>
               </div>
-              <ul className="git-list">
-                {overview.changes.map((change) => (
-                  <li key={change.path}>
-                    <input type="checkbox" aria-label={`${change.staged ? 'Unstage' : 'Stage'} ${change.path}`} checked={change.staged} disabled={busy !== null} onChange={() => void act(change.staged ? 'Unstage' : 'Stage', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, [change.path], !change.staged)).output, `${change.staged ? 'Unstaged' : 'Staged'} ${change.path}.`)} />
-                    <button type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, change.staged && !change.unstaged).then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><span className="truncate">{change.path}</span></button>
-                    <small>{describeChange(change)}</small>
-                  </li>
-                ))}
-              </ul>
+              {(['staged', 'unstaged'] as const).map((group) => {
+                // A partly staged file is listed in both groups, each showing its own half of the change.
+                const rows = overview.changes.filter((change) => group === 'staged' ? change.staged : change.unstaged || !change.staged);
+                if (rows.length === 0) return null;
+                const staging = group === 'unstaged';
+                return (
+                  <div key={group} className={`git-change-group ${group}`}>
+                    <h3>{staging ? 'Changes' : 'Staged for commit'} <span>{rows.length}</span></h3>
+                    <ul className="git-list">
+                      {rows.map((change) => {
+                        const kind = changeKindOf(change);
+                        const shown = { kind, staged: group === 'staged', unstaged: group === 'unstaged' };
+                        const pending = busy !== null && pendingPath === change.path;
+                        return (
+                          <li key={`${group}:${change.path}`} className={`git-${kind}`}>
+                            <GitBadge change={shown} />
+                            <button type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, group === 'staged').then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><span className="truncate">{change.path}</span></button>
+                            <small>{describeChange(change)}</small>
+                            <button
+                              type="button"
+                              className="icon-button compact"
+                              aria-label={`${staging ? 'Stage' : 'Unstage'} ${change.path}`}
+                              title={staging ? 'Stage: include in the next commit' : 'Unstage: leave out of the next commit'}
+                              disabled={busy !== null}
+                              onClick={() => {
+                                setPendingPath(change.path);
+                                void act(staging ? 'Stage' : 'Unstage', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, [change.path], staging)).output, `${staging ? 'Staged' : 'Unstaged'} ${change.path}.`);
+                              }}
+                            >
+                              {pending ? <Loader2 size={13} className="spin" /> : staging ? <Plus size={13} /> : <Minus size={13} />}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                );
+              })}
               {diff && <div className="git-diff"><div className="ops-card-head"><strong>{diff.path}</strong><button type="button" className="secondary-button" onClick={() => setDiff(null)}>Close</button></div><pre>{diff.text}</pre></div>}
             </>
           )}

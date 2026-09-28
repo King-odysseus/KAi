@@ -8781,6 +8781,12 @@ code {
 .learning-explain-back.solid .learning-explain-back-grade strong { color: var(--mint); }
 .learning-explain-back.partial .learning-explain-back-grade strong { color: var(--warning); }
 .learning-explain-back.missing .learning-explain-back-grade strong { color: var(--red); }
+.learning-explain-back-help { display: grid; gap: 4px; padding: 7px 8px; border-left: 2px solid var(--lavender); border-radius: 6px; background: var(--bg-input); }
+.learning-explain-back-help.answer { border-left-color: var(--mint); }
+.learning-explain-back-help strong { color: var(--lavender); font-size: 12px; }
+.learning-explain-back-help.answer strong { color: var(--mint); }
+.learning-explain-back-help p { margin: 0; color: var(--text); font-size: 11.5px; line-height: 1.5; }
+.learning-explain-back-help small { color: var(--text-dim); font-size: 10.5px; }
 
 .change-safety-summary {
   display: flex;
@@ -9470,6 +9476,12 @@ code {
 .files-count.deleted i, .files-badge.deleted { color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
 .files-count.renamed i, .files-badge.renamed { color: #6fa8ff; background: rgba(111, 168, 255, 0.16); }
 .files-count.conflict i, .files-badge.conflict { color: #fff; background: var(--red); }
+
+/* Where a change stands for the next commit: solid is staged, an outline is not, and a filled corner is partly. */
+.files-badge.unstaged { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+.files-badge.staged { background: currentColor; }
+.files-badge.staged > span { color: var(--bg-deep); }
+.files-badge.partly-staged { background: linear-gradient(135deg, transparent 58%, currentColor 58%); box-shadow: inset 0 0 0 1px currentColor; }
 
 .files-search {
   display: flex;

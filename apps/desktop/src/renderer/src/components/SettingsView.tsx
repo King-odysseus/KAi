@@ -433,6 +433,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
               />
             </div>
           )}
+          <NotificationToggle
+            label="Format on save"
+            hint="Prettier for JS, TS, React, HTML, CSS, JSON, Markdown and YAML (built in); Ruff or Black, gofmt, rustfmt and clang-format when installed"
+            checked={draft.editor.formatOnSave}
+            onChange={(formatOnSave) => setDraft((current) => ({ ...current, editor: { ...current.editor, formatOnSave } }))}
+          />
           {cardSave('editor', 'Save editor settings', ['editor'])}
         </section>
 

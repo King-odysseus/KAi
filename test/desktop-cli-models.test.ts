@@ -64,14 +64,14 @@ describe('CLI model setting', () => {
     delete legacy.editor;
     const parsed = appSettingsV1Schema.parse(legacy);
     expect(parsed.agentModels).toEqual({});
-    expect(parsed.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000 });
+    expect(parsed.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000, formatOnSave: true });
   });
 
   it('replaces the whole map on update so clearing a field removes that override', () => {
     const settings = { ...createDefaultSettings(), agentModels: { codex: 'gpt-5.5', claude: 'claude-opus-5' } };
     expect(mergeSettingsUpdate(settings, { agentModels: { codex: 'gpt-6-astra' } }).agentModels).toEqual({ codex: 'gpt-6-astra' });
     expect(mergeSettingsUpdate(settings, {}).agentModels).toEqual({ codex: 'gpt-5.5', claude: 'claude-opus-5' });
-    expect(mergeSettingsUpdate(settings, { editor: { autoSave: false } }).editor).toEqual({ autoSave: false, autoSaveDelayMs: 1_000 });
+    expect(mergeSettingsUpdate(settings, { editor: { autoSave: false } }).editor).toEqual({ autoSave: false, autoSaveDelayMs: 1_000, formatOnSave: true });
   });
 });
 

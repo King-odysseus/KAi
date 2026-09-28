@@ -234,6 +234,8 @@ export const editorSettingsSchema = z
   .object({
     autoSave: z.boolean().default(true),
     autoSaveDelayMs: z.number().int().min(300).max(10_000).default(1_000),
+    // Formats a file when the learner saves it (Ctrl+S or the Save button); autosave never reformats mid-typing.
+    formatOnSave: z.boolean().default(true),
   })
   .strict();
 
@@ -415,6 +417,7 @@ export function createDefaultSettings(): AppSettings {
     editor: {
       autoSave: true,
       autoSaveDelayMs: 1_000,
+      formatOnSave: true,
     },
     mcpServers: [{
       id: PLAYWRIGHT_MCP_SERVER_ID,

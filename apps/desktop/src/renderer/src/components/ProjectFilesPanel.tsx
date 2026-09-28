@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, RefreshCw, Sea
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { GitChange } from '@kai/contracts';
 import { unwrap } from '../types';
+import { GitBadge } from './GitBadge';
 import {
   CHANGE_BADGE,
   CHANGE_LABEL,
@@ -195,7 +196,7 @@ function FileRow({ name, title, depth, change, onOpen }: {
     >
       <FileText size={13} />
       <span className="truncate">{name}</span>
-      {change && <i className={`files-badge ${change.kind}`} aria-label={CHANGE_LABEL[change.kind]}>{CHANGE_BADGE[change.kind]}</i>}
+      {change && <GitBadge change={change} />}
     </button>
   );
 }

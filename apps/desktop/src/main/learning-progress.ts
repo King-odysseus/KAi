@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { z } from 'zod';
 import {
+  MAX_SAVED_LESSONS,
   learningProgressSchema,
   type LearningEvidence,
   type LearningExplainBackGrade,
@@ -155,7 +156,7 @@ export class LearningProgressStore {
       ...progress,
       concepts: concepts.sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt)).slice(0, 500),
       recentEvidence: [...evidence, ...progress.recentEvidence].slice(0, 100),
-      lessons: [{ id: lessonId, createdAt, ...(request.filePath ? { filePath: request.filePath } : {}), response, understood: false }, ...(progress.lessons ?? []).filter((lesson) => lesson.id !== lessonId)].slice(0, 30),
+      lessons: [{ id: lessonId, createdAt, ...(request.filePath ? { filePath: request.filePath } : {}), response, understood: false }, ...(progress.lessons ?? []).filter((lesson) => lesson.id !== lessonId)].slice(0, MAX_SAVED_LESSONS),
       memory: {
         lessonId,
         lastLesson: response.title,

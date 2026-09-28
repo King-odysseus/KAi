@@ -21,7 +21,7 @@ describe('desktop contracts', () => {
     expect(settings.theme).toBe('dark');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(settings.learningTutor).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
-    expect(settings.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000 });
+    expect(settings.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000, formatOnSave: true });
     expect(settings.cognitive1.overwatch).toEqual({
       enabled: false,
       provider: 'deepseek',

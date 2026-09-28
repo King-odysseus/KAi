@@ -261,6 +261,16 @@
   font-size: 9px;
 }
 
+/* Git state in the editor's file tree, matching the Files tab. The open file keeps its highlight colour. */
+.code-dirty + .files-badge { margin-left: 0; }
+.code-tree-item:not(.active).git-modified { color: var(--amber); }
+.code-tree-item:not(.active).git-added { color: var(--mint); }
+.code-tree-item:not(.active).git-untracked { color: var(--lavender); }
+.code-tree-item:not(.active).git-renamed { color: #6fa8ff; }
+.code-tree-item:not(.active).git-conflict,
+.code-tree-item:not(.active).git-deleted { color: var(--red); }
+.code-tree-item.folder.has-changes { color: var(--text); }
+
 .code-main {
   position: relative;
   display: flex;
@@ -1558,6 +1568,26 @@
   color: var(--amber);
 }
 
+/* A follow-up question that can be answered: clicking it goes to the Explain it back box. */
+button.learning-question.answerable {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.learning-question.answerable span { flex: 1; }
+button.learning-question.answerable small { flex: 0 0 auto; color: var(--amber); font-weight: 600; white-space: nowrap; }
+button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12); color: var(--text); }
+
+.learning-history-search { margin: 2px 0 4px; }
+
 .learning-question-box {
   display: grid;
   gap: 7px;
@@ -2401,6 +2431,39 @@
 .git-file:hover {
   color: var(--mint);
 }
+
+.git-change-group + .git-change-group { margin-top: 14px; }
+
+.git-change-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.git-change-group h3 span {
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--bg-hover);
+  font-size: 10.5px;
+}
+
+.git-change-group.staged h3 { color: var(--mint); }
+.git-change-group .files-badge { margin-left: 0; }
+.git-change-group li small { margin-left: 0; }
+.git-change-group li.git-modified .git-file { color: var(--amber); }
+.git-change-group li.git-added .git-file { color: var(--mint); }
+.git-change-group li.git-untracked .git-file { color: var(--lavender); }
+.git-change-group li.git-renamed .git-file { color: #6fa8ff; }
+.git-change-group li.git-deleted .git-file { color: var(--red); text-decoration: line-through; }
+.git-change-group li.git-conflict .git-file { color: var(--red); }
+.git-change-group li .git-file:hover { text-decoration: underline; }
 
 .git-diff {
   border: 1px solid var(--border-soft);

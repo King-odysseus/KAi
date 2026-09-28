@@ -9,6 +9,7 @@ import {
   summarizeChanges,
   visibleRows,
 } from '../apps/desktop/src/renderer/src/components/project-files-tree';
+import { stageState } from '../apps/desktop/src/renderer/src/components/GitBadge';
 
 const change = (path: string, index: string, worktree: string): GitChange => ({
   path,
@@ -113,5 +114,24 @@ describe('project file tree', () => {
   it('returns an empty tree when there is nothing to show', () => {
     expect(buildTree([], new Map(), false)).toEqual([]);
     expect(buildTree(files, new Map(), true)).toEqual([]);
+  });
+});
+
+describe('the staged state a Git badge shows', () => {
+  it('is solid when staged, outlined when not, and split when partly staged', () => {
+    const states = changeMap([
+      change('staged.ts', 'M', '.'),
+      change('edited.ts', '.', 'M'),
+      change('both.ts', 'M', 'M'),
+      change('new.ts', '?', '?'),
+      change('clash.ts', 'U', 'U'),
+    ]);
+    expect([...states.entries()].map(([path, item]) => [path, stageState(item)])).toEqual([
+      ['staged.ts', 'staged'],
+      ['edited.ts', 'unstaged'],
+      ['both.ts', 'partly-staged'],
+      ['new.ts', ''],
+      ['clash.ts', ''],
+    ]);
   });
 });

@@ -41,6 +41,7 @@ import {
   type CodeFormatResult,
   type GitFileInfo,
   type LearningEvaluationResult,
+  type LearningExplainBackHelp,
   type LearningExplainBackResult,
   type LearningLessonRecordResult,
   type LearningProgress,
@@ -522,6 +523,35 @@ export function registerIpc(context: IpcContext): void {
       });
       const progress = await context.learningProgress.recordExplanation(projectId, lessonId, question, detailed.grade);
       return { grade: detailed.grade, progress };
+    } finally {
+      context.learningBudget.release(reservation.id);
+    }
+  });
+  // Help with the question is not graded and records no progress: seeing an answer is not evidence of learning it.
+  handle(context, 'learning:explain-back-help', async ({ projectId, lessonId, question, kind }): Promise<LearningExplainBackHelp> => {
+    await resolveProject(context, projectId, true);
+    const lesson = (await context.learningProgress.get(projectId)).lessons?.find((candidate) => candidate.id === lessonId);
+    if (!lesson) throw new Error('This lesson is no longer available.');
+    const settings = await context.settings.load();
+    const readiness = await context.learningTutor.readiness();
+    if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
+    const reservation = context.learningBudget.reserve({
+      projectId,
+      provider: readiness.provider,
+      model: readiness.model,
+      conversations: await context.conversations.list(),
+      budget: settings.usageBudget,
+      estimatedInputTokens: Math.ceil((JSON.stringify(lesson.response).length + question.length) / 4) + 500,
+      estimatedOutputTokens: 800,
+      externalRuns: await context.learningUsage.runs(),
+    });
+    if (reservation.blockedReason) {
+      throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
+    }
+    try {
+      const detailed = await context.learningTutor.explainBackHelpDetailed(lesson.response, question, kind);
+      await context.learningUsage.record({ projectId, provider: readiness.provider, model: readiness.model, usage: detailed.usage });
+      return detailed.help;
     } finally {
       context.learningBudget.release(reservation.id);
     }

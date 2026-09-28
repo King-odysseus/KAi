@@ -1486,6 +1486,7 @@ export function App(): ReactNode {
                 editorState={bootstrap.editor}
                 autoSave={bootstrap.settings.editor.autoSave}
                 autoSaveDelayMs={bootstrap.settings.editor.autoSaveDelayMs}
+                formatOnSave={bootstrap.settings.editor.formatOnSave}
                 onOpenSettings={() => setView('settings')}
                 openRequest={codeOpenRequest}
               />

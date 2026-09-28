@@ -27,6 +27,15 @@ export const learningMasterySchema = z.enum([
 ]);
 export type LearningMastery = z.infer<typeof learningMasterySchema>;
 
+export const learningSuggestionPlacementSchema = z
+  .object({
+    filePath: z.string().min(1).max(1_000),
+    anchor: z.string().min(1).max(4_000),
+    position: z.enum(['before', 'after', 'replace']),
+  })
+  .strict();
+export type LearningSuggestionPlacement = z.infer<typeof learningSuggestionPlacementSchema>;
+
 export const learningAnalogySchema = z
   .object({
     title: z.string().min(1).max(200),
@@ -75,6 +84,9 @@ export const learningTutorResponseSchema = z
       language: z.string().max(80),
       replaceSelection: z.boolean(),
       explanation: z.string().min(1).max(2_000),
+      // Where the code belongs: whole lines copied from the file, and whether the code goes before, after or in
+      // place of them. Left out when the tutor does not know, and the learner inserts at the cursor.
+      placement: learningSuggestionPlacementSchema.optional(),
     }).strict().nullable(),
   })
   .strict();
@@ -132,6 +144,30 @@ export const learningExplainBackInputSchema = z
   .strict();
 export type LearningExplainBackInput = z.infer<typeof learningExplainBackInputSchema>;
 
+/** "I don't get the question" rewords it with a hint; "Show me the answer" gives a model answer to learn from. */
+export const learningExplainBackHelpKindSchema = z.enum(['rephrase', 'answer']);
+export type LearningExplainBackHelpKind = z.infer<typeof learningExplainBackHelpKindSchema>;
+
+export const learningExplainBackHelpInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    lessonId: z.string().min(1),
+    question: z.string().trim().min(1).max(1_000),
+    kind: learningExplainBackHelpKindSchema,
+  })
+  .strict();
+export type LearningExplainBackHelpInput = z.infer<typeof learningExplainBackHelpInputSchema>;
+
+export const learningExplainBackHelpSchema = z
+  .object({
+    // The question to answer next: a simpler wording, or after a shown answer, a prompt to restate it.
+    question: z.string().min(1).max(1_000),
+    // The hint for a reworded question, or the model answer and why it is right.
+    explanation: z.string().min(1).max(3_000),
+  })
+  .strict();
+export type LearningExplainBackHelp = z.infer<typeof learningExplainBackHelpSchema>;
+
 export const learningProviderUsageSchema = z
   .object({
     inputTokens: z.number().int().nonnegative(),
@@ -187,6 +223,9 @@ export const learningEvidenceSchema = z
   .strict();
 export type LearningEvidence = z.infer<typeof learningEvidenceSchema>;
 
+/** Lessons kept per project, newest first. Each holds the tutor's full answer, so the history is bounded. */
+export const MAX_SAVED_LESSONS = 150;
+
 export const learningProgressSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -209,7 +248,7 @@ export const learningProgressSchema = z
         feedback: z.string().max(2_000),
         answeredAt: timestampSchema,
       }).strict().optional(),
-    }).strict()).max(30).optional(),
+    }).strict()).max(MAX_SAVED_LESSONS).optional(),
     memory: z.object({
       lessonId: z.string().min(1),
       lastLesson: z.string().max(200),
@@ -362,7 +401,10 @@ export const codeFormatResultSchema = z
   .object({
     formatted: z.string(),
     changed: z.boolean(),
+    // The Prettier parser or the tool that formatted the file, for example "typescript" or "Ruff".
     parser: z.string().max(80),
+    // Set when nothing ran: the language has no formatter, or its formatter is not installed.
+    skipped: z.object({ reason: z.string().max(500), missingTool: z.boolean() }).strict().optional(),
   })
   .strict();
 export type CodeFormatResult = z.infer<typeof codeFormatResultSchema>;
