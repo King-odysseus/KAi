@@ -199,6 +199,9 @@ interface WorkflowDraftStep {
   agent: AgentId;
   prompt: string;
   label: string;
+  // Left out, the step follows the workflow's execution and route.
+  execution?: ExecutionMode;
+  route?: RouteMode;
   status: WorkflowStep['status'];
   output?: string;
   error?: string;
@@ -305,6 +308,8 @@ export function WorkflowsView({
       agent: step.agent,
       prompt: step.prompt,
       label: step.label ?? 'Step',
+      ...(step.execution ? { execution: step.execution } : {}),
+      ...(step.route ? { route: step.route } : {}),
       status: step.status,
       ...(step.output ? { output: step.output } : {}),
       ...(step.error ? { error: step.error } : {}),
@@ -314,6 +319,20 @@ export function WorkflowsView({
       ...(step.note ? { note: step.note } : {}),
     })));
   }, [activeRun]);
+
+  // API steps can always use the proxy; a CLI step only when that CLI supports it.
+  function proxyCapable(agent: AgentId, stepExecution: ExecutionMode): boolean {
+    return stepExecution === 'api' || Boolean(agentCapabilities.find((item) => item.id === agent)?.supportsRoutes.includes('proxy'));
+  }
+
+  function executionOf(step: WorkflowDraftStep): ExecutionMode {
+    return step.execution ?? execution;
+  }
+
+  /** The route a step runs on: its own choice, else the workflow's, and Direct when its agent cannot use the proxy. */
+  function routeOf(step: WorkflowDraftStep): RouteMode {
+    return proxyCapable(step.agent, executionOf(step)) ? step.route ?? route : 'direct';
+  }
 
   function addStep(): void {
     setSteps((current) => [...current, {
@@ -375,7 +394,7 @@ export function WorkflowsView({
         id: `workflow_${crypto.randomUUID()}`,
         name: title.trim() || 'Untitled workflow',
         description: '',
-        steps: steps.filter((step) => step.prompt.trim()).map((step) => ({ agent: step.agent, prompt: step.prompt.trim(), label: step.label })),
+        steps: steps.filter((step) => step.prompt.trim()).map((step) => ({ agent: step.agent, prompt: step.prompt.trim(), label: step.label, ...(step.execution ? { execution: step.execution } : {}), ...(step.route ? { route: step.route } : {}) })),
         execution,
         route,
         model: model.trim() || undefined,
@@ -418,6 +437,8 @@ export function WorkflowsView({
           agent: step.agent,
           prompt: step.prompt.trim(),
           label: step.label,
+          execution: executionOf(step),
+          route: routeOf(step),
         })),
       }).then(unwrap);
       reconcileRun(run);
@@ -523,7 +544,7 @@ export function WorkflowsView({
                 const template = templates.find((item) => item.id === event.target.value);
                 if (!template) return;
                 setTitle(template.name);
-                setSteps(template.steps.map((step, index) => ({ id: `step_${crypto.randomUUID()}`, agent: step.agent, prompt: step.prompt, label: step.label ?? `Step ${index + 1}`, status: 'pending' })));
+                setSteps(template.steps.map((step, index) => ({ id: `step_${crypto.randomUUID()}`, agent: step.agent, prompt: step.prompt, label: step.label ?? `Step ${index + 1}`, ...(step.execution ? { execution: step.execution } : {}), ...(step.route ? { route: step.route } : {}), status: 'pending' })));
                 setExecution(template.execution);
                 setRoute(template.route);
                 setAutonomy(template.autonomy);
@@ -542,8 +563,8 @@ export function WorkflowsView({
           </label>
         </div>
         <div className="workflow-builder-head workflow-run-options">
-          <label className="workflow-field" htmlFor="workflow-execution"><span>Execution</span><select id="workflow-execution" value={execution} onChange={(event) => setExecution(event.target.value as ExecutionMode)}><option value="cli">CLI</option><option value="api">Direct API / Proxy</option></select></label>
-          <label className="workflow-field" htmlFor="workflow-route"><span>Route</span><select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></select></label>
+          <label className="workflow-field" htmlFor="workflow-execution"><span>Default execution</span><select id="workflow-execution" value={execution} onChange={(event) => setExecution(event.target.value as ExecutionMode)}><option value="cli">CLI</option><option value="api">Direct API / Proxy</option></select></label>
+          <label className="workflow-field" htmlFor="workflow-route"><span>Default route</span><select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></select></label>
           <label className="workflow-field" htmlFor="workflow-autonomy"><span>Autonomy</span><select id="workflow-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}><option value="plan">Plan</option><option value="ask">Ask</option><option value="autoEdit">Auto-edit</option><option value="full">Full control</option><option value="custom">Custom</option></select></label>
           <label className="workflow-field" htmlFor="workflow-model"><span>Model override</span><input id="workflow-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider or CLI model" /></label>
         </div>
@@ -580,15 +601,37 @@ export function WorkflowsView({
           )}
         </div>
         <div className="workflow-step-list">
-          {steps.map((step, index) => (
+          {steps.map((step, index) => {
+            const runsOn = `${executionOf(step)}:${routeOf(step)}`;
+            const cliProxy = proxyCapable(step.agent, 'cli');
+            return (
             <div className="workflow-step" key={step.id}>
               <span className={`workflow-index ${step.status}`}>{index + 1}</span>
-              <label className="workflow-field workflow-agent-field">
-                <span>Agent</span>
-                <select aria-label={`Step ${index + 1} agent`} value={step.agent} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, agent: event.target.value as AgentId } : item))}>
-                  {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.displayName}{agent.available ? '' : ' (unavailable)'}</option>)}
-                </select>
-              </label>
+              <div className="workflow-agent-field">
+                <label className="workflow-field">
+                  <span>Agent</span>
+                  <select aria-label={`Step ${index + 1} agent`} value={step.agent} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, agent: event.target.value as AgentId } : item))}>
+                    {agentCapabilities.map((agent) => <option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.displayName}{agent.available ? '' : ' (unavailable)'}</option>)}
+                  </select>
+                </label>
+                <label className="workflow-field">
+                  <span>Runs on</span>
+                  <select
+                    aria-label={`Step ${index + 1} runs on`}
+                    value={runsOn}
+                    disabled={running}
+                    onChange={(event) => {
+                      const [stepExecution, stepRoute] = event.target.value.split(':') as [ExecutionMode, RouteMode];
+                      setSteps((current) => current.map((item) => item.id === step.id ? { ...item, execution: stepExecution, route: stepRoute } : item));
+                    }}
+                  >
+                    <option value="cli:direct">Subscription (CLI)</option>
+                    <option value="cli:proxy" disabled={!cliProxy}>CLI via Universal Proxy{cliProxy ? '' : ' (not supported)'}</option>
+                    <option value="api:direct">API (direct)</option>
+                    <option value="api:proxy">API via Universal Proxy</option>
+                  </select>
+                </label>
+              </div>
               <label className="workflow-field workflow-prompt-field">
                 <span>Prompt</span>
                 <textarea aria-label={`Step ${index + 1} prompt`} value={step.prompt} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, prompt: event.target.value } : item))} placeholder={`What should ${step.agent} do?`} rows={3} />
@@ -603,7 +646,8 @@ export function WorkflowsView({
               </div>
               <button type="button" className="icon-button compact workflow-remove" aria-label={`Remove step ${index + 1}`} title="Remove step" disabled={running || steps.length === 1} onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id))}><Trash2 size={15} /></button>
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="workflow-builder-footer">
           <span>{steps.length} {steps.length === 1 ? 'step' : 'steps'} in this workflow</span>

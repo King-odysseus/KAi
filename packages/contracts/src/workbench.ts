@@ -171,6 +171,9 @@ export const workflowTemplateSchema = z
             agent: agentIdSchema,
             prompt: z.string().trim().min(1).max(20_000),
             label: z.string().max(200).optional(),
+            // Left out, the step follows the template's execution and route.
+            execution: executionModeSchema.optional(),
+            route: routeModeSchema.optional(),
           })
           .strict(),
       )

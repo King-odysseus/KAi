@@ -4737,6 +4737,10 @@ code {
 
 .workflow-agent-field {
   grid-area: agent;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
 }
 
 .workflow-prompt-field {
