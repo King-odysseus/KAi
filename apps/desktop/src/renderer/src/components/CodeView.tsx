@@ -1539,7 +1539,8 @@ export function CodeView({
             onReference={(filePath, startLine, endLine) => void openLearningReference(filePath, startLine, endLine)}
             responseLessonId={responseLessonId}
             onLessonSelect={(lesson) => {
-              if (!progress) return;
+              // The lesson already on screen is not reopened a second time.
+              if (!progress || lesson.id === responseLessonId) return;
               lastLearningRequest.current = null;
               // The answer on screen joins the conversation above before the chosen lesson replaces it.
               if (learningResult?.response) {
