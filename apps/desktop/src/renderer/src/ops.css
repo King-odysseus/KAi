@@ -2674,7 +2674,15 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-memory button, .learning-path button, .learning-sources button { max-width: 100%; text-align: left; white-space: normal; }
 .learning-memory { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .learning-memory > * { max-width: 100%; margin-top: 0; margin-bottom: 0; }
-.learning-scroll { overflow-x: hidden; }
+/* clip, not hidden: a hidden overflow can still be scrolled sideways by scrollIntoView, which shifted the pane left. */
+.learning-scroll { overflow-x: clip; }
+/* Nothing in the Tutor may be wider than the pane: long words, file paths and button rows wrap instead. */
+.learning-scroll > *, .learning-conversation-turn > * { min-width: 0; max-width: 100%; }
+.learning-scroll p, .learning-scroll li, .learning-scroll dd, .learning-question span { min-width: 0; overflow-wrap: anywhere; }
+.learning-explain-back { grid-template-columns: minmax(0, 1fr); }
+.learning-explain-back > * { min-width: 0; }
+.learning-question-actions { flex-wrap: wrap; }
+.learning-explain-back .learning-question-actions button { max-width: 100%; white-space: normal; text-align: left; }
 .learning-response-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .learning-response-actions button:disabled { opacity: .5; cursor: default; }
 .learning-pending { display: flex; align-items: center; gap: 10px; }
@@ -2828,3 +2836,10 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .ops-inline-form .primary-button {
   flex: 0 0 auto;
 }
+
+/* Auto model: one row per CLI with a light, standard and heavy model. */
+.auto-model-grid { display: grid; gap: 8px; margin-top: 8px; }
+.auto-model-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 6px 8px 8px; border: 1px solid var(--border-soft); border-radius: 6px; }
+.auto-model-row legend { padding: 0 4px; color: var(--text-muted); font-size: 11px; font-weight: 650; text-transform: capitalize; }
+.auto-model-row .field { min-width: 0; }
+@media (max-width: 640px) { .auto-model-row { grid-template-columns: minmax(0, 1fr); } }

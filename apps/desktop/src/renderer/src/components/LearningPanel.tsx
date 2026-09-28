@@ -795,14 +795,15 @@ function TutorComposer({
   const fileLabel = selection
     ? `${selection.filePath.split('/').at(-1) ?? selection.filePath} - ${formatSelectionRange(selection, selected)}`
     : 'No file open';
-  const contextLabel = scope === 'project'
+  const scopeName = scope === 'auto' ? 'Auto' : 'Whole project';
+  const contextLabel = scope !== 'active-file'
     ? selection
-      ? `Whole project · ${fileLabel}`
-      : 'Whole project'
+      ? `${scopeName} · ${fileLabel}`
+      : scopeName
     : selection
       ? fileLabel
       : 'Open a file to use file context';
-  const placeholder = scope === 'project'
+  const placeholder = scope !== 'active-file'
     ? selected
       ? 'Ask about the selected code or the whole project...'
       : 'Ask about the whole project...'
@@ -820,8 +821,10 @@ function TutorComposer({
             <select
               aria-label="Tutor context scope"
               value={scope}
-              onChange={(event) => onScopeChange(event.target.value === 'active-file' ? 'active-file' : 'project')}
+              title="Auto starts from the open file and searches the project for your question"
+              onChange={(event) => onScopeChange(event.target.value === 'active-file' || event.target.value === 'project' ? event.target.value : 'auto')}
             >
+              <option value="auto">Auto</option>
               <option value="project">Whole project</option>
               <option value="active-file">File context</option>
             </select>

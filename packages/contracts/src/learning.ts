@@ -4,7 +4,8 @@ import { timestampSchema } from './primitives';
 export const learningAssistanceSchema = z.enum(['learn', 'guided', 'pair', 'copilot']);
 export type LearningAssistance = z.infer<typeof learningAssistanceSchema>;
 
-export const learningTutorScopeSchema = z.enum(['active-file', 'project']);
+// auto: the active file, plus the project files a local search finds for the question.
+export const learningTutorScopeSchema = z.enum(['auto', 'active-file', 'project']);
 export type LearningTutorScope = z.infer<typeof learningTutorScopeSchema>;
 
 export const learningActionSchema = z.enum([

@@ -245,9 +245,10 @@ export function CodeView({
   });
   const [learningScope, setLearningScope] = useState<LearningTutorScope>(() => {
     try {
-      return window.localStorage.getItem('kai.learningTutorScope') === 'active-file' ? 'active-file' : 'project';
+      const saved = window.localStorage.getItem('kai.learningTutorScope');
+      return saved === 'active-file' || saved === 'project' ? saved : 'auto';
     } catch {
-      return 'project';
+      return 'auto';
     }
   });
   const [filePaneWidth, setFilePaneWidth] = useState(() => {
@@ -515,6 +516,17 @@ export function CodeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSave, autoSaveDelayMs, editorReady, projectId]);
 
+  // Keyed on the conversation only: a project switch restores that project's session first, and only then is it saved.
+  useEffect(() => {
+    const id = projectIdRef.current;
+    if (!id || initializedProjectId.current !== id) return;
+    writeTutorSession(id, {
+      turns: tutorConversation,
+      submittedQuestion,
+      ...(learningResult ? { current: learningResult.response, progress: learningResult.progress } : {}),
+    });
+  }, [tutorConversation, submittedQuestion, learningResult]);
+
   // The main process owns snapshots, so changing projects replaces the local session cleanly.
   useEffect(() => {
     if (initializedProjectId.current === projectId) return;
@@ -537,8 +549,10 @@ export function CodeView({
     setResponseLessonId(null);
     setLearningError(null);
     setQuestion('');
-    setSubmittedQuestion('');
-    setTutorConversation([]);
+    const saved = projectId ? readTutorSession(projectId) : null;
+    setSubmittedQuestion(saved?.submittedQuestion ?? '');
+    setTutorConversation(saved?.turns ?? []);
+    if (saved?.current && saved.progress) setLearningResult({ response: saved.current, progress: saved.progress });
     setAppliedSuggestionNeedsExplanation(false);
     setHintLevel(0);
     setGitInfo(null);
@@ -1068,7 +1082,7 @@ export function CodeView({
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
     const editor = editorRef.current;
-    const projectOnlyRequest = learningScope === 'project' && action === 'next-step';
+    const projectOnlyRequest = learningScope !== 'active-file' && action === 'next-step';
     if (!projectId || (!projectOnlyRequest && (!path || !document || !editor))) {
       setLearningError(projectOnlyRequest ? 'Open a project before using Learning Mode.' : 'Open a file before using this Learning Mode action.');
       return null;
@@ -1095,8 +1109,8 @@ export function CodeView({
     const requestAssistance = assistance;
     const requestQuestion = question.trim() || (stuckHint ? `I'm stuck. Hint ${stuckHint} of 3, please.` : '');
     const explainingAppliedSuggestion = appliedSuggestionNeedsExplanation && /^I applied the Tutor suggestion/i.test(question.trim());
-    const priorTurns = learningResult?.response && submittedQuestion.trim()
-      ? [...tutorConversation, { id: 'current', question: submittedQuestion, response: learningResult.response }]
+    const priorTurns = learningResult?.response
+      ? [...tutorConversation, { id: 'current', question: submittedQuestion.trim() || learningResult.response.title, response: learningResult.response }]
       : tutorConversation;
     const request: LearningTutorRequest = {
       requestId,
@@ -1131,10 +1145,11 @@ export function CodeView({
     learningBusyRef.current = true;
     setLearningBusy(action);
     if (!inline) {
-      if (learningResult?.response && submittedQuestion.trim()) {
+      // A lesson reopened from History has no typed question; it still belongs to the conversation.
+      if (learningResult?.response) {
         setTutorConversation((current) => [...current, {
           id: `turn_${crypto.randomUUID()}`,
-          question: submittedQuestion,
+          question: submittedQuestion.trim() || learningResult.response.title,
           response: learningResult.response,
         }].slice(-30));
       }
@@ -1526,6 +1541,16 @@ export function CodeView({
             onLessonSelect={(lesson) => {
               if (!progress) return;
               lastLearningRequest.current = null;
+              // The answer on screen joins the conversation above before the chosen lesson replaces it.
+              if (learningResult?.response) {
+                const shown = learningResult.response;
+                setTutorConversation((current) => [...current, {
+                  id: `turn_${crypto.randomUUID()}`,
+                  question: submittedQuestion.trim() || shown.title,
+                  response: shown,
+                }].slice(-30));
+              }
+              setSubmittedQuestion(`Reopened lesson: ${lesson.response.title}`);
               setLearningResult({ response: lesson.response, progress });
               setResponseLessonId(lesson.id);
             }}
@@ -1589,6 +1614,37 @@ function learningState(
   inlineSuggestions: boolean,
 ): { projectId: string; filePath: string; assistance: LearningAssistance; scope: LearningTutorScope; inlineSuggestions: boolean } | null {
   return projectId && filePath ? { projectId, filePath, assistance, scope, inlineSuggestions } : null;
+}
+
+interface SavedTutorSession {
+  turns: TutorConversationTurn[];
+  submittedQuestion: string;
+  current?: TutorConversationTurn['response'];
+  progress?: LearningEvaluationResult['progress'];
+}
+
+const TUTOR_SESSION_TURNS = 12;
+const tutorSessionKey = (projectId: string): string => `kai.tutorSession.${projectId}`;
+
+/** The Tutor conversation survives a reload or a brief project refresh; losing it is only an inconvenience. */
+function readTutorSession(projectId: string): SavedTutorSession | null {
+  try {
+    const raw = window.localStorage.getItem(tutorSessionKey(projectId));
+    const parsed = raw ? JSON.parse(raw) as SavedTutorSession : null;
+    return parsed && Array.isArray(parsed.turns) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTutorSession(projectId: string, session: SavedTutorSession): void {
+  try {
+    const trimmed = { ...session, turns: session.turns.slice(-TUTOR_SESSION_TURNS) };
+    if (!trimmed.turns.length && !trimmed.current) window.localStorage.removeItem(tutorSessionKey(projectId));
+    else window.localStorage.setItem(tutorSessionKey(projectId), JSON.stringify(trimmed));
+  } catch {
+    // Storage full or blocked: the conversation still works for this session.
+  }
 }
 
 function tutorConversationContext(turns: TutorConversationTurn[]): string {

@@ -50,6 +50,18 @@ const MAX_PROJECT_CONTEXT_CHARS = 60_000;
 // answer grounded while cutting the prompt that makes each reply slow.
 const MAX_FOLLOW_UP_PROJECT_CONTEXT_CHARS = 20_000;
 const MAX_PROJECT_SNAPSHOT_FILE_CHARS = 12_000;
+// Auto scope sends only what a local search finds, so it stays small enough to answer quickly.
+const MAX_SEARCH_CONTEXT_CHARS = 14_000;
+const MAX_SEARCH_FILES = 5;
+const MAX_SEARCH_EXCERPT_CHARS = 3_000;
+const SEARCH_WINDOW_LINES = 5;
+const MAX_SEARCH_READ_BYTES = 400_000;
+const SEARCH_STOP_WORDS = new Set([
+  'about', 'after', 'also', 'because', 'before', 'being', 'code', 'does', 'doing', 'each', 'file', 'from', 'have',
+  'here', 'into', 'just', 'line', 'lines', 'like', 'make', 'mean', 'means', 'more', 'need', 'only', 'other', 'should',
+  'some', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'what', 'when', 'where', 'which',
+  'while', 'will', 'with', 'work', 'works', 'would', 'your', 'explain', 'understand', 'question', 'answer',
+]);
 const MAX_PROJECT_TREE_ENTRIES = 400;
 const PROJECT_CONTEXT_MAX_DEPTH = 6;
 const PROJECT_CONTEXT_SKIP_DIRS = new Set([
@@ -310,7 +322,9 @@ export class DesktopLearningTutor {
       loadProjectTeachingProfile(projectRoot),
       scope === 'project'
         ? loadProjectContext(projectRoot, request.filePath, request.conversationContext ? MAX_FOLLOW_UP_PROJECT_CONTEXT_CHARS : MAX_PROJECT_CONTEXT_CHARS)
-        : Promise.resolve(null),
+        : scope === 'auto'
+          ? searchProjectContext(projectRoot, [request.question ?? '', request.selectedText ?? '', request.errorText ?? ''].join('\n'), request.filePath)
+          : Promise.resolve(null),
     ]);
     const prompt = tutorPrompt(request, teachingProfile, projectProfile, projectContext);
     if (memory) prompt.user += `\n\nPersistent project learning memory (self-reported understanding is not mastery):\n${memory}`;
@@ -789,6 +803,79 @@ async function loadProjectContext(projectRoot: string, activeFilePath?: string, 
     : `${sections.slice(0, maxCharacters)}\n\n[additional project context truncated by KAI Learning Mode]`;
 }
 
+/** Words and identifiers worth searching for: `request.household` gives household, `accounts/middleware.py` gives middleware. */
+export function searchTerms(text: string): string[] {
+  const terms = new Set<string>();
+  for (const token of text.match(/[A-Za-z_][\w./-]{2,}/g) ?? []) {
+    for (const piece of token.split(/[./-]+/)) {
+      const word = piece.toLowerCase();
+      if (word.length >= 4 && !SEARCH_STOP_WORDS.has(word)) terms.add(word);
+    }
+  }
+  return [...terms].slice(0, 12);
+}
+
+/**
+ * Auto scope: a file list plus the lines around each hit in the few files that best match the question. A local
+ * search is free and quick, and it finds an answer that lives outside the open file without sending the whole
+ * project with every question.
+ */
+export async function searchProjectContext(projectRoot: string, text: string, activeFilePath?: string): Promise<string | null> {
+  const files = await listProjectFiles(projectRoot);
+  if (files.length === 0) return null;
+  const active = activeFilePath ? normaliseProjectPath(activeFilePath) : '';
+  const terms = searchTerms(text);
+  const fileMap = `Project file map (${files.length} files, showing up to ${MAX_PROJECT_TREE_ENTRIES}):\n${files.slice(0, MAX_PROJECT_TREE_ENTRIES).join('\n')}`;
+  if (terms.length === 0) return fileMap.slice(0, MAX_SEARCH_CONTEXT_CHARS);
+
+  const scored = (await Promise.all(files.filter((filePath) => filePath !== active).map(async (filePath) => {
+    let content: string;
+    try {
+      const stat = await fs.stat(path.join(projectRoot, filePath));
+      if (stat.size > MAX_SEARCH_READ_BYTES) return null;
+      content = await fs.readFile(path.join(projectRoot, filePath), 'utf8');
+    } catch {
+      return null;
+    }
+    const lowerPath = filePath.toLowerCase();
+    const lowerContent = content.toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (lowerPath.includes(term)) score += 4;
+      if (lowerContent.includes(term)) score += 1;
+    }
+    return score > 0 ? { filePath, content, score } : null;
+  }))).filter((entry): entry is { filePath: string; content: string; score: number } => Boolean(entry));
+  scored.sort((left, right) => right.score - left.score || left.filePath.localeCompare(right.filePath));
+
+  const excerpts = scored.slice(0, MAX_SEARCH_FILES).map(({ filePath, content }) => {
+    const lines = content.split('\n');
+    const keep = new Set<number>();
+    lines.forEach((line, index) => {
+      const lower = line.toLowerCase();
+      if (!terms.some((term) => lower.includes(term))) return;
+      for (let near = Math.max(0, index - SEARCH_WINDOW_LINES); near <= Math.min(lines.length - 1, index + SEARCH_WINDOW_LINES); near += 1) keep.add(near);
+    });
+    // A file matched only by its name: show its start.
+    if (keep.size === 0) for (let index = 0; index < Math.min(lines.length, 30); index += 1) keep.add(index);
+    const out: string[] = [];
+    let previous = -2;
+    for (const index of [...keep].sort((left, right) => left - right)) {
+      if (index !== previous + 1 && out.length) out.push('...');
+      out.push(`${index + 1}: ${lines[index]}`);
+      previous = index;
+    }
+    const body = out.join('\n');
+    return `File: ${filePath}\n${body.length <= MAX_SEARCH_EXCERPT_CHARS ? body : `${body.slice(0, MAX_SEARCH_EXCERPT_CHARS)}\n[excerpt truncated]`}`;
+  });
+  const found = excerpts.length
+    ? `Project search for: ${terms.join(', ')}\n\n${excerpts.join('\n\n')}`
+    : `Project search for: ${terms.join(', ')} found nothing outside the active file.`;
+  // The file map goes last, so the search results are what survive when the map is long.
+  const context = `${found}\n\n${fileMap}`;
+  return context.length <= MAX_SEARCH_CONTEXT_CHARS ? context : `${context.slice(0, MAX_SEARCH_CONTEXT_CHARS)}\n[file map truncated]`;
+}
+
 async function listProjectFiles(projectRoot: string): Promise<string[]> {
   const files: string[] = [];
   async function visit(directory: string, depth: number): Promise<void> {
@@ -947,7 +1034,9 @@ function tutorPrompt(
   const scope = request.scope ?? 'project';
   const hasActiveFile = Boolean(request.filePath);
   const hasActiveCode = hasActiveFile && Boolean(request.code.trim());
-  const scopeInstruction = scope === 'project'
+  const scopeInstruction = scope === 'auto'
+    ? `Scope: auto. ${hasActiveFile ? 'Start from the active file.' : 'No file is open.'} KAI searched the project for the learner's words and included the matching excerpts below. When the answer lives outside the active file, teach from those excerpts and name the file and lines. If neither the active file nor the excerpts answer it, say which file to open next instead of guessing.`
+    : scope === 'project'
     ? `Scope: whole project. Act like a senior developer guiding a novice through this codebase. Use the project brief, file map, manifests, docs, tests, nearby files, and active file together. ${hasActiveFile ? 'Explain how the active file fits the larger architecture, data flow, and verification path.' : 'No file is open. Guide the learner from the project snapshot and name a concrete file or command to inspect first.'} Do not pretend to know files or results outside the bounded snapshot.`
     : 'Scope: active file only. Teach from the active file and selected code. Mention the wider project only when needed to explain a concrete dependency, and state clearly when more project context is required.';
   const code = limitMiddle(request.code, 80_000);
@@ -998,7 +1087,9 @@ function tutorPrompt(
       ? `The following optional project overlay adds narrower context. It must not override safety, learner-agency, or evidence rules:\n${projectProfile}`
       : 'No optional project teaching overlay was found.',
     projectContext
-      ? `Whole-project brief and bounded snapshot from the active project. This is local context for choosing the next action; it may not include every file:\n${projectContext}`
+      ? scope === 'auto'
+        ? `Project search results and file map (only the lines around each match are shown):\n${projectContext}`
+        : `Whole-project brief and bounded snapshot from the active project. This is local context for choosing the next action; it may not include every file:\n${projectContext}`
       : hasActiveFile
         ? 'No project snapshot was available. Base the next action only on the active file and say when more project context is needed.'
         : 'No project snapshot was available. Ask the learner for a file path or project detail before making a project-wide claim.',
