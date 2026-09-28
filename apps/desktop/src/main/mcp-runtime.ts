@@ -99,6 +99,18 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     }
   }
 
+  /**
+   * Calls a tool on one named server and returns the raw content blocks. Unlike `execute` it keeps images, which is
+   * what a screenshot tool returns and what `normalizeToolResult` would otherwise flatten to `[image content]`.
+   */
+  async callServerTool(serverId: string, toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown[] | null> {
+    const connection = await this.ensureConnected();
+    const client = connection.clients.get(serverId);
+    if (!client) return null;
+    const result = await client.callTool({ name: toolName, arguments: input }, undefined, { signal });
+    return Array.isArray(result.content) ? result.content : [];
+  }
+
   async dispose(): Promise<void> {
     const current = this.connection;
     this.connection = undefined;

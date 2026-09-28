@@ -49,6 +49,8 @@ export function TeamPanel({
   busy,
   running,
   onStarted,
+  incomingPlan,
+  onIncomingPlanUsed,
 }: {
   activeProject: ProjectRecord | null;
   agentCapabilities: AgentCapability[];
@@ -56,6 +58,9 @@ export function TeamPanel({
   busy: boolean;
   running: boolean;
   onStarted: (run: WorkflowRun) => void;
+  /** A plan handed over from the Project Studio, one part per ready board card, opening here for review. */
+  incomingPlan?: TeamPlanDraft | null;
+  onIncomingPlanUsed?: () => void;
 }): ReactNode {
   const [goal, setGoal] = useState('');
   const [draft, setDraft] = useState<TeamPlanDraft | null>(null);
@@ -95,6 +100,14 @@ export function TeamPanel({
     setFixRounds(saved.rounds);
     return () => { cancelled = true; };
   }, [projectId]);
+
+  // The Project Studio's plan (one part per ready card) opens for review here, with the same warnings and edit step.
+  useEffect(() => {
+    if (!incomingPlan) return;
+    setDraft(incomingPlan);
+    setError(null);
+    onIncomingPlanUsed?.();
+  }, [incomingPlan, onIncomingPlanUsed]);
 
   // Readiness follows the Prompt Guide card in Settings, so turning it on there enables the button here.
   const guideSettings = JSON.stringify(settings.promptGuide);

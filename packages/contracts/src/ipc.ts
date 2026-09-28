@@ -1,6 +1,41 @@
 import { z } from 'zod';
 import { autoModelSettingsSchema } from './model-tiers';
 import {
+  interviewAnswerInputSchema,
+  interviewProjectInputSchema,
+  interviewStartInputSchema,
+  type InterviewAnswerInput,
+  type InterviewStartInput,
+  type InterviewState,
+  type StudioReadiness,
+} from './interview';
+import {
+  studioArtifactInputSchema,
+  studioBoardCardInputSchema,
+  studioBoardClaimInputSchema,
+  studioBoardMoveInputSchema,
+  studioBoardWorkInputSchema,
+  studioDesignPullSchema,
+  studioDesignSchema,
+  studioProjectInputSchema,
+  studioArtifactsSchema,
+  studioBoardSchema,
+  boardCardSchema,
+  studioUiCheckResultSchema,
+  type StudioArtifactInput,
+  type StudioArtifacts,
+  type StudioBoard,
+  type StudioBoardCardInput,
+  type StudioBoardClaimInput,
+  type StudioBoardMoveInput,
+  type StudioBoardWorkInput,
+  type StudioDesign,
+  type StudioDesignPull,
+  type StudioProjectInput,
+  type StudioUiCheckResult,
+  type BoardCard,
+} from './studio';
+import {
   promptGuideInputSchema,
   promptGuideSettingsSchema,
   teamPlanFromPartsInputSchema,
@@ -312,6 +347,27 @@ export const ipcChannels = [
   'team:plan-from-parts',
   'prompt-guide:readiness',
   'prompt-guide:refine',
+  'studio:readiness',
+  'studio:interview-read',
+  'studio:interview-start',
+  'studio:interview-answer',
+  'studio:interview-finish',
+  'studio:interview-reset',
+  'studio:artifacts-read',
+  'studio:artifacts-files',
+  'studio:artifacts-generate',
+  'studio:artifacts-generate-all',
+  'studio:artifacts-mark-edited',
+  'studio:board-read',
+  'studio:board-plan',
+  'studio:board-next',
+  'studio:board-move',
+  'studio:board-claim',
+  'studio:board-check-ui',
+  'studio:board-team-plan',
+  'studio:board-work',
+  'studio:design-pull',
+  'studio:design-read',
   'team:start',
   'team:record',
   'team:clear-record',
@@ -527,6 +583,27 @@ export const ipcInputSchemas = {
   'team:plan-from-parts': teamPlanFromPartsInputSchema,
   'prompt-guide:readiness': emptyInputSchema,
   'prompt-guide:refine': promptGuideInputSchema,
+  'studio:readiness': emptyInputSchema,
+  'studio:interview-read': interviewProjectInputSchema,
+  'studio:interview-start': interviewStartInputSchema,
+  'studio:interview-answer': interviewAnswerInputSchema,
+  'studio:interview-finish': interviewProjectInputSchema,
+  'studio:interview-reset': interviewProjectInputSchema,
+  'studio:artifacts-read': studioProjectInputSchema,
+  'studio:artifacts-files': studioProjectInputSchema,
+  'studio:artifacts-generate': studioArtifactInputSchema,
+  'studio:artifacts-generate-all': studioProjectInputSchema,
+  'studio:artifacts-mark-edited': studioArtifactInputSchema,
+  'studio:board-read': studioProjectInputSchema,
+  'studio:board-plan': studioProjectInputSchema,
+  'studio:board-next': studioProjectInputSchema,
+  'studio:board-move': studioBoardMoveInputSchema,
+  'studio:board-claim': studioBoardClaimInputSchema,
+  'studio:board-check-ui': studioBoardCardInputSchema,
+  'studio:board-team-plan': studioProjectInputSchema,
+  'studio:board-work': studioBoardWorkInputSchema,
+  'studio:design-pull': studioProjectInputSchema,
+  'studio:design-read': studioProjectInputSchema,
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
@@ -723,6 +800,14 @@ export const verificationRunResponseSchema = verificationRunSchema;
 export const recoveryListResponseSchema = z.array(recoveryRecordSchema);
 export const recoveryRecapResponseSchema = recoveryRecapSchema;
 export const recoveryResumeResponseSchema = recoveryResumeSchema;
+export const studioArtifactsResponseSchema = studioArtifactsSchema;
+export const studioBoardResponseSchema = studioBoardSchema;
+export const studioBoardCardResponseSchema = boardCardSchema.nullable();
+export const studioUiCheckResponseSchema = studioUiCheckResultSchema;
+export const studioDesignResponseSchema = studioDesignSchema;
+export const studioDesignPullResponseSchema = studioDesignPullSchema;
+/** The cards one "work the board" run touched, in the order they ran. */
+export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
 
@@ -861,6 +946,46 @@ export interface KaiDesktopBridge {
   promptGuideReadiness(): Promise<IpcResponse<PromptGuideReadiness>>;
   /** Turns a rough idea into a clear goal, open questions and one prompt per teammate. */
   refineIdea(request: PromptGuideInput): Promise<IpcResponse<PromptGuideResult>>;
+  /** The Project Studio's interview: the step that turns a paragraph into `.kai/spec/brief.md`. */
+  studioReadiness(): Promise<IpcResponse<StudioReadiness>>;
+  studioInterview(projectId: string): Promise<IpcResponse<InterviewState | null>>;
+  startStudioInterview(request: InterviewStartInput): Promise<IpcResponse<InterviewState>>;
+  /** Records the answers on screen and asks the next round, or writes the brief when there is nothing left to ask. */
+  answerStudioInterview(request: InterviewAnswerInput): Promise<IpcResponse<InterviewState>>;
+  finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
+  resetStudioInterview(projectId: string): Promise<IpcResponse<null>>;
+  /** The artifact catalog: what exists under `.kai/spec`, who wrote it, and what went stale. */
+  studioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
+  /** Every file the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */
+  studioArtifactFiles(projectId: string): Promise<IpcResponse<string[]>>;
+  /** Generates one artifact from the artifacts it reads. Runs one model call. */
+  generateStudioArtifact(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
+  /** Generates every artifact that is missing or stale, in dependency order. Runs one model call per artifact. */
+  generateStudioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
+  /** Records a hand edit, so the artifacts that read this one are shown as stale rather than trusted. */
+  markStudioArtifactEdited(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
+  /** The board of cards built from the stories. */
+  studioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
+  /** Rebuilds the board from the artifacts and the design, keeping the work already done. Runs one model call. */
+  planStudioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
+  /** The next card an agent should pick up, or null when nothing is ready. */
+  nextStudioCard(projectId: string): Promise<IpcResponse<BoardCard | null>>;
+  /** Moves a card; `done` is refused unless the check still covers the working tree. */
+  moveStudioCard(input: StudioBoardMoveInput): Promise<IpcResponse<BoardCard>>;
+  /** Reserves a card for one agent, so two agents never take the same one. */
+  claimStudioCard(input: StudioBoardClaimInput): Promise<IpcResponse<BoardCard>>;
+  /** Runs the visual check on a component or page card: screenshots, tokens, states, keyboard, flow. */
+  checkStudioCardUi(projectId: string, cardId: string): Promise<IpcResponse<StudioUiCheckResult>>;
+  /** A team plan with one part per `ready` card, for the user to review before anything runs. */
+  planStudioTeam(projectId: string): Promise<IpcResponse<TeamPlanDraft>>;
+  /** Runs ready cards, one agent per card. A card ends in review or blocked, never done. */
+  workStudioBoard(request: StudioBoardWorkInput): Promise<IpcResponse<BoardCard[]>>;
+  /** What KAI last read from open-pencil. */
+  studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
+  /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */
+  pullStudioDesign(projectId: string): Promise<IpcResponse<StudioDesignPull>>;
+  /** Redraws the board when a card moves, whichever window or agent moved it. */
+  onStudioBoardChanged(listener: (payload: { projectId: string; board: StudioBoard }) => void): () => void;
   /** Starts the approved plan as a workflow, one part at a time. */
   startTeam(request: TeamStartInput): Promise<IpcResponse<WorkflowRun>>;
   teamRecord(request: TeamRecordQuery): Promise<IpcResponse<TeamRecordAdvice[]>>;

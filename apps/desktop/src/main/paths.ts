@@ -12,6 +12,7 @@ export interface DesktopPaths {
   attachments: string;
   backups: string;
   learning: string;
+  studio: string;
 }
 
 export function createDesktopPaths(root: string): DesktopPaths {
@@ -27,6 +28,7 @@ export function createDesktopPaths(root: string): DesktopPaths {
     attachments: path.join(resolved, 'attachments'),
     backups: path.join(resolved, 'backups'),
     learning: path.join(resolved, 'learning'),
+    studio: path.join(resolved, 'studio'),
   };
 }
 
@@ -42,5 +44,6 @@ export function dataLocations(paths: DesktopPaths): DataLocation[] {
     { label: 'Attachments', path: paths.attachments, kind: 'runtime' },
     { label: 'Configuration backups', path: paths.backups, kind: 'settings' },
     { label: 'Learning progress and teaching library', path: paths.learning, kind: 'runtime' },
+    { label: 'Project Studio interviews', path: paths.studio, kind: 'runtime' },
   ];
 }

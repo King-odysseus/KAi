@@ -1,7 +1,12 @@
 import * as crypto from 'node:crypto';
 import {
+  readyCards,
   resolveRole,
   roleConfigFor,
+  type ArtifactKind,
+  type BoardCard,
+  type CardRun,
+  type BoardStatus,
   type AgentCapability,
   type AgentId,
   type AgentTeam,
@@ -20,8 +25,10 @@ import {
   type TeamRecordAdvice,
   type TeamRecordQuery,
   type TeamPlanFromPartsInput,
+  type StudioBoard,
 } from '@kai/contracts';
-import { assignTeam, completeTeam, partLevel, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
+import { agentName, assignTeam, completeTeam, partLevel, reach, resolveOrchestrator, teamAdvice, type AssignmentEnvironment } from './team-assign';
+import { boardCardPart, boardCardPrompt } from './board-brief';
 import {
   applyGuardrails,
   buildOrchestratorPrompt,
@@ -48,6 +55,16 @@ export interface TeamPlannerPorts {
   createConversation(projectId: string, title: string): Promise<ConversationRecord>;
   runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;
   startWorkflow(input: WorkflowStartInput, ownerWindowId: number): Promise<WorkflowRun>;
+  /** The board, when there is a Project Studio project behind this planner. */
+  board?(projectId: string): Promise<StudioBoard>;
+  /** The artifacts a card's brief is built from, keyed by kind. */
+  artifactsFor?(projectId: string): Promise<Partial<Record<ArtifactKind, string>>>;
+  /** The board's own claim, so two agents never hold the same card where cognitive1 is not configured. */
+  claimCard?(projectId: string, cardId: string, agent: string): Promise<BoardCard>;
+  recordCardRun?(projectId: string, cardId: string, run: CardRun): Promise<BoardCard>;
+  moveCard?(projectId: string, cardId: string, status: BoardStatus, note?: string): Promise<BoardCard>;
+  /** The files Git reports as changed, so a card records where it touched the project rather than what the agent claims. */
+  changedFilesFor?(projectId: string): Promise<string[]>;
 }
 
 /**
@@ -133,6 +150,89 @@ export class DesktopTeamPlanner {
       warnings: [...guarded.warnings, ...assigned.warnings],
       createdAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * A plan built straight from the board: one part per `ready` card, with the card's story, acceptance criteria,
+   * artifacts and design ref as the brief. No orchestrator call is made — the board already did the splitting.
+   */
+  async planFromBoard(projectId: string): Promise<TeamPlanDraft> {
+    if (!this.ports.board) throw new Error('The Project Studio board is not available.');
+    const settings = await this.ports.settings();
+    const { team, scope } = await this.teamFor(projectId, settings);
+    const [board, artifacts] = await Promise.all([this.ports.board(projectId), this.ports.artifactsFor?.(projectId) ?? Promise.resolve({})]);
+    const ready = readyCards(board);
+    if (ready.length === 0) throw new Error('No card is ready. Finish or promote a card on the board first.');
+    const parts = ready.map((card) => boardCardPart(card, artifacts));
+    const env = await this.environment(projectId);
+    const ordered = (orderParts(parts) ?? parts).map((part) => ({ ...part, effort: partLevel(part, resolveRole(team, part.role).access) }));
+    const assigned = assignTeam(ordered, team, env);
+    return {
+      id: `team_${crypto.randomUUID()}`,
+      projectId,
+      goal: `Work the board: ${ready.map((card) => card.title).join(', ')}`.slice(0, 4_000),
+      summary: `${ready.length} ready card${ready.length === 1 ? '' : 's'} from the Project Studio board.`,
+      parts: ordered,
+      assignments: assigned.assignments,
+      orchestrator: { assignee: 'api', route: 'direct', reason: 'The board already split the work, so no orchestrator ran.' },
+      teamScope: scope,
+      source: 'board',
+      warnings: [...assigned.warnings, 'A card is only moved to done by the board, and only when its check still passes.'],
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Runs one ready card, or as many as `maxCards` of them in order, one agent per card. Each card is claimed before
+   * it runs and its result is recorded on it. The card ends in `review`, or back in `ready` with what it needs when
+   * the run failed — never in `done`, whatever the agent says.
+   */
+  async workBoard(projectId: string, ownerWindowId: number, options: { maxCards?: number; agent?: AgentId; model?: string } = {}): Promise<BoardCard[]> {
+    const ports = this.ports;
+    if (!ports.board || !ports.claimCard || !ports.recordCardRun || !ports.moveCard) {
+      throw new Error('The Project Studio board is not available.');
+    }
+    const settings = await ports.settings();
+    const env = await this.environment(projectId);
+    const limit = Math.max(1, options.maxCards ?? 1);
+    const worked: BoardCard[] = [];
+    for (let index = 0; index < limit; index += 1) {
+      const board = await ports.board(projectId);
+      const card = readyCards(board)[0];
+      if (!card) break;
+      const agent = options.agent ?? settings.defaultAgent;
+      if (!reach(agent, settings.defaultRoute, env)) {
+        throw new Error(`${agentName(agent, env)} is not ready over the ${settings.defaultRoute} route, so no card can run.`);
+      }
+      await ports.claimCard(projectId, card.id, agentName(agent, env));
+      const artifacts = (await ports.artifactsFor?.(projectId)) ?? {};
+      const conversation = await ports.createConversation(projectId, `Card: ${card.title}`.slice(0, 120));
+      const result = await ports.runAgent({
+        conversationId: conversation.id,
+        prompt: boardCardPrompt(card, artifacts),
+        agent,
+        execution: 'cli',
+        route: settings.defaultRoute,
+        autonomy: settings.defaultAutonomy,
+        freshSession: true,
+        ...(options.model ? { model: options.model } : {}),
+      }, ownerWindowId);
+      await ports.recordCardRun(projectId, card.id, {
+        agent,
+        model: options.model ?? null,
+        at: new Date().toISOString(),
+        // What Git says the run changed, so the card's footprint is a fact rather than the agent's summary.
+        files: (await ports.changedFilesFor?.(projectId)) ?? [],
+      });
+      const failed = result.status === 'failed';
+      worked.push(await ports.moveCard(
+        projectId,
+        card.id,
+        failed ? 'blocked' : 'review',
+        failed ? `The run failed: ${result.error ?? 'unknown error'}` : 'The agent finished; the card needs a check and a person.',
+      ));
+    }
+    return worked;
   }
 
   async start(input: TeamStartRequest, ownerWindowId: number): Promise<WorkflowRun> {

@@ -21,6 +21,7 @@ import type {
   SettingsUpdate,
   SetupCheck,
   SetupStatus,
+  TeamPlanDraft,
 } from '@kai/contracts';
 import { THEME_MODES } from '@kai/contracts';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
@@ -32,6 +33,7 @@ import { SettingsView } from './components/SettingsView';
 import { CodeView } from './components/CodeView';
 import { GitView } from './components/GitView';
 import { TasksView } from './components/TasksView';
+import { StudioView } from './components/StudioView';
 import { TerminalView } from './components/TerminalView';
 import { PreviewView } from './components/PreviewView';
 import { UrgentBanner } from './components/CoordinationPanel';
@@ -84,6 +86,8 @@ export function App(): ReactNode {
   const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
   const [view, setView] = useState<ViewId>('workspace');
+  // A plan the Project Studio built from the board, carried to the Workflows page so it opens for review there.
+  const [incomingTeamPlan, setIncomingTeamPlan] = useState<TeamPlanDraft | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState(0);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(() => {
@@ -183,6 +187,7 @@ export function App(): ReactNode {
     { id: 'code', label: 'Open Code Editor', description: 'Browse and edit project files with the built-in editor', run: () => setView('code') },
     { id: 'preview', label: 'Toggle Live Preview Pane', description: 'Run the project, inspect rendered elements, and capture browser errors', run: () => setPreviewOpen((open) => !open) },
     { id: 'tasks', label: 'Open Tasks, Reviews and Handoffs', description: 'Shared task board, review queue, handoff inbox and decision log', run: () => setView('tasks') },
+    { id: 'studio', label: 'Open Project Studio', description: 'Interview a project idea and write the brief the board and agents work from', run: () => setView('studio') },
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => openOperations('verification') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
     { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: shortcutLabel(shortcuts, 'terminal'), run: () => setTerminalOpen((open) => !open) },
@@ -1225,6 +1230,8 @@ export function App(): ReactNode {
             agentCapabilities={agentCapabilities}
             settings={bootstrap.settings}
             busy={Boolean(busy)}
+            incomingPlan={incomingTeamPlan}
+            onIncomingPlanUsed={() => setIncomingTeamPlan(null)}
           />
         );
       case 'history':
@@ -1246,6 +1253,14 @@ export function App(): ReactNode {
         return <GitView activeProject={activeProject} />;
       case 'tasks':
         return <TasksView activeProject={activeProject} cognitive1Ready={serviceFor(bootstrap, 'cognitive1').status === 'ready'} onStartTask={async (prompt) => { setView('workspace'); await createConversation(prompt); }} />;
+      case 'studio':
+        return (
+          <StudioView
+            activeProject={activeProject ? { id: activeProject.id, name: activeProject.name } : null}
+            onOpenSettings={() => setView('settings')}
+            onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
+          />
+        );
       case 'code':
         return null;
       case 'operations':

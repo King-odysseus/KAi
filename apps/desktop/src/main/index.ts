@@ -1,13 +1,13 @@
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, directProviderPreset, isLocalProvider, migrateDeepSeekModel } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
-import { preparePlaywrightMcpSettings, syncCognitive1Mcp } from './agent-mcp-config';
+import { installKaiProjectMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
@@ -25,7 +25,8 @@ import { RecoveryStore } from './recovery-store';
 import { TerminalManager } from './terminal';
 import { UpdateController } from './updater';
 import { autoUpdater } from 'electron-updater';
-import { recordVerification, runCheckCommand, VerificationStore } from './verification';
+import { hashFile, recordVerification, runCheckCommand, VerificationStore } from './verification';
+import { gitOverview } from './git-tools';
 import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
 import { WorkflowTemplateStore } from './workflow-templates';
@@ -37,6 +38,14 @@ import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
 import { DesktopPromptGuide } from './prompt-guide';
+import { DesktopInterview } from './interview';
+import { InterviewStore } from './interview-store';
+import { StudioArtifacts } from './artifacts';
+import { StudioBoardStore } from './board';
+import { DesktopStudio } from './studio';
+import { SPEC_ROOT, SpecStore } from './spec-store';
+import { DesktopUiCheck, playwrightUiCheckPorts } from './ui-check';
+import { resolveInside } from './project-files';
 import { completeTeam } from './team-assign';
 import { TeamRecordStore } from './team-record-store';
 import { activeParallelDirectories, createParallelSession } from './parallel-session';
@@ -149,6 +158,29 @@ async function startApplication(): Promise<void> {
     }
   }
   if (playwrightMcp.changed) await settings.save(playwrightMcp.settings);
+  // open-pencil is only registered once its token is in the vault, so KAI never offers a server that cannot connect.
+  if (await credentials.has?.(OPENPENCIL_CREDENTIAL_ID)) {
+    const design = withOpenPencilMcpSetting(await settings.load());
+    if (design.changed) await settings.save(design.settings);
+  }
+  // The board server is useful only with a project to point at, so it is registered for the active project. An
+  // agent launched for another project keeps the entry it was given; opening that project rewrites it.
+  {
+    const current = await settings.load();
+    const active = (await projects.list()).find((project) => project.id === current.activeProjectId);
+    if (active) {
+      const results = await installKaiProjectMcpForAgents({
+        serverPath: path.join(__dirname, 'kai-project.cjs'),
+        projectRoot: active.path,
+        command: app.isPackaged ? process.execPath : 'node',
+        env: app.isPackaged ? { ELECTRON_RUN_AS_NODE: '1' } : {},
+      });
+      for (const result of results) {
+        if (result.error) logger.warn('internal', `KAI board MCP could not be added to ${result.agent}`, `${result.configPath}: ${result.error}`);
+        else if (result.changed) logger.info('internal', `KAI board MCP added to ${result.agent}`, result.configPath);
+      }
+    }
+  }
   const kaiRoot = app.isPackaged ? process.resourcesPath : path.resolve(app.getAppPath(), '..', '..');
   const proxyLauncherPath = app.isPackaged
     ? path.join(process.resourcesPath, 'integrations', 'start-proxy.cjs')
@@ -217,6 +249,9 @@ async function startApplication(): Promise<void> {
     teachingLibrary,
   );
   const preview = new PreviewRuntime(pathToFileURL(path.join(__dirname, '../preload/preview.cjs')).toString());
+  // The studio writes `.kai/spec` inside the project; the interview's own working state stays app-owned.
+  const specStore = new SpecStore();
+  const interviewStore = new InterviewStore(path.join(paths.studio, 'interviews.json'), fileSystem);
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
     waitIfPaused: (conversationId, signal) => runControl.waitIfPaused(conversationId, signal),
@@ -251,6 +286,8 @@ async function startApplication(): Promise<void> {
   let workflowRunner!: DesktopWorkflowRunner;
   let teamPlanner!: DesktopTeamPlanner;
   let promptGuide!: DesktopPromptGuide;
+  let interview!: DesktopInterview;
+  let studio!: DesktopStudio;
 
   ipcContext = {
     appName: 'KAI',
@@ -290,6 +327,8 @@ async function startApplication(): Promise<void> {
     workflows: workflowRunner,
     teamPlanner,
     promptGuide,
+    interview,
+    studio,
     runControl,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
@@ -376,6 +415,17 @@ async function startApplication(): Promise<void> {
     createConversation: createBlankConversation,
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
     startWorkflow: (input, ownerWindowId) => workflowRunner.start(input, ownerWindowId),
+    // The studio is built later in this function, so the board is reached lazily through the context.
+    board: (projectId) => ipcContext!.studio.board(projectId),
+    artifactsFor: (projectId) => ipcContext!.studio.artifactTexts(projectId),
+    claimCard: (projectId, cardId, agent) => ipcContext!.studio.claim(projectId, cardId, agent),
+    recordCardRun: (projectId, cardId, run) => ipcContext!.studio.recordRun(projectId, cardId, run),
+    moveCard: (projectId, cardId, status, note) => ipcContext!.studio.move(projectId, cardId, status, note ?? ''),
+    changedFilesFor: async (projectId) => {
+      const root = await studioProjectRoot(projectId);
+      const overview = await gitOverview(root);
+      return overview.changes.map((change) => change.path);
+    },
   });
   ipcContext.teamPlanner = teamPlanner;
   promptGuide = new DesktopPromptGuide({
@@ -391,6 +441,97 @@ async function startApplication(): Promise<void> {
     requester: learningTutor,
   });
   ipcContext.promptGuide = promptGuide;
+  interview = new DesktopInterview({
+    settings: () => settings.load(),
+    projectRoot: async (projectId) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('Project not found.');
+      return project.path;
+    },
+    credentialStored: async (id) => Boolean(await credentials.has?.(id)),
+    vaultAvailable: () => credentials.isAvailable(),
+    requester: learningTutor,
+    store: interviewStore,
+    spec: specStore,
+    now: () => new Date().toISOString(),
+  });
+  ipcContext.interview = interview;
+  const studioProjectRoot = async (projectId: string): Promise<string> => {
+    const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+    if (!project) throw new Error('Project not found.');
+    return project.path;
+  };
+  const studioArtifacts = new StudioArtifacts({ spec: specStore, projectRoot: studioProjectRoot, now: () => new Date().toISOString() });
+  const studioBoard = new StudioBoardStore({
+    spec: specStore,
+    projectRoot: studioProjectRoot,
+    // The board asks Git what changed since the check ran; a project that is not a repo simply has no drift.
+    dirtyFiles: async (projectPath) => {
+      try {
+        const overview = await gitOverview(projectPath);
+        return await Promise.all(overview.changes.map(async (change) => ({ path: change.path, hash: (await hashFile(projectPath, change.path)) ?? '' })));
+      } catch {
+        return null;
+      }
+    },
+    hashFile: (projectPath, relativePath) => hashFile(projectPath, relativePath),
+    run: async (projectId, runId) => (await ipcContext!.verification.list(projectId)).find((run) => run.id === runId) ?? null,
+    now: () => new Date().toISOString(),
+  });
+  // The visual check drives the Playwright MCP KAI already installs for its agents; screenshots land with the card.
+  const uiCheck = new DesktopUiCheck(playwrightUiCheckPorts({
+    mcp: {
+      callServerTool: (serverId, toolName, input) => {
+        if (!mcpRuntime) return Promise.reject(new Error('The MCP runtime is not running.'));
+        return mcpRuntime.callServerTool(serverId, toolName, input);
+      },
+    },
+    preview: {
+      start: (projectId, projectPath, command) => preview.start(projectId, projectPath, command),
+      status: (projectId, projectPath) => preview.status(projectId, projectPath),
+    },
+    readFile: async (projectPath, relativePath) => {
+      const target = await resolveInside(projectPath, path.join(SPEC_ROOT, relativePath));
+      try {
+        return await readFile(target, 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    },
+    writeFile: async (projectPath, relativePath, base64) => {
+      const target = await resolveInside(projectPath, path.join(SPEC_ROOT, relativePath));
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, Buffer.from(base64, 'base64'));
+    },
+    sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  }, () => new Date().toISOString()));
+  studio = new DesktopStudio({
+    settings: () => settings.load(),
+    projectRoot: studioProjectRoot,
+    requester: learningTutor,
+    interview: { readiness: () => interview.readiness() },
+    artifacts: studioArtifacts,
+    board: studioBoard,
+    uiCheck,
+    // open-pencil is reached through the same MCP runtime as every other server, so its token stays in the vault.
+    openPencil: async () => {
+      const current = await settings.load();
+      const server = current.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID && candidate.enabled);
+      if (!server) return null;
+      return {
+        endpoint: () => (server.transport === 'http' ? server.url : OPENPENCIL_ENDPOINT),
+        call: async (tool, input) => {
+          if (!mcpRuntime) throw new Error('The MCP runtime is not running.');
+          const blocks = await mcpRuntime.callServerTool(OPENPENCIL_MCP_SERVER_ID, tool, input);
+          if (blocks === null) throw new Error('open-pencil is not connected. Check its token in Settings, then pull the design again.');
+          return blocks;
+        },
+      };
+    },
+    now: () => new Date().toISOString(),
+  });
+  ipcContext.studio = studio;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);

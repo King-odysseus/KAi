@@ -36,6 +36,7 @@ import {
   type ServiceTokenCopyResult,
   type ServiceState,
   type SharedDesktopState,
+  type StudioBoard,
   type WorkflowTemplate,
   type WorkflowTemplateSaveInput,
   type CodeFormatResult,
@@ -94,6 +95,8 @@ import { autoCliModel } from './auto-model';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopPromptGuide } from './prompt-guide';
+import type { DesktopInterview } from './interview';
+import type { DesktopStudio } from './studio';
 import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
@@ -162,6 +165,8 @@ export interface IpcContext {
   workflows: DesktopWorkflowRunner;
   teamPlanner: DesktopTeamPlanner;
   promptGuide: DesktopPromptGuide;
+  interview: DesktopInterview;
+  studio: DesktopStudio;
   teamRecord: TeamRecordStore;
   runControl: DesktopRunControl;
   notifications: NotificationCenter;
@@ -292,6 +297,52 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
   handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
   handle(context, 'prompt-guide:refine', async (input) => context.promptGuide.refine(input));
+  handle(context, 'studio:readiness', async () => context.interview.readiness());
+  handle(context, 'studio:interview-read', async ({ projectId }) => context.interview.read({ projectId }));
+  handle(context, 'studio:interview-start', async (input) => context.interview.start(input));
+  handle(context, 'studio:interview-answer', async (input) => context.interview.answer(input));
+  handle(context, 'studio:interview-finish', async ({ projectId }) => context.interview.finish({ projectId }));
+  handle(context, 'studio:interview-reset', async ({ projectId }) => context.interview.reset({ projectId }));
+  handle(context, 'studio:artifacts-read', async ({ projectId }) => context.studio.artifacts(projectId));
+  handle(context, 'studio:artifacts-files', async ({ projectId }) => context.studio.files(projectId));
+  handle(context, 'studio:artifacts-generate', async ({ projectId, kind }) => context.studio.generate(projectId, kind));
+  handle(context, 'studio:artifacts-generate-all', async ({ projectId }) => context.studio.generateAll(projectId));
+  handle(context, 'studio:artifacts-mark-edited', async ({ projectId, kind }) => context.studio.markEdited(projectId, kind));
+  handle(context, 'studio:board-read', async ({ projectId }) => context.studio.board(projectId));
+  handle(context, 'studio:board-plan', async ({ projectId }) => announceBoard(context, projectId, await context.studio.plan(projectId)));
+  handle(context, 'studio:board-next', async ({ projectId }) => context.studio.next(projectId));
+  handle(context, 'studio:board-move', async (input) => {
+    const card = await context.studio.move(input.projectId, input.cardId, input.status, input.note);
+    announceBoard(context, input.projectId, await context.studio.board(input.projectId));
+    return card;
+  });
+  handle(context, 'studio:board-claim', async (input) => {
+    const card = await context.studio.claim(input.projectId, input.cardId, input.agent);
+    announceBoard(context, input.projectId, await context.studio.board(input.projectId));
+    return card;
+  });
+  handle(context, 'studio:board-check-ui', async ({ projectId, cardId }) => {
+    const checked = await context.studio.checkUi(projectId, cardId);
+    announceBoard(context, projectId, await context.studio.board(projectId));
+    return checked;
+  });
+  // Both of these run agents, so the window that asked owns the run and sees its events.
+  handle(context, 'studio:board-team-plan', async ({ projectId }) => context.teamPlanner.planFromBoard(projectId));
+  handle(context, 'studio:board-work', async ({ projectId, maxCards, agent, model }, request) => {
+    const worked = await context.teamPlanner.workBoard(projectId, ownerWindowId(context, request), {
+      maxCards,
+      ...(agent ? { agent } : {}),
+      ...(model ? { model } : {}),
+    });
+    announceBoard(context, projectId, await context.studio.board(projectId));
+    return worked;
+  });
+  handle(context, 'studio:design-read', async ({ projectId }) => context.studio.design(projectId));
+  handle(context, 'studio:design-pull', async ({ projectId }) => {
+    const pulled = await context.studio.pullDesign(projectId);
+    announceBoard(context, projectId, pulled.board);
+    return pulled;
+  });
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, ownerWindowId(context, request)));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });
@@ -2128,6 +2179,12 @@ function handle<TChannel extends IpcChannel>(
       return failureFor(error);
     }
   });
+}
+
+/** Every window redraws its board when a card moves, whichever window or agent moved it. */
+function announceBoard(context: IpcContext, projectId: string, board: StudioBoard): StudioBoard {
+  context.windows.broadcast('studio:board-changed', { projectId, board });
+  return board;
 }
 
 function ownerWindowId(context: IpcContext, request: IpcRequestContext): number {

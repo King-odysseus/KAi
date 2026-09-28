@@ -56,6 +56,17 @@ async function headCommit(projectPath: string): Promise<string | null> {
   }
 }
 
+/** The current hash of one file's content, whether or not Git reports it as changed. Null when it is gone or huge. */
+export async function hashFile(projectPath: string, relativePath: string): Promise<string | null> {
+  try {
+    const target = path.join(projectPath, relativePath);
+    const stats = await fs.stat(target);
+    if (!stats.isFile() || stats.size > MAX_HASHED_BYTES) return null;
+    return createHash('sha256').update(await fs.readFile(target)).digest('hex');
+  } catch {
+    return null;
+  }
+}
 /** Suggest the project's test command from its manifest files. */
 export async function suggestTestCommand(projectPath: string): Promise<string | null> {
   const has = async (name: string): Promise<boolean> => fs.access(path.join(projectPath, name)).then(() => true, () => false);

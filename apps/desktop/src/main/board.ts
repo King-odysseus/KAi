@@ -1,0 +1,322 @@
+import {
+  BOARD_STATUSES,
+  STUDIO_DESIGN_PATH,
+  artifactKindSchema,
+  boardCardSchema,
+  createStudioBoard,
+  createStudioDesign,
+  defaultNeeds,
+  isUiCard,
+  readyCards,
+  studioBoardSchema,
+  studioDesignSchema,
+  type ArtifactEntry,
+  type ArtifactKind,
+  type BoardCard,
+  type BoardStatus,
+  type CardCheck,
+  type CardRun,
+  type DesignComponent,
+  type StudioBoard,
+  type StudioDesign,
+} from '@kai/contracts';
+import type { VerificationRun } from '@kai/contracts';
+import type { SpecStore } from './spec-store';
+
+/**
+ * The board. It is the only writer of `.kai/spec/board.json`, and the only way a card changes status, whatever the
+ * caller is — a KAI agent, an outside agent over MCP, or the UI.
+ *
+ * The rule the plan calls the whole point is enforced here in code: a card only reaches `done` when there is a
+ * passing verification run whose recorded file hashes still match the working tree, and, for a UI card, when the
+ * visual check passed. Anything else returns the reason it was blocked. An agent cannot mark done work that does
+ * not build.
+ */
+
+export const STUDIO_BOARD_PATH = 'board.json';
+
+export interface BoardPorts {
+  spec: SpecStore;
+  projectRoot(projectId: string): Promise<string>;
+  /** The files Git reports as changed, with their content hashes; null when the project is not a repo. */
+  dirtyFiles(projectPath: string): Promise<Array<{ path: string; hash: string }> | null>;
+  /** The current hash of one file, whether or not Git reports it as changed. Null when it is gone or too large. */
+  hashFile(projectPath: string, relativePath: string): Promise<string | null>;
+  run(projectId: string, runId: string): Promise<VerificationRun | null>;
+  now(): string;
+}
+
+export interface DoneEvidence {
+  run: VerificationRun | null;
+  /** Each file the run recorded, with its hash as it is *now* — content, so a commit does not break the match. */
+  recordedNow: Array<{ path: string; hash: string | null }> | null;
+  /** A changed file that the run never recorded, so the tree has drifted since the check. */
+  drifted: boolean;
+}
+
+/** Null when the card may be marked `done`; otherwise the one rule that blocked it, for the caller to show. */
+export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'check'>, evidence: DoneEvidence): string | null {
+  if (!card.check) return 'The card has no record of a passing check.';
+  if (!evidence.run) return 'The check the card was closed on is no longer in the verification history.';
+  if (!evidence.run.passed) return `The recorded check did not pass (${evidence.run.command} exited ${evidence.run.exitCode ?? 'unknown'}).`;
+  if (isUiCard(card) && card.check.visual !== 'passed') return 'A component or page card needs a passing visual check before it can be done.';
+  if (evidence.drifted) return 'Files changed after the check passed, so the result does not cover the current tree.';
+  if (evidence.recordedNow === null) return 'The checked files could not be read back to confirm they still match.';
+  const missing = evidence.recordedNow.find((file) => file.hash === null);
+  if (missing) return `${missing.path} was checked but is no longer on disk.`;
+  const changed = evidence.recordedNow.find((file) => file.hash !== evidence.run!.files.find((item) => item.path === file.path)?.hash);
+  if (changed) return `${changed.path} changed since the check passed.`;
+  return null;
+}
+
+/**
+ * Cards that read a stale artifact are themselves stale: tokens go, every UI card follows. An artifact that has not
+ * been written yet does not stale a card — it simply is not there, which is a different problem from having moved.
+ */
+export function applyStaleness(cards: readonly BoardCard[], artifacts: readonly ArtifactEntry[]): BoardCard[] {
+  const byKind = new Map(artifacts.map((entry) => [entry.kind, entry]));
+  return cards.map((card) => {
+    const stale = card.needsArtifacts.filter((kind) => byKind.get(kind)?.stale);
+    if (stale.length === 0) return card;
+    return { ...card, stale: true, staleReason: `${stale.join(', ')} changed since this card was written.` };
+  });
+}
+
+/** A backlog card becomes ready once everything it depends on is done. Blocked and in-flight cards are left alone. */
+export function promoteReady(cards: readonly BoardCard[]): BoardCard[] {
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  return cards.map((card) => {
+    if (card.status !== 'backlog' || card.stale) return card;
+    const ready = card.dependsOn.every((id) => byId.get(id)?.status === 'done');
+    return ready ? { ...card, status: 'ready' as BoardStatus } : card;
+  });
+}
+
+/**
+ * Cards holding a node the design changed go stale, and their dependents follow. A card with no `designRef` is not
+ * touched: it was not drawn from the design, so a redesign cannot invalidate it.
+ */
+export function applyDesignStaleness(cards: readonly BoardCard[], changed: readonly string[]): BoardCard[] {
+  if (changed.length === 0) return [...cards];
+  const moved = new Set(changed);
+  const stale = new Set<string>();
+  let next = cards.map((card) => {
+    if (!card.designRef || !moved.has(card.designRef)) return card;
+    stale.add(card.id);
+    return { ...card, stale: true, staleReason: `open-pencil node ${card.designRef} changed since this card was written.` };
+  });
+  // A card built on a card that must be redone must be redone too, however deep the chain runs.
+  for (let pass = 0; pass < cards.length; pass += 1) {
+    let changedThisPass = false;
+    next = next.map((card) => {
+      if (stale.has(card.id) || card.dependsOn.every((id) => !stale.has(id))) return card;
+      stale.add(card.id);
+      changedThisPass = true;
+      return { ...card, stale: true, staleReason: 'Something this card is built on has to be redone for the new design.' };
+    });
+    if (!changedThisPass) break;
+  }
+  return next;
+}
+
+/**
+ * The design's own cards. A component or page the board does not have yet becomes a card carrying its node id; one
+ * the board already has (matched by `designRef`, or by name) has the node id attached rather than a second card.
+ */
+export function mergeDesign(
+  cards: readonly BoardCard[],
+  components: readonly DesignComponent[],
+  at: string,
+  idFor: (nodeId: string) => string = designCardId,
+): BoardCard[] {
+  const byNode = new Map(cards.filter((card) => card.designRef).map((card) => [card.designRef as string, card]));
+  const byName = new Map(cards.map((card) => [card.title.trim().toLowerCase(), card]));
+  const taken = new Set(cards.map((card) => card.id));
+  const added: BoardCard[] = [];
+  const merged = [...cards];
+  for (const component of components) {
+    const existing = byNode.get(component.id) ?? byName.get(component.name.trim().toLowerCase());
+    if (existing) {
+      const index = merged.findIndex((card) => card.id === existing.id);
+      merged[index] = { ...existing, designRef: component.id, updatedAt: at };
+      continue;
+    }
+    let id = idFor(component.id);
+    let suffix = 2;
+    while (taken.has(id)) id = `${idFor(component.id)}-${suffix++}`;
+    taken.add(id);
+    added.push(boardCardSchema.parse({
+      id,
+      title: component.name.slice(0, 200),
+      kind: component.screen ? 'page' : 'component',
+      story: `Built from the open-pencil ${component.screen ? 'page' : 'component'} "${component.name}".`,
+      acceptance: ['It matches the design node it was drawn from.', 'The design only changes when the node in open-pencil changes.'],
+      designRef: component.id,
+      needsArtifacts: defaultNeeds(component.screen ? 'page' : 'component'),
+      status: 'backlog',
+      createdAt: at,
+      updatedAt: at,
+    }));
+  }
+  return [...merged, ...added];
+}
+
+/** A card id from an open-pencil node id, so the same node always yields the same card. */
+export function designCardId(nodeId: string): string {
+  const slug = nodeId.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return slug || 'node';
+}
+
+export class StudioBoardStore {
+  constructor(private readonly ports: BoardPorts) {}
+
+  async read(projectId: string): Promise<StudioBoard> {
+    const root = await this.ports.projectRoot(projectId);
+    const raw = await this.ports.spec.read(root, STUDIO_BOARD_PATH);
+    if (raw === null) return createStudioBoard();
+    try {
+      const parsed = studioBoardSchema.safeParse(JSON.parse(raw));
+      // A hand-edited board is reported as empty rather than repaired: these are the user's files.
+      return parsed.success ? parsed.data : createStudioBoard();
+    } catch {
+      return createStudioBoard();
+    }
+  }
+
+  /**
+   * Replaces the board when the studio generates it from the artifacts and the design. Existing cards keep their
+   * status, runs and checks, so regenerating the plan never throws away work already done.
+   */
+  async replace(projectId: string, generated: readonly BoardCard[], artifacts: readonly ArtifactEntry[]): Promise<StudioBoard> {
+    const current = await this.read(projectId);
+    const previous = new Map(current.cards.map((card) => [card.id, card]));
+    const merged = generated.map((card) => {
+      const existing = previous.get(card.id);
+      return existing
+        ? { ...card, status: existing.status, check: existing.check, runs: existing.runs, claimedBy: existing.claimedBy, notes: existing.notes }
+        : card;
+    });
+    return this.save(projectId, { schemaVersion: 1, cards: promoteReady(applyStaleness(merged, artifacts)) });
+  }
+
+  /** Moves a card to a new status, enforcing the dependency and done rules. */
+  async move(projectId: string, cardId: string, status: BoardStatus, note = ''): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    if (!BOARD_STATUSES.includes(status)) throw new Error(`Unknown board status ${status}.`);
+    if (status === 'ready') {
+      const byId = new Map(board.cards.map((item) => [item.id, item]));
+      const unmet = card.dependsOn.filter((id) => byId.get(id)?.status !== 'done');
+      if (unmet.length > 0) throw new Error(`Card ${cardId} is blocked by ${unmet.join(', ')}.`);
+    }
+    let next: BoardCard = { ...card, status, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null };
+    if (status === 'done') {
+      const blocked = await this.explainDone(projectId, card);
+      if (blocked) throw new Error(blocked);
+    }
+    next = boardCardSchema.parse(next);
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    return next;
+  }
+
+  /** Reserves a card for one agent. Two agents never hold the same card: the second claim is refused. */
+  async claim(projectId: string, cardId: string, agent: string): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    if (card.claimedBy && card.claimedBy !== agent) throw new Error(`Card ${cardId} is already held by ${card.claimedBy}.`);
+    if (card.status !== 'ready' && card.status !== 'inProgress') throw new Error(`Card ${cardId} is ${card.status}; only a ready card can be claimed.`);
+    const next: BoardCard = { ...card, status: 'inProgress', claimedBy: agent, updatedAt: this.ports.now() };
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    return next;
+  }
+
+  /** Records a finished agent turn against the card. It does not move the card: only `move` can do that. */
+  async recordRun(projectId: string, cardId: string, run: CardRun): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    const next: BoardCard = { ...card, runs: [...card.runs, run].slice(-50), updatedAt: this.ports.now() };
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    return next;
+  }
+
+  /** Records the checks a card is closed on. Whether they are *enough* is decided by `move`, not here. */
+  async setCheck(projectId: string, cardId: string, check: CardCheck): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    const next: BoardCard = { ...card, check, updatedAt: this.ports.now() };
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    return next;
+  }
+
+  /** The next card an agent should pick up, or null when nothing is ready. */
+  async next(projectId: string): Promise<BoardCard | null> {
+    return readyCards(await this.read(projectId))[0] ?? null;
+  }
+
+  /**
+   * Folds a pull from open-pencil into the board: cards that hold a node the design changed go stale, and the
+   * design's components and pages get their cards. Nothing here can move a card forward — staleness and new cards
+   * only, so a redesign never marks work done.
+   */
+  async applyDesign(projectId: string, components: readonly DesignComponent[], changedNodes: readonly string[]): Promise<StudioBoard> {
+    const board = await this.read(projectId);
+    const at = this.ports.now();
+    const withDesign = mergeDesign(applyDesignStaleness(board.cards, changedNodes), components, at);
+    return this.save(projectId, { schemaVersion: 1, cards: promoteReady(withDesign) });
+  }
+
+  /** What KAI last read from open-pencil, or an empty record on a project that has never pulled one. */
+  async design(projectId: string): Promise<StudioDesign> {
+    const root = await this.ports.projectRoot(projectId);
+    const raw = await this.ports.spec.read(root, STUDIO_DESIGN_PATH);
+    if (raw === null) return createStudioDesign();
+    try {
+      const parsed = studioDesignSchema.safeParse(JSON.parse(raw));
+      return parsed.success ? parsed.data : createStudioDesign();
+    } catch {
+      return createStudioDesign();
+    }
+  }
+
+  /** Records what the pull saw, so the next pull can tell a redesign from a design nobody touched. */
+  async saveDesign(projectId: string, design: StudioDesign): Promise<StudioDesign> {
+    const parsed = studioDesignSchema.parse(design);
+    const root = await this.ports.projectRoot(projectId);
+    await this.ports.spec.write(root, STUDIO_DESIGN_PATH, `${JSON.stringify(parsed, null, 2)}\n`);
+    return parsed;
+  }
+
+  /** Gathers the evidence for a card and returns why `done` is blocked, or null when it is allowed. */
+  private async explainDone(projectId: string, card: BoardCard): Promise<string | null> {
+    if (!card.check) return doneBlockedBy(card, { run: null, recordedNow: null, drifted: false });
+    const root = await this.ports.projectRoot(projectId);
+    const [run, dirty] = await Promise.all([this.ports.run(projectId, card.check.runId), this.ports.dirtyFiles(root)]);
+    if (!run) return doneBlockedBy(card, { run: null, recordedNow: null, drifted: false });
+    const recordedNow = await Promise.all(run.files.map(async (file) => ({ path: file.path, hash: await this.ports.hashFile(root, file.path) })));
+    const recordedPaths = new Set(run.files.map((file) => file.path));
+    // The studio's own folder is bookkeeping, not the code under test: writing the board must not invalidate a check.
+    const drifted = (dirty ?? []).some((file) => !file.path.startsWith('.kai/') && !recordedPaths.has(file.path));
+    return doneBlockedBy(card, { run, recordedNow, drifted });
+  }
+
+  private require(board: StudioBoard, cardId: string): BoardCard {
+    const card = board.cards.find((item) => item.id === cardId);
+    if (!card) throw new Error(`No card ${cardId} on the board.`);
+    return card;
+  }
+
+  private async save(projectId: string, board: StudioBoard): Promise<StudioBoard> {
+    const parsed = studioBoardSchema.parse(board);
+    const root = await this.ports.projectRoot(projectId);
+    await this.ports.spec.write(root, STUDIO_BOARD_PATH, `${JSON.stringify(parsed, null, 2)}\n`);
+    return parsed;
+  }
+}
+
+/** Reads the artifact kinds a card's prompt should be built from, validated so a bad board cannot smuggle one in. */
+export function cardArtifacts(card: Pick<BoardCard, 'needsArtifacts'>): ArtifactKind[] {
+  return card.needsArtifacts.flatMap((kind) => {
+    const parsed = artifactKindSchema.safeParse(kind);
+    return parsed.success ? [parsed.data] : [];
+  });
+}

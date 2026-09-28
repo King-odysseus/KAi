@@ -2,6 +2,9 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  OPENPENCIL_CREDENTIAL_ID,
+  OPENPENCIL_ENDPOINT,
+  OPENPENCIL_MCP_SERVER_ID,
   PLAYWRIGHT_MCP_FEATURE_ID,
   PLAYWRIGHT_MCP_SERVER_ID,
   type AppSettings,
@@ -12,6 +15,7 @@ const PLAYWRIGHT_CLI_SERVER_NAME = 'playwright';
 const PLAYWRIGHT_CLI_COMMAND = 'npx';
 const PLAYWRIGHT_ARGS = ['-y', '@playwright/mcp@latest'];
 export const COGNITIVE1_CLI_SERVER_NAME = 'cognitive1';
+export const KAI_PROJECT_CLI_SERVER_NAME = 'kai-project';
 
 export type CliAgentId = 'claude' | 'codex' | 'qwen' | 'gemini';
 
@@ -42,6 +46,19 @@ export interface PlaywrightMcpPreparation {
 export interface Cognitive1McpInstallOptions extends AgentMcpInstallOptions {
   endpoint: string;
   token: string;
+}
+
+export interface KaiProjectMcpInstallOptions extends AgentMcpInstallOptions {
+  /** The bundled `kai-project` server script the agent launches. */
+  serverPath: string;
+  /** The one project the server is scoped to. */
+  projectRoot: string;
+  /** What runs the script: `node` in development, the Electron binary (`ELECTRON_RUN_AS_NODE`) once packaged. */
+  command: string;
+  /** Extra arguments before the script path, for instance `-e` or nothing at all. */
+  leadingArgs?: string[];
+  /** Environment the script needs, such as `ELECTRON_RUN_AS_NODE`. */
+  env?: Record<string, string>;
 }
 
 export interface Cognitive1McpAccess {
@@ -79,6 +96,33 @@ export function withInstalledFeature(
     settings: { ...settings, installedFeatures: [...settings.installedFeatures, featureId] },
     changed: true,
   };
+}
+
+/**
+ * open-pencil as a server KAI itself can call. Its endpoint and Bearer token are settings rather than a token
+ * written into a config file: the runtime reads the vault when it connects, so the value never reaches disk.
+ */
+export function withOpenPencilMcpSetting(
+  settings: AppSettings,
+  options: { endpoint?: string; credentialId?: string; enabled?: boolean } = {},
+): { settings: AppSettings; changed: boolean } {
+  const desired: McpServerSettings = {
+    id: OPENPENCIL_MCP_SERVER_ID,
+    name: 'open-pencil (design)',
+    enabled: options.enabled ?? true,
+    transport: 'http',
+    url: options.endpoint ?? OPENPENCIL_ENDPOINT,
+    // The vault holds the whole header value ("Bearer <token>"), which is what the runtime sends as-is.
+    headerCredentialIds: { Authorization: options.credentialId ?? OPENPENCIL_CREDENTIAL_ID },
+  };
+  const index = settings.mcpServers.findIndex((server) => server.id === OPENPENCIL_MCP_SERVER_ID);
+  if (index < 0) return { settings: { ...settings, mcpServers: [...settings.mcpServers, desired] }, changed: true };
+  // An entry the user edited by hand is left alone; only one that drifted from what we install is rewritten.
+  const existing = settings.mcpServers[index];
+  if (sameJson(existing, desired)) return { settings, changed: false };
+  const mcpServers = [...settings.mcpServers];
+  mcpServers[index] = desired;
+  return { settings: { ...settings, mcpServers }, changed: true };
 }
 
 export async function preparePlaywrightMcpSettings(
@@ -131,6 +175,32 @@ export async function installCognitive1McpForAgents(
     '[mcp_servers.cognitive1]',
     `url = "${escapeTomlString(endpoint)}"`,
     `http_headers = { Authorization = "${escapeTomlString(authorization)}" }`,
+  ], options);
+}
+
+/**
+ * Keep KAI's own board MCP server available to the CLI agents. The server is a script this app ships, scoped to one
+ * project with `--project`, and every tool it exposes goes through the studio's stores — so an outside agent works
+ * the same board under the same rules and cannot mark a card done that has not passed its checks.
+ */
+export async function installKaiProjectMcpForAgents(
+  options: KaiProjectMcpInstallOptions,
+): Promise<AgentMcpInstallResult[]> {
+  const serverName = KAI_PROJECT_CLI_SERVER_NAME;
+  const args = [...(options.leadingArgs ?? []), options.serverPath, '--project', options.projectRoot];
+  const env = options.env ?? {};
+  const jsonEntry = { command: options.command, args: [...args], ...(Object.keys(env).length > 0 ? { env } : {}) };
+  return installMcpForAgents(serverName, () => ({
+    claude: { ...jsonEntry },
+    qwen: { ...jsonEntry },
+    gemini: { ...jsonEntry },
+  }), [
+    `[mcp_servers.${serverName}]`,
+    `command = "${escapeTomlString(options.command)}"`,
+    `args = [${args.map((argument) => `"${escapeTomlString(argument)}"`).join(', ')}]`,
+    ...(Object.keys(env).length > 0
+      ? [`env = { ${Object.entries(env).map(([key, value]) => `${key} = "${escapeTomlString(value)}"`).join(', ')} }`]
+      : []),
   ], options);
 }
 

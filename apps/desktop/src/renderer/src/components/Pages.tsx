@@ -35,6 +35,7 @@ import type {
   ProjectRecord,
   RouteMode,
   ServiceState,
+  TeamPlanDraft,
   WorkflowRun,
   WorkflowStep,
   WorkflowTemplate,
@@ -226,11 +227,15 @@ export function WorkflowsView({
   agentCapabilities,
   settings,
   busy,
+  incomingPlan,
+  onIncomingPlanUsed,
 }: {
   activeProject: ProjectRecord | null;
   agentCapabilities: AgentCapability[];
   settings: AppSettings;
   busy: boolean;
+  incomingPlan?: TeamPlanDraft | null;
+  onIncomingPlanUsed?: () => void;
 }): ReactNode {
   const [title, setTitle] = useState('Untitled workflow');
   const [steps, setSteps] = useState<WorkflowDraftStep[]>([
@@ -508,6 +513,8 @@ export function WorkflowsView({
         settings={settings}
         busy={busy}
         running={running}
+        incomingPlan={incomingPlan}
+        onIncomingPlanUsed={onIncomingPlanUsed}
         onStarted={(run) => {
           reconcileRun(run);
           setActiveRunId(run.workflow.id);

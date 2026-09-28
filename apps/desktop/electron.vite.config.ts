@@ -16,10 +16,14 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@kai/contracts', '@kai/integrations', '@kai/runtime'] })],
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/main/index.ts'),
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // Its own bundle: the agents' configs launch it as a stdio MCP server, outside the Electron process.
+          'kai-project': resolve(__dirname, 'src/main/kai-project-server.ts'),
+        },
         output: {
           format: 'cjs',
-          entryFileNames: 'index.cjs',
+          entryFileNames: '[name].cjs',
         },
       },
     },

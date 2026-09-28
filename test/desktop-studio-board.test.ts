@@ -1,0 +1,219 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  boardCardSchema,
+  createStudioArtifacts,
+  dependentsOf,
+  verificationRunSchema,
+  type ArtifactEntry,
+  type BoardCard,
+  type StudioArtifacts,
+} from '../packages/contracts/src';
+import { StudioArtifacts, applyWrite, ensureBrief, markUserEdited } from '../apps/desktop/src/main/artifacts';
+import { StudioBoardStore, applyStaleness, doneBlockedBy, promoteReady, type BoardPorts } from '../apps/desktop/src/main/board';
+import { SpecStore } from '../apps/desktop/src/main/spec-store';
+import { hashFile } from '../apps/desktop/src/main/verification';
+
+const NOW = '2026-09-28T12:00:00.000Z';
+const LATER = '2026-09-28T13:00:00.000Z';
+let root = '';
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-studio-'));
+});
+afterEach(() => {
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+function write(relative: string, content: string): void {
+  fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+  fs.writeFileSync(path.join(root, relative), content, 'utf8');
+}
+
+function entry(over: Partial<ArtifactEntry> = {}): ArtifactEntry {
+  return { kind: 'prd', path: '.kai/spec/prd.md', version: 0, updatedAt: NOW, generatedBy: 'code', dependsOn: [], stale: false, staleReason: null, ...over };
+}
+
+function card(over: Partial<BoardCard> = {}): BoardCard {
+  return boardCardSchema.parse({ id: 'c1', title: 'Sign up', kind: 'backend', createdAt: NOW, updatedAt: NOW, ...over });
+}
+
+function run(over: Record<string, unknown> = {}) {
+  return verificationRunSchema.parse({
+    id: 'r1',
+    projectId: 'p1',
+    command: 'npm test',
+    source: 'agent',
+    exitCode: 0,
+    passed: true,
+    startedAt: NOW,
+    durationMs: 10,
+    head: 'abc',
+    files: [],
+    testsPassed: 0,
+    testsFailed: 0,
+    outputTail: '',
+    ...over,
+  });
+}
+
+describe('artifacts', () => {
+  it('flags every artifact that reads the one that changed, transitively', () => {
+    expect(dependentsOf('brief')).toEqual(['prd', 'stories', 'flows', 'stack', 'style-guide', 'tokens']);
+    expect(dependentsOf('tokens')).toEqual([]);
+    let entries = applyWrite([], 'prd', { version: 0, at: NOW, generatedBy: 'model' });
+    entries = applyWrite(entries, 'stories', { version: 0, at: NOW, generatedBy: 'model' });
+    entries = applyWrite(entries, 'brief', { version: 1, at: LATER, generatedBy: 'user' });
+    const byKind = new Map(entries.map((item) => [item.kind, item]));
+    expect(byKind.get('brief')?.stale).toBe(false);
+    expect(byKind.get('prd')?.stale).toBe(true);
+    expect(byKind.get('stories')?.staleReason).toBe('brief was regenerated.');
+  });
+
+  it('adopts a brief an interview already wrote, and none when there is no file', () => {
+    expect(ensureBrief([], false, NOW)).toEqual([]);
+    const withBrief = ensureBrief([], true, NOW);
+    expect(withBrief.map((item) => item.kind)).toEqual(['brief']);
+    expect(withBrief[0]?.generatedBy).toMatch(/interview/);
+  });
+
+  it('marks a hand-edited artifact as the user\'s and stales its dependents', () => {
+    const entries = markUserEdited(
+      [entry({ kind: 'stack' }), entry({ kind: 'tokens', path: '.kai/spec/design/tokens.json' })],
+      'stack',
+      LATER,
+    );
+    const byKind = new Map(entries.map((item) => [item.kind, item]));
+    expect(byKind.get('stack')?.generatedBy).toBe('user');
+    expect(byKind.get('tokens')?.stale).toBe(true);
+    expect(byKind.get('tokens')?.staleReason).toBe('stack was edited by hand.');
+  });
+
+  it('writes the artifact file, keeps history, and records the catalog', async () => {
+    const spec = new SpecStore();
+    const store = new StudioArtifacts({ spec, projectRoot: async () => root, now: () => NOW });
+    await store.write('p1', 'brief', '# Brief\n', 'model');
+    await store.write('p1', 'prd', '# PRD\n', 'model');
+    const catalog = await store.read('p1');
+    const byKind = new Map(catalog.artifacts.map((item) => [item.kind, item]));
+    expect(byKind.get('prd')?.stale).toBe(false);
+    // Regenerating the root makes the PRD a stale copy of an older brief.
+    await store.write('p1', 'brief', '# Brief v2\n', 'model');
+    const after = await store.read('p1');
+    expect(after.artifacts.find((item) => item.kind === 'prd')?.stale).toBe(true);
+    expect(await store.readText('p1', 'prd')).toBe('# PRD\n');
+    expect(await store.files('p1')).toContain('brief.md');
+    expect(fs.existsSync(path.join(root, '.kai', 'spec', '.history', 'brief', 'v1', 'brief.md'))).toBe(true);
+  });
+
+  it('reads a brief written straight to disk, without a catalog entry', async () => {
+    write('.kai/spec/brief.md', '# from the interview\n');
+    const store = new StudioArtifacts({ spec: new SpecStore(), projectRoot: async () => root, now: () => NOW });
+    const catalog = await store.read('p1');
+    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief']);
+  });
+});
+
+describe('board rules', () => {
+  it('refuses done for each unmet rule, and names it', () => {
+    const backend = card();
+    expect(doneBlockedBy(backend, { run: null, recordedNow: null, drifted: false })).toMatch(/no record of a passing check/);
+    const check = { runId: 'r1', at: NOW, visual: null, screenshots: [] };
+    expect(doneBlockedBy({ ...backend, check }, { run: null, recordedNow: null, drifted: false })).toMatch(/no longer in the verification history/);
+    expect(doneBlockedBy({ ...backend, check }, { run: run({ passed: false, exitCode: 1 }), recordedNow: [], drifted: false })).toMatch(/did not pass/);
+    expect(doneBlockedBy({ ...backend, check }, { run: run(), recordedNow: [], drifted: true })).toMatch(/changed after the check/);
+    expect(doneBlockedBy({ ...backend, check }, { run: run(), recordedNow: null, drifted: false })).toMatch(/could not be read back/);
+    expect(doneBlockedBy({ ...backend, check }, { run: run(), recordedNow: [{ path: 'a.ts', hash: null }], drifted: false })).toMatch(/no longer on disk/);
+    expect(doneBlockedBy({ ...backend, check }, { run: run({ files: [{ path: 'a.ts', hash: 'h1' }] }), recordedNow: [{ path: 'a.ts', hash: 'h2' }], drifted: false })).toMatch(/a\.ts changed since/);
+    expect(doneBlockedBy({ ...backend, check }, { run: run(), recordedNow: [], drifted: false })).toBeNull();
+  });
+
+  it('holds a UI card open until its visual check passed', () => {
+    const page = card({ kind: 'page', check: { runId: 'r1', at: NOW, visual: 'failed', screenshots: [] } });
+    expect(doneBlockedBy(page, { run: run(), recordedNow: [], drifted: false })).toMatch(/visual check/);
+    const passed = { ...page, check: { runId: 'r1', at: NOW, visual: 'passed' as const, screenshots: ['shot.png'] } };
+    expect(doneBlockedBy(passed, { run: run(), recordedNow: [], drifted: false })).toBeNull();
+  });
+
+  it('stales a card whose artifact moved, and promotes a card whose dependencies are done', () => {
+    const artifacts = [{ ...entry({ kind: 'tokens', path: '.kai/spec/design/tokens.json' }), stale: true }];
+    const [stale] = applyStaleness([card({ needsArtifacts: ['tokens'] })], artifacts);
+    expect(stale?.stale).toBe(true);
+    expect(stale?.staleReason).toMatch(/tokens changed/);
+    const done = card({ id: 'a', status: 'done' });
+    const waiting = card({ id: 'b', status: 'backlog', dependsOn: ['a'] });
+    const later = card({ id: 'c', status: 'backlog', dependsOn: ['missing'] });
+    const promoted = promoteReady([done, waiting, later]);
+    expect(promoted.find((item) => item.id === 'b')?.status).toBe('ready');
+    expect(promoted.find((item) => item.id === 'c')?.status).toBe('backlog');
+  });
+});
+
+describe('board store', () => {
+  function ports(): BoardPorts & { runs: Map<string, ReturnType<typeof run>> } {
+    const runs = new Map<string, ReturnType<typeof run>>();
+    return {
+      runs,
+      spec: new SpecStore(),
+      projectRoot: async () => root,
+      dirtyFiles: async () => {
+        const found: Array<{ path: string; hash: string }> = [];
+        const walk = (dir: string, prefix: string): void => {
+          for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+            const relative = prefix ? `${prefix}/${item.name}` : item.name;
+            if (item.isDirectory()) walk(path.join(dir, item.name), relative);
+            else found.push({ path: relative, hash: createHash('sha256').update(fs.readFileSync(path.join(dir, item.name))).digest('hex') });
+          }
+        };
+        walk(root, '');
+        return found;
+      },
+      hashFile: (projectPath, relativePath) => hashFile(projectPath, relativePath),
+      run: async (_projectId, runId) => runs.get(runId) ?? null,
+      now: () => NOW,
+    };
+  }
+
+  it('refuses to close a card whose check has drifted, then allows it once the tree matches again', async () => {
+    const p = ports();
+    const store = new StudioBoardStore(p);
+    write('src/a.ts', 'export const a = 1;\n');
+    const hash = await hashFile(root, 'src/a.ts');
+    p.runs.set('r1', run({ files: [{ path: 'src/a.ts', hash }] }));
+    await store.replace('p1', [card({ status: 'ready' })], []);
+    await store.setCheck('p1', 'c1', { runId: 'r1', at: NOW, visual: null, screenshots: [] });
+    // A file the check never saw appears: the recorded result no longer covers the tree.
+    write('src/b.ts', 'export const b = 2;\n');
+    await expect(store.move('p1', 'c1', 'done')).rejects.toThrow(/changed after the check passed/);
+    // Remove the drift: now the recorded hashes match what is on disk.
+    fs.rmSync(path.join(root, 'src', 'b.ts'));
+    const done = await store.move('p1', 'c1', 'done');
+    expect(done.status).toBe('done');
+  });
+
+  it('lets one agent hold a card, and only a ready card be claimed', async () => {
+    const store = new StudioBoardStore(ports());
+    await store.replace('p1', [card({ id: 'a' }), card({ id: 'b', dependsOn: ['a'] })], []);
+    // `a` has no dependencies, so it is promoted to ready; `b` waits on `a` and stays in the backlog.
+    await expect(store.claim('p1', 'b', 'claude')).rejects.toThrow(/only a ready card/);
+    const claimed = await store.claim('p1', 'a', 'claude');
+    expect(claimed.status).toBe('inProgress');
+    expect(claimed.claimedBy).toBe('claude');
+    await expect(store.claim('p1', 'a', 'codex')).rejects.toThrow(/already held by claude/);
+  });
+
+  it('refuses ready while a dependency is not done, and keeps work when the board is regenerated', async () => {
+    const store = new StudioBoardStore(ports());
+    await store.replace('p1', [card({ id: 'a', status: 'done', check: null }), card({ id: 'b', status: 'backlog', dependsOn: ['a'] })], []);
+    expect((await store.next('p1'))?.id).toBe('b');
+    await store.recordRun('p1', 'b', { agent: 'claude', model: 'gpt-6-luna', at: NOW, files: ['src/a.ts'] });
+    const regenerated = await store.replace('p1', [card({ id: 'a' }), card({ id: 'b', dependsOn: ['a'] })], []);
+    const b = regenerated.cards.find((item) => item.id === 'b');
+    expect(b?.runs).toHaveLength(1);
+    expect(b?.status).toBe('ready');
+    await expect(store.move('p1', 'c-missing', 'ready')).rejects.toThrow(/No card/);
+  });
+});

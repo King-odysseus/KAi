@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   Clock3,
+  DraftingCompass,
   FolderKanban,
   FolderOpen,
   History,
@@ -41,6 +42,7 @@ const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.find
 
 export const navigation: Array<{ id: ViewId; label: string; group: 'Work' | 'Learn' | 'Project' | 'Brain' | 'Control'; icon: typeof Brain }> = [
   { id: 'workspace', label: 'Workspace', group: 'Work', icon: Layers3 },
+  { id: 'studio', label: 'Project Studio', group: 'Work', icon: DraftingCompass },
   { id: 'workflows', label: 'Workflows', group: 'Work', icon: Workflow },
   { id: 'history', label: 'History', group: 'Work', icon: History },
   { id: 'tasks', label: 'Tasks', group: 'Work', icon: Kanban },

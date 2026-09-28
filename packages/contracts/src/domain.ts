@@ -250,6 +250,21 @@ const mcpServerBaseSchema = {
 export const PLAYWRIGHT_MCP_SERVER_ID = 'playwright-browser';
 export const PLAYWRIGHT_MCP_FEATURE_ID = 'mcp.playwright-browser.v1';
 
+/**
+ * open-pencil, the local design editor. It runs on this machine and speaks MCP over HTTP with a Bearer token, so
+ * KAI reaches it through the same runtime as any other server and the token stays in the credential vault.
+ *
+ * The token must equal the `OPENPENCIL_MCP_AUTH_TOKEN` the editor was started with; it is not minted per session,
+ * and multiple clients share it. The editor publishes it in its own discovery file (`%LOCALAPPDATA%/OpenPencil/mcp.json`
+ * on Windows) — read it from there to fill the vault, and never copy it into a config file, a fixture, or the repo.
+ * A 401 therefore means KAI's token is missing or wrong, not that another client holds it.
+ */
+export const OPENPENCIL_MCP_SERVER_ID = 'open-pencil';
+export const OPENPENCIL_MCP_FEATURE_ID = 'mcp.open-pencil.v1';
+export const OPENPENCIL_ENDPOINT = 'http://127.0.0.1:7600/mcp';
+/** Where the Bearer token lives in the vault. Never written to a config file. */
+export const OPENPENCIL_CREDENTIAL_ID = 'design.openpencil';
+
 export const mcpStdioServerSettingsSchema = z
   .object({
     ...mcpServerBaseSchema,

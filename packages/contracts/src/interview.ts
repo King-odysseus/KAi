@@ -1,0 +1,97 @@
+import { z } from 'zod';
+
+/**
+ * The Project Studio turns one paragraph into the spec files under `.kai/spec`, which the board and the coding
+ * agents then work from. The first step is the interview: a short, skippable conversation that closes the gaps in
+ * the idea before anything is written down as a requirement.
+ *
+ * The interview reuses the Prompt Guide's provider connection on purpose. One API key, one model choice, and no
+ * second bill: the studio never asks for its own subscription or a hosted service.
+ */
+
+/** Questions asked per round, and the most rounds the interview will ever run. Three rounds of four is the budget. */
+export const STUDIO_QUESTIONS_PER_ROUND = 4;
+export const STUDIO_MAX_ROUNDS = 3;
+
+export const interviewAnswerSchema = z
+  .object({
+    question: z.string().trim().min(1).max(400),
+    // An empty answer means the user skipped the question, which is always allowed.
+    answer: z.string().trim().max(1_000),
+  })
+  .strict();
+export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
+
+export const interviewRoundSchema = z
+  .object({
+    questions: z.array(z.string().trim().min(1).max(400)).max(STUDIO_QUESTIONS_PER_ROUND),
+    answers: z.array(interviewAnswerSchema).max(STUDIO_QUESTIONS_PER_ROUND),
+  })
+  .strict();
+export type InterviewRound = z.infer<typeof interviewRoundSchema>;
+
+export const interviewStatusSchema = z.enum(['asking', 'done']);
+export type InterviewStatus = z.infer<typeof interviewStatusSchema>;
+
+export const interviewStateSchema = z
+  .object({
+    projectId: z.string().min(1),
+    idea: z.string().trim().min(1).max(4_000),
+    // The idea restated as one clear goal, refreshed each round; empty until the first reply lands.
+    goal: z.string().trim().max(4_000).default(''),
+    // What the model assumed where the idea was silent. The user can correct any of them in the brief.
+    assumptions: z.array(z.string().trim().min(1).max(400)).max(12).default([]),
+    rounds: z.array(interviewRoundSchema).max(STUDIO_MAX_ROUNDS).default([]),
+    status: interviewStatusSchema.default('asking'),
+    // Relative path of the written brief once the interview is done, so the UI can point at a real file.
+    briefPath: z.string().max(300).nullable().default(null),
+    updatedAt: z.string().min(1),
+  })
+  .strict();
+export type InterviewState = z.infer<typeof interviewStateSchema>;
+
+export const interviewStartInputSchema = z
+  .object({ projectId: z.string().min(1), idea: z.string().trim().min(1).max(4_000) })
+  .strict();
+export type InterviewStartInput = z.infer<typeof interviewStartInputSchema>;
+
+/** The shape the model is asked to return. Goal and assumptions are refreshed each round, questions drive the next. */
+export const interviewReplySchema = z
+  .object({
+    goal: z.string().trim().min(1).max(4_000),
+    assumptions: z.array(z.string().trim().min(1).max(400)).max(8).default([]),
+    questions: z.array(z.string().trim().min(1).max(400)).max(STUDIO_QUESTIONS_PER_ROUND).default([]),
+  })
+  .strict();
+export type InterviewReply = z.infer<typeof interviewReplySchema>;
+
+export const interviewAnswerInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    answers: z.array(interviewAnswerSchema).max(STUDIO_QUESTIONS_PER_ROUND),
+  })
+  .strict();
+export type InterviewAnswerInput = z.infer<typeof interviewAnswerInputSchema>;
+
+export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
+export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;
+
+export interface StudioReadiness {
+  ready: boolean;
+  displayName: string;
+  model: string;
+  reason: string | null;
+}
+
+/** The questions of the round the user still has to answer, empty when the interview is done. */
+export function interviewOpenQuestions(state: InterviewState): string[] {
+  const last = state.rounds[state.rounds.length - 1];
+  if (!last || state.status === 'done') return [];
+  const answered = new Set(last.answers.map((item) => item.question));
+  return last.questions.filter((question) => !answered.has(question));
+}
+
+/** Every answer the user gave, oldest round first, with the skipped ones dropped. */
+export function interviewGivenAnswers(state: InterviewState): InterviewAnswer[] {
+  return state.rounds.flatMap((round) => round.answers.filter((item) => item.answer));
+}
