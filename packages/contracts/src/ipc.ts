@@ -161,6 +161,8 @@ import {
   codeFormatResultSchema,
   gitFileInfoSchema,
   learningEvaluationResultSchema,
+  learningExplainBackInputSchema,
+  learningExplainBackResultSchema,
   learningLessonRecordInputSchema,
   learningLessonRecordResultSchema,
   learningPreferencesInputSchema,
@@ -176,6 +178,8 @@ import {
   type CodeFormatResult,
   type GitFileInfo,
   type LearningEvaluationResult,
+  type LearningExplainBackInput,
+  type LearningExplainBackResult,
   type LearningLessonRecordInput,
   type LearningLessonRecordResult,
   type LearningPreferencesInput,
@@ -267,6 +271,7 @@ export const ipcChannels = [
   'editor:update-window',
   'learning:progress',
   'learning:understood',
+  'learning:explain-back',
   'learning:readiness',
   'learning:update-preferences',
   'learning:evaluate',
@@ -468,6 +473,7 @@ export const ipcInputSchemas = {
   'editor:remove-document': editorDocumentRemoveSchema,
   'editor:update-window': editorWindowSnapshotSchema,
   'learning:understood': z.object({ projectId: z.string().min(1), lessonId: z.string().min(1) }).strict(),
+  'learning:explain-back': learningExplainBackInputSchema,
   'learning:progress': z.object({ projectId: z.string().min(1) }).strict(),
   'learning:readiness': emptyInputSchema,
   'learning:update-preferences': learningPreferencesInputSchema,
@@ -670,6 +676,7 @@ export const writtenFileResponseSchema = writtenFileSchema;
 export const learningProgressResponseSchema = learningProgressSchema;
 export const learningReadinessResponseSchema = learningReadinessSchema;
 export const learningEvaluationResponseSchema = learningEvaluationResultSchema;
+export const learningExplainBackResponseSchema = learningExplainBackResultSchema;
 export const learningLessonRecordResponseSchema = learningLessonRecordResultSchema;
 export const teachingLibraryResponseSchema = teachingLibrarySchema;
 export const teachingDraftResponseSchema = teachingDraftSchema;
@@ -799,6 +806,7 @@ export interface KaiDesktopBridge {
   updateEditorWindow(snapshot: EditorWindowSnapshot): Promise<IpcResponse<boolean>>;
   onEditorDocumentsSaved(listener: (documents: EditorSavedDocument[]) => void): () => void;
   markLearningUnderstood(projectId: string, lessonId: string): Promise<IpcResponse<LearningProgress>>;
+  explainLearningBack(input: LearningExplainBackInput): Promise<IpcResponse<LearningExplainBackResult>>;
   learningProgress(projectId: string): Promise<IpcResponse<LearningProgress>>;
   learningReadiness(): Promise<IpcResponse<LearningReadiness>>;
   updateLearningPreferences(input: LearningPreferencesInput): Promise<IpcResponse<LearningProgress>>;

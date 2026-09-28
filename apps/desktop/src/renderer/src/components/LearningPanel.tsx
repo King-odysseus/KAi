@@ -29,6 +29,7 @@ import type {
   LearningAction,
   LearningAssistance,
   LearningEvaluationResult,
+  LearningExplainBackGrade,
   LearningMastery,
   LearningProgress,
   LearningReadiness,
@@ -48,6 +49,7 @@ interface LearningPanelProps {
   responseLessonId: string | null;
   onLessonSelect: (lesson: NonNullable<LearningProgress['lessons']>[number]) => void;
   onUnderstood: (lessonId: string) => void;
+  onExplainBack: (lessonId: string, question: string, answer: string) => Promise<LearningExplainBackGrade | null>;
   onRunCheck: () => Promise<string>;
   projectName: string | null;
   progress: LearningProgress | null;
@@ -70,7 +72,8 @@ interface LearningPanelProps {
   appliedSuggestionNeedsExplanation: boolean;
   onExplainAppliedSuggestion: () => void;
   onStuck: () => void;
-  canEscalateAssistance: boolean;
+  /** Hints already taken on the current step: 0 none, 3 means the exact code was shown. */
+  hintLevel: number;
   onRecordLesson?: () => void;
   onFormat: () => void;
   teachingLibrary: TeachingLibrary | null;
@@ -115,8 +118,27 @@ const actionOptions: Array<{ id: LearningAction; label: string; icon: ReactNode;
   { id: 'complete', label: 'Complete', icon: <WandSparkles size={14} /> },
 ];
 
+// Indexed by hints already taken on the current step.
+const stuckHints = [
+  { label: "I'm stuck", title: 'Hint 1 of 3: a nudge toward where to look' },
+  { label: 'Another hint', title: 'Hint 2 of 3: the file, the concept, and what to change, without the code' },
+  { label: 'Show me the code', title: 'Hint 3 of 3: the exact code and where it goes' },
+  { label: 'Code shown', title: 'All three hints used. Ask a new question to start again.' },
+];
+
+const explainBackVerdicts: Record<LearningExplainBackGrade['verdict'], string> = {
+  solid: 'You got it',
+  partial: 'Nearly there',
+  missing: 'Not yet',
+};
+
+function explainBackQuestion(response: LearningEvaluationResult['response']): string {
+  const question = response.followUpQuestion.trim() || response.checks[0]?.trim();
+  return question || `In your own words, what did "${response.title}" change, and why does it work?`;
+}
+
 export function LearningPanel({
-  projectFiles, onReference, onUnderstood, onRunCheck, responseLessonId, onLessonSelect,
+  projectFiles, onReference, onUnderstood, onExplainBack, onRunCheck, responseLessonId, onLessonSelect,
   progress,
   readiness,
   result,
@@ -137,7 +159,7 @@ export function LearningPanel({
   appliedSuggestionNeedsExplanation,
   onExplainAppliedSuggestion,
   onStuck,
-  canEscalateAssistance,
+  hintLevel,
   onRecordLesson,
   onFormat,
   teachingLibrary,
@@ -347,15 +369,32 @@ export function LearningPanel({
             {reference.startLine && <button type="button" onClick={() => onReference(reference.filePath!, reference.startLine, reference.endLine)}>Select lines</button>}
           </>}
           <button type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</button>
-          <button type="button" disabled={Boolean(busy) || !responseLessonId || responseUnderstood} onClick={() => responseLessonId && onUnderstood(responseLessonId)}>{responseUnderstood ? 'Understood' : 'Mark understood'}</button>
         </div>}
+        {response && tab === 'tutor' && responseLessonId && (
+          <ExplainBack
+            key={responseLessonId}
+            lessonId={responseLessonId}
+            question={explainBackQuestion(response)}
+            previous={progress?.lessons?.find((lesson) => lesson.id === responseLessonId)?.explainBack ?? null}
+            understood={responseUnderstood}
+            disabled={Boolean(busy)}
+            onExplainBack={onExplainBack}
+            onSkip={() => onUnderstood(responseLessonId)}
+          />
+        )}
         {tab === 'history' && <section className="learning-history">
           <strong>Lesson history</strong><p>Last 30 lessons saved for this project.</p>
           {!(progress?.lessons?.length) && <p>Your lessons will appear here after a tutor response.</p>}
           {progress?.lessons?.map((lesson) => <button key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(lesson); setTab('tutor'); }}>
             <strong>{lesson.response.title}</strong>
             <small>{new Date(lesson.createdAt).toLocaleString()} - {lesson.filePath ?? 'Whole project'}</small>
-            <span>{lesson.understood ? 'Understood (self-reported)' : 'Review lesson'}</span>
+            <span>{lesson.explainBack?.verdict === 'solid'
+              ? 'Explained it back'
+              : lesson.understood
+                ? 'Understood (self-reported)'
+                : lesson.explainBack
+                  ? 'Explain it back again'
+                  : 'Review lesson'}</span>
           </button>)}
         </section>}
         {tab === 'progress' && <ProgressContent progress={progress} />}
@@ -385,7 +424,7 @@ export function LearningPanel({
           onQuestionChange={onQuestionChange}
           onAction={onAction}
           onStuck={onStuck}
-          canEscalateAssistance={canEscalateAssistance}
+          hintLevel={hintLevel}
           onRecordLesson={onRecordLesson}
         />
       )}
@@ -436,22 +475,34 @@ function TutorContent({
         <span className="learning-mastery introduced">Tutor response</span>
         <h2>{response.title}</h2>
       </header>
+      <p className="learning-answer">{response.recap}</p>
       <section className="learning-next-action" aria-label="Do this next">
         <div><Target size={15} /><span>Do this next</span></div>
-        <strong>{nextStep.title}</strong>
+        {nextStep.title !== 'Do this next' && <strong>{nextStep.title}</strong>}
         <p>{nextStep.explanation}</p>
         {response.checks[0] && <small><CheckCircle2 size={13} />Done when: {response.checks[0]}</small>}
       </section>
-      <section className="learning-ownership-brief" aria-label="What to understand before accepting this work">
-        <div><BrainCircuit size={14} /><strong>Own this change</strong></div>
-        <p><b>Architecture:</b> {response.purpose}</p>
-        <p><b>Check before accepting:</b> {response.checks[0] ?? 'Review the changed code and explain what it does in your own words.'}</p>
-        <small>Generated code is a suggestion. Understanding and verification are what make it yours.</small>
-      </section>
-      <LearningSection title="Recap">{response.recap}</LearningSection>
-      <LearningSection title="Purpose">{response.purpose}</LearningSection>
-      <LearningSection title={response.analogy.title} className="analogy">
-        <p>{response.analogy.explanation}</p>
+      {response.suggestion && (
+        <div className="learning-suggestion">
+          <div><Sparkles size={14} /><strong>Code to type</strong></div>
+          <p>{response.suggestion.explanation}</p>
+          <pre><code>{response.suggestion.code}</code></pre>
+          <small className="learning-suggestion-target">
+            {response.suggestion.replaceSelection && selection?.text.trim()
+              ? 'Insert replaces the selected code. Typing it yourself is the better way to learn it.'
+              : 'Insert puts it at your cursor. Typing it yourself is the better way to learn it.'}
+          </small>
+          <div className="learning-question-actions">
+            <button type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</button>
+            {suggestedLocation?.filePath && <button type="button" className="secondary-button" onClick={() => onReference(suggestedLocation.filePath!, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open target</button>}
+            {canInsertSuggestion && <button type="button" className="primary-button" onClick={onInsertSuggestion}><WandSparkles size={13} />{applyLabel}</button>}
+          </div>
+        </div>
+      )}
+      {response.followUpQuestion && <div className="learning-question"><Lightbulb size={14} /><span>{response.followUpQuestion}</span></div>}
+      <LearningSection title="Why this matters" className="analogy" collapsible defaultOpen={false}>
+        <p>{response.purpose}</p>
+        <p><strong>{response.analogy.title}:</strong> {response.analogy.explanation}</p>
         {response.analogy.mappings.length > 0 && (
           <dl>
             {response.analogy.mappings.map((mapping, index) => (
@@ -481,40 +532,94 @@ function TutorContent({
           </div>
         </LearningSection>
       )}
-      {response.checks.length > 0 && (
-        <LearningSection title="Check your understanding">
-          <ul className="learning-checks">{response.checks.map((check, index) => <li key={`${check}-${index}`}><CheckCircle2 size={13} />{check}</li>)}</ul>
+      {response.checks.length > 1 && (
+        <LearningSection title="Check your understanding" collapsible defaultOpen={false}>
+          <ul className="learning-checks">{response.checks.slice(1).map((check, index) => <li key={`${check}-${index}`}><CheckCircle2 size={13} />{check}</li>)}</ul>
         </LearningSection>
       )}
       {response.concepts.length > 0 && (
-        <LearningSection title="Concepts">
+        <LearningSection title="Concepts" collapsible defaultOpen={false}>
           <div className="learning-concept-chips">{response.concepts.map((concept) => <span key={`${concept.category}-${concept.name}`} className={`learning-mastery ${concept.mastery}`}>{concept.name}</span>)}</div>
         </LearningSection>
       )}
-      {response.followUpQuestion && <div className="learning-question"><Lightbulb size={14} /><span>{response.followUpQuestion}</span></div>}
-      {response.suggestion && (
-        <div className="learning-suggestion">
-          <div><Sparkles size={14} /><strong>Suggested change</strong></div>
-          <p>{response.suggestion.explanation}</p>
-          <pre><code>{response.suggestion.code}</code></pre>
-          <small className="learning-suggestion-target">
-            {response.suggestion.replaceSelection && selection?.text.trim()
-              ? 'This will replace the selected code.'
-              : 'This will insert at your current cursor position.'}
-          </small>
-          <div className="learning-question-actions">
-            <button type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</button>
-            {suggestedLocation?.filePath && <button type="button" className="secondary-button" onClick={() => onReference(suggestedLocation.filePath!, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open target</button>}
-            {canInsertSuggestion && <button type="button" className="primary-button" onClick={onInsertSuggestion}><WandSparkles size={13} />{applyLabel}</button>}
-          </div>
-        </div>
-      )}
       {response.sourceNotes.length > 0 && (
-        <LearningSection title="Sources" collapsible defaultOpen={true}>
+        <LearningSection title="Sources" collapsible defaultOpen={false}>
           <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.filePath ? <button type="button" onClick={() => onReference(source.filePath!, source.startLine, source.endLine)}>{source.label} - {source.filePath}{source.startLine ? `:${source.startLine}${source.endLine ? `-${source.endLine}` : ''}` : ''}</button> : source.url && /^https?:\/\//i.test(source.url) ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
         </LearningSection>
       )}
     </div>
+  );
+}
+
+function ExplainBack({
+  lessonId,
+  question,
+  previous,
+  understood,
+  disabled,
+  onExplainBack,
+  onSkip,
+}: {
+  lessonId: string;
+  question: string;
+  previous: { verdict: LearningExplainBackGrade['verdict']; feedback: string } | null;
+  understood: boolean;
+  disabled: boolean;
+  onExplainBack: LearningPanelProps['onExplainBack'];
+  onSkip: () => void;
+}): ReactNode {
+  const [answer, setAnswer] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [grade, setGrade] = useState<LearningExplainBackGrade | null>(null);
+  const shown = grade ?? (previous ? { ...previous, gap: '' } : null);
+  const solid = shown?.verdict === 'solid';
+  const submit = async (): Promise<void> => {
+    if (!answer.trim() || checking) return;
+    setChecking(true);
+    try {
+      const result = await onExplainBack(lessonId, question, answer.trim());
+      if (result) setGrade(result);
+    } finally {
+      setChecking(false);
+    }
+  };
+  return (
+    <section className={`learning-explain-back ${shown ? shown.verdict : ''}`} aria-label="Explain it back">
+      <div><BrainCircuit size={14} /><strong>Explain it back</strong></div>
+      <p className="learning-explain-back-question">{question}</p>
+      {shown && (
+        <div className="learning-explain-back-grade" role="status">
+          <strong>{explainBackVerdicts[shown.verdict]}</strong>
+          <p>{shown.feedback}</p>
+          {shown.gap && <p><b>Revisit:</b> {shown.gap}</p>}
+        </div>
+      )}
+      {!solid && (
+        <>
+          <textarea
+            aria-label="Your explanation"
+            value={answer}
+            placeholder="Answer in your own words. A sentence or two is enough."
+            rows={3}
+            disabled={checking}
+            onChange={(event) => setAnswer(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                void submit();
+              }
+            }}
+          />
+          <div className="learning-question-actions">
+            {!understood && <button type="button" className="secondary-button" disabled={disabled || checking} onClick={onSkip} title="Records a self-report only; it does not raise mastery.">Skip, mark understood</button>}
+            <button type="button" className="primary-button" disabled={disabled || checking || !answer.trim()} onClick={() => void submit()}>
+              {checking ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
+              <span>{checking ? 'Checking...' : shown ? 'Try again' : 'Check my answer'}</span>
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -562,7 +667,7 @@ function TutorComposer({
   onQuestionChange,
   onAction,
   onStuck,
-  canEscalateAssistance,
+  hintLevel,
   onRecordLesson,
 }: {
   question: string;
@@ -577,7 +682,7 @@ function TutorComposer({
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onStuck: () => void;
-  canEscalateAssistance: boolean;
+  hintLevel: number;
   onRecordLesson?: () => void;
 }): ReactNode {
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -667,7 +772,7 @@ function TutorComposer({
           <footer>
             <span title={selection?.filePath ?? undefined}>{contextLabel} · Enter to ask · Shift+Enter for a new line</span>
             <div>
-              <button type="button" className="secondary-button" disabled={busy || !canEscalateAssistance || (scope === 'active-file' && !selection)} onClick={onStuck} title={canEscalateAssistance ? 'Get one level more help for this request only' : 'You are already using the highest level of help.'}><Lightbulb size={13} />I'm stuck</button>
+              <button type="button" className="secondary-button" disabled={busy || hintLevel >= 3 || (scope === 'active-file' && !selection)} onClick={onStuck} title={stuckHints[Math.min(hintLevel, 3)]!.title}><Lightbulb size={13} />{stuckHints[Math.min(hintLevel, 3)]!.label}</button>
               {response && onRecordLesson && (
                 <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
               )}

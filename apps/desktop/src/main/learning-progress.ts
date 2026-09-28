@@ -4,6 +4,8 @@ import { z } from 'zod';
 import {
   learningProgressSchema,
   type LearningEvidence,
+  type LearningExplainBackGrade,
+  type LearningExplainBackVerdict,
   type LearningMastery,
   type LearningPreferencesInput,
   type LearningProgress,
@@ -179,6 +181,49 @@ export class LearningProgressStore {
     });
   }
 
+  /**
+   * An explanation in the learner's own words is stronger evidence than a self-report: a solid answer
+   * resolves the lesson and lifts its concepts to practising, a partial one to developing, and a missing
+   * one leaves mastery alone but records what to revisit.
+   */
+  async recordExplanation(projectId: string, lessonId: string, question: string, grade: LearningExplainBackGrade): Promise<LearningProgress> {
+    return this.serialiseWrite(async () => {
+      const progress = await this.get(projectId);
+      const lesson = progress.lessons?.find((candidate) => candidate.id === lessonId);
+      if (!lesson) throw new Error('This lesson is no longer available.');
+      const answeredAt = this.now().toISOString();
+      const solid = grade.verdict === 'solid';
+      const award = explanationEvidence[grade.verdict];
+      const summary = `${award.summary}: ${question}`.slice(0, 1_000);
+      const concepts = progress.concepts.map((concept) => {
+        if (!lesson.response.concepts.some((taught) => conceptId(taught.name, taught.category) === concept.id)) return concept;
+        return {
+          ...concept,
+          mastery: award.mastery ? maxMastery(concept.mastery, award.mastery) : concept.mastery,
+          score: Math.max(concept.score, award.score),
+          evidenceCount: concept.evidenceCount + 1,
+          evidence: [summary, ...concept.evidence].slice(0, 20),
+          strengths: solid ? uniqueBounded([...concept.strengths, summary], 12, 500) : concept.strengths,
+          nextStep: grade.gap.trim() ? grade.gap.slice(0, 1_000) : concept.nextStep,
+          lastSeenAt: answeredAt,
+        };
+      });
+      const updated = learningProgressSchema.parse({
+        ...progress,
+        concepts,
+        lessons: progress.lessons?.map((candidate) => candidate.id === lessonId
+          ? { ...candidate, understood: candidate.understood || solid, explainBack: { verdict: grade.verdict, feedback: grade.feedback, answeredAt } }
+          : candidate),
+        memory: progress.memory?.lessonId === lessonId
+          ? { ...progress.memory, understood: progress.memory.understood || solid, unresolvedCheck: solid ? '' : (grade.gap || progress.memory.unresolvedCheck).slice(0, 1_000) }
+          : progress.memory,
+        updatedAt: answeredAt,
+      });
+      await this.store(projectId).save(updated);
+      return updated;
+    });
+  }
+
   private serialiseWrite<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.writeTail.then(operation);
     this.writeTail = result.then(() => undefined, () => undefined);
@@ -202,7 +247,20 @@ export class LearningProgressStore {
   }
 }
 
+const explanationEvidence: Record<LearningExplainBackVerdict, { mastery: LearningMastery | null; score: number; summary: string }> = {
+  solid: { mastery: 'practising', score: 72, summary: 'Explained it back correctly in own words' },
+  partial: { mastery: 'developing', score: 50, summary: 'Explained it back with a gap' },
+  missing: { mastery: null, score: 0, summary: 'Could not yet explain it back' },
+};
+
 function evaluationEvidence(request: LearningTutorRequest): EvaluationEvidence {
+  if (request.hintLevel === 3) {
+    return {
+      mastery: 'introduced',
+      score: 25,
+      summary: 'Needed the full answer after two hints.',
+    };
+  }
   if (request.action === 'complete') {
     return {
       mastery: 'introduced',

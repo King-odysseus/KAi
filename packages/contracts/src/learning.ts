@@ -104,9 +104,33 @@ export const learningTutorRequestSchema = z
     errorText: z.string().max(20_000).optional(),
     question: z.string().max(4_000).optional(),
     conversationContext: z.string().max(16_000).optional(),
+    /** "I'm stuck" presses on the current step: 1 is a nudge, 2 a pointer, 3 the exact code. */
+    hintLevel: z.number().int().min(1).max(3).optional(),
   })
   .strict();
 export type LearningTutorRequest = z.infer<typeof learningTutorRequestSchema>;
+
+export const learningExplainBackVerdictSchema = z.enum(['solid', 'partial', 'missing']);
+export type LearningExplainBackVerdict = z.infer<typeof learningExplainBackVerdictSchema>;
+
+export const learningExplainBackGradeSchema = z
+  .object({
+    verdict: learningExplainBackVerdictSchema,
+    feedback: z.string().min(1).max(2_000),
+    gap: z.string().max(1_000),
+  })
+  .strict();
+export type LearningExplainBackGrade = z.infer<typeof learningExplainBackGradeSchema>;
+
+export const learningExplainBackInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    lessonId: z.string().min(1),
+    question: z.string().trim().min(1).max(1_000),
+    answer: z.string().trim().min(1).max(4_000),
+  })
+  .strict();
+export type LearningExplainBackInput = z.infer<typeof learningExplainBackInputSchema>;
 
 export const learningProviderUsageSchema = z
   .object({
@@ -180,6 +204,11 @@ export const learningProgressSchema = z
       filePath: z.string().optional(),
       response: learningTutorResponseSchema,
       understood: z.boolean(),
+      explainBack: z.object({
+        verdict: learningExplainBackVerdictSchema,
+        feedback: z.string().max(2_000),
+        answeredAt: timestampSchema,
+      }).strict().optional(),
     }).strict()).max(30).optional(),
     memory: z.object({
       lessonId: z.string().min(1),
@@ -212,6 +241,14 @@ export const learningEvaluationResultSchema = z
   })
   .strict();
 export type LearningEvaluationResult = z.infer<typeof learningEvaluationResultSchema>;
+
+export const learningExplainBackResultSchema = z
+  .object({
+    grade: learningExplainBackGradeSchema,
+    progress: learningProgressSchema,
+  })
+  .strict();
+export type LearningExplainBackResult = z.infer<typeof learningExplainBackResultSchema>;
 
 export const learningLessonRecordInputSchema = z
   .object({

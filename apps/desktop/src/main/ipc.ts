@@ -41,6 +41,7 @@ import {
   type CodeFormatResult,
   type GitFileInfo,
   type LearningEvaluationResult,
+  type LearningExplainBackResult,
   type LearningLessonRecordResult,
   type LearningProgress,
   type WorkflowRun,
@@ -490,6 +491,40 @@ export function registerIpc(context: IpcContext): void {
   handle(context, 'learning:understood', async ({ projectId, lessonId }) => {
     await resolveProject(context, projectId, true);
     return context.learningProgress.markUnderstood(projectId, lessonId);
+  });
+  handle(context, 'learning:explain-back', async ({ projectId, lessonId, question, answer }): Promise<LearningExplainBackResult> => {
+    await resolveProject(context, projectId, true);
+    const lesson = (await context.learningProgress.get(projectId)).lessons?.find((candidate) => candidate.id === lessonId);
+    if (!lesson) throw new Error('This lesson is no longer available.');
+    const settings = await context.settings.load();
+    const readiness = await context.learningTutor.readiness();
+    if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
+    const reservation = context.learningBudget.reserve({
+      projectId,
+      provider: readiness.provider,
+      model: readiness.model,
+      conversations: await context.conversations.list(),
+      budget: settings.usageBudget,
+      estimatedInputTokens: Math.ceil((JSON.stringify(lesson.response).length + question.length + answer.length) / 4) + 600,
+      estimatedOutputTokens: 1_000,
+      externalRuns: await context.learningUsage.runs(),
+    });
+    if (reservation.blockedReason) {
+      throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
+    }
+    try {
+      const detailed = await context.learningTutor.gradeExplanationDetailed(lesson.response, question, answer);
+      await context.learningUsage.record({
+        projectId,
+        provider: readiness.provider,
+        model: readiness.model,
+        usage: detailed.usage,
+      });
+      const progress = await context.learningProgress.recordExplanation(projectId, lessonId, question, detailed.grade);
+      return { grade: detailed.grade, progress };
+    } finally {
+      context.learningBudget.release(reservation.id);
+    }
   });
   handle(context, 'learning:readiness', async () => context.learningTutor.readiness());
   handle(context, 'learning:update-preferences', async (input): Promise<LearningProgress> => {

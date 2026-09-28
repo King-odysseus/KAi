@@ -20,6 +20,7 @@ import type {
   LearningAction,
   LearningAssistance,
   LearningEvaluationResult,
+  LearningExplainBackGrade,
   LearningProgress,
   LearningReadiness,
   LearningTutorScope,
@@ -282,6 +283,8 @@ export function CodeView({
   const [submittedQuestion, setSubmittedQuestion] = useState('');
   const [tutorConversation, setTutorConversation] = useState<TutorConversationTurn[]>([]);
   const [appliedSuggestionNeedsExplanation, setAppliedSuggestionNeedsExplanation] = useState(false);
+  // How many "I'm stuck" hints the learner has taken on the current step (0-3); a new question resets it.
+  const [hintLevel, setHintLevel] = useState(0);
   const [gitInfo, setGitInfo] = useState<GitFileInfo | null>(null);
   const [formatting, setFormatting] = useState(false);
   const [teachingLibrary, setTeachingLibrary] = useState<TeachingLibrary | null>(null);
@@ -497,6 +500,7 @@ export function CodeView({
     setSubmittedQuestion('');
     setTutorConversation([]);
     setAppliedSuggestionNeedsExplanation(false);
+    setHintLevel(0);
     setGitInfo(null);
     activeLearningRequestId.current = null;
     learningBusyRef.current = false;
@@ -961,6 +965,20 @@ export function CodeView({
     } catch (error) { if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'Could not save understanding.'); }
   }
 
+  async function explainBack(lessonId: string, lessonQuestion: string, answer: string): Promise<LearningExplainBackGrade | null> {
+    const id = projectId;
+    if (!id) return null;
+    try {
+      const result = unwrap(await window.kaiDesktop.explainLearningBack({ projectId: id, lessonId, question: lessonQuestion, answer }));
+      if (projectIdRef.current !== id) return null;
+      setProgress(result.progress);
+      return result.grade;
+    } catch (error) {
+      if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'Could not check your explanation.');
+      return null;
+    }
+  }
+
   async function runLearningCheck(): Promise<string> {
     if (!projectId) throw new Error('Open a project first.');
     const id = projectId;
@@ -972,7 +990,7 @@ export function CodeView({
     return `${run.command}: ${run.passed ? 'Passed' : 'Failed'} (exit ${run.exitCode ?? 'unknown'})\n${run.outputTail}`;
   }
 
-  async function runLearningAction(action: LearningAction, inline = false, temporaryAssistance?: LearningAssistance): Promise<LearningEvaluationResult | null> {
+  async function runLearningAction(action: LearningAction, inline = false, stuckHint?: 1 | 2 | 3): Promise<LearningEvaluationResult | null> {
     if (learningBusyRef.current) return null;
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
@@ -1001,7 +1019,8 @@ export function CodeView({
     const selection = editor?.getSelection();
     const selectedText = document && selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 50_000) : undefined;
     const requestId = `learning_${crypto.randomUUID()}`;
-    const requestAssistance = temporaryAssistance ?? assistance;
+    const requestAssistance = assistance;
+    const requestQuestion = question.trim() || (stuckHint ? `I'm stuck. Hint ${stuckHint} of 3, please.` : '');
     const explainingAppliedSuggestion = appliedSuggestionNeedsExplanation && /^I applied the Tutor suggestion/i.test(question.trim());
     const priorTurns = learningResult?.response && submittedQuestion.trim()
       ? [...tutorConversation, { id: 'current', question: submittedQuestion, response: learningResult.response }]
@@ -1022,7 +1041,7 @@ export function CodeView({
       scope: learningScope,
       action,
       assistance: requestAssistance,
-      teachingModes: temporaryAssistance ? [requestAssistance] : teachingModes,
+      teachingModes,
       code: !inline && document ? boundedCode(document.model.getValue(), selection?.startLineNumber ?? 1, selection?.endLineNumber ?? selection?.startLineNumber ?? 1) : '',
       ...(inline && document && editor?.getPosition() ? { completionContext: {
         prefix: document.model.getValue().slice(0, document.model.getOffsetAt(editor.getPosition()!)).slice(-6_000),
@@ -1031,8 +1050,9 @@ export function CodeView({
       ...(selectedText ? { selectedText } : {}),
       ...(editor ? { cursorLine: editor.getPosition()?.lineNumber ?? 1 } : {}),
       ...(errorText ? { errorText } : {}),
-      ...(question.trim() ? { question: question.trim().slice(0, 4_000) } : {}),
+      ...(requestQuestion ? { question: requestQuestion.slice(0, 4_000) } : {}),
       ...(!inline && priorTurns.length ? { conversationContext: tutorConversationContext(priorTurns) } : {}),
+      ...(stuckHint ? { hintLevel: stuckHint } : {}),
     };
     activeLearningRequestId.current = requestId;
     learningBusyRef.current = true;
@@ -1047,6 +1067,7 @@ export function CodeView({
       }
       setSubmittedQuestion(request.question ?? `Tutor action: ${action.replace(/-/g, ' ')}`);
       setQuestion('');
+      setHintLevel(stuckHint ?? 0);
       setLearningResult(null);
       setResponseLessonId(null);
     }
@@ -1369,6 +1390,7 @@ export function CodeView({
               setResponseLessonId(lesson.id);
             }}
             onUnderstood={(lessonId) => void markUnderstood(lessonId)}
+            onExplainBack={explainBack}
             onRunCheck={runLearningCheck}
             projectName={activeProject?.name ?? null}
             progress={progress && optimisticPreferences ? { ...progress, preferences: optimisticPreferences } : progress}
@@ -1400,8 +1422,8 @@ export function CodeView({
               setQuestion('I applied the Tutor suggestion. I think it works because ');
               setTutorOpen(true);
             }}
-            onStuck={() => void runLearningAction('next-step', false, nextAssistanceLevel(assistance))}
-            canEscalateAssistance={assistance !== 'copilot'}
+            onStuck={() => void runLearningAction('next-step', false, Math.min(3, hintLevel + 1) as 1 | 2 | 3)}
+            hintLevel={hintLevel}
             onRecordLesson={lastLearningRequest.current ? () => void recordLesson() : undefined}
             onFormat={() => void formatActive()}
             teachingLibrary={teachingLibrary}
@@ -1427,12 +1449,6 @@ function learningState(
   inlineSuggestions: boolean,
 ): { projectId: string; filePath: string; assistance: LearningAssistance; scope: LearningTutorScope; inlineSuggestions: boolean } | null {
   return projectId && filePath ? { projectId, filePath, assistance, scope, inlineSuggestions } : null;
-}
-
-function nextAssistanceLevel(current: LearningAssistance): LearningAssistance {
-  const levels: LearningAssistance[] = ['learn', 'guided', 'pair', 'copilot'];
-  const index = levels.indexOf(current);
-  return levels[Math.min(levels.length - 1, Math.max(0, index) + 1)]!;
 }
 
 function tutorConversationContext(turns: TutorConversationTurn[]): string {

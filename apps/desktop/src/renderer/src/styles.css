@@ -8727,33 +8727,12 @@ code {
   background: color-mix(in srgb, var(--lavender) 9%, var(--bg-input));
 }
 
-.learning-ownership-brief {
-  display: grid;
-  gap: 7px;
-  margin: 10px 0;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--lavender) 42%, var(--border-soft));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--lavender) 7%, var(--bg-subtle));
+.learning-answer {
+  margin: 8px 0 10px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
 }
-
-.learning-ownership-brief > div {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--lavender);
-  font-size: 12px;
-}
-
-.learning-ownership-brief p,
-.learning-ownership-brief small {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.learning-ownership-brief b { color: var(--text); }
 
 .learning-applied-suggestion-nudge {
   display: grid;
@@ -8768,6 +8747,40 @@ code {
 .learning-applied-suggestion-nudge > div { display: flex; align-items: center; gap: 6px; color: var(--warning); font-size: 12px; }
 .learning-applied-suggestion-nudge p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
 .learning-applied-suggestion-nudge button { justify-self: start; }
+
+.learning-explain-back {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--lavender) 42%, var(--border-soft));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lavender) 7%, var(--bg-subtle));
+}
+
+.learning-explain-back > div:first-child { display: flex; align-items: center; gap: 6px; color: var(--lavender); font-size: 12px; }
+.learning-explain-back-question { margin: 0; color: var(--text); font-size: 12px; line-height: 1.45; }
+.learning-explain-back textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.learning-explain-back .learning-question-actions { justify-content: flex-end; }
+.learning-explain-back-grade { display: grid; gap: 4px; padding: 7px 8px; border-radius: 6px; background: var(--bg-input); }
+.learning-explain-back-grade strong { font-size: 12px; }
+.learning-explain-back-grade p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.learning-explain-back-grade b { color: var(--text); }
+.learning-explain-back.solid { border-color: color-mix(in srgb, var(--mint) 48%, var(--border-soft)); }
+.learning-explain-back.solid .learning-explain-back-grade strong { color: var(--mint); }
+.learning-explain-back.partial .learning-explain-back-grade strong { color: var(--warning); }
+.learning-explain-back.missing .learning-explain-back-grade strong { color: var(--red); }
 
 .change-safety-summary {
   display: flex;
