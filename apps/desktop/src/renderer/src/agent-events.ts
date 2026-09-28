@@ -10,3 +10,12 @@ export function shouldHandleAgentEvent(
 ): boolean {
   return payload.event.type === 'approval.request' || payload.conversationId === runningConversationId;
 }
+
+/** A missing approval or active conversation must never match just because both ids are absent. */
+export function isApprovalForConversation(
+  approvalConversationId: string | null | undefined,
+  activeConversationId: string | null | undefined,
+): boolean {
+  return Boolean(approvalConversationId && activeConversationId)
+    && approvalConversationId === activeConversationId;
+}

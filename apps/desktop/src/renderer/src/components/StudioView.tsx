@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Eye, FileText, LayoutGrid, Loader2, NotebookPen, Palette, Play, RefreshCw, RotateCcw, Settings, SkipForward, Sparkles, Users, Wand2 } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   ARTIFACT_KINDS,
@@ -10,13 +10,15 @@ import {
   type BoardCard,
   type BoardStatus,
   type InterviewState,
+  type ProjectRecord,
   type StudioArtifacts,
   type StudioBoard,
   type StudioDesign,
+  type StudioProjectSummary,
   type StudioReadiness,
   type TeamPlanDraft,
 } from '@kai/contracts';
-import { unwrap } from '../types';
+import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
 /**
@@ -24,22 +26,54 @@ import { confirmDialog } from './AppDialog';
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { activeProject: { id: string; name: string } | null; onOpenSettings: () => void; onPlanForTeam: (plan: TeamPlanDraft) => void }): ReactNode {
+export function StudioView({ activeProject, projects: desktopProjects, onOpenSettings, onLaunchProject, onPlanForTeam }: {
+  activeProject: ProjectRecord | null;
+  projects: ProjectRecord[];
+  onOpenSettings: () => void;
+  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor') => Promise<void>;
+  onPlanForTeam: (plan: TeamPlanDraft) => void;
+}): ReactNode {
+  const [screen, setScreen] = useState<'list' | 'project' | 'new'>('list');
+  const [viewedProjectId, setViewedProjectId] = useState<string | null>(null);
+  const [draftProjectId, setDraftProjectId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<StudioProjectSummary[]>([]);
+  const [projectsBusy, setProjectsBusy] = useState(true);
+  const [projectsVersion, setProjectsVersion] = useState(0);
+  const [showArchived, setShowArchived] = useState(false);
   const [readiness, setReadiness] = useState<StudioReadiness | null>(null);
   const [state, setState] = useState<InterviewState | null>(null);
   const [artifacts, setArtifacts] = useState<StudioArtifacts | null>(null);
   const [board, setBoard] = useState<StudioBoard | null>(null);
   const [idea, setIdea] = useState('');
   const [answers, setAnswers] = useState<string[]>([]);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'finish' | 'reset' | 'generate' | 'plan' | 'card' | 'team' | 'work' | 'design' | null>('load');
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'finish' | 'reset' | 'generate' | 'plan' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | null>(null);
+  const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [design, setDesign] = useState<StudioDesign | null>(null);
-  const projectId = activeProject?.id ?? null;
+  const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
+  const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
+  const projectTitle = state?.goal.trim() || state?.idea.trim() || viewedProject?.title || 'New project';
+  const activeProjects = projects.filter((project) => !project.archivedAt);
+  const archivedProjects = projects.filter((project) => Boolean(project.archivedAt));
+  const visibleProjects = showArchived ? archivedProjects : activeProjects;
+  const currentFolder = activeProject && !activeProject.id.startsWith('studio_') ? activeProject : null;
 
   useEffect(() => {
     let cancelled = false;
-    setBusy('load');
+    setProjectsBusy(true);
+    void window.kaiDesktop.studioProjects().then(unwrap).then((next) => {
+      if (!cancelled) setProjects(next);
+    }).catch((caught) => {
+      if (!cancelled) setError(messageOf(caught));
+    }).finally(() => {
+      if (!cancelled) setProjectsBusy(false);
+    });
+    return () => { cancelled = true; };
+  }, [projectsVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
     setError(null);
     setState(null);
     setArtifacts(null);
@@ -48,6 +82,11 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
     setIdea('');
     setAnswers([]);
     setNotice(null);
+    if (!projectId) {
+      setBusy(null);
+      return () => { cancelled = true; };
+    }
+    setBusy('load');
     void Promise.all([
       window.kaiDesktop.studioReadiness().then(unwrap),
       projectId ? window.kaiDesktop.studioInterview(projectId).then(unwrap) : Promise.resolve(null),
@@ -79,6 +118,106 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
     });
   }, [projectId]);
 
+  function openProjectStudio(nextProjectId: string): void {
+    if (!nextProjectId || nextProjectId === projectId || busy !== null) return;
+    setError(null);
+    setNotice(null);
+    setViewedProjectId(nextProjectId);
+    setDraftProjectId(null);
+    setScreen('project');
+  }
+
+  function startNewProject(): void {
+    if (busy !== null) return;
+    setError(null);
+    setNotice(null);
+    setViewedProjectId(null);
+    setDraftProjectId(`studio_${crypto.randomUUID()}`);
+    setUseCurrentFolder(false);
+    setScreen('new');
+  }
+
+  function leaveProjectStudio(): void {
+    setScreen('list');
+    setViewedProjectId(null);
+    setDraftProjectId(null);
+    setError(null);
+    setNotice(null);
+    setProjectsVersion((current) => current + 1);
+  }
+
+  async function toggleArchive(project: StudioProjectSummary): Promise<void> {
+    if (busy !== null) return;
+    setBusy('archive');
+    setError(null);
+    try {
+      const next = unwrap(await window.kaiDesktop.setStudioProjectArchived({ projectId: project.id, archived: !project.archivedAt }));
+      setProjects((current) => current.map((item) => (item.id === next.id ? next : item)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteProject(project: StudioProjectSummary): Promise<void> {
+    if (busy !== null) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete this project?',
+      detail: 'This permanently removes the Studio discussion and any brief or artifacts kept in its Studio workspace. Files in a separate code project are not touched.',
+      confirmLabel: 'Delete project',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    setBusy('delete');
+    setError(null);
+    try {
+      unwrap(await window.kaiDesktop.deleteStudioProject(project.id));
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      if (viewedProjectId === project.id) {
+        setViewedProjectId(null);
+        setScreen('list');
+      }
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function chooseProjectFolder(studioProjectId: string): Promise<void> {
+    if (busy !== null) return;
+    setBusy('folder');
+    setError(null);
+    try {
+      const folder = unwrap(await window.kaiDesktop.chooseStudioProjectFolder({ projectId: studioProjectId }));
+      if (!folder) return;
+      setNotice(`Created the project folder "${folder.projectName}".`);
+      setProjectsVersion((current) => current + 1);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function launchProject(studioProjectId: string, destination: 'composer' | 'editor'): Promise<void> {
+    if (busy !== null) return;
+    setBusy('launch');
+    setError(null);
+    try {
+      await onLaunchProject(studioProjectId, destination);
+    } catch (caught) {
+      setError(messageOf(caught));
+      setBusy(null);
+    }
+  }
+
+  function linkedProjectName(linkedProjectId: string | null): string {
+    if (!linkedProjectId) return 'Studio workspace only';
+    return desktopProjects.find((project) => project.id === linkedProjectId)?.name ?? 'Linked folder';
+  }
+
   function adopt(next: InterviewState): void {
     setState(next);
     setAnswers(interviewOpenQuestions(next).map(() => ''));
@@ -101,7 +240,16 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
     setBusy('start');
     setError(null);
     try {
-      adopt(unwrap(await window.kaiDesktop.startStudioInterview({ projectId, idea: idea.trim() })));
+      const next = unwrap(await window.kaiDesktop.startStudioInterview({
+        projectId,
+        idea: idea.trim(),
+        linkedProjectId: useCurrentFolder && currentFolder ? currentFolder.id : null,
+      }));
+      adopt(next);
+      setViewedProjectId(projectId);
+      setDraftProjectId(null);
+      setScreen('project');
+      setProjectsVersion((current) => current + 1);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -132,6 +280,7 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
     setError(null);
     try {
       adopt(unwrap(await window.kaiDesktop.finishStudioInterview(projectId)));
+      setProjectsVersion((current) => current + 1);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -155,6 +304,10 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
       setState(null);
       setIdea('');
       setAnswers([]);
+      setScreen('list');
+      setViewedProjectId(null);
+      setDraftProjectId(null);
+      setProjectsVersion((current) => current + 1);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -290,26 +443,197 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
   const briefReady = Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'brief'));
   const staleCount = artifacts?.artifacts.filter((entry) => entry.stale).length ?? 0;
 
+  if (screen === 'list') {
+    return (
+      <div className="page-view studio-view">
+        <div className="studio-scroll">
+          <header className="page-header">
+            <div>
+              <h1>Project Studio</h1>
+              <p>Projects you have discussed in Studio, kept separately from the folders in the Projects page.</p>
+            </div>
+            <div className="page-actions">
+              {!projectsBusy && projects.length > 0 && (
+                <span className="studio-model">
+                  {showArchived ? archivedProjects.length : activeProjects.length} {(showArchived ? archivedProjects.length : activeProjects.length) === 1 ? 'project' : 'projects'}
+                </span>
+              )}
+              {projects.length > 0 && (
+                <button type="button" className="secondary-button" onClick={() => setShowArchived((current) => !current)}>
+                  {showArchived ? <NotebookPen size={14} /> : <Archive size={14} />}
+                  {showArchived ? 'Active projects' : `Archived (${archivedProjects.length})`}
+                </button>
+              )}
+              {projects.length > 0 && (
+                <button type="button" className="primary-button" onClick={startNewProject}>
+                  <Plus size={14} /> Plan a new project
+                </button>
+              )}
+            </div>
+          </header>
+
+          {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /> {error}</p>}
+          {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
+
+          <section className="studio-project-start">
+            <div className="studio-project-start-head">
+              <div>
+                <h2>{showArchived ? 'Archived projects' : 'Your projects'}</h2>
+                <p>{showArchived ? 'Restore a discussion to move it back into the active list.' : 'Open a discussion to continue the brief, review the artifacts, or work the board.'}</p>
+              </div>
+            </div>
+            {projectsBusy ? (
+              <div className="empty-list"><Loader2 className="spin" size={14} /> Loading your projects…</div>
+            ) : visibleProjects.length > 0 ? (
+              <div className="studio-project-grid">
+                {visibleProjects.map((project) => (
+                  <article key={project.id} className={`studio-project-card${project.archivedAt ? ' archived' : ''}`}>
+                    <div className="studio-project-card-head">
+                      <div className="studio-project-glyph">{project.title.slice(0, 1).toUpperCase()}</div>
+                      <div className="studio-project-card-copy">
+                        <div className="studio-project-card-title">
+                          <strong>{project.title}</strong>
+                          <span className={`studio-project-status ${project.archivedAt ? 'archived' : project.status}`}>
+                            {project.archivedAt ? 'Archived' : project.status === 'done' ? 'Brief ready' : 'In discussion'}
+                          </span>
+                        </div>
+                        <p>{project.idea}</p>
+                        <small>{project.archivedAt ? `Archived ${relativeTime(project.archivedAt)}` : `Updated ${relativeTime(project.updatedAt)}`}</small>
+                        <small>{project.linkedProjectId ? `Folder: ${linkedProjectName(project.linkedProjectId)}` : 'Independent Studio workspace'}</small>
+                      </div>
+                    </div>
+                    <div className="studio-project-card-actions">
+                      {!project.archivedAt && project.status === 'done' ? (
+                        <>
+                          <button type="button" className="primary-button" onClick={() => void launchProject(project.id, 'composer')} disabled={busy !== null}>
+                            {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />}
+                            <span>Start on composer</span>
+                          </button>
+                          <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
+                            <Code2 size={14} />
+                            <span>Open in code editor</span>
+                          </button>
+                          {!project.linkedProjectId && (
+                            <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(project.id)} disabled={busy !== null}>
+                              {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />}
+                              <span>Create folder</span>
+                            </button>
+                          )}
+                          <button type="button" className="icon-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null} title={`Open Studio for ${project.title}`} aria-label={`Open Studio for ${project.title}`}>
+                            <LayoutGrid size={15} />
+                          </button>
+                        </>
+                      ) : (
+                        <button type="button" className="primary-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null}>
+                          <Play size={14} />
+                          <span>Open Studio</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => void toggleArchive(project)}
+                        disabled={busy !== null}
+                        title={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
+                        aria-label={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
+                      >
+                        {busy === 'archive' ? <Loader2 className="spin" size={15} /> : project.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button danger"
+                        onClick={() => void deleteProject(project)}
+                        disabled={busy !== null}
+                        title={`Delete ${project.title}`}
+                        aria-label={`Delete ${project.title}`}
+                      >
+                        {busy === 'delete' ? <Loader2 className="spin" size={15} /> : <Trash2 size={15} />}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="studio-project-empty">
+                <span className="studio-project-empty-icon">{showArchived ? <Archive size={22} /> : <NotebookPen size={22} />}</span>
+                <h3>{showArchived ? 'No archived projects' : projects.length === 0 ? 'Start your first Studio project' : 'No active projects'}</h3>
+                <p>
+                  {showArchived
+                    ? 'Projects you archive will stay here until you restore or delete them.'
+                    : 'Describe the idea, answer a few quick questions, and Studio will save the brief here when the discussion starts.'}
+                </p>
+                {!showArchived && (
+                  <button type="button" className="primary-button" onClick={startNewProject}>
+                    <Plus size={14} /> Plan a new project
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="page-view">
+    <div className="page-view studio-view">
+      <div className="studio-scroll">
       <header className="page-header">
         <div>
           <h1>Project Studio</h1>
-          <p>Describe the project in a paragraph. The studio asks what it still needs to know, then writes the brief the board and the agents work from.</p>
+          <p>{state ? 'Continue the discussion, review the brief, or turn it into artifacts and work for the team.' : 'Describe the project in a paragraph. Studio asks what it still needs to know, then saves the brief with the project.'}</p>
         </div>
         <div className="page-actions">
           {readiness && <span className="studio-model">{readiness.ready ? `${readiness.displayName} · ${readiness.model}` : 'Needs setup'}</span>}
           <button type="button" className="secondary-button" onClick={() => void reloadReadiness()} disabled={busy !== null}>
             {busy === 'load' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Check connection
           </button>
+          {state?.status === 'done' && projectId && (
+            <>
+              <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>
+                {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Start on composer
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
+                <Code2 size={14} /> Open in code editor
+              </button>
+              {!state.linkedProjectId && (
+                <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(projectId)} disabled={busy !== null}>
+                  {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />} Create folder
+                </button>
+              )}
+            </>
+          )}
           {state && <button type="button" className="secondary-button" onClick={() => void reset()} disabled={busy !== null}><RotateCcw size={14} /> Start over</button>}
         </div>
       </header>
 
+      <div className="studio-project-bar studio-project-bar-active">
+        <button type="button" className="secondary-button" onClick={leaveProjectStudio} disabled={busy !== null}>
+          <ArrowLeft size={14} />
+          All projects
+        </button>
+        <div className="studio-project-picker">
+          <span className="studio-project-icon"><NotebookPen size={17} /></span>
+          <div>
+            <span className="studio-project-label">{screen === 'new' ? 'New project' : state?.status === 'done' ? 'Brief ready' : 'In discussion'}</span>
+            <strong>{projectTitle}</strong>
+            <small className="studio-workspace-note">
+              <FolderOpen size={11} />
+              {screen === 'new'
+                ? useCurrentFolder && currentFolder
+                  ? `Using ${currentFolder.name}`
+                  : 'Independent Studio workspace'
+                : state?.linkedProjectId
+                  ? `Using ${linkedProjectName(state.linkedProjectId)}`
+                  : 'Independent Studio workspace'}
+            </small>
+          </div>
+        </div>
+      </div>
+
       {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /> {error}</p>}
       {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
-      {!activeProject && <p className="studio-notice warning" role="status"><AlertTriangle size={14} /> Choose a project first. The brief is written inside the project.</p>}
-      {activeProject && readiness && !readiness.ready && (
+      {readiness && !readiness.ready && (
         <p className="studio-notice warning" role="status">
           <AlertTriangle size={14} />
           <span>{readiness.reason ?? 'The Project Studio is not ready.'}</span>
@@ -317,40 +641,29 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
         </p>
       )}
 
-      <section className="studio-grid">
-        <article className="studio-card">
-          <h2><NotebookPen size={16} /> The idea</h2>
-          {state?.status === 'done' ? (
-            <>
-              <p className="studio-goal">{state.goal || state.idea}</p>
-              <p className="studio-note"><FileText size={13} /> Written to <code>{state.briefPath ?? '.kai/spec/brief.md'}</code></p>
-              <p className="studio-note">The artifacts, the board, and the design layer are built from this brief. Scroll down to review them.</p>
-            </>
-          ) : (
-            <>
-              <textarea
-                className="studio-idea"
-                value={idea}
-                onChange={(event) => setIdea(event.target.value)}
-                placeholder="A booking site for a two-chair barber shop: customers pick a time, pay a deposit, and the owner sees the day's list on her phone."
-                rows={6}
-                disabled={Boolean(state) || busy !== null}
-              />
-              {state ? (
+      <section className={`studio-grid${state ? '' : ' studio-grid-intake'}`}>
+        {state && (
+          <article className="studio-card">
+            <h2><NotebookPen size={16} /> The idea</h2>
+            {state.status === 'done' ? (
+              <>
+                <p className="studio-goal">{state.goal || state.idea}</p>
+                <p className="studio-note"><FileText size={13} /> Written to <code>{state.briefPath ?? '.kai/spec/brief.md'}</code></p>
+                <p className="studio-note">The artifacts, the board, and the design layer are built from this brief. Scroll down to review them.</p>
+              </>
+            ) : (
+              <>
+                <p className="studio-goal">{state.goal || state.idea}</p>
                 <p className="studio-note">Interview in progress. A blank answer counts as a skip, and the studio decides those itself.</p>
-              ) : (
-                <button type="button" className="primary-button" onClick={() => void start()} disabled={!projectId || !readiness?.ready || !idea.trim() || busy !== null}>
-                  {busy === 'start' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start the interview
-                </button>
-              )}
-            </>
-          )}
-        </article>
+              </>
+            )}
+          </article>
+        )}
 
         <article className="studio-card">
           <h2><Sparkles size={16} /> Questions</h2>
           {busy === 'load' && <p className="studio-note"><Loader2 className="spin" size={13} /> Reading the project…</p>}
-          {busy !== 'load' && !state && <p className="studio-note">Nothing to answer yet. Describe the idea on the left and start.</p>}
+          {busy !== 'load' && !state && <p className="studio-note">Nothing to answer yet. Describe the idea below and start.</p>}
           {state?.status === 'done' && (
             <>
               <p className="studio-note"><Check size={13} /> The interview is finished.</p>
@@ -396,7 +709,7 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
         </article>
       </section>
 
-      {activeProject && briefReady && (
+      {state && briefReady && (
         <section className="studio-stack">
           <article className="studio-card">
             <h2><FileText size={16} /> Artifacts</h2>
@@ -485,6 +798,59 @@ export function StudioView({ activeProject, onOpenSettings, onPlanForTeam }: { a
             )}
           </article>
         </section>
+      )}
+      </div>
+
+      {screen === 'new' && !state && (
+        <div className="studio-composer-dock">
+          <div className="composer-box studio-idea-composer studio-composer">
+            <textarea
+              className="studio-idea"
+              value={idea}
+              onChange={(event) => setIdea(event.target.value)}
+              placeholder="A booking site for a two-chair barber shop: customers pick a time, pay a deposit, and the owner sees the day's list on her phone."
+              rows={3}
+              disabled={busy !== null}
+            />
+            <div className="studio-folder-choice">
+              <span className="studio-project-label">Project location</span>
+              <div role="radiogroup" aria-label="Project location">
+                <button
+                  type="button"
+                  className={!useCurrentFolder ? 'selected' : undefined}
+                  aria-pressed={!useCurrentFolder}
+                  onClick={() => setUseCurrentFolder(false)}
+                  disabled={busy !== null}
+                >
+                  <NotebookPen size={13} /> Independent workspace
+                </button>
+                {currentFolder && (
+                  <button
+                    type="button"
+                    className={useCurrentFolder ? 'selected' : undefined}
+                    aria-pressed={useCurrentFolder}
+                    onClick={() => setUseCurrentFolder(true)}
+                    disabled={busy !== null}
+                  >
+                    <FolderOpen size={13} /> Use {currentFolder.name}
+                  </button>
+                )}
+              </div>
+              <small>{currentFolder ? 'Start independent by default, or explicitly use the open folder. You can create a new project folder after the brief is ready.' : 'Plan first. You can create a project folder after the brief is ready.'}</small>
+            </div>
+            <div className="composer-toolbar studio-idea-toolbar">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void start()}
+                disabled={!projectId || !readiness?.ready || !idea.trim() || busy !== null}
+                title={readiness?.reason ?? undefined}
+              >
+                {busy === 'start' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start the discussion
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

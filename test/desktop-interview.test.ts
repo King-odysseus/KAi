@@ -20,12 +20,14 @@ afterEach(() => {
 function state(overrides: Partial<InterviewState> = {}): InterviewState {
   return interviewStateSchema.parse({
     projectId: 'p1',
+    linkedProjectId: null,
     idea: 'A booking site for a barber shop.',
     goal: '',
     assumptions: [],
     rounds: [],
     status: 'asking',
     briefPath: null,
+    archivedAt: null,
     updatedAt: NOW,
     ...overrides,
   });
@@ -61,6 +63,7 @@ function ports(overrides: Partial<InterviewPorts> = {}, replies: string[] = []):
 function memoryStore(seed: InterviewState | null = null): InterviewPorts['store'] & { current: InterviewState | null } {
   const holder = {
     current: seed,
+    list: () => Promise.resolve(holder.current ? [holder.current] : []),
     read: () => Promise.resolve(holder.current),
     write: (next: InterviewState) => { holder.current = next; return Promise.resolve(); },
     clear: () => { holder.current = null; return Promise.resolve(); },
@@ -90,6 +93,35 @@ describe('Project Studio interview', () => {
     // The repeated question is dropped, so the user is never asked the same thing twice in one round.
     expect(started.rounds[0]?.questions).toEqual(['How many chairs?', 'Who cancels a booking?']);
     expect(interviewOpenQuestions(started)).toHaveLength(2);
+  });
+
+  it('keeps a new plan independent unless a folder is explicitly linked', async () => {
+    const roots: Array<string | null | undefined> = [];
+    const interview = new DesktopInterview(ports({
+      projectRoot: (_projectId, linkedProjectId) => {
+        roots.push(linkedProjectId);
+        return Promise.resolve(root);
+      },
+    }, [JSON.stringify({ goal: 'Build a booking site.', assumptions: [], questions: ['Who signs in?'] })]));
+
+    const standalone = await interview.start({ projectId: 'studio_11111111-1111-4111-8111-111111111111', idea: 'Booking site.' });
+    expect(standalone.linkedProjectId).toBeNull();
+    expect(roots[0]).toBeNull();
+
+    roots.length = 0;
+    const linkedInterview = new DesktopInterview(ports({
+      projectRoot: (_projectId, linkedProjectId) => {
+        roots.push(linkedProjectId);
+        return Promise.resolve(root);
+      },
+    }, [JSON.stringify({ goal: 'Build a booking site.', assumptions: [], questions: ['Who signs in?'] })]));
+    const linked = await linkedInterview.start({
+      projectId: 'studio_22222222-2222-4222-8222-222222222222',
+      idea: 'Booking site for the open folder.',
+      linkedProjectId: 'project_open_folder',
+    });
+    expect(linked.linkedProjectId).toBe('project_open_folder');
+    expect(roots[0]).toBe('project_open_folder');
   });
 
   it('shows the model what was answered, and marks what was skipped', () => {
@@ -153,6 +185,37 @@ describe('Project Studio interview', () => {
     await expect(interview.start({ projectId: 'p1', idea: 'Something else.' })).rejects.toThrow(/already in progress/);
     expect(await interview.reset({ projectId: 'p1' })).toBeNull();
     expect(await interview.read({ projectId: 'p1' })).toBeNull();
+  });
+
+  it('lists Studio projects by the discussion title rather than a filesystem name', async () => {
+    const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Build a tutor portal.', assumptions: [], questions: ['Who signs in?'] })]));
+    await interview.start({ projectId: 'studio_11111111-1111-4111-8111-111111111111', idea: 'A portal for tutors.' });
+    expect(await interview.list()).toEqual([
+      expect.objectContaining({
+        id: 'studio_11111111-1111-4111-8111-111111111111',
+        title: 'Build a tutor portal.',
+        idea: 'A portal for tutors.',
+        status: 'asking',
+      }),
+    ]);
+  });
+
+  it('archives, restores, and deletes a Studio project', async () => {
+    const memory = memoryStore();
+    const interview = new DesktopInterview(ports({ store: memory }, [JSON.stringify({ goal: 'Build a tutor portal.', assumptions: [], questions: [] })]));
+    const id = 'studio_11111111-1111-4111-8111-111111111111';
+    await interview.start({ projectId: id, idea: 'A portal for tutors.' });
+
+    const archived = await interview.setArchived({ projectId: id, archived: true });
+    expect(archived.archivedAt).toBe(NOW);
+    expect((await interview.list())[0]?.archivedAt).toBe(NOW);
+
+    const restored = await interview.setArchived({ projectId: id, archived: false });
+    expect(restored.archivedAt).toBeNull();
+
+    expect(await interview.remove({ projectId: id })).toBeNull();
+    expect(await interview.read({ projectId: id })).toBeNull();
+    expect(await interview.list()).toEqual([]);
   });
 
   it('lists what was skipped in the brief rather than pretending it was decided', () => {

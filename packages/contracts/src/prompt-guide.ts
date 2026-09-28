@@ -58,6 +58,21 @@ export const promptGuideResultSchema = z
   .strict();
 export type PromptGuideResult = z.infer<typeof promptGuideResultSchema>;
 
+export const promptRefineInputSchema = z
+  .object({
+    text: z.string().trim().min(1).max(8_000),
+    intent: z.enum(['ask', 'plan', 'build', 'review', 'learn']).default('ask'),
+  })
+  .strict();
+export type PromptRefineInput = z.infer<typeof promptRefineInputSchema>;
+
+export const promptRefineResultSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(8_000),
+  })
+  .strict();
+export type PromptRefineResult = z.infer<typeof promptRefineResultSchema>;
+
 export interface PromptGuideReadiness {
   ready: boolean;
   displayName: string;

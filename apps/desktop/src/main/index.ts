@@ -261,6 +261,22 @@ async function startApplication(): Promise<void> {
   // The studio writes `.kai/spec` inside the project; the interview's own working state stays app-owned.
   const specStore = new SpecStore();
   const interviewStore = new InterviewStore(path.join(paths.studio, 'interviews.json'), fileSystem);
+  // Studio discussions get their own app-owned workspace until the user chooses to connect them to a code folder.
+  const studioDiscussionRoot = async (projectId: string): Promise<string> => {
+    if (!/^studio_[0-9a-f-]{36}$/i.test(projectId)) throw new Error('Project not found.');
+    const root = path.join(paths.studio, 'projects', projectId);
+    await mkdir(root, { recursive: true });
+    return root;
+  };
+  const studioProjectRoot = async (projectId: string, linkedProjectId?: string | null): Promise<string> => {
+    const linked = linkedProjectId === undefined
+      ? (await interviewStore.read(projectId))?.linkedProjectId ?? null
+      : linkedProjectId;
+    if (!linked) return studioDiscussionRoot(projectId);
+    const linkedProject = (await projects.list()).find((candidate) => candidate.id === linked);
+    if (!linkedProject) throw new Error('The folder linked to this Studio plan is no longer available.');
+    return linkedProject.path;
+  };
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
     waitIfPaused: (conversationId, signal) => runControl.waitIfPaused(conversationId, signal),
@@ -455,11 +471,7 @@ async function startApplication(): Promise<void> {
   ipcContext.promptGuide = promptGuide;
   interview = new DesktopInterview({
     settings: () => settings.load(),
-    projectRoot: async (projectId) => {
-      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
-      if (!project) throw new Error('Project not found.');
-      return project.path;
-    },
+    projectRoot: studioProjectRoot,
     credentialStored: async (id) => Boolean(await credentials.has?.(id)),
     vaultAvailable: () => credentials.isAvailable(),
     requester: learningTutor,
@@ -468,11 +480,6 @@ async function startApplication(): Promise<void> {
     now: () => new Date().toISOString(),
   });
   ipcContext.interview = interview;
-  const studioProjectRoot = async (projectId: string): Promise<string> => {
-    const project = (await projects.list()).find((candidate) => candidate.id === projectId);
-    if (!project) throw new Error('Project not found.');
-    return project.path;
-  };
   const studioArtifacts = new StudioArtifacts({ spec: specStore, projectRoot: studioProjectRoot, now: () => new Date().toISOString() });
   const studioBoard = new StudioBoardStore({
     spec: specStore,

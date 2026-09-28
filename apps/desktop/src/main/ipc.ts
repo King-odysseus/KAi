@@ -342,7 +342,22 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
   handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
   handle(context, 'prompt-guide:refine', async (input) => context.promptGuide.refine(input));
+  handle(context, 'prompt-guide:refine-prompt', async (input) => context.promptGuide.refinePrompt(input));
   handle(context, 'studio:readiness', async () => context.interview.readiness());
+  handle(context, 'studio:projects-list', async () => context.interview.list());
+  handle(context, 'studio:project-archive', async (input) => context.interview.setArchived(input));
+  handle(context, 'studio:project-remove', async ({ projectId }) => {
+    await context.interview.remove({ projectId });
+    if (/^studio_[0-9a-f-]{36}$/i.test(projectId)) {
+      await removeProject(context, projectId, null);
+      await fs.rm(path.join(context.paths.studio, 'projects', projectId), { recursive: true, force: true });
+    }
+    return null;
+  });
+  handle(context, 'studio:project-folder', async ({ projectId }, request) =>
+    chooseStudioProjectFolder(context, projectId, request.session));
+  handle(context, 'studio:project-launch', async ({ projectId, destination }) =>
+    launchStudioProject(context, projectId, destination));
   handle(context, 'studio:interview-read', async ({ projectId }) => context.interview.read({ projectId }));
   handle(context, 'studio:interview-start', async (input) => context.interview.start(input));
   handle(context, 'studio:interview-answer', async (input) => context.interview.answer(input));
@@ -2194,6 +2209,97 @@ async function removeProject(
   }
   await broadcastSharedState(context);
   return createBootstrap(context, session);
+}
+
+async function chooseStudioProjectFolder(
+  context: IpcContext,
+  studioProjectId: string,
+  session: DesktopWindowSession | null,
+): Promise<{ projectId: string; projectName: string; path: string } | null> {
+  const state = await context.interview.read({ projectId: studioProjectId });
+  if (!state) throw new NotFoundError('Studio project not found.');
+  if (state.status !== 'done') throw new Error('Finish the interview before creating the project folder.');
+
+  const options: OpenDialogOptions = {
+    title: 'Create or choose a folder for this Studio project',
+    buttonLabel: 'Use this folder',
+    properties: ['openDirectory', 'createDirectory'],
+  };
+  const mainWindow = session?.window ?? context.getMainWindow();
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const projectPath = path.resolve(result.filePaths[0]);
+  const sourceRoot = path.join(context.paths.studio, 'projects', studioProjectId);
+  const sourceSpec = path.join(sourceRoot, '.kai');
+  const targetSpec = path.join(projectPath, '.kai');
+  if (await pathExists(sourceSpec)) {
+    if (await pathExists(targetSpec)) {
+      throw new Error('That folder already contains a .kai folder. Choose an empty folder so the Studio brief is not overwritten.');
+    }
+    await fs.cp(sourceSpec, targetSpec, { recursive: true, force: false, errorOnExist: true });
+  }
+
+  const now = new Date().toISOString();
+  const projectName = path.basename(projectPath) || studioProjectName(state);
+  const existing = (await context.projects.list()).find((project) => path.resolve(project.path) === projectPath);
+  const project: ProjectRecord = existing ?? {
+    schemaVersion: 1,
+    id: `project_${crypto.randomUUID()}`,
+    name: projectName,
+    path: projectPath,
+    createdAt: now,
+    lastOpenedAt: now,
+  };
+  project.name = projectName;
+  await context.projects.upsert(project);
+  await context.interview.setLinkedProject(studioProjectId, project.id);
+  await broadcastSharedState(context);
+  return { projectId: project.id, projectName: project.name, path: project.path };
+}
+
+async function launchStudioProject(
+  context: IpcContext,
+  studioProjectId: string,
+  _destination: 'composer' | 'editor',
+): Promise<{ projectId: string; projectName: string; prompt: string }> {
+  const state = await context.interview.read({ projectId: studioProjectId });
+  if (!state) throw new NotFoundError('Studio project not found.');
+  if (state.status !== 'done') throw new Error('Finish the interview before launching the project.');
+
+  let project = state.linkedProjectId
+    ? (await context.projects.list()).find((candidate) => candidate.id === state.linkedProjectId)
+    : undefined;
+  if (state.linkedProjectId && !project) throw new Error('The folder linked to this Studio plan is no longer available.');
+  if (!project) {
+    const root = path.join(context.paths.studio, 'projects', studioProjectId);
+    await fs.mkdir(root, { recursive: true });
+    const now = new Date().toISOString();
+    project = {
+      schemaVersion: 1,
+      id: studioProjectId,
+      name: studioProjectName(state),
+      path: root,
+      createdAt: state.updatedAt,
+      lastOpenedAt: now,
+    };
+    await context.projects.upsert(project);
+    await broadcastSharedState(context);
+  }
+
+  const brief = (await context.studio.artifactText(studioProjectId, 'brief'))?.trim();
+  const prompt = brief
+    ? `Use this Project Studio brief as the source of truth. Start by confirming the smallest implementation plan, then build it.\n\n${brief}`
+    : `Build this project from the Project Studio plan.\n\n${state.goal.trim() || state.idea.trim()}`;
+  return { projectId: project.id, projectName: project.name, prompt };
+}
+
+function studioProjectName(state: { goal: string; idea: string }): string {
+  return (state.goal.trim() || state.idea.trim() || 'Studio project').slice(0, 80);
+}
+
+async function pathExists(candidate: string): Promise<boolean> {
+  return fs.stat(candidate).then(() => true).catch(() => false);
 }
 
 export async function confirmEditorNavigation(

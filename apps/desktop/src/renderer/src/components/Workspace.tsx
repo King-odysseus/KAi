@@ -22,6 +22,7 @@ import {
   GitCompare,
   Goal,
   History,
+  Loader2,
   LogIn,
   Minimize2,
   ImagePlus,
@@ -40,6 +41,7 @@ import {
   Square,
   Trash2,
   Undo2,
+  Wand2,
   X,
 } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
@@ -63,6 +65,7 @@ import type {
   PermissionKey,
   ProjectPreferences,
   ProjectRecord,
+  PromptGuideReadiness,
   RouteMode,
   ServiceState,
   SkillSummary,
@@ -87,7 +90,7 @@ export interface WorkspaceSendOptions {
   agent?: AgentId;
 }
 
-export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff' | 'preview-change';
+export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff' | 'preview-change' | 'prompt';
 
 export interface WorkspaceCommandRequest {
   kind: WorkspaceCommandKind;
@@ -304,6 +307,8 @@ export function WorkspaceView({
   const [rawEventsOpen, setRawEventsOpen] = useState(false);
   const [showRunDetails, setShowRunDetails] = useState(false);
   const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
+  const [refiningPrompt, setRefiningPrompt] = useState(false);
+  const [promptGuideReadiness, setPromptGuideReadiness] = useState<PromptGuideReadiness | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -320,6 +325,14 @@ export function WorkspaceView({
   const unavailableReason = apiRun
     ? directApiCapability?.unavailableReason ?? 'Direct API status is unavailable.'
     : selectedCapability?.unavailableReason ?? 'No agent CLI is available.';
+  const refineTarget = promptGuideReadiness?.ready
+    ? `${promptGuideReadiness.displayName} · ${promptGuideReadiness.model}`
+    : directApiCapability?.available
+      ? `${directApiCapability.displayName}${directApiCapability.model ? ` · ${directApiCapability.model}` : ''}`
+      : null;
+  const refineReason = refineTarget
+    ? null
+    : promptGuideReadiness?.reason ?? directApiCapability?.unavailableReason ?? 'Checking the available model connection.';
   const activeGoal = activeConversation?.goal ?? null;
   const activeTaskIntent = TASK_INTENTS.find((intent) => intent.id === taskIntent) ?? TASK_INTENTS[0];
   const allContextChips: ContextChip[] = [
@@ -357,6 +370,29 @@ export function WorkspaceView({
       cancelled = true;
     };
   }, [activeProject?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPromptGuideReadiness(null);
+    void window.kaiDesktop
+      .promptGuideReadiness()
+      .then(unwrap)
+      .then((readiness) => {
+        if (!cancelled) setPromptGuideReadiness(readiness);
+      })
+      .catch(() => {
+        if (!cancelled) setPromptGuideReadiness(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    settings.promptGuide.baseUrl,
+    settings.promptGuide.credentialId,
+    settings.promptGuide.enabled,
+    settings.promptGuide.model,
+    settings.promptGuide.provider,
+  ]);
 
   useEffect(() => {
     if (!contextPickerOpen || !activeProject) return;
@@ -399,6 +435,10 @@ export function WorkspaceView({
     } else if (commandRequest.kind === 'preview-change') {
       setPrompt(commandRequest.prompt ?? '');
       setWorkbenchNotice('Preview context added. Add any extra detail, then send the change request.');
+      window.setTimeout(() => promptRef.current?.focus(), 0);
+    } else if (commandRequest.kind === 'prompt') {
+      setPrompt(commandRequest.prompt ?? '');
+      setWorkbenchNotice('The Studio brief is ready in the composer. Review it, then send when you are ready.');
       window.setTimeout(() => promptRef.current?.focus(), 0);
     } else if (commandRequest.kind === 'checkpoint') {
       const conversation = activeConversation;
@@ -474,7 +514,7 @@ export function WorkspaceView({
 
   const send = (): void => {
     const text = prompt.trim();
-    if (!text || !activeProject || busy || !ready) return;
+    if (!text || !activeProject || busy || refiningPrompt || !ready) return;
     const command = commandFor(text);
     if (command) {
       setPrompt('');
@@ -499,13 +539,32 @@ export function WorkspaceView({
 
   const steerNow = (): void => {
     const text = prompt.trim();
-    if (!text || !activeProject || busy || !ready) return;
+    if (!text || !activeProject || busy || refiningPrompt || !ready) return;
     setQueuedPrompts((current) => [{ text, options: optionsForPrompt(text) ?? {} }, ...current]);
     setPrompt('');
     clearComposerContext();
     setSelectedSkills([]);
     if (running) onCancel();
   };
+
+  async function refinePromptDraft(): Promise<void> {
+    const text = prompt.trim();
+    if (!text || !refineTarget || busy || running || paused || awaitingApproval || refiningPrompt) return;
+    setRefiningPrompt(true);
+    setWorkbenchNotice(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent }));
+      setPrompt(result.prompt);
+      window.setTimeout(() => {
+        promptRef.current?.focus();
+        promptRef.current?.setSelectionRange(result.prompt.length, result.prompt.length);
+      }, 0);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    } finally {
+      setRefiningPrompt(false);
+    }
+  }
 
   function cycleAutonomy(): void {
     const modes: AutonomyMode[] = ['plan', 'ask', 'autoEdit', 'full'];
@@ -846,6 +905,14 @@ export function WorkspaceView({
   const recentEvents = (activeConversation?.events ?? []).slice(-40);
   const runDetails = recentEvents.filter(isRunDetailEvent);
   const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval);
+  const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
+  const refineTitle = !prompt.trim()
+    ? 'Type a prompt to refine'
+    : refineBlocked
+      ? refiningPrompt ? 'Refining prompt' : 'Wait for the current action to finish'
+      : refineTarget
+        ? `Refine prompt with ${refineTarget}`
+        : refineReason ?? 'Set up Prompt Guide or Direct API in Settings';
 
   return (
     <div className="workspace-view">
@@ -1240,7 +1307,7 @@ export function WorkspaceView({
             }}
             placeholder={activeTaskIntent.placeholder}
             aria-label="Task prompt"
-            disabled={!activeProject || (busy && !running) || !ready}
+            disabled={!activeProject || (busy && !running) || !ready || refiningPrompt}
           />
           <div className="composer-toolbar">
             <div className="composer-leading">
@@ -1271,12 +1338,13 @@ export function WorkspaceView({
               <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
               <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>
               <button type="button" className={`composer-icon-button ${rawEventsOpen ? 'active' : ''}`} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw events"><Braces size={14} /></button>
+              <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               {(running || paused || awaitingApproval) ? (
                 <>
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
                   <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
                 </>
-              ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
+              ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || refiningPrompt || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
             </div>
           </div>
         </div>

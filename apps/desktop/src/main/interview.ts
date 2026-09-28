@@ -12,7 +12,9 @@ import {
   type InterviewRound,
   type InterviewStartInput,
   type InterviewState,
+  type StudioProjectArchiveInput,
   type StudioReadiness,
+  type StudioProjectSummary,
 } from '@kai/contracts';
 import { loadProjectContext, parseJsonResponse } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
@@ -42,6 +44,7 @@ const INTERVIEW_JSON_SCHEMA = {
 } as const;
 
 export interface InterviewStorePort {
+  list(): Promise<InterviewState[]>;
   read(projectId: string): Promise<InterviewState | null>;
   write(state: InterviewState): Promise<void>;
   clear(projectId: string): Promise<void>;
@@ -54,7 +57,7 @@ export interface SpecWriterPort {
 
 export interface InterviewPorts {
   settings(): Promise<AppSettings>;
-  projectRoot(projectId: string): Promise<string>;
+  projectRoot(projectId: string, linkedProjectId?: string | null): Promise<string>;
   credentialStored(id: string): Promise<boolean>;
   vaultAvailable(): boolean;
   requester: StructuredRequester;
@@ -86,6 +89,11 @@ export class DesktopInterview {
     return this.ports.store.read(input.projectId);
   }
 
+  async list(): Promise<StudioProjectSummary[]> {
+    const interviews = await this.ports.store.list();
+    return interviews.map(summaryOf);
+  }
+
   /** Starts an interview, or replaces a finished one. A half-answered interview has to be reset first. */
   async start(input: InterviewStartInput): Promise<InterviewState> {
     const existing = await this.ports.store.read(input.projectId);
@@ -96,12 +104,14 @@ export class DesktopInterview {
     if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
     const state = await this.ask({
       projectId: input.projectId,
+      linkedProjectId: input.linkedProjectId ?? null,
       idea: input.idea,
       goal: '',
       assumptions: [],
       rounds: [],
       status: 'asking',
       briefPath: null,
+      archivedAt: null,
       updatedAt: this.ports.now(),
     });
     return this.persist(state);
@@ -135,11 +145,40 @@ export class DesktopInterview {
     return null;
   }
 
+  async setArchived(input: StudioProjectArchiveInput): Promise<StudioProjectSummary> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state) throw new Error('Project not found.');
+    const next = interviewStateSchema.parse({
+      ...state,
+      archivedAt: input.archived ? this.ports.now() : null,
+      updatedAt: this.ports.now(),
+    });
+    await this.ports.store.write(next);
+    return summaryOf(next);
+  }
+
+  async setLinkedProject(projectId: string, linkedProjectId: string | null): Promise<StudioProjectSummary> {
+    const state = await this.ports.store.read(projectId);
+    if (!state) throw new Error('Project not found.');
+    const next = interviewStateSchema.parse({
+      ...state,
+      linkedProjectId,
+      updatedAt: this.ports.now(),
+    });
+    await this.ports.store.write(next);
+    return summaryOf(next);
+  }
+
+  async remove(input: InterviewProjectInput): Promise<null> {
+    await this.ports.store.clear(input.projectId);
+    return null;
+  }
+
   /** Asks the model for the next round, updating the goal and assumptions as it learns more. */
   private async ask(state: InterviewState): Promise<InterviewState> {
     const [settings, root] = await Promise.all([
       this.ports.settings(),
-      this.ports.projectRoot(state.projectId),
+      this.ports.projectRoot(state.projectId, state.linkedProjectId),
     ]);
     const context = await loadProjectContext(root, undefined, INTERVIEW_CONTEXT_CHARS).catch(() => null);
     const reply = await this.ports.requester.structuredRequest(
@@ -165,7 +204,7 @@ export class DesktopInterview {
 
   /** Marks the interview done and writes the brief the rest of the studio reads. */
   private async complete(state: InterviewState): Promise<InterviewState> {
-    const root = await this.ports.projectRoot(state.projectId);
+    const root = await this.ports.projectRoot(state.projectId, state.linkedProjectId);
     const written = await this.ports.spec.write(root, INTERVIEW_BRIEF_PATH, briefMarkdown(state, this.ports.now()));
     return { ...state, status: 'done', briefPath: written.path, updatedAt: this.ports.now() };
   }
@@ -182,6 +221,19 @@ export class DesktopInterview {
     if (state.status !== 'asking') throw new Error('This interview is already finished. Start over to change it.');
     return state;
   }
+}
+
+function summaryOf(state: InterviewState): StudioProjectSummary {
+  return {
+    id: state.projectId,
+    title: state.goal.trim() || state.idea.trim(),
+    idea: state.idea,
+    linkedProjectId: state.linkedProjectId,
+    status: state.status,
+    briefPath: state.briefPath,
+    archivedAt: state.archivedAt,
+    updatedAt: state.updatedAt,
+  };
 }
 
 /**

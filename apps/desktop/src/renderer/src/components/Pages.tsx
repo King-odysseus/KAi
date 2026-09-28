@@ -1,9 +1,11 @@
 import {
   Activity,
   AlertTriangle,
+  AppWindow,
   Archive,
   ArchiveRestore,
   Brain,
+  Code2,
   Clock3,
   Copy,
   FolderKanban,
@@ -11,6 +13,7 @@ import {
   GitBranch,
   GitFork,
   KeyRound,
+  MessageSquare,
   Pencil,
   Play,
   Plus,
@@ -50,12 +53,14 @@ export function ProjectsView({
   activeProjectId,
   onChoose,
   onOpen,
+  onOpenInNewWindow,
   onRemove,
 }: {
   projects: ProjectRecord[];
   activeProjectId: string | null;
   onChoose: () => void;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, destination: 'workspace' | 'code') => void;
+  onOpenInNewWindow: (id: string) => void;
   onRemove: (id: string) => void;
 }): ReactNode {
   return (
@@ -74,14 +79,30 @@ export function ProjectsView({
           <article key={project.id} className={`project-card ${project.id === activeProjectId ? 'active' : ''}`}>
             <div className="project-card-icon">{project.name.slice(0, 1).toUpperCase()}</div>
             <div className="project-card-copy">
-              <strong>{project.name}</strong>
+              <div className="project-card-title">
+                <strong>{project.name}</strong>
+                {project.id === activeProjectId && <span className="project-active-badge">Active</span>}
+              </div>
               <span className="mono truncate">{project.path}</span>
               <small>Last opened {relativeTime(project.lastOpenedAt)}</small>
             </div>
             <div className="project-card-actions">
-              <button type="button" className="secondary-button" onClick={() => onOpen(project.id)}>
-                <FolderOpen size={14} />
-                <span>{project.id === activeProjectId ? 'Active' : 'Open'}</span>
+              <button type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}>
+                <MessageSquare size={14} />
+                <span>Composer</span>
+              </button>
+              <button type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}>
+                <Code2 size={14} />
+                <span>Editor</span>
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => onOpenInNewWindow(project.id)}
+                title={`Open ${project.name} in a new window`}
+                aria-label={`Open ${project.name} in a new window`}
+              >
+                <AppWindow size={15} />
               </button>
               <button
                 type="button"

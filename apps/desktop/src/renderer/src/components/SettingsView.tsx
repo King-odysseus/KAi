@@ -1,7 +1,8 @@
 import { reconcileSettingsDraft } from './settings-draft';
-import { Archive, ArchiveRestore, Check, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users , Wand2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users , Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
+import { RemoteAccessPanel } from './RemoteAccessPanel';
 import { AgentTeamCard } from './TeamSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
@@ -21,6 +22,14 @@ const SCOPE_KEY = { direct: 'directApi', learning: 'learningTutor', guide: 'prom
 type FeedbackScope = ProviderScope | 'generic' | 'overwatch';
 type FeedbackKind = 'success' | 'error' | 'pending';
 interface SettingsFeedback { kind: FeedbackKind; message: string }
+type SettingsCategoryId = 'general' | 'connections' | 'services' | 'data';
+
+const SETTINGS_CATEGORIES: Array<{ id: SettingsCategoryId; title: string; detail: string }> = [
+  { id: 'general', title: 'General', detail: 'Defaults, team, editor, updates, and shortcuts' },
+  { id: 'connections', title: 'Connections and models', detail: 'Providers, API keys, MCP servers, and credentials' },
+  { id: 'services', title: 'Services and access', detail: 'C1 Brain, Universal Proxy, and remote access' },
+  { id: 'data', title: 'Data and diagnostics', detail: 'Locations, backups, and recent logs' },
+];
 
 /** What each card is called in the save bar. */
 const GROUP_LABELS: Record<SettingsGroup, string> = {
@@ -63,6 +72,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
   const [backupsLoading, setBackupsLoading] = useState(true);
   const [backupError, setBackupError] = useState<string | null>(null);
   const [cardFeedback, setCardFeedback] = useState<Record<string, SettingsFeedback | null>>({});
+  const [openCategories, setOpenCategories] = useState<Record<SettingsCategoryId, boolean>>({
+    general: true,
+    connections: false,
+    services: false,
+    data: false,
+  });
 
   const previousSettings = useRef(settings);
   useEffect(() => {
@@ -327,6 +342,17 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
     setCardFeedback({});
   }
 
+  function toggleCategory(id: SettingsCategoryId): void {
+    setOpenCategories((current) => ({ ...current, [id]: !current[id] }));
+  }
+
+  function jumpToCategory(id: SettingsCategoryId): void {
+    setOpenCategories((current) => ({ ...current, [id]: true }));
+    window.requestAnimationFrame(() => {
+      document.getElementById(`settings-category-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
   const changed = useMemo(() => changedGroups(draft, settings), [draft, settings]);
   const isDirty = (groups: readonly SettingsGroup[]): boolean => groups.some((group) => changed.includes(group));
 
@@ -385,6 +411,27 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
         </div>
         <FeedbackMessage feedback={cardFeedback.all ?? null} />
       </div>
+      <nav className="settings-category-nav" aria-label="Settings categories">
+        {SETTINGS_CATEGORIES.map((category) => (
+          <button
+            key={category.id}
+            type="button"
+            className={openCategories[category.id] ? 'active' : undefined}
+            onClick={() => jumpToCategory(category.id)}
+          >
+            {category.title}
+          </button>
+        ))}
+      </nav>
+      <div className="settings-categories">
+      <SettingsCategory
+        id="general"
+        icon={<Cpu size={17} />}
+        title="General"
+        detail="Defaults, team, editor, updates, and shortcuts"
+        open={openCategories.general}
+        onToggle={() => toggleCategory('general')}
+      >
       <div className="settings-grid">
         <section className="settings-section">
           <div className="section-title"><Cpu size={17} /><span>Agent defaults</span></div>
@@ -487,6 +534,18 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
           {cardSave('shortcuts', 'Save shortcuts', ['shortcuts'])}
         </section>
 
+      </div>
+      </SettingsCategory>
+
+      <SettingsCategory
+        id="connections"
+        icon={<Cloud size={17} />}
+        title="Connections and models"
+        detail="Providers, API keys, MCP servers, and credentials"
+        open={openCategories.connections}
+        onToggle={() => toggleCategory('connections')}
+      >
+      <div className="settings-grid">
         <ProviderConnectionSection
           title="Learning Tutor API"
           icon={<GraduationCap size={17} />}
@@ -638,6 +697,18 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
           <FeedbackMessage feedback={credentialFeedback.generic} />
         </section>
 
+      </div>
+      </SettingsCategory>
+
+      <SettingsCategory
+        id="services"
+        icon={<ServerCog size={17} />}
+        title="Services and access"
+        detail="C1 Brain, Universal Proxy, and remote access"
+        open={openCategories.services}
+        onToggle={() => toggleCategory('services')}
+      >
+      <div className="settings-grid">
         <section className="settings-section span-two">
           <div className="section-title"><ServerCog size={17} /><span>Managed services</span></div>
           <div className="service-settings-grid">
@@ -759,6 +830,20 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
           </div>
         </section>
 
+        <RemoteAccessPanel settings={settings} onSave={onSave} busy={busy} />
+
+      </div>
+      </SettingsCategory>
+
+      <SettingsCategory
+        id="data"
+        icon={<Database size={17} />}
+        title="Data and diagnostics"
+        detail="Locations, backups, and recent logs"
+        open={openCategories.data}
+        onToggle={() => toggleCategory('data')}
+      >
+      <div className="settings-grid">
         <section className="settings-section span-two">
           <div className="section-title"><Database size={17} /><span>Data locations</span></div>
           <div className="location-list">{dataLocations.map((location) => <div key={location.kind} className="location-row"><span>{location.label}</span><code>{location.path}</code></div>)}</div>
@@ -799,12 +884,36 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
           </div>
         </section>
       </div>
+      </SettingsCategory>
+      </div>
     </div>
   );
 }
 
 function PageHeader({ title, detail }: { title: string; detail: string }): ReactNode {
   return <header className="page-header"><div><h1>{title}</h1><p>{detail}</p></div></header>;
+}
+
+function SettingsCategory({ id, icon, title, detail, open, onToggle, children }: {
+  id: SettingsCategoryId;
+  icon: ReactNode;
+  title: string;
+  detail: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}): ReactNode {
+  const bodyId = `settings-category-body-${id}`;
+  return (
+    <section id={`settings-category-${id}`} className={`settings-category${open ? ' open' : ''}`}>
+      <button type="button" className="settings-category-toggle" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
+        <span className="settings-category-icon">{icon}</span>
+        <span className="settings-category-copy"><strong>{title}</strong><small>{detail}</small></span>
+        <ChevronDown size={17} className="settings-category-chevron" />
+      </button>
+      {open && <div id={bodyId} className="settings-category-body">{children}</div>}
+    </section>
+  );
 }
 
 /** The live state of a managed service, so "enabled but not running" shows its reason here and not only on its own page. */

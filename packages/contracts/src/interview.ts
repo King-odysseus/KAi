@@ -36,6 +36,8 @@ export type InterviewStatus = z.infer<typeof interviewStatusSchema>;
 export const interviewStateSchema = z
   .object({
     projectId: z.string().min(1),
+    // The code folder this discussion is attached to. Null means it lives only in KAI's Studio workspace.
+    linkedProjectId: z.string().min(1).nullable().default(null),
     idea: z.string().trim().min(1).max(4_000),
     // The idea restated as one clear goal, refreshed each round; empty until the first reply lands.
     goal: z.string().trim().max(4_000).default(''),
@@ -45,13 +47,19 @@ export const interviewStateSchema = z
     status: interviewStatusSchema.default('asking'),
     // Relative path of the written brief once the interview is done, so the UI can point at a real file.
     briefPath: z.string().max(300).nullable().default(null),
+    // Archived discussions stay on disk but are moved out of the active Studio list until restored.
+    archivedAt: z.string().min(1).nullable().default(null),
     updatedAt: z.string().min(1),
   })
   .strict();
 export type InterviewState = z.infer<typeof interviewStateSchema>;
 
 export const interviewStartInputSchema = z
-  .object({ projectId: z.string().min(1), idea: z.string().trim().min(1).max(4_000) })
+  .object({
+    projectId: z.string().min(1),
+    idea: z.string().trim().min(1).max(4_000),
+    linkedProjectId: z.string().min(1).nullable().optional(),
+  })
   .strict();
 export type InterviewStartInput = z.infer<typeof interviewStartInputSchema>;
 
@@ -75,6 +83,56 @@ export type InterviewAnswerInput = z.infer<typeof interviewAnswerInputSchema>;
 
 export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;
+
+export const studioProjectArchiveInputSchema = z
+  .object({ projectId: z.string().min(1), archived: z.boolean() })
+  .strict();
+export type StudioProjectArchiveInput = z.infer<typeof studioProjectArchiveInputSchema>;
+
+export const studioProjectLaunchInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    destination: z.enum(['composer', 'editor']),
+  })
+  .strict();
+export type StudioProjectLaunchInput = z.infer<typeof studioProjectLaunchInputSchema>;
+
+/** What the desktop shell needs to open a finished Studio plan in either surface. */
+export const studioProjectLaunchResultSchema = z
+  .object({
+    projectId: z.string().min(1),
+    projectName: z.string().min(1),
+    prompt: z.string().min(1),
+  })
+  .strict();
+export type StudioProjectLaunchResult = z.infer<typeof studioProjectLaunchResultSchema>;
+
+export const studioProjectFolderInputSchema = interviewProjectInputSchema;
+export type StudioProjectFolderInput = z.infer<typeof studioProjectFolderInputSchema>;
+
+export const studioProjectFolderResultSchema = z
+  .object({
+    projectId: z.string().min(1),
+    projectName: z.string().min(1),
+    path: z.string().min(1),
+  })
+  .strict();
+export type StudioProjectFolderResult = z.infer<typeof studioProjectFolderResultSchema>;
+
+/** A project that exists because it was discussed in Studio, even before it is tied to a code folder. */
+export const studioProjectSummarySchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().trim().min(1).max(4_000),
+    idea: z.string().trim().min(1).max(4_000),
+    linkedProjectId: z.string().min(1).nullable(),
+    status: interviewStatusSchema,
+    briefPath: z.string().max(300).nullable(),
+    archivedAt: z.string().min(1).nullable(),
+    updatedAt: z.string().min(1),
+  })
+  .strict();
+export type StudioProjectSummary = z.infer<typeof studioProjectSummarySchema>;
 
 export interface StudioReadiness {
   ready: boolean;

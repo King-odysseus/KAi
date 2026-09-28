@@ -49,7 +49,7 @@ import {
 } from './components/Workspace';
 import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
-import { shouldHandleAgentEvent } from './agent-events';
+import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
 import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from './agent-memory';
 import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
@@ -528,6 +528,7 @@ export function App(): ReactNode {
     if (next) {
       setBootstrap(next);
       setActiveConversationId(next.activeConversationId);
+      setView('workspace');
     }
   }
 
@@ -536,12 +537,45 @@ export function App(): ReactNode {
     setView('operations');
   }
 
-  async function openProject(id: string): Promise<void> {
+  async function openProject(id: string, destination: 'workspace' | 'code' | 'stay' = 'workspace'): Promise<BootstrapPayload | null> {
     const next = await perform(() => window.kaiDesktop.openProject(id).then(unwrap), 'Opening project');
     if (next) {
       setBootstrap(next);
       setActiveConversationId(preferredConversationId(next, conversations));
+      if (destination !== 'stay') setView(destination);
     }
+    return next ?? null;
+  }
+
+  async function openStudioProject(
+    studioProjectId: string,
+    destination: 'composer' | 'editor',
+  ): Promise<void> {
+    const launch = await perform(
+      () => window.kaiDesktop.launchStudioProject({ projectId: studioProjectId, destination }).then(unwrap),
+      destination === 'composer' ? 'Preparing the composer' : 'Opening the code editor',
+    );
+    if (!launch) return;
+    const next = await openProject(launch.projectId, 'stay');
+    if (!next) return;
+    if (destination === 'editor') {
+      setView('code');
+      return;
+    }
+
+    const conversation = await perform(
+      () => window.kaiDesktop.createConversation(launch.projectId, launch.prompt).then(unwrap),
+      'Creating conversation',
+    );
+    if (!conversation) return;
+    setConversations((current) => [conversation, ...current]);
+    setActiveConversationId(conversation.id);
+    setWorkspaceCommand({ kind: 'prompt', nonce: Date.now(), prompt: launch.prompt });
+    setView('workspace');
+  }
+
+  async function openProjectInNewWindow(id: string): Promise<void> {
+    await perform(() => window.kaiDesktop.newWindow(id).then(unwrap), 'Opening project in a new window');
   }
 
   async function openNewWindow(): Promise<void> {
@@ -1180,7 +1214,8 @@ export function App(): ReactNode {
             projects={bootstrap.projects}
             activeProjectId={bootstrap.activeProjectId}
             onChoose={() => void chooseProject()}
-            onOpen={(id) => void openProject(id)}
+            onOpen={(id, destination) => void openProject(id, destination)}
+            onOpenInNewWindow={(id) => void openProjectInNewWindow(id)}
             onRemove={(id) => void removeProject(id)}
           />
         );
@@ -1256,8 +1291,10 @@ export function App(): ReactNode {
       case 'studio':
         return (
           <StudioView
-            activeProject={activeProject ? { id: activeProject.id, name: activeProject.name } : null}
+            activeProject={activeProject}
+            projects={bootstrap.projects}
             onOpenSettings={() => setView('settings')}
+            onLaunchProject={openStudioProject}
             onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
           />
         );
@@ -1310,7 +1347,7 @@ export function App(): ReactNode {
             streamingText={streamingText}
             running={runningConversationId === activeConversation?.id}
             paused={runPaused}
-            awaitingApproval={pendingApproval?.conversationId === activeConversation?.id}
+            awaitingApproval={isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);

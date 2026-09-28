@@ -3,12 +3,15 @@ import {
   directProviderPreset,
   isBuiltInRole,
   isLocalProvider,
+  promptRefineResultSchema,
   promptGuideResultSchema,
   type AgentTeam,
   type AppSettings,
   type PromptGuideInput,
   type PromptGuideReadiness,
   type PromptGuideResult,
+  type PromptRefineInput,
+  type PromptRefineResult,
   type TeamWorkerRoleId,
 } from '@kai/contracts';
 import { loadProjectContext, parseJsonResponse, type ProviderConnection } from './learning-tutor';
@@ -65,6 +68,15 @@ const PROMPT_GUIDE_JSON_SCHEMA = {
   },
 } as const;
 
+const PROMPT_REFINEMENT_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['prompt'],
+  properties: {
+    prompt: { type: 'string' },
+  },
+} as const;
+
 /**
  * Helps the user say what they want before a team runs: it restates the idea as one clear goal, lists what it had to
  * assume and what it still needs to know, and writes a self-contained prompt for each teammate. It reads the project
@@ -74,15 +86,28 @@ export class DesktopPromptGuide {
   constructor(private readonly ports: PromptGuidePorts) {}
 
   async readiness(): Promise<PromptGuideReadiness> {
-    const guide = (await this.ports.settings()).promptGuide;
-    const displayName = directProviderPreset(guide.provider).displayName;
-    const local = isLocalProvider(guide.provider);
+    return this.connectionReadiness((await this.ports.settings()).promptGuide, 'Prompt Guide');
+  }
+
+  private async connectionReadiness(
+    connection: AppSettings['promptGuide'] | AppSettings['directApi'],
+    card: 'Prompt Guide' | 'Direct API',
+  ): Promise<PromptGuideReadiness> {
+    const displayName = directProviderPreset(connection.provider).displayName;
+    const local = isLocalProvider(connection.provider);
     let reason: string | null = null;
-    if (!guide.enabled) reason = 'The Prompt Guide is off. Turn it on and add its API key under Settings, Prompt Guide.';
-    else if (!guide.model.trim()) reason = 'Choose a Prompt Guide model under Settings, Prompt Guide.';
-    else if (!local && !this.ports.vaultAvailable()) reason = 'The OS credential vault is unavailable, so the Prompt Guide cannot read its key.';
-    else if (!local && !(await this.ports.credentialStored(guide.credentialId))) reason = `Save the ${guide.credentialId} key under Settings, Prompt Guide.`;
-    return { ready: reason === null, displayName, model: guide.model, reason };
+    if (!connection.enabled) {
+      reason = card === 'Prompt Guide'
+        ? 'The Prompt Guide is off. Turn it on and add its API key under Settings, Prompt Guide.'
+        : 'Direct API mode is off. Turn it on under Settings, Direct API.';
+    } else if (!connection.model.trim()) {
+      reason = `Choose a ${card} model under Settings, ${card}.`;
+    } else if (!local && !this.ports.vaultAvailable()) {
+      reason = `The OS credential vault is unavailable, so ${card} cannot read its key.`;
+    } else if (!local && !(await this.ports.credentialStored(connection.credentialId))) {
+      reason = `Save the ${connection.credentialId} key under Settings, ${card}.`;
+    }
+    return { ready: reason === null, displayName, model: connection.model, reason };
   }
 
   async refine(input: PromptGuideInput): Promise<PromptGuideResult> {
@@ -103,6 +128,59 @@ export class DesktopPromptGuide {
     );
     return result;
   }
+
+  /** Rewrites only the user's draft. It may use the dedicated Prompt Guide connection or the configured Direct API fallback. */
+  async refinePrompt(input: PromptRefineInput): Promise<PromptRefineResult> {
+    const settings = await this.ports.settings();
+    const guideReadiness = await this.connectionReadiness(settings.promptGuide, 'Prompt Guide');
+    const directReadiness = guideReadiness.ready
+      ? null
+      : await this.connectionReadiness(settings.directApi, 'Direct API');
+    const connection = guideReadiness.ready
+      ? settings.promptGuide
+      : directReadiness?.ready
+        ? settings.directApi
+        : null;
+    if (!connection) {
+      throw new Error(guideReadiness.reason ?? directReadiness?.reason ?? 'Configure Prompt Guide or Direct API in Settings before refining a prompt.');
+    }
+    return this.ports.requester.structuredRequest(
+      connection,
+      { feature: 'Prompt refinement', card: 'Prompt refinement' },
+      buildPromptRefinementPrompt(input),
+      'kai_prompt_refinement',
+      PROMPT_REFINEMENT_JSON_SCHEMA,
+      parsePromptRefinementContent,
+    );
+  }
+}
+
+/** Rewrites a rough draft without changing what the user asked for. */
+export function buildPromptRefinementPrompt(input: PromptRefineInput): { system: string; user: string } {
+  const intent = {
+    ask: 'Make the request specific and answerable. Preserve whether the user wants an explanation, advice, diagnosis, or an answer.',
+    plan: 'Make it ask for a concrete plan, affected areas, risks, and verification. Do not turn it into an instruction to edit files.',
+    build: 'Make the desired change explicit, preserve every constraint, and state what should be verified when the work is complete. Do not add scope, technologies, or requirements.',
+    review: 'Make the review target and concerns explicit: correctness, security, architecture, regressions, and missing tests where relevant. Do not ask for edits unless the draft does.',
+    learn: 'Make it ask for a clear explanation or teaching response, preserving the topic, desired depth, and any learner context.',
+  }[input.intent];
+  const system = [
+    'You are the prompt editor inside KAI, a desktop coding workbench.',
+    'Rewrite the user draft into a clear, self-contained prompt for a coding agent.',
+    intent,
+    'Preserve the user meaning, facts, names, paths, constraints, requested outcome, and level of detail. Do not add requirements or invent decisions.',
+    'Do not answer the request, perform the work, or turn the prompt into a plan unless the requested mode explicitly asks for a plan.',
+    'Keep the user language and tone. If the draft is already clear, make only the smallest useful edits. Return only JSON matching the schema, with no markdown fences.',
+  ].join('\n');
+  return { system, user: `Draft:\n${input.text}` };
+}
+
+export function parsePromptRefinementContent(content: string): PromptRefineResult {
+  const raw = parseJsonResponse(content, 'Prompt refinement');
+  const parsed = promptRefineResultSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  throw new Error(`The prompt refinement reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
 }
 
 export function buildPromptGuidePrompt(input: PromptGuideInput, team: Pick<AgentTeam, 'custom'>, context: string | null): { system: string; user: string } {

@@ -4,10 +4,22 @@ import {
   interviewAnswerInputSchema,
   interviewProjectInputSchema,
   interviewStartInputSchema,
+  studioProjectArchiveInputSchema,
+  studioProjectFolderInputSchema,
+  studioProjectFolderResultSchema,
+  studioProjectLaunchInputSchema,
+  studioProjectLaunchResultSchema,
+  studioProjectSummarySchema,
   type InterviewAnswerInput,
   type InterviewStartInput,
   type InterviewState,
   type StudioReadiness,
+  type StudioProjectArchiveInput,
+  type StudioProjectFolderInput,
+  type StudioProjectFolderResult,
+  type StudioProjectLaunchInput,
+  type StudioProjectLaunchResult,
+  type StudioProjectSummary,
 } from './interview';
 import {
   studioArtifactInputSchema,
@@ -50,11 +62,15 @@ import {
 } from './remote';
 import {
   promptGuideInputSchema,
+  promptRefineInputSchema,
+  promptRefineResultSchema,
   promptGuideSettingsSchema,
   teamPlanFromPartsInputSchema,
   type PromptGuideInput,
   type PromptGuideReadiness,
   type PromptGuideResult,
+  type PromptRefineInput,
+  type PromptRefineResult,
   type TeamPlanFromPartsInput,
 } from './prompt-guide';
 import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
@@ -360,7 +376,13 @@ export const ipcChannels = [
   'team:plan-from-parts',
   'prompt-guide:readiness',
   'prompt-guide:refine',
+  'prompt-guide:refine-prompt',
   'studio:readiness',
+  'studio:projects-list',
+  'studio:project-archive',
+  'studio:project-remove',
+  'studio:project-folder',
+  'studio:project-launch',
   'studio:interview-read',
   'studio:interview-start',
   'studio:interview-answer',
@@ -605,7 +627,13 @@ export const ipcInputSchemas = {
   'team:plan-from-parts': teamPlanFromPartsInputSchema,
   'prompt-guide:readiness': emptyInputSchema,
   'prompt-guide:refine': promptGuideInputSchema,
+  'prompt-guide:refine-prompt': promptRefineInputSchema,
   'studio:readiness': emptyInputSchema,
+  'studio:projects-list': emptyInputSchema,
+  'studio:project-archive': studioProjectArchiveInputSchema,
+  'studio:project-remove': interviewProjectInputSchema,
+  'studio:project-folder': studioProjectFolderInputSchema,
+  'studio:project-launch': studioProjectLaunchInputSchema,
   'studio:interview-read': interviewProjectInputSchema,
   'studio:interview-start': interviewStartInputSchema,
   'studio:interview-answer': interviewAnswerInputSchema,
@@ -768,6 +796,7 @@ export const attachmentResultSchema = contextChipSchema;
 export const workflowTemplateListResponseSchema = z.array(workflowTemplateSchema);
 export const workflowRunListResponseSchema = z.array(workflowRunSchema);
 export const teamPlanResponseSchema = teamPlanDraftSchema;
+export const promptRefineResponseSchema = promptRefineResultSchema;
 export const checkpointReviewResponseSchema = checkpointReviewSchema;
 export const checkpointRestoreResponseSchema = checkpointRestoreResultSchema;
 export const compareRunResponseSchema = compareRunSchema;
@@ -829,6 +858,9 @@ export const recoveryListResponseSchema = z.array(recoveryRecordSchema);
 export const recoveryRecapResponseSchema = recoveryRecapSchema;
 export const recoveryResumeResponseSchema = recoveryResumeSchema;
 export const studioArtifactsResponseSchema = studioArtifactsSchema;
+export const studioProjectSummariesResponseSchema = z.array(studioProjectSummarySchema);
+export const studioProjectFolderResponseSchema = studioProjectFolderResultSchema;
+export const studioProjectLaunchResponseSchema = studioProjectLaunchResultSchema;
 export const studioBoardResponseSchema = studioBoardSchema;
 export const studioBoardCardResponseSchema = boardCardSchema.nullable();
 export const studioUiCheckResponseSchema = studioUiCheckResultSchema;
@@ -979,8 +1011,18 @@ export interface KaiDesktopBridge {
   promptGuideReadiness(): Promise<IpcResponse<PromptGuideReadiness>>;
   /** Turns a rough idea into a clear goal, open questions and one prompt per teammate. */
   refineIdea(request: PromptGuideInput): Promise<IpcResponse<PromptGuideResult>>;
+  /** Rewrites a composer draft into a clearer prompt without sending it. */
+  refinePrompt(request: PromptRefineInput): Promise<IpcResponse<PromptRefineResult>>;
   /** The Project Studio's interview: the step that turns a paragraph into `.kai/spec/brief.md`. */
   studioReadiness(): Promise<IpcResponse<StudioReadiness>>;
+  /** Projects created in Studio, whether the discussion is still open or the brief is already written. */
+  studioProjects(): Promise<IpcResponse<StudioProjectSummary[]>>;
+  setStudioProjectArchived(request: StudioProjectArchiveInput): Promise<IpcResponse<StudioProjectSummary>>;
+  deleteStudioProject(projectId: string): Promise<IpcResponse<null>>;
+  /** Opens a folder picker and deliberately attaches this Studio plan to the folder the user creates or chooses. */
+  chooseStudioProjectFolder(request: StudioProjectFolderInput): Promise<IpcResponse<StudioProjectFolderResult | null>>;
+  /** Materialises an independent Studio workspace when needed, then returns the project and composer prompt. */
+  launchStudioProject(request: StudioProjectLaunchInput): Promise<IpcResponse<StudioProjectLaunchResult>>;
   studioInterview(projectId: string): Promise<IpcResponse<InterviewState | null>>;
   startStudioInterview(request: InterviewStartInput): Promise<IpcResponse<InterviewState>>;
   /** Records the answers on screen and asks the next round, or writes the brief when there is nothing left to ask. */

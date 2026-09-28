@@ -34,6 +34,11 @@ export class InterviewStore {
     return collection.interviews.find((interview) => interview.projectId === projectId) ?? null;
   }
 
+  async list(): Promise<InterviewState[]> {
+    const collection = await this.store.load();
+    return [...collection.interviews].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
   async write(state: InterviewState): Promise<void> {
     await this.serialiseWrite(async () => {
       const collection = await this.store.load();

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultAgentTeam, createDefaultSettings, partsFromGuide, promptGuideSettingsSchema, type AgentTeam } from '../packages/contracts/src';
-import { DesktopPromptGuide, buildPromptGuidePrompt, parsePromptGuideContent, type PromptGuidePorts } from '../apps/desktop/src/main/prompt-guide';
+import type { ProviderConnection } from '../apps/desktop/src/main/learning-tutor';
+import {
+  DesktopPromptGuide,
+  buildPromptGuidePrompt,
+  buildPromptRefinementPrompt,
+  parsePromptGuideContent,
+  parsePromptRefinementContent,
+  type PromptGuidePorts,
+} from '../apps/desktop/src/main/prompt-guide';
 
 const team: AgentTeam = {
   ...createDefaultAgentTeam(),
@@ -73,5 +81,41 @@ describe('Prompt Guide', () => {
     ], team);
     expect(parts.map((part) => part.id)).toEqual(['recipe-page', 'recipe-api', 'tests', 'recipe-api-2']);
     expect(parts[2]?.dependsOn).toEqual(['recipe-page', 'recipe-api', 'recipe-api-2']);
+  });
+
+  it('rewrites a draft for the selected composer intent without adding scope', () => {
+    const prompt = buildPromptRefinementPrompt({ text: 'fix login', intent: 'build' });
+    expect(prompt.system).toContain('desired change explicit');
+    expect(prompt.system).toContain('Do not add requirements or invent decisions');
+    expect(prompt.user).toBe('Draft:\nfix login');
+  });
+
+  it('accepts only a non-empty refined prompt', () => {
+    expect(parsePromptRefinementContent(JSON.stringify({ prompt: 'Fix the login redirect and verify it.' })).prompt)
+      .toBe('Fix the login redirect and verify it.');
+    expect(() => parsePromptRefinementContent(JSON.stringify({ prompt: '' }))).toThrow(/did not match the expected shape/);
+  });
+
+  it('falls back to Direct API when the Prompt Guide connection is off', async () => {
+    const settings = createDefaultSettings();
+    const used: ProviderConnection[] = [];
+    const guide = new DesktopPromptGuide(ports({
+      settings: () => Promise.resolve({
+        ...settings,
+        promptGuide: { ...settings.promptGuide, enabled: false },
+        directApi: { ...settings.directApi, enabled: true, provider: 'deepseek', model: 'deepseek-chat', credentialId: 'provider.deepseek' },
+      }),
+      requester: {
+        structuredRequest: async (connection, _names, _prompt, _schemaName, _schema, parse) => {
+          used.push(connection);
+          return parse(JSON.stringify({ prompt: 'Fix the login redirect and verify it.' }));
+        },
+      },
+    }));
+
+    await expect(guide.refinePrompt({ text: 'fix login', intent: 'build' }))
+      .resolves.toEqual({ prompt: 'Fix the login redirect and verify it.' });
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatchObject({ provider: 'deepseek', model: 'deepseek-chat' });
   });
 });
