@@ -122,7 +122,9 @@
     'Connecting the dots','Untangling the problem','Synthesizing','Testing assumptions','Looking for edges',
     'Wrangling the types','Asking the compiler nicely','Counting semicolons','Reading the stack trace',
     'Making the pixels behave','Refactoring the vibes','Trying not to overthink this','Double-checking the obvious',
-    'Talking to the test suite'
+    'Talking to the test suite','Pretending to understand regex','Blaming the cache','Googling the error',
+    'Having an existential crisis','Wondering if it\'s Friday yet','Vibing with the tree','Making it pop',
+    'Consulting the rubber duck','Sacrificing a semicolon to the linter gods','Breathing deeply'
   ];
   var thinkingEl = null, thinkingWordTimer = null, thinkingClockTimer = null, thinkingStart = 0, thinkingWordIdx = 0, thinkingDetail = '';
 
@@ -131,12 +133,12 @@
 
   function startThinking() {
     if(thinkingEl) return; removeEmpty();
-    thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking';
+    thinkingEl = document.createElement('div'); thinkingEl.className = 'thinking one-liner';
     thinkingEl.setAttribute('role', 'status');
     thinkingEl.setAttribute('aria-live', 'polite');
     thinkingEl.setAttribute('aria-atomic', 'true');
     thinkingWordIdx = Math.floor(Math.random()*STATUS_WORDS.length);
-    thinkingEl.innerHTML = '<span class="spinner"></span><span class="status-word">'+esc(STATUS_WORDS[thinkingWordIdx])+'</span><span class="status-detail"></span><span class="status-timer">0s</span>';
+    thinkingEl.innerHTML = '<span class="spinner"></span><span class="status-word">'+esc(STATUS_WORDS[thinkingWordIdx])+'</span><span class="status-timer">0s</span>';
     els.chat.appendChild(thinkingEl); thinkingStart = Date.now(); thinkingDetail = ''; scrollBottom(true);
     thinkingWordTimer = setInterval(function(){ if(!thinkingEl) return; var w=thinkingEl.querySelector('.status-word'); if(w) w.textContent=pickStatusWord(); },2200);
     thinkingClockTimer = setInterval(function(){ if(!thinkingEl) return; var t=thinkingEl.querySelector('.status-timer'); if(t) t.textContent=fmtElapsed(Date.now()-thinkingStart); },1000);
@@ -160,7 +162,7 @@
     contextChips = []; selectedSkills = []; messageQueue = []; renderCtxChips(); renderQueue();
     clearPrompt();
   }
-  function autoGrow() { els.prompt.style.height='auto'; els.prompt.style.height=Math.min(els.prompt.scrollHeight,180)+'px'; }
+  function autoGrow() { els.prompt.style.height='auto'; els.prompt.style.height=Math.min(els.prompt.scrollHeight,260)+'px'; }
   function agentLabel(agent) { return AGENT_NAMES[agent] || (agent ? agent.charAt(0).toUpperCase()+agent.slice(1) : 'Assistant'); }
 
   // ---- History panel (past conversations) ----
@@ -952,6 +954,11 @@
     copyBtn.addEventListener('click', function () { copyToClipboard(turn.rawText); });
     actions.appendChild(copyBtn);
 
+    var branchBtn = document.createElement('button'); branchBtn.type = 'button'; branchBtn.className = 'turn-action-btn wide'; branchBtn.title = 'Start a new conversation from this reply';
+    branchBtn.textContent = 'Branch';
+    branchBtn.addEventListener('click', function () { vscode.postMessage({ type: 'forkCurrentConversation', eventId: turn.lastEventId }); });
+    actions.appendChild(branchBtn);
+
     var retryBtn = document.createElement('button'); retryBtn.type = 'button'; retryBtn.className = 'turn-action-btn'; retryBtn.title = 'Retry with ' + agentLabel(turn.agent);
     retryBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>';
     retryBtn.addEventListener('click', function () {
@@ -1498,7 +1505,8 @@
     var taskId = event.taskId;
     var isTurnEvent = taskId && taskId !== 'workbench' && event.agent;
     if (isTurnEvent) {
-      var turn = ensureTurn(taskId, event.agent);
+    var turn = ensureTurn(taskId, event.agent);
+      turn.lastEventId = event.id;
       removeEmpty(); finalizeAssistant();
 
       if (event.type === 'text.delta') {

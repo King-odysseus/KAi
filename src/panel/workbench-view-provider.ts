@@ -35,7 +35,7 @@ interface WebviewMessage {
     | 'setGoal' | 'clearGoal' | 'pauseGoal' | 'resumeGoal' | 'completeGoal'
     | 'reviewChanges' | 'undoAllChanges' | 'rewindToHere' | 'respondToApproval'
     | 'newConversation' | 'listConversations' | 'searchConversations' | 'loadConversation'
-    | 'renameConversation' | 'archiveConversation' | 'unarchiveConversation' | 'forkConversation'
+    | 'renameConversation' | 'archiveConversation' | 'unarchiveConversation' | 'forkConversation' | 'forkCurrentConversation'
     | 'pickCompareWinner' | 'discardCompare' | 'openCompareWorktree' | 'openView';
   prompt?: string;
   goal?: GoalInput;
@@ -711,7 +711,13 @@ export class WorkbenchViewProvider implements vscode.WebviewViewProvider {
         break;
       case 'forkConversation':
         if (message.conversationId && this.conversationStore) {
-          await this.conversationStore.fork(message.conversationId);
+          await this.conversationStore.fork(message.conversationId, message.eventId);
+          await this.sendConversationList(webview, '');
+        }
+        break;
+      case 'forkCurrentConversation':
+        if (this.currentConversation && this.conversationStore) {
+          await this.conversationStore.fork(this.currentConversation.id, message.eventId);
           await this.sendConversationList(webview, '');
         }
         break;

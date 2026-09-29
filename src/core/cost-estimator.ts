@@ -11,9 +11,9 @@ export interface CostEstimate {
 
 // Rough pricing per 1M tokens (input / output), as of mid-2026
 const PRICING: Record<string, { input: number; output: number; model: string }> = {
-  'claude:direct': { input: 3.0, output: 15.0, model: 'Claude Sonnet 4' },
+  'claude:direct': { input: 3.0, output: 15.0, model: 'Claude Opus 5' },
   'claude:proxy': { input: 0.5, output: 1.5, model: 'DeepSeek V4 Pro (via proxy)' },
-  'codex:direct': { input: 2.5, output: 10.0, model: 'GPT-5.5' },
+  'codex:direct': { input: 2.5, output: 10.0, model: 'GPT-6 Astra' },
   'codex:proxy': { input: 0.3, output: 0.9, model: 'DeepSeek V4 Flash (via proxy)' },
   'qwen:direct': { input: 1.0, output: 4.0, model: 'Qwen Code' },
   'qwen:proxy': { input: 0.4, output: 1.2, model: 'DeepSeek V4 Pro (via proxy)' },

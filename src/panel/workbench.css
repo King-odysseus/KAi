@@ -614,7 +614,7 @@ body.hide-details .telemetry {
   font-size: 12.5px;
   line-height: 1.5;
   min-height: 36px;
-  max-height: 180px;
+  max-height: 260px;
   resize: none;
 }
 #prompt::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
@@ -804,6 +804,33 @@ body.hide-details .telemetry {
   color: var(--vscode-descriptionForeground);
   font-variant-numeric: tabular-nums;
   opacity: 0.8;
+}
+
+/* Compact one-liner thinking display */
+.thinking.one-liner {
+  max-width: 100%;
+  padding: 6px 0;
+  gap: 6px;
+  font-size: 11px;
+  border: 0;
+  border-left: 0;
+  background: transparent;
+  animation: none;
+}
+.thinking.one-liner .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+.thinking.one-liner .status-word {
+  min-width: auto;
+  font-weight: 500;
+  font-size: 11px;
+}
+.thinking.one-liner .status-timer {
+  font-size: 10px;
+  margin-left: 4px;
+  opacity: 0.7;
 }
 
 /* ---- Reply turns (agent header, tool groups, markdown, chips) ---- */

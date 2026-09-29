@@ -148,21 +148,27 @@ export class ConversationStore {
     await this.save(conversation);
   }
 
-  /** Copies a conversation's transcript into a new one — "fork". */
-  async fork(id: string): Promise<Conversation | undefined> {
+  /** Copies a conversation into a clean branch. When eventId is supplied, the
+   * branch stops at that message rather than inheriting later activity. */
+  async fork(id: string, eventId?: string): Promise<Conversation | undefined> {
     const source = await this.get(id);
     if (!source) return undefined;
     const now = new Date().toISOString();
+    const eventIndex = eventId ? source.events.findIndex((event) => event.id === eventId) : -1;
+    const events = eventIndex >= 0 ? source.events.slice(0, eventIndex + 1) : source.events;
     const forked: Conversation = {
       ...source,
       id: `conv_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-      title: `${source.title} (copy)`,
+      title: `${source.title} (branch)`,
       createdAt: now,
       updatedAt: now,
       unread: false,
       // A fork has its own context. Keeping the source's native session ids
       // would make the copy attach to the original agent conversation.
       agentSessions: {},
+      events: [...events],
+      // A branch must not resume the source agent's hidden conversation.
+      turns: [],
     };
     await this.save(forked);
     return forked;

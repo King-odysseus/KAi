@@ -121,7 +121,7 @@ describe('ConversationStore', () => {
     const forked = await store.fork(conv.id);
     expect(forked).toBeDefined();
     expect(forked?.id).not.toBe(conv.id);
-    expect(forked?.title).toContain('copy');
+    expect(forked?.title).toContain('branch');
     expect(forked?.events).toHaveLength(1);
     expect(forked?.agentSessions).toEqual({});
 
