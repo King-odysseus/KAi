@@ -43,9 +43,9 @@ export class DesktopShell {
     });
   }
 
-  /** True when the window should hide to the tray instead of closing. */
+  /** Keep the app resident only when closing would otherwise abandon active work. */
   shouldHideOnClose(): boolean {
-    return this.trayEnabled && !this.quitting;
+    return this.trayEnabled && !this.quitting && this.deps.center.activeRunIds().length > 0;
   }
 
   apply(settings: NotificationSettings): void {

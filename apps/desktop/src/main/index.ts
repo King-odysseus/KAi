@@ -79,7 +79,12 @@ if (!hasSingleInstanceLock) {
 } else {
   app.on('second-instance', () => {
     const window = desktopWindows.focused()?.window;
-    if (!window) return;
+    // A retained tray process can outlive a renderer/window failure. Never leave a
+    // second launch stranded behind that process: create a usable window again.
+    if (!window || window.isDestroyed()) {
+      void createMainWindow();
+      return;
+    }
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();
@@ -138,7 +143,14 @@ app.on('before-quit', (event) => {
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) void createMainWindow();
+  const window = desktopWindows.focused()?.window;
+  if (!window || window.isDestroyed()) {
+    void createMainWindow();
+    return;
+  }
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 });
 
 async function startApplication(): Promise<void> {
