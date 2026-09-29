@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileCode2, Pause, Search, Terminal, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileCode2, Loader2, Pause, Search, Terminal, Wrench } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { relativeTime } from '../types';
@@ -75,15 +75,16 @@ function describeEvent(event: PersistedEvent): string {
   return event.type.replaceAll('.', ' ');
 }
 
-export function AgentActivityStrip({ events, running, paused, awaitingApproval }: {
+export function AgentActivityStrip({ events, running, paused, awaitingApproval, elapsedSeconds = 0, tokenEstimate = 0 }: {
   events: readonly PersistedEvent[];
   running: boolean;
   paused: boolean;
   awaitingApproval: boolean;
+  elapsedSeconds?: number;
+  tokenEstimate?: number;
 }): ReactNode {
   const activity = deriveAgentActivity(events, running, paused, awaitingApproval);
-  // Routine progress already shows on the thinking line in the chat; the strip only speaks up when the run needs attention.
-  if (!['waiting', 'blocked', 'paused'].includes(activity.kind)) return null;
+  if (!running && !paused && !awaitingApproval && !['waiting', 'blocked'].includes(activity.kind)) return null;
   return (
     <section className={`agent-activity ${activity.kind}`} aria-live="polite" aria-label="Agent activity">
       <span className="agent-activity-icon">{activityIcon(activity.kind)}</span>
@@ -92,8 +93,13 @@ export function AgentActivityStrip({ events, running, paused, awaitingApproval }
         <span>{activity.detail}</span>
         {activity.lastAction && <small className="agent-activity-last" title={activity.lastAction}>Last: {activity.lastAction}</small>}
       </div>
+      {(running || paused || awaitingApproval) && <div className="agent-activity-metrics" aria-label="Run progress"><span>{elapsedSeconds}s</span>{tokenEstimate > 0 && <span>~{formatTokens(tokenEstimate)} tokens</span>}</div>}
     </section>
   );
+}
+
+function formatTokens(value: number): string {
+  return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value);
 }
 
 function activityIcon(kind: AgentActivityKind): ReactNode {
@@ -103,5 +109,6 @@ function activityIcon(kind: AgentActivityKind): ReactNode {
   if (kind === 'waiting' || kind === 'blocked') return <AlertTriangle size={15} />;
   if (kind === 'completed') return <CheckCircle2 size={15} />;
   if (kind === 'paused') return <Pause size={15} />;
+  if (kind === 'planning' || kind === 'working') return <Loader2 className="spin" size={15} />;
   return <Wrench size={15} />;
 }

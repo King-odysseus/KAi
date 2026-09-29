@@ -1046,6 +1046,7 @@ export function WorkspaceView({
     return summary;
   }, { tools: 0, edits: 0, usage: 0 });
   const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval);
+  const liveTokenEstimate = (activeConversation ? estimateConversationTokens(activeConversation) : 0) + Math.ceil(streamingText.length / 4);
   const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
   const refineTitle = !prompt.trim()
     ? 'Type a prompt to refine'
@@ -1254,6 +1255,8 @@ export function WorkspaceView({
           running={running}
           paused={paused}
           awaitingApproval={awaitingApproval}
+          elapsedSeconds={elapsedSeconds}
+          tokenEstimate={liveTokenEstimate}
         />}
         {/* A missing CLI is explained even before a project is open, so the user knows how to get it. */}
         {(activeProject || (!apiRun && selectedCapability?.state === 'not_installed')) && !ready && (apiRun ? directApiCapability : selectedCapability) && (
