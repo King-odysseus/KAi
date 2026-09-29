@@ -54,8 +54,8 @@ interface ChatToolCall {
     arguments: string;
   };
 }
-const MAX_PROVIDER_ROUNDS = 9;
-const MAX_TOOL_ROUNDS = 8;
+const MAX_PROVIDER_ROUNDS = 41;
+const MAX_TOOL_ROUNDS = 40;
 const MAX_APPROVAL_DETAIL = 4_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;

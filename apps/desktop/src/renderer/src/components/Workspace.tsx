@@ -316,6 +316,10 @@ export function WorkspaceView({
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  // Follow new output only while the reader is at the bottom; scrolling up releases it until they send again.
+  const stickToBottomRef = useRef(true);
+  const wasRunningRef = useRef(false);
+  const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number } | null>(null);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const brainReady = settings.cognitive1.enabled;
   const apiRun = executionMode === 'api';
@@ -498,13 +502,22 @@ export function WorkspaceView({
   }, [activeConversation, activeProject, busy, onCreateConversation, onSend, queuedPrompts, ready, running]);
 
   useEffect(() => {
+    if (wasRunningRef.current && !running) setPendingUser(null);
+    wasRunningRef.current = running;
+  }, [running]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    // Let React lay out the incoming message/change summary before following it. This keeps the active
-    // conversation at the bottom and naturally moves earlier turns into scrollback history.
+    if (!canvas || !stickToBottomRef.current) return;
+    // Let React lay out the incoming message/change summary before following it.
     const frame = window.requestAnimationFrame(() => { canvas.scrollTop = canvas.scrollHeight; });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeConversation?.turns.length, activeConversation?.events.length, compareResult, queuedPrompts.length, streamingText]);
+  }, [activeConversation?.turns.length, activeConversation?.events.length, compareResult, queuedPrompts.length, streamingText, pendingUser, running]);
+
+  const onCanvasScroll = (): void => {
+    const canvas = canvasRef.current;
+    if (canvas) stickToBottomRef.current = canvas.scrollHeight - canvas.scrollTop - canvas.clientHeight < 80;
+  };
 
   const queueOrSend = (text: string, options = sendOptions): void => {
     if (!text || !activeProject || !ready) return;
@@ -512,6 +525,8 @@ export function WorkspaceView({
       setQueuedPrompts((current) => [...current, { text, options: options ?? {} }]);
       return;
     }
+    stickToBottomRef.current = true;
+    setPendingUser({ text, baseCount: activeConversation?.turns.length ?? 0 });
     if (activeConversation) onSend(text, options);
     else onCreateConversation(text, options);
   };
@@ -1059,12 +1074,15 @@ export function WorkspaceView({
         </div>
       , document.body)}
 
-      <div ref={canvasRef} className="conversation-canvas">
-        {activeConversation?.turns.length || streamingText ? (
+      <div ref={canvasRef} className="conversation-canvas" onScroll={onCanvasScroll}>
+        {activeConversation?.turns.length || streamingText || pendingUser ? (
           <>
             {activeConversation?.turns.map((turn) => (
               <MessageTurn key={turn.id} turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} />
             ))}
+            {pendingUser && (activeConversation?.turns.length ?? 0) <= pendingUser.baseCount && (
+              <article className="message user"><div className="message-role">You</div><MessageContent text={pendingUser.text} /></article>
+            )}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
             {running && !streamingText && (
               <article className="thinking" role="status" aria-live="polite">
@@ -1339,6 +1357,7 @@ export function WorkspaceView({
               </div>}
             </div>
             <div className="composer-actions">
+              <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               <SelectMenu ariaLabel="Model" className="composer-model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
               {(running || paused || awaitingApproval) ? (
                 <>

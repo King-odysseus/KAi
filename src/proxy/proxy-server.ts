@@ -987,6 +987,17 @@ export class KaiProxyServer {
     return new Promise((resolve) => {
       const options = buildRequestOptions(targetUrl, config, Buffer.byteLength(body));
       const proxyReq = makeRequest(targetUrl, options, (proxyRes) => {
+        if (proxyRes.statusCode !== 200 && proxyRes.statusCode !== 201) {
+          let data = '';
+          proxyRes.on('data', c => { data += c; });
+          proxyRes.on('end', () => {
+            const reformatted = this.reformatDeepSeekError(data);
+            res.writeHead(proxyRes.statusCode || 500, proxyRes.headers);
+            res.end(reformatted);
+            resolve();
+          });
+          return;
+        }
         res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
         proxyRes.pipe(res);
         proxyRes.on('end', resolve);
@@ -1001,6 +1012,24 @@ export class KaiProxyServer {
     });
   }
 
+  private reformatDeepSeekError(errorData: string): string {
+    try {
+      const parsed = JSON.parse(errorData);
+      const message = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message || '';
+
+      if (message.includes('8') && (message.includes('round') || message.includes('tool'))) {
+        return JSON.stringify({
+          error: {
+            message: 'DeepSeek has reached its 8-round tool limit for this request. This means too many back-and-forth tool calls were attempted. Try again with a simpler task, or use a different model. For complex multi-step tasks, consider breaking them into smaller requests.'
+          }
+        });
+      }
+      return errorData;
+    } catch {
+      return errorData;
+    }
+  }
+
   private proxyNonStreamingTranslated(
     res: http.ServerResponse, targetUrl: URL, chatBody: string, reqModel: string, config: ProxyServerConfig,
   ): Promise<void> {
@@ -1011,8 +1040,9 @@ export class KaiProxyServer {
         proxyRes.on('data', c => { data += c; });
         proxyRes.on('end', () => {
           if (proxyRes.statusCode !== 200) {
+            const reformatted = this.reformatDeepSeekError(data);
             res.writeHead(proxyRes.statusCode || 500, { 'Content-Type': 'application/json' });
-            res.end(data);
+            res.end(reformatted);
             resolve();
             return;
           }
@@ -1048,8 +1078,9 @@ export class KaiProxyServer {
           let data = '';
           proxyRes.on('data', c => { data += c; });
           proxyRes.on('end', () => {
+            const reformatted = this.reformatDeepSeekError(data);
             res.writeHead(proxyRes.statusCode || 500, { 'Content-Type': 'application/json' });
-            res.end(data);
+            res.end(reformatted);
             resolve();
           });
           return;
