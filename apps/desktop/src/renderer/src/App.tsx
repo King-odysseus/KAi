@@ -208,7 +208,15 @@ export function App(): ReactNode {
         autonomy: selectedAutonomy,
         model: modelChoices[`${executionMode}:${selectedAgent}`] ?? '',
       };
-      return { ...current, [activeDraftKey]: { ...fallback, ...(current[activeDraftKey] ?? {}), ...patch } };
+      const next = { ...current, [activeDraftKey]: { ...fallback, ...(current[activeDraftKey] ?? {}), ...patch } };
+      // Save in the selection event itself. This must survive an immediate app close,
+      // before React has a chance to flush the state-effect below.
+      try {
+        window.localStorage.setItem(COMPOSER_SELECTIONS_KEY, JSON.stringify(next));
+      } catch {
+        // The rendered state remains usable when storage is unavailable.
+      }
+      return next;
     });
   }, [activeDraftKey, executionMode, modelChoices, selectedAgent, selectedAutonomy, selectedRoute]);
 
@@ -1459,6 +1467,7 @@ export function App(): ReactNode {
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
               updateComposerSelection({ execution: mode });
+              rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: mode });
               setAgentNotice(null);
             }}
             onSelectAgent={(agent) => {
@@ -1467,11 +1476,13 @@ export function App(): ReactNode {
               const route = capability?.supportsRoutes.includes('proxy') ? selectedRoute : 'direct';
               if (route !== selectedRoute) setSelectedRoute(route);
               updateComposerSelection({ agent, route });
+              rememberAgentChoice({ agent, route, execution: executionMode });
               setAgentNotice(null);
             }}
             onSelectRoute={(route) => {
               setSelectedRoute(route);
               updateComposerSelection({ route });
+              rememberAgentChoice({ agent: selectedAgent, route, execution: executionMode });
               if (route === 'proxy') setProxyContinuationAgent(null);
               setAgentNotice(null);
             }}
@@ -1484,6 +1495,7 @@ export function App(): ReactNode {
               setSelectedAgent(agent);
               setSelectedRoute('proxy');
               updateComposerSelection({ execution: 'cli', agent, route: 'proxy' });
+              rememberAgentChoice({ agent, route: 'proxy', execution: 'cli' });
               setProxyContinuationAgent(null);
               setAgentNotice(`${agentCapabilities.find((item) => item.id === agent)?.displayName ?? agent} now uses the proxy for the next message in this conversation.`);
             }}
