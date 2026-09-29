@@ -56,10 +56,18 @@ interface ChatToolCall {
 }
 const MAX_PROVIDER_ROUNDS = 41;
 const MAX_TOOL_ROUNDS = 40;
+const DEEPSEEK_MAX_TOOL_ROUNDS = 7;
+const DEEPSEEK_WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
 const MAX_APPROVAL_DETAIL = 4_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 30_000;
+
+// DeepSeek is the one Chat Completions provider whose tool round cap (8) sits far below the others.
+// OpenRouter and openai-compatible routes can still point at a DeepSeek model, so match on the id too.
+function isDeepSeekCapability(capability: DirectApiCapability): boolean {
+  return capability.provider === 'deepseek' || capability.model.trim().toLowerCase().includes('deepseek');
+}
 
 interface ProviderStreamEvent {
   event: string;
@@ -506,6 +514,9 @@ export class DesktopDirectProviderRuntime {
     let outputTokens: number | undefined;
     let aborted = false;
     let toolRounds = 0;
+    // DeepSeek's hard cap is far lower than the generic limit; stop one round early and summarize.
+    const toolRoundLimit = isDeepSeekCapability(capability) ? DEEPSEEK_MAX_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+    let forceFinalAnswer = false;
 
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
@@ -521,6 +532,7 @@ export class DesktopDirectProviderRuntime {
           externalToolDefinitions,
           controller.signal,
           emit,
+          !forceFinalAnswer,
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -591,6 +603,12 @@ export class DesktopDirectProviderRuntime {
           chatToolOutput,
         );
         messages.push(...toolResults as ChatMessage[]);
+        // DeepSeek stops accepting tools past its own cap; drop tools from the next request and
+        // nudge it to wrap up instead of hitting the hard MAX_TOOL_ROUNDS error.
+        if (!forceFinalAnswer && toolRounds >= toolRoundLimit) {
+          forceFinalAnswer = true;
+          messages.push({ role: 'user', content: DEEPSEEK_WRAP_UP_MESSAGE });
+        }
       }
     } catch (error) {
       aborted = controller.signal.aborted;
@@ -970,6 +988,7 @@ export class DesktopDirectProviderRuntime {
     externalToolDefinitions: readonly unknown[],
     signal: AbortSignal,
     emit: (event: PersistedEvent) => void,
+    includeTools = true,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -985,8 +1004,9 @@ export class DesktopDirectProviderRuntime {
             messages,
             stream: true,
             stream_options: { include_usage: true },
-            tools: chatToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]),
-            tool_choice: 'auto',
+            ...(includeTools
+              ? { tools: chatToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]), tool_choice: 'auto' }
+              : {}),
           }),
           signal,
         });
