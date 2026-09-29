@@ -6853,7 +6853,6 @@ code {
   align-items: center;
   gap: 3px;
   padding: 0 6px;
-  border: 1px solid var(--mint-line);
   border: 0;
   border-radius: 4px;
   color: var(--accent);
@@ -10705,6 +10704,20 @@ code {
 .thinking .status-word { flex: 0 0 auto; font-weight: 550; }
 .thinking .thinking-copy small { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .thinking .spinner { width: 11px; height: 11px; border-width: 1.5px; }
+
+.work-progress { margin: 10px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); overflow: hidden; }
+.work-progress-current { display: flex; align-items: baseline; gap: 7px; padding: 10px 12px; }
+.work-progress-current strong { color: var(--text); font-size: 12px; }
+.work-progress-current small { min-width: 0; overflow: hidden; color: var(--text-dim); text-overflow: ellipsis; white-space: nowrap; }
+.work-progress-current time { margin-left: auto; color: var(--text-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+.progress-dot { width: 8px; height: 8px; border: 2px solid var(--mint); border-top-color: transparent; border-radius: 50%; animation: kai-spin .8s linear infinite; }
+.progress-dot.paused { animation: none; border-color: var(--amber); }
+.work-progress-steps { border-top: 1px solid var(--border); }
+.work-progress-step { display: flex; gap: 8px; align-items: center; padding: 7px 12px; border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); color: var(--text-dim); font-size: 11px; }
+.work-progress-step:first-child { border-top: 0; }
+.work-progress-step span { width: 15px; color: var(--mint); font-weight: 750; text-align: center; }
+.work-progress-step.failed span { color: var(--red); }
+.work-progress-step p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-event > span { font-size: 9px; }
 .run-details, .run-details-toggle { flex: 0 0 auto; }
 

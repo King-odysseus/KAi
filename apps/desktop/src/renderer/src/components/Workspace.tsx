@@ -678,22 +678,14 @@ export function WorkspaceView({
 
   /** Lets a plain-English request behave like Codex's "make a goal and
    * implement" workflow without making the user learn a slash command. */
-  function goalAndImplementationFor(text: string): { goal: WorkbenchGoal; prompt: string } | null {
+  function goalAndImplementationFor(text: string): { goal: NormalizedGoalInput; prompt: string } | null {
     const match = /^(?:please\s+)?(?:make|create|start|set)\s+(?:a\s+)?goal\s+(?:and|then)\s+(?:implement|build|do)\s+(.+)$/i.exec(text.trim());
     const outcome = match?.[1]?.trim();
     if (!outcome) return null;
-    const now = new Date().toISOString();
+    // Only the goal input shape crosses the IPC boundary; the main process assigns the id, status
+    // and timestamps (and its strict goal schema rejects anything else).
     return {
-      goal: {
-        id: `goal_${crypto.randomUUID()}`,
-        outcome,
-        constraints: '',
-        verification: '',
-        status: 'running',
-        createdAt: now,
-        updatedAt: now,
-        startedAt: now,
-      },
+      goal: { outcome, constraints: '', verification: '' },
       prompt: `Implement this goal: ${outcome}`,
     };
   }
@@ -1169,11 +1161,7 @@ export function WorkspaceView({
             )}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
             {running && !streamingText && (
-              <article className="thinking" role="status" aria-live="polite">
-                <span className="spinner" />
-                <span className="thinking-copy"><span className="status-word">{paused ? 'Paused' : statusWord}</span><small>{activity.detail}</small></span>
-                <span className="status-timer">{elapsedSeconds}s</span>
-              </article>
+              <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} />
             )}
             {trailingInlineEvents.map(renderInlineEvent)}
             {runDetails.length > 0 && (
@@ -1512,6 +1500,33 @@ function CopyMessageButton({ text }: { text: string }): ReactNode {
         {copied ? <Check size={13} /> : <Copy size={13} />}
       </button>
     </div>
+  );
+}
+
+function WorkProgressTimeline({ events, activity, paused, elapsedSeconds }: {
+  events: readonly PersistedEvent[];
+  activity: ReturnType<typeof deriveAgentActivity>;
+  paused: boolean;
+  elapsedSeconds: number;
+}): ReactNode {
+  const milestones = events
+    .filter((event) => event.type === 'tool.call' || event.type === 'file.edit.applied' || event.type === 'file.change')
+    .slice(-5)
+    .map((event) => {
+      if (event.type === 'tool.call') {
+        const input = event.input && typeof event.input === 'object' && !Array.isArray(event.input) ? event.input as Record<string, unknown> : {};
+        const detail = [input.path, input.filePath, input.command, input.pattern].find((value): value is string => typeof value === 'string');
+        return { id: event.id, label: detail ? `${event.name}: ${detail}` : event.name, complete: event.status === 'completed', failed: event.status === 'failed' };
+      }
+      const path = event.type === 'file.edit.applied' ? event.filePath : event.path;
+      return { id: event.id, label: `${event.type === 'file.change' ? event.action : 'Edited'} ${path}`, complete: true, failed: false };
+    });
+  const current = paused ? 'Paused' : activity.label;
+  return (
+    <article className="work-progress" role="status" aria-live="polite">
+      <div className="work-progress-current"><span className={paused ? 'progress-dot paused' : 'progress-dot'} /> <strong>{current}</strong><small>{activity.detail}</small><time>{elapsedSeconds}s</time></div>
+      {milestones.length > 0 && <div className="work-progress-steps">{milestones.map((step) => <div key={step.id} className={`work-progress-step ${step.complete ? 'complete' : step.failed ? 'failed' : 'active'}`}><span>{step.complete ? '✓' : step.failed ? '!' : '•'}</span><p>{step.label}</p></div>)}</div>}
+    </article>
   );
 }
 
