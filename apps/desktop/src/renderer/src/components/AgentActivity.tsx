@@ -82,6 +82,8 @@ export function AgentActivityStrip({ events, running, paused, awaitingApproval }
   awaitingApproval: boolean;
 }): ReactNode {
   const activity = deriveAgentActivity(events, running, paused, awaitingApproval);
+  // Routine progress already shows on the thinking line in the chat; the strip only speaks up when the run needs attention.
+  if (!['waiting', 'blocked', 'paused'].includes(activity.kind)) return null;
   return (
     <section className={`agent-activity ${activity.kind}`} aria-live="polite" aria-label="Agent activity">
       <span className="agent-activity-icon">{activityIcon(activity.kind)}</span>

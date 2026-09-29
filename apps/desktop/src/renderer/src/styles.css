@@ -10674,18 +10674,40 @@ code {
 /* Agent chatter (thinking status, tool calls, notes) reads as quiet one-line text: no boxes or borders. */
 .thinking,
 .run-event {
+  flex: 0 0 auto;
+  min-height: 20px;
   gap: 8px;
   padding: 2px 2px;
   border: 0;
   border-radius: 0;
   background: transparent;
-  overflow: hidden;
+  line-height: 1.5;
   white-space: nowrap;
 }
 .run-event.error { background: transparent; }
 .run-event.error > strong { color: var(--red); }
-.thinking-copy { display: flex; align-items: baseline; gap: 8px; }
-.thinking .status-word { font-weight: 550; }
-.thinking .thinking-copy small { min-width: 0; }
+.thinking-copy { display: flex; min-width: 0; align-items: baseline; gap: 8px; overflow: hidden; }
+.thinking .status-word { flex: 0 0 auto; font-weight: 550; }
+.thinking .thinking-copy small { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .thinking .spinner { width: 11px; height: 11px; border-width: 1.5px; }
 .run-event > span { font-size: 9px; }
+.run-details, .run-details-toggle { flex: 0 0 auto; }
+
+/* The activity strip is a single quiet line too. */
+.agent-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 2px 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 11px;
+}
+.agent-activity.waiting, .agent-activity.blocked { background: transparent; }
+.agent-activity-icon { display: inline-flex; width: auto; height: auto; background: transparent !important; }
+.agent-activity-copy { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; }
+.agent-activity-copy > div { display: flex; flex: 0 0 auto; gap: 8px; }
+.agent-activity-copy > span { min-width: 0; flex: 1 1 auto; }
+.agent-activity-last { display: none; }
