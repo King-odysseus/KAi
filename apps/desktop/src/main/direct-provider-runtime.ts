@@ -1452,16 +1452,18 @@ async function executeToolCalls(
 
     emit(toolCallEvent(request, name, 'started', argumentsValue));
     let policy = externalTools?.policy(name, request.autonomy) ?? toolRuntime.policy(name, request.autonomy);
-    // Pushing or publishing leaves this machine, so it asks even in Full control.
+    // Ask-first protects publishing operations, but an explicit Full access choice in
+    // the composer authorizes the entire run, including Git commit/push.
     if (
       policy.decision === 'allow'
+      && request.autonomy !== 'full'
       && name === 'run_command'
       && isPublishingCommand(String((argumentsValue as { command?: unknown } | null)?.command ?? ''))
     ) {
       policy = {
         decision: 'ask',
         title: 'Publish work off this machine?',
-        detail: 'This command pushes commits or changes a shared service such as GitHub or a package registry. It asks every time, even in Full control.',
+        detail: 'This command pushes commits or changes a shared service such as GitHub or a package registry. Approve it to continue.',
         risk: 'high',
       };
     }
