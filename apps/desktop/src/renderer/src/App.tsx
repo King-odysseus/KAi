@@ -23,7 +23,7 @@ import type {
   SetupStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { THEME_MODES } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, THEME_MODES } from '@kai/contracts';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -76,11 +76,20 @@ interface ComposerSelection {
 
 const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
 
+function isSupportedCodexCliModel(model: string): boolean {
+  return model === '' || CLI_MODEL_SUGGESTIONS.codex.includes(model);
+}
+
 function loadComposerSelections(): Record<string, ComposerSelection> {
   try {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_SELECTIONS_KEY) ?? '{}');
     if (!parsed || typeof parsed !== 'object') return {};
-    return parsed as Record<string, ComposerSelection>;
+    return Object.fromEntries(Object.entries(parsed as Record<string, ComposerSelection>).map(([key, selection]) => [
+      key,
+      selection.agent === 'codex' && selection.execution === 'cli' && !isSupportedCodexCliModel(selection.model)
+        ? { ...selection, model: '' }
+        : selection,
+    ]));
   } catch {
     return {};
   }
@@ -196,6 +205,10 @@ export function App(): ReactNode {
   const openConversations = openConversationIds.map((id) => conversations.find((conversation) => conversation.id === id)).filter((conversation): conversation is ConversationRecord => Boolean(conversation));
   const activeDraftKey = activeConversationId ?? '__new__';
   const activeComposerSelection = composerSelections[activeDraftKey];
+  const savedActiveModel = activeComposerSelection?.model ?? modelChoices[`${executionMode}:${selectedAgent}`] ?? '';
+  const selectedWorkspaceModel = executionMode === 'cli' && selectedAgent === 'codex' && !isSupportedCodexCliModel(savedActiveModel)
+    ? ''
+    : savedActiveModel;
   const updateComposerDraft = useCallback((value: string) => {
     setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
   }, [activeDraftKey]);
@@ -833,7 +846,12 @@ export function App(): ReactNode {
           execution: runExecution,
           route: runRoute,
           autonomy: runAutonomy,
-          ...(modelChoices[`${runExecution}:${runAgentId}`] ? { model: modelChoices[`${runExecution}:${runAgentId}`] } : {}),
+          ...(() => {
+            const model = composerSelections[conversation.id]?.model ?? modelChoices[`${runExecution}:${runAgentId}`] ?? '';
+            return runExecution === 'cli' && runAgentId === 'codex' && !isSupportedCodexCliModel(model)
+              ? {}
+              : model ? { model } : {};
+          })(),
           ...(options.goal ? { goal: options.goal } : {}),
           ...(options.skills?.length ? { skills: options.skills } : {}),
           ...(options.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
@@ -1526,8 +1544,12 @@ export function App(): ReactNode {
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
             onOpenUsage={() => setView('usage')}
-            selectedModel={activeComposerSelection?.model ?? modelChoices[`${executionMode}:${selectedAgent}`] ?? ''}
+            selectedModel={selectedWorkspaceModel}
             onSelectModel={(model) => {
+              if (executionMode === 'cli' && selectedAgent === 'codex' && !isSupportedCodexCliModel(model)) {
+                setError('This Codex ChatGPT connection supports GPT-6 Astra or Default. GPT-6 Sol requires an API connection.');
+                return;
+              }
               setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }));
               updateComposerSelection({ model });
             }}
