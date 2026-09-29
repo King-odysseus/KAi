@@ -470,7 +470,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       schemaVersion: 1,
       id: `conv_${crypto.randomUUID()}`,
       projectId,
-      title: titleFromPrompt(firstPrompt),
+      title: firstPrompt.trim() ? titleFromPrompt(firstPrompt) : 'New conversation',
       createdAt: now,
       updatedAt: now,
       archived: false,
@@ -1080,6 +1080,12 @@ export async function runConversationAgent(
   let effectivePrompt = buildSkillPrompt(selectedSkills, request.prompt);
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
+  // A route/agent switch starts a fresh CLI session. Carry enough transcript
+  // forward that the new provider treats this as a continuation, not a new task.
+  if (executionMode === 'cli' && !canResume) {
+    const handoff = renderConversationHandoff(conversation.turns.slice(0, -1));
+    if (handoff) effectivePrompt = `${handoff}\n\n${effectivePrompt}`;
+  }
   if (executionMode === 'cli' && contextText) {
     effectivePrompt = `${contextText}\n\n[USER REQUEST]\n${effectivePrompt}`;
   }
@@ -1384,6 +1390,12 @@ async function buildConversationContext(
     ...projectContext,
     text: `${renderCompactionContext(compaction)}\n\n${projectContext.text}`,
   };
+}
+
+function renderConversationHandoff(turns: readonly ConversationRecord['turns'][number][]): string {
+  const lines = turns.slice(-12).map((turn) => `${turn.role === 'user' ? 'User' : 'KAi'}: ${turn.text}`).join('\n\n');
+  if (!lines) return '';
+  return `# Conversation handoff\nYou are continuing an existing conversation after the user changed agent, route, or provider. Preserve the prior intent, decisions, and context; do not ask them to repeat it.\n\n${lines.slice(-60_000)}`;
 }
 
 async function renderContextChips(

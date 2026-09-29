@@ -1,5 +1,5 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type {
   AgentCapability,
   AgentTeam,
@@ -70,6 +70,7 @@ export function App(): ReactNode {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [openConversationIds, setOpenConversationIds] = useState<string[]>([]);
   const [credentials, setCredentials] = useState<CredentialStatus>(emptyCredentials);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [agentCapabilities, setAgentCapabilities] = useState<AgentCapability[]>([]);
@@ -142,9 +143,11 @@ export function App(): ReactNode {
   });
   const [resizing, setResizing] = useState<'sidebar' | 'context' | 'preview' | null>(null);
   const [busy, setBusy] = useState('Starting KAI');
-  const [runningConversationId, setRunningConversationId] = useState<string | null>(null);
-  const [runPaused, setRunPaused] = useState(false);
-  const [streamingText, setStreamingText] = useState('');
+  const [runningConversationIds, setRunningConversationIds] = useState<string[]>([]);
+  const [pausedConversationIds, setPausedConversationIds] = useState<string[]>([]);
+  const [failedConversationIds, setFailedConversationIds] = useState<string[]>([]);
+  const [streamingTextByConversation, setStreamingTextByConversation] = useState<Record<string, string>>({});
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [proxyContinuationAgent, setProxyContinuationAgent] = useState<AgentId | null>(null);
@@ -156,16 +159,28 @@ export function App(): ReactNode {
   const started = useRef(false);
   const commandNonce = useRef(0);
   const resizeOrigin = useRef<{ kind: 'sidebar' | 'context' | 'preview'; x: number; width: number } | null>(null);
-  const runningConversationIdRef = useRef<string | null>(null);
+  const runningConversationIdsRef = useRef<string[]>([]);
   const shortcutsRef = useRef(bootstrap?.settings.shortcuts ?? {});
   const shortcutSheetOpenRef = useRef(false);
-  const pendingApproval = pendingApprovals[0] ?? null;
-  runningConversationIdRef.current = runningConversationId;
+  const pendingApproval = pendingApprovals.find((approval) => approval.conversationId === activeConversationId) ?? pendingApprovals[0] ?? null;
+  runningConversationIdsRef.current = runningConversationIds;
   shortcutsRef.current = bootstrap?.settings.shortcuts ?? {};
   shortcutSheetOpenRef.current = shortcutSheetOpen;
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+  const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
+  const activePaused = Boolean(activeConversationId && pausedConversationIds.includes(activeConversationId));
+  const streamingText = activeConversationId ? streamingTextByConversation[activeConversationId] ?? '' : '';
+  const openConversations = openConversationIds.map((id) => conversations.find((conversation) => conversation.id === id)).filter((conversation): conversation is ConversationRecord => Boolean(conversation));
+  const activeDraftKey = activeConversationId ?? '__new__';
+  const updateComposerDraft = useCallback((value: string) => {
+    setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
+  }, [activeDraftKey]);
+
+  useEffect(() => {
+    if (activeConversationId) setOpenConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
+  }, [activeConversationId]);
   const shortcuts = shortcutsWithDefaults(bootstrap?.settings.shortcuts ?? {});
   const commandItems: CommandPaletteItem[] = [
     { id: 'workbench', label: 'Open Agent Workbench', description: 'Return to the active conversation and composer', shortcut: shortcutLabel(shortcuts, 'workbench'), run: () => setView('workspace') },
@@ -420,7 +435,7 @@ export function App(): ReactNode {
 
   useEffect(() => window.kaiDesktop.onAgentEvent((payload) => {
     const { conversationId, event } = payload;
-    if (!shouldHandleAgentEvent(payload, runningConversationIdRef.current)) return;
+    if (!runningConversationIdsRef.current.includes(conversationId)) return;
     if (event.type === 'approval.request') {
       const requestId = event.requestId;
       if (!requestId) return;
@@ -436,9 +451,8 @@ export function App(): ReactNode {
           }]);
       return;
     }
-    if (conversationId !== runningConversationIdRef.current) return;
       if (event.type === 'text.delta' && event.channel === 'assistant') {
-        setStreamingText((current) => current + event.text);
+        setStreamingTextByConversation((current) => ({ ...current, [conversationId]: `${current[conversationId] ?? ''}${event.text}` }));
       }
   }), []);
 
@@ -670,6 +684,26 @@ export function App(): ReactNode {
     await runConversation(conversation, prompt, options);
   }
 
+  async function createEmptyConversation(): Promise<void> {
+    if (!bootstrap) return;
+    const conversation = await perform(
+      () => window.kaiDesktop.createConversation(activeProject?.id ?? null, '').then(unwrap),
+      'Opening new conversation',
+    );
+    if (!conversation) return;
+    setConversations((current) => [conversation, ...current]);
+    setOpenConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
+    setActiveConversationId(conversation.id);
+    setSelectedAgent(bootstrap.settings.defaultAgent);
+    setExecutionMode('cli');
+    setSelectedRoute(bootstrap.settings.defaultRoute);
+    setSelectedAutonomy(bootstrap.settings.defaultAutonomy);
+    setError(null);
+    setAgentNotice(null);
+    setProxyContinuationAgent(null);
+    setView('workspace');
+  }
+
   async function sendPrompt(prompt: string, options: WorkspaceSendOptions = {}): Promise<void> {
     if (!bootstrap || !activeConversation) {
       await createConversation(prompt, options);
@@ -726,13 +760,13 @@ export function App(): ReactNode {
 
     setAgentNotice(null);
     setProxyContinuationAgent(null);
-    setStreamingText('');
+    setStreamingTextByConversation((current) => ({ ...current, [conversation.id]: '' }));
     setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
-    setRunningConversationId(conversation.id);
-    setRunPaused(false);
+    setRunningConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
+    setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
+    setFailedConversationIds((current) => current.filter((id) => id !== conversation.id));
     try {
-      const result = await perform(
-        () => window.kaiDesktop.runAgent({
+      const result = unwrap(await window.kaiDesktop.runAgent({
           conversationId: conversation.id,
           prompt,
           agent: runAgentId,
@@ -743,12 +777,7 @@ export function App(): ReactNode {
           ...(options.goal ? { goal: options.goal } : {}),
           ...(options.skills?.length ? { skills: options.skills } : {}),
           ...(options.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
-        }).then(unwrap),
-        apiRun
-          ? `${directApiCapability?.displayName} is working`
-          : `${capability?.displayName} is working`,
-      );
-      if (!result) return;
+        }));
       setConversations((current) => [
         result.conversation,
         ...current.filter((item) => item.id !== result.conversation.id),
@@ -760,25 +789,29 @@ export function App(): ReactNode {
           setProxyContinuationAgent(runAgentId);
           setAgentNotice(`${capability.displayName}'s usage limit on your subscription was reached. Continue this run through your paid Universal Proxy route instead?`);
         } else {
-          setError(result.error);
+          setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
+          if (conversation.id === activeConversationId) setError(result.error);
         }
       }
+    } catch (caught) {
+      setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
+      if (conversation.id === activeConversationId) setError(messageOf(caught));
     } finally {
-      setRunningConversationId(null);
-      setRunPaused(false);
-      setStreamingText('');
+      setRunningConversationIds((current) => current.filter((id) => id !== conversation.id));
+      setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
+      setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversation.id]; return next; });
       setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     }
   }
 
   async function cancelConversation(): Promise<void> {
-    if (!runningConversationId) return;
+    if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
     const cancelled = await perform(
-      () => window.kaiDesktop.cancelAgent(runningConversationId).then(unwrap),
+      () => window.kaiDesktop.cancelAgent(activeConversationId).then(unwrap),
       'Stopping agent',
     );
     if (cancelled) {
-      setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== runningConversationId));
+      setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== activeConversationId));
       setAgentNotice('Stopping the current agent run.');
     }
   }
@@ -1151,19 +1184,19 @@ export function App(): ReactNode {
   }
 
   async function pauseConversation(): Promise<void> {
-    if (!runningConversationId) return;
-    const paused = await perform(() => window.kaiDesktop.pauseAgent(runningConversationId).then(unwrap), 'Pausing agent');
+    if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
+    const paused = await perform(() => window.kaiDesktop.pauseAgent(activeConversationId).then(unwrap), 'Pausing agent');
     if (paused) {
-      setRunPaused(true);
+      setPausedConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
       setAgentNotice('The run is paused. It will continue from the same point.');
     }
   }
 
   async function resumeConversation(): Promise<void> {
-    if (!runningConversationId) return;
-    const resumed = await perform(() => window.kaiDesktop.resumeAgent(runningConversationId).then(unwrap), 'Resuming agent');
+    if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
+    const resumed = await perform(() => window.kaiDesktop.resumeAgent(activeConversationId).then(unwrap), 'Resuming agent');
     if (resumed) {
-      setRunPaused(false);
+      setPausedConversationIds((current) => current.filter((id) => id !== activeConversationId));
       setAgentNotice(null);
     }
   }
@@ -1244,7 +1277,7 @@ export function App(): ReactNode {
           <ServiceView
             service={serviceFor(bootstrap, 'cognitive1')}
             kind="brain"
-            busy={Boolean(busy)}
+            busy={Boolean(busy) && !activeRunning}
             onConfigure={() => setView('settings')}
             onStart={() => void controlService('cognitive1', 'start')}
             onStop={() => void controlService('cognitive1', 'stop')}
@@ -1355,6 +1388,8 @@ export function App(): ReactNode {
             settings={bootstrap.settings}
             projectPreferences={projectPreferences}
             busy={Boolean(busy)}
+            composerDraft={composerDrafts[activeDraftKey] ?? ''}
+            onComposerDraftChange={updateComposerDraft}
             commandRequest={workspaceCommand}
             agentCapabilities={agentCapabilities}
             directApiCapability={directApiCapability}
@@ -1365,8 +1400,8 @@ export function App(): ReactNode {
             proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
             proxyContinuationAgent={proxyContinuationAgent}
             streamingText={streamingText}
-            running={runningConversationId === activeConversation?.id}
-            paused={runPaused}
+            running={activeRunning}
+            paused={activePaused}
             awaitingApproval={isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
             notice={agentNotice}
             onSelectExecution={(mode) => {
@@ -1475,6 +1510,17 @@ export function App(): ReactNode {
         onTogglePreview={() => setPreviewOpen((open) => !open)}
         onToggleTerminal={() => setTerminalOpen((open) => !open)}
       />
+      {view === 'workspace' && (
+        <nav className="conversation-tab-strip" role="tablist" aria-label="Open conversations">
+          {openConversations.map((conversation) => {
+            const running = runningConversationIds.includes(conversation.id);
+            const approval = pendingApprovals.some((item) => item.conversationId === conversation.id);
+            const failed = failedConversationIds.includes(conversation.id);
+            return <button key={conversation.id} type="button" role="tab" aria-selected={conversation.id === activeConversationId} className={`conversation-tab ${conversation.id === activeConversationId ? 'active' : ''}`} onClick={() => void openConversation(conversation.id)}><span className={`conversation-tab-state ${approval ? 'approval' : failed ? 'failed' : running ? 'running' : 'idle'}`} /><span className="truncate">{conversation.title}</span><span className="conversation-tab-close" onClick={(event) => { event.stopPropagation(); setOpenConversationIds((current) => current.filter((id) => id !== conversation.id)); if (conversation.id === activeConversationId) setActiveConversationId(openConversations.find((item) => item.id !== conversation.id)?.id ?? null); }}>×</span></button>;
+          })}
+          <button type="button" className="conversation-tab-new" title="New conversation" aria-label="New conversation" onClick={() => void createEmptyConversation()}>+</button>
+        </nav>
+      )}
       <UrgentBanner />
       <UpdateBanner onOpen={() => setView('settings')} />
       {setupStatus && !setupStatus.complete && !setupOpen && (
@@ -1524,15 +1570,7 @@ export function App(): ReactNode {
                 onOpen={(id) => void openConversation(id)}
                 onDelete={(id) => void deleteConversation(id)}
                 onCollapse={() => setThreadsOpen(false)}
-                onNew={() => {
-                  setActiveConversationId(null);
-                  setExecutionMode('cli');
-                  setStreamingText('');
-                  setError(null);
-                  setAgentNotice(null);
-                  setProxyContinuationAgent(null);
-                  setView('workspace');
-                }}
+                onNew={() => void createEmptyConversation()}
               />
             </div>
             <div

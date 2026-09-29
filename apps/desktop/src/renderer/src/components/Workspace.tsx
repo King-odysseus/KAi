@@ -106,6 +106,8 @@ interface WorkspaceViewProps {
   settings: AppSettings;
   projectPreferences: ProjectPreferences | null;
   busy: boolean;
+  composerDraft: string;
+  onComposerDraftChange: (draft: string) => void;
   commandRequest: WorkspaceCommandRequest | null;
   running: boolean;
   paused: boolean;
@@ -250,6 +252,8 @@ export function WorkspaceView({
   settings,
   projectPreferences,
   busy,
+  composerDraft,
+  onComposerDraftChange,
   commandRequest,
   running,
   paused,
@@ -372,6 +376,16 @@ export function WorkspaceView({
         ...(allContextChips.length ? { contextChips: allContextChips } : {}),
       }
     : undefined;
+
+  // A tab owns its draft even while another tab is active. The composer remains local
+  // for responsive typing, while the shell persists the value by conversation id.
+  useEffect(() => {
+    setPrompt(composerDraft);
+  }, [activeConversation?.id, composerDraft]);
+
+  useEffect(() => {
+    onComposerDraftChange(prompt);
+  }, [onComposerDraftChange, prompt]);
 
   useEffect(() => {
     setSelectedFiles([]);
