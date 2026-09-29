@@ -45,7 +45,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
-import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   AgentCapability,
@@ -951,6 +951,16 @@ export function WorkspaceView({
     .reverse();
   const recentEvents = (activeConversation?.events ?? []).slice(-40);
   const runDetails = recentEvents.filter(isRunDetailEvent);
+  // Errors and change summaries sit in the conversation where they happened, before the next message,
+  // so a new message pushes them up instead of leaving them pinned under the chat.
+  const inlineEventsByTurn = new Map<string, PersistedEvent[]>();
+  const trailingInlineEvents: PersistedEvent[] = [];
+  for (const event of (activeConversation?.events ?? []).filter((item) => !isRunDetailEvent(item)).slice(-100)) {
+    const next = activeConversation?.turns.find((turn) => turn.role === 'user' && turn.createdAt > event.timestamp);
+    if (!next) trailingInlineEvents.push(event);
+    else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
+  }
+  const renderInlineEvent = (event: PersistedEvent): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
@@ -1094,7 +1104,10 @@ export function WorkspaceView({
         {activeConversation?.turns.length || streamingText || pendingUser ? (
           <>
             {activeConversation?.turns.map((turn) => (
-              <MessageTurn key={turn.id} turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} />
+              <Fragment key={turn.id}>
+                {(inlineEventsByTurn.get(turn.id) ?? []).map(renderInlineEvent)}
+                <MessageTurn turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} />
+              </Fragment>
             ))}
             {pendingUser && (activeConversation?.turns.length ?? 0) <= pendingUser.baseCount && (
               <article className="message user"><div className="message-role">You</div><MessageContent text={pendingUser.text} /></article>
@@ -1107,7 +1120,7 @@ export function WorkspaceView({
                 <span className="status-timer">{elapsedSeconds}s</span>
               </article>
             )}
-            {recentEvents.filter((event) => !isRunDetailEvent(event)).map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+            {trailingInlineEvents.map(renderInlineEvent)}
             {runDetails.length > 0 && (
               <section className="run-details" aria-label="Activity timeline">
                 <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
