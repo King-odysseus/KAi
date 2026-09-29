@@ -367,7 +367,7 @@ export function App(): ReactNode {
       const startChoice = startupAgentChoice(
         nextConversations.find((conversation) => conversation.id === startConversationId),
         rememberedAgentChoice(),
-        { agent: nextBootstrap.settings.defaultAgent, route: 'direct' },
+        { agent: nextBootstrap.settings.defaultAgent, route: nextBootstrap.settings.defaultRoute, execution: 'cli' },
       );
       setBootstrap(nextBootstrap);
       setConversations(nextConversations);
@@ -379,7 +379,7 @@ export function App(): ReactNode {
       setSetupStatus(nextSetupStatus);
       setSetupOpen(!nextSetupStatus.complete);
       setSelectedAgent(startChoice.agent);
-      setExecutionMode('cli');
+      setExecutionMode(startChoice.execution);
       setSelectedRoute(startChoice.route);
       setSelectedAutonomy(nextBootstrap.settings.defaultAutonomy);
       setAgentNotice(null);
@@ -463,8 +463,8 @@ export function App(): ReactNode {
   const applicationLoaded = bootstrap !== null;
   useEffect(() => {
     // Wait for startup to restore the choice, so the placeholder state never overwrites it.
-    if (!applicationLoaded || executionMode !== 'cli') return;
-    rememberAgentChoice({ agent: selectedAgent, route: selectedRoute });
+    if (!applicationLoaded) return;
+    rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: executionMode });
   }, [applicationLoaded, executionMode, selectedAgent, selectedRoute]);
 
   useEffect(() => {

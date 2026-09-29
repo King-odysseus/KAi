@@ -381,7 +381,11 @@ export function WorkspaceView({
   // for responsive typing, while the shell persists the value by conversation id.
   useEffect(() => {
     setPrompt(composerDraft);
-  }, [activeConversation?.id, composerDraft]);
+  // Deliberately only switch the draft when the tab changes. Including composerDraft
+  // here caused the old tab's effect to write back during a switch, producing a rapid
+  // visual blink and occasionally replacing the new draft.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConversation?.id]);
 
   useEffect(() => {
     onComposerDraftChange(prompt);

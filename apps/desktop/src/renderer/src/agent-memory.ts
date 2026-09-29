@@ -1,20 +1,23 @@
-import { agentIdSchema, routeModeSchema, type AgentId, type ConversationRecord, type RouteMode } from '@kai/contracts';
+import { agentIdSchema, executionModeSchema, routeModeSchema, type AgentId, type ConversationRecord, type ExecutionMode, type RouteMode } from '@kai/contracts';
 
 const AGENT_KEY = 'kai.lastAgent';
 const ROUTE_KEY = 'kai.lastRoute';
+const EXECUTION_KEY = 'kai.lastExecution';
 
 export interface AgentChoice {
   agent: AgentId;
   route: RouteMode;
+  execution: ExecutionMode;
 }
 
-/** The CLI agent and route picked last, or null when nothing valid was saved. */
+/** The composer agent, execution mode, and route picked last, or null when nothing valid was saved. */
 export function rememberedAgentChoice(storage: Pick<Storage, 'getItem'> | null = safeStorage()): AgentChoice | null {
   try {
     const agent = agentIdSchema.safeParse(storage?.getItem(AGENT_KEY));
     if (!agent.success) return null;
     const route = routeModeSchema.safeParse(storage?.getItem(ROUTE_KEY));
-    return { agent: agent.data, route: route.success ? route.data : 'direct' };
+    const execution = executionModeSchema.safeParse(storage?.getItem(EXECUTION_KEY));
+    return { agent: agent.data, route: route.success ? route.data : 'direct', execution: execution.success ? execution.data : 'cli' };
   } catch {
     return null;
   }
@@ -24,24 +27,26 @@ export function rememberAgentChoice(choice: AgentChoice, storage: Pick<Storage, 
   try {
     storage?.setItem(AGENT_KEY, choice.agent);
     storage?.setItem(ROUTE_KEY, choice.route);
+    storage?.setItem(EXECUTION_KEY, choice.execution);
   } catch {
     // Remembering the last agent is a convenience only.
   }
 }
 
 /**
- * The agent to show when KAI opens: the reopened conversation's own agent first, then the agent picked
- * last time, then the Settings default.
+ * The agent to show when KAI opens: the user's last composer choice first, then the reopened
+ * conversation's historical choice, then the Settings default.
  */
 export function startupAgentChoice(
-  conversation: Pick<ConversationRecord, 'activeAgent' | 'route'> | null | undefined,
+  conversation: Pick<ConversationRecord, 'activeAgent' | 'route' | 'execution'> | null | undefined,
   remembered: AgentChoice | null,
   defaults: AgentChoice,
 ): AgentChoice {
-  if (conversation?.activeAgent) {
-    return { agent: conversation.activeAgent, route: conversation.route ?? remembered?.route ?? defaults.route };
-  }
-  return remembered ?? defaults;
+  // The choice in the composer is intentional. Restore it before falling back to a
+  // reopened conversation, whose historical route may be different.
+  if (remembered) return remembered;
+  if (conversation?.activeAgent) return { agent: conversation.activeAgent, route: conversation.route ?? defaults.route, execution: conversation.execution ?? defaults.execution };
+  return defaults;
 }
 
 function safeStorage(): Storage | null {
