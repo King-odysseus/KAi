@@ -334,6 +334,7 @@ export function WorkspaceView({
   const [refiningPrompt, setRefiningPrompt] = useState(false);
   const [promptGuideReadiness, setPromptGuideReadiness] = useState<PromptGuideReadiness | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const steerPendingRef = useRef(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   // Follow new output only while the reader is at the bottom; scrolling up releases it until they send again.
@@ -532,6 +533,10 @@ export function WorkspaceView({
     const next = queuedPrompts[0];
     if (running || busy || !next || !activeProject || !ready) return;
     setQueuedPrompts((current) => current.slice(1));
+    if (steerPendingRef.current) {
+      steerPendingRef.current = false;
+      setWorkbenchNotice('Steered instruction started.');
+    }
     if (activeConversation) onSend(next.text, next.options);
     else onCreateConversation(next.text, next.options);
   }, [activeConversation, activeProject, busy, onCreateConversation, onSend, queuedPrompts, ready, running]);
@@ -633,7 +638,11 @@ export function WorkspaceView({
     setPrompt('');
     clearComposerContext();
     setSelectedSkills([]);
-    if (running) onCancel();
+    if (running) {
+      steerPendingRef.current = true;
+      setWorkbenchNotice('Steering: stopping the current run, then starting this instruction.');
+      onCancel();
+    }
   };
 
   const steerQueuedPrompt = (index: number): void => {
@@ -642,7 +651,11 @@ export function WorkspaceView({
     // Promote the selected instruction, then stop the active run. The normal
     // queue effect starts it as soon as cancellation has settled.
     setQueuedPrompts((current) => [item, ...current.filter((_, itemIndex) => itemIndex !== index)]);
-    if (running) onCancel();
+    if (running) {
+      steerPendingRef.current = true;
+      setWorkbenchNotice('Steering: stopping the current run, then starting this instruction.');
+      onCancel();
+    }
   };
 
   async function refinePromptDraft(): Promise<void> {
@@ -1306,7 +1319,7 @@ export function WorkspaceView({
             {queuedPrompts.map((item, index) => (
               <div className="queue-row" key={`${item.text}:${index}`}>
                 <span className="queue-label" title="Queued instruction"><GitFork size={12} /></span><span className="truncate">{item.text}</span>
-                <button type="button" className="queue-steer-button" aria-label="Steer with queued prompt" title="Stop the current run and use this instruction now" onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Steer</span></button>
+                <button type="button" className="queue-steer-button" aria-label="Interrupt and steer with queued prompt" title="Stop the current run and start this instruction next" onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Interrupt & steer</span></button>
                 <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" onClick={() => { setPrompt(item.text); setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index)); promptRef.current?.focus(); }}><Pencil size={12} /></button>
                 <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" onClick={() => setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={12} /></button>
               </div>
@@ -1470,7 +1483,7 @@ export function WorkspaceView({
           </div>
         )}
         <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
-        <div className="composer-footer"><span>Enter to send · Ctrl+Enter to steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
+        <div className="composer-footer"><span>Enter to queue · Ctrl+Enter to interrupt &amp; steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
   );
