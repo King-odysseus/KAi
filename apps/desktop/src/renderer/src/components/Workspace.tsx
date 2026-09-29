@@ -575,6 +575,17 @@ export function WorkspaceView({
   const send = (): void => {
     const text = prompt.trim();
     if (!text || !activeProject || busy || refiningPrompt || !ready) return;
+    const goalAndImplementation = goalAndImplementationFor(text);
+    if (goalAndImplementation) {
+      setPrompt('');
+      queueOrSend(goalAndImplementation.prompt, {
+        ...(optionsForPrompt(text) ?? {}),
+        goal: goalAndImplementation.goal,
+      });
+      clearComposerContext();
+      setSelectedSkills([]);
+      return;
+    }
     const command = commandFor(text);
     if (command) {
       setPrompt('');
@@ -604,6 +615,15 @@ export function WorkspaceView({
     setPrompt('');
     clearComposerContext();
     setSelectedSkills([]);
+    if (running) onCancel();
+  };
+
+  const steerQueuedPrompt = (index: number): void => {
+    const item = queuedPrompts[index];
+    if (!item || busy || !activeProject || !ready) return;
+    // Promote the selected instruction, then stop the active run. The normal
+    // queue effect starts it as soon as cancellation has settled.
+    setQueuedPrompts((current) => [item, ...current.filter((_, itemIndex) => itemIndex !== index)]);
     if (running) onCancel();
   };
 
@@ -654,6 +674,28 @@ export function WorkspaceView({
   function commandFor(text: string): string | undefined {
     const match = /^\/(goal|skills|rules|agent|route|handoff|workflows|review|implement|debug|explain|test)\b/i.exec(text);
     return match?.[1]?.toLowerCase();
+  }
+
+  /** Lets a plain-English request behave like Codex's "make a goal and
+   * implement" workflow without making the user learn a slash command. */
+  function goalAndImplementationFor(text: string): { goal: WorkbenchGoal; prompt: string } | null {
+    const match = /^(?:please\s+)?(?:make|create|start|set)\s+(?:a\s+)?goal\s+(?:and|then)\s+(?:implement|build|do)\s+(.+)$/i.exec(text.trim());
+    const outcome = match?.[1]?.trim();
+    if (!outcome) return null;
+    const now = new Date().toISOString();
+    return {
+      goal: {
+        id: `goal_${crypto.randomUUID()}`,
+        outcome,
+        constraints: '',
+        verification: '',
+        status: 'running',
+        createdAt: now,
+        updatedAt: now,
+        startedAt: now,
+      },
+      prompt: `Implement this goal: ${outcome}`,
+    };
   }
 
   function runCommand(command: string, text: string): void {
@@ -1257,9 +1299,10 @@ export function WorkspaceView({
           <div className="queue-list">
             {queuedPrompts.map((item, index) => (
               <div className="queue-row" key={`${item.text}:${index}`}>
-                <span className="queue-label">Queued</span><span className="truncate">{item.text}</span>
-                <button type="button" aria-label="Edit queued prompt" onClick={() => { setPrompt(item.text); setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index)); promptRef.current?.focus(); }}><Pencil size={12} /></button>
-                <button type="button" aria-label="Remove queued prompt" onClick={() => setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={12} /></button>
+                <span className="queue-label" title="Queued instruction"><GitFork size={12} /></span><span className="truncate">{item.text}</span>
+                <button type="button" className="queue-steer-button" aria-label="Steer with queued prompt" title="Stop the current run and use this instruction now" onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Steer</span></button>
+                <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" onClick={() => { setPrompt(item.text); setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index)); promptRef.current?.focus(); }}><Pencil size={12} /></button>
+                <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" onClick={() => setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={12} /></button>
               </div>
             ))}
           </div>
