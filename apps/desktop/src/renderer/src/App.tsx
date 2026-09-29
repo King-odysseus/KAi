@@ -66,6 +66,26 @@ interface PendingApproval {
   tool?: string;
 }
 
+interface ComposerSelection {
+  agent: AgentId;
+  execution: ExecutionMode;
+  route: RouteMode;
+  autonomy: AutonomyMode;
+  model: string;
+}
+
+const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
+
+function loadComposerSelections(): Record<string, ComposerSelection> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_SELECTIONS_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as Record<string, ComposerSelection>;
+  } catch {
+    return {};
+  }
+}
+
 export function App(): ReactNode {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
@@ -148,6 +168,7 @@ export function App(): ReactNode {
   const [failedConversationIds, setFailedConversationIds] = useState<string[]>([]);
   const [streamingTextByConversation, setStreamingTextByConversation] = useState<Record<string, string>>({});
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
+  const [composerSelections, setComposerSelections] = useState<Record<string, ComposerSelection>>(loadComposerSelections);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [proxyContinuationAgent, setProxyContinuationAgent] = useState<AgentId | null>(null);
@@ -174,13 +195,44 @@ export function App(): ReactNode {
   const streamingText = activeConversationId ? streamingTextByConversation[activeConversationId] ?? '' : '';
   const openConversations = openConversationIds.map((id) => conversations.find((conversation) => conversation.id === id)).filter((conversation): conversation is ConversationRecord => Boolean(conversation));
   const activeDraftKey = activeConversationId ?? '__new__';
+  const activeComposerSelection = composerSelections[activeDraftKey];
   const updateComposerDraft = useCallback((value: string) => {
     setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
   }, [activeDraftKey]);
+  const updateComposerSelection = useCallback((patch: Partial<ComposerSelection>) => {
+    setComposerSelections((current) => {
+      const fallback: ComposerSelection = {
+        agent: selectedAgent,
+        execution: executionMode,
+        route: selectedRoute,
+        autonomy: selectedAutonomy,
+        model: modelChoices[`${executionMode}:${selectedAgent}`] ?? '',
+      };
+      return { ...current, [activeDraftKey]: { ...fallback, ...(current[activeDraftKey] ?? {}), ...patch } };
+    });
+  }, [activeDraftKey, executionMode, modelChoices, selectedAgent, selectedAutonomy, selectedRoute]);
 
   useEffect(() => {
     if (activeConversationId) setOpenConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
   }, [activeConversationId]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COMPOSER_SELECTIONS_KEY, JSON.stringify(composerSelections));
+    } catch {
+      // Per-tab composer preferences are a convenience only.
+    }
+  }, [composerSelections]);
+
+  useEffect(() => {
+    const selection = composerSelections[activeDraftKey];
+    if (!selection) return;
+    setSelectedAgent(selection.agent);
+    setExecutionMode(selection.execution);
+    setSelectedRoute(selection.route);
+    setSelectedAutonomy(selection.autonomy);
+    if (selection.model) setModelChoices((current) => ({ ...current, [`${selection.execution}:${selection.agent}`]: selection.model }));
+  }, [activeDraftKey]);
   const shortcuts = shortcutsWithDefaults(bootstrap?.settings.shortcuts ?? {});
   const commandItems: CommandPaletteItem[] = [
     { id: 'workbench', label: 'Open Agent Workbench', description: 'Return to the active conversation and composer', shortcut: shortcutLabel(shortcuts, 'workbench'), run: () => setView('workspace') },
@@ -1406,16 +1458,20 @@ export function App(): ReactNode {
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
+              updateComposerSelection({ execution: mode });
               setAgentNotice(null);
             }}
             onSelectAgent={(agent) => {
               setSelectedAgent(agent);
               const capability = agentCapabilities.find((item) => item.id === agent);
-              if (!capability?.supportsRoutes.includes('proxy')) setSelectedRoute('direct');
+              const route = capability?.supportsRoutes.includes('proxy') ? selectedRoute : 'direct';
+              if (route !== selectedRoute) setSelectedRoute(route);
+              updateComposerSelection({ agent, route });
               setAgentNotice(null);
             }}
             onSelectRoute={(route) => {
               setSelectedRoute(route);
+              updateComposerSelection({ route });
               if (route === 'proxy') setProxyContinuationAgent(null);
               setAgentNotice(null);
             }}
@@ -1427,11 +1483,13 @@ export function App(): ReactNode {
               setExecutionMode('cli');
               setSelectedAgent(agent);
               setSelectedRoute('proxy');
+              updateComposerSelection({ execution: 'cli', agent, route: 'proxy' });
               setProxyContinuationAgent(null);
               setAgentNotice(`${agentCapabilities.find((item) => item.id === agent)?.displayName ?? agent} now uses the proxy for the next message in this conversation.`);
             }}
             onSelectAutonomy={(autonomy) => {
               setSelectedAutonomy(autonomy);
+              updateComposerSelection({ autonomy });
               setAgentNotice(null);
             }}
             onUpdatePreferences={saveProjectPreferences}
@@ -1456,8 +1514,11 @@ export function App(): ReactNode {
             onRefreshAgents={() => void refreshAgentCapabilities()}
             onOpenSettings={() => setView('settings')}
             onOpenUsage={() => setView('usage')}
-            selectedModel={modelChoices[`${executionMode}:${selectedAgent}`] ?? ''}
-            onSelectModel={(model) => setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }))}
+            selectedModel={activeComposerSelection?.model ?? modelChoices[`${executionMode}:${selectedAgent}`] ?? ''}
+            onSelectModel={(model) => {
+              setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }));
+              updateComposerSelection({ model });
+            }}
             interruptedRuns={interruptedRuns}
             onOpenRecovery={() => openOperations('recovery')}
             onOpenVerification={() => openOperations('verification')}
