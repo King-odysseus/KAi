@@ -6,9 +6,9 @@ import { mergeSettingsUpdate } from '../apps/desktop/src/main/service-controller
 const base = { prompt: 'Fix the bug', autonomy: 'ask' as const };
 
 describe('CLI model selection', () => {
-  it('offers current model families without duplicate menu entries', () => {
-    expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(expect.arrayContaining(['claude-opus-5.5', 'claude-sonnet-5', 'opus']));
-    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(expect.arrayContaining(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']));
+  it('offers verified model choices without duplicate menu entries', () => {
+    expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(['claude-opus-5']);
+    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(['gpt-6-astra']);
     expect(CLI_MODEL_SUGGESTIONS.qwen).toEqual(expect.arrayContaining(['qwen3.8-max', 'qwen3.8-flash', 'qwen3-coder-plus']));
     expect(CLI_MODEL_SUGGESTIONS.gemini).toEqual(expect.arrayContaining(['gemini-3.8-pro', 'gemini-3.8-flash', 'flash']));
 

@@ -47,28 +47,14 @@ export const agentRunRequestSchema = z
   })
   .strict();
 
-// Suggestions only; any model name the CLI accepts can be typed.
+// These are the models verified against the signed-in desktop account.  A model
+// can still be typed when a different account or provider supports it.
 export const CLI_MODEL_SUGGESTIONS: Record<AgentId, readonly string[]> = {
   claude: [
-    'claude-opus-5.5',
     'claude-opus-5',
-    'claude-sonnet-5',
-    'claude-fable-5.1',
-    'claude-haiku-4-5-20251001',
-    'opus',
-    'sonnet',
-    'haiku',
   ],
   codex: [
-    'gpt-6-astra-pro',
     'gpt-6-astra',
-    'gpt-6-sol',
-    'gpt-6-luna',
-    'gpt-5.6-sol',
-    'gpt-5.6-terra',
-    'gpt-5.6-luna',
-    'gpt-5.5',
-    'gpt-5.4',
   ],
   qwen: [
     'qwen3.8-max',

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import type {
   AgentCapability,
   AgentId,
@@ -221,14 +221,36 @@ export function isSignInError(message: string): boolean {
   return /not (?:logged|signed) in|please (?:run )?\/?log ?in|run [`'"]?\w+ (?:auth )?login|login required|no authentication method configured|authentication required|invalid api key|oauth token (?:has )?expired|credentials? (?:are |is )?(?:missing|expired)/i.test(message);
 }
 
+/**
+ * True when a CLI rejected the requested model as unknown or inaccessible. This is worded the same whether the
+ * model name is wrong or the CLI predates that model's release, so KAI treats it as a CLI-update hint rather than
+ * assuming its own model catalog is at fault.
+ */
+export function isUnknownModelError(message: string): boolean {
+  return /model[^.\n]{0,60}(?:does not exist|doesn't exist|not found|is unknown|is invalid|is not (?:a )?(?:valid|supported|recognized))|issue with the selected model|may not exist or you (?:may not|don't|do not) have access/i.test(message);
+}
+
 interface ActiveAgentRun {
   controller: AbortController;
   child: ChildProcess | null;
   paused: boolean;
 }
 
+// How long a capability check (CLI --version plus an auth-status probe, two spawned processes) stays valid for
+// the pre-flight check in run(). Explicit callers (Settings' Refresh button, the capabilities list) go straight
+// to capability()/capabilities() and always get a live result; only the per-message pre-flight check is cached,
+// since paying for two process spawns before every single prompt is what made runs feel slow.
+// A capability changes only after sign-in, install, or an explicit refresh (both invalidate this cache).
+// Keep normal conversations off the shell process path long enough for consecutive requests to feel immediate.
+const CAPABILITY_CACHE_MS = 120_000;
+
 export class DesktopAgentRuntime {
   private readonly activeRuns = new Map<string, ActiveAgentRun>();
+  private readonly capabilityCache = new Map<AgentId, { value: AgentCapability; expires: number }>();
+  private readonly capabilityRequests = new Map<AgentId, Promise<AgentCapability>>();
+  // A CLI has already authoritatively told us that this account cannot use a model. Do not make the user wait
+  // through the same failed process launch again; install/sign-in clears it because access may have changed.
+  private readonly rejectedModels = new Map<string, string>();
 
   constructor(
     private readonly commandOverrides: Partial<Record<AgentId, string>> = {},
@@ -238,6 +260,23 @@ export class DesktopAgentRuntime {
 
   async capabilities(): Promise<AgentCapability[]> {
     return Promise.all(AGENT_ORDER.map((id) => this.capability(id)));
+  }
+
+  /** Same result as capability(), but reused across runs within CAPABILITY_CACHE_MS instead of re-spawning the CLI. */
+  private async cachedCapability(id: AgentId): Promise<AgentCapability> {
+    const cached = this.capabilityCache.get(id);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    // A quick retry must share the pre-flight probe rather than launch duplicate CLIs.
+    const inFlight = this.capabilityRequests.get(id);
+    if (inFlight) return inFlight;
+    const request = this.capability(id)
+      .then((value) => {
+        this.capabilityCache.set(id, { value, expires: Date.now() + CAPABILITY_CACHE_MS });
+        return value;
+      })
+      .finally(() => this.capabilityRequests.delete(id));
+    this.capabilityRequests.set(id, request);
+    return request;
   }
 
   async capability(id: AgentId): Promise<AgentCapability> {
@@ -293,6 +332,10 @@ export class DesktopAgentRuntime {
     }
     try {
       await (this.options.installLauncher ?? launchInstallTerminal)(command, { cwd: homedir(), env: process.env });
+      // The install runs in a separate window and finishes later, but drop the cached "not_installed" verdict now
+      // so the next run() re-checks live instead of waiting out CAPABILITY_CACHE_MS after the user comes back.
+      this.capabilityCache.delete(id);
+      this.clearRejectedModels(id);
       return {
         agent: id,
         started: true,
@@ -322,6 +365,8 @@ export class DesktopAgentRuntime {
         cwd: homedir(),
         env: process.env,
       });
+      this.capabilityCache.delete(id);
+      this.clearRejectedModels(id);
       return {
         agent: id,
         started: true,
@@ -339,6 +384,12 @@ export class DesktopAgentRuntime {
     }
   }
 
+  private clearRejectedModels(agent: AgentId): void {
+    for (const key of this.rejectedModels.keys()) {
+      if (key.startsWith(`${agent}:`)) this.rejectedModels.delete(key);
+    }
+  }
+
   async run(
     request: AgentRunRequest,
     cwd: string,
@@ -350,7 +401,12 @@ export class DesktopAgentRuntime {
     modelNote?: string,
   ): Promise<AgentExecutionResult> {
     const definition = AGENTS[request.agent];
-    const capability = await this.capability(request.agent);
+    const modelKey = model ? `${request.agent}:${model}` : null;
+    const rejectedReason = modelKey ? this.rejectedModels.get(modelKey) : undefined;
+    if (rejectedReason) {
+      return this.immediateFailure(request, `${definition.displayName} cannot use "${model}" for the current CLI/account. ${rejectedReason}`);
+    }
+    const capability = await this.cachedCapability(request.agent);
     // The proxy supplies its own credentials, so a CLI that is installed but signed out can still run through it.
     const proxyWithoutAccount = request.route === 'proxy' && capability.state === 'signed_out' && supportsProxy(request.agent);
     if (!capability.available && !proxyWithoutAccount) {
@@ -460,11 +516,23 @@ export class DesktopAgentRuntime {
     const output = outputParts.join('').trim();
     const aborted = controller.signal.aborted;
     const failed = !aborted && (exitCode !== 0 || (!output && errors.length > 0));
-    const error = aborted
+    const rawError = aborted
       ? `${definition.displayName} run cancelled.`
       : failed
         ? errors.at(-1) || `${definition.displayName} exited with code ${exitCode ?? 'unknown'}${exitSignal ? ` (${exitSignal})` : ''}.`
         : undefined;
+    // The CLI rejects a model it does not recognize the same way whether the name is wrong or just newer than the
+    // installed CLI build. Since KAI's model list is not the source of truth for what an account can reach, treat
+    // this as "update the CLI" rather than "pick a different model".
+    const error = failed && model && isUnknownModelError(rawError ?? '')
+      ? `${rawError} If "${model}" was released after this copy of ${definition.displayName} was installed, update it and try again: ${agentInstallCommand(request.agent)}`
+      : rawError;
+
+    if (modelKey && failed && isUnknownModelError(rawError ?? '')) {
+      this.rejectedModels.set(modelKey, `Update ${definition.displayName} or select another model.`);
+    } else if (modelKey && !failed && !aborted) {
+      this.rejectedModels.delete(modelKey);
+    }
 
     if (output) {
       events.push({
@@ -988,7 +1056,11 @@ async function* streamProcess(
     notify = undefined;
   };
   const abort = (): void => {
-    if (!child.killed) child.kill();
+    if (child.killed) return;
+    // child.kill() alone only reaches the process node spawned directly. On Windows that is cmd.exe when the
+    // CLI is an npm .cmd shim (useShell), so the real CLI process underneath survives and keeps running.
+    if (child.pid) void killProcessTree(child.pid);
+    else child.kill();
   };
 
   signal.addEventListener('abort', abort, { once: true });
@@ -1027,6 +1099,33 @@ export function kimiSignedIn(home = process.env.KIMI_CODE_HOME || path.join(home
     return existsSync(config) && /^\s*\[providers\./m.test(readFileSync(config, 'utf8'));
   } catch {
     return false;
+  }
+}
+
+/**
+ * Ends a run's whole process tree, not just the directly spawned handle. Needed because a cancelled run is often
+ * a shell (cmd.exe on Windows, /bin/sh elsewhere) wrapping the actual CLI process as a child of its own.
+ */
+async function killProcessTree(pid: number): Promise<void> {
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve) => {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
+      killer.once('error', () => resolve());
+      killer.once('close', () => resolve());
+    });
+    return;
+  }
+  const descendants = [pid];
+  for (let index = 0; index < descendants.length; index += 1) {
+    try {
+      const children = execSync(`pgrep -P ${descendants[index]}`, { encoding: 'utf8' }).trim();
+      if (children) descendants.push(...children.split('\n').map(Number));
+    } catch {
+      // pgrep exits non-zero when a process has no children; nothing more to add for this branch.
+    }
+  }
+  for (const id of descendants) {
+    try { process.kill(id, 'SIGKILL'); } catch { /* already exited */ }
   }
 }
 

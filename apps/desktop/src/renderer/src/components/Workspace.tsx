@@ -20,6 +20,7 @@ import {
   FolderPlus,
   FolderOpen,
   GitCompare,
+  GitFork,
   Goal,
   History,
   Loader2,
@@ -45,6 +46,7 @@ import {
   X,
 } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type {
   AgentCapability,
   AgentId,
@@ -127,6 +129,7 @@ interface WorkspaceViewProps {
   onUpdateConversation: (conversation: ConversationRecord) => Promise<void>;
   onChooseProject: () => void;
   onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
+  onBranchTurn: (turnId: string) => void;
   onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
   onHandoff: (agent: AgentId, prompt: string) => void;
   onCompare: (prompt: string, targetAgent: AgentId) => Promise<CompareRun>;
@@ -254,6 +257,7 @@ export function WorkspaceView({
   onUpdateConversation,
   onChooseProject,
   onCreateConversation,
+  onBranchTurn,
   onSend,
   onHandoff,
   onCompare,
@@ -394,6 +398,15 @@ export function WorkspaceView({
     settings.promptGuide.provider,
   ]);
 
+  // Keep the prompt legible as it grows. Resetting first makes it shrink again after text is removed.
+  useEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 260)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 260 ? 'auto' : 'hidden';
+  }, [prompt]);
+
   useEffect(() => {
     if (!contextPickerOpen || !activeProject) return;
     let cancelled = false;
@@ -487,8 +500,11 @@ export function WorkspaceView({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.scrollTop = canvas.scrollHeight;
-  }, [activeConversation?.turns.length, compareResult, queuedPrompts.length, streamingText]);
+    // Let React lay out the incoming message/change summary before following it. This keeps the active
+    // conversation at the bottom and naturally moves earlier turns into scrollback history.
+    const frame = window.requestAnimationFrame(() => { canvas.scrollTop = canvas.scrollHeight; });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeConversation?.turns.length, activeConversation?.events.length, compareResult, queuedPrompts.length, streamingText]);
 
   const queueOrSend = (text: string, options = sendOptions): void => {
     if (!text || !activeProject || !ready) return;
@@ -904,6 +920,12 @@ export function WorkspaceView({
     .reverse();
   const recentEvents = (activeConversation?.events ?? []).slice(-40);
   const runDetails = recentEvents.filter(isRunDetailEvent);
+  const timelineSummary = runDetails.reduce((summary, event) => {
+    if (event.type === 'tool.call') summary.tools += 1;
+    else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
+    else if (event.type === 'cost.update') summary.usage += 1;
+    return summary;
+  }, { tools: 0, edits: 0, usage: 0 });
   const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval);
   const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
   const refineTitle = !prompt.trim()
@@ -1002,7 +1024,7 @@ export function WorkspaceView({
         <SaveToBrainDialog text={brainDraft} project={activeProject.name} onClose={() => setBrainDraft(null)} onSaved={setWorkbenchNotice} />
       )}
 
-      {checkpointReview && (
+      {checkpointReview && createPortal(
         <div className="skills-overlay checkpoint-overlay" role="dialog" aria-modal="true" aria-label="Review turn changes">
           <div className="skills-panel checkpoint-panel">
             <div className="skills-panel-head">
@@ -1035,13 +1057,13 @@ export function WorkspaceView({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       <div ref={canvasRef} className="conversation-canvas">
         {activeConversation?.turns.length || streamingText ? (
           <>
             {activeConversation?.turns.map((turn) => (
-              <MessageTurn key={turn.id} turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} />
+              <MessageTurn key={turn.id} turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} />
             ))}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
             {running && !streamingText && (
@@ -1053,11 +1075,11 @@ export function WorkspaceView({
             )}
             {recentEvents.filter((event) => !isRunDetailEvent(event)).map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
             {runDetails.length > 0 && (
-              <section className="run-details" aria-label="Run details">
+              <section className="run-details" aria-label="Activity timeline">
                 <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
                   <ChevronDown size={13} />
-                  <span>Run details</span>
-                  <small>{runDetails.length}</small>
+                  <span>Activity</span>
+                  <small>{timelineSummary.tools ? `${timelineSummary.tools} actions` : ''}{timelineSummary.edits ? `${timelineSummary.tools ? ' · ' : ''}${timelineSummary.edits} edits` : ''}{timelineSummary.usage ? `${timelineSummary.tools || timelineSummary.edits ? ' · ' : ''}usage` : ''}</small>
                 </button>
                 {showRunDetails && (
                   <div className="run-details-list">
@@ -1247,23 +1269,6 @@ export function WorkspaceView({
             if (file) void attachImageFile(file);
           }}
         />
-        <div className="task-intent-picker" role="group" aria-label="What would you like KAI to do?">
-          <span className="task-intent-label">I want to</span>
-          {TASK_INTENTS.map((intent) => (
-            <button
-              key={intent.id}
-              type="button"
-              className={taskIntent === intent.id ? 'active' : ''}
-              aria-pressed={taskIntent === intent.id}
-              title={intent.description}
-              onClick={() => chooseTaskIntent(intent.id)}
-              disabled={busy}
-            >
-              {intent.label}
-            </button>
-          ))}
-          <small>{activeTaskIntent.description}</small>
-        </div>
         <div className="composer-box">
           <textarea
             ref={promptRef}
@@ -1311,14 +1316,16 @@ export function WorkspaceView({
           />
           <div className="composer-toolbar">
             <div className="composer-leading">
-              <button type="button" className="composer-icon-button" onClick={() => void attachFiles()} title="Add project files" aria-label="Add project files"><Paperclip size={14} /></button>
-              <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add context" aria-label="Add context"><AtSign size={14} /></button>
-              <button type="button" className="composer-icon-button" onClick={() => imageInputRef.current?.click()} title="Attach an image" aria-label="Attach an image"><ImagePlus size={14} /></button>
-              <button type="button" className="composer-icon-button" onClick={() => setSkillsOpen(true)} title="Add a skill" aria-label="Add a skill"><Sparkles size={14} /></button>
+              <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
+              <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={[{ value: 'plan', label: 'Plan only' }, { value: 'ask', label: 'Ask first' }, { value: 'autoEdit', label: 'Edit files' }, { value: 'full', label: 'Full access' }, { value: 'custom', label: 'Custom access' }]} title="Choose how much access KAI has" value={selectedAutonomy} />
               <button type="button" className={`composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}>
-                <Settings2 size={14} /><span>{advancedComposerOpen ? 'Hide controls' : 'Advanced'}</span>
+                <span>{advancedComposerOpen ? 'Hide' : 'Work locally'}</span><ChevronDown size={13} />
               </button>
               {advancedComposerOpen && <div className="composer-advanced-controls">
+                <div className="task-intent-picker" role="group" aria-label="What would you like KAI to do?">
+                  <span className="task-intent-label">Intent</span>
+                  {TASK_INTENTS.map((intent) => <button key={intent.id} type="button" className={taskIntent === intent.id ? 'active' : ''} aria-pressed={taskIntent === intent.id} title={intent.description} onClick={() => chooseTaskIntent(intent.id)} disabled={busy}>{intent.label}</button>)}
+                </div>
                 <div className="mode-toggle" role="group" aria-label="Execution mode">
                   <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
                   <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
@@ -1332,13 +1339,7 @@ export function WorkspaceView({
               </div>}
             </div>
             <div className="composer-actions">
-              <button type="button" className={`composer-icon-button ${compareMode ? 'active' : ''}`} onClick={() => setCompareMode((current) => !current)} title="Compare two agents" aria-pressed={compareMode}><GitCompare size={14} /></button>
-              {compareMode && <Select value={compareAgent} onChange={(event) => setCompareAgent(event.target.value as AgentId)} aria-label="Comparison agent">{agentCapabilities.filter((agent) => agent.id !== selectedAgent).map((agent) => <option key={agent.id} value={agent.id}>{agent.displayName}</option>)}</Select>}
-              <button type="button" className="composer-icon-button" disabled={!activeConversation || activeConversation.turns.length < 2 || running || busy} onClick={onCompactConversation} title="Compact conversation context" aria-label="Compact conversation context"><Minimize2 size={14} /></button>
-              <button type="button" className="composer-icon-button" onClick={() => setGoalEditor({ outcome: '', constraints: '', verification: '' })} title="Start or edit a goal"><Goal size={14} /></button>
-              <button type="button" className="composer-icon-button" onClick={onOpenWorkflows} title="Open workflows"><History size={14} /></button>
-              <button type="button" className={`composer-icon-button ${rawEventsOpen ? 'active' : ''}`} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw events"><Braces size={14} /></button>
-              <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
+              <SelectMenu ariaLabel="Model" className="composer-model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
               {(running || paused || awaitingApproval) ? (
                 <>
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
@@ -1370,7 +1371,7 @@ export function WorkspaceView({
 // keyboard. Their props are already stable: the turn and event objects are replaced only when the run changes.
 const RunEventCard = memo(RunEventCardBase);
 
-const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain }: { turn: ConversationTurn; brainReady: boolean; onSaveToBrain: (text: string) => void }): ReactNode {
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch }: { turn: ConversationTurn; brainReady: boolean; onSaveToBrain: (text: string) => void; onBranch: (turnId: string) => void }): ReactNode {
   return (
     <article className={`message ${turn.role}`}>
       <div className="message-role">
@@ -1380,11 +1381,32 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain 
             <BookmarkPlus size={12} /><span>Save to Brain</span>
           </button>
         )}
+        <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
       </div>
-      <div className="message-body">{turn.text}</div>
+      <MessageContent text={turn.text} />
     </article>
   );
 });
+
+/** A small, dependency-free response renderer: prose remains easy to scan and fenced commands become copyable cards. */
+function MessageContent({ text }: { text: string }): ReactNode {
+  const parts = text.split(/```([^\n`]*)\n?([\s\S]*?)```/g);
+  return (
+    <div className="message-body response-content">
+      {parts.map((part, index) => {
+        if (index % 3 === 1) return null;
+        if (index % 3 === 2) {
+          const language = parts[index - 1]?.trim() || 'text';
+          return <section className="response-code" key={`code-${index}`}>
+            <header><span>{language}</span><button type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(part)}><Copy size={14} /></button></header>
+            <pre><code>{part.trim()}</code></pre>
+          </section>;
+        }
+        return part.split(/\n{2,}/).filter(Boolean).map((paragraph, paragraphIndex) => <p key={`text-${index}-${paragraphIndex}`}>{paragraph}</p>);
+      })}
+    </div>
+  );
+}
 
 function RunEventCardBase({ event, projectId, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);

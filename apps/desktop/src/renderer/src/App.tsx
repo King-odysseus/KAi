@@ -630,6 +630,10 @@ export function App(): ReactNode {
       setExecutionMode(mode);
       setSelectedRoute(existing.route ?? bootstrap?.settings.defaultRoute ?? 'direct');
       setSelectedAutonomy(existing.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
+      // A failure from whatever chat was open before must not bleed into the one being switched to.
+      setError(null);
+      setAgentNotice(null);
+      setProxyContinuationAgent(null);
       setView('workspace');
       return;
     }
@@ -645,6 +649,8 @@ export function App(): ReactNode {
     setExecutionMode(mode);
     setSelectedRoute(conversation.route ?? bootstrap?.settings.defaultRoute ?? 'direct');
     setSelectedAutonomy(conversation.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
+    setAgentNotice(null);
+    setProxyContinuationAgent(null);
     setView('workspace');
   }
 
@@ -657,6 +663,9 @@ export function App(): ReactNode {
     if (!conversation) return;
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
+    setError(null);
+    setAgentNotice(null);
+    setProxyContinuationAgent(null);
     setView('workspace');
     await runConversation(conversation, prompt, options);
   }
@@ -749,7 +758,7 @@ export function App(): ReactNode {
       } else if (result.error) {
         if (!apiRun && runRoute === 'direct' && capability?.supportsRoutes.includes('proxy') && looksLikeAccountLimit(result.error)) {
           setProxyContinuationAgent(runAgentId);
-          setAgentNotice(`${capability.displayName} can continue through your Universal Proxy route.`);
+          setAgentNotice(`${capability.displayName}'s usage limit on your subscription was reached. Continue this run through your paid Universal Proxy route instead?`);
         } else {
           setError(result.error);
         }
@@ -975,23 +984,30 @@ export function App(): ReactNode {
     await saveConversationRecord({ ...conversation, archived, updatedAt: new Date().toISOString() });
   }
 
-  async function forkConversation(id: string): Promise<void> {
+  async function forkConversation(id: string, throughTurnId?: string): Promise<void> {
     const original = conversations.find((item) => item.id === id) ?? await perform(
       () => window.kaiDesktop.getConversation(id).then(unwrap),
       'Loading conversation',
     );
     if (!original) return;
+    const throughIndex = throughTurnId ? original.turns.findIndex((turn) => turn.id === throughTurnId) : -1;
+    const turnsToCopy = throughIndex >= 0 ? original.turns.slice(0, throughIndex + 1) : original.turns;
     const now = new Date().toISOString();
     const forked: ConversationRecord = {
       ...original,
       id: `conv_${crypto.randomUUID()}`,
-      title: `${original.title} (fork)`,
+      title: `${original.title} (branch)`,
       createdAt: now,
       updatedAt: now,
       archived: false,
       unread: false,
-      turns: original.turns.map((turn) => ({ ...turn, id: `turn_${crypto.randomUUID()}` })),
-      events: original.events.map((event) => ({ ...event, id: `evt_${crypto.randomUUID()}`, taskId: `conv_${crypto.randomUUID()}` })),
+      // Provider-native sessions belong to the original thread. Reusing one in a copy can trigger
+      // resume failures (for example, "no rollout found"), so the branch starts a fresh CLI session.
+      agentSessionId: undefined,
+      turns: turnsToCopy.map((turn) => ({ ...turn, id: `turn_${crypto.randomUUID()}` })),
+      // Events describe a provider run and may refer to turns after the branch point. The copied transcript is
+      // the branch context; new activity begins cleanly in the new conversation.
+      events: [],
     };
     await saveConversationRecord(forked);
     setActiveConversationId(forked.id);
@@ -1383,6 +1399,7 @@ export function App(): ReactNode {
             onUpdateConversation={saveConversationRecord}
             onChooseProject={() => void chooseProject()}
             onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
+            onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
             onSend={(prompt, options) => void sendPrompt(prompt, options)}
             onHandoff={(agent, prompt) => void handoffConversation(agent, prompt)}
             onCompare={compareConversation}
@@ -1507,6 +1524,9 @@ export function App(): ReactNode {
                   setActiveConversationId(null);
                   setExecutionMode('cli');
                   setStreamingText('');
+                  setError(null);
+                  setAgentNotice(null);
+                  setProxyContinuationAgent(null);
                   setView('workspace');
                 }}
               />
@@ -1687,7 +1707,9 @@ function ApprovalDialog({
 }
 
 function looksLikeAccountLimit(message: string): boolean {
-  return /(?:credit|quota|usage(?:\s|-)?limit|monthly(?:\s|-)?limit|spending(?:\s|-)?limit|billing|balance|exhausted|out of tokens|reached (?:your )?limit|limit (?:has been )?reached)/i.test(message);
+  // Covers both metered-API wording ("quota exhausted", "billing") and subscription CLI wording, which speaks of
+  // a rolling window ("5-hour limit", "weekly limit") and a reset time rather than money.
+  return /(?:credit|quota|usage(?:\s|-)?limit|monthly(?:\s|-)?limit|spending(?:\s|-)?limit|billing|balance|exhausted|out of tokens|reached (?:your )?limit|limit (?:has been )?reached|\d+[\s-]?(?:hour|day|week)(?:ly)?[\s-]?limit|limit will reset|resets? at|try again (?:later|after)|rate.?limit)/i.test(message);
 }
 
 function serviceFor(bootstrap: BootstrapPayload, kind: 'cognitive1' | 'universalProxy') {

@@ -738,7 +738,8 @@ export function HistoryView({
             <span className="history-actions">
               <button type="button" title="Rename" onClick={() => { void promptDialog({ title: 'Rename conversation', label: 'Conversation title', initialValue: conversation.title, confirmLabel: 'Rename' }).then((next) => { if (next?.trim()) onRename(conversation.id, next.trim()); }); }}><Pencil size={13} /></button>
               <button type="button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onArchive(conversation.id, !conversation.archived)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}</button>
-              <button type="button" title="Fork" onClick={() => onFork(conversation.id)}><GitFork size={13} /></button>
+              <button type="button" title="Copy conversation text" onClick={() => void navigator.clipboard?.writeText(conversation.turns.map((turn) => `${turn.role === 'user' ? 'You' : 'KAI'}:\n${turn.text}`).join('\n\n'))}><Copy size={13} /></button>
+              <button type="button" title="Branch conversation" onClick={() => onFork(conversation.id)}><GitFork size={13} /></button>
               <button type="button" title="Delete" onClick={() => { void confirmDialog({ title: 'Delete conversation?', detail: `Delete "${conversation.title}"?`, confirmLabel: 'Delete', destructive: true }).then((confirmed) => { if (confirmed) onDelete(conversation.id); }); }}><Trash2 size={13} /></button>
             </span>
           </div>
