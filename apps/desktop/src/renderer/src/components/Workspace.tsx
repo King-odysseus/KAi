@@ -193,6 +193,22 @@ const STATUS_WORDS = [
   'Trying not to overthink this',
   'Double-checking the obvious',
   'Talking to the test suite',
+  'Bribing the linter with coffee',
+  'Asking the rubber duck',
+  'Herding the async promises',
+  'Blaming the cache, just in case',
+  'Turning it off and on again',
+  'Reading the docs so you do not have to',
+  'Negotiating with node_modules',
+  'Sharpening the diffs',
+  'Consulting the ancient Stack Overflow scrolls',
+  'Aligning the divs, spiritually',
+  'Convincing the build to cooperate',
+  'Politely arguing with the regex',
+  'Sweeping up the null pointers',
+  'Compiling my thoughts',
+  'Rehearsing the commit message',
+  'Measuring twice, editing once',
 ] as const;
 
 const COMMANDS = [
@@ -1357,8 +1373,8 @@ export function WorkspaceView({
               </div>}
             </div>
             <div className="composer-actions">
-              <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               <SelectMenu ariaLabel="Model" className="composer-model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
+              <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               {(running || paused || awaitingApproval) ? (
                 <>
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}

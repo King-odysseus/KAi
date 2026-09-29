@@ -10670,3 +10670,22 @@ code {
     white-space: normal;
   }
 }
+
+/* Agent chatter (thinking status, tool calls, notes) reads as quiet one-line text: no boxes or borders. */
+.thinking,
+.run-event {
+  gap: 8px;
+  padding: 2px 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.run-event.error { background: transparent; }
+.run-event.error > strong { color: var(--red); }
+.thinking-copy { display: flex; align-items: baseline; gap: 8px; }
+.thinking .status-word { font-weight: 550; }
+.thinking .thinking-copy small { min-width: 0; }
+.thinking .spinner { width: 11px; height: 11px; border-width: 1.5px; }
+.run-event > span { font-size: 9px; }
