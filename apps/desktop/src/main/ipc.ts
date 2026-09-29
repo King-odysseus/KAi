@@ -1080,6 +1080,7 @@ export async function runConversationAgent(
   let effectivePrompt = buildSkillPrompt(selectedSkills, request.prompt);
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
+  if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing()}\n\n${effectivePrompt}`;
   // A route/agent switch starts a fresh CLI session. Carry enough transcript
   // forward that the new provider treats this as a continuation, not a new task.
   if (executionMode === 'cli' && !canResume) {
@@ -1396,6 +1397,19 @@ function renderConversationHandoff(turns: readonly ConversationRecord['turns'][n
   const lines = turns.slice(-12).map((turn) => `${turn.role === 'user' ? 'User' : 'KAi'}: ${turn.text}`).join('\n\n');
   if (!lines) return '';
   return `# Conversation handoff\nYou are continuing an existing conversation after the user changed agent, route, or provider. Preserve the prior intent, decisions, and context; do not ask them to repeat it.\n\n${lines.slice(-60_000)}`;
+}
+
+function fullAccessExecutionBriefing(): string {
+  const windows = process.platform === 'win32';
+  return [
+    '# Full access execution policy',
+    'The user explicitly selected Full access for this run. You may edit project files, run shell commands, and, when the user explicitly asks, commit and push changes without requesting an additional confirmation.',
+    'Complete the requested workflow yourself. Do not stop after a command error merely to give the user instructions when a safe retry or equivalent command can be run.',
+    windows
+      ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
+      : 'Use commands compatible with the current project shell.',
+    'For build → commit → push work: make the requested change, run the verification command, fix actionable failures, then commit and push only if the user requested commit/push. Report the command results and commit hash at the end.',
+  ].join('\n');
 }
 
 async function renderContextChips(
