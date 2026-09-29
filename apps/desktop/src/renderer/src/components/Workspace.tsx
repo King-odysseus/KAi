@@ -335,6 +335,7 @@ export function WorkspaceView({
   // Follow new output only while the reader is at the bottom; scrolling up releases it until they send again.
   const stickToBottomRef = useRef(true);
   const wasRunningRef = useRef(false);
+  const previousConversationIdRef = useRef<string | null>(null);
   const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number } | null>(null);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const brainReady = settings.cognitive1.enabled;
@@ -529,6 +530,18 @@ export function WorkspaceView({
     const frame = window.requestAnimationFrame(() => { canvas.scrollTop = canvas.scrollHeight; });
     return () => window.cancelAnimationFrame(frame);
   }, [activeConversation?.turns.length, activeConversation?.events.length, compareResult, queuedPrompts.length, streamingText, pendingUser, running]);
+
+  // Opening a different conversation (including a branch) starts at its latest message with the composer ready.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    // A brand-new chat gets its id after the first send; keep that message showing.
+    if (previousConversationIdRef.current) setPendingUser(null);
+    previousConversationIdRef.current = activeConversation?.id ?? null;
+    setShowRunDetails(false);
+    const canvas = canvasRef.current;
+    if (canvas) canvas.scrollTop = canvas.scrollHeight;
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }, [activeConversation?.id]);
 
   const onCanvasScroll = (): void => {
     const canvas = canvasRef.current;
@@ -1432,9 +1445,32 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
         <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
       </div>
       <MessageContent text={turn.text} />
+      <CopyMessageButton text={turn.text} />
     </article>
   );
 });
+
+function CopyMessageButton({ text }: { text: string }): ReactNode {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="message-tools">
+      <button
+        type="button"
+        className="message-copy"
+        title={copied ? 'Copied' : 'Copy message'}
+        aria-label="Copy message"
+        onClick={() => {
+          void navigator.clipboard?.writeText(text).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1_500);
+          }).catch(() => undefined);
+        }}
+      >
+        {copied ? <Check size={13} /> : <Copy size={13} />}
+      </button>
+    </div>
+  );
+}
 
 /** A small, dependency-free response renderer: prose remains easy to scan and fenced commands become copyable cards. */
 function MessageContent({ text }: { text: string }): ReactNode {

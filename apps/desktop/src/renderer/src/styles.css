@@ -10711,3 +10711,22 @@ code {
 .agent-activity-copy > div { display: flex; flex: 0 0 auto; gap: 8px; }
 .agent-activity-copy > span { min-width: 0; flex: 1 1 auto; }
 .agent-activity-last { display: none; }
+
+/* Copy control under every message; fades in on hover so it stays out of the way. */
+.message-tools { display: flex; margin-top: 2px; }
+.message.user .message-tools { justify-content: flex-end; }
+.message-copy {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.message:hover .message-copy,
+.message-copy:focus-visible { opacity: 1; }
+.message-copy:hover { color: var(--text); background: var(--bg-subtle); }

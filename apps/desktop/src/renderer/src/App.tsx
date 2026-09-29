@@ -1011,6 +1011,10 @@ export function App(): ReactNode {
     };
     await saveConversationRecord(forked);
     setActiveConversationId(forked.id);
+    setError(null);
+    setProxyContinuationAgent(null);
+    setView('workspace');
+    setAgentNotice(`Branched into "${forked.title}". Continue from here without changing the original chat.`);
   }
 
   async function saveSettings(update: SettingsUpdate): Promise<boolean> {
