@@ -399,6 +399,8 @@ export class DesktopAgentRuntime {
     model?: string,
     /** Why KAI chose the model, when it chose it; shown on the run's first line. */
     modelNote?: string,
+    /** Local image files already validated by the desktop IPC layer. */
+    imagePaths: readonly string[] = [],
   ): Promise<AgentExecutionResult> {
     const definition = AGENTS[request.agent];
     const modelKey = model ? `${request.agent}:${model}` : null;
@@ -436,7 +438,7 @@ export class DesktopAgentRuntime {
     if (proxyBaseUrl && request.agent === 'qwen') {
       environment = { ...environment, QWEN_CODE_SYSTEM_SETTINGS_PATH: writeQwenProxySettings(proxyBaseUrl, model) };
     }
-    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model, proxyBaseUrl);
+    const args = buildAgentArgs(request, cwd, resumeSessionId, customPermissions, model, proxyBaseUrl, imagePaths);
     // Its prompt is an argument. Behind a Windows .cmd shim only the first line would arrive, and Windows caps a
     // command line at a few thousand characters, so say so plainly instead of failing with "command line too long".
     if (request.agent === 'kimi' && process.platform === 'win32') {
@@ -696,12 +698,14 @@ export function buildAgentArgs(
   customPermissions?: Partial<Record<PermissionKey, boolean>>,
   model?: string,
   proxyBaseUrl?: string,
+  imagePaths: readonly string[] = [],
 ): string[] {
   // Every supported CLI takes the model as `--model <name>`; without one the CLI keeps its own default.
   const modelArgs = model ? ['--model', model] : [];
   if (request.agent === 'codex') {
     const providerArgs = proxyBaseUrl ? codexProxyProviderArgs(proxyBaseUrl) : [];
-    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...modelArgs, '-'];
+    const imageArgs = imagePaths.flatMap((imagePath) => ['--image', imagePath]);
+    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...modelArgs, ...imageArgs, '-'];
     return [
       'exec',
       ...providerArgs,
@@ -712,6 +716,7 @@ export function buildAgentArgs(
       '--skip-git-repo-check',
       '--cd',
       cwd,
+      ...imageArgs,
       '-',
     ];
   }

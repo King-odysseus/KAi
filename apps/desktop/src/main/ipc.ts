@@ -1079,7 +1079,7 @@ export async function runConversationAgent(
       )).text;
   let effectivePrompt = buildSkillPrompt(selectedSkills, request.prompt);
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
-  if (chipContext) effectivePrompt = `${chipContext}\n\n${effectivePrompt}`;
+  if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
   if (executionMode === 'cli' && contextText) {
     effectivePrompt = `${contextText}\n\n[USER REQUEST]\n${effectivePrompt}`;
   }
@@ -1122,7 +1122,7 @@ export async function runConversationAgent(
           apiHistory,
           preferences?.customPermissions,
         )
-      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note);
+      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note, chipContext.imagePaths);
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
@@ -1390,9 +1390,10 @@ async function renderContextChips(
   projectPath: string,
   attachmentsRoot: string,
   chips: readonly ContextChip[],
-): Promise<string> {
-  if (chips.length === 0) return '';
+): Promise<{ text: string; imagePaths: string[] }> {
+  if (chips.length === 0) return { text: '', imagePaths: [] };
   const sections: string[] = [];
+  const imagePaths: string[] = [];
   for (const chip of chips) {
     if (chip.type === 'file') continue;
     if (chip.type === 'selection') {
@@ -1420,10 +1421,14 @@ async function renderContextChips(
       if (!target || !insideRoot(root, target) || !(await fs.stat(target)).isFile()) {
         throw new Error(`Attached image is unavailable: ${chip.name}`);
       }
-      sections.push(`### Attached image\nName: ${chip.name}\nPath: ${target}`);
+      imagePaths.push(target);
+      sections.push(`### Attached image\nName: ${chip.name}\nPath: ${target}\nThis is visual input. Open the image with an image-capable reader before answering; do not infer its contents from the file name.`);
     }
   }
-  return sections.length > 0 ? `# Attached context\n${sections.join('\n\n')}` : '';
+  return {
+    text: sections.length > 0 ? `# Attached context\n${sections.join('\n\n')}` : '',
+    imagePaths: [...new Set(imagePaths)],
+  };
 }
 
 async function readProjectSelection(

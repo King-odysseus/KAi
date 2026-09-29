@@ -342,6 +342,20 @@ describe('desktop agent runtime', () => {
       'C:/repo',
       '-',
     ]);
+    expect(buildAgentArgs({ ...base, agent: 'codex' }, 'C:/repo', undefined, undefined, 'gpt-6-astra', undefined, ['C:/kai/attachments/capture.png'])).toEqual([
+      'exec',
+      '--json',
+      '--model',
+      'gpt-6-astra',
+      '--sandbox',
+      'read-only',
+      '--skip-git-repo-check',
+      '--cd',
+      'C:/repo',
+      '--image',
+      'C:/kai/attachments/capture.png',
+      '-',
+    ]);
     expect(buildAgentArgs({ ...base, agent: 'claude' }, 'C:/repo')).toEqual([
       '-p',
       '--output-format',
