@@ -972,9 +972,14 @@ export function App(): ReactNode {
     return result;
   }
 
-  async function respondToApproval(approved: boolean): Promise<void> {
+  async function respondToApproval(approved: boolean, useFullAccess = false): Promise<void> {
     const approval = pendingApproval;
     if (!approval) return;
+    if (useFullAccess) {
+      setSelectedAutonomy('full');
+      updateComposerSelection({ autonomy: 'full' });
+      setAgentNotice('Full access is selected for this conversation’s next run.');
+    }
     setPendingApprovals((current) => current.filter((item) => item.requestId !== approval.requestId));
     await perform(
       () => window.kaiDesktop.respondToApproval({
@@ -1793,7 +1798,7 @@ export function App(): ReactNode {
         </div>
       )}
       {pendingApproval && (
-        <ApprovalDialog approval={pendingApproval} onRespond={(approved) => void respondToApproval(approved)} />
+        <ApprovalDialog approval={pendingApproval} onRespond={(approved, useFullAccess) => void respondToApproval(approved, useFullAccess)} />
       )}
       {setupOpen && setupStatus && !setupStatus.complete && (
         <SetupPanel
@@ -1822,7 +1827,7 @@ function ApprovalDialog({
   onRespond,
 }: {
   approval: PendingApproval;
-  onRespond: (approved: boolean) => void;
+  onRespond: (approved: boolean, useFullAccess?: boolean) => void;
 }): ReactNode {
   return (
     <div className="approval-overlay">
@@ -1837,6 +1842,7 @@ function ApprovalDialog({
         <div className="approval-dialog-actions">
           <button type="button" className="secondary-button" onClick={() => onRespond(false)}>Deny</button>
           <button type="button" className="primary-button" autoFocus onClick={() => onRespond(true)}>Allow once</button>
+          <button type="button" className="primary-button" onClick={() => onRespond(true, true)}>Allow &amp; use full access</button>
         </div>
       </section>
     </div>
