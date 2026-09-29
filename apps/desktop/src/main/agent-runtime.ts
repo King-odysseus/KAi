@@ -705,11 +705,15 @@ export function buildAgentArgs(
   if (request.agent === 'codex') {
     const providerArgs = proxyBaseUrl ? codexProxyProviderArgs(proxyBaseUrl) : [];
     const imageArgs = imagePaths.flatMap((imagePath) => ['--image', imagePath]);
-    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...modelArgs, ...imageArgs, '-'];
+    // Full access is an explicit user choice in the composer. Preserve it when a
+    // conversation resumes, otherwise Codex falls back to interactive approvals.
+    const fullAccessArgs = request.autonomy === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : [];
+    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...fullAccessArgs, ...modelArgs, ...imageArgs, '-'];
     return [
       'exec',
       ...providerArgs,
       '--json',
+      ...fullAccessArgs,
       ...modelArgs,
       '--sandbox',
       codexSandbox(request.autonomy, customPermissions),
