@@ -526,7 +526,16 @@ export function App(): ReactNode {
     }
       if (event.type === 'text.delta' && event.channel === 'assistant') {
         setStreamingTextByConversation((current) => ({ ...current, [conversationId]: `${current[conversationId] ?? ''}${event.text}` }));
+        return;
       }
+      // Keep tool and lifecycle events in the active transcript as they arrive.
+      // The completed run later saves the authoritative event list; this only
+      // fills the otherwise silent period while an agent is working.
+      setConversations((current) => current.map((conversation) => (
+        conversation.id !== conversationId || conversation.events.some((item) => item.id === event.id)
+          ? conversation
+          : { ...conversation, events: [...conversation.events, event] }
+      )));
   }), []);
 
   useEffect(() => {

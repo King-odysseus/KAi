@@ -72,6 +72,9 @@ export const contextChipSchema = z.discriminatedUnion('type', [
       type: z.literal('image'),
       name: z.string().min(1).max(500),
       path: z.string().min(1).max(2_000),
+      // Kept only for the lifetime of a submitted turn so the renderer can show
+      // the same visual input in the conversation history.
+      dataUrl: z.string().min(1).max(30_000_000).optional(),
     })
     .strict(),
 ]);

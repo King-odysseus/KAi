@@ -991,6 +991,13 @@ export async function runConversationAgent(
     text: request.prompt,
     createdAt: now,
     ...(checkpoint ? { checkpoint } : {}),
+    ...(request.contextChips?.some((chip) => chip.type === 'image' && chip.dataUrl)
+      ? {
+          attachments: request.contextChips
+            .filter((chip): chip is Extract<ContextChip, { type: 'image' }> => chip.type === 'image' && Boolean(chip.dataUrl))
+            .map((chip) => ({ name: chip.name, dataUrl: chip.dataUrl! })),
+        }
+      : {}),
   };
   conversation.turns.push(userTurn);
 
@@ -1572,7 +1579,7 @@ async function saveAttachment(context: IpcContext, name: string, dataUrl: string
   const id = `img_${crypto.randomUUID()}`;
   const filePath = path.join(context.paths.attachments, `${id}.${extension}`);
   await fs.writeFile(filePath, data);
-  return { type: 'image', name: sanitizeAttachmentName(name, `${id}.${extension}`), path: filePath };
+  return { type: 'image', name: sanitizeAttachmentName(name, `${id}.${extension}`), path: filePath, dataUrl };
 }
 
 function sanitizeAttachmentName(name: string, fallback: string): string {

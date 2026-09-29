@@ -364,6 +364,10 @@ export const conversationTurnSchema = z
     createdAt: timestampSchema,
     checkpoint: checkpointRecordSchema.nullable().optional(),
     fileChanges: z.array(turnFileChangeSchema).optional(),
+    attachments: z.array(z.object({
+      name: z.string().min(1).max(500),
+      dataUrl: z.string().min(1).max(30_000_000),
+    }).strict()).optional(),
   })
   .strict();
 

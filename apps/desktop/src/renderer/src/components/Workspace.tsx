@@ -1192,8 +1192,8 @@ export function WorkspaceView({
               <article className="message user"><div className="message-role">You</div><MessageContent text={pendingUser.text} /></article>
             )}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
-            {running && !streamingText && (
-              <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} />
+            {running && (
+              <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
             )}
             {trailingInlineEvents.map(renderInlineEvent)}
             {runDetails.length > 0 && (
@@ -1510,6 +1510,16 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
         <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
       </div>
       <MessageContent text={turn.text} />
+      {turn.role === 'user' && turn.attachments?.length ? (
+        <div className="message-attachments" aria-label="Attached images">
+          {turn.attachments.map((attachment) => (
+            <figure key={`${attachment.name}-${attachment.dataUrl.slice(-24)}`} className="message-image-attachment">
+              <img src={attachment.dataUrl} alt={attachment.name} />
+              <figcaption><ImagePlus size={12} /> {attachment.name}</figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
       <CopyMessageButton text={turn.text} />
     </article>
   );
@@ -1537,11 +1547,12 @@ function CopyMessageButton({ text }: { text: string }): ReactNode {
   );
 }
 
-function WorkProgressTimeline({ events, activity, paused, elapsedSeconds }: {
+function WorkProgressTimeline({ events, activity, paused, elapsedSeconds, tokenEstimate }: {
   events: readonly PersistedEvent[];
   activity: ReturnType<typeof deriveAgentActivity>;
   paused: boolean;
   elapsedSeconds: number;
+  tokenEstimate: number;
 }): ReactNode {
   const milestones = events
     .filter((event) => event.type === 'tool.call' || event.type === 'file.edit.applied' || event.type === 'file.change')
@@ -1558,10 +1569,14 @@ function WorkProgressTimeline({ events, activity, paused, elapsedSeconds }: {
   const current = paused ? 'Paused' : activity.label;
   return (
     <article className="work-progress" role="status" aria-live="polite">
-      <div className="work-progress-current"><span className={paused ? 'progress-dot paused' : 'progress-dot'} /> <strong>{current}</strong><small>{activity.detail}</small><time>{elapsedSeconds}s</time></div>
+      <div className="work-progress-current"><span className={paused ? 'progress-dot paused' : 'progress-dot'} /> <strong>{current}</strong><small>{activity.detail}</small><time>{elapsedSeconds}s{tokenEstimate > 0 ? ` · ~${formatTokenEstimate(tokenEstimate)} tokens` : ''}</time></div>
       {milestones.length > 0 && <div className="work-progress-steps">{milestones.map((step) => <div key={step.id} className={`work-progress-step ${step.complete ? 'complete' : step.failed ? 'failed' : 'active'}`}><span>{step.complete ? '✓' : step.failed ? '!' : '•'}</span><p>{step.label}</p></div>)}</div>}
     </article>
   );
+}
+
+function formatTokenEstimate(value: number): string {
+  return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value);
 }
 
 /** A small, dependency-free response renderer: prose remains easy to scan and fenced commands become copyable cards. */

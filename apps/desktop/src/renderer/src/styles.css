@@ -1048,6 +1048,11 @@ button:disabled {
   background: rgba(17, 31, 50, 0.72);
 }
 
+.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 14px 0; }
+.message-image-attachment { width: min(280px, 100%); margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
+.message-image-attachment img { display: block; width: 100%; max-height: 220px; object-fit: contain; background: color-mix(in srgb, var(--surface) 80%, #000); }
+.message-image-attachment figcaption { display: flex; align-items: center; gap: 6px; padding: 7px 9px; overflow: hidden; color: var(--text-dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
 .workspace-empty {
   display: flex;
   flex-direction: column;
