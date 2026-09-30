@@ -315,6 +315,23 @@ export function isPublishingCommand(command: string): boolean {
 
 const EDIT_TOOLS = new Set(['replace_in_file', 'create_file', 'multi_edit', 'write_file', 'move_file', 'delete_file']);
 
+/**
+ * What a model needs to fix a call with bad arguments. The raw validation dump is meant for programmers: a model that
+ * sent no arguments at all reads it as noise and repeats the same call.
+ */
+export function describeArgumentError(name: string, rawInput: unknown, error: z.ZodError): string {
+  const problems = error.issues.map((issue) => {
+    const field = issue.path.join('.') || 'arguments';
+    return issue.code === 'invalid_type' && issue.received === 'undefined'
+      ? `"${field}" is required (${issue.expected})`
+      : `"${field}": ${issue.message}`;
+  });
+  const sent = rawInput === undefined || rawInput === null || (typeof rawInput === 'object' && Object.keys(rawInput as object).length === 0)
+    ? 'You sent no arguments.'
+    : `You sent: ${JSON.stringify(rawInput).slice(0, 300)}`;
+  return `The ${name} call was not run because its arguments are invalid: ${problems.join('; ')}. ${sent} Call ${name} again and fill in every required argument.`;
+}
+
 export class DesktopProjectToolRuntime {
   private resolvedRoot: Promise<string> | undefined;
   /** Per-run limits: a spend ceiling and repeated-call detection. */
@@ -380,6 +397,7 @@ export class DesktopProjectToolRuntime {
       if (name === 'run_command') return await this.runCommand(runCommandInputSchema.parse(rawInput), signal);
       return toolFailure(`Unknown project tool: ${name}.`);
     } catch (error) {
+      if (error instanceof z.ZodError) return toolFailure(describeArgumentError(name, rawInput, error));
       return toolFailure(error instanceof Error ? error.message : String(error));
     }
   }
