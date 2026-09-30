@@ -162,7 +162,10 @@ try {
 
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('heading', { name: 'Settings' }).waitFor();
+  // Settings is split into categories; the vault status sits with the connections, Overwatch with the services.
+  await openSettingsCategory(page, 'Connections and models');
   await page.getByText('OS vault available').waitFor();
+  await openSettingsCategory(page, 'Services and access');
   const overwatchHeading = page.getByText('AI Overwatch', { exact: true });
   await overwatchHeading.waitFor();
   await page.getByRole('checkbox', { name: /Enable Overwatch/ }).waitFor();
@@ -190,7 +193,7 @@ try {
     throw new Error('Managed services did not show live status for C1 and the Universal Proxy.');
   }
   await assertNoErrorBanner(page);
-  await assertPageContentFillsWidth(page, '.settings-grid');
+  await assertPageContentFillsWidth(page, '.settings-categories');
   await assertControlsDoNotWrap(page, 'settings-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
@@ -234,7 +237,7 @@ try {
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
-  await assertPageContentFillsWidth(page, '.settings-grid');
+  await assertPageContentFillsWidth(page, '.settings-categories');
   await assertControlsDoNotWrap(page, 'settings-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-960x640.png') });
   await verifyControlsOnEveryPage(page, '960x640');
@@ -331,7 +334,8 @@ async function verifyAgentCapabilities(page) {
 async function verifyWorkspaceControls(page) {
   // The agent, model, route and autonomy menus live behind the composer's Advanced toggle.
   if (await page.getByRole('button', { name: 'Agent', exact: true }).count() === 0) {
-    await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+    // The toggle reads "Work locally" (or "Hide" once open), so it is found by its class.
+    await page.locator('.composer-advanced-toggle').click();
     await page.getByRole('button', { name: 'Agent', exact: true }).waitFor();
   }
   const agents = [
@@ -1231,6 +1235,12 @@ async function assertNoErrorBanner(page) {
 async function assertNoHorizontalOverflow(page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   if (overflow) throw new Error('KAI displayed horizontal overflow at the minimum window size.');
+}
+
+async function openSettingsCategory(page, name) {
+  // A category button toggles its section, and the open sections are remembered, so only click a closed one.
+  const button = page.locator('.settings-category-nav').getByRole('button', { name });
+  if (!(await button.evaluate((element) => element.classList.contains('active')))) await button.click();
 }
 
 async function assertPageContentFillsWidth(page, selector) {

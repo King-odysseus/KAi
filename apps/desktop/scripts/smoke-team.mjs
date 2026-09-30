@@ -86,8 +86,18 @@ try {
   await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined);
 }
 
+async function openAllSettingsCategories(page) {
+  // Settings is split into categories and only the first starts open; open the rest so every card can be reached.
+  const buttons = page.locator('.settings-category-nav button');
+  for (let index = 0; index < await buttons.count(); index += 1) {
+    const button = buttons.nth(index);
+    if (!(await button.evaluate((element) => element.classList.contains('active')))) await button.click();
+  }
+}
+
 async function verifySettingsCard(page) {
   await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await openAllSettingsCategories(page);
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   const section = page.locator('section.settings-section[aria-label="Agent team"]');
   await section.scrollIntoViewIfNeeded();
@@ -115,6 +125,7 @@ async function verifySettingsCard(page) {
 
 async function verifyTrackRecord(page) {
   await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await openAllSettingsCategories(page);
   const section = page.locator('section.settings-section[aria-label="Agent team"]');
   await section.scrollIntoViewIfNeeded();
   const record = section.locator('.team-track-record-line').first();
@@ -282,7 +293,9 @@ async function continueAndFinish(page) {
     return runs.some((run) => run.workflow.status === 'paused' && run.workflow.steps.some((step) => step.round === 1 && step.gate === 'security' && step.verdict?.result === 'block' && !step.verdict.acknowledged));
   }, undefined, { timeoutMs: 90_000, message: 'The fix was not stopped at a fresh security review.' });
   const calls = await readCalls();
-  if (calls.some((call) => /Re-review/.test(call.prompt) && /Code reviewer/.test(call.prompt))) throw new Error('The fresh code review ran past a blocked security re-review.');
+  // A step's own role text comes right after its "Re-review only what FIX ROUND n changed" line. Later steps also carry
+  // earlier steps' hand-offs, so the words "Code reviewer" appearing anywhere in a prompt do not mean that role ran.
+  if (calls.some((call) => /Re-review only what FIX ROUND \d+ changed[\s\S]{0,200}Code reviewer/.test(call.prompt))) throw new Error('The fresh code review ran past a blocked security re-review.');
   await page.getByRole('button', { name: 'Continue anyway' }).click();
   await page.locator('.workflow-run-list .workflow-status.completed').first().waitFor({ timeout: 90_000 });
   await page.locator('section.team-decision').waitFor({ state: 'detached' });
@@ -347,6 +360,7 @@ function originalPlan() {
 /** A team just for this project, with a role of its own: planned with, then removed and refused. */
 async function verifyCustomRoleAndProjectTeam(page) {
   await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await openAllSettingsCategories(page);
   const card = page.locator('section.settings-section[aria-label="Agent team"]');
   await card.scrollIntoViewIfNeeded();
   await card.getByRole('tab', { name: /^Just Team Smoke Project/ }).click();
@@ -383,6 +397,7 @@ async function verifyCustomRoleAndProjectTeam(page) {
 
   // Remove the project team: the same plan now names a role nobody has, and is refused instead of run.
   await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await openAllSettingsCategories(page);
   await card.scrollIntoViewIfNeeded();
   await card.getByRole('tab', { name: /^Just Team Smoke Project/ }).click();
   await card.getByRole('button', { name: 'Use the team from Settings again' }).click();

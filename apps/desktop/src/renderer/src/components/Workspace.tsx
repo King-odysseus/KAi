@@ -1,3 +1,4 @@
+import { ImageCard, ImageChip } from './ImageAttachment';
 import { Markdown } from './Markdown';
 import {
   Archive,
@@ -342,7 +343,7 @@ export function WorkspaceView({
   const stickToBottomRef = useRef(true);
   const wasRunningRef = useRef(false);
   const previousConversationIdRef = useRef<string | null>(null);
-  const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number } | null>(null);
+  const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number; images: Array<{ name: string; dataUrl: string }> } | null>(null);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const brainReady = settings.cognitive1.enabled;
   const apiRun = executionMode === 'api';
@@ -579,7 +580,11 @@ export function WorkspaceView({
       return;
     }
     stickToBottomRef.current = true;
-    setPendingUser({ text, baseCount: activeConversation?.turns.length ?? 0 });
+    setPendingUser({
+      text,
+      baseCount: activeConversation?.turns.length ?? 0,
+      images: contextChips.flatMap((chip) => (chip.type === 'image' && chip.dataUrl ? [{ name: chip.name, dataUrl: chip.dataUrl }] : [])),
+    });
     if (activeConversation) onSend(text, options);
     else onCreateConversation(text, options);
   };
@@ -1190,7 +1195,15 @@ export function WorkspaceView({
               </Fragment>
             ))}
             {pendingUser && (activeConversation?.turns.length ?? 0) <= pendingUser.baseCount && (
-              <article className="message user"><div className="message-role">You</div><MessageContent text={pendingUser.text} /></article>
+              <article className="message user">
+                <div className="message-role">You</div>
+                <MessageContent text={pendingUser.text} />
+                {pendingUser.images.length > 0 && (
+                  <div className="message-attachments" aria-label="Attached images">
+                    {pendingUser.images.map((image) => <ImageCard key={`${image.name}-${image.dataUrl.slice(-24)}`} name={image.name} dataUrl={image.dataUrl} />)}
+                  </div>
+                )}
+              </article>
             )}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} /></article>}
             {running && (
@@ -1334,7 +1347,14 @@ export function WorkspaceView({
           {selectedFiles.map((file) => (
             <span className="context-chip" key={file} title={file}><File size={11} /><span className="truncate">{file}</span><button type="button" aria-label={`Remove ${file}`} onClick={() => setSelectedFiles((current) => current.filter((item) => item !== file))}><X size={11} /></button></span>
           ))}
-          {contextChips.map((chip) => (
+          {contextChips.map((chip) => chip.type === 'image' && chip.dataUrl ? (
+            <ImageChip
+              key={contextChipKey(chip)}
+              name={chip.name}
+              dataUrl={chip.dataUrl}
+              onRemove={() => setContextChips((current) => current.filter((item) => contextChipKey(item) !== contextChipKey(chip)))}
+            />
+          ) : (
             <span className={`context-chip ${chip.type}-chip`} key={contextChipKey(chip)} title={contextChipLabel(chip)}>
               {contextChipIcon(chip.type)}
               <span className="truncate">{contextChipLabel(chip)}</span>
@@ -1459,7 +1479,6 @@ export function WorkspaceView({
                 {apiRun ? (
                   <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}><Cloud size={14} /><span className="truncate">{selectedRoute === 'proxy' ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}` : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span></button>
                 ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason} value={selectedAgent} />}
-                <SelectMenu ariaLabel="Model" className="control-select model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title={apiRun ? 'Model for this conversation. Default is the model set in Settings.' : 'Model the CLI is asked to use. Default lets the CLI choose its own.'} value={selectedModel} />
                 <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
                 <SelectMenu ariaLabel="Autonomy" className="control-select autonomy-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={[{ value: 'plan', label: 'Plan' }, { value: 'ask', label: 'Ask' }, { value: 'autoEdit', label: 'Auto-edit' }, { value: 'full', label: 'Full control' }, { value: 'custom', label: 'Custom' }]} title="Choose how much project access the active run has" value={selectedAutonomy} />
               </div>}
@@ -1514,10 +1533,7 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
       {turn.role === 'user' && turn.attachments?.length ? (
         <div className="message-attachments" aria-label="Attached images">
           {turn.attachments.map((attachment) => (
-            <figure key={`${attachment.name}-${attachment.dataUrl.slice(-24)}`} className="message-image-attachment">
-              <img src={attachment.dataUrl} alt={attachment.name} />
-              <figcaption><ImagePlus size={12} /> {attachment.name}</figcaption>
-            </figure>
+            <ImageCard key={`${attachment.name}-${attachment.dataUrl.slice(-24)}`} name={attachment.name} dataUrl={attachment.dataUrl} />
           ))}
         </div>
       ) : null}

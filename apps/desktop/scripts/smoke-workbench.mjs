@@ -308,6 +308,8 @@ async function verifyTasksAndSettings(page) {
   await page.getByText('CLI models').waitFor();
   await page.getByText('Tray and notifications').waitFor();
   await assertSettingsSectionsFullWidth(page);
+  // The tutor connection sits in the Connections category, which starts closed.
+  await openSettingsCategory(page, 'Connections and models');
   const learningSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
   const learningProvider = learningSection.locator('label.field:has(span:text-is("Provider")) > .kai-select');
   await chooseOption(learningProvider, 'deepseek');
@@ -348,7 +350,8 @@ async function verifyTasksAndSettings(page) {
 
   // The agent, model, route and autonomy menus live behind the composer's Advanced toggle.
   if (await page.getByRole('button', { name: 'Agent', exact: true }).count() === 0) {
-    await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+    // The toggle reads "Work locally" (or "Hide" once open), so it is found by its class.
+    await page.locator('.composer-advanced-toggle').click();
   }
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
   await page.getByRole('listbox', { name: 'Agent', exact: true }).getByRole('option', { name: /^Qwen Code/ }).click();
@@ -782,8 +785,15 @@ async function verifyTutorInlineCompletion(page) {
 }
 
 
+async function openSettingsCategory(page, name) {
+  // A category button toggles its section, and the open sections are remembered, so only click a closed one.
+  const button = page.locator('.settings-category-nav').getByRole('button', { name });
+  if (!(await button.evaluate((element) => element.classList.contains('active')))) await button.click();
+}
+
 async function verifySettingsCheckboxRetention(page) {
   await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await openSettingsCategory(page, 'Services and access');
   const overwatch = page.getByRole('checkbox', { name: /Enable Overwatch/ });
   await overwatch.check();
   // An unrelated write broadcasts fresh settings to the open form.
@@ -799,6 +809,8 @@ async function verifySettingsCheckboxRetention(page) {
   if (!saved.cognitive1.overwatch.enabled) throw new Error('Overwatch checkbox did not persist.');
   await page.locator('.nav-rail').getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
   await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  // Coming back to Settings starts with only the first category open.
+  await openSettingsCategory(page, 'Services and access');
   if (!(await overwatch.isChecked())) throw new Error('Overwatch checkbox reverted after navigation.');
   await page.locator('.nav-rail').getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
 }

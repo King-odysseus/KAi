@@ -1088,10 +1088,25 @@ button:disabled {
 .guided-review-empty { display: grid; place-items: center; gap: 8px; padding: 34px 18px; color: var(--text-dim); text-align: center; font-size: 11px; }
 .guided-review-empty strong { color: var(--text); }
 
-.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 14px 0; }
-.message-image-attachment { width: min(280px, 100%); margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
-.message-image-attachment img { display: block; width: 100%; max-height: 220px; object-fit: contain; background: color-mix(in srgb, var(--surface) 80%, #000); }
-.message-image-attachment figcaption { display: flex; align-items: center; gap: 6px; padding: 7px 9px; overflow: hidden; color: var(--text-dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.message-attachments { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 0 0; }
+.message-image-attachment { width: min(240px, 100%); margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+.message-image-attachment.expanded { width: min(640px, 100%); }
+.message-image-button { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.message-image-attachment.expanded .message-image-button { cursor: zoom-out; }
+.message-image-attachment img { display: block; width: 100%; max-height: 180px; object-fit: cover; background: color-mix(in srgb, var(--surface) 80%, #000); }
+.message-image-attachment.expanded img { max-height: 520px; object-fit: contain; }
+.message-image-attachment figcaption { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; overflow: hidden; color: var(--text-dim); font-size: 11px; }
+.message-image-attachment figcaption strong { min-width: 0; color: var(--text); font-weight: 600; }
+.message-image-attachment figcaption small { flex: 0 0 auto; color: var(--text-dim); font-size: 10.5px; }
+
+/* An image attached in the composer: thumbnail, name and pixel size, like the preview in the conversation. */
+.attachment-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 9px; padding: 5px 8px 5px 5px; border: 1px solid var(--border); border-radius: 10px; color: var(--text-muted); background: var(--bg-panel); }
+.attachment-thumb { display: block; width: 36px; height: 36px; flex: 0 0 auto; border-radius: 6px; object-fit: cover; background: color-mix(in srgb, var(--surface) 80%, #000); }
+.attachment-meta { display: flex; min-width: 0; flex-direction: column; gap: 1px; line-height: 1.25; }
+.attachment-meta strong { max-width: min(260px, 40vw); color: var(--text); font-size: 12px; font-weight: 600; }
+.attachment-meta small { color: var(--text-dim); font-size: 10.5px; }
+.attachment-chip button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; color: var(--text-dim); background: transparent; cursor: pointer; }
+.attachment-chip button:hover { color: var(--text); background: var(--bg-hover); }
 
 .workspace-empty {
   display: flex;
