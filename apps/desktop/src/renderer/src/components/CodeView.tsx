@@ -1543,6 +1543,8 @@ export function CodeView({
             onDoubleClick={() => setLearningPaneWidth(DEFAULT_LEARNING_PANE_WIDTH)}
             onKeyDown={(event) => resizeCodePaneWithKeyboard('learning', event)}
           />
+          {/* One grid cell holds the tabs and whichever panel is showing; separate children would each take a cell. */}
+          <div className="code-side-panel">
           <div className="code-side-panel-tabs" role="tablist" aria-label="Code assistance">
             <button type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => { setSidePanel('learn'); window.localStorage.setItem('kai.codeSidePanel', 'learn'); }}>Learn</button>
             <button type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => { setSidePanel('review'); window.localStorage.setItem('kai.codeSidePanel', 'review'); }}>Review</button>
@@ -1623,6 +1625,7 @@ export function CodeView({
             onOpenSettings={onOpenSettings}
             onClose={() => setTutorOpen(false)}
           />}
+          </div>
         </>
       )}
     </div>

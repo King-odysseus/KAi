@@ -1048,6 +1048,8 @@ button:disabled {
   background: rgba(17, 31, 50, 0.72);
 }
 
+.code-side-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border-soft, var(--border)); background: var(--bg-panel, var(--surface)); }
+.code-side-panel > .learning-panel, .code-side-panel > .guided-review-panel { min-height: 0; flex: 1; border-left: 0; }
 .code-side-panel-tabs { display: flex; gap: 4px; padding: 7px 9px 0; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
 .code-side-panel-tabs button { padding: 6px 9px; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); background: transparent; cursor: pointer; font-size: 11px; }
 .code-side-panel-tabs button.active { border-bottom-color: var(--mint); color: var(--text); }
