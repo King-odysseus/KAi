@@ -198,6 +198,23 @@ export async function gitDiffFile(cwd: string, filePath: string, staged: boolean
   return { output: output.length > MAX_DIFF_CHARS ? `${output.slice(0, MAX_DIFF_CHARS)}\n\n[diff truncated]` : output };
 }
 
+/**
+ * Everything a file changed against the last commit, staged or not, as one diff. A file that is untracked (new) is
+ * compared with nothing. This is what a review should read: the unstaged-only diff is empty for a change that has
+ * already been staged.
+ */
+export async function gitDiffAgainstHead(cwd: string, filePath: string): Promise<string> {
+  // Whether the file is in the last commit decides how to read it, not whether Git tracks it now: a staged deletion is
+  // no longer tracked but still has a diff, and a staged new file is tracked but has nothing to compare with.
+  const inHead = await git(cwd, ['cat-file', '-e', `HEAD:${filePath}`]).then(() => true, () => false);
+  const output = inHead
+    ? await git(cwd, ['diff', 'HEAD', '--no-color', '--', filePath]).catch(() => '')
+    : await git(cwd, ['diff', '--no-index', '--no-color', '--', process.platform === 'win32' ? 'NUL' : '/dev/null', filePath])
+      // `git diff --no-index` exits 1 when the files differ, which is the normal case here.
+      .catch((error: GitCommandError) => error.stdout ?? '');
+  return output.length > MAX_DIFF_CHARS ? `${output.slice(0, MAX_DIFF_CHARS)}\n\n[diff truncated]` : output;
+}
+
 export async function gitCreatePullRequest(cwd: string, title: string, body: string): Promise<{ url: string }> {
   const branch = (await git(cwd, ['branch', '--show-current'])).trim();
   if (!branch) throw new GitCommandError('Switch to a branch before opening a pull request.');

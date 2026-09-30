@@ -340,6 +340,13 @@ async function startApplication(): Promise<void> {
     return root;
   };
   const studioProjectRoot = async (projectId: string, linkedProjectId?: string | null): Promise<string> => {
+    // A code project's own id (which is what the phone console sends) reads the same .kai/spec folder that a Studio
+    // plan linked to that project uses, so its board and artifacts can be reached without knowing the plan.
+    if (!/^studio_/i.test(projectId)) {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('Project not found.');
+      return project.path;
+    }
     const linked = linkedProjectId === undefined
       ? (await interviewStore.read(projectId))?.linkedProjectId ?? null
       : linkedProjectId;

@@ -228,6 +228,7 @@ const bridge: KaiDesktopBridge = {
   gitCreateBranch: (projectId, name, checkout) => ipcRenderer.invoke('git:create-branch', { projectId, name, checkout }),
   gitSync: (projectId, action) => ipcRenderer.invoke('git:sync', { projectId, action }),
   gitDiff: (projectId, path, staged) => ipcRenderer.invoke('git:diff', { projectId, path, staged }),
+  reviewChanges: (request) => ipcRenderer.invoke('review:changes', request),
   reviewChange: (request, diff, mode) => ipcRenderer.invoke('review:change', { request, diff, mode }),
   experienceCount: () => ipcRenderer.invoke('experiences:count', {}),
   exportExperiences: () => ipcRenderer.invoke('experiences:export', {}),

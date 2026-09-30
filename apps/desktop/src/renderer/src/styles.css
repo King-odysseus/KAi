@@ -1088,6 +1088,47 @@ button:disabled {
 .guided-review-empty { display: grid; place-items: center; gap: 8px; padding: 34px 18px; color: var(--text-dim); text-align: center; font-size: 11px; }
 .guided-review-empty strong { color: var(--text); }
 
+/* AI review: the button, the verdict, and findings that each name their file and open it. */
+.guided-review-ai { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+.guided-review-hint { margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+.guided-review-ai-error { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid rgba(248, 113, 113, 0.35); border-radius: 8px; background: rgba(248, 113, 113, 0.08); }
+.guided-review-ai-error strong { color: var(--text); font-size: 12px; }
+.guided-review-ai-error p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.guided-review-ai-card { display: flex; flex-direction: column; gap: 10px; }
+.guided-review-verdict { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.guided-review-verdict small { color: var(--text-dim); font-size: 10.5px; }
+.review-verdict { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.review-verdict.ok { color: var(--mint); background: rgba(102, 227, 189, 0.12); }
+.review-verdict.minor { color: #e6c56a; background: rgba(230, 197, 106, 0.12); }
+.review-verdict.attention { color: #f59a9a; background: rgba(248, 113, 113, 0.14); }
+.guided-review-summary { margin: 0; color: var(--text); font-size: 12px; line-height: 1.55; }
+.review-findings { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.review-finding { display: flex; flex-direction: column; gap: 7px; padding: 10px 12px; border: 1px solid var(--border-soft); border-left-width: 3px; border-radius: 8px; background: rgba(8, 18, 31, 0.45); }
+.review-finding.high { border-left-color: #f87171; }
+.review-finding.medium { border-left-color: #e6c56a; }
+.review-finding.low { border-left-color: var(--text-dim); }
+.review-finding p { margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.55; }
+.review-finding-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.review-finding-file { min-width: 0; overflow: hidden; color: var(--text); font: 11px "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.review-finding-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.review-finding-actions .secondary-button { min-height: 26px; padding: 3px 9px; font-size: 11px; }
+.review-chip { flex: 0 0 auto; padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
+.review-chip.high { color: #f59a9a; background: rgba(248, 113, 113, 0.14); }
+.review-chip.medium { color: #e6c56a; background: rgba(230, 197, 106, 0.14); }
+.review-chip.low { color: var(--text-muted); background: rgba(128, 128, 160, 0.16); }
+.guided-review-skipped { color: var(--text-dim); font-size: 11px; }
+.guided-review-skipped summary { cursor: pointer; }
+.guided-review-skipped ul { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.guided-review-skipped li { display: flex; justify-content: space-between; gap: 10px; }
+.guided-review-skipped li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guided-review-count { color: #f59a9a !important; font-weight: 700; }
+.guided-review-file-findings { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid rgba(248, 113, 113, 0.28); border-radius: 8px; background: rgba(248, 113, 113, 0.06); }
+.guided-review-file-findings > strong { color: var(--text); font-size: 11px; }
+.guided-review-file-findings ul { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.guided-review-file-findings li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
+.guided-review-file-findings li em { color: var(--text-dim); font-size: 10.5px; font-style: normal; }
+.guided-review-file-findings li p { flex-basis: 100%; margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.55; }
+
 .message-attachments { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 0 0; }
 .message-image-attachment { width: min(240px, 100%); margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
 .message-image-attachment.expanded { width: min(640px, 100%); }
@@ -10918,3 +10959,11 @@ code {
 .automation-card .fail {
   color: var(--red);
 }
+.guided-review-progress { height: 4px; margin: 0 0 8px; overflow: hidden; border-radius: 999px; background: var(--bg-hover); }
+.guided-review-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 160ms ease; }
+.guided-review-toggle { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.guided-review-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--text-muted); font-size: 12px; }
+.guided-review-actions { display: flex; margin: 8px 0; }
+.guided-review-actions .primary-button { display: inline-flex; width: 100%; align-items: center; justify-content: center; gap: 6px; }
+.guided-review-files button.done { color: var(--text-muted); }
+.guided-review-done { color: var(--accent); }

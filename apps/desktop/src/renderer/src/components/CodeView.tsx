@@ -1557,6 +1557,8 @@ export function CodeView({
             onOpenFile={openFile}
             onExplainFile={async (path) => { await openFile(path); setSidePanel('learn'); setTutorOpen(true); await runLearningAction('explain-file'); }}
             onCreateFollowup={onCreateReviewFollowup}
+            onOpenAt={(filePath, line) => void openLearningReference(filePath, line, line)}
+            onOpenSettings={onOpenSettings}
           /> : <LearningPanel
             key={projectId}
             projectFiles={files.map((file) => file.path)}

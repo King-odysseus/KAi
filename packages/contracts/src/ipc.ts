@@ -74,6 +74,7 @@ import {
   type TeamPlanFromPartsInput,
 } from './prompt-guide';
 import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
+import { reviewChangesInputSchema, type ChangeReviewResult, type ReviewChangesInput } from './review';
 import {
   evalCaseDeleteInputSchema,
   evalCaseInputSchema,
@@ -514,6 +515,7 @@ export const ipcChannels = [
   'git:sync',
   'git:diff',
   'review:change',
+  'review:changes',
   'experiences:count',
   'experiences:export',
   'experiences:clear',
@@ -785,6 +787,7 @@ export const ipcInputSchemas = {
   'git:sync': gitSyncInputSchema,
   'git:diff': gitDiffInputSchema,
   'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
+  'review:changes': reviewChangesInputSchema,
   'experiences:count': emptyInputSchema,
   'experiences:export': emptyInputSchema,
   'experiences:clear': emptyInputSchema,
@@ -1214,6 +1217,8 @@ export interface KaiDesktopBridge {
   gitSync(projectId: string, action: GitSyncAction): Promise<IpcResponse<GitActionResult>>;
   gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
   reviewChange(request: string, diff: string, mode: 'novice' | 'intermediate' | 'expert'): Promise<IpcResponse<string | null>>;
+  /** Reads the diffs of several changed files and returns findings that each name their file. */
+  reviewChanges(request: ReviewChangesInput): Promise<IpcResponse<ChangeReviewResult>>;
   experienceCount(): Promise<IpcResponse<number>>;
   exportExperiences(): Promise<IpcResponse<{ count: number; path: string } | null>>;
   clearExperiences(): Promise<IpcResponse<boolean>>;

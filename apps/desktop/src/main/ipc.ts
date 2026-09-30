@@ -80,7 +80,7 @@ import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUr
 import type { TerminalManager } from './terminal';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
-import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffFile, gitOverview, gitStage, gitSync } from './git-tools';
+import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffAgainstHead, gitDiffFile, gitOverview, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
@@ -819,6 +819,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'git:sync', async ({ projectId, action }) => gitSync(await projectPath(projectId), action));
   handle(context, 'git:diff', async ({ projectId, path: filePath, staged }) => gitDiffFile(await projectPath(projectId), filePath, staged));
   handle(context, 'review:change', async ({ request: reviewRequest, diff, mode }) => context.changeReviewer.review(reviewRequest, diff, mode));
+  handle(context, 'review:changes', async ({ projectId, paths, request: reviewRequest, mode }) => {
+    const root = await projectPath(projectId);
+    const files: Array<{ path: string; diff: string }> = [];
+    for (const filePath of [...new Set(paths)]) files.push({ path: filePath, diff: await gitDiffAgainstHead(root, filePath).catch(() => '') });
+    return context.changeReviewer.reviewFiles(reviewRequest ?? '', files, mode);
+  });
   handle(context, 'experiences:count', async () => (await context.experiences.list()).length);
   handle(context, 'experiences:export', async (_input, request) => {
     const records = await context.experiences.exportReviewed();
