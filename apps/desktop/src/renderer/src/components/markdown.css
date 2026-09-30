@@ -1,0 +1,123 @@
+/* Formatted agent replies. Shared by the desktop chat and the phone console, so colours have fallbacks. */
+.markdown,
+.message-body.markdown,
+.response-content.markdown p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+
+.markdown p {
+  margin: 0 0 12px;
+}
+
+.markdown .md-heading {
+  margin: 18px 0 8px;
+  color: var(--text, inherit);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.markdown h1.md-heading { font-size: 1.35em; }
+.markdown h2.md-heading { font-size: 1.2em; }
+.markdown h3.md-heading { font-size: 1.08em; }
+.markdown h4.md-heading,
+.markdown h5.md-heading,
+.markdown h6.md-heading { font-size: 1em; }
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.markdown li { margin: 3px 0; }
+.markdown li > p { margin: 0 0 6px; }
+.markdown li > ul,
+.markdown li > ol { margin: 4px 0 4px; }
+
+.markdown blockquote {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border, rgba(128, 128, 160, 0.4));
+  color: var(--text-dim, inherit);
+}
+
+.markdown hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--border, rgba(128, 128, 160, 0.35));
+}
+
+.markdown a {
+  color: var(--mint, #7ee0b5);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown strong { color: var(--text, inherit); font-weight: 700; }
+
+.markdown .md-inline-code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(128, 128, 160, 0.18);
+  font: 0.9em "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.markdown .md-table-wrap {
+  margin: 0 0 12px;
+  overflow-x: auto;
+}
+
+.markdown table {
+  border-collapse: collapse;
+  font-size: 0.93em;
+}
+
+.markdown th,
+.markdown td {
+  padding: 6px 12px;
+  border: 1px solid var(--border, rgba(128, 128, 160, 0.35));
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  background: rgba(128, 128, 160, 0.12);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* The phone console has no desktop stylesheet, so a code card gets its basics here too. */
+.markdown .response-code {
+  margin: 0 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--border, rgba(128, 128, 160, 0.35));
+  border-radius: 12px;
+}
+
+.markdown .response-code header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 2px;
+  font: 700 12px "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+}
+
+.markdown .response-code header button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.markdown .response-code pre {
+  margin: 0;
+  padding: 6px 12px 12px;
+  overflow: auto;
+  white-space: pre;
+  font: 12.5px/1.6 "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+}

@@ -1,3 +1,4 @@
+import { Markdown } from '../src/components/Markdown';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ConversationRecord } from '@kai/contracts';
 import { Composer, ago } from './views';
@@ -147,7 +148,7 @@ export function ConversationDetail({ state, conversationId, backLabel, onBack, o
               <span className={`chip ${turn.role === 'user' ? 'soft' : 'run'}`}>{turn.role === 'user' ? 'You' : 'KAI'}</span>
               <span className="meta mono flush">{ago(turn.createdAt)}</span>
             </div>
-            <div className="meta flush">{turn.text || '—'}</div>
+            {turn.role === 'assistant' && turn.text ? <Markdown text={turn.text} /> : <div className="meta flush">{turn.text || '—'}</div>}
           </div>
         ))}
 

@@ -1,3 +1,4 @@
+import { Markdown } from './Markdown';
 import {
   Archive,
   AtSign,
@@ -1191,7 +1192,7 @@ export function WorkspaceView({
             {pendingUser && (activeConversation?.turns.length ?? 0) <= pendingUser.baseCount && (
               <article className="message user"><div className="message-role">You</div><MessageContent text={pendingUser.text} /></article>
             )}
-            {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><div className="message-body">{streamingText}</div></article>}
+            {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} /></article>}
             {running && (
               <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
             )}
@@ -1509,7 +1510,7 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
         )}
         <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
       </div>
-      <MessageContent text={turn.text} />
+      <MessageContent text={turn.text} markdown={turn.role === 'assistant'} />
       {turn.role === 'user' && turn.attachments?.length ? (
         <div className="message-attachments" aria-label="Attached images">
           {turn.attachments.map((attachment) => (
@@ -1580,7 +1581,9 @@ function formatTokenEstimate(value: number): string {
 }
 
 /** A small, dependency-free response renderer: prose remains easy to scan and fenced commands become copyable cards. */
-function MessageContent({ text }: { text: string }): ReactNode {
+function MessageContent({ text, markdown = false }: { text: string; markdown?: boolean }): ReactNode {
+  // KAI's replies are Markdown. What the user typed is shown exactly as written.
+  if (markdown) return <Markdown text={text} />;
   const parts = text.split(/```([^\n`]*)\n?([\s\S]*?)```/g);
   return (
     <div className="message-body response-content">
