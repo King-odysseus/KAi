@@ -158,6 +158,7 @@ import {
   projectRecordV1Schema,
   proxyServiceSettingsSchema,
   learningTutorSettingsSchema,
+  experienceCaptureSettingsSchema,
 } from './domain';
 import { providerModelCatalogSchema, type ProviderModelCatalog } from './direct-providers';
 import {
@@ -512,6 +513,10 @@ export const ipcChannels = [
   'git:create-branch',
   'git:sync',
   'git:diff',
+  'review:change',
+  'experiences:count',
+  'experiences:export',
+  'experiences:clear',
   'git:pull-request',
   'verification:overview',
   'verification:run',
@@ -564,6 +569,7 @@ export const ipcInputSchemas = {
         .strict()
         .optional(),
       learningTutor: learningTutorSettingsSchema.partial().strict().optional(),
+      experienceCapture: experienceCaptureSettingsSchema.partial().strict().optional(),
       promptGuide: promptGuideSettingsSchema.partial().strict().optional(),
       editor: z
         .object({
@@ -778,6 +784,10 @@ export const ipcInputSchemas = {
   'git:create-branch': gitCreateBranchInputSchema,
   'git:sync': gitSyncInputSchema,
   'git:diff': gitDiffInputSchema,
+  'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
+  'experiences:count': emptyInputSchema,
+  'experiences:export': emptyInputSchema,
+  'experiences:clear': emptyInputSchema,
   'git:pull-request': gitPullRequestInputSchema,
   'verification:overview': z.object({ projectId: z.string().min(1) }).strict(),
   'verification:run': verificationRunInputSchema,
@@ -957,6 +967,7 @@ export interface SettingsUpdate {
   mcpServers?: AppSettings['mcpServers'];
   directApi?: Partial<AppSettings['directApi']>;
   learningTutor?: Partial<AppSettings['learningTutor']>;
+  experienceCapture?: Partial<AppSettings['experienceCapture']>;
   promptGuide?: Partial<AppSettings['promptGuide']>;
   editor?: Partial<AppSettings['editor']>;
   cognitive1?: Partial<AppSettings['cognitive1']>;
@@ -1202,6 +1213,10 @@ export interface KaiDesktopBridge {
   gitCreateBranch(projectId: string, name: string, checkout: boolean): Promise<IpcResponse<GitActionResult>>;
   gitSync(projectId: string, action: GitSyncAction): Promise<IpcResponse<GitActionResult>>;
   gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
+  reviewChange(request: string, diff: string, mode: 'novice' | 'intermediate' | 'expert'): Promise<IpcResponse<string | null>>;
+  experienceCount(): Promise<IpcResponse<number>>;
+  exportExperiences(): Promise<IpcResponse<{ count: number; path: string } | null>>;
+  clearExperiences(): Promise<IpcResponse<boolean>>;
   gitPullRequest(projectId: string, title: string, body: string): Promise<IpcResponse<{ url: string }>>;
   verificationOverview(projectId: string): Promise<IpcResponse<VerificationOverview>>;
   runVerification(projectId: string, command: string): Promise<IpcResponse<VerificationRun>>;

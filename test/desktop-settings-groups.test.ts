@@ -31,7 +31,7 @@ describe('per-card settings saves', () => {
     expect(Object.keys(updateForGroups(draft, ['proxy', 'editor'])).sort()).toEqual(['editor', 'proxy']);
     expect(Object.keys(updateForGroups(draft, SETTINGS_GROUP_NAMES)).sort()).toEqual([
       'agentModels', 'agentTeam', 'autoModel', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
-      'directApi', 'editor', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'notifications', 'promptGuide', 'proxy',
+      'directApi', 'editor', 'experienceCapture', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'notifications', 'promptGuide', 'proxy',
       'shortcuts', 'theme',
     ]);
   });

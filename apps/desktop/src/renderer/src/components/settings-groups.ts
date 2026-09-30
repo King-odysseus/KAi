@@ -11,6 +11,7 @@ export const SETTINGS_GROUPS = {
   editor: ['editor'],
   shortcuts: ['shortcuts'],
   learningTutor: ['learningTutor'],
+  experienceCapture: ['experienceCapture'],
   promptGuide: ['promptGuide'],
   directApi: ['directApi'],
   mcpServers: ['mcpServers'],

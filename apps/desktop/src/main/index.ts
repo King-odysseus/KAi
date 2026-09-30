@@ -18,6 +18,7 @@ import { configureCopyCheckpoints } from './copy-checkpoints';
 import { jobFileFromArgv, processHeadlessJobFile } from './headless';
 import { DesktopEvals, EvalStore } from './evals';
 import { RunScoreStore } from './run-scores';
+import { AgentExperienceStore } from './experience-store';
 import { DesktopScheduler, ScheduleStore } from './scheduler';
 import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
@@ -401,6 +402,7 @@ async function startApplication(): Promise<void> {
     preferences,
     teamRecord,
     runScores: new RunScoreStore(path.join(paths.root, 'run-scores.json')),
+    experiences: new AgentExperienceStore(path.join(paths.root, 'agent-experiences.json')),
     scheduler,
     evals,
     changeReviewer,

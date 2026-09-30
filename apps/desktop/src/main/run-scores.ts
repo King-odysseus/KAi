@@ -6,7 +6,8 @@ const MAX_STORED = 500;
 /** Only the most recent runs in a bucket count, so an agent that improves is not held back by old failures. */
 const RECENT_WINDOW = 30;
 export const MIN_RUNS_TO_JUDGE = 5;
-export const ESCALATE_BELOW = 0.5;
+/** An agent is sent up a level only when more than this share of its recent runs went wrong. */
+export const ESCALATE_ABOVE_FAILURE_RATE = 0.5;
 
 const NEXT_LEVEL: Record<WorkLevel, WorkLevel> = { light: 'standard', standard: 'heavy', heavy: 'heavy' };
 
@@ -35,7 +36,16 @@ export class RunScoreStore {
 
 /** A run counts as clean when it finished, and neither its checks nor a fix round said otherwise. */
 export function isCleanRun(score: RunScore): boolean {
-  return score.completed && score.checkPassed !== false && score.fixRounds === 0;
+  // Missing verification is not evidence of success. Only explicit passing checks qualify.
+  return score.completed && score.checkPassed === true && score.fixRounds === 0;
+}
+
+/**
+ * A run that went wrong: it did not finish, a check failed, or it needed a fix round. A run with no check is neither
+ * clean nor failed, so agents are never moved up a level just because nothing verified their work.
+ */
+export function isFailedRun(score: RunScore): boolean {
+  return !score.completed || score.checkPassed === false || score.fixRounds > 0;
 }
 
 export function summarizeScores(scores: readonly RunScore[]): AgentScorecard[] {
@@ -49,6 +59,7 @@ export function summarizeScores(scores: readonly RunScore[]): AgentScorecard[] {
       const recent = entries.slice(-RECENT_WINDOW);
       const first = recent[0]!;
       const clean = recent.filter(isCleanRun).length;
+      const failed = recent.filter(isFailedRun).length;
       const durations = recent.map((entry) => entry.durationMs).sort((a, b) => a - b);
       const middle = Math.floor(durations.length / 2);
       const median = durations.length % 2 ? durations[middle]! : (durations[middle - 1]! + durations[middle]!) / 2;
@@ -62,7 +73,7 @@ export function summarizeScores(scores: readonly RunScore[]): AgentScorecard[] {
         cleanRate,
         medianDurationMs: median,
         totalCostUsd: recent.reduce((sum, entry) => sum + (entry.costUsd ?? 0), 0),
-        escalated: first.execution === 'cli' && first.level !== 'heavy' && recent.length >= MIN_RUNS_TO_JUDGE && cleanRate < ESCALATE_BELOW,
+        escalated: first.execution === 'cli' && first.level !== 'heavy' && recent.length >= MIN_RUNS_TO_JUDGE && failed / recent.length > ESCALATE_ABOVE_FAILURE_RATE,
       };
     })
     .sort((a, b) => a.agent.localeCompare(b.agent) || a.execution.localeCompare(b.execution) || levelRank(a.level) - levelRank(b.level));
@@ -82,6 +93,6 @@ export function escalatedLevel(level: WorkLevel, agent: AgentId, scores: readonl
   const next = NEXT_LEVEL[level];
   return {
     level: next,
-    why: `${agent} got ${card.cleanRuns} of its last ${card.runs} ${level} runs right first time, so this goes one level up`,
+    why: `${agent} has had trouble with its last ${card.runs} ${level} runs, so this goes one level up`,
   };
 }

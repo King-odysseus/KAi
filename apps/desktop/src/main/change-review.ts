@@ -24,6 +24,8 @@ export interface ChangeReviewPorts {
   requester: StructuredRequester;
 }
 
+export type ReviewLearningMode = 'novice' | 'intermediate' | 'expert';
+
 const REVIEW_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -52,14 +54,14 @@ export class DesktopChangeReviewer {
   constructor(private readonly ports: ChangeReviewPorts) {}
 
   /** A short markdown verdict for the transcript, or null when there is nothing to review or no model to do it. */
-  async review(request: string, diff: string): Promise<string | null> {
+  async review(request: string, diff: string, mode: ReviewLearningMode = 'intermediate'): Promise<string | null> {
     if (!diff.trim()) return null;
     const picked = await this.ports.pickConnection();
     if (!('connection' in picked)) return null;
     const result = await this.ports.requester.structuredRequest(
       picked.connection,
       { feature: 'Change review', card: 'Change review' },
-      buildReviewPrompt(request, diff),
+      buildReviewPrompt(request, diff, mode),
       'kai_change_review',
       REVIEW_JSON_SCHEMA,
       parseReview,
@@ -68,14 +70,20 @@ export class DesktopChangeReviewer {
   }
 }
 
-export function buildReviewPrompt(request: string, diff: string): { system: string; user: string } {
+export function buildReviewPrompt(request: string, diff: string, mode: ReviewLearningMode = 'intermediate'): { system: string; user: string } {
+  const teaching = mode === 'novice'
+    ? 'Explain each real finding in plain language: what the code does, why the risk matters, and one concrete question the learner can use to inspect it. Avoid unexplained jargon.'
+    : mode === 'expert'
+      ? 'Use concise, technical findings. Prioritize contracts, data flow, trust boundaries, concurrency, and regression risks; explicitly connect affected modules when the diff supports it.'
+      : 'Explain the consequence and relevant dependency or call path for each finding, using standard engineering terminology.';
   const system = [
     'You are a code reviewer inside KAI, a desktop coding workbench. An agent has just changed a project to satisfy a request.',
     'Judge the diff against the request. Look for: the request not actually being met, bugs and unhandled cases, tests deleted or weakened to pass, unrelated changes (scope creep), secrets or credentials added, and risky commands.',
     'Only report a real problem you can point to in the diff. Do not praise, do not restate the change, do not nitpick style, and do not invent files.',
+    teaching,
     'Set "ok" to true when there is nothing the user needs to act on. Keep "summary" to one or two sentences. Return only JSON matching the schema, with no markdown fences.',
   ].join('\n');
-  return { system, user: `Request:\n${request.slice(0, 4_000)}\n\nDiff:\n${diff}` };
+  return { system, user: `Review level: ${mode}\n\nRequest:\n${request.slice(0, 4_000)}\n\nDiff:\n${diff.slice(0, 100_000)}` };
 }
 
 export function parseReview(content: string): ChangeReview {

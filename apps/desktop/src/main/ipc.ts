@@ -100,6 +100,7 @@ import { runWithAutomation, type AutomationPorts } from './automation';
 import type { DesktopChangeReviewer } from './change-review';
 import type { DesktopEvals } from './evals';
 import { escalatedLevel, summarizeScores, type RunScoreStore } from './run-scores';
+import { makeAgentExperience, type AgentExperienceStore } from './experience-store';
 import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
@@ -180,6 +181,7 @@ export interface IpcContext {
   studio: DesktopStudio;
   teamRecord: TeamRecordStore;
   runScores: RunScoreStore;
+  experiences: AgentExperienceStore;
   scheduler: DesktopScheduler;
   evals: DesktopEvals;
   changeReviewer: DesktopChangeReviewer;
@@ -816,6 +818,21 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   // Pushing sends work off this machine, so the renderer confirms it with the user before calling this.
   handle(context, 'git:sync', async ({ projectId, action }) => gitSync(await projectPath(projectId), action));
   handle(context, 'git:diff', async ({ projectId, path: filePath, staged }) => gitDiffFile(await projectPath(projectId), filePath, staged));
+  handle(context, 'review:change', async ({ request: reviewRequest, diff, mode }) => context.changeReviewer.review(reviewRequest, diff, mode));
+  handle(context, 'experiences:count', async () => (await context.experiences.list()).length);
+  handle(context, 'experiences:export', async (_input, request) => {
+    const records = await context.experiences.exportReviewed();
+    if (!records) return null;
+    const options = {
+      title: 'Export KAI agent experiences', defaultPath: 'kai-agent-experiences.jsonl', filters: [{ name: 'JSON Lines', extensions: ['jsonl'] }],
+    };
+    const owner = request.session?.window ?? context.getMainWindow();
+    const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return null;
+    await fs.writeFile(result.filePath, `${records}\n`, 'utf8');
+    return { count: records.split('\n').filter(Boolean).length, path: result.filePath };
+  });
+  handle(context, 'experiences:clear', async () => { await context.experiences.clear(); return true; });
   handle(context, 'git:pull-request', async ({ projectId, title, body }) => gitCreatePullRequest(await projectPath(projectId), title, body));
   handle(context, 'verification:overview', async ({ projectId }) => {
     const project = await resolveProject(context, projectId, true);
@@ -1336,6 +1353,45 @@ export async function runConversationAgent(
   conversation.events.push(...execution.events);
   conversation.agentSessionId = execution.sessionId;
   await context.conversations.save(conversation);
+
+  // Keep a local, redacted record of observable work only (never hidden reasoning). Content capture is separately
+  // controlled by the user's privacy setting; metadata-only records still support reliability/evaluation metrics.
+  const capture = settings.experienceCapture;
+  if (capture.enabled) {
+    const verification = agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
+      .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0, detail: check.output }));
+    const contentDiff = capture.includeContent && checkpoint
+      ? await textDiffFromCheckpoint(workRoot, checkpoint).catch(() => '')
+      : '';
+    const changes: Array<{ path: string; additions: number; removals: number; patch?: string }> = (userTurn.fileChanges ?? []).map((change) => ({
+      path: change.path,
+      additions: change.added,
+      removals: change.removed,
+    }));
+    if (contentDiff && changes.length) changes[0] = { ...changes[0]!, patch: contentDiff };
+    const outcome = execution.status === 'completed'
+      ? verification.length > 0 && verification.every((check) => check.passed === true) ? 'verified' : 'unverified'
+      : /cancel/i.test(execution.error ?? '') ? 'cancelled' : 'failed';
+    const experience = makeAgentExperience({
+      schemaVersion: 1,
+      id: `exp_${crypto.randomUUID()}`,
+      createdAt: conversation.updatedAt,
+      projectId: project.id,
+      conversationId: conversation.id,
+      request: userTurn.text,
+      response: execution.output ?? '',
+      agent: request.agent,
+      execution: executionMode,
+      ...(request.model ? { model: request.model } : {}),
+      outcome,
+      verification,
+      changes,
+      reviewedForTraining: false,
+    }, capture.includeContent);
+    await context.experiences.add(experience, capture.retentionDays).catch((error) => {
+      context.logger.warn('internal', 'Could not save local agent experience', error instanceof Error ? error.message : String(error));
+    });
+  }
 
   const cancelled = execution.status === 'failed' && /cancel/i.test(execution.error ?? '');
   void context.notifications.notifyRunFinished(

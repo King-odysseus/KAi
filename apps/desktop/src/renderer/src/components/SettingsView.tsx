@@ -39,6 +39,7 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   editor: 'Code editor',
   shortcuts: 'Keyboard shortcuts',
   learningTutor: 'Learning Tutor API',
+  experienceCapture: 'Agent experience capture',
   promptGuide: 'Prompt Guide',
   directApi: 'Direct API',
   mcpServers: 'MCP servers',
@@ -72,6 +73,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [experienceCount, setExperienceCount] = useState(0);
+  const [experienceMessage, setExperienceMessage] = useState('');
   const [cardFeedback, setCardFeedback] = useState<Record<string, SettingsFeedback | null>>({});
   const [openCategories, setOpenCategories] = useState<Record<SettingsCategoryId, boolean>>({
     general: true,
@@ -89,6 +92,19 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   useEffect(() => {
     void refreshBackups();
   }, []);
+  useEffect(() => {
+    void window.kaiDesktop.experienceCount().then((response) => { if (response.ok) setExperienceCount(response.data); });
+  }, []);
+  const exportExperiences = async (): Promise<void> => {
+    const response = await window.kaiDesktop.exportExperiences();
+    setExperienceMessage(response.ok ? response.data ? `Exported ${response.data.count} records to ${response.data.path}` : 'Export cancelled or no records are available.' : response.error.message);
+  };
+  const clearExperiences = async (): Promise<void> => {
+    if (!(await confirmDialog({ title: 'Delete captured agent experiences?', detail: 'This permanently removes the local experience dataset from this device.', confirmLabel: 'Delete dataset', destructive: true }))) return;
+    const response = await window.kaiDesktop.clearExperiences();
+    if (response.ok) { setExperienceCount(0); setExperienceMessage('Local experience dataset deleted.'); }
+    else setExperienceMessage(response.error.message);
+  };
   const directPreset = directProviderPreset(draft.directApi.provider);
   const learningPreset = directProviderPreset(draft.learningTutor.provider);
   const directModels = providerModels.direct?.provider === draft.directApi.provider
@@ -853,6 +869,17 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         <section className="settings-section span-two">
           <div className="section-title"><Database size={17} /><span>Data locations</span></div>
           <div className="location-list">{dataLocations.map((location) => <div key={location.kind} className="location-row"><span>{location.label}</span><code>{location.path}</code></div>)}</div>
+        </section>
+
+        <section className="settings-section span-two">
+          <div className="section-title"><Database size={17} /><span>Local agent experience capture</span></div>
+          <p className="settings-note">Optional Cognitive1 training-data foundation. Records stay on this device, redact common secret formats, and never include hidden model reasoning. Content is excluded unless you explicitly enable it.</p>
+          <label className="toggle-row"><input type="checkbox" checked={draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, enabled: event.target.checked } })} /><span>Collect run outcomes and verification metadata locally</span></label>
+          <label className="toggle-row"><input type="checkbox" checked={draft.experienceCapture.includeContent} disabled={!draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, includeContent: event.target.checked } })} /><span>Include redacted request, response, and code diffs for later curation</span></label>
+          <label className="field"><span>Retention (days)</span><input type="number" min={1} max={3650} value={draft.experienceCapture.retentionDays} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, retentionDays: Math.max(1, Math.min(3650, Number(event.target.value) || 1)) } })} /></label>
+          {cardSave('experienceCapture', 'Save experience capture settings', ['experienceCapture'])}
+          <div className="backup-create-row"><span>{experienceCount} local run records</span><button type="button" className="secondary-button" disabled={!experienceCount} onClick={() => void exportExperiences()}><Archive size={14} />Export JSONL</button><button type="button" className="secondary-button danger-button" disabled={!experienceCount} onClick={() => void clearExperiences()}><Trash2 size={14} />Delete all</button></div>
+          {experienceMessage && <p className="settings-note" role="status">{experienceMessage}</p>}
         </section>
 
         <section className="settings-section span-two">

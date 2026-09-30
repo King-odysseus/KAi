@@ -567,6 +567,7 @@ export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdat
     ...update,
     directApi: { ...settings.directApi, ...update.directApi },
     learningTutor: { ...settings.learningTutor, ...update.learningTutor },
+    experienceCapture: { ...settings.experienceCapture, ...update.experienceCapture },
     promptGuide: { ...settings.promptGuide, ...update.promptGuide },
     editor: { ...settings.editor, ...update.editor },
     mcpServers: update.mcpServers ?? settings.mcpServers,

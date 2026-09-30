@@ -20,12 +20,12 @@ function score(overrides: Partial<RunScore> = {}): RunScore {
 }
 
 describe('run scorecards', () => {
-  it('counts a run as clean only when it finished with no failing check and no fix round', () => {
+  it('counts a run as clean only when it finished, a check passed, and no fix round was needed', () => {
     const cards = summarizeScores([
       score(), score({ checkPassed: true }), score({ checkPassed: false }), score({ fixRounds: 1 }), score({ completed: false }),
     ]);
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({ runs: 5, cleanRuns: 2, cleanRate: 0.4 });
+    expect(cards[0]).toMatchObject({ runs: 5, cleanRuns: 1, cleanRate: 0.2 });
   });
 
   it('escalates a level only after enough runs, and only for CLI agents below heavy', () => {
@@ -39,6 +39,12 @@ describe('run scorecards', () => {
     expect(escalatedLevel('heavy', 'claude', bad('heavy', 9)).level).toBe('heavy');
     expect(escalatedLevel('standard', 'claude', bad('standard', 9, 'api')).level).toBe('standard');
     expect(escalatedLevel('standard', 'codex', bad('standard', 9)).level).toBe('standard');
+  });
+
+  it('never escalates an agent just because nothing verified its runs', () => {
+    const unverified = Array.from({ length: 12 }, () => score({ checkPassed: null }));
+    expect(summarizeScores(unverified)[0]).toMatchObject({ cleanRuns: 0, escalated: false });
+    expect(escalatedLevel('standard', 'claude', unverified).level).toBe('standard');
   });
 
   it('lets an improving agent recover because only recent runs count', () => {

@@ -234,6 +234,13 @@ export const learningTutorSettingsSchema = z
   })
   .strict();
 
+/** Local-only, redacted records of agent work. Content is captured only when the user enables this setting. */
+export const experienceCaptureSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  includeContent: z.boolean().default(false),
+  retentionDays: z.number().int().min(1).max(3650).default(365),
+}).strict();
+
 export const editorSettingsSchema = z
   .object({
     autoSave: z.boolean().default(true),
@@ -321,6 +328,7 @@ export const appSettingsV1Schema = z
     installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
     directApi: directApiSettingsSchema,
     learningTutor: learningTutorSettingsSchema,
+    experienceCapture: experienceCaptureSettingsSchema.default({}),
     // Turns a rough idea into a clear goal and one prompt per teammate, on its own provider connection.
     promptGuide: promptGuideSettingsSchema.default(createDefaultPromptGuide),
     editor: editorSettingsSchema.default({}),
@@ -410,6 +418,7 @@ export const conversationRecordV1Schema = z
 export type ProjectRecord = z.infer<typeof projectRecordV1Schema>;
 export type AppSettings = z.infer<typeof appSettingsV1Schema>;
 export type LearningTutorSettings = z.infer<typeof learningTutorSettingsSchema>;
+export type ExperienceCaptureSettings = z.infer<typeof experienceCaptureSettingsSchema>;
 export type McpServerSettings = z.infer<typeof mcpServerSettingsSchema>;
 export type McpStdioServerSettings = z.infer<typeof mcpStdioServerSettingsSchema>;
 export type McpHttpServerSettings = z.infer<typeof mcpHttpServerSettingsSchema>;
@@ -445,6 +454,7 @@ export function createDefaultSettings(): AppSettings {
       baseUrl: 'https://api.openai.com/v1',
       credentialId: 'provider.openai',
     },
+    experienceCapture: {},
     editor: {
       autoSave: true,
       autoSaveDelayMs: 1_000,

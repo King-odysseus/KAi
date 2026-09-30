@@ -43,6 +43,8 @@ export function GuidedReviewPanel({
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [notes, setNotes] = useState<Record<string, ReviewNote>>(() => readNotes(projectId));
   const [noteText, setNoteText] = useState('');
+  const [aiReview, setAiReview] = useState('');
+  const [reviewing, setReviewing] = useState(false);
 
   useEffect(() => { setNotes(readNotes(projectId)); setPath(null); setDiff(''); }, [projectId]);
   useEffect(() => { try { window.localStorage.setItem('kai.reviewMode', mode); } catch { /* preference only */ } }, [mode]);
@@ -83,6 +85,19 @@ export function GuidedReviewPanel({
     : mode === 'intermediate'
       ? 'Review responsibilities, dependencies, error paths, and the tests that would prove this change.'
       : 'Focus on architecture impact, contracts, failure modes, security boundaries, and regression risk.';
+  const runAiReview = async (): Promise<void> => {
+    if (!diff.trim()) return;
+    setReviewing(true); setAiReview('');
+    try {
+      const result = unwrap(await window.kaiDesktop.reviewChange(
+        `Review the changes in ${selectedPath ?? 'this file'} for correctness, regressions, security, and internal consistency. Explain real findings at the selected ${mode} learning level.`,
+        diff,
+        mode,
+      ));
+      setAiReview(result ?? 'No textual diff is available to review.');
+    } catch (error) { setAiReview(error instanceof Error ? error.message : 'AI review could not be completed.'); }
+    finally { setReviewing(false); }
+  };
 
   return <aside className="guided-review-panel" aria-label="Guided code review">
     <header className="guided-review-head"><div><strong>Guided Review</strong><small>{reviewed}/{scopedPaths.length} files reviewed</small></div><button type="button" className="icon-button compact" title="Copy review report" aria-label="Copy review report" onClick={copyReport}><ClipboardCopy size={13} /></button></header>
@@ -95,6 +110,8 @@ export function GuidedReviewPanel({
       <div className="guided-review-files">{scopedPaths.map((item) => <button key={item} type="button" className={item === selectedPath ? 'active' : ''} onClick={() => { setPath(item); void onOpenFile(item); }}><FileCode2 size={13} /><span>{item}</span><small>{notes[item]?.status ?? 'unreviewed'}</small><ChevronRight size={13} /></button>)}</div>
       {selectedPath && <section className="guided-review-detail"><div className="guided-review-file-title"><FileCode2 size={14} /><strong>{selectedPath}</strong></div>
         <ReviewExplanation mode={mode} path={selectedPath} diff={diff} />
+        <div className="guided-review-actions"><button type="button" className="primary-button" disabled={reviewing || loadingDiff || !diff.trim()} onClick={() => void runAiReview()}><Sparkles size={13} />{reviewing ? 'Reviewing…' : 'AI review this diff'}</button></div>
+        {aiReview && <pre className="guided-review-ai-result">{aiReview}</pre>}
         <div className="guided-review-actions"><button type="button" className="secondary-button" onClick={() => void onExplainFile(selectedPath)}><BookOpen size={13} />Explain with KAI</button><button type="button" className="secondary-button" onClick={() => onCreateFollowup(`Review follow-up for ${selectedPath}: ${currentNote?.note || 'Investigate this change, address any risks, and explain the result.'}`)}><MessageSquareText size={13} />Create follow-up</button><button type="button" className="secondary-button" onClick={() => void onOpenFile(selectedPath)}>Open code</button></div>
         <details className="guided-review-diff"><summary>{loadingDiff ? 'Loading diff…' : 'View diff'}</summary><pre>{diff || 'No diff loaded.'}</pre></details>
         <label className="guided-review-note">Review note<textarea value={noteText || currentNote?.note || ''} onChange={(event) => setNoteText(event.target.value)} placeholder="Decision, question, risk, or test to run" /></label>
