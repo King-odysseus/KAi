@@ -2,6 +2,7 @@ import { BookOpen, CheckCircle2, ChevronRight, ClipboardCopy, FileCode2, GitComp
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { GitChange } from '@kai/contracts';
 import { unwrap } from '../types';
+import { Select } from './ui/Select';
 
 type ReviewMode = 'novice' | 'intermediate' | 'expert';
 type ReviewScope = 'changes' | 'active-file' | 'selection';
@@ -102,8 +103,8 @@ export function GuidedReviewPanel({
   return <aside className="guided-review-panel" aria-label="Guided code review">
     <header className="guided-review-head"><div><strong>Guided Review</strong><small>{reviewed}/{scopedPaths.length} files reviewed</small></div><button type="button" className="icon-button compact" title="Copy review report" aria-label="Copy review report" onClick={copyReport}><ClipboardCopy size={13} /></button></header>
     <div className="guided-review-controls">
-      <label>Mode<select value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)}><option value="novice">Novice</option><option value="intermediate">Intermediate</option><option value="expert">Expert</option></select></label>
-      <label>Scope<select value={scope} onChange={(event) => setScope(event.target.value as ReviewScope)}><option value="changes">Uncommitted changes</option><option value="active-file">Active file</option><option value="selection" disabled={!hasSelection}>Selected code</option></select></label>
+      <label className="field"><span>Mode</span><Select value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)}><option value="novice">Novice</option><option value="intermediate">Intermediate</option><option value="expert">Expert</option></Select></label>
+      <label className="field"><span>Scope</span><Select value={scope} onChange={(event) => setScope(event.target.value as ReviewScope)}><option value="changes">Uncommitted changes</option><option value="active-file">Active file</option><option value="selection" disabled={!hasSelection}>Selected code</option></Select></label>
     </div>
     <p className="guided-review-guidance"><Sparkles size={13} />{guidance}</p>
     {!scopedPaths.length ? <div className="guided-review-empty"><GitCompare size={16} /><strong>Nothing selected for review</strong><span>{scope === 'changes' ? 'Make or refresh Git changes, or choose Active file.' : 'Open a file and select code to review it here.'}</span></div> : <>
@@ -115,7 +116,7 @@ export function GuidedReviewPanel({
         <div className="guided-review-actions"><button type="button" className="secondary-button" onClick={() => void onExplainFile(selectedPath)}><BookOpen size={13} />Explain with KAI</button><button type="button" className="secondary-button" onClick={() => onCreateFollowup(`Review follow-up for ${selectedPath}: ${currentNote?.note || 'Investigate this change, address any risks, and explain the result.'}`)}><MessageSquareText size={13} />Create follow-up</button><button type="button" className="secondary-button" onClick={() => void onOpenFile(selectedPath)}>Open code</button></div>
         <details className="guided-review-diff"><summary>{loadingDiff ? 'Loading diff…' : 'View diff'}</summary><pre>{diff || 'No diff loaded.'}</pre></details>
         <label className="guided-review-note">Review note<textarea value={noteText || currentNote?.note || ''} onChange={(event) => setNoteText(event.target.value)} placeholder="Decision, question, risk, or test to run" /></label>
-        <div className="guided-review-statuses"><button onClick={() => update('understood')} type="button">Understood</button><button onClick={() => update('question')} type="button">Question</button><button onClick={() => update('needs-change')} type="button"><ShieldAlert size={12} />Needs change</button><button onClick={() => update('approved')} type="button"><CheckCircle2 size={12} />Approve</button></div>
+        <div className="guided-review-statuses"><button type="button" className={`secondary-button${currentNote?.status === 'understood' ? ' active-button' : ''}`} onClick={() => update('understood')}>Understood</button><button type="button" className={`secondary-button${currentNote?.status === 'question' ? ' active-button' : ''}`} onClick={() => update('question')}>Question</button><button type="button" className={`secondary-button${currentNote?.status === 'needs-change' ? ' active-button' : ''}`} onClick={() => update('needs-change')}><ShieldAlert size={12} />Needs change</button><button type="button" className={`secondary-button${currentNote?.status === 'approved' ? ' active-button' : ''}`} onClick={() => update('approved')}><CheckCircle2 size={12} />Approve</button></div>
       </section>}
     </>}
   </aside>;
