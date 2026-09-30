@@ -172,11 +172,13 @@ interface ProviderStreamEvent {
   data: string;
 }
 
-interface PendingToolCall {
+export interface PendingToolCall {
   key: string;
   callId?: string;
   name?: string;
   argumentsText: string;
+  /** Anthropic streams a call's arguments by the index of its content block, which counts text blocks too. */
+  blockIndex?: number;
 }
 
 interface PendingChatToolCall extends PendingToolCall {
@@ -924,7 +926,7 @@ export class DesktopDirectProviderRuntime {
           }
           if (type === 'content_block_start') {
             const block = asRecord(value.content_block);
-            if (block?.type === 'tool_use') rememberAnthropicToolCall(pendingToolCalls, block);
+            if (block?.type === 'tool_use') rememberAnthropicToolCall(pendingToolCalls, block, integerValue(value.index));
             const initialText = block?.type === 'text' ? stringValue(block.text) : undefined;
             if (initialText) {
               const shown = (roundText ? '' : roundBreak(outputParts)) + initialText;
@@ -1523,31 +1525,35 @@ function safeToolArguments(value: string): unknown {
   }
 }
 
-function rememberAnthropicToolCall(
+export function rememberAnthropicToolCall(
   toolCalls: Map<string, PendingToolCall>,
   block: Record<string, unknown>,
+  blockIndex?: number,
 ): void {
   const callId = stringValue(block.id);
   const name = stringValue(block.name);
   if (!callId || !name) return;
   const existing = toolCalls.get(callId) ?? { key: callId, callId, name, argumentsText: '' };
   existing.name = name;
+  if (blockIndex !== undefined) existing.blockIndex = blockIndex;
+  // A streamed call starts with an empty input object and then sends its real arguments as JSON fragments, so only a
+  // non-empty input is kept here; an empty one would be glued in front of the fragments and break the JSON.
   const input = block.input;
-  if (input && typeof input === 'object') existing.argumentsText = JSON.stringify(input);
+  if (input && typeof input === 'object' && Object.keys(input).length > 0) existing.argumentsText = JSON.stringify(input);
   toolCalls.set(callId, existing);
 }
 
-function rememberAnthropicToolArguments(
+export function rememberAnthropicToolArguments(
   toolCalls: Map<string, PendingToolCall>,
   value: Record<string, unknown>,
   partialJson: string | undefined,
 ): void {
-  const index = integerValue(value.index) ?? 0;
-  const existing = [...toolCalls.values()].find((call) => call.key === `anthropic-index-${index}`)
-    ?? [...toolCalls.values()][index]
-    ?? { key: `anthropic-index-${index}`, argumentsText: '' };
-  if (partialJson) existing.argumentsText += partialJson;
-  toolCalls.set(existing.key, existing);
+  const index = integerValue(value.index);
+  const existing = index === undefined ? undefined : [...toolCalls.values()].find((call) => call.blockIndex === index);
+  // Fragments for a block that was never announced as a tool call cannot be attributed to one; dropping them is safer
+  // than appending them to whichever call happens to sit at the same position in the list.
+  if (!existing || !partialJson) return;
+  existing.argumentsText += partialJson;
 }
 
 function rememberGeminiToolCall(

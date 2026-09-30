@@ -98,7 +98,8 @@ export class ServiceManager {
 
     record.stopping = true;
     this.setState(kind, 'stopping', `Stopping ${record.spec.label}.`, record.spec);
-    record.child.kill('SIGTERM');
+    // On Windows, killing a process leaves the processes it started running, so the whole tree is ended at once.
+    if (!killWindowsProcessTree(record.child)) record.child.kill('SIGTERM');
     const exit = await Promise.race([
       record.exitPromise,
       delay(record.spec.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS).then(() => null),
@@ -178,6 +179,14 @@ function createManagedProcess(spec: ServiceLaunchSpec, child: ChildProcess): Man
     child.once('error', () => settle(null, null));
   });
   return { spec, child, exitPromise, stopping: false, exited: false, ready: false };
+}
+
+/** Ends a child and everything it started. Returns false where that is not done this way (not Windows). */
+export function killWindowsProcessTree(child: ChildProcess): boolean {
+  if (process.platform !== 'win32' || !child.pid) return false;
+  const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  killer.once('error', () => { child.kill('SIGKILL'); });
+  return true;
 }
 
 function pipeLines(stream: NodeJS.ReadableStream | null, onLine: (line: string) => void): void {

@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -178,7 +179,9 @@ app.on('before-quit', (event) => {
     .then(() => activeContext?.preview.stopAll())
     .then(() => Promise.all([
       serviceController?.dispose() ?? Promise.resolve(),
-      mcpRuntime?.dispose() ?? Promise.resolve(),
+      // On Windows the MCP servers are ended with everything else at the very end, while they are still attached to
+      // KAI; closing them one by one first would leave the processes behind them running.
+      process.platform === 'win32' ? Promise.resolve() : (mcpRuntime?.dispose() ?? Promise.resolve()),
       remoteGateway?.dispose() ?? Promise.resolve(),
     ]))
     .then(() => undefined)
@@ -196,9 +199,24 @@ app.on('before-quit', (event) => {
       mcpRuntime = null;
       remoteGateway = null;
       desktopShell?.dispose();
+      endOwnProcessTree();
       app.exit(0);
     });
 });
+
+/**
+ * Ends every process KAI started (services, agents, commands, terminals, dev servers) so closing the window leaves
+ * nothing running. Windows does not do this by itself: a child keeps running after its parent exits. The tree is
+ * ended by a separate process because this one is part of it.
+ */
+function endOwnProcessTree(): void {
+  if (process.platform !== 'win32') return;
+  try {
+    spawn('taskkill', ['/pid', String(process.pid), '/T', '/F'], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+  } catch {
+    // Exiting anyway; the services were already asked to stop.
+  }
+}
 
 app.on('activate', () => {
   const window = desktopWindows.focused()?.window;
