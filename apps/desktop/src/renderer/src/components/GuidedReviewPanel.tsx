@@ -26,6 +26,7 @@ export function GuidedReviewPanel({
   hasSelection,
   onOpenFile,
   onExplainFile,
+  onCreateFollowup,
 }: {
   projectId: string;
   changes: readonly GitChange[];
@@ -33,6 +34,7 @@ export function GuidedReviewPanel({
   hasSelection: boolean;
   onOpenFile: (path: string) => Promise<void>;
   onExplainFile: (path: string) => Promise<void>;
+  onCreateFollowup: (prompt: string) => void;
 }): ReactNode {
   const [mode, setMode] = useState<ReviewMode>(() => (window.localStorage.getItem('kai.reviewMode') as ReviewMode) || 'novice');
   const [scope, setScope] = useState<ReviewScope>('changes');
@@ -93,7 +95,7 @@ export function GuidedReviewPanel({
       <div className="guided-review-files">{scopedPaths.map((item) => <button key={item} type="button" className={item === selectedPath ? 'active' : ''} onClick={() => { setPath(item); void onOpenFile(item); }}><FileCode2 size={13} /><span>{item}</span><small>{notes[item]?.status ?? 'unreviewed'}</small><ChevronRight size={13} /></button>)}</div>
       {selectedPath && <section className="guided-review-detail"><div className="guided-review-file-title"><FileCode2 size={14} /><strong>{selectedPath}</strong></div>
         <ReviewExplanation mode={mode} path={selectedPath} diff={diff} />
-        <div className="guided-review-actions"><button type="button" className="secondary-button" onClick={() => void onExplainFile(selectedPath)}><BookOpen size={13} />Explain with KAI</button><button type="button" className="secondary-button" onClick={() => void onOpenFile(selectedPath)}><MessageSquareText size={13} />Open code</button></div>
+        <div className="guided-review-actions"><button type="button" className="secondary-button" onClick={() => void onExplainFile(selectedPath)}><BookOpen size={13} />Explain with KAI</button><button type="button" className="secondary-button" onClick={() => onCreateFollowup(`Review follow-up for ${selectedPath}: ${currentNote?.note || 'Investigate this change, address any risks, and explain the result.'}`)}><MessageSquareText size={13} />Create follow-up</button><button type="button" className="secondary-button" onClick={() => void onOpenFile(selectedPath)}>Open code</button></div>
         <details className="guided-review-diff"><summary>{loadingDiff ? 'Loading diff…' : 'View diff'}</summary><pre>{diff || 'No diff loaded.'}</pre></details>
         <label className="guided-review-note">Review note<textarea value={noteText || currentNote?.note || ''} onChange={(event) => setNoteText(event.target.value)} placeholder="Decision, question, risk, or test to run" /></label>
         <div className="guided-review-statuses"><button onClick={() => update('understood')} type="button">Understood</button><button onClick={() => update('question')} type="button">Question</button><button onClick={() => update('needs-change')} type="button"><ShieldAlert size={12} />Needs change</button><button onClick={() => update('approved')} type="button"><CheckCircle2 size={12} />Approve</button></div>

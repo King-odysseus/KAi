@@ -215,6 +215,7 @@ export function CodeView({
   autoSaveDelayMs,
   formatOnSave = true,
   onOpenSettings,
+  onCreateReviewFollowup,
   openRequest = null,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
@@ -225,6 +226,7 @@ export function CodeView({
   autoSaveDelayMs: number;
   formatOnSave?: boolean;
   onOpenSettings: () => void;
+  onCreateReviewFollowup: (prompt: string) => void;
 }): ReactNode {
   const projectId = activeProject?.id ?? null;
   const [files, setFiles] = useState<ProjectFileEntry[]>([]);
@@ -1552,6 +1554,7 @@ export function CodeView({
             hasSelection={Boolean(learningSelection?.text.trim())}
             onOpenFile={openFile}
             onExplainFile={async (path) => { await openFile(path); setSidePanel('learn'); setTutorOpen(true); await runLearningAction('explain-file'); }}
+            onCreateFollowup={onCreateReviewFollowup}
           /> : <LearningPanel
             key={projectId}
             projectFiles={files.map((file) => file.path)}

@@ -1164,6 +1164,17 @@ export function App(): ReactNode {
     if (saved) setProjectPreferences(saved);
   }
 
+  /** Saves (or, with null, removes) the checks, hooks and review for the open project; true when it was stored. */
+  async function saveProjectAutomation(automation: ProjectPreferences['automation'] | null): Promise<boolean> {
+    if (!activeProject) return false;
+    const base: ProjectPreferences = projectPreferences ?? { schemaVersion: 1, projectId: activeProject.id };
+    const { automation: _previous, ...rest } = base;
+    const next: ProjectPreferences = automation ? { ...rest, automation } : rest;
+    const saved = await perform(() => window.kaiDesktop.updatePreferences(next).then(unwrap), 'Saving project automation');
+    if (saved) setProjectPreferences(saved);
+    return Boolean(saved);
+  }
+
   /** Saves (or, with null, removes) the team just for the open project; true when it was stored. */
   async function saveProjectTeam(team: AgentTeam | null): Promise<boolean> {
     if (!activeProject) return false;
@@ -1453,6 +1464,8 @@ export function App(): ReactNode {
             activeProject={activeProject ? { id: activeProject.id, name: activeProject.name } : null}
             projectTeam={projectPreferences?.agentTeam ?? null}
             onSaveProjectTeam={(team) => saveProjectTeam(team)}
+            projectAutomation={projectPreferences?.automation ?? null}
+            onSaveProjectAutomation={(automation) => saveProjectAutomation(automation)}
             settings={bootstrap.settings}
             credentialStatus={credentials}
             dataLocations={bootstrap.dataLocations}
@@ -1711,6 +1724,7 @@ export function App(): ReactNode {
                 autoSaveDelayMs={bootstrap.settings.editor.autoSaveDelayMs}
                 formatOnSave={bootstrap.settings.editor.formatOnSave}
                 onOpenSettings={() => setView('settings')}
+                onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
                 openRequest={codeOpenRequest}
               />
             </div>
