@@ -55,16 +55,16 @@ interface ChatToolCall {
     arguments: string;
   };
 }
-const MAX_PROVIDER_ROUNDS = 41;
-const MAX_TOOL_ROUNDS = 40;
+const MAX_PROVIDER_ROUNDS = 101;
+const MAX_TOOL_ROUNDS = 100;
 const DEEPSEEK_MAX_TOOL_ROUNDS = 7;
 /**
  * DeepSeek refuses more than DEEPSEEK_MAX_TOOL_ROUNDS tool rounds in one request. Rather than cutting the task short and
  * telling the user to finish it, a run continues in a fresh request whose history folds the earlier tool activity into a
  * short summary. These bound the whole run: the cost cap and repeat detection still apply on top.
  */
-const DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS = 120;
-const DEEPSEEK_MAX_PROVIDER_ROUNDS = 140;
+const DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS = 300;
+const DEEPSEEK_MAX_PROVIDER_ROUNDS = 340;
 const CONTINUATION_ENTRY_LIMIT = 40;
 const CONTINUATION_TEXT_LIMIT = 200;
 const DEEPSEEK_WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
@@ -145,6 +145,23 @@ function continuationMessage(summary: string): string {
   return `${summary}\n\nContinue the task from where you left off. Do not repeat steps that already succeeded. Run any remaining commands and edits yourself with your tools instead of listing them for the user, and give the final answer only when the task is done.`;
 }
 
+/** The Anthropic-style address of the official DeepSeek API, or undefined for any other provider or a custom address. */
+export function deepSeekAnthropicBaseUrl(capability: Pick<DirectApiCapability, 'provider' | 'baseUrl'>): string | undefined {
+  if (capability.provider !== 'deepseek') return undefined;
+  try {
+    const url = new URL(capability.baseUrl);
+    if (url.hostname.toLowerCase() !== 'api.deepseek.com') return undefined;
+    return 'https://api.deepseek.com/anthropic';
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when a failed request says the endpoint itself refused the call, rather than the key, quota or content. */
+export function endpointRejected(error: string | undefined): boolean {
+  return /Provider request failed \((400|404|405|415|422)\)/.test(error ?? '');
+}
+
 function isDeepSeekCapability(capability: DirectApiCapability): boolean {
   return capability.provider === 'deepseek' || capability.model.trim().toLowerCase().includes('deepseek');
 }
@@ -215,6 +232,8 @@ export interface DirectProviderRuntimeOptions {
 
 export class DesktopDirectProviderRuntime {
   private readonly activeRuns = new Map<string, AbortController>();
+  /** Set once DeepSeek's Anthropic-style endpoint refuses a call, so later runs go straight to the chat endpoint. */
+  private deepSeekAnthropicRejected = false;
 
   constructor(
     private readonly settings: DirectApiSettingsPort,
@@ -346,6 +365,31 @@ export class DesktopDirectProviderRuntime {
     }
 
     const protocol = directProviderPreset(capability.provider).protocol;
+    // DeepSeek's chat endpoint refuses more than a few tool rounds per request, which forces runs to be cut into blocks.
+    // Its Anthropic-style endpoint has no such cap, so the official API is tried that way first.
+    const anthropicBase = protocol === 'chat-completions' && request.route !== 'proxy' ? deepSeekAnthropicBaseUrl(capability) : undefined;
+    if (anthropicBase && !this.deepSeekAnthropicRejected) {
+      let toolsUsed = false;
+      const watch = (event: PersistedEvent): void => {
+        if (event.type !== 'agent.lifecycle' && event.type !== 'text.delta') toolsUsed = true;
+        onEvent?.(event);
+      };
+      const attempt = await this.runAnthropicMessages(
+        request,
+        projectRoot,
+        { ...capability, baseUrl: anthropicBase },
+        apiKey,
+        watch,
+        approvals,
+        contextText,
+        history,
+        customPermissions,
+      );
+      if (!(attempt.status === 'failed' && !toolsUsed && !attempt.output.trim() && endpointRejected(attempt.error))) return attempt;
+      // The endpoint is not available for this key or model; use the chat endpoint, and do not try again this session.
+      this.deepSeekAnthropicRejected = true;
+      onEvent?.(lifecycleEvent(request, 'starting', 'DeepSeek\'s Anthropic-style endpoint was not accepted; using its chat endpoint instead.'));
+    }
     if (protocol === 'chat-completions') {
       return this.runChatCompletions(
         request,
