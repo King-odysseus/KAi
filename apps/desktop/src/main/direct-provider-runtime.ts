@@ -40,7 +40,7 @@ export interface DirectApiHistoryTurn {
   text: string;
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content?: string | null;
   tool_calls?: ChatToolCall[];
@@ -58,6 +58,15 @@ interface ChatToolCall {
 const MAX_PROVIDER_ROUNDS = 41;
 const MAX_TOOL_ROUNDS = 40;
 const DEEPSEEK_MAX_TOOL_ROUNDS = 7;
+/**
+ * DeepSeek refuses more than DEEPSEEK_MAX_TOOL_ROUNDS tool rounds in one request. Rather than cutting the task short and
+ * telling the user to finish it, a run continues in a fresh request whose history folds the earlier tool activity into a
+ * short summary. These bound the whole run: the cost cap and repeat detection still apply on top.
+ */
+const DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS = 120;
+const DEEPSEEK_MAX_PROVIDER_ROUNDS = 140;
+const CONTINUATION_ENTRY_LIMIT = 40;
+const CONTINUATION_TEXT_LIMIT = 200;
 const DEEPSEEK_WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
 const MAX_APPROVAL_DETAIL = 4_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
@@ -66,6 +75,56 @@ const MAX_RETRY_DELAY_MS = 30_000;
 
 // DeepSeek is the one Chat Completions provider whose tool round cap (8) sits far below the others.
 // OpenRouter and openai-compatible routes can still point at a DeepSeek model, so match on the id too.
+function clip(value: string, limit: number): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`;
+}
+
+/** Whether a tool result reads as a failure: an error field, or a command that exited non-zero. */
+function toolResultFailed(content: string | null | undefined): boolean {
+  try {
+    const parsed = JSON.parse(content ?? '') as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object') return false;
+    if (typeof parsed.error === 'string' && parsed.error) return true;
+    return typeof parsed.exitCode === 'number' && parsed.exitCode !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The tool activity of a run so far, as a short plain-text list. It replaces the raw tool calls and results in the
+ * history when a run continues in a fresh request, so the model keeps what it learned without the request growing.
+ */
+export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
+  const results = new Map<string, ChatMessage>();
+  for (const message of tail) {
+    if (message.role === 'tool' && message.tool_call_id) results.set(message.tool_call_id, message);
+  }
+  const entries: string[] = [];
+  for (const message of tail) {
+    if (message.role !== 'assistant') continue;
+    const said = message.content?.trim();
+    if (said) entries.push(`You said: ${clip(said, CONTINUATION_TEXT_LIMIT)}`);
+    for (const call of message.tool_calls ?? []) {
+      const result = results.get(call.id);
+      const status = result ? (toolResultFailed(result.content) ? 'failed' : 'ok') : 'no result';
+      entries.push(`${call.function.name} ${clip(call.function.arguments, CONTINUATION_TEXT_LIMIT)} -> ${status}${result?.content ? `: ${clip(result.content, CONTINUATION_TEXT_LIMIT)}` : ''}`);
+    }
+  }
+  const shown = entries.slice(-CONTINUATION_ENTRY_LIMIT);
+  const omitted = entries.length - shown.length;
+  return [
+    'Progress so far on this task (your earlier tool calls, oldest first):',
+    ...(omitted > 0 ? [`(${omitted} earlier steps not shown)`] : []),
+    ...shown.map((entry, index) => `${omitted + index + 1}. ${entry}`),
+  ].join('\n');
+}
+
+function continuationMessage(summary: string): string {
+  return `${summary}\n\nContinue the task from where you left off. Do not repeat steps that already succeeded. Run any remaining commands and edits yourself with your tools instead of listing them for the user, and give the final answer only when the task is done.`;
+}
+
 function isDeepSeekCapability(capability: DirectApiCapability): boolean {
   return capability.provider === 'deepseek' || capability.model.trim().toLowerCase().includes('deepseek');
 }
@@ -526,12 +585,18 @@ export class DesktopDirectProviderRuntime {
     let outputTokens: number | undefined;
     let aborted = false;
     let toolRounds = 0;
-    // DeepSeek's hard cap is far lower than the generic limit; stop one round early and summarize.
-    const toolRoundLimit = isDeepSeekCapability(capability) ? DEEPSEEK_MAX_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+    // DeepSeek's cap on tool rounds per request is far lower than the generic limit, so its runs work in blocks:
+    // after each block the history is compacted and the run carries on in a fresh request.
+    const deepSeek = isDeepSeekCapability(capability);
+    const segmentLimit = deepSeek ? DEEPSEEK_MAX_TOOL_ROUNDS : Number.POSITIVE_INFINITY;
+    const totalToolRoundLimit = deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+    const providerRoundLimit = deepSeek ? DEEPSEEK_MAX_PROVIDER_ROUNDS : MAX_PROVIDER_ROUNDS;
+    let segmentRounds = 0;
+    let segmentStart = messages.length;
     let forceFinalAnswer = false;
 
     try {
-      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+      for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
@@ -590,8 +655,8 @@ export class DesktopDirectProviderRuntime {
           .sort((left, right) => left.index - right.index)
           .filter((call) => call.name);
         if (toolCalls.length === 0) break;
-        if (toolRounds >= MAX_TOOL_ROUNDS) {
-          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+        if (toolRounds >= totalToolRoundLimit) {
+          errors.push(`The provider exceeded the ${totalToolRoundLimit}-round tool limit.`);
           break;
         }
         toolRounds += 1;
@@ -616,11 +681,21 @@ export class DesktopDirectProviderRuntime {
           chatToolOutput,
         );
         messages.push(...toolResults as ChatMessage[]);
-        // DeepSeek stops accepting tools past its own cap; drop tools from the next request and
-        // nudge it to wrap up instead of hitting the hard MAX_TOOL_ROUNDS error.
-        if (!forceFinalAnswer && toolRounds >= toolRoundLimit) {
-          forceFinalAnswer = true;
-          messages.push({ role: 'user', content: DEEPSEEK_WRAP_UP_MESSAGE });
+        segmentRounds += 1;
+        if (!forceFinalAnswer && segmentRounds >= segmentLimit) {
+          if (toolRounds < totalToolRoundLimit) {
+            // DeepSeek stops accepting tools past its per-request cap. Fold this block of tool activity into a
+            // summary and carry on in a fresh request, so the task is finished rather than handed back half-done.
+            const summary = compactChatToolHistory(messages.slice(segmentStart));
+            messages.length = segmentStart;
+            messages.push({ role: 'user', content: continuationMessage(summary) });
+            segmentStart = messages.length;
+            segmentRounds = 0;
+            emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached its per-request tool limit; continuing in a fresh request.`));
+          } else {
+            forceFinalAnswer = true;
+            messages.push({ role: 'user', content: DEEPSEEK_WRAP_UP_MESSAGE });
+          }
         }
       }
     } catch (error) {

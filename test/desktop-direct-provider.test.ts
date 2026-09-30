@@ -214,6 +214,62 @@ describe('desktop direct provider runtime', () => {
     expect(requests[0]).toMatchObject({ path: '/v1/chat/completions', body: { model: 'deepseek-reasoner' } });
   });
 
+  it('keeps a DeepSeek run going past its per-request tool limit instead of handing the task back', async () => {
+    const requests: Array<{ messages: Array<Record<string, unknown>>; tools?: unknown[] }> = [];
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-deepseek-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { messages: Array<Record<string, unknown>>; tools?: unknown[] };
+        requests.push(body);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        // Nineteen tool rounds, then the answer: well past DeepSeek's seven per request.
+        if (requests.length <= 19) {
+          const call = { index: 0, id: `call_${requests.length}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'notes.txt', start_line: requests.length }) } };
+          response.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] } }] })}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+`);
+          return;
+        }
+        response.end(`data: {"choices":[{"delta":{"content":"All done."},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(chatProviderSettings(baseUrl, 'deepseek', 'deepseek-chat')),
+      credentialPort('provider.deepseek', 'ds-test-secret'),
+    );
+
+    const result = await runtime.run({ ...runRequest(), autonomy: 'full' }, projectRoot);
+
+    expect(result).toMatchObject({ status: 'completed', output: 'All done.' });
+    expect(requests).toHaveLength(20);
+    // No request carries more than seven tool rounds, and every one still offers tools until the answer.
+    for (const request of requests) {
+      const rounds = request.messages.filter((message) => message.role === 'assistant' && Array.isArray(message.tool_calls)).length;
+      expect(rounds).toBeLessThanOrEqual(7);
+      expect(Array.isArray(request.tools) && request.tools.length > 0).toBe(true);
+    }
+    // The request after the seventh round starts fresh, with the earlier work summarised instead of replayed.
+    const continued = requests[7]!.messages;
+    expect(continued.some((message) => message.role === 'tool')).toBe(false);
+    const summary = continued.find((message) => typeof message.content === 'string' && message.content.includes('Progress so far'));
+    expect(String(summary?.content)).toContain('read_file');
+    expect(String(summary?.content)).toContain('Run any remaining commands and edits yourself');
+  });
+
   it('streams native Anthropic Messages with the Anthropic credential headers', async () => {
     const requests: Array<{ path?: string; apiKey?: string; version?: string; body: Record<string, unknown> }> = [];
     const server = http.createServer((request, response) => {
