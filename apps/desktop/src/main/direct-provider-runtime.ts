@@ -121,6 +121,26 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
   ].join('\n');
 }
 
+/**
+ * True when a reply that used no tools only says what the model is about to do ("Let me read the files"). Some models
+ * end their turn there, which would end the run with the work not started.
+ */
+export function announcesUnfinishedWork(text: string): boolean {
+  const said = text.trim();
+  if (!said || said.length > 700 || said.endsWith('?')) return false;
+  const last = said.split(/\n{2,}/).at(-1) ?? said;
+  return /\b(let me|i'll|i will|i'm going to|i am going to|now i(?:'ll| will)?|next,? i)\b/i.test(last);
+}
+
+const UNFINISHED_WORK_NUDGE = 'You described what you would do but did not do it. Do it now with your tools. If the task is already complete, say what you did and stop.';
+const MAX_UNFINISHED_NUDGES = 3;
+
+/** A blank line to put before the first text of a round when earlier rounds already wrote some, so they do not run together. */
+function roundBreak(outputParts: readonly string[]): string {
+  const last = outputParts.at(-1);
+  return last && !/\s$/.test(last) ? '\n\n' : '';
+}
+
 function continuationMessage(summary: string): string {
   return `${summary}\n\nContinue the task from where you left off. Do not repeat steps that already succeeded. Run any remaining commands and edits yourself with your tools instead of listing them for the user, and give the final answer only when the task is done.`;
 }
@@ -389,6 +409,7 @@ export class DesktopDirectProviderRuntime {
     let outputTokens: number | undefined;
     let aborted = false;
     let toolRounds = 0;
+    let nudges = 0;
     let providerInput: unknown = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
       : request.prompt;
@@ -399,6 +420,7 @@ export class DesktopDirectProviderRuntime {
         assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundEmittedText = false;
+        let roundText = '';
         let roundProviderError: string | undefined;
 
         const response = await this.requestProviderResponse(
@@ -438,9 +460,11 @@ export class DesktopDirectProviderRuntime {
           if (type === 'response.output_text.delta') {
             const delta = stringValue(value.delta);
             if (delta) {
-              outputParts.push(delta);
+              const shown = (roundText ? '' : roundBreak(outputParts)) + delta;
+              roundText += delta;
+              outputParts.push(shown);
               roundEmittedText = true;
-              onEvent?.(textEvent(request, delta));
+              onEvent?.(textEvent(request, shown));
             }
             continue;
           }
@@ -456,9 +480,11 @@ export class DesktopDirectProviderRuntime {
             if (!roundEmittedText) {
               const finalText = outputText(responseRecord?.output);
               if (finalText) {
-                outputParts.push(finalText);
+                const shown = (roundText ? '' : roundBreak(outputParts)) + finalText;
+                roundText += finalText;
+                outputParts.push(shown);
                 roundEmittedText = true;
-                onEvent?.(textEvent(request, finalText));
+                onEvent?.(textEvent(request, shown));
               }
             }
             continue;
@@ -474,7 +500,14 @@ export class DesktopDirectProviderRuntime {
         }
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
-        if (toolCalls.length === 0) break;
+        if (toolCalls.length === 0) {
+          if (nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
+            nudges += 1;
+            providerInput = UNFINISHED_WORK_NUDGE;
+            continue;
+          }
+          break;
+        }
         if (toolRounds >= MAX_TOOL_ROUNDS) {
           errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
           break;
@@ -594,6 +627,7 @@ export class DesktopDirectProviderRuntime {
     let segmentRounds = 0;
     let segmentStart = messages.length;
     let forceFinalAnswer = false;
+    let nudges = 0;
 
     try {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
@@ -634,6 +668,11 @@ export class DesktopDirectProviderRuntime {
           const delta = asRecord(choice?.delta);
           const deltaText = chatContentText(delta?.content);
           if (deltaText) {
+            // Text from an earlier round would otherwise run straight into this one ("...the files.I will...").
+            if (!roundText && outputParts.length > 0 && !/\s$/.test(outputParts.join('').slice(-1))) {
+              outputParts.push('\n\n');
+              onEvent?.(textEvent(request, '\n\n'));
+            }
             roundText += deltaText;
             outputParts.push(deltaText);
             onEvent?.(textEvent(request, deltaText));
@@ -654,7 +693,15 @@ export class DesktopDirectProviderRuntime {
         const toolCalls = [...pendingToolCalls.values()]
           .sort((left, right) => left.index - right.index)
           .filter((call) => call.name);
-        if (toolCalls.length === 0) break;
+        if (toolCalls.length === 0) {
+          if (!forceFinalAnswer && nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
+            nudges += 1;
+            messages.push({ role: 'assistant', content: roundText });
+            messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
+            continue;
+          }
+          break;
+        }
         if (toolRounds >= totalToolRoundLimit) {
           errors.push(`The provider exceeded the ${totalToolRoundLimit}-round tool limit.`);
           break;
@@ -789,6 +836,7 @@ export class DesktopDirectProviderRuntime {
     let outputTokens: number | undefined;
     let aborted = false;
     let toolRounds = 0;
+    let nudges = 0;
 
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
@@ -830,9 +878,10 @@ export class DesktopDirectProviderRuntime {
             if (block?.type === 'tool_use') rememberAnthropicToolCall(pendingToolCalls, block);
             const initialText = block?.type === 'text' ? stringValue(block.text) : undefined;
             if (initialText) {
+              const shown = (roundText ? '' : roundBreak(outputParts)) + initialText;
               roundText += initialText;
-              outputParts.push(initialText);
-              onEvent?.(textEvent(request, initialText));
+              outputParts.push(shown);
+              onEvent?.(textEvent(request, shown));
             }
             continue;
           }
@@ -841,9 +890,10 @@ export class DesktopDirectProviderRuntime {
             if (delta?.type === 'text_delta') {
               const text = stringValue(delta.text);
               if (text) {
+                const shown = (roundText ? '' : roundBreak(outputParts)) + text;
                 roundText += text;
-                outputParts.push(text);
-                onEvent?.(textEvent(request, text));
+                outputParts.push(shown);
+                onEvent?.(textEvent(request, shown));
               }
             } else if (delta?.type === 'input_json_delta') {
               rememberAnthropicToolArguments(pendingToolCalls, value, stringValue(delta.partial_json));
@@ -869,7 +919,15 @@ export class DesktopDirectProviderRuntime {
         }
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
-        if (toolCalls.length === 0) break;
+        if (toolCalls.length === 0) {
+          if (nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
+            nudges += 1;
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
+            messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
+            continue;
+          }
+          break;
+        }
         if (toolRounds >= MAX_TOOL_ROUNDS) {
           errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
           break;
@@ -951,6 +1009,7 @@ export class DesktopDirectProviderRuntime {
     let outputTokens: number | undefined;
     let aborted = false;
     let toolRounds = 0;
+    let nudges = 0;
 
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
@@ -995,9 +1054,10 @@ export class DesktopDirectProviderRuntime {
             const part = asRecord(rawPart);
             const text = stringValue(part?.text);
             if (text) {
+              const shown = (roundText ? '' : roundBreak(outputParts)) + text;
               roundText += text;
-              outputParts.push(text);
-              onEvent?.(textEvent(request, text));
+              outputParts.push(shown);
+              onEvent?.(textEvent(request, shown));
             }
             const functionCall = asRecord(part?.functionCall);
             const name = stringValue(functionCall?.name);
@@ -1011,7 +1071,15 @@ export class DesktopDirectProviderRuntime {
         }
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
-        if (toolCalls.length === 0) break;
+        if (toolCalls.length === 0) {
+          if (nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
+            nudges += 1;
+            contents.push({ role: 'model', parts: [{ text: roundText }] });
+            contents.push({ role: 'user', parts: [{ text: UNFINISHED_WORK_NUDGE }] });
+            continue;
+          }
+          break;
+        }
         if (toolRounds >= MAX_TOOL_ROUNDS) {
           errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
           break;

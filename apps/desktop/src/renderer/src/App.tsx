@@ -864,6 +864,11 @@ export function App(): ReactNode {
           ...(options.goal ? { goal: options.goal } : {}),
           ...(options.skills?.length ? { skills: options.skills } : {}),
           ...(options.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
+          // Files picked in the composer already travel as selectedPaths; the images and memory notes travel as chips.
+          ...(() => {
+            const chips = (options.contextChips ?? []).filter((chip) => chip.type !== 'file');
+            return chips.length ? { contextChips: chips } : {};
+          })(),
         }));
       setConversations((current) => [
         result.conversation,

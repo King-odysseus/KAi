@@ -896,22 +896,26 @@ export function WorkspaceView({
     }
   }
 
-  async function attachImageFile(file: File): Promise<void> {
-    if (!file.type.startsWith('image/')) {
+  /** Attaches every image given, one after another. A failure on one is reported and the rest still attach. */
+  async function attachImageFiles(files: readonly File[]): Promise<void> {
+    const images = files.filter((file) => file.type.startsWith('image/'));
+    if (images.length === 0) {
       setWorkbenchNotice('Attach a PNG, JPEG, GIF, or WebP image.');
       return;
     }
     setContextBusy(true);
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      const chip = await window.kaiDesktop.saveAttachment(file.name, dataUrl).then(unwrap);
-      if (chip.type !== 'image') throw new Error('The attachment service returned an invalid image chip.');
-      setContextChips((current) => [
-        ...current.filter((item) => !(item.type === 'image' && item.name === chip.name)),
-        chip,
-      ]);
-    } catch (caught) {
-      setWorkbenchNotice(messageOf(caught));
+      for (const file of images) {
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          const chip = await window.kaiDesktop.saveAttachment(file.name, dataUrl).then(unwrap);
+          if (chip.type !== 'image') throw new Error('The attachment service returned an invalid image chip.');
+          // Each save has its own file, so two pasted screenshots that are both called image.png stay separate.
+          setContextChips((current) => [...current.filter((item) => !(item.type === 'image' && item.path === chip.path)), chip]);
+        } catch (caught) {
+          setWorkbenchNotice(`${file.name}: ${messageOf(caught)}`);
+        }
+      }
     } finally {
       setContextBusy(false);
       if (imageInputRef.current) imageInputRef.current.value = '';
@@ -1410,9 +1414,10 @@ export function WorkspaceView({
           className="visually-hidden"
           type="file"
           accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
           onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void attachImageFile(file);
+            const files = [...(event.target.files ?? [])];
+            if (files.length > 0) void attachImageFiles(files);
           }}
         />
         <div className="composer-box">
@@ -1433,11 +1438,12 @@ export function WorkspaceView({
               }
             }}
             onPaste={(event) => {
-              const image = [...event.clipboardData.items].find((item) => item.type.startsWith('image/'));
-              const file = image?.getAsFile();
-              if (file) {
+              const files = [...event.clipboardData.items]
+                .filter((item) => item.type.startsWith('image/'))
+                .flatMap((item) => item.getAsFile() ?? []);
+              if (files.length > 0) {
                 event.preventDefault();
-                void attachImageFile(file);
+                void attachImageFiles(files);
               }
             }}
             onKeyDown={(event) => {
