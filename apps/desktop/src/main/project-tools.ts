@@ -361,6 +361,10 @@ export class DesktopProjectToolRuntime {
     const stat = await fs.stat(cwd);
     if (!stat.isDirectory()) throw new Error(`${input.cwd ?? '.'} is not a directory.`);
 
+    // Dev servers deliberately do not exit. Waiting for one makes the normal
+    // command timeout kill it and leaves the agent turn looking frozen.
+    if (isDevServerCommand(input.command)) return this.startBackgroundServer(input.command, cwd);
+
     const startedAt = Date.now();
     let stdout = '';
     let stderr = '';
@@ -425,6 +429,33 @@ export class DesktopProjectToolRuntime {
       if (timeout) clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
     }
+  }
+
+  private async startBackgroundServer(command: string, cwd: string): Promise<ProjectToolExecution> {
+    return new Promise((resolve) => {
+      const child = spawn(command, {
+        cwd,
+        shell: true,
+        windowsHide: true,
+        detached: true,
+        env: { ...process.env, BROWSER: 'none', FORCE_COLOR: '1' },
+        stdio: 'ignore',
+      });
+      child.once('error', (error) => resolve(commandFailure(error.message, '', '', undefined)));
+      child.once('spawn', () => {
+        child.unref();
+        resolve({
+          ok: true,
+          output: {
+            background: true,
+            pid: child.pid ?? null,
+            command,
+            cwd,
+            message: 'Dev server started in the background. It will keep running after this agent turn finishes.',
+          },
+        });
+      });
+    });
   }
 
   private async collectTextFiles(root: string): Promise<string[]> {
@@ -547,6 +578,10 @@ function commandFailure(
       error: message,
     },
   };
+}
+
+function isDevServerCommand(command: string): boolean {
+  return /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start)(?:\s|$)|(?:^|\s)(?:vite|next\s+dev|nuxt\s+dev|webpack(?:\s+serve)?)(?:\s|$)/i.test(command.trim());
 }
 
 function isMissingPathError(error: unknown): boolean {

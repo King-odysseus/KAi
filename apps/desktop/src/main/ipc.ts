@@ -1084,7 +1084,7 @@ export async function runConversationAgent(
         selectedPaths,
         conversation.compaction,
       )).text;
-  let effectivePrompt = buildSkillPrompt(selectedSkills, request.prompt);
+  let effectivePrompt = `${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
   if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing()}\n\n${effectivePrompt}`;
@@ -1416,6 +1416,14 @@ function fullAccessExecutionBriefing(): string {
       ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
       : 'Use commands compatible with the current project shell.',
     'For build → commit → push work: make the requested change, run the verification command, fix actionable failures, then commit and push only if the user requested commit/push. Report the command results and commit hash at the end.',
+  ].join('\n');
+}
+
+function longRunningCommandBriefing(): string {
+  return [
+    '# Long-running command policy',
+    'Development servers are long-lived processes, not verification commands. When the user asks to run `npm run dev`, `npm start`, Vite, Next dev, or an equivalent server, start it in the background, confirm the local URL when possible, and then finish the agent turn.',
+    'Never leave a conversation waiting for a dev server to exit and do not describe a timed-out foreground server as successfully running.',
   ].join('\n');
 }
 
