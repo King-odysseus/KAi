@@ -203,7 +203,7 @@ function BackendSection(props: ConfigTabProps & {
                   label={agent === 'codex' ? 'Proxy relay model ⓘ' : 'Client relay model ⓘ'}
                   title={`The client-side model ID written to the ${name} config. It is a stable relay name; the proxy replaces it with the upstream model.`}
                   value={backend.configModel ?? ''}
-                  placeholder={agent === 'codex' ? 'gpt-5.5' : 'qwen-proxy'}
+                  placeholder={agent === 'codex' ? 'gpt-5.6-sol' : 'qwen-proxy'}
                   onChange={(configModel) => update(configModel.trim() ? { configModel: configModel.trim() } : { configModel: undefined })}
                 />
               </div>
@@ -415,8 +415,8 @@ function DualApiSection(props: ConfigTabProps): ReactNode {
   const { draft, patch, save, savedSection, credentialStatus } = props;
   const anthropic = draft.providers.anthropic;
   const openai = draft.providers.openai;
-  const anthropicModel = anthropic?.modelMap['gpt-5.5'] ?? CATALOG_DEFAULTS.anthropic;
-  const openaiModel = openai?.modelMap['gpt-5.5'] ?? CATALOG_DEFAULTS.openai;
+  const anthropicModel = anthropic?.modelMap['gpt-5.6-sol'] ?? anthropic?.modelMap['gpt-5.5'] ?? CATALOG_DEFAULTS.anthropic;
+  const openaiModel = openai?.modelMap['gpt-5.6-sol'] ?? openai?.modelMap['gpt-5.5'] ?? CATALOG_DEFAULTS.openai;
 
   function setDualProvider(name: 'anthropic' | 'openai', update: { presetKey?: string; model?: string; enable?: boolean }): void {
     const current = draft.providers[name];

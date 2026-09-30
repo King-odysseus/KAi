@@ -48,12 +48,14 @@ export const AGENT_MARKS: Record<ProxyAgentId, string> = { claude: 'C', qwen: 'Q
 /** What each agent puts in the model field when routed through the proxy. */
 export const AGENT_SENDS: Record<ProxyAgentId, string> = {
   claude: 'claude-opus-5',
-  codex: 'gpt-5.5',
+  codex: 'gpt-5.6-sol',
   kimi: 'kimi-for-coding',
   qwen: 'qwen-proxy',
 };
 
-export const CODEX_PROXY_MODEL = 'gpt-5.5';
+export const CODEX_PROXY_MODEL = 'gpt-5.6-sol';
+/** The relay id earlier releases used; saved model maps may still be keyed by it. */
+export const LEGACY_CODEX_PROXY_MODEL = 'gpt-5.5';
 
 /** Claude ids a Claude Code client may send; the model-map table lists these rows. */
 export const CLAUDE_CLIENT_MODELS = [

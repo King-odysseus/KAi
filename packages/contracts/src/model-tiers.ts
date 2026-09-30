@@ -13,7 +13,7 @@ export type WorkLevel = z.infer<typeof workLevelSchema>;
 const tierModelNameSchema = z
   .string()
   .max(100)
-  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.5 or claude-sonnet-5.');
+  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.6-sol or claude-sonnet-5.');
 
 /** The model a CLI is asked to use for each level. A missing level keeps whatever model the run would have used. */
 export const modelTierSchema = z

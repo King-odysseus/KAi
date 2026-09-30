@@ -196,13 +196,20 @@ export function proxyAgentBaseUrl(settings: AppSettings, agent: ProxyAgentId): s
   return `http://127.0.0.1:${settings.proxy.port}/a/${agent}${suffix}`;
 }
 
+function relayModelFor(configured: string | undefined): string {
+  const chosen = configured?.trim();
+  return !chosen || chosen === 'gpt-5.5' ? 'gpt-5.6-sol' : chosen;
+}
+
 function adapterDeps(settings: AppSettings): Record<string, unknown> {
   const endpoint = (agent: ProxyAgentId) => proxyAgentBaseUrl(settings, agent);
   return {
     claude: { proxyEndpoint: endpoint('claude') },
     codex: {
       proxyEndpoint: endpoint('codex'),
-      relayModel: settings.proxy.codexConfig.configModel || 'gpt-5.5',
+      // A saved retired relay id (gpt-5.5) moves onto the current one, so Codex is never configured with a name
+      // OpenAI has retired.
+      relayModel: relayModelFor(settings.proxy.codexConfig.configModel),
     },
     kimi: { proxyEndpoint: endpoint('kimi') },
     qwen: { proxyEndpoint: endpoint('qwen') },

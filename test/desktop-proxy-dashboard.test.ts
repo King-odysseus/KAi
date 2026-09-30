@@ -51,9 +51,10 @@ describe('proxy dashboard agent cards', () => {
     expect(applyAgentProvider(routed, 'qwen', 'main').qwenConfig.enabled).toBe(false);
   });
 
-  it('keeps the Codex relay model when a preset is chosen', () => {
+  it('gives Codex the current relay model when a preset is chosen, moving a retired one onto it', () => {
+    // The fixture still carries the retired relay id a saved config would have.
     const next = applyAgentProvider(settings(), 'codex', 'deepseek');
-    expect(next.codexConfig).toMatchObject({ enabled: true, baseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-flash', configModel: 'gpt-5.5' });
+    expect(next.codexConfig).toMatchObject({ enabled: true, baseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-flash', configModel: 'gpt-5.6-sol' });
   });
 
   it('writes a model choice to whichever upstream the agent uses', () => {

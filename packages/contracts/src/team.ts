@@ -39,7 +39,7 @@ export const teamPresetSchema = z.enum(['quality', 'balanced', 'budget']);
 const teamModelNameSchema = z
   .string()
   .max(100)
-  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.5 or claude-sonnet-5.');
+  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.6-sol or claude-sonnet-5.');
 
 /** When KAI adds this role to a job on its own: every job, only when the job touches sensitive areas, or never. */
 export const teamAutoAddSchema = z.enum(['always', 'sensitive', 'never']);

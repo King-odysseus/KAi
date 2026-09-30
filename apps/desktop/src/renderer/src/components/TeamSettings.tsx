@@ -140,7 +140,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                   <span>Model</span>
                   <input aria-label={`${info.label} model`} value={config.model ?? ''} placeholder="Agent default" list={`team-models-${role}`} aria-invalid={modelInvalid} onChange={(event) => update(role, { model: event.target.value.trim() })} />
                   <datalist id={`team-models-${role}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
-                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.5, without spaces or a leading dash.</small>}
+                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.6-sol, without spaces or a leading dash.</small>}
                 </label>
                 {role !== 'orchestrator' && (
                   <label className="field">
@@ -211,7 +211,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                   <span>Model</span>
                   <input aria-label={`${role.label} model`} value={role.model ?? ''} placeholder="Agent default" list={`team-models-${role.id}`} aria-invalid={modelInvalid} onChange={(event) => updateCustom(role.id, { model: event.target.value.trim() })} />
                   <datalist id={`team-models-${role.id}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
-                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.5, without spaces or a leading dash.</small>}
+                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.6-sol, without spaces or a leading dash.</small>}
                 </label>
               </div>
               <label className="field">

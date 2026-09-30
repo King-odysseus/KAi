@@ -194,7 +194,7 @@ export const proxyServiceSettingsSchema = z
       enabled: false,
       baseUrl: 'https://api.openai.com/v1',
       defaultModel: 'gpt-6-astra',
-      configModel: 'gpt-5.5',
+      configModel: 'gpt-5.6-sol',
     }),
     costBudget: proxyCostBudgetSchema.default({ daily: 0, weekly: 0, monthly: 0, currency: 'USD', mode: 'warn' }),
     historyConfig: proxyHistorySettingsSchema.default({
@@ -300,7 +300,7 @@ export const mcpServerSettingsSchema = z.union([mcpStdioServerSettingsSchema, mc
 export const cliModelNameSchema = z
   .string()
   .max(100)
-  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.5 or claude-sonnet-5.');
+  .regex(/^[A-Za-z0-9][\w.:/@[\]-]*$/, 'Use a model name such as gpt-5.6-sol or claude-sonnet-5.');
 
 export const DEFAULT_DESKTOP_SHORTCUTS: Readonly<Record<string, string>> = {
   'workbench': 'Ctrl+1',
