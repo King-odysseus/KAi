@@ -1013,7 +1013,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        response = await fetch(chatCompletionsUrl(capability.baseUrl), {
+        response = await fetchWithHeaderTimeout(chatCompletionsUrl(capability.baseUrl), {
           method: 'POST',
           headers: chatCompletionsHeaders(capability, apiKey),
           body: JSON.stringify({
@@ -1074,7 +1074,7 @@ export class DesktopDirectProviderRuntime {
       let response: Response;
       try {
         const tools = anthropicToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
-        response = await fetch(anthropicMessagesUrl(capability.baseUrl), {
+        response = await fetchWithHeaderTimeout(anthropicMessagesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
             'x-api-key': apiKey,
@@ -1138,7 +1138,7 @@ export class DesktopDirectProviderRuntime {
       let response: Response;
       try {
         const functionDeclarations = geminiToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
-        response = await fetch(geminiGenerateUrl(capability.baseUrl, capability.model), {
+        response = await fetchWithHeaderTimeout(geminiGenerateUrl(capability.baseUrl, capability.model), {
           method: 'POST',
           headers: {
             'x-goog-api-key': apiKey,
@@ -1201,7 +1201,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        response = await fetch(responsesUrl(capability.baseUrl), {
+        response = await fetchWithHeaderTimeout(responsesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -1612,7 +1612,48 @@ async function executeToolCalls(
   return results;
 }
 
-async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<ProviderStreamEvent> {
+/** A provider that accepts the request but never answers would leave the run waiting forever. */
+const RESPONSE_HEADERS_TIMEOUT_MS = 90_000;
+/** A provider that goes quiet in the middle of a reply, for longer than any real pause between chunks. */
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+export async function fetchWithHeaderTimeout(
+  url: string,
+  init: RequestInit & { signal: AbortSignal },
+  timeoutMs: number = RESPONSE_HEADERS_TIMEOUT_MS,
+): Promise<Response> {
+  // Only the wait for the response headers is timed. The body streams for as long as the model needs, and the
+  // combined signal stays attached to it, so the caller's own abort still stops the stream.
+  const slow = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    slow.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.any([init.signal, slow.signal]) });
+  } catch (error) {
+    if (timedOut && !init.signal.aborted) throw new Error(`The provider did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function readWithIdleTimeout(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs: number): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`The provider stopped sending data for ${Math.round(timeoutMs / 1000)} seconds.`));
+    }, timeoutMs);
+    reader.read().then(
+      (result) => { clearTimeout(timer); resolve(result); },
+      (error: unknown) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+export async function* readSseEvents(body: ReadableStream<Uint8Array>, idleTimeoutMs: number = STREAM_IDLE_TIMEOUT_MS): AsyncGenerator<ProviderStreamEvent> {
   const decoder = new TextDecoder();
   let buffer = '';
   let eventName = '';
@@ -1621,7 +1662,7 @@ async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let newline = buffer.indexOf('\n');

@@ -178,6 +178,12 @@ export function runCheckCommand(projectPath: string, command: string, signal?: A
       finish(null);
     });
     child.once('close', (code) => finish(code));
+    // A check that leaves a background process holding its output pipes never gets a 'close'; once the command has
+    // exited, stop waiting for the pipes after a short moment so the run is not left hanging.
+    child.once('exit', (code) => {
+      const grace = setTimeout(() => finish(code), 400);
+      grace.unref();
+    });
   });
 }
 

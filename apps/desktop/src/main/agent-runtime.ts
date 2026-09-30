@@ -12,6 +12,9 @@ import type {
   PermissionKey,
   PersistedEvent,
 } from '@kai/contracts';
+
+/** How long to keep reading a finished process's output before giving up on pipes a background process still holds. */
+const OUTPUT_DRAIN_GRACE_MS = 1_000;
 
 const AGENTS: Record<
   AgentId,
@@ -1030,7 +1033,7 @@ function isAuthenticated(agent: AgentId, output: string): boolean {
   return true;
 }
 
-async function* streamProcess(
+export async function* streamProcess(
   command: string,
   args: string[],
   cwd: string,
@@ -1080,10 +1083,23 @@ async function* streamProcess(
     done = true;
     push({ code: 1, signal: null });
   });
-  child.on('close', (code, closeSignal) => {
+  // 'close' also waits for every process holding the CLI's output pipes. A tool the CLI started in the background
+  // (a dev server, a watcher) can keep them open indefinitely, which would leave the run looking stuck long after
+  // the agent finished. Once the CLI itself has exited, give its last output a moment and then stop waiting.
+  let finished = false;
+  const finishRun = (code: number | null, closeSignal: NodeJS.Signals | null): void => {
+    if (finished) return;
+    finished = true;
     signal.removeEventListener('abort', abort);
+    child.stdout?.destroy();
+    child.stderr?.destroy();
     done = true;
     push({ code, signal: closeSignal });
+  };
+  child.on('close', finishRun);
+  child.on('exit', (code, closeSignal) => {
+    const grace = setTimeout(() => finishRun(code, closeSignal), OUTPUT_DRAIN_GRACE_MS);
+    grace.unref();
   });
 
   while (!done || queue.length > 0) {

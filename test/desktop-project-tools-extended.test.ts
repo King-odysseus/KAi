@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DesktopProjectToolRuntime, globToRegExp, projectToolDefinitions } from '../apps/desktop/src/main/project-tools';
+import { runCheckCommand } from '../apps/desktop/src/main/verification';
 
 describe('extended project tools', () => {
   let root: string;
@@ -105,5 +106,41 @@ describe('extended project tools', () => {
     expect(globToRegExp('*.md').test('docs/readme.md')).toBe(true);
     expect(globToRegExp('a?.ts').test('ab.ts')).toBe(true);
     expect(globToRegExp('a.ts').test('aXts')).toBe(false);
+  });
+});
+
+describe('commands that leave a background process behind', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'kai-bg-'));
+    // Starts a detached process that keeps holding this command's output pipes for a while, like `start /b npm run dev`.
+    await writeFile(
+      path.join(root, 'spawner.cjs'),
+      [
+        "const { spawn } = require('node:child_process');",
+        "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }).unref();",
+        "console.log('server started');",
+      ].join(String.fromCharCode(10)),
+    );
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
+
+  it('returns once the command has exited instead of waiting for the background process', async () => {
+    const runtime = new DesktopProjectToolRuntime(root);
+    const startedAt = Date.now();
+    const result = await runtime.execute('run_command', { command: `"${process.execPath}" spawner.cjs` });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(result.ok).toBe(true);
+    expect((result.output as { stdout: string }).stdout).toContain('server started');
+  });
+
+  it('does the same for a check command', async () => {
+    const startedAt = Date.now();
+    const check = await runCheckCommand(root, `"${process.execPath}" spawner.cjs`);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(check.exitCode).toBe(0);
+    expect(check.output).toContain('server started');
   });
 });

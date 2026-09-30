@@ -19,6 +19,8 @@ const MAX_COMMAND_LENGTH = 20_000;
 const MAX_COMMAND_OUTPUT = 200_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 const MAX_COMMAND_TIMEOUT_MS = 120_000;
+/** How long to keep reading a finished command's output before giving up on pipes a background process still holds. */
+const OUTPUT_DRAIN_GRACE_MS = 400;
 const IGNORED_DIRECTORIES = new Set([
   '.git',
   '.hg',
@@ -660,9 +662,25 @@ export class DesktopProjectToolRuntime {
       stderrTruncated ||= appended.truncated;
     });
 
+    // 'close' waits for every process holding the output pipes to let go. A command that starts something in the
+    // background (`start /b npm run dev`, `nohup ... &`) leaves that process holding them, so 'close' can be minutes
+    // away or never come, and the tool call, the run and the Stop button all hang with it. Once the command itself
+    // has exited, give any last output a moment to arrive and then stop waiting for the pipes.
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      let settled = false;
+      const finish = (code: number | null, signalName: NodeJS.Signals | null): void => {
+        if (settled) return;
+        settled = true;
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolve({ code, signal: signalName });
+      };
       child.once('error', reject);
-      child.once('close', (code, signalName) => resolve({ code, signal: signalName }));
+      child.once('close', finish);
+      child.once('exit', (code, signalName) => {
+        const grace = setTimeout(() => finish(code, signalName), OUTPUT_DRAIN_GRACE_MS);
+        grace.unref();
+      });
     });
     timeout = setTimeout(() => {
       timeoutRequested = true;
