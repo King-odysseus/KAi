@@ -23,7 +23,7 @@ import type {
   SetupStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_MODEL_SUGGESTIONS, THEME_MODES } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, estimateConversationTokens, THEME_MODES } from '@kai/contracts';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -840,7 +840,18 @@ export function App(): ReactNode {
       }
     }
 
-    setAgentNotice(null);
+    // A conversation that has grown long is summarised first, so every later request stays small. A failure here
+    // never blocks the message: the run simply goes ahead with the full history.
+    if (estimateConversationTokens(conversation) >= COMPACTION_WARNING_TOKENS) {
+      setAgentNotice('This conversation has grown long, so KAI is summarising the older turns first.');
+      const compacted = await window.kaiDesktop.compactConversation(conversation.id).then(unwrap).catch(() => null);
+      if (compacted) {
+        setConversations((current) => current.map((item) => item.id === compacted.id ? compacted : item));
+        setAgentNotice(`Summarised ${compacted.compaction?.originalTurns ?? 0} earlier turns to keep this conversation fast.`);
+      }
+    } else {
+      setAgentNotice(null);
+    }
     setProxyContinuationAgent(null);
     setStreamingTextByConversation((current) => ({ ...current, [conversation.id]: '' }));
     setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
@@ -1212,6 +1223,43 @@ export function App(): ReactNode {
     if (!compacted) return;
     setConversations((current) => current.map((item) => item.id === compacted.id ? compacted : item));
     setAgentNotice(`Compacted ${compacted.compaction?.originalTurns ?? 0} conversation turns into a reusable context briefing.`);
+  }
+
+  /** Summarises the open conversation and carries on from that summary in a new tab; the old tab is left as it was. */
+  async function continueInNewTab(): Promise<void> {
+    if (!bootstrap || !activeConversation) return;
+    const source = activeConversation;
+    const compacted = await perform(
+      () => window.kaiDesktop.compactConversation(source.id).then(unwrap),
+      'Summarising this conversation',
+    );
+    if (!compacted?.compaction) return;
+    setConversations((current) => current.map((item) => item.id === compacted.id ? compacted : item));
+    const fresh = await perform(
+      () => window.kaiDesktop.createConversation(source.projectId, '').then(unwrap),
+      'Opening a new tab',
+    );
+    if (!fresh) return;
+    const now = new Date().toISOString();
+    const seeded: ConversationRecord = {
+      ...fresh,
+      title: `${source.title} (continued)`.slice(0, 120),
+      ...(source.activeAgent ? { activeAgent: source.activeAgent } : {}),
+      ...(source.execution ? { execution: source.execution } : {}),
+      ...(source.route ? { route: source.route } : {}),
+      ...(source.autonomy ? { autonomy: source.autonomy } : {}),
+      turns: [
+        { id: `turn_${crypto.randomUUID()}`, role: 'user', text: `I am continuing "${source.title}" in a new conversation. Here is a briefing of the earlier work:\n\n${compacted.compaction.summary}`, createdAt: now },
+        { id: `turn_${crypto.randomUUID()}`, role: 'assistant', text: 'I have the briefing and will carry on from here.', createdAt: now },
+      ],
+    };
+    const saved = await perform(() => window.kaiDesktop.saveConversation(seeded).then(unwrap), 'Saving the new tab');
+    if (!saved) return;
+    setConversations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    setOpenConversationIds((current) => current.includes(saved.id) ? current : [...current, saved.id]);
+    setActiveConversationId(saved.id);
+    setView('workspace');
+    setAgentNotice('Opened a new tab that continues from a summary of the earlier conversation.');
   }
 
   async function importBrain(): Promise<void> {
@@ -1591,6 +1639,7 @@ export function App(): ReactNode {
             onOpenRules={() => setView('rules')}
             onOpenWorkflows={() => setView('workflows')}
             onCompactConversation={() => void compactActiveConversation()}
+            onContinueInNewTab={() => void continueInNewTab()}
           />
         );
     }

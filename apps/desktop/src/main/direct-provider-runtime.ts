@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
 import { directProviderPreset, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, type ProviderId } from '@kai/contracts';
 import type {
   AppSettings,
@@ -677,6 +678,8 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        const trimmedResults = trimChatToolResults(messages);
+        if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;
@@ -886,6 +889,8 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        const trimmedResults = trimAnthropicToolResults(messages);
+        if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;
@@ -1059,6 +1064,8 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        const trimmedResults = trimGeminiToolResults(contents);
+        if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;

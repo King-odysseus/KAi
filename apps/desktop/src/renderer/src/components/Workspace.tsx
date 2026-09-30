@@ -159,6 +159,7 @@ interface WorkspaceViewProps {
   onOpenRules: () => void;
   onOpenWorkflows: () => void;
   onCompactConversation: () => void;
+  onContinueInNewTab: () => void;
 }
 
 interface QueuedPrompt {
@@ -305,6 +306,7 @@ export function WorkspaceView({
   onOpenRules,
   onOpenWorkflows,
   onCompactConversation,
+  onContinueInNewTab,
 }: WorkspaceViewProps): ReactNode {
   const [prompt, setPrompt] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -1089,6 +1091,7 @@ export function WorkspaceView({
           <div className="workbench-notice compaction-banner" role="status">
             <span>This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.</span>
             <button type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</button>
+            <button type="button" className="secondary-button" disabled={busy} onClick={onContinueInNewTab} title="Summarise this conversation and carry on in a new tab">Continue in new tab</button>
           </div>
         )}
 
