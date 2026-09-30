@@ -2,6 +2,7 @@ import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { BrainEntry, ContextPreview, ContextPreviewItem, ContextPreviewSection } from '@kai/contracts';
+import { buildRepoMap } from './repo-map';
 
 const INSTRUCTION_FILES = [
   'AGENTS.md',
@@ -33,6 +34,13 @@ export interface BuildProjectContextOptions {
   /** What the recall did, shown beside the memories so an empty list is explained instead of silent. */
   memoryNote?: string | null;
   authoritativeRules?: string;
+  /**
+   * Leave out the instruction files, rules and skills list. A resumed CLI session already holds them from its first
+   * turn, so repeating them only spends tokens and crowds out the conversation.
+   */
+  omitStatic?: boolean;
+  /** Add an outline of the project's source files and what they declare. For agents that cannot explore on their own. */
+  includeRepoMap?: boolean;
 }
 
 export interface BuiltProjectContext {
@@ -48,16 +56,17 @@ export async function buildProjectContext(
   const rootStat = await fs.stat(root);
   if (!rootStat.isDirectory()) throw new Error('The active project is not a directory.');
 
-  const instructions = [
-    ...collectAuthoritativeInstructions(options.authoritativeRules),
-    ...(await collectInstructions(root)),
-  ];
+  const instructions = options.omitStatic
+    ? []
+    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...(await collectInstructions(root))];
   const instructionPaths = new Set(instructions.map((entry) => entry.item.source));
   const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths);
-  const skills = await collectSkills(root);
+  const skills = options.omitStatic ? [] : await collectSkills(root);
   const memories = collectMemories(options.memories ?? []);
+  const repoMap = options.includeRepoMap ? await collectRepoMap(root) : [];
   const sections: ContextPreviewSection[] = [
     makeSection('instructions', 'Instructions', instructions),
+    makeSection('map', 'Repository map', repoMap),
     makeSection('files', 'Selected files', files),
     makeSection('skills', 'Available skills', skills),
     makeSection('memories', 'Recalled memories', memories, options.memoryNote),
@@ -72,7 +81,7 @@ export async function buildProjectContext(
       approximate: true,
       sections,
     },
-    text: renderContext(instructions, files, skills, memories),
+    text: renderContext(instructions, files, skills, memories, repoMap),
   };
 }
 
@@ -113,6 +122,16 @@ async function collectSelectedFiles(
     entries.push(toEntry('file', path.basename(relativePath), relativePath, content.text, content.truncated));
   }
   return entries;
+}
+
+async function collectRepoMap(root: string): Promise<ContextEntry[]> {
+  try {
+    const map = await buildRepoMap(root);
+    if (!map) return [];
+    return [toEntry('map', 'Repository map', `${map.files} source files, ${map.symbols} symbols`, map.text, map.truncated)];
+  } catch {
+    return [];
+  }
 }
 
 async function collectSkills(root: string): Promise<ContextEntry[]> {
@@ -273,6 +292,7 @@ function renderContext(
   files: ContextEntry[],
   skills: ContextEntry[],
   memories: ContextEntry[],
+  repoMap: ContextEntry[] = [],
 ): string {
   const parts: string[] = ['# KAI project context'];
   if (memories.length > 0) {
@@ -295,6 +315,12 @@ function renderContext(
     if (projectInstructions.length > 0) {
       parts.push(`## Project instructions\n${projectInstructions.map(renderEntry).join('\n\n')}`);
     }
+  }
+  if (repoMap.length > 0) {
+    parts.push(`## Repository map
+Source files and what each declares. Use list_files, search_files and read_file to look deeper.
+
+${repoMap[0]!.text}`);
   }
   if (files.length > 0) {
     parts.push(`## Selected project files\n${files.map(renderEntry).join('\n\n')}`);

@@ -75,6 +75,23 @@ import {
 } from './prompt-guide';
 import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
 import {
+  evalCaseDeleteInputSchema,
+  evalCaseInputSchema,
+  evalListInputSchema,
+  evalRunInputSchema,
+  scheduleIdInputSchema,
+  scheduleInputSchema,
+  scheduleListInputSchema,
+  type AgentScorecard,
+  type EvalCase,
+  type EvalCaseInput,
+  type EvalOverview,
+  type EvalResult,
+  type EvalRunInput,
+  type Schedule,
+  type ScheduleInput,
+} from './automation';
+import {
   agentCapabilitySchema,
   agentApprovalResponseInputSchema,
   agentCancelInputSchema,
@@ -406,6 +423,15 @@ export const ipcChannels = [
   'team:start',
   'team:record',
   'team:clear-record',
+  'schedules:list',
+  'schedules:save',
+  'schedules:delete',
+  'schedules:run-now',
+  'evals:list',
+  'evals:save-case',
+  'evals:delete-case',
+  'evals:run',
+  'scorecards:summary',
   'proxy:overview',
   'proxy:history',
   'proxy:history-detail',
@@ -657,6 +683,15 @@ export const ipcInputSchemas = {
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
+  'schedules:list': scheduleListInputSchema,
+  'schedules:save': scheduleInputSchema,
+  'schedules:delete': scheduleIdInputSchema,
+  'schedules:run-now': scheduleIdInputSchema,
+  'evals:list': evalListInputSchema,
+  'evals:save-case': evalCaseInputSchema,
+  'evals:delete-case': evalCaseDeleteInputSchema,
+  'evals:run': evalRunInputSchema,
+  'scorecards:summary': z.object({}).strict(),
   'proxy:overview': emptyInputSchema,
   'proxy:history': proxyHistoryQuerySchema,
   'proxy:history-detail': z.object({ id: z.string().min(1) }).strict(),
@@ -1065,6 +1100,15 @@ export interface KaiDesktopBridge {
   startTeam(request: TeamStartInput): Promise<IpcResponse<WorkflowRun>>;
   teamRecord(request: TeamRecordQuery): Promise<IpcResponse<TeamRecordAdvice[]>>;
   clearTeamRecord(): Promise<IpcResponse<null>>;
+  listSchedules(projectId: string): Promise<IpcResponse<Schedule[]>>;
+  saveSchedule(request: ScheduleInput): Promise<IpcResponse<Schedule>>;
+  deleteSchedule(id: string): Promise<IpcResponse<{ deleted: boolean }>>;
+  runScheduleNow(id: string): Promise<IpcResponse<Schedule>>;
+  listEvals(projectId: string): Promise<IpcResponse<EvalOverview>>;
+  saveEvalCase(request: EvalCaseInput): Promise<IpcResponse<EvalCase>>;
+  deleteEvalCase(projectId: string, caseId: string): Promise<IpcResponse<{ deleted: boolean }>>;
+  runEval(request: EvalRunInput): Promise<IpcResponse<EvalResult>>;
+  scorecards(): Promise<IpcResponse<AgentScorecard[]>>;
   stopWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   resumeWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   onWorkflowChanged(listener: (run: WorkflowRun) => void): () => void;

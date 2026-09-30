@@ -68,7 +68,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
 
   const paidProviders = DIRECT_PROVIDER_ORDER;
   const maxDay = Math.max(...(summary?.byDay.map((day) => day.usd) ?? [0]), 0.000001);
-  const setLimit = (key: 'perConversationUsd' | 'dailyUsd' | 'monthlyUsd', value: number): void =>
+  const setLimit = (key: 'perRunUsd' | 'perConversationUsd' | 'dailyUsd' | 'monthlyUsd', value: number): void =>
     setDraft((current) => ({ ...current, [key]: Number.isFinite(value) && value >= 0 ? value : 0 }));
   const setProviderLimit = (provider: string, value: number): void =>
     setDraft((current) => {
@@ -104,9 +104,10 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
       <div className="settings-grid usage-grid">
         <section className="settings-section span-two">
           <div className="section-title"><Wallet size={17} /><span>Budget limits</span></div>
-          <p className="settings-note">Set a limit to 0 to turn it off. Warn mode shows a banner at 80% and 100%. Block mode also stops new API requests at 100%, before anything is sent.</p>
+          <p className="settings-note">Set a limit to 0 to turn it off. Warn mode shows a banner at 80% and 100%. Block mode also stops new API requests at 100%, before anything is sent. The per-run limit always stops a single direct API run that reaches it, in either mode.</p>
           <div className="field-grid">
             <label className="field"><span>Mode</span><Select value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as UsageBudget['mode'] })}><option value="warn">warn</option><option value="block">block</option></Select></label>
+            <UsdField label="Per run (USD)" value={draft.perRunUsd} onChange={(value) => setLimit('perRunUsd', value)} />
             <UsdField label="Per conversation (USD)" value={draft.perConversationUsd} onChange={(value) => setLimit('perConversationUsd', value)} />
             <UsdField label="Per day (USD)" value={draft.dailyUsd} onChange={(value) => setLimit('dailyUsd', value)} />
             <UsdField label="Per month (USD)" value={draft.monthlyUsd} onChange={(value) => setLimit('monthlyUsd', value)} />

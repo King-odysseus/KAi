@@ -1,4 +1,5 @@
 export * from './agents';
+export * from './automation';
 export * from './brain';
 export * from './context';
 export * from './coordination';

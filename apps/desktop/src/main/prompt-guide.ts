@@ -130,20 +130,20 @@ export class DesktopPromptGuide {
   }
 
   /** Rewrites only the user's draft. It may use the dedicated Prompt Guide connection or the configured Direct API fallback. */
-  async refinePrompt(input: PromptRefineInput): Promise<PromptRefineResult> {
+  /** The Prompt Guide connection when it is ready, otherwise the Direct API one; a reason when neither is. */
+  async pickConnection(): Promise<{ connection: AppSettings['promptGuide'] | AppSettings['directApi'] } | { reason: string }> {
     const settings = await this.ports.settings();
     const guideReadiness = await this.connectionReadiness(settings.promptGuide, 'Prompt Guide');
-    const directReadiness = guideReadiness.ready
-      ? null
-      : await this.connectionReadiness(settings.directApi, 'Direct API');
-    const connection = guideReadiness.ready
-      ? settings.promptGuide
-      : directReadiness?.ready
-        ? settings.directApi
-        : null;
-    if (!connection) {
-      throw new Error(guideReadiness.reason ?? directReadiness?.reason ?? 'Configure Prompt Guide or Direct API in Settings before refining a prompt.');
-    }
+    if (guideReadiness.ready) return { connection: settings.promptGuide };
+    const directReadiness = await this.connectionReadiness(settings.directApi, 'Direct API');
+    if (directReadiness.ready) return { connection: settings.directApi };
+    return { reason: guideReadiness.reason ?? directReadiness.reason ?? 'Configure Prompt Guide or Direct API in Settings first.' };
+  }
+
+  async refinePrompt(input: PromptRefineInput): Promise<PromptRefineResult> {
+    const picked = await this.pickConnection();
+    if (!('connection' in picked)) throw new Error(picked.reason);
+    const connection = picked.connection;
     return this.ports.requester.structuredRequest(
       connection,
       { feature: 'Prompt refinement', card: 'Prompt refinement' },

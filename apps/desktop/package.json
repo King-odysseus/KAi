@@ -78,6 +78,10 @@
       {
         "from": "resources/agent-rules",
         "to": "agent-rules"
+      },
+      {
+        "from": "resources/kai-cli",
+        "to": "kai-cli"
       }
     ],
     "win": {

@@ -5,6 +5,8 @@ const usdSchema = z.number().finite().nonnegative();
 export const usageBudgetSchema = z
   .object({
     mode: z.enum(['warn', 'block']).default('warn'),
+    // Stops one direct API run that has spent this much, whatever the other limits say. Zero turns it off.
+    perRunUsd: usdSchema.default(5),
     perConversationUsd: usdSchema.default(0),
     dailyUsd: usdSchema.default(0),
     monthlyUsd: usdSchema.default(0),
@@ -63,6 +65,7 @@ export type UsageSummary = z.infer<typeof usageSummarySchema>;
 
 export const defaultUsageBudget: UsageBudget = {
   mode: 'warn',
+  perRunUsd: 5,
   perConversationUsd: 0,
   dailyUsd: 0,
   monthlyUsd: 0,

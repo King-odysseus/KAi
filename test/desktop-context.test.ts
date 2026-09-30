@@ -12,6 +12,25 @@ afterEach(async () => {
 });
 
 describe('desktop project context builder', () => {
+  it('leaves out instructions, rules and skills for a resumed session but keeps the selected files', async () => {
+    const root = await fixtureProject();
+    await writeFile(path.join(root, 'AGENTS.md'), '# Rules\nAlways run focused tests.\n', 'utf8');
+    await writeFile(path.join(root, 'src', 'index.ts'), 'export const answer = 42;\n', 'utf8');
+    await mkdir(path.join(root, '.codex', 'skills', 'review'), { recursive: true });
+    await writeFile(path.join(root, '.codex', 'skills', 'review', 'SKILL.md'), '# Review\nReview code.\n', 'utf8');
+
+    const built = await buildProjectContext(root, {
+      selectedPaths: ['src/index.ts'],
+      authoritativeRules: '1. **Rule** Follow it.',
+      omitStatic: true,
+    });
+
+    expect(built.text).toContain('export const answer = 42;');
+    expect(built.text).not.toContain('Always run focused tests.');
+    expect(built.text).not.toContain('Follow it.');
+    expect(built.text).not.toContain('Skill: Review');
+  });
+
   it('collects instructions, selected files, and project skill metadata', async () => {
     const root = await fixtureProject();
     await writeFile(path.join(root, 'AGENTS.md'), '# Rules\nAlways run focused tests.\n', 'utf8');

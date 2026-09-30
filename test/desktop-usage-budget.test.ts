@@ -12,7 +12,7 @@ import {
 const NOW = new Date(2026, 8, 23, 15, 0, 0);
 
 function budget(overrides: Partial<UsageBudget> = {}): UsageBudget {
-  return { mode: 'warn', perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {}, ...overrides };
+  return { mode: 'warn', perRunUsd: 5, perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {}, ...overrides };
 }
 
 function costEvent(
@@ -161,7 +161,7 @@ describe('usage limits', () => {
 describe('usage budget settings contract', () => {
   it('fills budget defaults so settings saved before this feature still load', () => {
     const defaults = createDefaultSettings();
-    expect(defaults.usageBudget).toEqual({ mode: 'warn', perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {} });
+    expect(defaults.usageBudget).toEqual({ mode: 'warn', perRunUsd: 5, perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {} });
     const { usageBudget: _omitted, ...legacy } = defaults;
     expect(appSettingsV1Schema.parse(legacy).usageBudget.mode).toBe('warn');
   });

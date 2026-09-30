@@ -12,6 +12,7 @@ import {
   timestampSchema,
   windowBoundsSchema,
 } from './primitives';
+import { projectAutomationSchema } from './automation';
 import { notificationSettingsSchema } from './notifications';
 import { autoModelSettingsSchema, createDefaultAutoModel } from './model-tiers';
 import { createDefaultPromptGuide, promptGuideSettingsSchema } from './prompt-guide';
@@ -353,6 +354,8 @@ export const projectPreferencesV1Schema = z
     autonomy: autonomyModeSchema.optional(),
     customPermissions: z.record(permissionKeySchema, z.boolean()).optional(),
     alwaysAllowRules: z.array(z.string()).optional(),
+    // Checks, hooks and review that run around this project's agent runs. Set up by the user, never by the repository.
+    automation: projectAutomationSchema.optional(),
   })
   .strict();
 

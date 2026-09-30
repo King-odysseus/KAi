@@ -583,8 +583,8 @@ describe('desktop direct provider runtime', () => {
     expect(JSON.stringify(bodies[1].input)).toContain('command-ok');
   });
 
-  describe('publishing commands in Full control', () => {
-    async function runFullControl(command: string, approve: boolean) {
+  describe('publishing commands', () => {
+    async function runFullControl(command: string, approve: boolean, autonomy: 'full' | 'custom' = 'full') {
       const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-direct-publish-'));
       temporaryDirectories.push(projectRoot);
       const bodies: Record<string, unknown>[] = [];
@@ -611,12 +611,12 @@ describe('desktop direct provider runtime', () => {
         credentialPort('provider.openai', 'sk-test-secret'),
       );
       const asked: Array<{ tool: string; title: string }> = [];
-      await runtime.run({ ...runRequest(), autonomy: 'full' }, projectRoot, undefined, undefined, {
+      await runtime.run({ ...runRequest(), autonomy }, projectRoot, undefined, undefined, {
         request: async (approval) => {
           asked.push({ tool: approval.tool, title: approval.title });
           return approve;
         },
-      });
+      }, undefined, undefined, { shellCommand: true });
       return { asked, followUp: JSON.stringify(bodies[1]?.input) };
     }
 
@@ -631,8 +631,18 @@ describe('desktop direct provider runtime', () => {
       'git -C repo push --force-with-lease',
       'gh pr create --title x --body y',
       'npm publish',
-    ])('still asks before "%s" and does not run it when denied', async (command) => {
-      const { asked, followUp } = await runFullControl(command, false);
+    ])('runs "%s" without asking when the user chose Full access', async (command) => {
+      const { asked } = await runFullControl(command, false);
+      expect(asked).toEqual([]);
+    });
+
+    it.each([
+      'git push origin main',
+      'git -C repo push --force-with-lease',
+      'gh pr create --title x --body y',
+      'npm publish',
+    ])('still asks before "%s" under custom permissions and does not run it when denied', async (command) => {
+      const { asked, followUp } = await runFullControl(command, false, 'custom');
       expect(asked).toEqual([{ tool: 'run_command', title: 'Publish work off this machine?' }]);
       expect(followUp).toContain('The user denied this project change.');
     });

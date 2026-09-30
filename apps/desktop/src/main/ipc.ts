@@ -4,6 +4,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { BrowserWindow, clipboard, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron';
 import {
+  classifyWork,
+  type Schedule,
   type BootstrapPayload,
   type AgentRunEvent,
   type AgentId,
@@ -79,7 +81,7 @@ import type { TerminalManager } from './terminal';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffFile, gitOverview, gitStage, gitSync } from './git-tools';
-import { agentChecksFromEvents, recordVerification, runCheckCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
+import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
 import type { NotificationCenter } from './notification-rules';
@@ -93,6 +95,12 @@ import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
 import { autoCliModel } from './auto-model';
+import { invalidateRepoMap } from './repo-map';
+import { runWithAutomation, type AutomationPorts } from './automation';
+import type { DesktopChangeReviewer } from './change-review';
+import type { DesktopEvals } from './evals';
+import { escalatedLevel, summarizeScores, type RunScoreStore } from './run-scores';
+import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopPromptGuide } from './prompt-guide';
@@ -107,11 +115,12 @@ import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWind
 import type { EditorSessionManager } from './editor-sessions';
 import { formatProjectCode, projectGitFileInfo } from './code-tools';
 import {
-  createCheckpoint,
+  createProjectCheckpoint,
   diffFromCheckpoint,
   gitDiffStat,
   isGitRepo,
   readFileAtCheckpoint,
+  textDiffFromCheckpoint,
   restoreCheckpoint,
   restoreCheckpointFile,
 } from './checkpoints';
@@ -170,6 +179,10 @@ export interface IpcContext {
   interview: DesktopInterview;
   studio: DesktopStudio;
   teamRecord: TeamRecordStore;
+  runScores: RunScoreStore;
+  scheduler: DesktopScheduler;
+  evals: DesktopEvals;
+  changeReviewer: DesktopChangeReviewer;
   runControl: DesktopRunControl;
   notifications: NotificationCenter;
   recovery: RecoveryStore;
@@ -406,6 +419,18 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, request.ownerWindowId));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });
+  handle(context, 'schedules:list', async ({ projectId }) => context.scheduler.list(projectId));
+  handle(context, 'schedules:save', async (input) => {
+    await resolveProject(context, input.projectId, true);
+    return context.scheduler.save(input);
+  });
+  handle(context, 'schedules:delete', async ({ id }) => ({ deleted: await context.scheduler.remove(id) }));
+  handle(context, 'schedules:run-now', async ({ id }) => context.scheduler.runNow(id));
+  handle(context, 'evals:list', async ({ projectId }) => context.evals.overview(projectId));
+  handle(context, 'evals:save-case', async (input) => context.evals.saveCase(input));
+  handle(context, 'evals:delete-case', async ({ projectId, caseId }) => ({ deleted: await context.evals.deleteCase(projectId, caseId) }));
+  handle(context, 'evals:run', async (input) => context.evals.run(input));
+  handle(context, 'scorecards:summary', async () => summarizeScores(await context.runScores.list()));
   handle(context, 'proxy:overview', async () => context.proxy.overview());
   handle(context, 'proxy:history', async (query) => context.proxy.history(query));
   handle(context, 'proxy:history-detail', async ({ id }) => context.proxy.historyDetail(id));
@@ -546,7 +571,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     const project = await resolveProject(context, projectId, true);
     return context.preview.stop(project.id, project.path);
   });
-  handle(context, 'agents:run', async (request, ipcRequest) => runConversationAgent(context, request, ipcRequest.ownerWindowId));
+  handle(context, 'agents:run', async (request, ipcRequest) => runInteractiveAgent(context, request, ipcRequest.ownerWindowId));
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
   handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
   handle(context, 'agents:resume', async ({ conversationId }) => context.runControl.resume(conversationId));
@@ -910,6 +935,122 @@ async function restartCognitive1ForOverwatchCredential(context: IpcContext, cred
   if (cognitive1Ready) await context.services.restart('cognitive1', settings);
 }
 
+/**
+ * One prompt from the user (or a schedule), with the project's automation around it: hooks, automatic checks and
+ * fixes, and review. The outcome is also scored, so the agent's record can steer later model choices.
+ */
+export async function runInteractiveAgent(
+  context: IpcContext,
+  request: AgentRunRequest,
+  ownerWindowId: number | null,
+): Promise<AgentRunResult> {
+  const conversation = await context.conversations.get(request.conversationId);
+  if (!conversation) throw new NotFoundError('Conversation not found.');
+  const settings = await context.settings.load();
+  const projectId = conversation.projectId ?? settings.activeProjectId;
+  const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
+  if (!project) return runConversationAgent(context, request, ownerWindowId);
+
+  const startedAt = Date.now();
+  const firstTurnIndex = conversation.turns.length;
+  const automation = (await context.preferences.get(project.id))?.automation;
+  const stop = new AbortController();
+  automationRuns.set(request.conversationId, stop);
+  const ports: AutomationPorts = {
+    cancelled: () => stop.signal.aborted,
+    runOnce: (turn) => runConversationAgent(context, turn, ownerWindowId),
+    automation: async () => automation,
+    conversation: () => context.conversations.get(request.conversationId),
+    suggestCheck: () => suggestTestCommand(project.path),
+    runShell: async (command, timeoutMs, env) => {
+      const check = await runCheckCommand(project.path, command, AbortSignal.any([stop.signal, AbortSignal.timeout(timeoutMs)]), env);
+      return { exitCode: check.exitCode, output: check.output };
+    },
+    recordCheck: async (command, outcome) => {
+      const check: RecordedCheck = { command, source: 'agent', exitCode: outcome.exitCode, startedAt: new Date(), durationMs: 0, output: outcome.output };
+      await recordVerification(context.verification, project.id, project.path, check);
+      await logRegression(context, project.path, project.name, check);
+    },
+    note: async (text) => {
+      const latest = await context.conversations.get(request.conversationId);
+      if (!latest) return;
+      const at = new Date().toISOString();
+      latest.turns.push({ id: `turn_${crypto.randomUUID()}`, role: 'assistant', text, createdAt: at });
+      latest.updatedAt = at;
+      await context.conversations.save(latest);
+    },
+    review: async (original) => {
+      const latest = await context.conversations.get(request.conversationId);
+      const checkpoint = latest?.turns[firstTurnIndex]?.checkpoint;
+      if (!checkpoint) return null;
+      return context.changeReviewer.review(original.prompt, await textDiffFromCheckpoint(project.path, checkpoint));
+    },
+  };
+
+  let outcome: Awaited<ReturnType<typeof runWithAutomation>>;
+  try {
+    outcome = await runWithAutomation(ports, request);
+  } finally {
+    automationRuns.delete(request.conversationId);
+  }
+  const cancelled = stop.signal.aborted || (outcome.result.status === 'failed' && /cancel/i.test(outcome.result.error ?? ''));
+  if (!cancelled) {
+    await context.runScores.add({
+      at: new Date().toISOString(),
+      projectId: project.id,
+      agent: request.agent,
+      execution: request.execution ?? 'cli',
+      ...(request.model ? { model: request.model } : {}),
+      level: request.effort ?? classifyWork(request.prompt).level,
+      completed: outcome.result.status === 'completed',
+      checkPassed: outcome.checkPassed,
+      fixRounds: outcome.fixRounds,
+      filesChanged: outcome.filesChanged,
+      durationMs: Date.now() - startedAt,
+      ...(outcome.result.costUsd !== undefined ? { costUsd: outcome.result.costUsd } : {}),
+    }).catch(() => undefined);
+  }
+  return outcome.result;
+}
+
+/** Runs a schedule's prompt in a fresh conversation, as the user would have. */
+export async function runScheduledGoal(context: IpcContext, schedule: Schedule): Promise<ScheduledRunOutcome> {
+  const project = (await context.projects.list()).find((item) => item.id === schedule.projectId);
+  if (!project) return { status: 'failed', summary: 'The project for this schedule is no longer in KAI.' };
+  const now = new Date().toISOString();
+  const conversation: ConversationRecord = {
+    schemaVersion: 1,
+    id: `conv_${crypto.randomUUID()}`,
+    projectId: project.id,
+    title: `Scheduled: ${schedule.name}`.slice(0, 64),
+    createdAt: now,
+    updatedAt: now,
+    archived: false,
+    unread: true,
+    activeAgent: null,
+    route: null,
+    autonomy: null,
+    turns: [],
+    events: [],
+  };
+  await context.conversations.save(conversation);
+  const result = await runInteractiveAgent(
+    context,
+    {
+      conversationId: conversation.id,
+      prompt: schedule.prompt,
+      agent: schedule.agent,
+      execution: schedule.execution,
+      route: schedule.route,
+      autonomy: schedule.autonomy,
+      freshSession: true,
+    },
+    null,
+  );
+  const summary = result.status === 'completed' ? result.output.replace(/\s+/g, ' ').trim().slice(0, 300) || 'Completed.' : result.error ?? 'The run failed.';
+  return { status: result.status === 'completed' ? 'completed' : 'failed', summary, conversationId: conversation.id };
+}
+
 export async function runConversationAgent(
   context: IpcContext,
   request: AgentRunRequest,
@@ -982,9 +1123,7 @@ export async function runConversationAgent(
   conversation.autonomy = request.autonomy;
   if (request.goal) conversation.goal = activeGoal;
   conversation.updatedAt = now;
-  const checkpoint = (await isGitRepo(workRoot))
-    ? await createCheckpoint(workRoot).catch(() => null)
-    : null;
+  const checkpoint = await createProjectCheckpoint(workRoot).catch(() => null);
   const userTurn: ConversationRecord['turns'][number] = {
     id: `turn_${crypto.randomUUID()}`,
     role: 'user',
@@ -1073,6 +1212,9 @@ export async function runConversationAgent(
         authoritativeRules,
         selectedPaths,
         conversation.compaction,
+        false,
+        // The direct API agent has no way to look around by itself, so it is given an outline of the project.
+        true,
       )).text
     : (await buildConversationContext(
         context,
@@ -1083,6 +1225,8 @@ export async function runConversationAgent(
         undefined,
         selectedPaths,
         conversation.compaction,
+        // A resumed session already holds the rules, instruction files and skills from its first turn.
+        Boolean(resumeSessionId),
       )).text;
   let effectivePrompt = `${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
@@ -1098,7 +1242,8 @@ export async function runConversationAgent(
     effectivePrompt = `${contextText}\n\n[USER REQUEST]\n${effectivePrompt}`;
   }
   const preparedRequest: AgentRunRequest = { ...request, prompt: effectivePrompt };
-  const executionRequest = executionMode === 'cli'
+  // The standing rules are sent once, on the first turn of a CLI session; a resumed session remembers them.
+  const executionRequest = executionMode === 'cli' && !resumeSessionId
     ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
     : preparedRequest;
   const historyTurns = conversation.compaction
@@ -1111,7 +1256,11 @@ export async function runConversationAgent(
       ]
     : undefined;
   // A model picked for this run wins; otherwise KAI sizes the request, and the Settings model is the last resort.
-  const autoPick = executionMode === 'cli' && !request.model ? autoCliModel(request, settings, selectedPaths.length) : undefined;
+  // An agent that keeps getting a level of work wrong is handed that level's work one tier up.
+  const recentScores = executionMode === 'cli' && !request.model ? await context.runScores.list() : [];
+  const autoPick = executionMode === 'cli' && !request.model
+    ? autoCliModel(request, settings, selectedPaths.length, (level, agent) => escalatedLevel(level, agent, recentScores))
+    : undefined;
   let execution: AgentExecutionResult;
   // CLI runs claim the project so other agents see the work; API runs are claimed by their memory session.
   const claimedProject = executionMode === 'cli' && (await cognitive1Ready(context))
@@ -1154,6 +1303,8 @@ export async function runConversationAgent(
   }
   execution.events.unshift(...memoryEvents);
   resolvePendingApprovals(context, conversation.id, false);
+  // Files may have changed, so the next run's project outline must be rebuilt.
+  invalidateRepoMap(workRoot);
   for (const check of agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)) {
     await recordVerification(context.verification, project.id, project.path, check).catch(() => undefined);
     await logRegression(context, project.path, project.name, check);
@@ -1385,6 +1536,8 @@ async function buildConversationContext(
   authoritativeRules?: string,
   selectedPaths: readonly string[] = [],
   compaction?: ConversationRecord['compaction'],
+  omitStatic = false,
+  includeRepoMap = false,
 ) {
   const recall = await recallScopedMemories(context, projectPath, projectName, prompt);
   const projectContext = await buildProjectContext(projectPath, {
@@ -1392,6 +1545,8 @@ async function buildConversationContext(
     memories: recall.memories,
     memoryNote: recall.note,
     authoritativeRules,
+    omitStatic,
+    includeRepoMap,
   });
   if (!compaction) return projectContext;
   return {
@@ -2091,10 +2246,15 @@ export function cancelConversationRun(context: IpcContext, conversationId: strin
   return cancelAgent(context, conversationId);
 }
 
+/** Stops on Stop: the checks and hooks a run's automation is executing, not only the agent. */
+const automationRuns = new Map<string, AbortController>();
+
 function cancelAgent(context: IpcContext, conversationId: string): boolean {
   resolvePendingApprovals(context, conversationId, false);
   context.runControl.forget(conversationId);
-  return context.agents.cancel(conversationId) || context.directApi.cancel(conversationId);
+  const automation = automationRuns.get(conversationId);
+  automation?.abort();
+  return context.agents.cancel(conversationId) || context.directApi.cancel(conversationId) || Boolean(automation);
 }
 
 async function sharedBrainPath(context: IpcContext): Promise<string> {

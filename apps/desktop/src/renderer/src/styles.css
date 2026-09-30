@@ -10787,3 +10787,89 @@ code {
 .message:hover .message-copy,
 .message-copy:focus-visible { opacity: 1; }
 .message-copy:hover { color: var(--text); background: var(--bg-subtle); }
+
+/* Project automation: checks, hooks, schedules, evals and scorecards */
+.automation-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.automation-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.automation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automation-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.automation-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.automation-row-main small {
+  overflow-wrap: anywhere;
+}
+
+.automation-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.automation-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.automation-table th,
+.automation-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.automation-table .pass {
+  color: var(--green, #3fb950);
+}
+
+.automation-table .fail,
+.automation-card .fail {
+  color: var(--red);
+}

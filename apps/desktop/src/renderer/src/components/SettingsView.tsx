@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
 import { RemoteAccessPanel } from './RemoteAccessPanel';
 import { AgentTeamCard } from './TeamSettings';
+import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
-import type { AppSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
+import type { AppSettings, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
@@ -55,7 +56,7 @@ const SERVICE_STATES: Record<ServiceState['status'], string> = {
   not_configured: 'Off',
 };
 
-export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService }: { activeProject: { id: string; name: string } | null; projectTeam: AppSettings['agentTeam'] | null; onSaveProjectTeam: (team: AppSettings['agentTeam'] | null) => Promise<boolean>; settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void }): ReactNode {
+export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, projectAutomation, onSaveProjectAutomation, settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService }: { activeProject: { id: string; name: string } | null; projectTeam: AppSettings['agentTeam'] | null; onSaveProjectTeam: (team: AppSettings['agentTeam'] | null) => Promise<boolean>; projectAutomation: ProjectAutomationSettings | null; onSaveProjectAutomation: (automation: ProjectAutomationSettings | null) => Promise<boolean>; settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void }): ReactNode {
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
@@ -488,6 +489,11 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, se
             onSaveProjectTeam={onSaveProjectTeam}
             busy={busy}
           />
+        </section>
+
+        <section className="settings-section span-two" aria-label="Project automation">
+          <div className="section-title"><Wand2 size={17} /><span>Project automation</span></div>
+          <ProjectAutomation project={activeProject} automation={projectAutomation} onSaveAutomation={onSaveProjectAutomation} busy={busy} />
         </section>
 
         <section className="settings-section">

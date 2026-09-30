@@ -13,7 +13,13 @@ import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
-import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, type IpcContext } from './ipc';
+import { DesktopChangeReviewer } from './change-review';
+import { configureCopyCheckpoints } from './copy-checkpoints';
+import { jobFileFromArgv, processHeadlessJobFile } from './headless';
+import { DesktopEvals, EvalStore } from './evals';
+import { RunScoreStore } from './run-scores';
+import { DesktopScheduler, ScheduleStore } from './scheduler';
+import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { UniversalProxyClient } from './proxy-client';
 import { DesktopProxyRouting } from './proxy-routing';
@@ -74,10 +80,53 @@ const desktopWindows = new DesktopWindowRegistry();
 const forceClosing = new Set<number>();
 let parallelCleanupStarted = false;
 
+// `kai run ...` launches KAI with a job file. A launch that is only a job gets no window and quits when it is done.
+const startupJobFile = jobFileFromArgv(process.argv);
+let headlessReady = false;
+let headlessJobsInFlight = 0;
+const queuedJobFiles: string[] = [];
+
+async function handleHeadlessJob(jobFile: string): Promise<void> {
+  const context = ipcContext;
+  if (!context) return;
+  headlessJobsInFlight += 1;
+  try {
+    await processHeadlessJobFile(
+      {
+        projects: () => context.projects.list(),
+        createConversation: async (projectId, title) => {
+          const now = new Date().toISOString();
+          const conversation = {
+            schemaVersion: 1 as const, id: `conv_${crypto.randomUUID()}`, projectId, title, createdAt: now, updatedAt: now,
+            archived: false, unread: true, activeAgent: null, route: null, autonomy: null, turns: [], events: [],
+          };
+          await context.conversations.save(conversation);
+          return conversation.id;
+        },
+        run: (request) => runInteractiveAgent(context, request, null),
+      },
+      jobFile,
+    );
+  } finally {
+    headlessJobsInFlight -= 1;
+    if (startupJobFile && headlessJobsInFlight === 0 && BrowserWindow.getAllWindows().length === 0) app.quit();
+  }
+}
+
+function submitHeadlessJob(jobFile: string): void {
+  if (headlessReady) void handleHeadlessJob(jobFile);
+  else queuedJobFiles.push(jobFile);
+}
+
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
+    const jobFile = jobFileFromArgv(commandLine);
+    if (jobFile) {
+      submitHeadlessJob(jobFile);
+      return;
+    }
     const window = desktopWindows.focused()?.window;
     // A retained tray process can outlive a renderer/window failure. Never leave a
     // second launch stranded behind that process: create a usable window again.
@@ -116,6 +165,7 @@ app.on('before-quit', (event) => {
     .then(() => closeMemorySessions(activeContext))
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
     .then(() => activeContext?.workflows.dispose())
+    .then(() => activeContext?.scheduler.stop())
     .then(() => activeContext?.terminal.stopAll())
     .then(() => activeContext?.preview.stopAll())
     .then(() => Promise.all([
@@ -253,6 +303,7 @@ async function startApplication(): Promise<void> {
     bundledRulesPath,
     path.join(paths.root, 'agent-rules', 'Cognitive1-Rules.md'),
   );
+  configureCopyCheckpoints(path.join(paths.root, 'checkpoints'));
   const workflowTemplates = new WorkflowTemplateStore(path.join(paths.root, 'workflows'));
   const backups = new DesktopConfigBackupStore(paths);
   const learningProgress = new LearningProgressStore(paths.learning, fileSystem);
@@ -327,6 +378,9 @@ async function startApplication(): Promise<void> {
   let promptGuide!: DesktopPromptGuide;
   let interview!: DesktopInterview;
   let studio!: DesktopStudio;
+  let scheduler!: DesktopScheduler;
+  let evals!: DesktopEvals;
+  let changeReviewer!: DesktopChangeReviewer;
 
   ipcContext = {
     appName: 'KAI',
@@ -339,6 +393,10 @@ async function startApplication(): Promise<void> {
     projects,
     preferences,
     teamRecord,
+    runScores: new RunScoreStore(path.join(paths.root, 'run-scores.json')),
+    scheduler,
+    evals,
+    changeReviewer,
     conversations,
     credentials,
     services: serviceController,
@@ -481,6 +539,33 @@ async function startApplication(): Promise<void> {
     requester: learningTutor,
   });
   ipcContext.promptGuide = promptGuide;
+  changeReviewer = new DesktopChangeReviewer({ pickConnection: () => promptGuide.pickConnection(), requester: learningTutor });
+  ipcContext.changeReviewer = changeReviewer;
+  const projectById = async (projectId: string) => {
+    const found = (await projects.list()).find((candidate) => candidate.id === projectId);
+    if (!found) throw new Error('That project is no longer in KAI.');
+    return found;
+  };
+  evals = new DesktopEvals(new EvalStore(path.join(paths.root, 'evals')), {
+    project: projectById,
+    createConversation: async (projectId, title) => {
+      const conversation = await createBlankConversation(projectId, title);
+      // Eval runs stay out of the conversation list; their results live in the Evals card.
+      await conversations.save({ ...conversation, archived: true });
+      return conversation.id;
+    },
+    runAgent: (request, cwd) => runConversationAgent(ipcContext!, request, null, { cwd }),
+    runCheck: async (cwd, command) => {
+      const check = await runCheckCommand(cwd, command);
+      return { exitCode: check.exitCode, output: check.output };
+    },
+  });
+  ipcContext.evals = evals;
+  scheduler = new DesktopScheduler(new ScheduleStore(path.join(paths.root, 'schedules.json')), {
+    run: (schedule) => runScheduledGoal(ipcContext!, schedule),
+  });
+  ipcContext.scheduler = scheduler;
+  scheduler.start();
   interview = new DesktopInterview({
     settings: () => settings.load(),
     projectRoot: studioProjectRoot,
@@ -583,10 +668,13 @@ async function startApplication(): Promise<void> {
   remoteGateway = remote;
   ipcContext.remote = remote;
   installContentSecurityPolicy();
-  await createMainWindow();
+  if (!startupJobFile) await createMainWindow();
   await remote.apply((await settings.load()).remote).catch((error: unknown) => {
     logger.warn('internal', 'KAI Remote could not start', messageOf(error));
   });
+  headlessReady = true;
+  if (startupJobFile) queuedJobFiles.unshift(startupJobFile);
+  for (const queued of queuedJobFiles.splice(0)) void handleHeadlessJob(queued);
   // Look for a new version shortly after startup and every few hours, if the user allows it. Checking is
   // read-only; downloading and installing always wait for the user.
   const checkForUpdates = (): void => {

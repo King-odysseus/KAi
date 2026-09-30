@@ -161,11 +161,11 @@ export async function recordVerification(store: VerificationStore, projectId: st
 }
 
 /** Run a check command in the project. The caller must have the user's confirmation. */
-export function runCheckCommand(projectPath: string, command: string, signal?: AbortSignal): Promise<RecordedCheck> {
+export function runCheckCommand(projectPath: string, command: string, signal?: AbortSignal, env?: Record<string, string>): Promise<RecordedCheck> {
   return new Promise((resolve) => {
     const startedAt = new Date();
     let output = '';
-    const child = spawn(command, { cwd: projectPath, shell: true, windowsHide: true, signal, timeout: RUN_TIMEOUT_MS });
+    const child = spawn(command, { cwd: projectPath, shell: true, windowsHide: true, signal, timeout: RUN_TIMEOUT_MS, ...(env ? { env: { ...process.env, ...env } } : {}) });
     const append = (chunk: Buffer): void => {
       output = (output + chunk.toString('utf8')).slice(-20_000);
     };

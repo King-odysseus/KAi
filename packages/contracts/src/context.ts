@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const contextItemKindSchema = z.enum(['instructions', 'file', 'skill', 'memory']);
-export const contextSectionKindSchema = z.enum(['instructions', 'files', 'skills', 'memories']);
+export const contextItemKindSchema = z.enum(['instructions', 'file', 'skill', 'memory', 'map']);
+export const contextSectionKindSchema = z.enum(['instructions', 'files', 'skills', 'memories', 'map']);
 
 export const contextPreviewItemSchema = z
   .object({

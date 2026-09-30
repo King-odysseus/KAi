@@ -3,11 +3,15 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { AutonomyMode, PermissionKey } from '@kai/contracts';
+import { RunGuard } from './run-guard';
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_READ_LINES = 400;
 const MAX_SEARCH_FILES = 2_000;
 const MAX_SEARCH_RESULTS = 50;
+const MAX_LIST_RESULTS = 500;
+const MAX_WRITE_TEXT = 400_000;
+const MAX_MULTI_EDITS = 40;
 const MAX_SEARCH_FILE_BYTES = 256 * 1024;
 const MAX_EDIT_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_EDIT_TEXT = 100_000;
@@ -41,6 +45,50 @@ const searchFilesInputSchema = z
     query: z.string().min(1).max(200),
     path: z.string().min(1).max(1_024).optional(),
     max_results: z.number().int().min(1).max(MAX_SEARCH_RESULTS).optional(),
+    regex: z.boolean().optional(),
+    glob: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+const listFilesInputSchema = z
+  .object({
+    pattern: z.string().min(1).max(200).optional(),
+    path: z.string().min(1).max(1_024).optional(),
+    max_results: z.number().int().min(1).max(MAX_LIST_RESULTS).optional(),
+  })
+  .strict();
+
+const writeFileInputSchema = z
+  .object({
+    path: z.string().min(1).max(1_024),
+    content: z.string().max(MAX_WRITE_TEXT),
+  })
+  .strict();
+
+const multiEditInputSchema = z
+  .object({
+    path: z.string().min(1).max(1_024),
+    edits: z
+      .array(
+        z
+          .object({
+            old_text: z.string().min(1).max(MAX_EDIT_TEXT),
+            new_text: z.string().max(MAX_EDIT_TEXT),
+            replace_all: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_MULTI_EDITS),
+  })
+  .strict();
+
+const deleteFileInputSchema = z.object({ path: z.string().min(1).max(1_024) }).strict();
+
+const moveFileInputSchema = z
+  .object({
+    from: z.string().min(1).max(1_024),
+    to: z.string().min(1).max(1_024),
   })
   .strict();
 
@@ -87,12 +135,14 @@ export const projectToolDefinitions = [
   {
     type: 'function',
     name: 'search_files',
-    description: 'Search text files inside the active project for a literal, case-insensitive string.',
+    description: 'Search text files inside the active project for a case-insensitive string, or a regular expression when regex is true.',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Literal text to search for.' },
+        query: { type: 'string', description: 'Text to search for, or a JavaScript regular expression when regex is true.' },
         path: { type: 'string', description: 'Optional project-relative file or directory to search.' },
+        regex: { type: 'boolean', description: 'Treat query as a regular expression.' },
+        glob: { type: 'string', description: 'Only search files whose project-relative path matches this glob, for example "src/**/*.ts".' },
         max_results: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_RESULTS },
       },
       required: ['query'],
@@ -126,6 +176,86 @@ export const projectToolDefinitions = [
         content: { type: 'string', description: 'Initial file content.' },
       },
       required: ['path', 'content'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'list_files',
+    description: 'List project files, optionally only those matching a glob such as "src/**/*.ts". Skips node_modules, build output and .git.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'Glob matched against project-relative paths. Omit to list everything.' },
+        path: { type: 'string', description: 'Optional project-relative directory to list under.' },
+        max_results: { type: 'integer', minimum: 1, maximum: MAX_LIST_RESULTS },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'multi_edit',
+    description: 'Apply several exact-text replacements to one file in order. All of them apply or none do, so use it for a change that needs more than one edit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Project-relative file path.' },
+        edits: {
+          type: 'array',
+          description: 'Replacements applied in order; each sees the result of the previous one.',
+          items: {
+            type: 'object',
+            properties: {
+              old_text: { type: 'string' },
+              new_text: { type: 'string' },
+              replace_all: { type: 'boolean' },
+            },
+            required: ['old_text', 'new_text'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['path', 'edits'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'write_file',
+    description: 'Write the full content of a project file, creating it or replacing it. Prefer replace_in_file or multi_edit for small changes to a large file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Project-relative file path.' },
+        content: { type: 'string', description: 'The complete new file content.' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'move_file',
+    description: 'Move or rename a project file. The destination must not exist.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Existing project-relative path.' },
+        to: { type: 'string', description: 'New project-relative path.' },
+      },
+      required: ['from', 'to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'delete_file',
+    description: 'Delete one project file. Directories are never deleted.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Project-relative file path.' } },
+      required: ['path'],
       additionalProperties: false,
     },
   },
@@ -181,8 +311,12 @@ export function isPublishingCommand(command: string): boolean {
   return PUBLISHING_COMMAND.test(command);
 }
 
+const EDIT_TOOLS = new Set(['replace_in_file', 'create_file', 'multi_edit', 'write_file', 'move_file', 'delete_file']);
+
 export class DesktopProjectToolRuntime {
   private resolvedRoot: Promise<string> | undefined;
+  /** Per-run limits: a spend ceiling and repeated-call detection. */
+  readonly guard = new RunGuard();
 
   constructor(
     private readonly root: string,
@@ -190,7 +324,7 @@ export class DesktopProjectToolRuntime {
   ) {}
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
-    if (name === 'read_file' || name === 'search_files') return { decision: 'allow' };
+    if (name === 'read_file' || name === 'search_files' || name === 'list_files') return { decision: 'allow' };
     if (name === 'run_command') {
       if (autonomy === 'plan') {
         return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
@@ -204,11 +338,21 @@ export class DesktopProjectToolRuntime {
         risk: 'high',
       };
     }
-    if (name !== 'replace_in_file' && name !== 'create_file') {
+    if (!EDIT_TOOLS.has(name)) {
       return { decision: 'deny', reason: `Unknown project tool: ${name}.` };
     }
     if (autonomy === 'plan') {
       return { decision: 'deny', reason: `The current plan mode does not allow ${name}.` };
+    }
+    // Removing a file is the one edit that cannot be undone by another edit, so only Full access skips the question.
+    if (name === 'delete_file') {
+      if (autonomy === 'full' || (autonomy === 'custom' && this.customPermissions.workspaceEdit)) return { decision: 'allow' };
+      return {
+        decision: 'ask',
+        title: 'Delete a project file?',
+        detail: 'The model asked to delete a project file. A checkpoint can bring it back, but review the path before allowing it.',
+        risk: 'medium',
+      };
     }
     if (autonomy === 'autoEdit' || autonomy === 'full') return { decision: 'allow' };
     if (autonomy === 'custom' && this.customPermissions.workspaceEdit) return { decision: 'allow' };
@@ -226,6 +370,11 @@ export class DesktopProjectToolRuntime {
       if (name === 'search_files') return await this.searchFiles(searchFilesInputSchema.parse(rawInput));
       if (name === 'replace_in_file') return await this.replaceInFile(replaceInFileInputSchema.parse(rawInput));
       if (name === 'create_file') return await this.createFile(createFileInputSchema.parse(rawInput));
+      if (name === 'list_files') return await this.listFiles(listFilesInputSchema.parse(rawInput));
+      if (name === 'multi_edit') return await this.multiEdit(multiEditInputSchema.parse(rawInput));
+      if (name === 'write_file') return await this.writeFile(writeFileInputSchema.parse(rawInput));
+      if (name === 'move_file') return await this.moveFile(moveFileInputSchema.parse(rawInput));
+      if (name === 'delete_file') return await this.deleteFile(deleteFileInputSchema.parse(rawInput));
       if (name === 'run_command') return await this.runCommand(runCommandInputSchema.parse(rawInput), signal);
       return toolFailure(`Unknown project tool: ${name}.`);
     } catch (error) {
@@ -268,7 +417,20 @@ export class DesktopProjectToolRuntime {
     const stat = await fs.stat(target);
     const maxResults = input.max_results ?? 20;
     const needle = input.query.toLocaleLowerCase();
-    const files = stat.isDirectory() ? await this.collectTextFiles(target) : [target];
+    let pattern: RegExp | undefined;
+    if (input.regex) {
+      try {
+        pattern = new RegExp(input.query, 'i');
+      } catch (error) {
+        throw new Error(`Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const globPattern = input.glob ? globToRegExp(input.glob) : undefined;
+    const root = await this.projectRoot();
+    const candidates = stat.isDirectory() ? await this.collectTextFiles(target) : [target];
+    const files = globPattern
+      ? candidates.filter((file) => globPattern.test(normalizeRelative(path.relative(root, file))))
+      : candidates;
     const matches: Array<{ path: string; line: number; text: string }> = [];
 
     for (const file of files) {
@@ -284,7 +446,7 @@ export class DesktopProjectToolRuntime {
       if (looksBinary(content)) continue;
       const lines = content.split(/\r?\n/);
       for (let index = 0; index < lines.length && matches.length < maxResults; index += 1) {
-        if (lines[index].toLocaleLowerCase().includes(needle)) {
+        if (pattern ? pattern.test(lines[index]) : lines[index].toLocaleLowerCase().includes(needle)) {
           matches.push({
             path: normalizeRelative(path.relative(await this.projectRoot(), file)),
             line: index + 1,
@@ -317,7 +479,7 @@ export class DesktopProjectToolRuntime {
     }
     const next = input.replace_all
       ? content.split(input.old_text).join(input.new_text)
-      : content.replace(input.old_text, input.new_text);
+      : content.replace(input.old_text, () => input.new_text);
     await fs.writeFile(target, next, 'utf8');
     return {
       ok: true,
@@ -351,6 +513,108 @@ export class DesktopProjectToolRuntime {
         path: normalizeRelative(input.path),
         action: 'created',
         summary: `Created ${input.path}.`,
+      },
+    };
+  }
+
+  private async listFiles(input: z.infer<typeof listFilesInputSchema>): Promise<ProjectToolExecution> {
+    const root = await this.projectRoot();
+    const target = await this.resolveInsideProject(input.path ?? '.', true);
+    if (!(await fs.stat(target)).isDirectory()) throw new Error(`${input.path} is not a directory.`);
+    const pattern = input.pattern ? globToRegExp(input.pattern) : undefined;
+    const limit = input.max_results ?? 200;
+    const all = (await this.collectTextFiles(target))
+      .map((file) => normalizeRelative(path.relative(root, file)))
+      .filter((file) => !pattern || pattern.test(file))
+      .sort();
+    return { ok: true, output: { files: all.slice(0, limit), total: all.length, truncated: all.length > limit } };
+  }
+
+  private async multiEdit(input: z.infer<typeof multiEditInputSchema>): Promise<ProjectToolExecution> {
+    const target = await this.resolveInsideProject(input.path, true);
+    const stat = await fs.stat(target);
+    if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
+    if (stat.size > MAX_EDIT_FILE_BYTES) throw new Error(`${input.path} is too large to edit safely.`);
+    let content = await fs.readFile(target, 'utf8');
+    let replacements = 0;
+    for (const [index, edit] of input.edits.entries()) {
+      const occurrences = countOccurrences(content, edit.old_text);
+      if (occurrences === 0) throw new Error(`Edit ${index + 1}: the exact old_text was not found in ${input.path}. No edits were applied.`);
+      if (!edit.replace_all && occurrences !== 1) {
+        throw new Error(`Edit ${index + 1}: old_text occurs ${occurrences} times in ${input.path}; make it unique or set replace_all. No edits were applied.`);
+      }
+      content = edit.replace_all ? content.split(edit.old_text).join(edit.new_text) : content.replace(edit.old_text, () => edit.new_text);
+      replacements += edit.replace_all ? occurrences : 1;
+    }
+    await fs.writeFile(target, content, 'utf8');
+    return {
+      ok: true,
+      output: { path: normalizeRelative(input.path), edits: input.edits.length, replacements },
+      changedFile: {
+        path: normalizeRelative(input.path),
+        action: 'edited',
+        summary: `Applied ${input.edits.length} edit(s) to ${input.path}.`,
+      },
+    };
+  }
+
+  private async writeFile(input: z.infer<typeof writeFileInputSchema>): Promise<ProjectToolExecution> {
+    const target = await this.resolveInsideProject(input.path, false);
+    let existed = true;
+    try {
+      const stat = await fs.stat(target);
+      if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      existed = false;
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, input.content, 'utf8');
+    return {
+      ok: true,
+      output: { path: normalizeRelative(input.path), created: !existed, bytes: Buffer.byteLength(input.content, 'utf8') },
+      changedFile: {
+        path: normalizeRelative(input.path),
+        action: existed ? 'edited' : 'created',
+        summary: `${existed ? 'Rewrote' : 'Created'} ${input.path}.`,
+      },
+    };
+  }
+
+  private async moveFile(input: z.infer<typeof moveFileInputSchema>): Promise<ProjectToolExecution> {
+    const source = await this.resolveInsideProject(input.from, true);
+    if (!(await fs.stat(source)).isFile()) throw new Error(`${input.from} is not a file.`);
+    const destination = await this.resolveInsideProject(input.to, false);
+    try {
+      await fs.access(destination);
+      throw new Error(`${input.to} already exists.`);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+    }
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.rename(source, destination);
+    return {
+      ok: true,
+      output: { from: normalizeRelative(input.from), to: normalizeRelative(input.to) },
+      changedFile: {
+        path: normalizeRelative(input.to),
+        action: 'edited',
+        summary: `Moved ${input.from} to ${input.to}.`,
+      },
+    };
+  }
+
+  private async deleteFile(input: z.infer<typeof deleteFileInputSchema>): Promise<ProjectToolExecution> {
+    const target = await this.resolveInsideProject(input.path, true);
+    if (!(await fs.stat(target)).isFile()) throw new Error(`${input.path} is not a file. Directories are never deleted.`);
+    await fs.unlink(target);
+    return {
+      ok: true,
+      output: { path: normalizeRelative(input.path), deleted: true },
+      changedFile: {
+        path: normalizeRelative(input.path),
+        action: 'edited',
+        summary: `Deleted ${input.path}.`,
       },
     };
   }
@@ -586,6 +850,33 @@ function isDevServerCommand(command: string): boolean {
 
 function isMissingPathError(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR'));
+}
+
+/** A path glob: `**` crosses folders, `*` and `?` stay inside one, and a pattern with no slash matches at any depth. */
+export function globToRegExp(glob: string): RegExp {
+  const normalized = glob.replace(/\\/g, '/').replace(/^\.\//, '');
+  let source = '';
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index]!;
+    if (char === '*') {
+      if (normalized[index + 1] === '*') {
+        index += 1;
+        if (normalized[index + 1] === '/') {
+          index += 1;
+          source += '(?:.*/)?';
+        } else {
+          source += '.*';
+        }
+      } else {
+        source += '[^/]*';
+      }
+    } else if (char === '?') {
+      source += '[^/]';
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${normalized.includes('/') ? '' : '(?:.*/)?'}${source}$`, 'i');
 }
 
 function looksBinary(content: string): boolean {

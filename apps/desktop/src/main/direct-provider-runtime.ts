@@ -17,6 +17,7 @@ import {
   type ProjectToolExecution,
 } from './project-tools';
 import { estimateCostUsd } from './usage-budget';
+import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, RunLimitError } from './run-guard';
 
 function costFields(
   provider: string,
@@ -129,6 +130,8 @@ export interface DirectProviderRuntimeOptions {
   waitIfPaused?: (conversationId: string, signal: AbortSignal) => Promise<void>;
   /** Asks a local server (LM Studio) which models it offers; replaced in tests. */
   probeLocalServer?: (baseUrl: string) => Promise<LocalServerProbe>;
+  /** Stop a run whose estimated cost passes this many USD. Zero disables it; defaults to KAI_MAX_RUN_COST_USD, then the Usage setting. */
+  maxRunCostUsd?: number;
 }
 
 export class DesktopDirectProviderRuntime {
@@ -140,6 +143,14 @@ export class DesktopDirectProviderRuntime {
     private readonly externalTools?: ExternalToolPort,
     private readonly options: DirectProviderRuntimeOptions = {},
   ) {}
+
+  private async newToolRuntime(projectRoot: string, customPermissions?: Partial<Record<PermissionKey, boolean>>): Promise<DesktopProjectToolRuntime> {
+    const runtime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    // The environment variable wins so a script can loosen or tighten the limit without touching settings.
+    const fromSettings = await this.settings.load().then((loaded) => loaded.usageBudget.perRunUsd, () => undefined);
+    runtime.guard.setMaxCost(this.options.maxRunCostUsd ?? maxRunCostFromEnvironment() ?? fromSettings ?? DEFAULT_MAX_RUN_COST_USD);
+    return runtime;
+  }
 
   async capability(): Promise<DirectApiCapability> {
     const settings = await this.settings.load();
@@ -296,7 +307,7 @@ export class DesktopDirectProviderRuntime {
       );
     }
 
-    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalTools?.definitions() ?? [];
@@ -326,6 +337,7 @@ export class DesktopDirectProviderRuntime {
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
+        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundEmittedText = false;
         let roundProviderError: string | undefined;
@@ -491,7 +503,7 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalTools?.definitions() ?? [];
@@ -521,6 +533,7 @@ export class DesktopDirectProviderRuntime {
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
+        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;
@@ -678,7 +691,7 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalTools?.definitions() ?? [];
@@ -705,6 +718,7 @@ export class DesktopDirectProviderRuntime {
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
+        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;
@@ -731,7 +745,9 @@ export class DesktopDirectProviderRuntime {
           if (type === 'message_start') {
             const usage = asRecord(asRecord(value.message)?.usage);
             const roundInputTokens = integerValue(usage?.input_tokens);
-            if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens;
+            // Cached prompt tokens are reported separately; count them so budgets never undercount the prompt.
+            const cachedTokens = (integerValue(usage?.cache_read_input_tokens) ?? 0) + (integerValue(usage?.cache_creation_input_tokens) ?? 0);
+            if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens;
             continue;
           }
           if (type === 'content_block_start') {
@@ -837,7 +853,7 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalTools?.definitions() ?? [];
@@ -864,6 +880,7 @@ export class DesktopDirectProviderRuntime {
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
+        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundText = '';
         let roundProviderError: string | undefined;
@@ -1069,9 +1086,8 @@ export class DesktopDirectProviderRuntime {
             model: capability.model,
             max_tokens: 8_192,
             stream: true,
-            messages,
-            ...(system?.trim() ? { system: system.trim() } : {}),
-            ...(tools.length > 0 ? { tools, tool_choice: { type: 'auto' } } : {}),
+            ...withAnthropicPromptCaching(capability.baseUrl, { messages, system: system?.trim(), tools }),
+            ...(tools.length > 0 ? { tool_choice: { type: 'auto' } } : {}),
           }),
           signal,
         });
@@ -1233,6 +1249,16 @@ export class DesktopDirectProviderRuntime {
   }
 }
 
+function assertRunSpend(
+  toolRuntime: DesktopProjectToolRuntime,
+  capability: DirectApiCapability,
+  inputTokens: number | undefined,
+  outputTokens: number | undefined,
+): void {
+  if (inputTokens === undefined && outputTokens === undefined) return;
+  toolRuntime.guard.assertSpend(costFields(capability.provider, capability.model, inputTokens, outputTokens).amountUsd);
+}
+
 function finishProviderRun(input: {
   request: AgentRunRequest;
   capability: DirectApiCapability;
@@ -1365,6 +1391,48 @@ function geminiContents(
       role: turn.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: turn.text }],
     }));
+}
+
+/**
+ * Mark the stable prefix of a request (tools, system, and the conversation so far) as cache breakpoints, so the
+ * rules and tool list are not billed at full price on each of a run's tool rounds. Only Anthropic's own API is
+ * given the field; compatible third-party endpoints may reject unknown keys.
+ */
+export function withAnthropicPromptCaching(
+  baseUrl: string,
+  parts: { messages: readonly AnthropicMessage[]; system?: string; tools: Array<Record<string, unknown>> },
+): { messages: AnthropicMessage[]; system?: string | Array<Record<string, unknown>>; tools?: Array<Record<string, unknown>> } {
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    // An unparseable base URL is not Anthropic's; send the request unchanged.
+  }
+  const cache = { type: 'ephemeral' };
+  if (host !== 'api.anthropic.com') {
+    return {
+      messages: [...parts.messages],
+      ...(parts.system ? { system: parts.system } : {}),
+      ...(parts.tools.length > 0 ? { tools: parts.tools } : {}),
+    };
+  }
+  const messages = parts.messages.map((message) => ({ ...message }));
+  const last = messages[messages.length - 1];
+  if (last) {
+    const blocks: Array<Record<string, unknown>> =
+      typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content.map((block) => ({ ...block }));
+    if (blocks.length > 0) {
+      blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: cache };
+      last.content = blocks;
+    }
+  }
+  const tools = parts.tools.map((tool) => ({ ...tool }));
+  if (tools.length > 0) tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: cache };
+  return {
+    messages,
+    ...(parts.system ? { system: [{ type: 'text', text: parts.system, cache_control: cache }] } : {}),
+    ...(tools.length > 0 ? { tools } : {}),
+  };
 }
 
 function anthropicToolDefinitions(definitions: readonly unknown[]): Array<Record<string, unknown>> {
@@ -1505,6 +1573,14 @@ async function executeToolCalls(
     const execution: ProjectToolExecution = (
       (await externalTools?.execute(name, argumentsValue, signal)) ?? await toolRuntime.execute(name, argumentsValue, signal)
     );
+    const repeat = toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
+    if (repeat === 'stop') {
+      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: REPEAT_STOP_MESSAGE }));
+      throw new RunLimitError(REPEAT_STOP_MESSAGE);
+    }
+    if (repeat === 'warn') {
+      execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: REPEAT_WARNING };
+    }
     emit(toolCallEvent(request, name, execution.ok ? 'completed' : 'failed', argumentsValue, execution.output));
     if (execution.changedFile) {
       if (execution.changedFile.action === 'created') {
