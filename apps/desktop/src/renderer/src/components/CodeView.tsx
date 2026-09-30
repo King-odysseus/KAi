@@ -17,6 +17,7 @@ import type * as Monaco from 'monaco-editor';
 import type {
   CodeFormatResult,
   GitFileInfo,
+  GitChange,
   EditorWindowSnapshot,
   LearningAction,
   LearningAssistance,
@@ -43,6 +44,7 @@ import { changeMap, type FileChange } from './project-files-tree';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { LearningPanel, type LearningSelectionPreview, type TutorConversationTurn } from './LearningPanel';
+import { GuidedReviewPanel } from './GuidedReviewPanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 
 interface TreeNode {
@@ -243,6 +245,7 @@ export function CodeView({
       return true;
     }
   });
+  const [sidePanel, setSidePanel] = useState<'learn' | 'review'>(() => window.localStorage.getItem('kai.codeSidePanel') === 'review' ? 'review' : 'learn');
   const [learningScope, setLearningScope] = useState<LearningTutorScope>(() => {
     try {
       const saved = window.localStorage.getItem('kai.learningTutorScope');
@@ -333,15 +336,20 @@ export function CodeView({
   const missingFormatterNoted = useRef(new Set<string>());
   // Git state for the file tree: what changed since the last commit and whether it is staged.
   const [gitChanges, setGitChanges] = useState<ReadonlyMap<string, FileChange>>(new Map());
+  const [reviewChanges, setReviewChanges] = useState<GitChange[]>([]);
   const refreshGitChanges = useCallback(async (): Promise<void> => {
     const id = projectIdRef.current;
     if (!id) {
       setGitChanges(new Map());
+      setReviewChanges([]);
       return;
     }
     try {
       const overview = unwrap(await window.kaiDesktop.gitOverview(id));
-      if (projectIdRef.current === id) setGitChanges(overview.isRepository ? changeMap(overview.changes) : new Map());
+      if (projectIdRef.current === id) {
+        setGitChanges(overview.isRepository ? changeMap(overview.changes) : new Map());
+        setReviewChanges(overview.isRepository ? overview.changes : []);
+      }
     } catch {
       // The badges are a convenience; a failed status check leaves the last known state.
     }
@@ -1533,7 +1541,18 @@ export function CodeView({
             onDoubleClick={() => setLearningPaneWidth(DEFAULT_LEARNING_PANE_WIDTH)}
             onKeyDown={(event) => resizeCodePaneWithKeyboard('learning', event)}
           />
-          <LearningPanel
+          <div className="code-side-panel-tabs" role="tablist" aria-label="Code assistance">
+            <button type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => { setSidePanel('learn'); window.localStorage.setItem('kai.codeSidePanel', 'learn'); }}>Learn</button>
+            <button type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => { setSidePanel('review'); window.localStorage.setItem('kai.codeSidePanel', 'review'); }}>Review</button>
+          </div>
+          {sidePanel === 'review' ? <GuidedReviewPanel
+            projectId={activeProject.id}
+            changes={reviewChanges}
+            activePath={activePath}
+            hasSelection={Boolean(learningSelection?.text.trim())}
+            onOpenFile={openFile}
+            onExplainFile={async (path) => { await openFile(path); setSidePanel('learn'); setTutorOpen(true); await runLearningAction('explain-file'); }}
+          /> : <LearningPanel
             key={projectId}
             projectFiles={files.map((file) => file.path)}
             onReference={(filePath, startLine, endLine) => void openLearningReference(filePath, startLine, endLine)}
@@ -1600,7 +1619,7 @@ export function CodeView({
             onGenerateTeachingDraft={generateTeachingDraft}
             onOpenSettings={onOpenSettings}
             onClose={() => setTutorOpen(false)}
-          />
+          />}
         </>
       )}
     </div>
