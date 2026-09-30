@@ -144,9 +144,9 @@ app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin') return;
-  // With the gateway up the phone is still attached, so losing the last window must not end the run.
-  // The listener is released on quit; the tray restores a window when the user wants one back.
-  if (remoteGateway?.isRunning()) return;
+  // Closing the last window ends KAI and every process it started (Cognitive1, the proxy, MCP servers, terminals),
+  // even with KAI Remote on: the phone console is only reachable while KAI is open. Someone who wants KAI to keep
+  // running in the background can turn on the tray option, which keeps the app alive while an agent is working.
   app.quit();
 });
 
@@ -161,6 +161,13 @@ app.on('before-quit', (event) => {
       quitting = false;
       throw new Error('QUIT_CANCELLED');
     }
+    // The user has agreed to quit. If a service refuses to stop, leave anyway rather than linger as background
+    // processes after the window is gone.
+    const forceExit = setTimeout(() => {
+      ipcContext?.logger.warn('internal', 'Shutdown took too long; exiting anyway');
+      app.exit(0);
+    }, 15_000);
+    forceExit.unref();
   })()
     .then(() => closeMemorySessions(activeContext))
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
