@@ -10,6 +10,18 @@ describe('a reply that only announces work', () => {
     expect(announcesUnfinishedWork('I have the architecture and stack.\n\nI now have')).toBe(true);
   });
 
+  it('is recognised even when the promise closes a long reply', () => {
+    // The reply that stalled a real run: a long read-up that ends by promising to build. A length limit used to
+    // skip exactly this shape, so no nudge was ever sent and the run ended with the task untouched.
+    const readUp = `I read the brief, the stack notes and the tokens. ${'The board is clear. '.repeat(40)}`;
+    expect(announcesUnfinishedWork(`${readUp}\n\nI'll stop reading and start building. Let me pull the exact content of the files I need to write correct code (data model, env vars, deps, tokens, board task IDs), then scaffold immediately.`)).toBe(true);
+  });
+
+  it('does not read a polite sign-off as a promise', () => {
+    expect(announcesUnfinishedWork('The nav link is in and the em dashes are gone. Let me know if you want anything else.')).toBe(false);
+    expect(announcesUnfinishedWork('All three changes are in place. Let me know if you need more.')).toBe(false);
+  });
+
   it('leaves a real answer, a question, and an empty reply alone', () => {
     expect(announcesUnfinishedWork('')).toBe(false);
     expect(announcesUnfinishedWork('I added the Home link and removed the em dashes. Everything builds.')).toBe(false);

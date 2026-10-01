@@ -124,18 +124,39 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
 }
 
 /**
+ * A model that is about to act says so with its last word, so only the closing sentences are read: the last block of
+ * the reply, and inside it the final two sentences. That keeps an announcement sitting at the top of a finished
+ * report ("I'll summarise. …The build passed.") from counting as a promise. `let me know` is excluded because it is
+ * a sign-off, not an intention — it ends far more replies than it announces.
+ *
+ * There is deliberately no length limit. The long replies are exactly the ones that promise work and then stop, and
+ * skipping them entirely is how a run ends silently with the task half done.
+ */
+const ANNOUNCEMENT = /\b(let me (?!know\b)|i'll|i will|i'm going to|i am going to|now i(?:'ll| will)?|i now (?:have|know)|next,? i)\b/i;
+
+/**
  * True when a reply that used no tools only says what the model is about to do ("Let me read the files"). Some models
  * end their turn there, which would end the run with the work not started.
  */
 export function announcesUnfinishedWork(text: string): boolean {
   const said = text.trim();
-  if (!said || said.length > 700 || said.endsWith('?')) return false;
-  const last = said.split(/\n{2,}/).at(-1) ?? said;
-  return /\b(let me|i'll|i will|i'm going to|i am going to|now i(?:'ll| will)?|i now (?:have|know)|next,? i)\b/i.test(last);
+  if (!said || said.endsWith('?')) return false;
+  const block = said.split(/\n{2,}/).at(-1) ?? said;
+  const closing = block.split(/(?<=[.!?])\s+/).slice(-2).join(' ');
+  return ANNOUNCEMENT.test(closing);
 }
 
-const UNFINISHED_WORK_NUDGE = 'You described what you would do but did not do it. Do it now with your tools. If the task is already complete, say what you did and stop.';
-const MAX_UNFINISHED_NUDGES = 3;
+const UNFINISHED_WORK_NUDGE = 'Your turn ended with no tool call, so the work is not done. Call the tools yourself now — do not restate the plan, do not describe what you are about to do, and do not ask for permission. If the task is genuinely complete, say what you changed and stop.';
+
+/**
+ * How many stalls in a row to nudge through before the run is ended. The budget resets on every real tool round, so
+ * this bounds a model that keeps promising without acting, not the whole run. Claude Code ends a turn after eight
+ * consecutive Stop-hook continuations; matching that keeps a stubborn model from looping forever.
+ */
+const MAX_UNFINISHED_NUDGES = 8;
+
+/** Ends a run whose model kept describing work instead of doing it, so the stop is explained rather than silent. */
+const UNFINISHED_STALL = 'The model kept describing what it would do instead of calling its tools, so the run ended with the task unfinished. Send "continue" to carry on, or switch to a model that uses tools more readily.';
 
 /** A blank line to put before the first text of a round when earlier rounds already wrote some, so they do not run together. */
 function roundBreak(outputParts: readonly string[]): string {
@@ -573,10 +594,13 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
-          if (nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
-            nudges += 1;
-            providerInput = UNFINISHED_WORK_NUDGE;
-            continue;
+          if (announcesUnfinishedWork(roundText)) {
+            if (nudges < MAX_UNFINISHED_NUDGES) {
+              nudges += 1;
+              providerInput = UNFINISHED_WORK_NUDGE;
+              continue;
+            }
+            errors.push(UNFINISHED_STALL);
           }
           break;
         }
@@ -769,11 +793,14 @@ export class DesktopDirectProviderRuntime {
           .sort((left, right) => left.index - right.index)
           .filter((call) => call.name);
         if (toolCalls.length === 0) {
-          if (!forceFinalAnswer && nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
-            nudges += 1;
-            messages.push({ role: 'assistant', content: roundText });
-            messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
-            continue;
+          if (!forceFinalAnswer && announcesUnfinishedWork(roundText)) {
+            if (nudges < MAX_UNFINISHED_NUDGES) {
+              nudges += 1;
+              messages.push({ role: 'assistant', content: roundText });
+              messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
+              continue;
+            }
+            errors.push(UNFINISHED_STALL);
           }
           break;
         }
@@ -998,11 +1025,14 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
-          if (nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
-            nudges += 1;
-            messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
-            messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
-            continue;
+          if (announcesUnfinishedWork(roundText)) {
+            if (nudges < MAX_UNFINISHED_NUDGES) {
+              nudges += 1;
+              messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
+              messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
+              continue;
+            }
+            errors.push(UNFINISHED_STALL);
           }
           break;
         }
@@ -1153,11 +1183,14 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
-          if (nudges < MAX_UNFINISHED_NUDGES && announcesUnfinishedWork(roundText)) {
-            nudges += 1;
-            contents.push({ role: 'model', parts: [{ text: roundText }] });
-            contents.push({ role: 'user', parts: [{ text: UNFINISHED_WORK_NUDGE }] });
-            continue;
+          if (announcesUnfinishedWork(roundText)) {
+            if (nudges < MAX_UNFINISHED_NUDGES) {
+              nudges += 1;
+              contents.push({ role: 'model', parts: [{ text: roundText }] });
+              contents.push({ role: 'user', parts: [{ text: UNFINISHED_WORK_NUDGE }] });
+              continue;
+            }
+            errors.push(UNFINISHED_STALL);
           }
           break;
         }
