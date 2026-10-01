@@ -1,4 +1,5 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
+import { AutopilotIntentPanel } from './AutopilotPanel';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
 import {
@@ -173,7 +174,7 @@ interface QueuedPrompt {
   options: WorkspaceSendOptions;
 }
 
-type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer';
+type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'autopilot';
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'Ask', description: 'Understand an idea or get advice', placeholder: 'Ask KAI about this project or idea', starter: '' },
@@ -182,6 +183,7 @@ const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: 
   { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
   { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
   { id: 'equalizer', label: 'Equalizer', description: 'Compare the built screens with their design and report every difference', placeholder: 'Say what does not match, for example: the dashboard on my dev server', starter: '' },
+  { id: 'autopilot', label: 'Autopilot', description: 'Work every card on the project board, one after another, checking each', placeholder: 'Autopilot works the board by itself; start it above', starter: '' },
 ];
 
 const STATUS_WORDS = [
@@ -684,7 +686,7 @@ export function WorkspaceView({
     setRefiningPrompt(true);
     setWorkbenchNotice(null);
     try {
-      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' ? 'build' : taskIntent }));
+      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || taskIntent === 'autopilot' ? 'build' : taskIntent }));
       setPrompt(result.prompt);
       window.setTimeout(() => {
         promptRef.current?.focus();
@@ -1452,6 +1454,7 @@ export function WorkspaceView({
             if (files.length > 0) void attachImageFiles(files);
           }}
         />
+        {taskIntent === 'autopilot' && activeProject && <AutopilotIntentPanel projectId={activeProject.id} />}
         {taskIntent === 'equalizer' && activeProject && (
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}

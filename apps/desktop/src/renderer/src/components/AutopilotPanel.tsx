@@ -1,6 +1,6 @@
 import { Loader2, Moon, Plane, Square } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import type { AutopilotStatus } from '@kai/contracts';
+import type { AutopilotStatus, StudioBoard } from '@kai/contracts';
 import { unwrap } from '../types';
 
 interface Props {
@@ -186,5 +186,54 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Autopilot as a composer intent. The board belongs to a Studio plan, which is the open project itself or the plan
+ * linked to its folder, so the plan is found first and the same panel the Studio shows is placed above the composer.
+ */
+export function AutopilotIntentPanel({ projectId }: { projectId: string }): ReactNode {
+  const [planId, setPlanId] = useState<string | null | undefined>(undefined);
+  const [board, setBoard] = useState<StudioBoard | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPlanId(undefined);
+    setBoard(null);
+    void window.kaiDesktop.studioProjects().then(unwrap).then((plans) => {
+      if (cancelled) return;
+      const plan = plans.find((item) => !item.archivedAt && (item.id === projectId || item.linkedProjectId === projectId));
+      setPlanId(plan?.id ?? null);
+    }).catch(() => { if (!cancelled) setPlanId(null); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!planId) return undefined;
+    let cancelled = false;
+    void window.kaiDesktop.studioBoard(planId).then(unwrap).then((next) => { if (!cancelled) setBoard(next); }).catch(() => undefined);
+    const off = window.kaiDesktop.onStudioBoardChanged((payload) => {
+      if (payload.projectId === planId) setBoard(payload.board);
+    });
+    return () => { cancelled = true; off(); };
+  }, [planId]);
+
+  if (planId === undefined) return <section className="autopilot-panel" aria-label="Autopilot"><p className="studio-note"><Loader2 className="spin" size={13} /> Looking for this project's board…</p></section>;
+  if (planId === null || !board) {
+    return (
+      <section className="autopilot-panel" aria-label="Autopilot">
+        <p className="studio-note">{planId === null ? 'Autopilot works the board of a Studio plan, and this project has none. Plan it in the Studio first.' : 'Loading the board…'}</p>
+      </section>
+    );
+  }
+  const cards = board.cards;
+  return (
+    <AutopilotPanel
+      projectId={planId}
+      blockedCount={cards.filter((card) => card.status === 'blocked').length}
+      hasWork={cards.some((card) => card.status === 'ready' || card.status === 'inProgress')}
+      disabled={false}
+    />
   );
 }

@@ -114,6 +114,7 @@ import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopAutopilot } from './autopilot';
+import { composeRunLesson, type RunLessonInput } from './run-learning';
 import type { DesktopPromptGuide } from './prompt-guide';
 import type { DesktopInterview } from './interview';
 import type { DesktopStudio } from './studio';
@@ -1407,6 +1408,20 @@ export async function runConversationAgent(
       hasCheckpoint: true,
     });
   }
+  // The brain hears what the run did, not just that a session came and went; Overwatch then judges the draft.
+  const lessonEvent = await fileRunLesson(context, {
+    conversationId: conversation.id,
+    agent: request.agent,
+    projectPath: project.path,
+    projectName: project.name,
+    prompt: userTurn.text,
+    output: execution.output ?? '',
+    status: execution.status,
+    files: (userTurn.fileChanges ?? []).map((change) => change.path),
+    checks: agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
+      .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0 })),
+  });
+  if (lessonEvent) execution.events.push(lessonEvent);
   conversation.turns.push(...(execution.output
     ? [{
         id: `turn_${crypto.randomUUID()}`,
@@ -1506,6 +1521,36 @@ async function logRegression(context: IpcContext, projectPath: string, projectNa
     tool: 'regression_log',
     arguments: { project: await memoryProjectName(context, projectPath, projectName), passed: counts.passed, failed: counts.failed ?? 0, notes: `${check.source}: ${check.command}`.slice(0, 300), agent: 'kai-desktop' },
   }).catch(() => undefined);
+}
+
+/**
+ * Files a short account of a finished run into C1's draft queue. It is deliberately forgiving: the brain being down,
+ * slow or unconfigured must never fail or delay the run it is describing.
+ */
+async function fileRunLesson(
+  context: IpcContext,
+  run: RunLessonInput & { conversationId: string; agent: AgentId; projectPath: string; projectName: string },
+): Promise<PersistedEvent | null> {
+  const lesson = composeRunLesson(run);
+  if (!lesson || !(await cognitive1Ready(context))) return null;
+  try {
+    // The daemon answers 200 with `ok: false` when its own quality gate turns the draft away.
+    const result = (await context.cognitive1.operation({
+      operation: 'brain-auto-learn',
+      payload: {
+        source: 'session',
+        summary: lesson.summary,
+        files: lesson.files,
+        project: await memoryProjectName(context, run.projectPath, run.projectName),
+        agent: run.agent,
+      },
+    })) as { ok?: boolean } | null;
+    if (result?.ok === false) return null;
+    return memoryEvent(run.conversationId, run.agent, 'learn', 'Filed what this run did as a draft in C1 for review.');
+  } catch (error) {
+    context.logger.warn('internal', 'Could not file the run in C1', messageOf(error));
+    return null;
+  }
 }
 
 async function releaseAgentClaim(context: IpcContext, agent: string): Promise<void> {

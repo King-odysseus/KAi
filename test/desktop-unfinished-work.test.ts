@@ -6,6 +6,8 @@ describe('a reply that only announces work', () => {
     expect(announcesUnfinishedWork('I\'ll complete the three pending tasks now. Let me investigate the current state of the nav and em-dash usage.')).toBe(true);
     expect(announcesUnfinishedWork('Let me read the files.')).toBe(true);
     expect(announcesUnfinishedWork('Done with the audit.\n\nNow I will edit the nav.')).toBe(true);
+    // Cut off mid-sentence: the model stopped before it did anything.
+    expect(announcesUnfinishedWork('I have the architecture and stack.\n\nI now have')).toBe(true);
   });
 
   it('leaves a real answer, a question, and an empty reply alone', () => {

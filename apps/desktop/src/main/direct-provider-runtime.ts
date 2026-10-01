@@ -131,7 +131,7 @@ export function announcesUnfinishedWork(text: string): boolean {
   const said = text.trim();
   if (!said || said.length > 700 || said.endsWith('?')) return false;
   const last = said.split(/\n{2,}/).at(-1) ?? said;
-  return /\b(let me|i'll|i will|i'm going to|i am going to|now i(?:'ll| will)?|next,? i)\b/i.test(last);
+  return /\b(let me|i'll|i will|i'm going to|i am going to|now i(?:'ll| will)?|i now (?:have|know)|next,? i)\b/i.test(last);
 }
 
 const UNFINISHED_WORK_NUDGE = 'You described what you would do but did not do it. Do it now with your tools. If the task is already complete, say what you did and stop.';
@@ -585,6 +585,7 @@ export class DesktopDirectProviderRuntime {
           break;
         }
         toolRounds += 1;
+        nudges = 0; // real work resets the budget: nudges are for stalls, not for the whole run
         providerInput = await executeToolCalls(
           request,
           toolRuntime,
@@ -781,6 +782,7 @@ export class DesktopDirectProviderRuntime {
           break;
         }
         toolRounds += 1;
+        nudges = 0; // real work resets the budget: nudges are for stalls, not for the whole run
         for (const call of toolCalls) call.callId ||= `call_${randomUUID()}`;
         messages.push({
           role: 'assistant',
@@ -1009,6 +1011,7 @@ export class DesktopDirectProviderRuntime {
           break;
         }
         toolRounds += 1;
+        nudges = 0; // real work resets the budget: nudges are for stalls, not for the whole run
         for (const call of toolCalls) call.callId ||= `toolu_${randomUUID()}`;
         const assistantContent: Array<Record<string, unknown>> = [];
         if (roundText) assistantContent.push({ type: 'text', text: roundText });
@@ -1163,6 +1166,7 @@ export class DesktopDirectProviderRuntime {
           break;
         }
         toolRounds += 1;
+        nudges = 0; // real work resets the budget: nudges are for stalls, not for the whole run
         const modelParts: Array<Record<string, unknown>> = [];
         if (roundText) modelParts.push({ text: roundText });
         modelParts.push(...toolCalls.map((call) => ({
