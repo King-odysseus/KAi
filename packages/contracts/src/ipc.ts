@@ -144,7 +144,7 @@ import {
   type Cognitive1OperationInput,
   type Cognitive1OperationResult,
 } from './brain';
-import { setupStatusSchema, type AgentConfigImportPreview, type SetupStatus } from './setup';
+import { setupGuideAnswerInputSchema, setupStatusSchema, type AgentConfigImportPreview, type SetupGuideAnswer, type SetupGuideAnswerInput, type SetupStatus } from './setup';
 import {
   contextChipSchema,
   contextSearchInputSchema,
@@ -526,6 +526,7 @@ export const ipcChannels = [
   'setup:complete',
   'setup:agent-config-preview',
   'setup:agent-config-import',
+  'setup:guide-answer',
   'terminal:start',
   'terminal:write',
   'terminal:resize',
@@ -810,6 +811,7 @@ export const ipcInputSchemas = {
   'setup:complete': z.object({ complete: z.boolean() }).strict(),
   'setup:agent-config-preview': emptyInputSchema,
   'setup:agent-config-import': z.object({ agent: z.enum(['codex', 'claude']) }).strict(),
+  'setup:guide-answer': setupGuideAnswerInputSchema,
   'terminal:start': terminalStartInputSchema,
   'terminal:write': terminalWriteInputSchema,
   'terminal:resize': terminalResizeInputSchema,
@@ -1257,6 +1259,7 @@ export interface KaiDesktopBridge {
   completeSetup(complete: boolean): Promise<IpcResponse<SetupStatus>>;
   agentConfigImportPreview(): Promise<IpcResponse<AgentConfigImportPreview[]>>;
   importAgentConfig(agent: 'codex' | 'claude'): Promise<IpcResponse<AgentConfigImportPreview>>;
+  answerSetupGuide(input: SetupGuideAnswerInput): Promise<IpcResponse<SetupGuideAnswer>>;
   startTerminal(projectId: string, shell: TerminalSession['shell'], cols: number, rows: number): Promise<IpcResponse<TerminalSession>>;
   writeTerminal(id: string, data: string): Promise<IpcResponse<boolean>>;
   resizeTerminal(id: string, cols: number, rows: number): Promise<IpcResponse<boolean>>;

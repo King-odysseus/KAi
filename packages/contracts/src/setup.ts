@@ -32,6 +32,18 @@ export const setupStatusSchema = z
 export type SetupCheck = z.infer<typeof setupCheckSchema>;
 export type SetupStatus = z.infer<typeof setupStatusSchema>;
 
+export const setupGuideAnswerInputSchema = z.object({
+  question: z.string().trim().min(1).max(1_000),
+  conversationContext: z.string().max(4_000).optional(),
+}).strict();
+export type SetupGuideAnswerInput = z.infer<typeof setupGuideAnswerInputSchema>;
+
+export const setupGuideAnswerSchema = z.object({
+  answer: z.string().trim().min(1).max(4_000),
+  nextSteps: z.array(z.string().trim().min(1).max(300)).max(5),
+}).strict();
+export type SetupGuideAnswer = z.infer<typeof setupGuideAnswerSchema>;
+
 /** A deliberately small, secret-free preview of a local agent configuration. */
 export const agentConfigImportPreviewSchema = z.object({
   agent: z.enum(['codex', 'claude']),
