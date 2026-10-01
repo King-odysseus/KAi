@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
@@ -44,6 +45,14 @@ const MAX_TUTOR_RESPONSE_CHARS = 200_000;
 // before producing the required JSON. Keep this aligned with the Direct API
 // runtime's completion ceiling so ordinary tutor requests do not end early.
 const TUTOR_MAX_OUTPUT_TOKENS = 8_192;
+/**
+ * A caller that writes long documents can ask for a bigger output budget for one request without every provider
+ * function taking another argument. A reasoning model spends part of this on thinking before it writes a word.
+ */
+const outputBudget = new AsyncLocalStorage<number>();
+function currentOutputTokens(): number {
+  return outputBudget.getStore() ?? TUTOR_MAX_OUTPUT_TOKENS;
+}
 const MAX_TEACHING_PROFILE_CHARS = 60_000;
 const MAX_LEARNING_GUIDE_TAIL_CHARS = 18_000;
 const MAX_PROJECT_CONTEXT_CHARS = 60_000;
@@ -451,13 +460,15 @@ export class DesktopLearningTutor {
     schemaName: string,
     schema: object,
     parse: (content: string) => T,
+    options?: { maxOutputTokens?: number },
   ): Promise<T> {
     const provider = await this.connectionConfiguration(connection, names);
     const repair = (invalid: string, error: unknown): { system: string; user: string } => ({
       system: prompt.system,
       user: `${prompt.user}\n\nYour previous reply could not be used (${messageOf(error)}). Reply again with only the JSON object.\nPrevious reply:\n${invalid.slice(0, 4_000)}`,
     });
-    return (await this.requestAndParse(provider, prompt, schemaName, schema, parse, repair)).value;
+    const run = async (): Promise<T> => (await this.requestAndParse(provider, prompt, schemaName, schema, parse, repair)).value;
+    return options?.maxOutputTokens ? outputBudget.run(options.maxOutputTokens, run) : run();
   }
 
   private async requestAndParse<T>(
@@ -524,7 +535,7 @@ export class DesktopLearningTutor {
       body: JSON.stringify({
         model,
         system: prompt.system,
-        max_tokens: TUTOR_MAX_OUTPUT_TOKENS,
+        max_tokens: currentOutputTokens(),
         messages: [{ role: 'user', content: prompt.user }],
       }),
       signal: AbortSignal.timeout(this.requestTimeoutMs),
@@ -552,7 +563,7 @@ export class DesktopLearningTutor {
         systemInstruction: { parts: [{ text: prompt.system }] },
         contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
         generationConfig: {
-          maxOutputTokens: TUTOR_MAX_OUTPUT_TOKENS,
+          maxOutputTokens: currentOutputTokens(),
           responseMimeType: 'application/json',
         },
       }),
@@ -581,7 +592,7 @@ export class DesktopLearningTutor {
         model,
         store: false,
         input: `${prompt.system}\n\n${prompt.user}`,
-        max_output_tokens: TUTOR_MAX_OUTPUT_TOKENS,
+        max_output_tokens: currentOutputTokens(),
         text: {
           format: {
             type: 'json_schema',
@@ -611,6 +622,26 @@ export class DesktopLearningTutor {
   }
 
   private async requestChatCompletions(
+    baseUrl: string,
+    model: string,
+    apiKey: string,
+    prompt: { system: string; user: string },
+    openRouter: boolean,
+    schemaName: string,
+    schema: object,
+  ): Promise<LearningProviderResult> {
+    try {
+      return await this.requestChatCompletionsOnce(baseUrl, model, apiKey, prompt, openRouter, schemaName, schema);
+    } catch (error) {
+      // Some providers cap max_tokens below what a long document needs and answer 400 to a bigger ask.
+      if (currentOutputTokens() > TUTOR_MAX_OUTPUT_TOKENS && /max_tokens|max.?output|maximum|valid range|exceed/i.test(messageOf(error))) {
+        return outputBudget.run(TUTOR_MAX_OUTPUT_TOKENS, () => this.requestChatCompletionsOnce(baseUrl, model, apiKey, prompt, openRouter, schemaName, schema));
+      }
+      throw error;
+    }
+  }
+
+  private async requestChatCompletionsOnce(
     baseUrl: string,
     model: string,
     apiKey: string,
@@ -653,7 +684,7 @@ export class DesktopLearningTutor {
             { role: 'system', content: prompt.system },
             { role: 'user', content: prompt.user },
           ],
-          max_tokens: TUTOR_MAX_OUTPUT_TOKENS,
+          max_tokens: currentOutputTokens(),
           ...(structured ? {
             response_format: {
               type: 'json_schema',

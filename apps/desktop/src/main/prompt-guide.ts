@@ -25,6 +25,8 @@ export interface StructuredRequester {
     schemaName: string,
     schema: object,
     parse: (content: string) => T,
+    /** A larger output budget for a request that writes a long document. */
+    options?: { maxOutputTokens?: number },
   ): Promise<T>;
 }
 

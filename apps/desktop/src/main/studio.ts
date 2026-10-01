@@ -40,6 +40,8 @@ export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flow
 
 const NAMES = { feature: 'the Project Studio', card: 'Project Studio' };
 const GENERATE_CONTEXT_CHARS = 12_000;
+/** A document or a board for a big brief is long, and a reasoning model spends part of the budget thinking first. */
+const STUDIO_MAX_OUTPUT_TOKENS = 24_000;
 
 const CONTENT_SCHEMA = { type: 'object', additionalProperties: false, required: ['content'], properties: { content: { type: 'string' } } } as const;
 const BOARD_SCHEMA = {
@@ -169,6 +171,7 @@ export class DesktopStudio {
       `kai_studio_${kind.replace('-', '_')}`,
       CONTENT_SCHEMA,
       (raw) => parseArtifact(raw, kind),
+      { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
     );
     const catalog = await this.ports.artifacts.write(projectId, kind, content, settings.promptGuide.model);
     await this.refreshHandoff(projectId);
@@ -195,6 +198,7 @@ export class DesktopStudio {
       'kai_studio_board',
       BOARD_SCHEMA,
       parseBoardDraft,
+      { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
     ).catch((error: unknown) => {
       const fallback = boardDraftFromStories(stories);
       if (fallback.cards.length === 0) throw error;

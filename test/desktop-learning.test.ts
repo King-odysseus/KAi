@@ -59,6 +59,42 @@ describe('desktop learning mode', () => {
     await expect(tutor.evaluateDetailed({ ...request, assistance: 'guided' })).rejects.toThrow('requires Copilot');
   });
 
+  it('asks for the bigger output budget a long document needs, and drops back when the provider caps it lower', async () => {
+    const asked: number[] = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { max_tokens: number };
+        asked.push(body.max_tokens);
+        if (body.max_tokens > 8_192) {
+          response.writeHead(400, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ error: { message: 'Invalid max_tokens value, the valid range of max_tokens is [1, 8192]' } }));
+          return;
+        }
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ content: '# Long document' }) }, finish_reason: 'stop' }] }));
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = createDefaultSettings();
+    settings.promptGuide = { ...settings.promptGuide, enabled: true, provider: 'deepseek', model: 'test-model', baseUrl: `${baseUrl}/v1` };
+    const tutor = new DesktopLearningTutor({ load: async () => settings }, { isAvailable: () => true, get: async () => 'test-key' }, async () => { throw new Error('No project is scanned'); });
+    const reply = await tutor.structuredRequest(
+      settings.promptGuide,
+      { feature: 'the Project Studio', card: 'Project Studio' },
+      { system: 'Write a document.', user: 'Go.' },
+      'kai_test',
+      { type: 'object' },
+      (content) => (JSON.parse(content) as { content: string }).content,
+      { maxOutputTokens: 24_000 },
+    );
+    expect(reply).toBe('# Long document');
+    // Both of the first attempt's requests used the big budget; the retry used the standard one.
+    expect(asked[0]).toBe(24_000);
+    expect(asked[asked.length - 1]).toBe(8_192);
+  });
+
   it('remembers lessons across files and restarts without awarding mastery for self-report', async () => {
     const root = await temporaryDirectory();
     const store = new LearningProgressStore(root, new NodeFileSystem());
