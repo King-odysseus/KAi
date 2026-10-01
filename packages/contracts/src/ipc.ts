@@ -384,7 +384,6 @@ export const ipcChannels = [
   'brain:import',
   'brain:git-status',
   'brain:git-sync',
-  'brain:mirror-now',
   'cognitive1:tool',
   'cognitive1:operation',
   'rules:get',
