@@ -53,6 +53,8 @@ export const autopilotStatusSchema = z
     message: z.string().max(600),
     cardId: z.string().nullable(),
     cardTitle: z.string().nullable(),
+    /** The conversation the agent is working in right now, so the composer can show it. */
+    conversationId: z.string().nullable().default(null),
     attempt: z.number().int().min(0),
     /** Set while resting: when work picks up again. */
     resumeAt: z.string().nullable(),

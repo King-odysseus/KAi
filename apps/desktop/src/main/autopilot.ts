@@ -55,6 +55,13 @@ export interface AutopilotPorts {
   /** Turns request pacing on for the Direct API runtime while a job runs, and off again after. */
   setPacer(pacer: RequestPacer | undefined): void;
   announce(ownerWindowId: number, status: AutopilotStatus): void;
+  /**
+   * Makes sure the plan can run agents, throwing a message a person can act on if it cannot. It runs before a single
+   * card is touched, so a setup problem never turns into a board full of blocked cards.
+   */
+  preflight(projectId: string): Promise<void>;
+  /** Takes the window to the conversation the agent is working in, so the person can watch. */
+  openConversation(ownerWindowId: number, conversation: ConversationRecord): void;
   now(): number;
 }
 
@@ -63,7 +70,14 @@ interface ActiveRun {
   ownerWindowId: number;
   conversationId: string | null;
   done: Promise<void>;
+  /** The window has been taken to the composer once; it is not dragged back on every card. */
+  opened: boolean;
+  /** Cards this run parked as blocked, and why, so a setup failure can put them back. */
+  blocked: Array<{ id: string; reason: string }>;
 }
+
+/** Every card fails the same way: the cause is the setup, not the cards, so the run stops instead of parking the board. */
+class SystemicFailure extends Error {}
 
 /**
  * Works a Project Studio board to the end without anyone watching. It is deliberately a thin loop over what already
@@ -89,9 +103,10 @@ export class DesktopAutopilot {
     if (this.runs.has(input.projectId)) throw new Error('Autopilot is already running on this project.');
     const board = await this.ports.board(input.projectId);
     if (board.cards.length === 0) throw new Error('The board has no cards yet. Plan the board in the Studio first.');
+    await this.ports.preflight(input.projectId);
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
-    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversationId: null, done: Promise.resolve() };
+    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversationId: null, done: Promise.resolve(), opened: false, blocked: [] };
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
@@ -143,6 +158,11 @@ export class DesktopAutopilot {
     } catch (error) {
       if (active.controller.signal.aborted) return this.settle(projectId, owner, 'stopped', 'Autopilot was stopped.');
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof SystemicFailure) {
+        const restored = await this.putBack(projectId, active.blocked.map((item) => item.id), 'Autopilot stopped on a setup problem, so this card was put back untouched.');
+        this.record(projectId, owner, 'warn', `${message}${restored > 0 ? ` ${restored} card${restored === 1 ? ' was' : 's were'} put back in the queue.` : ''}`);
+        return this.settle(projectId, owner, 'failed', `${message}${restored > 0 ? ` The ${restored} card${restored === 1 ? '' : 's'} it had parked ${restored === 1 ? 'was' : 'were'} put back.` : ''}`);
+      }
       this.record(projectId, owner, 'warn', message);
       return this.settle(projectId, owner, 'failed', message);
     }
@@ -167,9 +187,16 @@ export class DesktopAutopilot {
       const base = boardCardPrompt(card, artifacts);
       const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120));
       active.conversationId = conversation.id;
+      state.conversationId = conversation.id;
+      this.ports.announce(owner, state);
+      if (!active.opened) {
+        active.opened = true;
+        this.ports.openConversation(owner, conversation);
+      }
 
       const run = await this.runResting(input, settings, conversation.id, base, failure, active);
       active.conversationId = null;
+      state.conversationId = null;
       await this.ports.recordCardRun(projectId, card.id, {
         agent: input.execution === 'api' ? 'api' : (input.agent ?? settings.defaultAgent),
         model: input.model ?? null,
@@ -229,7 +256,12 @@ export class DesktopAutopilot {
     }
 
     await this.ports.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${input.attemptsPerCard} attempts. ${failure}`.slice(0, 3_900), 'agent');
+    active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
+    const lastTwo = active.blocked.slice(-2);
+    if (lastTwo.length === 2 && lastTwo[0]!.reason === lastTwo[1]!.reason && lastTwo[0]!.reason.startsWith('The last attempt ended with an error:')) {
+      throw new SystemicFailure(`Autopilot stopped: two cards in a row ended with exactly the same agent error, which points at the setup rather than the cards. ${failure.slice(0, 300)}`);
+    }
     this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${input.attemptsPerCard} attempts; moving on.`);
   }
 
@@ -295,6 +327,36 @@ export class DesktopAutopilot {
     }
   }
 
+  /**
+   * Puts the cards an earlier run parked as blocked back in the queue: ready when everything they wait on is done,
+   * backlog otherwise. Only cards Autopilot itself gave up on are touched; a card a person blocked stays blocked.
+   */
+  async requeueBlocked(projectId: string): Promise<number> {
+    if (this.runs.has(projectId)) throw new Error('Autopilot is running. Stop it before putting cards back.');
+    const board = await this.ports.board(projectId);
+    const mine = board.cards.filter((card) => card.status === 'blocked' && card.notes.startsWith('Autopilot gave up'));
+    return this.putBack(projectId, mine.map((card) => card.id), 'Put back in the queue after Autopilot gave up on it.');
+  }
+
+  private async putBack(projectId: string, ids: readonly string[], note: string): Promise<number> {
+    let restored = 0;
+    for (const id of ids) {
+      try {
+        await this.ports.moveCard(projectId, id, 'ready', note, 'agent');
+        restored += 1;
+      } catch {
+        // A card that still waits on others cannot be ready; the backlog is where it belongs until they are done.
+        try {
+          await this.ports.moveCard(projectId, id, 'backlog', note, 'agent');
+          restored += 1;
+        } catch {
+          // Left where it is: the person can move it by hand.
+        }
+      }
+    }
+    return restored;
+  }
+
   private async rest(projectId: string, owner: number, state: AutopilotStatus, ms: number, reason: string, signal: AbortSignal): Promise<void> {
     const resumeAt = new Date(this.ports.now() + ms);
     state.resumeAt = resumeAt.toISOString();
@@ -336,6 +398,7 @@ export class DesktopAutopilot {
       message: 'Starting.',
       cardId: null,
       cardTitle: null,
+      conversationId: null,
       attempt: 0,
       resumeAt: null,
       restReason: null,

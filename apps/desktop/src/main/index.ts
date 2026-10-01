@@ -21,7 +21,7 @@ import { DesktopEvals, EvalStore } from './evals';
 import { RunScoreStore } from './run-scores';
 import { AgentExperienceStore } from './experience-store';
 import { DesktopScheduler, ScheduleStore } from './scheduler';
-import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
+import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { UniversalProxyClient } from './proxy-client';
 import { DesktopProxyRouting } from './proxy-routing';
@@ -768,7 +768,10 @@ async function startApplication(): Promise<void> {
       const { result } = await studio.checkUi(projectId, card.id);
       return { passed: result.passed, summary: failureSummary(result) };
     },
-    createConversation: createBlankConversation,
+    // An agent can only work inside a project the app knows, and a Studio plan is not one until it is registered.
+    createConversation: async (projectId, title) => createBlankConversation((await ensureStudioDesktopProject(ipcContext!, projectId)).id, title),
+    preflight: async (projectId) => { await ensureStudioDesktopProject(ipcContext!, projectId); },
+    openConversation: (ownerWindowId, conversation) => desktopWindows.send(ownerWindowId, 'app:open-conversation', { conversationId: conversation.id, ...(conversation.projectId ? { projectId: conversation.projectId } : {}) }),
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
     runCheck: async (projectId, command, signal) => {

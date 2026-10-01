@@ -115,6 +115,7 @@ const bridge: KaiDesktopBridge = {
   startAutopilot: (request) => ipcRenderer.invoke('autopilot:start', request),
   stopAutopilot: (request) => ipcRenderer.invoke('autopilot:stop', request),
   autopilotStatus: (request) => ipcRenderer.invoke('autopilot:status', request),
+  requeueAutopilot: (request) => ipcRenderer.invoke('autopilot:requeue', request),
   onAutopilotChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: import('@kai/contracts').AutopilotStatus): void => listener(payload);
     ipcRenderer.on('autopilot:changed', handler);

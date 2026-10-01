@@ -62,6 +62,8 @@ function harness(options: {
     changedFilesFor: async () => ['src/a.ts'],
     setPacer: () => undefined,
     announce: () => undefined,
+    preflight: async () => undefined,
+    openConversation: () => undefined,
     now: () => Date.now(),
   };
   return { autopilot: new DesktopAutopilot(ports), board, prompts, ports };
@@ -206,5 +208,40 @@ describe('desktop autopilot', () => {
     await settled(h);
     expect(h.board.cards[0]?.status).toBe('done');
     expect(h.board.cards[1]?.status).toBe('ready');
+  });
+
+  it('stops and puts the cards back when every run fails the same way, instead of parking the whole board', async () => {
+    const h = harness({ cards: [card('a'), card('b'), card('c')], agent: () => new Error('Open a project before sending a message.') });
+    await start(h, { attemptsPerCard: 1 });
+    const final = await settled(h);
+    expect(final.phase).toBe('failed');
+    expect(final.message).toContain('put back');
+    expect(h.board.cards.map((item) => item.status)).toEqual(['ready', 'ready', 'ready']);
+    expect(h.prompts).toHaveLength(2);
+  });
+
+  it('refuses to start, touching no card, when the preflight finds a setup problem', async () => {
+    const h = harness({ cards: [card('a')] });
+    h.ports.preflight = async () => { throw new Error('This plan cannot run agents.'); };
+    await expect(start(h)).rejects.toThrow('cannot run agents');
+    expect(h.board.cards[0]?.status).toBe('ready');
+  });
+
+  it('takes the window to the composer conversation once, on the first card', async () => {
+    const h = harness({ cards: [card('a'), card('b')] });
+    const opened: string[] = [];
+    h.ports.openConversation = (_w, conversation) => { opened.push(conversation.id); };
+    await start(h);
+    await settled(h);
+    expect(opened).toHaveLength(1);
+  });
+
+  it('puts back only the cards Autopilot gave up on', async () => {
+    const h = harness({ cards: [card('a'), card('b')], check: () => false });
+    await start(h, { attemptsPerCard: 1 });
+    await settled(h);
+    h.board.cards[1]!.notes = 'Blocked by a person';
+    expect(await h.autopilot.requeueBlocked('p1')).toBe(1);
+    expect(h.board.cards.map((item) => item.status)).toEqual(['ready', 'blocked']);
   });
 });

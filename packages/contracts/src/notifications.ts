@@ -20,7 +20,8 @@ export const viewReportSchema = z
   })
   .strict();
 
-export const openConversationEventSchema = z.object({ conversationId: z.string().min(1) }).strict();
+// `projectId`, when given, is the project the conversation belongs to, so the window can switch to it first.
+export const openConversationEventSchema = z.object({ conversationId: z.string().min(1), projectId: z.string().min(1).optional() }).strict();
 
 export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
 export type NotificationKind = z.infer<typeof notificationKindSchema>;

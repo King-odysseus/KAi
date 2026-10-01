@@ -115,6 +115,8 @@ interface WorkspaceViewProps {
   composerDraft: string;
   onComposerDraftChange: (draft: string) => void;
   commandRequest: WorkspaceCommandRequest | null;
+  /** Called once a command has been acted on, so coming back to this screen later does not replay it. */
+  onCommandHandled: () => void;
   running: boolean;
   paused: boolean;
   awaitingApproval: boolean;
@@ -263,6 +265,7 @@ export function WorkspaceView({
   composerDraft,
   onComposerDraftChange,
   commandRequest,
+  onCommandHandled,
   running,
   paused,
   awaitingApproval,
@@ -483,6 +486,9 @@ export function WorkspaceView({
 
   useEffect(() => {
     if (!commandRequest) return;
+    // The request lives in the app, not here: without this, leaving for another screen and coming back remounts the
+    // composer and the stale request fills the prompt again.
+    onCommandHandled();
     if (commandRequest.kind === 'goal') {
       setGoalEditor({ outcome: '', constraints: '', verification: '' });
     } else if (commandRequest.kind === 'skills') {

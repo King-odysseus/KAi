@@ -7,6 +7,8 @@ interface Props {
   projectId: string;
   /** True when the board has a card to start from. */
   hasWork: boolean;
+  /** Cards currently blocked, so a way to put them back can be offered. */
+  blockedCount: number;
   /** Another action on the screen is running, so starting is held back. */
   disabled: boolean;
 }
@@ -25,7 +27,7 @@ function remaining(iso: string, now: number): string {
 }
 
 /** Autopilot: hand the board to the agents and let it run, resting when the provider says it has had enough. */
-export function AutopilotPanel({ projectId, hasWork, disabled }: Props): ReactNode {
+export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: Props): ReactNode {
   const [status, setStatus] = useState<AutopilotStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +64,19 @@ export function AutopilotPanel({ projectId, hasWork, disabled }: Props): ReactNo
     setError(null);
     try {
       setStatus(unwrap(await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: 100, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds })));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requeue(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const { requeued } = unwrap(await window.kaiDesktop.requeueAutopilot({ projectId }));
+      setError(requeued === 0 ? 'No cards Autopilot gave up on were found.' : null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -138,6 +153,13 @@ export function AutopilotPanel({ projectId, hasWork, disabled }: Props): ReactNo
       )}
 
       {error && <p className="studio-error" role="alert">{error}</p>}
+
+      {!running && blockedCount > 0 && (
+        <p className="studio-note">
+          {blockedCount} card{blockedCount === 1 ? ' is' : 's are'} blocked.{' '}
+          <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy}>Put the ones Autopilot gave up on back in the queue</button>
+        </p>
+      )}
 
       {status && (
         <div className={`autopilot-status phase-${status.phase}`} aria-live="polite">

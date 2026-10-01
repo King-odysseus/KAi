@@ -466,6 +466,7 @@ export const ipcChannels = [
   'autopilot:start',
   'autopilot:stop',
   'autopilot:status',
+  'autopilot:requeue',
   'studio:design-pull',
   'studio:design-read',
   'team:start',
@@ -752,6 +753,7 @@ export const ipcInputSchemas = {
   'autopilot:start': autopilotStartInputSchema,
   'autopilot:stop': autopilotProjectInputSchema,
   'autopilot:status': autopilotProjectInputSchema,
+  'autopilot:requeue': autopilotProjectInputSchema,
   'studio:design-pull': studioProjectInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'team:start': teamStartInputSchema,
@@ -1205,6 +1207,8 @@ export interface KaiDesktopBridge {
   startAutopilot(request: AutopilotStartInput): Promise<IpcResponse<AutopilotStatus>>;
   stopAutopilot(request: AutopilotProjectInput): Promise<IpcResponse<AutopilotStatus | null>>;
   autopilotStatus(request: AutopilotProjectInput): Promise<IpcResponse<AutopilotStatus | null>>;
+  /** Puts the cards a stopped or failed Autopilot run left blocked back in the queue. */
+  requeueAutopilot(request: AutopilotProjectInput): Promise<IpcResponse<{ requeued: number }>>;
   onAutopilotChanged(listener: (status: AutopilotStatus) => void): () => void;
   /** What KAI last read from open-pencil. */
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;

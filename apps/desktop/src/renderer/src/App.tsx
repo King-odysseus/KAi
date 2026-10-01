@@ -609,8 +609,16 @@ export function App(): ReactNode {
 
   const openConversationRef = useRef(openConversation);
   openConversationRef.current = openConversation;
-  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId }) => {
-    void openConversationRef.current(conversationId);
+  const openProjectRef = useRef(openProject);
+  openProjectRef.current = openProject;
+  const activeProjectIdRef = useRef<string | null>(null);
+  activeProjectIdRef.current = bootstrap?.activeProjectId ?? null;
+  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId, projectId }) => {
+    void (async () => {
+      // A conversation belongs to a project; switch to it first or the composer would show the wrong one.
+      if (projectId && projectId !== activeProjectIdRef.current) await openProjectRef.current(projectId, 'stay');
+      await openConversationRef.current(conversationId);
+    })();
   }), []);
 
   useEffect(() => {
@@ -1604,6 +1612,7 @@ export function App(): ReactNode {
             composerDraft={composerDrafts[activeDraftKey] ?? ''}
             onComposerDraftChange={updateComposerDraft}
             commandRequest={workspaceCommand}
+            onCommandHandled={() => setWorkspaceCommand(null)}
             agentCapabilities={agentCapabilities}
             directApiCapability={directApiCapability}
             selectedAgent={selectedAgent}

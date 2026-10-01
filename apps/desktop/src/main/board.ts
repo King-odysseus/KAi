@@ -215,7 +215,9 @@ export class StudioBoardStore {
       if (blocked) throw new Error(blocked);
     }
     next = boardCardSchema.parse(next);
-    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    const moved = board.cards.map((item) => (item.id === cardId ? next : item));
+    // A card that is done frees the cards that were waiting on it; without this a board with dependencies stalls.
+    await this.save(projectId, { ...board, cards: status === 'done' ? promoteReady(moved) : moved });
     return next;
   }
 

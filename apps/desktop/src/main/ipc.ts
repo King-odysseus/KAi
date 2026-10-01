@@ -470,6 +470,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'autopilot:start', async (input, request) => context.autopilot.start(input, request.ownerWindowId));
   handle(context, 'autopilot:stop', async ({ projectId }) => context.autopilot.stop(projectId));
   handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));
+  handle(context, 'autopilot:requeue', async ({ projectId }) => ({ requeued: await context.autopilot.requeueBlocked(projectId) }));
   handle(context, 'studio:design-read', async ({ projectId }) => context.studio.design(projectId));
   handle(context, 'studio:design-pull', async ({ projectId }) => {
     const pulled = await context.studio.pullDesign(projectId);
@@ -2605,31 +2606,46 @@ async function launchStudioProject(
   if (!state) throw new NotFoundError('Studio project not found.');
   if (state.status !== 'done') throw new Error('Finish the interview before launching the project.');
 
-  let project = state.linkedProjectId
-    ? (await context.projects.list()).find((candidate) => candidate.id === state.linkedProjectId)
-    : undefined;
-  if (state.linkedProjectId && !project) throw new Error('The folder linked to this Studio plan is no longer available.');
-  if (!project) {
-    const root = path.join(context.paths.studio, 'projects', studioProjectId);
-    await fs.mkdir(root, { recursive: true });
-    const now = new Date().toISOString();
-    project = {
-      schemaVersion: 1,
-      id: studioProjectId,
-      name: studioProjectName(state),
-      path: root,
-      createdAt: state.updatedAt,
-      lastOpenedAt: now,
-    };
-    await context.projects.upsert(project);
-    await broadcastSharedState(context);
-  }
+  const project = await ensureStudioDesktopProject(context, studioProjectId, state);
 
   const brief = (await context.studio.artifactText(studioProjectId, 'brief'))?.trim();
   const prompt = brief
     ? `Use this Project Studio brief as the source of truth. Start by confirming the smallest implementation plan, then build it.\n\n${brief}`
     : `Build this project from the Project Studio plan.\n\n${state.goal.trim() || state.idea.trim()}`;
   return { projectId: project.id, projectName: project.name, prompt };
+}
+
+/**
+ * The desktop project a Studio plan runs in. A plan linked to a folder runs in that folder's project; one that is
+ * not gets a project of its own, registered here, because an agent can only work inside a project the app knows.
+ * Anything that starts an agent for a plan, whether the composer or Autopilot, goes through this.
+ */
+export async function ensureStudioDesktopProject(
+  context: IpcContext,
+  studioProjectId: string,
+  known?: { linkedProjectId: string | null; goal: string; idea: string; updatedAt: string },
+): Promise<ProjectRecord> {
+  const state = known ?? await context.interview.read({ projectId: studioProjectId });
+  if (!state) throw new NotFoundError('Studio project not found.');
+  const existing = state.linkedProjectId
+    ? (await context.projects.list()).find((candidate) => candidate.id === state.linkedProjectId)
+    : (await context.projects.list()).find((candidate) => candidate.id === studioProjectId);
+  if (state.linkedProjectId && !existing) throw new Error('The folder linked to this Studio plan is no longer available.');
+  if (existing) return existing;
+  const root = path.join(context.paths.studio, 'projects', studioProjectId);
+  await fs.mkdir(root, { recursive: true });
+  const now = new Date().toISOString();
+  const project: ProjectRecord = {
+    schemaVersion: 1,
+    id: studioProjectId,
+    name: studioProjectName(state),
+    path: root,
+    createdAt: state.updatedAt,
+    lastOpenedAt: now,
+  };
+  await context.projects.upsert(project);
+  await broadcastSharedState(context);
+  return project;
 }
 
 function studioProjectName(state: { goal: string; idea: string }): string {
