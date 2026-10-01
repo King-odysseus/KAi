@@ -88,7 +88,7 @@ import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUr
 import type { TerminalManager } from './terminal';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
-import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffAgainstHead, gitDiffFile, gitOverview, gitStage, gitSync } from './git-tools';
+import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitOverview, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
@@ -272,6 +272,30 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'settings:get', async () => context.settings.load());
   handle(context, 'setup:agent-config-preview', async () => agentConfigImportPreview());
   handle(context, 'setup:agent-config-import', async ({ agent }) => importAgentConfig(context, agent));
+  handle(context, 'setup:guide-answer', async ({ question, conversationContext }) => {
+    const settings = await context.settings.load();
+    const readiness = await context.learningTutor.readiness();
+    if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Tutor is not ready.'} ${readiness.recovery ?? ''}`.trim());
+    const projectId = settings.activeProjectId ?? 'kai-guide';
+    const reservation = context.learningBudget.reserve({
+      projectId,
+      provider: readiness.provider,
+      model: readiness.model,
+      conversations: await context.conversations.list(),
+      budget: settings.usageBudget,
+      estimatedInputTokens: Math.ceil((question.length + (conversationContext?.length ?? 0)) / 4) + 1_000,
+      estimatedOutputTokens: 1_500,
+      externalRuns: await context.learningUsage.runs(),
+    });
+    if (reservation.blockedReason) throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
+    try {
+      const result = await context.learningTutor.answerKaiGuideDetailed(question, conversationContext);
+      await context.learningUsage.record({ projectId, provider: readiness.provider, model: readiness.model, usage: result.usage });
+      return result.response;
+    } finally {
+      context.learningBudget.release(reservation.id);
+    }
+  });
   handle(context, 'providers:list-models', async (request) => listProviderModels(request, context.credentials));
   handle(context, 'settings:update', async (update) => {
     const snapshot: { previous: AppSettings | null } = { previous: null };
@@ -2367,8 +2391,8 @@ async function currentSetupStatus(context: IpcContext): Promise<Awaited<ReturnTy
       const settings = await context.settings.load();
       const project = (await context.projects.list()).find((item) => item.id === settings.activeProjectId);
       if (!project) return { available: false, signedInAs: null, detail: 'Open a project before connecting GitHub.' };
-      const github = (await gitOverview(project.path)).github;
-      if (!github.cliAvailable) return { available: false, signedInAs: null, detail: 'Install GitHub CLI to connect an account and create pull requests.' };
+      const github = await githubCliStatus(project.path);
+      if (!github.cliAvailable) return { available: false, signedInAs: null, detail: 'GitHub CLI is not installed. Open its install instructions, then return here to sign in.' };
       return { available: true, signedInAs: github.signedInAs, detail: 'GitHub CLI is installed. Open GitHub setup to sign in.' };
     },
   });

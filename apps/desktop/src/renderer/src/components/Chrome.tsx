@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Clock3,
   DraftingCompass,
+  GraduationCap,
   FolderKanban,
   FolderOpen,
   History,
@@ -99,7 +100,7 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal, onOpenTour, tourListOpen }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void; onOpenTour: () => void; tourListOpen: boolean }): ReactNode {
   const newWindowShortcut = shortcutLabel(shortcuts, 'new-window');
   const searchShortcut = shortcutLabel(shortcuts, 'command-palette');
   const threadsShortcut = shortcutLabel(shortcuts, 'threads');
@@ -116,6 +117,9 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         </button>
         <button type="button" className="icon-button" title={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} aria-label={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} onClick={onToggleTheme}>
           <Palette size={17} />
+        </button>
+        <button type="button" className={`icon-button ${tourListOpen ? 'active' : ''}`} title="Guided tour and lessons" aria-label="Open the guided tour" aria-pressed={tourListOpen} onClick={onOpenTour}>
+          <GraduationCap size={17} />
         </button>
         <button type="button" className="icon-button" title={`Command palette${searchShortcut ? ` (${searchShortcut})` : ''}`} aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
         <button type="button" className="icon-button" title={leftOpen ? `Hide threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}` : `Show threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}`} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>

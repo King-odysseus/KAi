@@ -219,6 +219,7 @@ const bridge: KaiDesktopBridge = {
   completeSetup: (complete) => ipcRenderer.invoke('setup:complete', { complete }),
   agentConfigImportPreview: () => ipcRenderer.invoke('setup:agent-config-preview', {}),
   importAgentConfig: (agent) => ipcRenderer.invoke('setup:agent-config-import', { agent }),
+  answerSetupGuide: (input) => ipcRenderer.invoke('setup:guide-answer', input),
   onUpdateState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: UpdateState): void => listener(payload);
     ipcRenderer.on('app:update-state', handler);

@@ -11,6 +11,7 @@ import {
   learningExplainBackHelpSchema,
   learningSuggestionPlacementSchema,
   learningTutorResponseSchema,
+  setupGuideAnswerSchema,
   teachingDraftSchema,
   type AppSettings,
   type ProviderId,
@@ -21,6 +22,7 @@ import {
   type LearningTutorResponse,
   type LearningReadiness,
   type LearningProviderUsage,
+  type SetupGuideAnswer,
   type TeachingDraft,
   type TeachingDraftGenerateInput,
 } from '@kai/contracts';
@@ -45,6 +47,15 @@ const MAX_TUTOR_RESPONSE_CHARS = 200_000;
 // before producing the required JSON. Keep this aligned with the Direct API
 // runtime's completion ceiling so ordinary tutor requests do not end early.
 const TUTOR_MAX_OUTPUT_TOKENS = 8_192;
+const KAI_GUIDE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['answer', 'nextSteps'],
+  properties: {
+    answer: { type: 'string' },
+    nextSteps: { type: 'array', items: { type: 'string' } },
+  },
+} as const;
 /**
  * A caller that writes long documents can ask for a bigger output budget for one request without every provider
  * function taking another argument. A reasoning model spends part of this on thinking before it writes a word.
@@ -303,6 +314,38 @@ export class DesktopLearningTutor {
       reason,
       recovery,
     };
+  }
+
+  /** Interactive KAI product help, using the user's separate Learning Tutor connection. */
+  async answerKaiGuideDetailed(question: string, conversationContext = ''): Promise<{ response: SetupGuideAnswer; usage: LearningProviderUsage }> {
+    const settings = await this.settings.load();
+    const provider = await this.connectionConfiguration(settings.learningTutor, { feature: 'KAI Guide', card: 'Learning Tutor' });
+    const system = [
+      'You are KAI Guide, a patient in-app tutor who teaches people how to use the KAI local desktop coding workbench.',
+      'Answer questions about KAI clearly for a beginner. Keep the answer focused, explain unfamiliar terms, and give concrete navigation or setup instructions.',
+      'KAI can run installed local CLI agents such as Codex and Claude Code, direct API providers, its Learning Tutor, GitHub CLI integration, project editing, Git, MCP, shared Brain memory, workflows, budgets, previews, and authenticated KAI Remote device pairing.',
+      'KAI Remote lets a paired device control supported KAI work on this computer over the local network; it is not a hosted cloud coding environment or a remote desktop video stream.',
+      'Never claim that KAI has performed an action. Do not ask for API keys, passwords, or access tokens. Explain that API calls may incur provider charges when relevant.',
+      'Return only JSON with answer and nextSteps. nextSteps should be short, actionable steps and may be empty.',
+    ].join('\n');
+    const user = [conversationContext ? `Recent guide conversation:\n${conversationContext}` : '', `User question: ${question}`].filter(Boolean).join('\n\n');
+    const result = await outputBudget.run(1_500, () => this.requestAndParse(
+      provider,
+      { system, user },
+      'kai_setup_guide_answer',
+      KAI_GUIDE_SCHEMA,
+      (content) => {
+        const parsed = parseJsonResponse(content, 'KAI Guide');
+        const result = setupGuideAnswerSchema.safeParse(parsed);
+        if (!result.success) throw new Error(`KAI Guide response was incomplete: ${result.error.issues.map((issue) => issue.message).join('; ')}`);
+        return result.data;
+      },
+      (invalid, error) => ({
+        system,
+        user: `${user}\n\nYour previous reply could not be used (${messageOf(error)}). Reply again with only the JSON object.\nPrevious reply:\n${invalid.slice(0, 4_000)}`,
+      }),
+    ));
+    return { response: result.value, usage: result.usage };
   }
 
   async evaluate(request: LearningTutorRequest): Promise<LearningTutorResponse> {

@@ -70,6 +70,8 @@ try {
     await setupDialog.locator('button.secondary-button').filter({ hasText: 'Set up later' }).click({ force: true });
     await setupDialog.waitFor({ state: 'detached' });
   }
+  // The guided tour starts by itself on a fresh profile; turn it off so its hint card never covers a control under test.
+  await page.locator('.tour-card').getByRole('button', { name: 'Turn tour off' }).click({ timeout: 4_000 }).catch(() => undefined);
   try {
     await page.locator('.project-picker-button').getByText(usesAgentProject ? 'KAI Live Agent Smoke' : 'No project', { exact: true }).waitFor({ timeout: 20_000 });
     await verifyBuildIdentifier(page);

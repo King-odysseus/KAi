@@ -53,6 +53,8 @@ try {
     timeout: 30_000,
   });
   const page = await electronApp.firstWindow();
+  // The guided tour starts by itself on a fresh profile; turn it off so its hint card never covers a control under test.
+  await page.locator('.tour-card').getByRole('button', { name: 'Turn tour off' }).click({ timeout: 4_000 }).catch(() => undefined);
   page.on('pageerror', (error) => rendererErrors.push(error.stack ?? error.message));
   await page.locator('.project-picker-button').getByText('Team Smoke Project', { exact: true }).waitFor({ timeout: 20_000 });
 

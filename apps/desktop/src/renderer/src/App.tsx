@@ -48,6 +48,8 @@ import {
   type WorkspaceCommandRequest,
 } from './components/Workspace';
 import { GraphView } from './components/GraphView';
+import { TourGuide } from './components/TourGuide';
+import { TOUR_STORAGE_KEY, parseTourProgress, type TourProgress } from './tour-lessons';
 import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
@@ -117,6 +119,23 @@ export function App(): ReactNode {
   const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
   const [view, setView] = useState<ViewId>('workspace');
+  // The guided tour's progress is a per-viewer convenience, so it lives in this window's storage, not in settings.
+  const [tourProgress, setTourProgress] = useState<TourProgress>(() => {
+    try {
+      return parseTourProgress(window.localStorage.getItem(TOUR_STORAGE_KEY));
+    } catch {
+      return parseTourProgress(null);
+    }
+  });
+  const [tourListOpen, setTourListOpen] = useState(false);
+  function changeTourProgress(next: TourProgress): void {
+    setTourProgress(next);
+    try {
+      window.localStorage.setItem(TOUR_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // The tour still works for this session if storage is unavailable.
+    }
+  }
   // A plan the Project Studio built from the board, carried to the Workflows page so it opens for review there.
   const [incomingTeamPlan, setIncomingTeamPlan] = useState<TeamPlanDraft | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState(0);
@@ -711,8 +730,16 @@ export function App(): ReactNode {
       setAgentNotice('Open Learning Tutor in Settings to choose a provider and securely save its API key. It is optional and separate from your coding-agent connection.');
     } else if (action === 'open_github') {
       setSetupOpen(false);
-      setView('git');
-      setAgentNotice('In the GitHub section, follow the sign-in guidance. KAI never stores your GitHub token; GitHub CLI manages it.');
+      const githubCheck = setupStatus?.checks.find((check) => check.id === 'github');
+      if (githubCheck?.detail.includes('not installed')) {
+        window.open('https://cli.github.com/', '_blank', 'noopener,noreferrer');
+        setAgentNotice('Install GitHub CLI, then choose Reconfigure KAI → Connect GitHub to sign in.');
+      } else {
+        setView('git');
+        setTerminalCommand({ command: 'gh auth login', nonce: Date.now() });
+        setTerminalOpen(true);
+        setAgentNotice('GitHub sign-in is running in KAI’s Terminal. Follow the prompts and approve access in your browser; GitHub CLI stores the sign-in securely.');
+      }
     } else if (action === 'open_remote') {
       setSetupOpen(false);
       setSettingsDestination({ category: 'services', nonce: Date.now() });
@@ -1713,6 +1740,8 @@ export function App(): ReactNode {
         onToggleContext={() => setContextOpen((open) => !open)}
         onTogglePreview={() => setPreviewOpen((open) => !open)}
         onToggleTerminal={() => setTerminalOpen((open) => !open)}
+        onOpenTour={() => setTourListOpen((open) => !open)}
+        tourListOpen={tourListOpen}
       />
       {view === 'workspace' && (
         <nav className="conversation-tab-strip" role="tablist" aria-label="Open conversations">
@@ -1906,6 +1935,15 @@ export function App(): ReactNode {
       {pendingApproval && (
         <ApprovalDialog approval={pendingApproval} onRespond={(approved, useFullAccess) => void respondToApproval(approved, useFullAccess)} />
       )}
+      <TourGuide
+        view={view}
+        progress={tourProgress}
+        suspended={setupOpen}
+        listOpen={tourListOpen}
+        onProgress={changeTourProgress}
+        onCloseList={() => setTourListOpen(false)}
+        onNavigate={setView}
+      />
       {setupOpen && setupStatus && (
         <SetupPanel
           status={setupStatus}
@@ -1913,6 +1951,7 @@ export function App(): ReactNode {
           onAction={(action) => void runSetupAction(action)}
           onComplete={() => void completeSetup()}
           onDismiss={() => setSetupOpen(false)}
+          onAskGuide={(question, conversationContext) => window.kaiDesktop.answerSetupGuide({ question, conversationContext }).then(unwrap)}
         />
       )}
       {shortcutSheetOpen && (

@@ -33,6 +33,8 @@ try {
     timeout: 30_000,
   });
   const page = await electronApp.firstWindow();
+  // The guided tour starts by itself on a fresh profile. Check it works, then turn it off so its hint card never covers a control under test.
+  await verifyTour(page);
   page.on('pageerror', (error) => {
     // Monaco cancels internal async decorations when the test rapidly changes models.
     // Ignore only that library cancellation; retain all application errors.
@@ -291,6 +293,42 @@ async function verifyOperations(page) {
 
   await page.getByRole('tab', { name: 'Active work' }).click();
   await page.getByText(/Cognitive1 is not running/).waitFor();
+}
+
+/** The tour starts by itself, walks a lesson with Next, turns off everywhere, and still lists every screen. */
+async function verifyTour(page) {
+  const card = page.locator('.tour-card');
+  await card.waitFor({ state: 'visible', timeout: 10_000 });
+  await card.getByText('Workspace', { exact: false }).first().waitFor();
+  await card.getByRole('button', { name: /Next/ }).click();
+  await card.getByRole('heading', { name: 'The composer' }).waitFor();
+  // Let the ring finish sliding, then it must sit on the composer and the card must not cover it.
+  await page.waitForTimeout(500);
+  const geometry = await page.evaluate(() => {
+    const box = (selector) => { const element = document.querySelector(selector); if (!element) return null; const r = element.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    return { spot: box('.tour-spot'), composer: box('.composer-box'), card: box('.tour-card') };
+  });
+  if (!geometry.spot || !geometry.composer || !geometry.card) throw new Error('The tour ring, the composer or the card is missing.');
+  if (Math.abs(geometry.spot.top - geometry.composer.top) > 12 || Math.abs(geometry.spot.left - geometry.composer.left) > 12) throw new Error('The tour ring is not on the composer: ' + JSON.stringify(geometry));
+  const overlaps = geometry.card.left < geometry.composer.right && geometry.card.right > geometry.composer.left && geometry.card.top < geometry.composer.bottom && geometry.card.bottom > geometry.composer.top;
+  if (overlaps) throw new Error('The tour card covers the composer it is explaining: ' + JSON.stringify(geometry));
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'tour-card-1440x920.png') });
+  await card.getByRole('button', { name: 'Turn tour off' }).click();
+  await card.waitFor({ state: 'detached' });
+  // Another screen must not start a lesson now that the tour is off.
+  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await page.waitForTimeout(700);
+  if (await card.isVisible().catch(() => false)) throw new Error('The tour started on a new screen after it was turned off.');
+  await page.getByRole('button', { name: 'Open the guided tour' }).click();
+  const list = page.getByRole('dialog', { name: 'Lessons' });
+  await list.waitFor();
+  for (const title of ['Workspace', 'Project Studio', 'Project Graph', 'Settings']) await list.getByText(title, { exact: true }).first().waitFor();
+  if (await list.getByRole('checkbox').isChecked()) throw new Error('The lessons list still says lessons start by themselves.');
+  await page.screenshot({ path: path.join(outputDirectory, 'tour-list-1440x920.png') });
+  await page.keyboard.press('Escape');
+  await list.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
 }
 
 /** Settings can be searched through every card, and the open-pencil connector is a card of its own. */

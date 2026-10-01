@@ -1,0 +1,225 @@
+import type { ViewId } from './types';
+
+/**
+ * The guided tour: one short lesson per screen, written by hand. There is no model behind it, so it works offline,
+ * costs nothing and cannot say something wrong about the app. A step may name the part of the screen it is about
+ * with a CSS selector; when that part is not on screen the hint is still shown, just without the spotlight.
+ */
+
+export interface TourStep {
+  /** The part of the screen to ring, as a CSS selector. Optional. */
+  target?: string;
+  title: string;
+  body: string;
+}
+
+export interface TourLesson {
+  view: ViewId;
+  title: string;
+  /** One line shown in the lessons list. */
+  summary: string;
+  steps: TourStep[];
+}
+
+const RAIL: TourStep = {
+  target: '.nav-button.active',
+  title: 'You are here',
+  body: 'The rail on the left switches between screens. The highlighted button is the one you are on; hover any button to see its name and shortcut.',
+};
+
+export const TOUR_LESSONS: TourLesson[] = [
+  {
+    view: 'workspace',
+    title: 'Workspace',
+    summary: 'Tell an agent what to build',
+    steps: [
+      RAIL,
+      { target: '.composer-box', title: 'The composer', body: 'Describe a task here and press Enter to send it to an agent. Shift+Enter starts a new line. This is where building happens.' },
+      { target: '.composer-toolbar', title: 'Context, access and refine', body: 'The plus button adds files or notes as context. The access menu chooses how much the agent may change. The wand rewrites a rough prompt into a clearer one before you send it.' },
+      { target: '.composer-advanced-toggle', title: 'Work locally and more', body: 'This opens the agent, model, route and intent choices. The defaults are fine to start; come back here when you want a different agent or model.' },
+      { target: '.titlebar-actions', title: 'The top bar', body: 'Theme, search, the threads and context panels, the live preview and the terminal live up here. Search (the magnifier) finds any command by name.' },
+    ],
+  },
+  {
+    view: 'studio',
+    title: 'Project Studio',
+    summary: 'Turn an idea into a brief, artifacts and a board',
+    steps: [
+      RAIL,
+      { title: 'Start with an idea', body: 'Plan a new project and describe it in a sentence or two. KAI then asks questions one at a time, with suggested answers you can pick or replace. New to this? Use the "ask me more" button for extra questions, or pick "Not sure, you decide".' },
+      { target: '.studio-tabs', title: 'Interview, Artifacts, Board, Design', body: 'When the interview ends, these tabs hold what was built. Artifacts are the documents; the Board is the work cards; Design is where the screens get drawn.' },
+      { title: 'Artifacts', body: 'Click an artifact to read or edit it. Generate all writes what is missing, and Regenerate all rewrites everything from the brief. The flows artifact opens as a diagram.' },
+      { title: 'Board', body: 'Cards move from Backlog to Done. Drag them between columns. A card only reaches Done through a passing check, so work is never marked finished by guesswork.' },
+      { title: 'Design and open-pencil', body: 'Connect open-pencil under Settings, Design tools. Then copy the foundation prompt and one prompt per screen into the Workspace composer, letting each finish before the next. Pull the design to tick off the screens it finds.' },
+    ],
+  },
+  {
+    view: 'graph',
+    title: 'Project Graph',
+    summary: 'See what blocks what and who holds which card',
+    steps: [
+      RAIL,
+      { target: '.graph-controls', title: 'Pick a project and a view', body: 'Choose a Studio project. Dependencies shows which cards wait on others; Agents shows which agent holds which card right now. The page refreshes by itself.' },
+      { target: '.graph-canvas', title: 'The graph', body: 'Each box is a card, coloured by status. Click one to see its details. The graph is read-only: move cards from the Studio board.' },
+    ],
+  },
+  {
+    view: 'workflows',
+    title: 'Workflows',
+    summary: 'Build, save and run sequential agent work',
+    steps: [
+      RAIL,
+      { title: 'Steps run in order', body: 'A workflow is a list of steps, each given to an agent. Build one, save it as a template, and run it again whenever you need the same work done.' },
+      { title: 'Agent teams', body: 'The Auto team card plans one prompt per teammate from a goal and shows them for review before anything runs, so you stay in control.' },
+    ],
+  },
+  {
+    view: 'history',
+    title: 'History',
+    summary: 'Find, rename, fork and reopen conversations',
+    steps: [
+      RAIL,
+      { title: 'Every conversation is kept', body: 'Search past threads, rename them, archive the ones you are done with, fork one to try another direction, or reopen it to carry on where it stopped.' },
+    ],
+  },
+  {
+    view: 'tasks',
+    title: 'Tasks',
+    summary: 'Shared board, reviews and handoffs',
+    steps: [
+      RAIL,
+      { title: 'A shared task board', body: 'Tasks, the review queue, the handoff inbox and the decision log live here, so agents and you work from the same list. It needs the C1 brain running.' },
+    ],
+  },
+  {
+    view: 'code',
+    title: 'Learn & Code',
+    summary: 'Edit files with a learning tutor beside you',
+    steps: [
+      RAIL,
+      { title: 'Browse and edit', body: 'The file tree is on the left and the editor in the middle. Saving keeps a file\'s line endings, and KAI warns if the file changed on disk meanwhile.' },
+      { title: 'The learning tutor', body: 'The tutor panel explains the file or the code you select, in terms of this project. It teaches rather than just handing over code, and it reads the project\'s plan when the Studio wrote one.' },
+    ],
+  },
+  {
+    view: 'projects',
+    title: 'Projects',
+    summary: 'The folders you work in',
+    steps: [
+      RAIL,
+      { title: 'Choose a folder', body: 'Open a folder to work in it. The project picker at the top left switches between the folders you have opened. Studio plans can be linked to a folder once the brief is ready.' },
+    ],
+  },
+  {
+    view: 'git',
+    title: 'Git',
+    summary: 'Branches, changes, commits and pull requests',
+    steps: [
+      RAIL,
+      { title: 'Source control without the terminal', body: 'See the changes, stage and commit them, and push or pull. KAI always asks before it pushes, and it never force-pushes.' },
+      { title: 'GitHub', body: 'Pull requests open through the GitHub CLI when you are signed in to it. KAI stores no GitHub token.' },
+    ],
+  },
+  {
+    view: 'brain',
+    title: 'C1 Brain',
+    summary: 'The memory agents share',
+    steps: [
+      RAIL,
+      { title: 'What agents remember', body: 'Search, inspect and tidy the notes agents keep between sessions. The knowledge map draws how those notes connect.' },
+    ],
+  },
+  {
+    view: 'rules',
+    title: 'Execution Rules',
+    summary: 'The standing rules every agent run gets',
+    steps: [
+      RAIL,
+      { title: 'Rules agents must follow', body: 'These rules are added to every agent run. Edit them to change how agents behave across all your projects.' },
+    ],
+  },
+  {
+    view: 'proxy',
+    title: 'Universal Proxy',
+    summary: 'One route to many model providers',
+    steps: [
+      RAIL,
+      { title: 'Status and costs', body: 'See whether the proxy is running, its recent activity and health, and what it has cost. Start it from Settings if you want agents to route through it.' },
+    ],
+  },
+  {
+    view: 'usage',
+    title: 'Usage',
+    summary: 'Estimated spend and limits',
+    steps: [
+      RAIL,
+      { title: 'Watch spend, set limits', body: 'Estimated API spend is listed here. Set a warn or block limit so a long run cannot cost more than you meant it to.' },
+    ],
+  },
+  {
+    view: 'operations',
+    title: 'Operations',
+    summary: 'What is running, and recovering interrupted work',
+    steps: [
+      RAIL,
+      { title: 'Keep an eye on runs', body: 'Runs, checks and recovery are here. If KAI closed in the middle of a run, you can resume it from this page.' },
+    ],
+  },
+  {
+    view: 'settings',
+    title: 'Settings',
+    summary: 'Connections, models, design tools and services',
+    steps: [
+      RAIL,
+      { target: '.settings-search', title: 'Search every setting', body: 'Type a word such as model, token or open-pencil and only the matching cards stay. Press Escape to clear.' },
+      { target: '.settings-category-nav', title: 'Categories stay with you', body: 'This bar stays pinned as you scroll, and the current category is underlined. Design tools holds the open-pencil connection.' },
+    ],
+  },
+];
+
+export function lessonFor(view: ViewId): TourLesson | undefined {
+  return TOUR_LESSONS.find((lesson) => lesson.view === view);
+}
+
+// --- Progress ----------------------------------------------------------------------------------------------
+
+export const TOUR_STORAGE_KEY = 'kai.tour.v1';
+
+export interface TourProgress {
+  /** Whether lessons start by themselves when a screen is opened. Turning it off turns it off everywhere. */
+  enabled: boolean;
+  /** Screens whose lesson was finished or skipped. */
+  done: ViewId[];
+}
+
+export const DEFAULT_TOUR_PROGRESS: TourProgress = { enabled: true, done: [] };
+
+/** Reads saved progress, tolerating anything: a missing, old or hand-edited value falls back to the default. */
+export function parseTourProgress(raw: string | null): TourProgress {
+  if (!raw) return { ...DEFAULT_TOUR_PROGRESS, done: [] };
+  try {
+    const value = JSON.parse(raw) as { enabled?: unknown; done?: unknown };
+    const known = new Set(TOUR_LESSONS.map((lesson) => lesson.view));
+    const done = Array.isArray(value.done) ? value.done.filter((item): item is ViewId => typeof item === 'string' && known.has(item as ViewId)) : [];
+    return { enabled: value.enabled !== false, done: [...new Set(done)] };
+  } catch {
+    return { ...DEFAULT_TOUR_PROGRESS, done: [] };
+  }
+}
+
+/** A lesson starts by itself when the tour is on, nothing else is asking for attention, and it has not been seen. */
+export function shouldAutoStart(progress: TourProgress, view: ViewId, suspended: boolean): boolean {
+  return progress.enabled && !suspended && Boolean(lessonFor(view)) && !progress.done.includes(view);
+}
+
+export function markLessonDone(progress: TourProgress, view: ViewId): TourProgress {
+  return progress.done.includes(view) ? progress : { ...progress, done: [...progress.done, view] };
+}
+
+export function turnTourOff(progress: TourProgress): TourProgress {
+  return { ...progress, enabled: false };
+}
+
+export function resetTour(): TourProgress {
+  return { enabled: true, done: [] };
+}

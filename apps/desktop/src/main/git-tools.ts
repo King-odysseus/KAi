@@ -96,6 +96,11 @@ async function githubState(cwd: string): Promise<GitOverview['github']> {
   }
 }
 
+/** GitHub account readiness is useful even before a project has a GitHub remote. */
+export async function githubCliStatus(cwd: string): Promise<GitOverview['github']> {
+  return githubState(cwd);
+}
+
 export async function gitOverview(cwd: string): Promise<GitOverview> {
   const empty: GitOverview = {
     isRepository: false, branch: null, detached: false, upstream: null, ahead: 0, behind: 0, remotes: [],
