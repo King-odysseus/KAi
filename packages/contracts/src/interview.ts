@@ -13,10 +13,14 @@ import { z } from 'zod';
 export const STUDIO_QUESTIONS_PER_ROUND = 4;
 export const STUDIO_MAX_ROUNDS = 10;
 export const STUDIO_MAX_QUESTIONS = 10;
+/** A newcomer can ask for more: five at a time, twice, so the interview never passes twenty questions. */
+export const STUDIO_EXTRA_QUESTIONS = 5;
+export const STUDIO_MAX_EXTENSIONS = 2;
+export const STUDIO_QUESTION_CEILING = STUDIO_MAX_QUESTIONS + STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS;
 /** Each round is one question, asked in its own model call so it can react to the answer before it. */
-export const STUDIO_ROUND_QUESTION_LIMITS = Array.from({ length: STUDIO_MAX_ROUNDS }, () => 1) as readonly number[];
+export const STUDIO_ROUND_QUESTION_LIMITS = Array.from({ length: STUDIO_QUESTION_CEILING }, () => 1) as readonly number[];
 /** Suggested answers offered under one question. The user can always type their own instead. */
-export const STUDIO_MAX_OPTIONS = 5;
+export const STUDIO_MAX_OPTIONS = 6;
 
 const interviewOptionsSchema = z.array(z.string().trim().min(1).max(120)).max(STUDIO_MAX_OPTIONS);
 
@@ -54,7 +58,9 @@ export const interviewStateSchema = z
     goal: z.string().trim().max(4_000).default(''),
     // What the model assumed where the idea was silent. The user can correct any of them in the brief.
     assumptions: z.array(z.string().trim().min(1).max(400)).max(12).default([]),
-    rounds: z.array(interviewRoundSchema).max(STUDIO_MAX_ROUNDS).default([]),
+    rounds: z.array(interviewRoundSchema).max(STUDIO_QUESTION_CEILING).default([]),
+    // Questions the user asked for beyond the first ten, because they wanted to be walked through more.
+    extraQuestions: z.number().int().min(0).max(STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS).default(0),
     status: interviewStatusSchema.default('asking'),
     // Relative path of the written brief once the interview is done, so the UI can point at a real file.
     briefPath: z.string().max(300).nullable().default(null),
@@ -157,6 +163,11 @@ export interface StudioReadiness {
   displayName: string;
   model: string;
   reason: string | null;
+}
+
+/** How many questions this interview may ask in all: ten, plus any the user asked for. */
+export function interviewQuestionBudget(state: { extraQuestions?: number }): number {
+  return STUDIO_MAX_QUESTIONS + (state.extraQuestions ?? 0);
 }
 
 /** The questions of the round the user still has to answer, empty when the interview is done. */

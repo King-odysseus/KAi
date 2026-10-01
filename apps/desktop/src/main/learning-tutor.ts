@@ -450,6 +450,92 @@ export class DesktopLearningTutor {
   }
 
   /**
+   * One plain-text request with images attached, for describing a visual style. Only the protocols whose image
+   * format is settled are supported; a model that cannot read images answers with an error, which is passed on in
+   * words the user can act on rather than as a raw provider failure.
+   */
+  async describeImages(
+    connection: ProviderConnection,
+    names: { feature: string; card: string },
+    prompt: { system: string; user: string },
+    images: ReadonlyArray<{ mediaType: string; base64: string }>,
+  ): Promise<string> {
+    const provider = await this.connectionConfiguration(connection, names);
+    const dataUrl = (image: { mediaType: string; base64: string }): string => `data:${image.mediaType};base64,${image.base64}`;
+    try {
+      if (provider.protocol === 'anthropic-messages') {
+        const response = await fetch(anthropicMessagesUrl(provider.baseUrl), {
+          method: 'POST',
+          headers: { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: provider.model,
+            system: prompt.system,
+            max_tokens: 2_000,
+            messages: [{
+              role: 'user',
+              content: [
+                ...images.map((image) => ({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } })),
+                { type: 'text', text: prompt.user },
+              ],
+            }],
+          }),
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
+        });
+        if (!response.ok) throw await providerFailure(response);
+        return anthropicOutputText(await response.json() as Record<string, unknown>).trim();
+      }
+      if (provider.protocol === 'google-generative-ai') {
+        throw new Error('this connection type is not supported for images yet');
+      }
+      if (provider.protocol === 'responses') {
+        const response = await fetch(responsesUrl(provider.baseUrl), {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: provider.model,
+            store: false,
+            instructions: prompt.system,
+            max_output_tokens: 2_000,
+            input: [{
+              role: 'user',
+              content: [
+                { type: 'input_text', text: prompt.user },
+                ...images.map((image) => ({ type: 'input_image', image_url: dataUrl(image) })),
+              ],
+            }],
+          }),
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
+        });
+        if (!response.ok) throw await providerFailure(response);
+        return (responseOutputText(await response.json() as Record<string, unknown>) ?? '').trim();
+      }
+      const response = await fetch(chatCompletionsUrl(provider.baseUrl), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: provider.model,
+          max_tokens: 2_000,
+          messages: [
+            { role: 'system', content: prompt.system },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt.user },
+                ...images.map((image) => ({ type: 'image_url', image_url: { url: dataUrl(image) } })),
+              ],
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+      if (!response.ok) throw await providerFailure(response);
+      return (chatOutputText(await response.json() as Record<string, unknown>) ?? '').trim();
+    } catch (error) {
+      throw new Error(`${names.card} could not read the images (${messageOf(error)}). The model set for it may not accept images: pick one that does in Settings, or describe the style in words in the brief instead.`);
+    }
+  }
+
+  /**
    * One structured JSON request on a provider connection other than the tutor's own (the Prompt Guide uses it),
    * with the same protocols, timeout and single repair attempt.
    */

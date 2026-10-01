@@ -24,6 +24,8 @@ import {
 import {
   studioArtifactInputSchema,
   studioArtifactSaveInputSchema,
+  studioStyleReferenceAddInputSchema,
+  studioStyleReferenceRemoveInputSchema,
   studioBoardCardInputSchema,
   studioBoardClaimInputSchema,
   studioBoardMoveInputSchema,
@@ -37,6 +39,9 @@ import {
   studioUiCheckResultSchema,
   type StudioArtifactInput,
   type StudioArtifactSaveInput,
+  type StudioStyleReferenceAddInput,
+  type StudioStyleReferenceRemoveInput,
+  type StudioStyleReferences,
   type StudioArtifacts,
   type StudioBoard,
   type StudioBoardCardInput,
@@ -409,10 +414,15 @@ export const ipcChannels = [
   'studio:interview-answer',
   'studio:interview-finish',
   'studio:interview-reset',
+  'studio:interview-extend',
   'studio:artifacts-read',
   'studio:artifacts-files',
   'studio:artifacts-text',
   'studio:artifacts-save',
+  'studio:style-refs-read',
+  'studio:style-refs-add',
+  'studio:style-refs-remove',
+  'studio:style-refs-describe',
   'studio:artifacts-generate',
   'studio:artifacts-generate-all',
   'studio:artifacts-mark-edited',
@@ -677,10 +687,15 @@ export const ipcInputSchemas = {
   'studio:interview-answer': interviewAnswerInputSchema,
   'studio:interview-finish': interviewProjectInputSchema,
   'studio:interview-reset': interviewProjectInputSchema,
+  'studio:interview-extend': interviewProjectInputSchema,
   'studio:artifacts-read': studioProjectInputSchema,
   'studio:artifacts-files': studioProjectInputSchema,
   'studio:artifacts-text': studioArtifactInputSchema,
   'studio:artifacts-save': studioArtifactSaveInputSchema,
+  'studio:style-refs-read': studioProjectInputSchema,
+  'studio:style-refs-add': studioStyleReferenceAddInputSchema,
+  'studio:style-refs-remove': studioStyleReferenceRemoveInputSchema,
+  'studio:style-refs-describe': studioProjectInputSchema,
   'studio:artifacts-generate': studioArtifactInputSchema,
   'studio:artifacts-generate-all': studioProjectInputSchema,
   'studio:artifacts-mark-edited': studioArtifactInputSchema,
@@ -1084,6 +1099,8 @@ export interface KaiDesktopBridge {
   answerStudioInterview(request: InterviewAnswerInput): Promise<IpcResponse<InterviewState>>;
   finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   resetStudioInterview(projectId: string): Promise<IpcResponse<null>>;
+  /** Lets the interview ask five more questions, up to twenty in all, for someone who wants to be walked through. */
+  extendStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   /** The artifact catalog: what exists under `.kai/spec`, who wrote it, and what went stale. */
   studioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
   /** Every file the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */
@@ -1092,6 +1109,12 @@ export interface KaiDesktopBridge {
   studioArtifactText(input: StudioArtifactInput): Promise<IpcResponse<string | null>>;
   /** Saves a hand edit of one artifact and flags everything that reads it as stale. */
   saveStudioArtifact(input: StudioArtifactSaveInput): Promise<IpcResponse<StudioArtifacts>>;
+  /** The reference images for the project's look, and the description written from them. */
+  studioStyleReferences(projectId: string): Promise<IpcResponse<StudioStyleReferences>>;
+  addStudioStyleReference(input: StudioStyleReferenceAddInput): Promise<IpcResponse<StudioStyleReferences>>;
+  removeStudioStyleReference(input: StudioStyleReferenceRemoveInput): Promise<IpcResponse<StudioStyleReferences>>;
+  /** Has a model that can read images describe the references, so the style guide is written from them. */
+  describeStudioStyle(projectId: string): Promise<IpcResponse<StudioStyleReferences>>;
   /** Generates one artifact from the artifacts it reads. Runs one model call. */
   generateStudioArtifact(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
   /** Generates every artifact that is missing or stale, in dependency order. Runs one model call per artifact. */

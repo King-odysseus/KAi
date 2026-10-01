@@ -1,6 +1,8 @@
 import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
+import { FlowDiagram } from './FlowDiagram';
+import { buildDesignPrompt, parseFlows, parsePages } from '../flow-diagram';
 import { Markdown } from './Markdown';
 import {
   ARTIFACT_KINDS,
@@ -10,13 +12,17 @@ import {
   interviewGivenAnswers,
   interviewOpenOptions,
   interviewOpenQuestions,
+  STUDIO_EXTRA_QUESTIONS,
+  STUDIO_MAX_EXTENSIONS,
   STUDIO_MAX_QUESTIONS,
+  interviewQuestionBudget,
   type ArtifactKind,
   type BoardCard,
   type BoardStatus,
   type InterviewState,
   type ProjectRecord,
   type StudioArtifacts,
+  type StudioStyleReferences,
   type StudioBoard,
   type StudioDesign,
   type StudioProjectSummary,
@@ -58,6 +64,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [viewing, setViewing] = useState<ArtifactKind | null>(null);
   const [viewText, setViewText] = useState<string | null>(null);
   const [editText, setEditText] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'diagram' | 'text'>('diagram');
+  const [pagesText, setPagesText] = useState<string | null>(null);
+  const [styleRefs, setStyleRefs] = useState<StudioStyleReferences | null>(null);
+  const [drawPrompt, setDrawPrompt] = useState<string | null>(null);
   const [progress, setProgress] = useState<ArtifactProgress | null>(null);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
   const [handoffDismissed, setHandoffDismissed] = useState(false);
@@ -307,6 +317,95 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /** The design tab's own data: the screens the project needs and the reference images for its look. */
+  useEffect(() => {
+    if (tab !== 'design' || !projectId || state?.status !== 'done') return undefined;
+    let cancelled = false;
+    void Promise.all([
+      window.kaiDesktop.studioArtifactText({ projectId, kind: 'pages' }).then(unwrap),
+      window.kaiDesktop.studioStyleReferences(projectId).then(unwrap),
+    ]).then(([pages, refs]) => {
+      if (cancelled) return;
+      setPagesText(pages);
+      setStyleRefs(refs);
+    }).catch((caught) => {
+      if (!cancelled) setError(messageOf(caught));
+    });
+    return () => { cancelled = true; };
+  }, [tab, projectId, state?.status, artifacts]);
+
+  const flowJourneys = useMemo(() => (viewing === 'flows' && viewText ? parseFlows(viewText) : []), [viewing, viewText]);
+  const designPages = useMemo(() => (pagesText ? parsePages(pagesText) : []), [pagesText]);
+
+  /** Copies the instructions that tell a KAI agent to draw the project's screens in open-pencil. */
+  async function copyDrawPrompt(): Promise<void> {
+    if (!state) return;
+    const text = buildDesignPrompt({
+      projectName: projectTitle,
+      goal: state.goal || state.idea,
+      pages: designPages,
+      hasTokens: Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'tokens')),
+      hasStyleGuide: Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'style-guide')),
+      references: styleRefs?.images.map((image) => image.name) ?? [],
+    });
+    setDrawPrompt(text);
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice('Prompt copied. Paste it into the Workspace composer and send it to a KAI agent that has open-pencil connected.');
+    } catch {
+      setNotice('Could not reach the clipboard. Select the prompt below and copy it by hand.');
+    }
+  }
+
+  async function addReferenceImages(files: FileList | null): Promise<void> {
+    if (!projectId || !files || files.length === 0) return;
+    setBusy('design');
+    setError(null);
+    try {
+      let latest: StudioStyleReferences | null = null;
+      for (const file of [...files]) {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        latest = unwrap(await window.kaiDesktop.addStudioStyleReference({ projectId, name: file.name, data }));
+      }
+      if (latest) setStyleRefs(latest);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeReferenceImage(name: string): Promise<void> {
+    if (!projectId) return;
+    setBusy('design');
+    try {
+      setStyleRefs(unwrap(await window.kaiDesktop.removeStudioStyleReference({ projectId, name })));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function describeReferences(): Promise<void> {
+    if (!projectId) return;
+    setBusy('design');
+    setError(null);
+    try {
+      setStyleRefs(unwrap(await window.kaiDesktop.describeStudioStyle(projectId)));
+      setNotice('Described. Regenerate the style guide and the tokens so they follow it.');
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** After a partial failure, shows what was written instead of leaving the screen on its old catalog. */
   async function reloadSpec(id: string): Promise<void> {
     try {
@@ -449,6 +548,20 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBusy(null);
     setProjectsVersion((current) => current + 1);
     if (problems.length > 0) setError(`${problems.join(' ')} What was written is kept: fix the connection if needed, then use Generate all and Build the board.`);
+  }
+
+  /** Five more questions, for someone who wants to be walked through the choices instead of deciding fast. */
+  async function extendInterview(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('card');
+    setError(null);
+    try {
+      setState(unwrap(await window.kaiDesktop.extendStudioInterview(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function enhanceText(text: string, apply: (next: string) => void): Promise<void> {
@@ -956,7 +1069,12 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             <>
               <div className="studio-interview-head">
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
-                <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, STUDIO_MAX_QUESTIONS)} of up to {STUDIO_MAX_QUESTIONS}. Skip anything you would rather leave to the agents.</p>
+                <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of up to {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
+                {state.extraQuestions < STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS && (
+                  <button type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`New to this? KAI will ask ${STUDIO_EXTRA_QUESTIONS} more questions and explain the choices.`}>
+                    I am new to this: ask me {STUDIO_EXTRA_QUESTIONS} more
+                  </button>
+                )}
               </div>
               <div className="studio-thread" role="log" aria-live="polite">
                 <div className="studio-bubble user">{state.idea}</div>
@@ -996,7 +1114,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                         <button type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</button>
                       </>
                     )}
-                    footer={<><span>Enter to send · Shift+Enter for a new line</span><span>{state.rounds.flatMap((round) => round.questions).length} of up to {STUDIO_MAX_QUESTIONS} questions</span></>}
+                    footer={<><span>Enter to send · Shift+Enter for a new line</span><span>{state.rounds.flatMap((round) => round.questions).length} of up to {interviewQuestionBudget(state)} questions</span></>}
                   />
                 </div>
               )}
@@ -1065,6 +1183,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                         <button type="button" className="secondary-button" onClick={() => setEditText(null)} disabled={busy !== null}>Cancel</button>
                       </>
                     )}
+                    {viewing === 'flows' && flowJourneys.length > 0 && editText === null && (
+                      <button type="button" className="secondary-button" onClick={() => setViewMode(viewMode === 'diagram' ? 'text' : 'diagram')}>{viewMode === 'diagram' ? 'Show text' : 'Show diagram'}</button>
+                    )}
                     <button type="button" className="secondary-button" onClick={() => { setViewing(null); setEditText(null); }}>Close</button>
                   </span>
                 </header>
@@ -1074,6 +1195,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   <textarea className="studio-viewer-edit" value={editText} onChange={(event) => setEditText(event.target.value)} spellCheck={false} aria-label={`Edit ${viewing}`} />
                 ) : !viewText.trim() ? (
                   <p className="studio-note">This artifact is empty.</p>
+                ) : viewing === 'flows' && flowJourneys.length > 0 && viewMode === 'diagram' ? (
+                  <FlowDiagram journeys={flowJourneys} />
                 ) : viewing === 'tokens' ? (
                   <pre className="studio-viewer-code">{viewText}</pre>
                 ) : (
@@ -1106,6 +1229,69 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </ul>
             )}
           </article>
+          )}
+
+          {tab === 'design' && (
+            <>
+              <article className="studio-card">
+                <h2><LayoutGrid size={16} /> Screens to design</h2>
+                <p className="studio-note">The pages the project needs, from the pages artifact. Draw them in open-pencil, then pull the design to match each one to its card.</p>
+                <div className="page-actions">
+                  <button type="button" className="primary-button" onClick={() => void copyDrawPrompt()} disabled={!state}>
+                    <Send size={14} /> Copy the prompt for KAI to draw these in open-pencil
+                  </button>
+                  {!pagesText && (
+                    <button type="button" className="secondary-button" onClick={() => void generateOne('pages')} disabled={busy !== null || !readiness?.ready}>
+                      {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Write the pages list
+                    </button>
+                  )}
+                </div>
+                {designPages.length > 0 ? (
+                  <ul className="studio-list studio-screens">
+                    {designPages.map((page) => {
+                      const drawn = design?.components.some((component) => component.screen && component.name.trim().toLowerCase() === page.name.trim().toLowerCase());
+                      return (
+                        <li key={page.name}>
+                          {page.name}{page.route ? <code> {page.route}</code> : null}
+                          <span className={`studio-kind ${drawn ? 'drawn' : ''}`}>{drawn ? 'drawn' : 'to draw'}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="studio-note">{pagesText === null ? 'No pages list yet. Write it, or generate all artifacts.' : 'The pages artifact has no screens in it yet.'}</p>
+                )}
+                {drawPrompt && <textarea className="studio-viewer-edit" readOnly value={drawPrompt} rows={12} aria-label="Prompt to copy" onFocus={(event) => event.currentTarget.select()} />}
+              </article>
+
+              <article className="studio-card">
+                <h2><Palette size={16} /> Style reference</h2>
+                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor). A model that can read images describes them, and the style guide and tokens are written to follow that. KAI agents can also look at the images when they draw.</p>
+                <div className="page-actions">
+                  <label className="secondary-button studio-file-button">
+                    <Plus size={14} /> Add images
+                    <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy !== null} onChange={(event) => { void addReferenceImages(event.target.files); event.target.value = ''; }} />
+                  </label>
+                  <button type="button" className="secondary-button" onClick={() => void describeReferences()} disabled={busy !== null || !styleRefs || styleRefs.images.length === 0 || !readiness?.ready}>
+                    {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Eye size={14} />} Describe the style
+                  </button>
+                </div>
+                {styleRefs && styleRefs.images.length > 0 ? (
+                  <ul className="studio-refs">
+                    {styleRefs.images.map((image) => (
+                      <li key={image.name}>
+                        {image.preview ? <img src={image.preview} alt={image.name} /> : <span className="studio-note">No preview</span>}
+                        <span className="studio-note">{image.name}</span>
+                        <button type="button" className="secondary-button" onClick={() => void removeReferenceImage(image.name)} disabled={busy !== null} aria-label={`Remove ${image.name}`}><Trash2 size={13} /></button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="studio-note">No images yet.</p>
+                )}
+                {styleRefs?.notes && <div className="studio-viewer-body"><Markdown text={styleRefs.notes} /></div>}
+              </article>
+            </>
           )}
 
           {tab === 'board' && (
@@ -1198,7 +1384,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               sendTitle={readiness?.reason ?? 'Start the discussion'}
               enhancing={busy === 'enhance'}
               onEnhance={() => void enhanceIdea()}
-              footer={<><span>Enter to start · Shift+Enter for a new line</span><span>KAI will ask up to {STUDIO_MAX_QUESTIONS} questions</span></>}
+              footer={<><span>Enter to start · Shift+Enter for a new line</span><span>KAI will ask up to {STUDIO_MAX_QUESTIONS} questions, and more if you ask</span></>}
             />
           </div>
         </div>

@@ -122,6 +122,7 @@ describe('studio generation', () => {
       kai_studio_flows: JSON.stringify({ content: '# Flows' }),
       kai_studio_style_guide: JSON.stringify({ content: '# Style' }),
       kai_studio_tokens: JSON.stringify({ content: '{}' }),
+      kai_studio_pages: JSON.stringify({ content: '# Pages' }),
       kai_studio_decisions: JSON.stringify({ content: '# Decisions' }),
       kai_studio_architecture: JSON.stringify({ content: '# Architecture' }),
       kai_studio_conventions: JSON.stringify({ content: '# Conventions' }),
@@ -134,15 +135,15 @@ describe('studio generation', () => {
     await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
     await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'brief.md'), '# Brief\n');
     const catalog = await app.generateAll('p1');
-    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup']);
+    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens', 'pages', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup']);
     expect(calls).toEqual([
       'kai_studio_prd', 'kai_studio_stories', 'kai_studio_stack', 'kai_studio_flows', 'kai_studio_style_guide', 'kai_studio_tokens',
-      'kai_studio_decisions', 'kai_studio_architecture', 'kai_studio_conventions', 'kai_studio_acceptance',
+      'kai_studio_pages', 'kai_studio_decisions', 'kai_studio_architecture', 'kai_studio_conventions', 'kai_studio_acceptance',
       'kai_studio_risks', 'kai_studio_glossary', 'kai_studio_setup',
     ]);
     const again = await app.generateAll('p1');
     expect(again.artifacts.every((item) => !item.stale)).toBe(true);
-    expect(calls).toHaveLength(13);
+    expect(calls).toHaveLength(14);
   });
 
   it('keeps writing the other artifacts when the model gets one wrong, and says which failed', async () => {
@@ -160,7 +161,7 @@ describe('studio generation', () => {
     await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
     await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'brief.md'), '# Brief\n');
     // The stories are the one reply the model never produced, so what is built from them cannot be written either.
-    await expect(app.generateAll('p1')).rejects.toThrow(/Wrote 9 of 13 artifacts\. Could not write: stories, flows, architecture, acceptance\. stories: no canned reply/);
+    await expect(app.generateAll('p1')).rejects.toThrow(/Wrote 9 of 14 artifacts\. Could not write: stories, flows, pages, architecture, acceptance\. stories: no canned reply/);
     const catalog = await app.artifacts('p1');
     expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stack', 'style-guide', 'tokens', 'decisions', 'conventions', 'risks', 'glossary', 'setup']);
   });

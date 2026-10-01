@@ -74,7 +74,7 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
     {
       name: 'read_artifact',
       description:
-        'Read one artifact by kind (brief, prd, stories, stack, flows, style-guide, tokens), or any other file under .kai/spec by its spec-relative path.',
+        'Read one artifact by kind (list_artifacts shows which exist: brief, prd, stories, stack, flows, style-guide, tokens, pages, decisions, architecture, conventions, acceptance, risks, glossary, setup), or any other file under .kai/spec by its spec-relative path, such as status.md.',
       input: {
         kind: artifactKindSchema.optional().describe('An artifact kind, for the files the studio manages.'),
         path: z.string().min(1).max(300).optional().describe('A path relative to .kai/spec, for anything else.'),

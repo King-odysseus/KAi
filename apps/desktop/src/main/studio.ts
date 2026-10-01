@@ -1,5 +1,6 @@
 import {
   ARTIFACT_KINDS,
+  STUDIO_STYLE_REFERENCE_NOTES_PATH,
   cardsFromDraft,
   designComponentSchema,
   directDependencies,
@@ -39,7 +40,7 @@ import { boardDraftFromStories, replySnippet } from './studio-fallbacks';
  * The artifacts a model writes. `brief` comes from the interview. `tokens` is written here from the style guide so a
  * project always has them; pulling the design from open-pencil replaces them, because the design tool is the source of truth.
  */
-export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup'];
+export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens', 'pages', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup'];
 
 const NAMES = { feature: 'the Project Studio', card: 'Project Studio' };
 const GENERATE_CONTEXT_CHARS = 12_000;
@@ -166,6 +167,11 @@ export class DesktopStudio {
     }
     const missing = Object.entries(inputs).filter(([, text]) => !text.trim()).map(([name]) => name);
     if (missing.length > 0) throw new Error(`Write ${missing.join(', ')} first: ${kind} is built from it.`);
+    // Reference images, once a model has described them, steer the look: the style guide and the tokens follow them.
+    if (kind === 'style-guide' || kind === 'tokens') {
+      const reference = await this.ports.artifacts.readSpecText(projectId, STUDIO_STYLE_REFERENCE_NOTES_PATH);
+      if (reference?.trim()) inputs['style reference (from the user\'s images; follow it)'] = reference;
+    }
     const context = await loadProjectContext(root, undefined, GENERATE_CONTEXT_CHARS).catch(() => null);
     const content = await this.ports.requester.structuredRequest(
       settings.promptGuide,
@@ -359,7 +365,8 @@ const ARTIFACT_BRIEFS: Record<ArtifactKind, string> = {
   prd: 'Write the PRD: the product requirements — the problem, who it is for, the features in priority order, and what is explicitly out of scope. Every requirement should be checkable.',
   stories: 'Write the user stories: a numbered list of small, independent stories. Each says who wants it, what they want, and why, then its acceptance criteria as a short list. These become the board cards, so make them small enough for one agent to finish.',
   stack: 'Write the stack document: the languages, frameworks, data store, and hosting, each with the one-line reason it was chosen. Name the concrete packages and versions where it matters, and say where the code lives.',
-  flows: 'Write the flows document: the main user journeys end to end, each as an ordered list of steps naming the screens or endpoints they pass through.',
+  flows: 'Write the flows document: the main user journeys end to end. Use a "## Journey name" heading for each journey, then a numbered list with one short step per line. Name screens with their route, like "Sign-in page (/sign-in)", and endpoints like "POST /api/sessions". Start a step with "If ...?" when the journey branches, and say where each branch goes. A diagram is drawn from this, so keep the format.',
+  pages: 'Write the page inventory: one "## Page name" section per screen the project needs, each with its route, what it is for, the main components on it, the states it must handle (empty, loading, error), and the story numbers it serves. Include every screen the flows pass through, including sign-in, settings and error pages. These become the screens designed in the design tool and the page cards on the board.',
   'style-guide': 'Write the design style guide around the token names that exist: colour, type, spacing and radius. Reference tokens by name; never invent values that contradict the token file.',
   tokens: 'Write the design tokens as one JSON object, with no commentary: "colors" (semantic names such as background, surface, text, muted, primary, accent, success, warning, danger, each with "light" and "dark" hex values), "typography" (font families and a size scale), "spacing" and "radius" scales. Take the colours and the feel from the style guide and the brief. Where none were chosen, pick a restrained palette that fits the product and explain the choice in a top-level "notes" string. Put the whole JSON document, as text, in "content".',
   decisions: 'Write the decision log: one entry per significant choice already made in the brief and the stack. Each entry has a number, the decision, the reason, and the alternatives that were dropped, so a new agent does not reverse a choice without knowing why.',

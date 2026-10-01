@@ -15,6 +15,8 @@ import { agentIdSchema } from './primitives';
 /** The artifacts the studio writes. Each is one plain file, so Git versions it and an agent reads it without MCP. */
 export const ARTIFACT_KINDS = [
   'brief', 'prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens',
+  // The screens to design and build, derived from the stories and the flows.
+  'pages',
   // The handoff set: what an agent or a person needs to pick the project up without re-reading everything.
   'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup',
 ] as const;
@@ -30,6 +32,7 @@ export const ARTIFACT_PATHS: Record<ArtifactKind, string> = {
   flows: '.kai/spec/flows.md',
   'style-guide': '.kai/spec/design/style-guide.md',
   tokens: '.kai/spec/design/tokens.json',
+  pages: '.kai/spec/pages.md',
   decisions: '.kai/spec/decisions.md',
   architecture: '.kai/spec/architecture.md',
   conventions: '.kai/spec/conventions.md',
@@ -51,6 +54,7 @@ export const ARTIFACT_SPEC_PATHS: Record<ArtifactKind, string> = {
   flows: 'flows.md',
   'style-guide': 'design/style-guide.md',
   tokens: 'design/tokens.json',
+  pages: 'pages.md',
   decisions: 'decisions.md',
   architecture: 'architecture.md',
   conventions: 'conventions.md',
@@ -62,6 +66,9 @@ export const ARTIFACT_SPEC_PATHS: Record<ArtifactKind, string> = {
 
 /** Written by code from the board and the artifacts, never by a model, and never part of the dependency table. */
 export const STUDIO_STATUS_PATH = 'status.md';
+/** Where reference images for the look of the project are kept, and the description written from them. */
+export const STUDIO_STYLE_REFERENCES_DIR = 'design/references';
+export const STUDIO_STYLE_REFERENCE_NOTES_PATH = 'design/style-reference.md';
 /** The agent instructions file lives in the project root so any agent finds it, not only KAI's. */
 export const AGENTS_FILE = 'AGENTS.md';
 
@@ -83,6 +90,7 @@ export const ARTIFACT_DEPENDENCIES: Record<ArtifactKind, readonly ArtifactKind[]
   flows: ['stories'],
   'style-guide': ['brief', 'stack'],
   tokens: ['style-guide'],
+  pages: ['stories', 'flows'],
   decisions: ['brief', 'stack'],
   architecture: ['stack', 'flows'],
   conventions: ['stack'],
@@ -360,6 +368,25 @@ export const studioArtifactInputSchema = z
   .object({ projectId: z.string().min(1), kind: artifactKindSchema })
   .strict();
 export type StudioArtifactInput = z.infer<typeof studioArtifactInputSchema>;
+
+/** The reference images for a project's look, with a small preview of each, and the description written from them. */
+export const studioStyleReferencesSchema = z
+  .object({
+    images: z.array(z.object({ name: z.string().min(1).max(120), size: z.number().int().min(0), preview: z.string().nullable() }).strict()),
+    notes: z.string().nullable(),
+  })
+  .strict();
+export type StudioStyleReferences = z.infer<typeof studioStyleReferencesSchema>;
+
+export const studioStyleReferenceAddInputSchema = z
+  .object({ projectId: z.string().min(1), name: z.string().min(1).max(200), data: z.string().min(1).max(6_000_000) })
+  .strict();
+export type StudioStyleReferenceAddInput = z.infer<typeof studioStyleReferenceAddInputSchema>;
+
+export const studioStyleReferenceRemoveInputSchema = z
+  .object({ projectId: z.string().min(1), name: z.string().min(1).max(200) })
+  .strict();
+export type StudioStyleReferenceRemoveInput = z.infer<typeof studioStyleReferenceRemoveInputSchema>;
 
 /** A hand edit from the artifact viewer. The text is the whole file, so a save replaces it. */
 export const studioArtifactSaveInputSchema = z

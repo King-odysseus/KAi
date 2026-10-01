@@ -52,6 +52,7 @@ import { StudioArtifacts } from './artifacts';
 import { StudioBoardStore } from './board';
 import { DesktopStudio } from './studio';
 import { writeHandoffFiles } from './handoff-files';
+import { StudioStyleReferenceStore } from './style-references';
 import { SPEC_ROOT, SpecStore } from './spec-store';
 import { DesktopUiCheck, playwrightUiCheckPorts } from './ui-check';
 import { resolveInside } from './project-files';
@@ -421,6 +422,12 @@ async function startApplication(): Promise<void> {
   let evals!: DesktopEvals;
   let changeReviewer!: DesktopChangeReviewer;
 
+  const styleReferences = new StudioStyleReferenceStore({
+    settings: () => settings.load(),
+    projectRoot: studioProjectRoot,
+    spec: specStore,
+    vision: learningTutor,
+  });
   ipcContext = {
     appName: 'KAI',
     version: app.getVersion(),
@@ -466,6 +473,7 @@ async function startApplication(): Promise<void> {
     promptGuide,
     interview,
     studio,
+    styleReferences,
     runControl,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),

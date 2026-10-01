@@ -102,6 +102,11 @@ export class StudioArtifacts {
     return this.ports.spec.read(await this.ports.projectRoot(projectId), ARTIFACT_SPEC_PATHS[kind]);
   }
 
+  /** Any file under `.kai/spec` that is not one of the catalogued artifacts, such as the style reference notes. */
+  async readSpecText(projectId: string, relativePath: string): Promise<string | null> {
+    return this.ports.spec.read(await this.ports.projectRoot(projectId), relativePath);
+  }
+
   /**
    * Writes one artifact and updates the catalog. The file goes through the spec store, so the copy it replaced is
    * kept under `.history` and every artifact that reads this one is flagged stale.

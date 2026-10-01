@@ -213,6 +213,29 @@ describe('Project Studio interview', () => {
     expect(state.rounds[0]?.options).toEqual([['React PWA', 'Web app', 'Desktop app']]);
   });
 
+  it('lets a newcomer ask for five more questions at a time, up to twenty, and no further', async () => {
+    const replies = Array.from({ length: 25 }, (_value, index) => JSON.stringify({ goal: `Goal ${index + 1}`, assumptions: [], questions: [`Question ${index + 1}`] }));
+    const interview = new DesktopInterview(ports({}, replies));
+    let current = await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    expect(current.extraQuestions).toBe(0);
+    current = await interview.extend({ projectId: 'p1' });
+    expect(current.extraQuestions).toBe(5);
+    current = await interview.extend({ projectId: 'p1' });
+    expect(current.extraQuestions).toBe(10);
+    await expect(interview.extend({ projectId: 'p1' })).rejects.toThrow(/20 questions/);
+    while (current.status === 'asking') current = await interview.answer({ projectId: 'p1', answers: [] });
+    expect(current.rounds.flatMap((round) => round.questions)).toHaveLength(20);
+  });
+
+  it('tells the model to cover technology and design, recommend an option, and look after a newcomer', () => {
+    const { system } = buildInterviewPrompt({ idea: 'A booking site.', goal: '', assumptions: [], rounds: [], extraQuestions: 5 }, null);
+    expect(system).toMatch(/the technology to build it with/);
+    expect(system).toMatch(/visual design/);
+    expect(system).toMatch(/Not sure, you decide/);
+    expect(system).toMatch(/\(recommended\)/);
+    expect(system).toMatch(/no more than 15 questions/);
+  });
+
   it('refuses a second interview while one is in progress, and a reset clears it', async () => {
     const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Take deposits.', assumptions: [], questions: ['How many chairs?'] })]));
     await interview.start({ projectId: 'p1', idea: 'Booking site.' });
