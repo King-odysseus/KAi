@@ -7,7 +7,7 @@ import type { AppSettings, SettingsUpdate } from '@kai/contracts';
  */
 export const SETTINGS_GROUPS = {
   agentTeam: ['agentTeam'],
-  agentDefaults: ['defaultAgent', 'defaultRoute', 'defaultAutonomy', 'theme', 'logRetentionEntries', 'diagnosticsEnabled', 'notifications', 'agentModels', 'autoModel'],
+  agentDefaults: ['defaultAgent', 'defaultRoute', 'defaultAutonomy', 'experienceLevel', 'theme', 'logRetentionEntries', 'diagnosticsEnabled', 'notifications', 'agentModels', 'autoModel'],
   editor: ['editor'],
   shortcuts: ['shortcuts'],
   learningTutor: ['learningTutor'],

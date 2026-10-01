@@ -7,6 +7,7 @@ export * from './direct-providers';
 export * from './domain';
 export * from './diff';
 export * from './events';
+export * from './experience';
 export * from './files';
 export * from './git';
 export * from './host';

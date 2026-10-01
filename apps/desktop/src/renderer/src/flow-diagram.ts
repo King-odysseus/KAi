@@ -187,3 +187,17 @@ export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignCont
     'When you are done, say what you drew on this screen.',
   ].filter((line, index, all) => line !== '' || all[index - 1] !== '').join('\n');
 }
+
+export const FLOW_COLUMN = 230;
+export const FLOW_ROW = 118;
+
+/**
+ * Where each step of one journey sits. A long journey wraps after `perRow` steps, like lines of text, so it stays
+ * readable at a glance instead of running off to the right. Index 0 is the journey's own title box.
+ */
+export function layoutSteps(count: number, perRow = 5): Array<{ x: number; y: number }> {
+  return Array.from({ length: count + 1 }, (_value, index) => ({
+    x: (index % (perRow + 1)) * FLOW_COLUMN,
+    y: Math.floor(index / (perRow + 1)) * FLOW_ROW,
+  }));
+}

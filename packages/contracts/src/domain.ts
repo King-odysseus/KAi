@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { persistedEventV1Schema } from './events';
+import { experienceLevelSchema } from './experience';
 import {
   agentIdSchema,
   autonomyModeSchema,
@@ -319,6 +320,8 @@ export const appSettingsV1Schema = z
     defaultAgent: agentIdSchema,
     defaultRoute: routeModeSchema,
     defaultAutonomy: autonomyModeSchema,
+    // How much help the person wants. Settings saved before this existed read as intermediate, so nothing changes for them.
+    experienceLevel: experienceLevelSchema.default('intermediate'),
     theme: themeModeSchema,
     activeProjectId: z.string().nullable(),
     projectOrder: z.array(z.string()),
@@ -433,6 +436,8 @@ export function createDefaultSettings(): AppSettings {
     defaultAgent: 'codex',
     defaultRoute: 'direct',
     defaultAutonomy: 'ask',
+    // A fresh install starts with the most guidance and the safest access; Settings changes it any time.
+    experienceLevel: 'beginner',
     theme: 'dark',
     activeProjectId: null,
     projectOrder: [],

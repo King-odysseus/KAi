@@ -11970,3 +11970,241 @@ code {
   top: 64px;
   bottom: auto;
 }
+
+/* Flow diagram: one tab per journey, a detail strip under it, and a full screen mode. */
+.flow-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flow-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.flow-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.flow-tabs button {
+  max-width: 220px;
+  padding: 5px 11px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  font: inherit;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.flow-tabs button:hover {
+  color: var(--text);
+}
+
+.flow-tabs button.active {
+  border-color: color-mix(in srgb, var(--mint) 55%, var(--border));
+  color: var(--text);
+  background: var(--mint-soft);
+}
+
+.flow-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-input);
+  font-size: 12px;
+}
+
+.flow-detail-text {
+  flex: 1;
+  min-width: 200px;
+  overflow-wrap: anywhere;
+}
+
+.flow-detail-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.flow-kind {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.flow-kind.screen { border-color: var(--lavender); }
+.flow-kind.api { border-color: var(--amber); }
+.flow-kind.decision { border-style: dashed; }
+
+.flow-node.selected {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 35%, transparent);
+  border-color: var(--mint) !important;
+}
+
+.flow-diagram .react-flow__edge.flow-edge.hot .react-flow__edge-path {
+  stroke: var(--mint);
+  stroke-width: 2.5;
+}
+
+.flow-diagram .react-flow__minimap {
+  background: var(--bg-panel);
+}
+
+.studio-viewer.studio-viewer-full {
+  position: fixed;
+  inset: 0;
+  z-index: 880;
+  margin: 0;
+  padding: 16px clamp(16px, 2vw, 32px);
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-deep, var(--bg-shell));
+}
+
+.studio-viewer-full .studio-viewer-body,
+.studio-viewer-full .studio-viewer-code {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+}
+
+.studio-viewer-full .studio-viewer-edit {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+}
+
+.flow-panel.flow-fill {
+  flex: 1;
+  min-height: 0;
+}
+
+.flow-panel.flow-fill .flow-diagram {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Board full screen: the board fills the window, all six columns in one row. */
+.studio-card.studio-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 880;
+  overflow-y: auto;
+  padding: 18px clamp(16px, 2vw, 32px);
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-deep, var(--bg-shell));
+}
+
+.studio-fullscreen .studio-board {
+  grid-template-columns: repeat(6, minmax(220px, 1fr));
+  overflow-x: auto;
+  align-items: start;
+}
+
+.studio-card > h2 .studio-fullscreen-toggle {
+  margin-left: auto;
+}
+
+.studio-card > h2:has(.studio-fullscreen-toggle) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Access levels explain themselves, and finished work can be explained in plain words. */
+.select-menu-option-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.select-menu-option-text > small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.select-menu-option.selected .select-menu-option-text > small {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.access-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 2px 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.access-hint svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--mint);
+}
+
+.explain-error-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.change-explanation {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-left: 3px solid var(--mint);
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.change-explanation.error {
+  border-left-color: var(--red);
+}
+
+.change-explanation p {
+  margin: 0;
+}
+
+.change-explanation ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.change-explanation li em {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-style: normal;
+}

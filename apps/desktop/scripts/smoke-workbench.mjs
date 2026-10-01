@@ -53,6 +53,7 @@ try {
   await verifyOperations(page);
   await verifyTasksAndSettings(page);
   await verifyStudioAndGraph(page);
+  await verifyStudioArtifacts(page);
   await verifySettingsSearch(page);
   await verifyThemes(page);
   await verifyIndependentWindows(electronApp, page);
@@ -331,6 +332,57 @@ async function verifyTour(page) {
   await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
 }
 
+/** A finished plan opens on its artifacts; the flows artifact is a tabbed, interactive diagram, and full screen works. */
+async function verifyStudioArtifacts(page) {
+  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Studio for Smoke Booking Site' }).click();
+  await page.getByRole('tab', { name: /Artifacts/ }).waitFor();
+  await page.getByRole('button', { name: /^flows/ }).click();
+  const tabs = page.getByRole('tablist', { name: 'Flows' });
+  await tabs.waitFor();
+  const titles = await tabs.getByRole('tab').allInnerTexts();
+  if (titles.join('|') !== 'Book a haircut|Owner sees the day|Cancel a booking') throw new Error(`The flow tabs are wrong: ${titles.join('|')}`);
+  // Each flow is its own diagram: the second tab shows three steps, not the first flow's seven.
+  await tabs.getByRole('tab', { name: 'Owner sees the day' }).click();
+  await page.locator('.flow-diagram .react-flow__node.flow-title').getByText('Owner sees the day').waitFor();
+  if ((await page.locator('.flow-diagram .react-flow__node').count()) !== 4) throw new Error('The second flow should draw its title and three steps.');
+  // Interactive: click a step, see its detail, walk to the next one.
+  await page.locator('.flow-diagram .react-flow__node', { hasText: 'Owner opens the Day list page' }).click();
+  await page.locator('.flow-detail').getByText('Step 2 of 3').waitFor();
+  await page.getByRole('button', { name: 'Next step' }).click();
+  await page.locator('.flow-detail').getByText('Step 3 of 3').waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-1440x920.png') });
+  // Full screen: the viewer covers the window and the diagram grows with it, then Escape returns.
+  await page.getByRole('button', { name: 'Full screen' }).first().click();
+  const viewer = page.locator('.studio-viewer-full');
+  await viewer.waitFor();
+  const size = await page.evaluate(() => {
+    const viewerBox = document.querySelector('.studio-viewer-full')?.getBoundingClientRect();
+    const diagramBox = document.querySelector('.studio-viewer-full .flow-diagram')?.getBoundingClientRect();
+    return { viewerWidth: viewerBox?.width ?? 0, viewerHeight: viewerBox?.height ?? 0, diagramHeight: diagramBox?.height ?? 0, windowWidth: window.innerWidth, windowHeight: window.innerHeight };
+  });
+  if (size.viewerWidth < size.windowWidth - 2 || size.viewerHeight < size.windowHeight - 2) throw new Error(`The artifact is not full screen: ${JSON.stringify(size)}`);
+  if (size.diagramHeight < size.windowHeight * 0.55) throw new Error(`The diagram did not grow in full screen: ${JSON.stringify(size)}`);
+  await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-fullscreen-1440x920.png') });
+  await page.keyboard.press('Escape');
+  await viewer.waitFor({ state: 'detached' });
+  // A plain artifact (the brief) opens in the same viewer and goes full screen too.
+  await page.getByRole('button', { name: /^brief/ }).click();
+  await page.locator('.studio-viewer-body').getByText('Customers book a haircut').waitFor();
+  await page.getByRole('button', { name: 'Full screen' }).first().click();
+  await page.locator('.studio-viewer-full').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.studio-viewer-full').waitFor({ state: 'detached' });
+  // The board has a full screen too.
+  await page.getByRole('tab', { name: /Board/ }).click();
+  await page.getByRole('button', { name: 'Full screen' }).click();
+  await page.locator('.studio-fullscreen').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.studio-fullscreen').waitFor({ state: 'detached' });
+  await assertNoHorizontalOverflow(page);
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+}
+
 /** Settings can be searched through every card, and the open-pencil connector is a card of its own. */
 async function verifySettingsSearch(page) {
   await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
@@ -583,6 +635,29 @@ async function createProject() {
   };
   await writeFile(path.join(userData, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   await writeFile(path.join(userData, 'projects.json'), `${JSON.stringify({ schemaVersion: 1, projects: [project, secondProject] }, null, 2)}\n`, 'utf8');
+  await seedStudioProject(now);
+}
+
+/** A finished Studio plan with a brief and a flows document, so the artifact viewer has something real to open. */
+async function seedStudioProject(now) {
+  const studioId = 'studio_11111111-2222-4333-8444-555555555555';
+  const spec = path.join(userData, 'studio', 'projects', studioId, '.kai', 'spec');
+  await mkdir(spec, { recursive: true });
+  const interview = { projectId: studioId, linkedProjectId: null, idea: 'A booking site for a two-chair barber shop.', goal: 'Smoke Booking Site', assumptions: [], rounds: [], extraQuestions: 0, status: 'done', briefPath: '.kai/spec/brief.md', archivedAt: null, updatedAt: now };
+  await writeFile(path.join(userData, 'studio', 'interviews.json'), `${JSON.stringify({ schemaVersion: 1, interviews: [interview] }, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(spec, 'brief.md'), '# Smoke Booking Site\n\nCustomers book a haircut and the owner sees the day.\n', 'utf8');
+  const flows = [
+    '# Flows', '',
+    '## Book a haircut',
+    '1. Customer opens the Home page (/)', '2. Customer picks a time on the Calendar page (/calendar)', '3. Is the slot still free?', '4. POST /api/bookings reserves it', '5. Customer pays the deposit', '6. Confirmation page (/confirmed) shows the booking', '7. Customer receives a reminder', '',
+    '## Owner sees the day',
+    '1. Owner signs in on the Sign-in page (/sign-in)', '2. Owner opens the Day list page (/day)', '3. Owner marks a customer as arrived', '',
+    '## Cancel a booking',
+    '1. Customer opens the link in the reminder', '2. Is the booking more than a day away?', '3. Customer confirms the cancellation', '4. DELETE /api/bookings/:id frees the slot', '',
+  ].join('\n');
+  await writeFile(path.join(spec, 'flows.md'), flows, 'utf8');
+  const entry = (kind, file, dependsOn) => ({ kind, path: `.kai/spec/${file}`, version: 0, updatedAt: now, generatedBy: 'smoke', dependsOn, stale: false, staleReason: null });
+  await writeFile(path.join(spec, 'artifacts.json'), `${JSON.stringify({ schemaVersion: 1, artifacts: [entry('brief', 'brief.md', []), entry('flows', 'flows.md', ['stories'])] }, null, 2)}\n`, 'utf8');
 }
 
 async function resizeWindow(application, width, height) {

@@ -15,6 +15,7 @@ import {
   Cpu,
   Download,
   Eye,
+  Lightbulb,
   File,
   FileSearch,
   ExternalLink,
@@ -54,6 +55,7 @@ import type {
   AgentId,
   AppSettings,
   AutonomyMode,
+  ChangeReviewResult,
   CheckpointReview,
   CompareRun,
   ConversationRecord,
@@ -70,13 +72,14 @@ import type {
   ProjectPreferences,
   ProjectRecord,
   PromptGuideReadiness,
+  ReviewMode,
   RouteMode,
   ServiceState,
   SkillSummary,
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, directProviderPreset, estimateConversationTokens } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { SaveToBrainDialog } from './SaveToBrain';
@@ -348,6 +351,7 @@ export function WorkspaceView({
   const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number; images: Array<{ name: string; dataUrl: string }> } | null>(null);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const brainReady = settings.cognitive1.enabled;
+  const profile = experienceProfile(settings.experienceLevel);
   const apiRun = executionMode === 'api';
   const cliProxySupported = Boolean(selectedCapability?.supportsRoutes.includes('proxy'));
   const routeAvailable = apiRun || (cliProxySupported && proxyReady);
@@ -691,11 +695,20 @@ export function WorkspaceView({
     onSelectAutonomy(modes[(index === -1 ? 0 : index + 1) % modes.length]);
   }
 
+  /** Puts a question about something KAI just showed into the composer, read-only, ready to send. */
+  function askKai(text: string): void {
+    setTaskIntent('learn');
+    onSelectAutonomy('plan');
+    setPrompt(text);
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }
+
   function chooseTaskIntent(intent: TaskIntent): void {
     const definition = TASK_INTENTS.find((item) => item.id === intent)!;
     setTaskIntent(intent);
     if (intent === 'plan' || intent === 'review' || intent === 'learn') onSelectAutonomy('plan');
-    if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy('autoEdit');
+    // Leaving plan-only for Build lands on the level the person's experience setting asks for, not always on auto-edit.
+    if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
     if (!prompt.trim() && definition.starter) setPrompt(definition.starter);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
@@ -1050,7 +1063,7 @@ export function WorkspaceView({
     if (!next) trailingInlineEvents.push(event);
     else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
   }
-  const renderInlineEvent = (event: PersistedEvent): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
+  const renderInlineEvent = (event: PersistedEvent): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
@@ -1226,7 +1239,7 @@ export function WorkspaceView({
                 </button>
                 {showRunDetails && (
                   <div className="run-details-list">
-                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
                   </div>
                 )}
               </section>
@@ -1472,7 +1485,7 @@ export function WorkspaceView({
           <div className="composer-toolbar">
             <div className="composer-leading">
               <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
-              <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={[{ value: 'plan', label: 'Plan only' }, { value: 'ask', label: 'Ask first' }, { value: 'autoEdit', label: 'Edit files' }, { value: 'full', label: 'Full access' }, { value: 'custom', label: 'Custom access' }]} title="Choose how much access KAI has" value={selectedAutonomy} />
+              <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <button type="button" className={`composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}>
                 <span>{advancedComposerOpen ? 'Hide' : 'Work locally'}</span><ChevronDown size={13} />
               </button>
@@ -1489,7 +1502,7 @@ export function WorkspaceView({
                   <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}><Cloud size={14} /><span className="truncate">{selectedRoute === 'proxy' ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}` : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span></button>
                 ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason} value={selectedAgent} />}
                 <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
-                <SelectMenu ariaLabel="Autonomy" className="control-select autonomy-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={[{ value: 'plan', label: 'Plan' }, { value: 'ask', label: 'Ask' }, { value: 'autoEdit', label: 'Auto-edit' }, { value: 'full', label: 'Full control' }, { value: 'custom', label: 'Custom' }]} title="Choose how much project access the active run has" value={selectedAutonomy} />
+                <SelectMenu ariaLabel="Autonomy" className="control-select autonomy-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={COMPACT_ACCESS_OPTIONS} title="Choose how much project access the active run has" value={selectedAutonomy} />
               </div>}
             </div>
             <div className="composer-actions">
@@ -1515,6 +1528,7 @@ export function WorkspaceView({
           </div>
         )}
         <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
+        {profile.explainAccess && <p className="access-hint" role="note"><ShieldCheck size={12} /><span><strong>{ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.label}:</strong> {ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.description}</span></p>}
         <div className="composer-footer"><span>Enter to queue · Ctrl+Enter to interrupt &amp; steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
@@ -1627,8 +1641,19 @@ function MessageContent({ text, markdown = false }: { text: string; markdown?: b
   );
 }
 
-function RunEventCardBase({ event, projectId, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
+function RunEventCardBase({ event, projectId, reviewMode, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);
+  const [explanation, setExplanation] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; result?: ChangeReviewResult; error?: string }>({ state: 'idle' });
+  async function explainChanges(paths: string[]): Promise<void> {
+    if (!projectId || paths.length === 0) return;
+    setExplanation({ state: 'loading' });
+    try {
+      const result = unwrap(await window.kaiDesktop.reviewChanges({ projectId, paths: paths.slice(0, MAX_REVIEW_FILES), mode: reviewMode }));
+      setExplanation({ state: 'done', result });
+    } catch (error) {
+      setExplanation({ state: 'error', error: error instanceof Error ? error.message : 'The explanation could not be completed.' });
+    }
+  }
   const [verification, setVerification] = useState<VerificationOverview | null>(null);
   useEffect(() => {
     if (event.type !== 'turn.changes' || !projectId) return;
@@ -1663,7 +1688,7 @@ function RunEventCardBase({ event, projectId, onReview, onUndo, onOpenVerificati
     return details ? <div className="run-event cost"><span>Usage</span><strong>{details}</strong></div> : null;
   }
   if (event.type === 'error') {
-    return <div className="run-event error"><span>Error</span><strong>{event.message}</strong>{event.recoverable && <small>recoverable</small>}</div>;
+    return <div className="run-event error"><span>Error</span><strong>{event.message}</strong>{event.recoverable && <small>recoverable</small>}<button type="button" className="secondary-button explain-error-button" title="Ask KAI what this error means and how to fix it, without changing any files" onClick={() => onAskKai(`I got this error. Explain in plain words what it means, why it probably happened, and the smallest safe fix. Do not change any files yet.\n\nError: ${event.message}`)}><Lightbulb size={12} /><span>Explain this error</span></button></div>;
   }
   if (event.type === 'turn.changes') {
     const added = event.files.reduce((sum, file) => sum + file.added, 0);
@@ -1716,8 +1741,17 @@ function RunEventCardBase({ event, projectId, onReview, onUndo, onOpenVerificati
         <div className="changes-actions">
           <button type="button" className="primary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review changes</span></button>
           <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo turn</span></button>
+          <button type="button" className="secondary-button" disabled={!projectId || event.files.length === 0 || explanation.state === 'loading'} onClick={() => void explainChanges(event.files.map((file) => file.path))} title="A second model reads these changes and explains them in plain words"><Lightbulb size={13} /><span>{explanation.state === 'loading' ? 'Reading the changes…' : explanation.state === 'done' ? 'Explain again' : 'Explain these changes'}</span></button>
           {verification?.latest && <button type="button" className="secondary-button" onClick={onOpenVerification} title="Open verification history"><ShieldCheck size={13} /><span>Verification details</span></button>}
         </div>
+        {explanation.state === 'error' && <div className="change-explanation error" role="alert"><strong>Could not explain the changes</strong><p>{explanation.error}</p></div>}
+        {explanation.state === 'done' && explanation.result && (
+          <div className="change-explanation" aria-live="polite">
+            <strong>{explanation.result.findings.length === 0 ? 'Nothing needs your attention' : explanation.result.ok ? 'A few minor notes' : 'Worth a look before you keep this'}</strong>
+            {explanation.result.summary && <p>{explanation.result.summary}</p>}
+            {explanation.result.findings.length > 0 && <ul>{explanation.result.findings.map((finding, index) => <li key={index}><span className={`review-chip ${finding.severity}`}>{finding.severity}</span><em>{finding.file}{finding.line ? `:${finding.line}` : ''}</em><p>{finding.note}</p></li>)}</ul>}
+          </div>
+        )}
       </section>
     );
   }
@@ -1909,8 +1943,15 @@ function modelOptions(
 interface SelectMenuOption<T extends string> {
   value: T;
   label: string;
+  /** A line under the label that says what the choice does. */
+  description?: string;
   disabled?: boolean;
 }
+
+/** The access choices with what each one lets KAI do. The wider dropdown uses the full labels, the compact one the short ones. */
+const ACCESS_OPTIONS: readonly SelectMenuOption<AutonomyMode>[] = ACCESS_LEVELS.map((level) => ({ value: level.value, label: level.label, description: level.description }));
+const SHORT_ACCESS_LABEL: Record<AutonomyMode, string> = { plan: 'Plan', ask: 'Ask', autoEdit: 'Auto-edit', full: 'Full control', custom: 'Custom' };
+const COMPACT_ACCESS_OPTIONS: readonly SelectMenuOption<AutonomyMode>[] = ACCESS_OPTIONS.map((option) => ({ ...option, label: SHORT_ACCESS_LABEL[option.value] }));
 
 function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = false, icon, onChange, options, title, value }: {
   ariaLabel: string;
@@ -2023,7 +2064,9 @@ function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = fa
               onClick={() => choose(option)}
               onKeyDown={(event) => handleOptionKeyDown(event, index)}
             >
-              <span>{option.label}</span>
+              {option.description
+                ? <span className="select-menu-option-text"><span>{option.label}</span><small>{option.description}</small></span>
+                : <span>{option.label}</span>}
               {option.value === value && <Check size={13} />}
             </button>
           ))}

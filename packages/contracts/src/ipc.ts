@@ -85,6 +85,7 @@ import {
   type TeamPlanFromPartsInput,
 } from './prompt-guide';
 import { teamRecordQuerySchema, type TeamRecordQuery, type TeamRecordAdvice } from './team-record';
+import { experienceLevelSchema } from './experience';
 import { reviewChangesInputSchema, type ChangeReviewResult, type ReviewChangesInput } from './review';
 import {
   evalCaseDeleteInputSchema,
@@ -580,6 +581,7 @@ export const ipcInputSchemas = {
       defaultAgent: agentIdSchema.optional(),
       defaultRoute: routeModeSchema.optional(),
       defaultAutonomy: autonomyModeSchema.optional(),
+      experienceLevel: experienceLevelSchema.optional(),
       theme: themeModeSchema.optional(),
       logRetentionEntries: z.number().int().min(100).max(100_000).optional(),
       diagnosticsEnabled: z.boolean().optional(),
@@ -1001,6 +1003,7 @@ export interface SettingsUpdate {
   defaultAgent?: AppSettings['defaultAgent'];
   defaultRoute?: AppSettings['defaultRoute'];
   defaultAutonomy?: AppSettings['defaultAutonomy'];
+  experienceLevel?: AppSettings['experienceLevel'];
   theme?: AppSettings['theme'];
   logRetentionEntries?: number;
   diagnosticsEnabled?: boolean;

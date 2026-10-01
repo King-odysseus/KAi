@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, stepKind } from '../apps/desktop/src/renderer/src/flow-diagram';
+import { buildFoundationPrompt, buildPagePrompt, filterScreens, FLOW_COLUMN, FLOW_ROW, layoutSteps, parseFlows, parsePages, screenRows, stepKind } from '../apps/desktop/src/renderer/src/flow-diagram';
 
 const FLOWS = `# Flows
 
@@ -92,5 +92,22 @@ describe('pages and the drawing prompts', () => {
     const prompt = buildFoundationPrompt({ projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, references: [] });
     expect(prompt).not.toContain('tokens.json');
     expect(prompt).not.toContain('references');
+  });
+});
+
+describe('flow layout', () => {
+  it('puts the title first and the steps after it in one row while they fit', () => {
+    const spots = layoutSteps(3);
+    expect(spots).toHaveLength(4);
+    expect(spots.map((spot) => spot.y)).toEqual([0, 0, 0, 0]);
+    expect(spots.map((spot) => spot.x)).toEqual([0, FLOW_COLUMN, FLOW_COLUMN * 2, FLOW_COLUMN * 3]);
+  });
+
+  it('wraps a long journey onto new rows like lines of text, and never stacks two boxes', () => {
+    const spots = layoutSteps(14);
+    expect(new Set(spots.map((spot) => `${spot.x},${spot.y}`)).size).toBe(15);
+    expect(Math.max(...spots.map((spot) => spot.x))).toBe(FLOW_COLUMN * 5);
+    expect(spots[6]).toEqual({ x: 0, y: FLOW_ROW });
+    expect(spots[14]).toEqual({ x: FLOW_COLUMN * 2, y: FLOW_ROW * 2 });
   });
 });

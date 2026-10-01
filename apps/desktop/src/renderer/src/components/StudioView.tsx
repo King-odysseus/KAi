@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { FlowDiagram } from './FlowDiagram';
@@ -73,6 +73,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [attachNote, setAttachNote] = useState<string | null>(null);
   const [foundationDone, setFoundationDone] = useState(false);
   const [progress, setProgress] = useState<ArtifactProgress | null>(null);
+  // The board can fill the whole window, so a long board can be read and worked without the page around it.
+  const [boardFull, setBoardFull] = useState(false);
+  // Any artifact can be read, edited or (for flows) explored full screen.
+  const [viewerFull, setViewerFull] = useState(false);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
@@ -337,6 +341,24 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     });
     return () => { cancelled = true; };
   }, [tab, projectId, state?.status, artifacts]);
+
+  useEffect(() => {
+    if (!viewerFull) return undefined;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setViewerFull(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewerFull]);
+
+  useEffect(() => {
+    if (!boardFull) return undefined;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setBoardFull(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [boardFull]);
 
   const flowJourneys = useMemo(() => (viewing === 'flows' && viewText ? parseFlows(viewText) : []), [viewing, viewText]);
   const designPages = useMemo(() => (pagesText ? parsePages(pagesText) : []), [pagesText]);
@@ -1269,7 +1291,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               })}
             </ul>
             {viewing && (
-              <section className="studio-viewer" aria-label={`${viewing} artifact`}>
+              <section className={`studio-viewer${viewerFull ? ' studio-viewer-full' : ''}`} aria-label={`${viewing} artifact`}>
                 <header>
                   <strong>{viewing}</strong>
                   <span className="studio-note"><code>{ARTIFACT_PATHS[viewing]}</code></span>
@@ -1287,7 +1309,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     {viewing === 'flows' && flowJourneys.length > 0 && editText === null && (
                       <button type="button" className="secondary-button" onClick={() => setViewMode(viewMode === 'diagram' ? 'text' : 'diagram')}>{viewMode === 'diagram' ? 'Show text' : 'Show diagram'}</button>
                     )}
-                    <button type="button" className="secondary-button" onClick={() => { setViewing(null); setEditText(null); }}>Close</button>
+                    <button type="button" className="secondary-button" onClick={() => setViewerFull((current) => !current)} aria-pressed={viewerFull} title={viewerFull ? 'Leave full screen (Esc)' : 'Show this artifact full screen'}>
+                      {viewerFull ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {viewerFull ? 'Exit full screen' : 'Full screen'}
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => { setViewing(null); setEditText(null); setViewerFull(false); }}>Close</button>
                   </span>
                 </header>
                 {viewText === null ? (
@@ -1297,7 +1322,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 ) : !viewText.trim() ? (
                   <p className="studio-note">This artifact is empty.</p>
                 ) : viewing === 'flows' && flowJourneys.length > 0 && viewMode === 'diagram' ? (
-                  <FlowDiagram journeys={flowJourneys} />
+                  <FlowDiagram journeys={flowJourneys} fill={viewerFull} />
                 ) : viewing === 'tokens' ? (
                   <pre className="studio-viewer-code">{viewText}</pre>
                 ) : (
@@ -1427,8 +1452,12 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           )}
 
           {tab === 'board' && (
-          <article className="studio-card">
-            <h2><LayoutGrid size={16} /> Board</h2>
+          <article className={`studio-card${boardFull ? ' studio-fullscreen' : ''}`}>
+            <h2><LayoutGrid size={16} /> Board
+              <button type="button" className="secondary-button studio-fullscreen-toggle" onClick={() => setBoardFull((current) => !current)} aria-pressed={boardFull} title={boardFull ? 'Leave full screen (Esc)' : 'Show the board full screen'}>
+                {boardFull ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {boardFull ? 'Exit full screen' : 'Full screen'}
+              </button>
+            </h2>
             <p className="studio-note">Cards built from the stories. A card reaches done only through a passing check that still matches the working tree.</p>
             <div className="page-actions">
               <button type="button" className="primary-button" onClick={() => void plan()} disabled={busy !== null || !readiness?.ready}>

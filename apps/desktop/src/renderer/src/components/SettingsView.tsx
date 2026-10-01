@@ -7,7 +7,7 @@ import { RemoteAccessPanel } from './RemoteAccessPanel';
 import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
-import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
 import type { AgentConfigImportPreview, AppSettings, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
@@ -520,10 +520,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           <div className="field-grid">
             <SelectField label="Agent" value={draft.defaultAgent} onChange={(value) => setDraft({ ...draft, defaultAgent: value as AppSettings['defaultAgent'] })} options={['codex', 'claude', 'qwen', 'gemini', 'kimi']} />
             <SelectField label="Route" value={draft.defaultRoute} onChange={(value) => setDraft({ ...draft, defaultRoute: value as AppSettings['defaultRoute'] })} options={['direct', 'proxy']} />
-            <SelectField label="Autonomy" value={draft.defaultAutonomy} onChange={(value) => setDraft({ ...draft, defaultAutonomy: value as AppSettings['defaultAutonomy'] })} options={['plan', 'ask', 'autoEdit', 'full', 'custom']} />
+            <SelectField label="Experience level" value={draft.experienceLevel} onChange={(value) => { const level = value as AppSettings['experienceLevel']; setDraft({ ...draft, experienceLevel: level, defaultAutonomy: experienceProfile(level).autonomy }); }} options={(Object.keys(EXPERIENCE_PROFILES) as AppSettings['experienceLevel'][]).map((level) => ({ value: level, label: EXPERIENCE_PROFILES[level].label }))} />
+            <SelectField label="Autonomy" value={draft.defaultAutonomy} onChange={(value) => setDraft({ ...draft, defaultAutonomy: value as AppSettings['defaultAutonomy'] })} options={ACCESS_LEVELS.map((level) => ({ value: level.value, label: level.label }))} />
             <SelectField label="Theme" value={draft.theme} onChange={(value) => setDraft({ ...draft, theme: value as AppSettings['theme'] })} options={THEME_MODES.map((item) => ({ value: item.id, label: item.label }))} />
             <NumberField label="Log entries" value={draft.logRetentionEntries} min={100} max={100000} onChange={(value) => setDraft({ ...draft, logRetentionEntries: value })} />
           </div>
+          <p className="settings-note">{experienceProfile(draft.experienceLevel).summary} Changing the level also resets the default access to match; you can still pick any access level per chat. {ACCESS_LEVELS.find((level) => level.value === draft.defaultAutonomy)?.description}</p>
           <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><input type="checkbox" checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>CLI models</span></div>
