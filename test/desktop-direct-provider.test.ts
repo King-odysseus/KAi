@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, type AgentRunRequest, type AppSettings } from '../packages/contracts/src';
-import { DesktopDirectProviderRuntime } from '../apps/desktop/src/main/direct-provider-runtime';
+import { DesktopDirectProviderRuntime, outputBudgetRejected } from '../apps/desktop/src/main/direct-provider-runtime';
 
 const servers: http.Server[] = [];
 const temporaryDirectories: string[] = [];
@@ -312,6 +312,43 @@ data: [DONE]
     expect(result.events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'cost.update', inputTokens: 7, outputTokens: 3, provider: 'anthropic' }),
     ]));
+  });
+
+  it('resumes a turn that ran out of output budget instead of ending the run with nothing', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        bodies.push(JSON.parse(raw) as Record<string, unknown>);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (bodies.length === 1) {
+          // A reasoning model that spends the whole output budget thinking: a thinking block, no visible text and no
+          // tool call. This is the shape that used to end the run as "the provider returned no output".
+          response.end('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Weighing the options."}}\n\nevent: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":20},"delta":{"stop_reason":"max_tokens"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+          return;
+        }
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Carried on and finished."}}\n\nevent: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5},"delta":{"stop_reason":"end_turn"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run(runRequest(), process.cwd());
+
+    expect(result).toMatchObject({ status: 'completed', output: 'Carried on and finished.' });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]!.max_tokens).toBe(32_768);
+  });
+
+  it('asks for the smaller output budget when the endpoint refuses the larger one', () => {
+    expect(outputBudgetRejected('Provider request failed (400): max_tokens is too large')).toBe(true);
+    expect(outputBudgetRejected('Provider request failed (400): invalid model')).toBe(false);
+    expect(outputBudgetRejected(undefined)).toBe(false);
   });
 
   it('streams native Gemini generative AI responses with the Google credential header', async () => {

@@ -158,10 +158,33 @@ const MAX_UNFINISHED_NUDGES = 8;
 /** Ends a run whose model kept describing work instead of doing it, so the stop is explained rather than silent. */
 const UNFINISHED_STALL = 'The model kept describing what it would do instead of calling its tools, so the run ended with the task unfinished. Send "continue" to carry on, or switch to a model that uses tools more readily.';
 
+/**
+ * How many output tokens to ask for. A reasoning model spends this budget on its thinking before it writes a single
+ * visible word, so a ceiling that is too low leaves the turn cut off with nothing to show and the run looks empty.
+ * The smaller value is kept for endpoints that refuse the larger one, rather than dropping to the chat endpoint —
+ * that is a different protocol and a far bigger change than the model actually needs.
+ */
+const OUTPUT_TOKEN_BUDGET = 32_768;
+const OUTPUT_TOKEN_BUDGET_FALLBACK = 8_192;
+
+/** How many cut-off turns in a row to resume, so a model that only ever reasons cannot loop forever. */
+const MAX_TRUNCATED_CONTINUATIONS = 5;
+
+/** Sent when a turn was cut off mid-thought, so the model carries on instead of the run ending with nothing. */
+const TRUNCATED_TURN_CONTINUATION = 'Your previous turn reached the output limit before you wrote a reply or called a tool, so nothing was shown. Continue from where you left off and act now: call the tools you need instead of reasoning further.';
+
+/** Names the real problem when a reasoning model thinks until the budget runs out and never writes a reply. */
+const REASONING_ONLY = ' produced only reasoning and no reply: the model spent its whole output budget thinking. Raise the output limit for this model, or choose one that does not reason.';
+
 /** A blank line to put before the first text of a round when earlier rounds already wrote some, so they do not run together. */
 function roundBreak(outputParts: readonly string[]): string {
   const last = outputParts.at(-1);
   return last && !/\s$/.test(last) ? '\n\n' : '';
+}
+
+/** True when the endpoint turned the request down over the output-token ceiling rather than the request itself. */
+export function outputBudgetRejected(error: string | undefined): boolean {
+  return /max_tokens|max output|output token|maximum number of tokens|too large|too many tokens/i.test(error ?? '');
 }
 
 function continuationMessage(summary: string): string {
@@ -435,6 +458,23 @@ export class DesktopDirectProviderRuntime {
         customPermissions,
       );
       if (!(attempt.status === 'failed' && !toolsUsed && !attempt.output.trim() && endpointRejected(attempt.error))) return attempt;
+      // A ceiling the endpoint will not accept is a much smaller problem than a protocol it does not speak, so ask
+      // for the older budget before giving up on the Anthropic-style endpoint altogether.
+      if (outputBudgetRejected(attempt.error)) {
+        const smaller = await this.runAnthropicMessages(
+          request,
+          projectRoot,
+          { ...capability, baseUrl: anthropicBase },
+          apiKey,
+          watch,
+          approvals,
+          contextText,
+          history,
+          customPermissions,
+          OUTPUT_TOKEN_BUDGET_FALLBACK,
+        );
+        if (!(smaller.status === 'failed' && !toolsUsed && !smaller.output.trim() && endpointRejected(smaller.error))) return smaller;
+      }
       // The endpoint is not available for this key or model; use the chat endpoint, and do not try again this session.
       this.deepSeekAnthropicRejected = true;
       onEvent?.(lifecycleEvent(request, 'starting', 'DeepSeek\'s Anthropic-style endpoint was not accepted; using its chat endpoint instead.'));
@@ -725,6 +765,8 @@ export class DesktopDirectProviderRuntime {
     let segmentStart = messages.length;
     let forceFinalAnswer = false;
     let nudges = 0;
+    let continuations = 0;
+    let reasoningOnly = false;
 
     try {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
@@ -734,6 +776,8 @@ export class DesktopDirectProviderRuntime {
         if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
         let roundText = '';
+        let roundThinking = false;
+        let truncated = false;
         let roundProviderError: string | undefined;
         const response = await this.requestChatCompletionsResponse(
           request,
@@ -765,6 +809,9 @@ export class DesktopDirectProviderRuntime {
 
           const choice = firstRecord(value.choices);
           const delta = asRecord(choice?.delta);
+          // DeepSeek's own reasoning stream. None of it is shown — it is the model working — but its presence still
+          // means the turn produced something, so a turn that only reasoned is not mistaken for an empty reply.
+          if (stringValue(delta?.reasoning_content)) roundThinking = true;
           const deltaText = chatContentText(delta?.content);
           if (deltaText) {
             // Text from an earlier round would otherwise run straight into this one ("...the files.I will...").
@@ -782,6 +829,8 @@ export class DesktopDirectProviderRuntime {
           if (choice?.finish_reason === 'error') {
             roundProviderError ||= `${capability.displayName} reported a failed response.`;
           }
+          // Ran out of room mid-turn rather than finishing, so it has to be resumed instead of treated as the end.
+          if (choice?.finish_reason === 'length') truncated = true;
         }
 
         if (roundProviderError) {
@@ -793,6 +842,17 @@ export class DesktopDirectProviderRuntime {
           .sort((left, right) => left.index - right.index)
           .filter((call) => call.name);
         if (toolCalls.length === 0) {
+          // Cut off mid-thought: the model spent the whole output budget working and never reached a word or a tool
+          // call. That is an unfinished turn, so it is resumed rather than ended — ending it is what made a long,
+          // productive run look like the agent had stopped for no reason.
+          if (truncated && !forceFinalAnswer && continuations < MAX_TRUNCATED_CONTINUATIONS) {
+            continuations += 1;
+            if (roundThinking && !roundText) reasoningOnly = true;
+            messages.push({ role: 'assistant', content: roundText || '(reasoning only)' });
+            messages.push({ role: 'user', content: TRUNCATED_TURN_CONTINUATION });
+            continue;
+          }
+          if (truncated && roundThinking && !roundText) reasoningOnly = true;
           if (!forceFinalAnswer && announcesUnfinishedWork(roundText)) {
             if (nudges < MAX_UNFINISHED_NUDGES) {
               nudges += 1;
@@ -855,6 +915,10 @@ export class DesktopDirectProviderRuntime {
       this.activeRuns.delete(request.conversationId);
     }
 
+    // An empty run that consisted only of reasoning would otherwise be reported as a model that said nothing, which
+    // sends the reader looking for a broken provider instead of a budget the model thought its way through.
+    if (!aborted && !outputParts.join('').trim() && reasoningOnly) errors.push(`${capability.displayName}${REASONING_ONLY}`);
+
     const output = outputParts.join('').trim();
     const failed = !aborted && (errors.length > 0 || !output);
     const error = aborted
@@ -915,6 +979,7 @@ export class DesktopDirectProviderRuntime {
     contextText?: string,
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
+    maxTokens: number = OUTPUT_TOKEN_BUDGET,
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
@@ -940,6 +1005,8 @@ export class DesktopDirectProviderRuntime {
     let aborted = false;
     let toolRounds = 0;
     let nudges = 0;
+    let continuations = 0;
+    let reasoningOnly = false;
 
     try {
       for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
@@ -949,6 +1016,8 @@ export class DesktopDirectProviderRuntime {
         if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundText = '';
+        let roundThinking = false;
+        let truncated = false;
         let roundProviderError: string | undefined;
         const response = await this.requestAnthropicResponse(
           request,
@@ -959,6 +1028,7 @@ export class DesktopDirectProviderRuntime {
           externalToolDefinitions,
           controller.signal,
           emit,
+          maxTokens,
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -981,6 +1051,10 @@ export class DesktopDirectProviderRuntime {
           if (type === 'content_block_start') {
             const block = asRecord(value.content_block);
             if (block?.type === 'tool_use') rememberAnthropicToolCall(pendingToolCalls, block, integerValue(value.index));
+            // A reasoning model opens its turn with a thinking block. None of that text is shown — it is the model
+            // working — but the block still means the turn produced something, which keeps a long think from being
+            // mistaken for a silent, empty turn.
+            if (block?.type === 'thinking' || block?.type === 'redacted_thinking') roundThinking = true;
             const initialText = block?.type === 'text' ? stringValue(block.text) : undefined;
             if (initialText) {
               const shown = (roundText ? '' : roundBreak(outputParts)) + initialText;
@@ -992,7 +1066,9 @@ export class DesktopDirectProviderRuntime {
           }
           if (type === 'content_block_delta') {
             const delta = asRecord(value.delta);
-            if (delta?.type === 'text_delta') {
+            if (delta?.type === 'thinking_delta') {
+              if (stringValue(delta.thinking)) roundThinking = true;
+            } else if (delta?.type === 'text_delta') {
               const text = stringValue(delta.text);
               if (text) {
                 const shown = (roundText ? '' : roundBreak(outputParts)) + text;
@@ -1011,6 +1087,8 @@ export class DesktopDirectProviderRuntime {
             if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
             const delta = asRecord(value.delta);
             if (delta?.stop_reason === 'error') roundProviderError = `${capability.displayName} reported a failed response.`;
+            // The turn ran out of room rather than finishing, so it has to be resumed instead of treated as the end.
+            if (delta?.stop_reason === 'max_tokens') truncated = true;
             continue;
           }
           if (type === 'error') {
@@ -1025,6 +1103,20 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
+          // Cut off mid-thought. A reasoning model can spend the entire output budget working and stop before it
+          // writes a word or calls a tool; that is an unfinished turn, so it is resumed rather than ended. Ending it
+          // here is what made a long, productive run look like the agent had simply stopped for no reason.
+          if (truncated && continuations < MAX_TRUNCATED_CONTINUATIONS) {
+            continuations += 1;
+            if (roundThinking && !roundText) reasoningOnly = true;
+            const assistant = roundText
+              ? [{ type: 'text', text: roundText }]
+              : [{ type: 'text', text: '(reasoning only)' }];
+            messages.push({ role: 'assistant', content: assistant });
+            messages.push({ role: 'user', content: TRUNCATED_TURN_CONTINUATION });
+            continue;
+          }
+          if (truncated && roundThinking && !roundText) reasoningOnly = true;
           if (announcesUnfinishedWork(roundText)) {
             if (nudges < MAX_UNFINISHED_NUDGES) {
               nudges += 1;
@@ -1070,6 +1162,10 @@ export class DesktopDirectProviderRuntime {
     } finally {
       this.activeRuns.delete(request.conversationId);
     }
+
+    // An empty run that consisted only of reasoning would otherwise be reported as a model that said nothing, which
+    // sends the reader looking for a broken provider instead of a budget the model thought its way through.
+    if (!aborted && !outputParts.join('').trim() && reasoningOnly) errors.push(`${capability.displayName}${REASONING_ONLY}`);
 
     return finishProviderRun({
       request,
@@ -1324,6 +1420,7 @@ export class DesktopDirectProviderRuntime {
     externalToolDefinitions: readonly unknown[],
     signal: AbortSignal,
     emit: (event: PersistedEvent) => void,
+    maxTokens: number = OUTPUT_TOKEN_BUDGET,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1342,7 +1439,7 @@ export class DesktopDirectProviderRuntime {
           },
           body: JSON.stringify({
             model: capability.model,
-            max_tokens: 8_192,
+            max_tokens: maxTokens,
             stream: true,
             ...withAnthropicPromptCaching(capability.baseUrl, { messages, system: system?.trim(), tools }),
             ...(tools.length > 0 ? { tool_choice: { type: 'auto' } } : {}),
