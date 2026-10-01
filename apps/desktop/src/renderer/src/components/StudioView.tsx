@@ -1,8 +1,8 @@
-import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { FlowDiagram } from './FlowDiagram';
-import { buildDesignPrompt, parseFlows, parsePages } from '../flow-diagram';
+import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, type DesignContext } from '../flow-diagram';
 import { Markdown } from './Markdown';
 import {
   ARTIFACT_KINDS,
@@ -67,7 +67,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [viewMode, setViewMode] = useState<'diagram' | 'text'>('diagram');
   const [pagesText, setPagesText] = useState<string | null>(null);
   const [styleRefs, setStyleRefs] = useState<StudioStyleReferences | null>(null);
-  const [drawPrompt, setDrawPrompt] = useState<string | null>(null);
+  const [drawPrompt, setDrawPrompt] = useState<{ title: string; text: string } | null>(null);
+  const [screenQuery, setScreenQuery] = useState('');
+  // What KAI says back after the user attaches style images in the interview.
+  const [attachNote, setAttachNote] = useState<string | null>(null);
+  const [foundationDone, setFoundationDone] = useState(false);
   const [progress, setProgress] = useState<ArtifactProgress | null>(null);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
   const [handoffDismissed, setHandoffDismissed] = useState(false);
@@ -337,23 +341,90 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const flowJourneys = useMemo(() => (viewing === 'flows' && viewText ? parseFlows(viewText) : []), [viewing, viewText]);
   const designPages = useMemo(() => (pagesText ? parsePages(pagesText) : []), [pagesText]);
 
-  /** Copies the instructions that tell a KAI agent to draw the project's screens in open-pencil. */
-  async function copyDrawPrompt(): Promise<void> {
-    if (!state) return;
-    const text = buildDesignPrompt({
+  const designRows = useMemo(
+    () => screenRows(designPages, design?.components.filter((component) => component.screen).map((component) => component.name) ?? []),
+    [designPages, design],
+  );
+  const visibleRows = useMemo(() => filterScreens(designRows, screenQuery), [designRows, screenQuery]);
+
+  // Whether the foundation step was run is the user's own note: open-pencil has no single thing to look for.
+  useEffect(() => {
+    try {
+      setFoundationDone(Boolean(projectId && window.localStorage.getItem(`kai.studio.foundation.${projectId}`)));
+    } catch {
+      setFoundationDone(false);
+    }
+  }, [projectId]);
+
+  function toggleFoundation(done: boolean): void {
+    setFoundationDone(done);
+    try {
+      if (!projectId) return;
+      if (done) window.localStorage.setItem(`kai.studio.foundation.${projectId}`, '1');
+      else window.localStorage.removeItem(`kai.studio.foundation.${projectId}`);
+    } catch {
+      // Remembering the tick is optional.
+    }
+  }
+
+  function designContext(): DesignContext {
+    return {
       projectName: projectTitle,
-      goal: state.goal || state.idea,
-      pages: designPages,
+      goal: state?.goal || state?.idea || '',
       hasTokens: Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'tokens')),
       hasStyleGuide: Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'style-guide')),
       references: styleRefs?.images.map((image) => image.name) ?? [],
-    });
-    setDrawPrompt(text);
+    };
+  }
+
+  /**
+   * Copies one drawing step. The prompts are small on purpose: a single prompt for a whole project is what can
+   * stall the editor, so the foundation and each screen are their own, run one after another.
+   */
+  async function copyDrawPrompt(title: string, text: string): Promise<void> {
+    setDrawPrompt({ title, text });
     try {
       await navigator.clipboard.writeText(text);
-      setNotice('Prompt copied. Paste it into the Workspace composer and send it to a KAI agent that has open-pencil connected.');
+      setNotice(`Copied: ${title}. Paste it into the Workspace composer for a KAi agent that has open-pencil connected, and let it finish before the next one.`);
     } catch {
       setNotice('Could not reach the clipboard. Select the prompt below and copy it by hand.');
+    }
+  }
+
+  /**
+   * The interview's image button. The images are saved with the project; when the model can read them, they are
+   * described at once so the next questions already know the look, and when it cannot, the user is told so and asked
+   * to say it in words. Either way the drawing agent can still see the files.
+   */
+  async function attachStyleImages(files: FileList | null): Promise<void> {
+    if (!projectId || !files || files.length === 0) return;
+    setBusy('design');
+    setError(null);
+    setAttachNote('Looking at your image…');
+    try {
+      for (const file of [...files]) {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        unwrap(await window.kaiDesktop.addStudioStyleReference({ projectId, name: file.name, data }));
+      }
+    } catch (caught) {
+      setAttachNote(null);
+      setError(messageOf(caught));
+      setBusy(null);
+      return;
+    }
+    try {
+      const described = unwrap(await window.kaiDesktop.describeStudioStyle(projectId));
+      const summary = (described.notes ?? '').split('\n').filter((line) => line.trim() && !line.startsWith('#') && !line.startsWith('_')).slice(0, 3).join(' ').replace(/[*-]\s*/g, '').slice(0, 300);
+      setAttachNote(`I looked at your image${(files.length ?? 0) > 1 ? 's' : ''} and will use the look in the style guide. ${summary}`.trim());
+    } catch (caught) {
+      setAttachNote(`I saved your image, but I could not read it: ${messageOf(caught)}`);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -474,6 +545,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   async function submitStep(text: string): Promise<void> {
     if (busy !== null) return;
     const value = text.trim();
+    setAttachNote(null);
     const next = answers.map((existing, index) => (index === step ? value : existing));
     setAnswers(next);
     setDraft('');
@@ -1085,6 +1157,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   <ThreadTurn key={question} question={question} answer={answers[index] ?? ''} />
                 ))}
                 {open[step] !== undefined && <div className="studio-bubble ai">{open[step]}</div>}
+                {attachNote && <div className="studio-bubble ai">{attachNote}</div>}
                 {open.length === 0 && <p className="studio-note">No questions this round.</p>}
                 {busy === 'answer' && <div className="studio-bubble ai"><Loader2 className="spin" size={13} /> Thinking about what to ask next…</div>}
                 <div ref={threadEnd} />
@@ -1110,6 +1183,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     onEnhance={() => void enhanceDraft()}
                     extra={(
                       <>
+                        <label className="composer-text-button studio-file-button" title="Attach images of a look you like (PNG, JPEG or WebP)">
+                          <ImagePlus size={13} /> Image
+                          <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy !== null} onChange={(event) => { void attachStyleImages(event.target.files); event.target.value = ''; }} />
+                        </label>
                         <button type="button" className="composer-text-button" onClick={() => void submitStep('')} disabled={busy !== null} title="Leave this one to the agents">Skip</button>
                         <button type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</button>
                       </>
@@ -1211,7 +1288,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           <article className="studio-card">
             <h2><Palette size={16} /> Design</h2>
             <p className="studio-note">
-              open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. The editor has to be running with the same token KAI holds in Settings.
+              open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. The editor has to be running with the same token KAI holds under Settings, Design tools.
             </p>
             <div className="page-actions">
               <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
@@ -1234,39 +1311,70 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           {tab === 'design' && (
             <>
               <article className="studio-card">
-                <h2><LayoutGrid size={16} /> Screens to design</h2>
-                <p className="studio-note">The pages the project needs, from the pages artifact. Draw them in open-pencil, then pull the design to match each one to its card.</p>
+                <h2><LayoutGrid size={16} /> Draw in open-pencil</h2>
+                <p className="studio-note">
+                  Small steps, one prompt each, because one long prompt is what can stall the editor. Run the foundation first, then one screen at a time, letting each finish. Press Pull the design afterwards and the screens it finds tick themselves off.
+                </p>
                 <div className="page-actions">
-                  <button type="button" className="primary-button" onClick={() => void copyDrawPrompt()} disabled={!state}>
-                    <Send size={14} /> Copy the prompt for KAI to draw these in open-pencil
+                  <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
+                    {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
                   </button>
                   {!pagesText && (
                     <button type="button" className="secondary-button" onClick={() => void generateOne('pages')} disabled={busy !== null || !readiness?.ready}>
                       {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Write the pages list
                     </button>
                   )}
+                  <span className="studio-model">{designRows.filter((row) => row.drawn).length} of {designRows.length} screens drawn</span>
                 </div>
-                {designPages.length > 0 ? (
-                  <ul className="studio-list studio-screens">
-                    {designPages.map((page) => {
-                      const drawn = design?.components.some((component) => component.screen && component.name.trim().toLowerCase() === page.name.trim().toLowerCase());
-                      return (
-                        <li key={page.name}>
-                          {page.name}{page.route ? <code> {page.route}</code> : null}
-                          <span className={`studio-kind ${drawn ? 'drawn' : ''}`}>{drawn ? 'drawn' : 'to draw'}</span>
-                        </li>
-                      );
-                    })}
+                <ul className="studio-steps">
+                  <li className={foundationDone ? 'done' : undefined}>
+                    <label className="studio-step-check">
+                      <input type="checkbox" checked={foundationDone} onChange={(event) => toggleFoundation(event.target.checked)} aria-label="Foundation step finished" />
+                      <span><strong>1 · Foundation</strong><small>Variables from the tokens, text styles and the shared components. No screens.</small></span>
+                    </label>
+                    <button type="button" className="secondary-button" onClick={() => void copyDrawPrompt('Foundation', buildFoundationPrompt(designContext()))}>
+                      <Send size={13} /> Copy prompt
+                    </button>
+                  </li>
+                </ul>
+                <label className="studio-search">
+                  <Search size={13} />
+                  <input type="search" value={screenQuery} onChange={(event) => setScreenQuery(event.target.value)} placeholder="Search screens by name, route or what is on them" aria-label="Search screens" />
+                </label>
+                {designRows.length > 0 ? (
+                  <ul className="studio-steps">
+                    {visibleRows.map((row) => (
+                      <li key={row.name} className={row.drawn ? 'done' : undefined}>
+                        <div className="studio-step-text">
+                          <strong>{row.name}{row.route ? <code> {row.route}</code> : null}</strong>
+                          <small>
+                            <span className={`studio-kind ${row.drawn ? 'drawn' : ''}`}>{row.drawn ? 'drawn' : 'to draw'}</span>
+                            {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
+                          </small>
+                        </div>
+                        {row.inPages && (
+                          <button type="button" className="secondary-button" onClick={() => void copyDrawPrompt(row.name, buildPagePrompt(row, designContext()))}>
+                            <Send size={13} /> Copy prompt
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                    {visibleRows.length === 0 && <li className="studio-note">No screen matches "{screenQuery}".</li>}
                   </ul>
                 ) : (
                   <p className="studio-note">{pagesText === null ? 'No pages list yet. Write it, or generate all artifacts.' : 'The pages artifact has no screens in it yet.'}</p>
                 )}
-                {drawPrompt && <textarea className="studio-viewer-edit" readOnly value={drawPrompt} rows={12} aria-label="Prompt to copy" onFocus={(event) => event.currentTarget.select()} />}
+                {drawPrompt && (
+                  <>
+                    <p className="studio-note">Prompt for <strong>{drawPrompt.title}</strong>:</p>
+                    <textarea className="studio-viewer-edit" readOnly value={drawPrompt.text} rows={10} aria-label="Prompt to copy" onFocus={(event) => event.currentTarget.select()} />
+                  </>
+                )}
               </article>
 
               <article className="studio-card">
                 <h2><Palette size={16} /> Style reference</h2>
-                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor). A model that can read images describes them, and the style guide and tokens are written to follow that. KAI agents can also look at the images when they draw.</p>
+                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor). They are used two ways: (1) a model that can read images describes them, and the style guide and tokens are written from that description, so regenerate those after describing; (2) the agent that draws is pointed at the images to match them. open-pencil itself never reads them.</p>
                 <div className="page-actions">
                   <label className="secondary-button studio-file-button">
                     <Plus size={14} /> Add images

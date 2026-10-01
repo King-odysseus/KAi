@@ -388,6 +388,25 @@ export const studioStyleReferenceRemoveInputSchema = z
   .strict();
 export type StudioStyleReferenceRemoveInput = z.infer<typeof studioStyleReferenceRemoveInputSchema>;
 
+/** Whether KAI is set up to reach open-pencil, without ever returning the token itself. */
+export const openPencilStatusSchema = z
+  .object({ endpoint: z.string(), enabled: z.boolean(), tokenStored: z.boolean() })
+  .strict();
+export type OpenPencilStatus = z.infer<typeof openPencilStatusSchema>;
+
+export const openPencilSaveInputSchema = z
+  .object({
+    endpoint: z.string().trim().url().max(300),
+    // Left out to keep the token already stored; the editor must be started with the same one.
+    token: z.string().trim().max(500).optional(),
+    enabled: z.boolean(),
+  })
+  .strict();
+export type OpenPencilSaveInput = z.infer<typeof openPencilSaveInputSchema>;
+
+export const openPencilTestResultSchema = z.object({ ok: z.boolean(), message: z.string() }).strict();
+export type OpenPencilTestResult = z.infer<typeof openPencilTestResultSchema>;
+
 /** A hand edit from the artifact viewer. The text is the whole file, so a save replaces it. */
 export const studioArtifactSaveInputSchema = z
   .object({ projectId: z.string().min(1), kind: artifactKindSchema, content: z.string().max(400_000) })

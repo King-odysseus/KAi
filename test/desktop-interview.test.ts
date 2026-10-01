@@ -236,6 +236,15 @@ describe('Project Studio interview', () => {
     expect(system).toMatch(/no more than 15 questions/);
   });
 
+  it('feeds the described style images into the next question, and points the model at the image button', () => {
+    const withImages = buildInterviewPrompt({ idea: 'A booking site.', goal: '', assumptions: [], rounds: [] }, null, '- Palette: deep navy, mint accent');
+    expect(withImages.user).toContain('The user attached reference images');
+    expect(withImages.user).toContain('deep navy, mint accent');
+    expect(withImages.system).toMatch(/image button next to the answer box/);
+    const without = buildInterviewPrompt({ idea: 'A booking site.', goal: '', assumptions: [], rounds: [] }, null);
+    expect(without.user).not.toContain('reference images');
+  });
+
   it('refuses a second interview while one is in progress, and a reset clears it', async () => {
     const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Take deposits.', assumptions: [], questions: ['How many chairs?'] })]));
     await interview.start({ projectId: 'p1', idea: 'Booking site.' });

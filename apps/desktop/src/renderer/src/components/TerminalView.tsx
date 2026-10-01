@@ -8,12 +8,14 @@ import { unwrap } from '../types';
 
 import { Select } from './ui/Select';
 /** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
-export function TerminalView({ activeProject, open, height, onClose, onResizeStart }: {
+export function TerminalView({ activeProject, open, height, onClose, onResizeStart, commandRequest }: {
   activeProject: ProjectRecord | null;
   open: boolean;
   height: number;
   onClose: () => void;
   onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
+  /** A command is only injected after the user chose an action such as GitHub sign-in. */
+  commandRequest?: { command: string; nonce: number } | null;
 }): ReactNode {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -154,6 +156,13 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
       setError(caught instanceof Error ? caught.message : 'The terminal could not be started.');
     }
   }
+
+  useEffect(() => {
+    const request = commandRequest;
+    const id = sessionRef.current?.id;
+    if (!request || !id || status !== 'running') return;
+    void window.kaiDesktop.writeTerminal(id, `${request.command}\r`);
+  }, [commandRequest?.nonce, status]);
 
   async function restart(): Promise<void> {
     const current = sessionRef.current;

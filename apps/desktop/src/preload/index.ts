@@ -70,6 +70,9 @@ const bridge: KaiDesktopBridge = {
   promptGuideReadiness: () => ipcRenderer.invoke('prompt-guide:readiness', {}),
   refineIdea: (request) => ipcRenderer.invoke('prompt-guide:refine', request),
   refinePrompt: (request) => ipcRenderer.invoke('prompt-guide:refine-prompt', request),
+  openPencilStatus: () => ipcRenderer.invoke('design:openpencil-status', {}),
+  saveOpenPencil: (input) => ipcRenderer.invoke('design:openpencil-save', input),
+  testOpenPencil: () => ipcRenderer.invoke('design:openpencil-test', {}),
   studioReadiness: () => ipcRenderer.invoke('studio:readiness', {}),
   studioProjects: () => ipcRenderer.invoke('studio:projects-list', {}),
   setStudioProjectArchived: (request) => ipcRenderer.invoke('studio:project-archive', request),
@@ -214,6 +217,8 @@ const bridge: KaiDesktopBridge = {
   installUpdate: () => ipcRenderer.invoke('updates:install', {}),
   setupStatus: () => ipcRenderer.invoke('setup:status', {}),
   completeSetup: (complete) => ipcRenderer.invoke('setup:complete', { complete }),
+  agentConfigImportPreview: () => ipcRenderer.invoke('setup:agent-config-preview', {}),
+  importAgentConfig: (agent) => ipcRenderer.invoke('setup:agent-config-import', { agent }),
   onUpdateState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: UpdateState): void => listener(payload);
     ipcRenderer.on('app:update-state', handler);

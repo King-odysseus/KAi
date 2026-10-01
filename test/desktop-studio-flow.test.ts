@@ -304,6 +304,6 @@ describe('pulling the design from open-pencil', () => {
   it('says the design layer is not set up rather than failing obscurely', async () => {
     const { studio: app } = studio({});
 
-    await expect(app.pullDesign('p1')).rejects.toThrow('open-pencil is not configured');
+    await expect(app.pullDesign('p1')).rejects.toThrow('open-pencil is not connected');
   });
 });

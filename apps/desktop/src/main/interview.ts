@@ -3,6 +3,7 @@ import {
   STUDIO_MAX_EXTENSIONS,
   STUDIO_MAX_OPTIONS,
   STUDIO_QUESTION_CEILING,
+  STUDIO_STYLE_REFERENCE_NOTES_PATH,
   STUDIO_ROUND_QUESTION_LIMITS,
   interviewQuestionBudget,
   directProviderPreset,
@@ -68,6 +69,8 @@ export interface InterviewStorePort {
 /** Only the one spec write the interview needs; the full spec store arrives with the artifacts phase. */
 export interface SpecWriterPort {
   write(projectRoot: string, relativePath: string, content: string): Promise<{ path: string }>;
+  /** Optional: lets the interview read what the user's reference images were described as. */
+  read?(projectRoot: string, relativePath: string): Promise<string | null>;
 }
 
 export interface InterviewPorts {
@@ -206,10 +209,11 @@ export class DesktopInterview {
       this.ports.projectRoot(state.projectId, state.linkedProjectId),
     ]);
     const context = await loadProjectContext(root, undefined, INTERVIEW_CONTEXT_CHARS).catch(() => null);
+    const styleReference = (await this.ports.spec.read?.(root, STUDIO_STYLE_REFERENCE_NOTES_PATH).catch(() => null)) ?? null;
     const reply = await this.ports.requester.structuredRequest(
       settings.promptGuide,
       NAMES,
-      buildInterviewPrompt(state, context),
+      buildInterviewPrompt(state, context, styleReference),
       'kai_project_interview',
       INTERVIEW_JSON_SCHEMA,
       parseInterviewReply,
@@ -269,7 +273,7 @@ function summaryOf(state: InterviewState): StudioProjectSummary {
  * The interview prompt. It shows everything the user has said so far, marks what they skipped, and tells the model
  * to stop asking when it can already write a specific goal.
  */
-export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & { extraQuestions?: number }, context: string | null): { system: string; user: string } {
+export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & { extraQuestions?: number }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
   const system = [
     'You are the Project Studio inside KAI, a desktop workbench where a team of coding agents builds software.',
     'The user has described a project in a paragraph. Your job is to close the gaps that would make the agents guess, before anything is written down as a requirement.',
@@ -281,7 +285,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
     `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
     'Many users are new to building software. When their wording suggests that (no technical terms, "I don\'t know", very broad answers), write in plain language, explain what each option means in a few words, and prefer the simplest choice that works. Never assume they know what a framework, database or hosting service is.',
-    'The documents written after this interview need: who uses it and in which roles, the data and where it lives, integrations and hosting, how the result is judged, and, for anything with a screen, the visual design (brand or preferred colours, light or dark, the feel, products it should resemble). Use your questions on whatever of that the user has not already said. Two topics are required before you finish: (1) the technology to build it with (language and framework, where it is hosted, the database), unless the user already chose it; offer options suited to the project with a recommended one, and for a newcomer explain the recommendation in a few words; (2) for anything with a screen, the visual design, with options such as palettes or styles. Do not finish without either.',
+    'The documents written after this interview need: who uses it and in which roles, the data and where it lives, integrations and hosting, how the result is judged, and, for anything with a screen, the visual design (brand or preferred colours, light or dark, the feel, products it should resemble). Use your questions on whatever of that the user has not already said. Two topics are required before you finish: (1) the technology to build it with (language and framework, where it is hosted, the database), unless the user already chose it; offer options suited to the project with a recommended one, and for a newcomer explain the recommendation in a few words; (2) for anything with a screen, the visual design, with options such as palettes or styles. Do not finish without either. When you ask about the visual design, add that they can attach reference images of a look they like with the image button next to the answer box.',
     'Ask none when you can already write the goal, the stack, the design direction and the acceptance criteria from what you have. Fewer, better questions beat a full set.',
     'Never repeat a question the user has already answered, and never re-ask one they skipped: a skip means they want you to decide.',
     'Never invent files that the snapshot shows do not exist; say "a new file under <folder>" instead.',
@@ -297,6 +301,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     state.goal ? `Goal so far:\n${state.goal}` : '',
     answered.length > 0 ? `Already answered:\n${answered.join('\n\n')}` : '',
     skipped.length > 0 ? `Skipped (decide these yourself):\n${skipped.map((question) => `- ${question}`).join('\n')}` : '',
+    styleReference?.trim() ? `The user attached reference images; a model described them as:\n${styleReference.trim().slice(0, 2_500)}\nTreat this as their stated taste and do not ask again for what it already answers.` : '',
     context ? `Project snapshot (read-only; for naming real files and folders):\n${context}` : 'No project snapshot is available.',
   ].filter(Boolean).join('\n\n');
   return { system, user };

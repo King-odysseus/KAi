@@ -51,6 +51,7 @@ try {
   await verifyOperations(page);
   await verifyTasksAndSettings(page);
   await verifyStudioAndGraph(page);
+  await verifySettingsSearch(page);
   await verifyThemes(page);
   await verifyIndependentWindows(electronApp, page);
   }
@@ -290,6 +291,26 @@ async function verifyOperations(page) {
 
   await page.getByRole('tab', { name: 'Active work' }).click();
   await page.getByText(/Cognitive1 is not running/).waitFor();
+}
+
+/** Settings can be searched through every card, and the open-pencil connector is a card of its own. */
+async function verifySettingsSearch(page) {
+  await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
+  const search = page.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('MCP address');
+  await page.getByText('open-pencil (design editor)').waitFor();
+  await page.getByRole('button', { name: 'Test connection' }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'settings-search-1440x920.png') });
+  await search.fill('zzzz-no-such-setting');
+  if ((await page.locator('.settings-categories .settings-section:visible').count()) !== 0) throw new Error('A search with no match still shows settings cards.');
+  await search.fill('');
+  if ((await page.locator('.settings-categories .settings-section:visible').count()) === 0) throw new Error('Clearing the settings search left every card hidden.');
+  // The category bar stays pinned while the page scrolls.
+  const bar = page.locator('.settings-sticky');
+  await bar.waitFor();
+  if ((await bar.evaluate((element) => getComputedStyle(element).position)) !== 'sticky') throw new Error('The settings category bar is not pinned.');
 }
 
 /** The Studio composer and the graph page open, fit the window, and show their empty states without a model. */

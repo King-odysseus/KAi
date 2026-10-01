@@ -2,13 +2,21 @@ import * as crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { BrowserWindow, clipboard, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron';
 import {
+  OPENPENCIL_CREDENTIAL_ID,
+  OPENPENCIL_ENDPOINT,
+  OPENPENCIL_MCP_SERVER_ID,
+  type OpenPencilSaveInput,
+  type OpenPencilStatus,
+  type OpenPencilTestResult,
   classifyWork,
   type Schedule,
   type BootstrapPayload,
   type AgentRunEvent,
   type AgentId,
+  type AgentConfigImportPreview,
   type AgentRunRequest,
   type AgentRunResult,
   type AppSettings,
@@ -112,7 +120,7 @@ import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
 import { buildSetupStatus } from './setup-status';
-import { syncCognitive1Mcp } from './agent-mcp-config';
+import { syncCognitive1Mcp, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWindowSession } from './desktop-windows';
 import type { EditorSessionManager } from './editor-sessions';
 import { formatProjectCode, projectGitFileInfo } from './code-tools';
@@ -262,6 +270,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'projects:open', async ({ id }, request) => openProject(context, id, request.session));
   handle(context, 'projects:remove', async ({ id }, request) => removeProject(context, id, request.session));
   handle(context, 'settings:get', async () => context.settings.load());
+  handle(context, 'setup:agent-config-preview', async () => agentConfigImportPreview());
+  handle(context, 'setup:agent-config-import', async ({ agent }) => importAgentConfig(context, agent));
   handle(context, 'providers:list-models', async (request) => listProviderModels(request, context.credentials));
   handle(context, 'settings:update', async (update) => {
     const snapshot: { previous: AppSettings | null } = { previous: null };
@@ -360,6 +370,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
   handle(context, 'prompt-guide:refine', async (input) => context.promptGuide.refine(input));
   handle(context, 'prompt-guide:refine-prompt', async (input) => context.promptGuide.refinePrompt(input));
+  handle(context, 'design:openpencil-status', async () => openPencilStatus(context));
+  handle(context, 'design:openpencil-save', async (input) => saveOpenPencil(context, input));
+  handle(context, 'design:openpencil-test', async () => testOpenPencil(context));
   handle(context, 'studio:readiness', async () => context.interview.readiness());
   handle(context, 'studio:projects-list', async () => context.interview.list());
   handle(context, 'studio:project-archive', async (input) => context.interview.setArchived(input));
@@ -2337,7 +2350,7 @@ async function sharedBrainPath(context: IpcContext): Promise<string> {
 async function currentSetupStatus(context: IpcContext): Promise<Awaited<ReturnType<typeof buildSetupStatus>>> {
   return buildSetupStatus({
     settings: () => context.settings.load(),
-    projects: async () => (await context.projects.list()).map((project) => ({ id: project.id })),
+    projects: async () => (await context.projects.list()).map((project) => ({ id: project.id, path: project.path })),
     services: () => context.services.status(),
     agentCapabilities: async () => (await context.agents.capabilities()).map((capability) => ({
       available: capability.available,
@@ -2346,6 +2359,18 @@ async function currentSetupStatus(context: IpcContext): Promise<Awaited<ReturnTy
     })),
     directApiAvailable: async () => (await context.directApi.capability()).available,
     directApiDetail: async () => (await context.directApi.capability()).unavailableReason ?? 'Configure a direct API provider.',
+    learningTutor: async () => {
+      const readiness = await context.learningTutor.readiness();
+      return { ready: readiness.ready, reason: readiness.reason, recovery: readiness.recovery };
+    },
+    github: async () => {
+      const settings = await context.settings.load();
+      const project = (await context.projects.list()).find((item) => item.id === settings.activeProjectId);
+      if (!project) return { available: false, signedInAs: null, detail: 'Open a project before connecting GitHub.' };
+      const github = (await gitOverview(project.path)).github;
+      if (!github.cliAvailable) return { available: false, signedInAs: null, detail: 'Install GitHub CLI to connect an account and create pull requests.' };
+      return { available: true, signedInAs: github.signedInAs, detail: 'GitHub CLI is installed. Open GitHub setup to sign in.' };
+    },
   });
 }
 
@@ -3047,3 +3072,75 @@ function messageOf(error: unknown): string {
 }
 
 export type DesktopBridge = KaiDesktopBridge;
+
+/** Read only model preferences are offered for import; tokens, permissions, MCP servers and account state stay owned by their source tool. */
+async function agentConfigImportPreview(): Promise<AgentConfigImportPreview[]> {
+  const home = os.homedir();
+  const codexPath = path.join(home, '.codex', 'config.toml');
+  const claudePath = path.join(home, '.claude', 'settings.json');
+  const [codex, claude] = await Promise.all([
+    fs.readFile(codexPath, 'utf8').then((text) => previewCodexConfig(codexPath, text)).catch(() => ({ agent: 'codex' as const, path: codexPath, found: false, model: null, detail: 'No Codex configuration was found.' })),
+    fs.readFile(claudePath, 'utf8').then((text) => previewClaudeConfig(claudePath, text)).catch(() => ({ agent: 'claude' as const, path: claudePath, found: false, model: null, detail: 'No Claude Code settings file was found.' })),
+  ]);
+  return [codex, claude];
+}
+
+function previewCodexConfig(configPath: string, text: string): AgentConfigImportPreview {
+  const match = /^\s*model\s*=\s*["']([^"']+)["']/m.exec(text);
+  const model = match?.[1]?.trim() || null;
+  return { agent: 'codex', path: configPath, found: true, model, detail: model ? `Codex uses ${model}.` : 'Codex config was found, but it has no top-level model preference.' };
+}
+
+function previewClaudeConfig(configPath: string, text: string): AgentConfigImportPreview {
+  try {
+    const value = JSON.parse(text) as { model?: unknown };
+    const model = typeof value.model === 'string' && value.model.trim() ? value.model.trim() : null;
+    return { agent: 'claude', path: configPath, found: true, model, detail: model ? `Claude Code uses ${model}.` : 'Claude Code settings were found, but no model preference is set.' };
+  } catch {
+    return { agent: 'claude', path: configPath, found: true, model: null, detail: 'Claude Code settings could not be read as JSON, so nothing can be imported.' };
+  }
+}
+
+async function importAgentConfig(context: IpcContext, agent: 'codex' | 'claude'): Promise<AgentConfigImportPreview> {
+  const preview = (await agentConfigImportPreview()).find((candidate) => candidate.agent === agent)!;
+  if (!preview.found || !preview.model) throw new Error(`There is no ${agent} model preference to import.`);
+  await context.backups.create(`Before importing ${agent} preference`);
+  await context.settings.update((settings) => ({ ...settings, agentModels: { ...settings.agentModels, [agent]: preview.model! } }));
+  await broadcastSharedState(context);
+  return preview;
+}
+
+/** What the Settings card shows. The vault holds the token, so only whether one is stored leaves this function. */
+async function openPencilStatus(context: IpcContext): Promise<OpenPencilStatus> {
+  const settings = await context.settings.load();
+  const server = settings.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID);
+  return {
+    endpoint: server?.transport === 'http' ? server.url : OPENPENCIL_ENDPOINT,
+    enabled: Boolean(server?.enabled),
+    tokenStored: Boolean(await context.credentials.has(OPENPENCIL_CREDENTIAL_ID)),
+  };
+}
+
+/** Stores the token as the whole Authorization header value, registers the server, and tells the runtime to reconnect. */
+async function saveOpenPencil(context: IpcContext, input: OpenPencilSaveInput): Promise<OpenPencilStatus> {
+  const token = input.token?.replace(/^bearer\s+/i, '').trim();
+  if (token) await context.credentials.set(OPENPENCIL_CREDENTIAL_ID, `Bearer ${token}`);
+  await context.settings.update((settings) => withOpenPencilMcpSetting(settings, { endpoint: input.endpoint, enabled: input.enabled }).settings);
+  context.mcp.invalidate();
+  await broadcastSharedState(context);
+  return openPencilStatus(context);
+}
+
+/** One cheap read, so a wrong address, a missing token or a stopped editor is reported in words before a pull. */
+async function testOpenPencil(context: IpcContext): Promise<OpenPencilTestResult> {
+  const status = await openPencilStatus(context);
+  if (!status.enabled) return { ok: false, message: 'Turn the connection on and save it first.' };
+  if (!status.tokenStored) return { ok: false, message: 'Save the token first. It must equal the OPENPENCIL_MCP_AUTH_TOKEN the editor was started with.' };
+  try {
+    const blocks = await context.mcp.callServerTool(OPENPENCIL_MCP_SERVER_ID, 'list_pages', {});
+    if (blocks === null) return { ok: false, message: `KAI could not connect to ${status.endpoint}. Check that the editor is running and the token matches.` };
+    return { ok: true, message: `Connected to open-pencil at ${status.endpoint}.` };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'open-pencil did not answer.' };
+  }
+}

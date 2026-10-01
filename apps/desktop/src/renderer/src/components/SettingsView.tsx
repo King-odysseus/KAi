@@ -1,13 +1,14 @@
 import { reconcileSettingsDraft } from './settings-draft';
-import { Archive, ArchiveRestore, Check, ChevronDown, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, Play, Plug, Plus, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, Trash2, Users , Wand2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, PenTool, Play, Plug, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, ShieldCheck, Trash2, Users, Wand2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
+import { OpenPencilCard } from './OpenPencilCard';
 import { RemoteAccessPanel } from './RemoteAccessPanel';
 import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
-import type { AppSettings, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
+import type { AgentConfigImportPreview, AppSettings, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
@@ -23,11 +24,12 @@ const SCOPE_KEY = { direct: 'directApi', learning: 'learningTutor', guide: 'prom
 type FeedbackScope = ProviderScope | 'generic' | 'overwatch';
 type FeedbackKind = 'success' | 'error' | 'pending';
 interface SettingsFeedback { kind: FeedbackKind; message: string }
-type SettingsCategoryId = 'general' | 'connections' | 'services' | 'data';
+type SettingsCategoryId = 'general' | 'connections' | 'design' | 'services' | 'data';
 
 const SETTINGS_CATEGORIES: Array<{ id: SettingsCategoryId; title: string; detail: string }> = [
   { id: 'general', title: 'General', detail: 'Defaults, team, editor, updates, and shortcuts' },
   { id: 'connections', title: 'Connections and models', detail: 'Providers, API keys, MCP servers, and credentials' },
+  { id: 'design', title: 'Design tools', detail: 'The open-pencil connection for drawing and pulling screens' },
   { id: 'services', title: 'Services and access', detail: 'C1 Brain, Universal Proxy, and remote access' },
   { id: 'data', title: 'Data and diagnostics', detail: 'Locations, backups, and recent logs' },
 ];
@@ -57,7 +59,7 @@ const SERVICE_STATES: Record<ServiceState['status'], string> = {
   not_configured: 'Off',
 };
 
-export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, projectAutomation, onSaveProjectAutomation, settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService }: { activeProject: { id: string; name: string } | null; projectTeam: AppSettings['agentTeam'] | null; onSaveProjectTeam: (team: AppSettings['agentTeam'] | null) => Promise<boolean>; projectAutomation: ProjectAutomationSettings | null; onSaveProjectAutomation: (automation: ProjectAutomationSettings | null) => Promise<boolean>; settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void }): ReactNode {
+export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, projectAutomation, onSaveProjectAutomation, settings, credentialStatus, dataLocations, logs, busy, services, onSave, onImportBrain, onSaveCredential, onClearCredential, onListProviderModels, onListBackups, onCreateBackup, onRestoreBackup, onDeleteBackup, onControlService, destination }: { activeProject: { id: string; name: string } | null; projectTeam: AppSettings['agentTeam'] | null; onSaveProjectTeam: (team: AppSettings['agentTeam'] | null) => Promise<boolean>; projectAutomation: ProjectAutomationSettings | null; onSaveProjectAutomation: (automation: ProjectAutomationSettings | null) => Promise<boolean>; settings: AppSettings; credentialStatus: CredentialStatus; dataLocations: DataLocation[]; logs: LogEntry[]; busy: boolean; services: ServiceState[]; onSave: (update: SettingsUpdate) => Promise<boolean>; onImportBrain: () => void; onSaveCredential: (id: string, value: string) => Promise<boolean>; onClearCredential: (id: string) => Promise<boolean>; onListProviderModels: (request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }) => Promise<ProviderModelCatalog>; onListBackups: () => Promise<ConfigBackup[]>; onCreateBackup: (name?: string) => Promise<ConfigBackup>; onRestoreBackup: (id: string) => Promise<void>; onDeleteBackup: (id: string) => Promise<void>; onControlService: (kind: 'cognitive1' | 'universalProxy', action: 'start' | 'restart') => void; destination?: { category: SettingsCategoryId; nonce: number } | null }): ReactNode {
   const [draft, setDraft] = useState(settings);
   const [credentialId, setCredentialId] = useState('provider.openai');
   const [credentialValue, setCredentialValue] = useState('');
@@ -79,9 +81,15 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const [openCategories, setOpenCategories] = useState<Record<SettingsCategoryId, boolean>>({
     general: true,
     connections: false,
+    design: false,
     services: false,
     data: false,
   });
+
+  const [query, setQuery] = useState('');
+  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('general');
+  const searching = query.trim() !== '';
+  const isOpen = (id: SettingsCategoryId): boolean => searching || openCategories[id];
 
   const previousSettings = useRef(settings);
   useEffect(() => {
@@ -354,6 +362,40 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
     }));
   }
 
+  // Search looks through everything a card says: headings, notes, field labels, placeholders and tooltips. Closed
+  // categories are opened while searching so their cards exist to be matched, and categories with no match hide.
+  useEffect(() => {
+    const root = document.querySelector('.settings-categories');
+    if (!root) return;
+    const needle = query.trim().toLowerCase();
+    const cards = [...root.querySelectorAll<HTMLElement>('.settings-section')];
+    for (const card of cards) {
+      if (!needle) {
+        card.hidden = false;
+        continue;
+      }
+      const attributes = [...card.querySelectorAll<HTMLElement>('[placeholder],[aria-label],[title]')]
+        .map((element) => `${element.getAttribute('placeholder') ?? ''} ${element.getAttribute('aria-label') ?? ''} ${element.getAttribute('title') ?? ''}`)
+        .join(' ');
+      card.hidden = !`${card.textContent ?? ''} ${attributes}`.toLowerCase().includes(needle);
+    }
+    for (const category of root.querySelectorAll<HTMLElement>('.settings-category')) {
+      category.hidden = needle !== '' && ![...category.querySelectorAll<HTMLElement>('.settings-section')].some((card) => !card.hidden);
+    }
+  });
+
+  // The bar highlights the category being read, so it works as a map and not only as buttons.
+  useEffect(() => {
+    const elements = SETTINGS_CATEGORIES.flatMap((category) => document.getElementById(`settings-category-${category.id}`) ?? []);
+    if (elements.length === 0 || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      const top = entries.filter((entry) => entry.isIntersecting).sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)[0];
+      if (top) setActiveCategory(top.target.id.replace('settings-category-', '') as SettingsCategoryId);
+    }, { rootMargin: '-120px 0px -60% 0px' });
+    for (const element of elements) observer.observe(element);
+    return () => observer.disconnect();
+  }, [openCategories, query]);
+
   function discardDraft(): void {
     setDraft(settings);
     setCardFeedback({});
@@ -364,11 +406,19 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   }
 
   function jumpToCategory(id: SettingsCategoryId): void {
+    setQuery('');
+    setActiveCategory(id);
     setOpenCategories((current) => ({ ...current, [id]: true }));
     window.requestAnimationFrame(() => {
       document.getElementById(`settings-category-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
+
+  useEffect(() => {
+    if (destination) jumpToCategory(destination.category);
+  // A destination is an explicit navigation event, not a settings change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [destination?.nonce]);
 
   const changed = useMemo(() => changedGroups(draft, settings), [draft, settings]);
   const isDirty = (groups: readonly SettingsGroup[]): boolean => groups.some((group) => changed.includes(group));
@@ -428,25 +478,40 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         </div>
         <FeedbackMessage feedback={cardFeedback.all ?? null} />
       </div>
-      <nav className="settings-category-nav" aria-label="Settings categories">
-        {SETTINGS_CATEGORIES.map((category) => (
-          <button
-            key={category.id}
-            type="button"
-            className={openCategories[category.id] ? 'active' : undefined}
-            onClick={() => jumpToCategory(category.id)}
-          >
-            {category.title}
-          </button>
-        ))}
-      </nav>
+      <div className="settings-sticky">
+        <label className="settings-search">
+          <Search size={14} />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Escape') setQuery(''); }}
+            placeholder="Search every setting: model, API key, token, open-pencil…"
+            aria-label="Search settings"
+          />
+          {searching && <button type="button" onClick={() => setQuery('')} aria-label="Clear search"><X size={13} /></button>}
+        </label>
+        <nav className="settings-category-nav" aria-label="Settings categories">
+          {SETTINGS_CATEGORIES.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              className={[openCategories[category.id] ? 'active' : '', !searching && activeCategory === category.id ? 'current' : ''].filter(Boolean).join(' ') || undefined}
+              aria-current={!searching && activeCategory === category.id ? 'location' : undefined}
+              onClick={() => jumpToCategory(category.id)}
+            >
+              {category.title}
+            </button>
+          ))}
+        </nav>
+      </div>
       <div className="settings-categories">
       <SettingsCategory
         id="general"
         icon={<Cpu size={17} />}
         title="General"
         detail="Defaults, team, editor, updates, and shortcuts"
-        open={openCategories.general}
+        open={isOpen('general')}
         onToggle={() => toggleCategory('general')}
       >
       <div className="settings-grid">
@@ -564,7 +629,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         icon={<Cloud size={17} />}
         title="Connections and models"
         detail="Providers, API keys, MCP servers, and credentials"
-        open={openCategories.connections}
+        open={isOpen('connections')}
         onToggle={() => toggleCategory('connections')}
       >
       <div className="settings-grid">
@@ -600,6 +665,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           onClearKey={() => void clearProviderCredential('learning')}
           vaultAvailable={credentialStatus.available}
         />
+
+        <AgentConfigImportCard />
 
         <ProviderConnectionSection
           title="Prompt Guide"
@@ -723,11 +790,24 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
       </SettingsCategory>
 
       <SettingsCategory
+        id="design"
+        icon={<PenTool size={17} />}
+        title="Design tools"
+        detail="The open-pencil connection for drawing and pulling screens"
+        open={isOpen('design')}
+        onToggle={() => toggleCategory('design')}
+      >
+        <div className="settings-grid">
+          <OpenPencilCard />
+        </div>
+      </SettingsCategory>
+
+      <SettingsCategory
         id="services"
         icon={<ServerCog size={17} />}
         title="Services and access"
         detail="C1 Brain, Universal Proxy, and remote access"
-        open={openCategories.services}
+        open={isOpen('services')}
         onToggle={() => toggleCategory('services')}
       >
       <div className="settings-grid">
@@ -862,7 +942,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         icon={<Database size={17} />}
         title="Data and diagnostics"
         detail="Locations, backups, and recent logs"
-        open={openCategories.data}
+        open={isOpen('data')}
         onToggle={() => toggleCategory('data')}
       >
       <div className="settings-grid">
@@ -925,6 +1005,56 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
 
 function PageHeader({ title, detail }: { title: string; detail: string }): ReactNode {
   return <header className="page-header"><div><h1>{title}</h1><p>{detail}</p></div></header>;
+}
+
+function AgentConfigImportCard(): ReactNode {
+  const [previews, setPreviews] = useState<AgentConfigImportPreview[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
+  const [working, setWorking] = useState<'codex' | 'claude' | null>(null);
+
+  const refresh = (): void => {
+    void window.kaiDesktop.agentConfigImportPreview().then((response) => {
+      if (response.ok) setPreviews(response.data);
+      else setMessage(response.error.message);
+    });
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  async function importModel(agent: 'codex' | 'claude'): Promise<void> {
+    setWorking(agent);
+    setMessage(null);
+    try {
+      const response = await window.kaiDesktop.importAgentConfig(agent);
+      if (!response.ok) throw new Error(response.error.message);
+      setMessage(`Imported ${response.data.model} as KAI's ${agent} CLI model preference. A KAI backup was created first.`);
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The preference could not be imported.');
+    } finally {
+      setWorking(null);
+    }
+  }
+
+  return (
+    <section className="settings-section span-two" aria-label="Import agent preferences">
+      <div className="section-title"><FolderInput size={17} /><span>Import local agent preferences</span></div>
+      <p className="settings-note">KAI can copy the selected CLI model from local Codex or Claude Code settings. It previews first, creates a KAI backup, and never imports account sessions, API keys, permissions, or MCP connections.</p>
+      <div className="import-agent-list">
+        {previews.map((preview) => (
+          <div className="vault-state" key={preview.agent}>
+            <Cpu size={17} />
+            <div><strong>{preview.agent === 'codex' ? 'Codex' : 'Claude Code'}</strong><small>{preview.detail}</small></div>
+            {preview.model && <code>{preview.model}</code>}
+            <button type="button" className="secondary-button" disabled={!preview.model || working !== null} onClick={() => void importModel(preview.agent)}>
+              <FolderInput size={14} /><span>{working === preview.agent ? 'Importing…' : 'Import model'}</span>
+            </button>
+          </div>
+        ))}
+      </div>
+      {message && <p className="settings-note">{message}</p>}
+    </section>
+  );
 }
 
 function SettingsCategory({ id, icon, title, detail, open, onToggle, children }: {

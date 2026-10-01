@@ -2,22 +2,26 @@ import type { AppSettings, ServiceState, SetupStatus } from '@kai/contracts';
 
 interface SetupStatusPorts {
   settings(): Promise<AppSettings>;
-  projects(): Promise<Array<{ id: string }>>;
+  projects(): Promise<Array<{ id: string; path: string }>>;
   services(): Promise<ServiceState[]>;
   agentCapabilities(): Promise<Array<{ available: boolean; displayName: string; unavailableReason?: string }>>;
   directApiAvailable(): Promise<boolean>;
   directApiDetail(): Promise<string>;
+  learningTutor(): Promise<{ ready: boolean; reason: string | null; recovery: string | null }>;
+  github(): Promise<{ available: boolean; signedInAs: string | null; detail: string }>;
 }
 
 /** Build first-run checks without making a network or provider call. */
 export async function buildSetupStatus(ports: SetupStatusPorts): Promise<SetupStatus> {
-  const [settings, projects, services, capabilities, apiAvailable, apiDetail] = await Promise.all([
+  const [settings, projects, services, capabilities, apiAvailable, apiDetail, tutor, github] = await Promise.all([
     ports.settings(),
     ports.projects(),
     ports.services(),
     ports.agentCapabilities(),
     ports.directApiAvailable(),
     ports.directApiDetail(),
+    ports.learningTutor(),
+    ports.github(),
   ]);
   const activeProject = settings.activeProjectId
     ? projects.some((project) => project.id === settings.activeProjectId)
@@ -49,6 +53,27 @@ export async function buildSetupStatus(ports: SetupStatusPorts): Promise<SetupSt
       status: apiAvailable ? 'ready' : cliReady ? 'optional' : 'blocked',
       detail: apiAvailable ? 'The selected API provider is ready.' : apiDetail,
       action: apiAvailable ? undefined : 'open_settings',
+    },
+    {
+      id: 'tutor',
+      label: 'Learning Tutor',
+      status: tutor.ready ? 'ready' : 'optional',
+      detail: tutor.ready ? 'Ready to explain KAI and teach while you work.' : (tutor.recovery ?? tutor.reason ?? 'Configure the optional Learning Tutor.'),
+      action: tutor.ready ? undefined : 'open_tutor',
+    },
+    {
+      id: 'github',
+      label: 'GitHub',
+      status: github.signedInAs ? 'ready' : 'optional',
+      detail: github.signedInAs ? `Connected as ${github.signedInAs}.` : github.detail,
+      action: github.signedInAs ? undefined : 'open_github',
+    },
+    {
+      id: 'remote',
+      label: 'KAI Remote',
+      status: settings.remote.enabled ? 'ready' : 'optional',
+      detail: settings.remote.enabled ? 'Remote access is enabled. Pair devices in Settings.' : 'Pair a phone or another device to continue a local run away from your desk.',
+      action: settings.remote.enabled ? undefined : 'open_remote',
     },
     {
       id: 'cognitive1',

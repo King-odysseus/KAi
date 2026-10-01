@@ -121,6 +121,8 @@ export function App(): ReactNode {
   const [incomingTeamPlan, setIncomingTeamPlan] = useState<TeamPlanDraft | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState(0);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalCommand, setTerminalCommand] = useState<{ command: string; nonce: number } | null>(null);
+  const [settingsDestination, setSettingsDestination] = useState<{ category: 'connections' | 'services'; nonce: number } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(() => {
     try {
       return window.localStorage.getItem('kai.previewOpen') === 'true';
@@ -287,6 +289,7 @@ export function App(): ReactNode {
     { id: 'shortcut-sheet', label: 'Open Shortcut Sheet', description: 'Review and customize keyboard shortcuts', shortcut: shortcutLabel(shortcuts, 'shortcuts'), run: () => setShortcutSheetOpen(true) },
     { id: 'diagnostics', label: 'Open Diagnostics', description: 'Service health, engine checks and a copyable bug report', run: () => openOperations('diagnostics') },
     { id: 'settings', label: 'Open Settings', description: 'Configure agents, routes, API providers, services, and MCP', run: () => setView('settings') },
+    { id: 'reconfigure', label: 'Reconfigure KAI', description: 'Run the setup wizard again and use KAI Guide', run: () => { setSetupOpen(true); void refreshSetupStatus(); } },
     { id: 'backups', label: 'Open Configuration Backups', description: 'Create, restore, or delete app-owned configuration backups', run: () => setView('settings') },
     { id: 'restart-proxy', label: 'Restart Universal Proxy', description: 'Stop and start the managed proxy service', run: () => controlService('universalProxy', 'restart') },
     ...agentCapabilities.map((agent): CommandPaletteItem => ({
@@ -699,7 +702,22 @@ export function App(): ReactNode {
       await chooseProject();
     } else if (action === 'open_settings') {
       setSetupOpen(false);
+      setSettingsDestination({ category: 'connections', nonce: Date.now() });
       setView('settings');
+    } else if (action === 'open_tutor') {
+      setSetupOpen(false);
+      setSettingsDestination({ category: 'connections', nonce: Date.now() });
+      setView('settings');
+      setAgentNotice('Open Learning Tutor in Settings to choose a provider and securely save its API key. It is optional and separate from your coding-agent connection.');
+    } else if (action === 'open_github') {
+      setSetupOpen(false);
+      setView('git');
+      setAgentNotice('In the GitHub section, follow the sign-in guidance. KAI never stores your GitHub token; GitHub CLI manages it.');
+    } else if (action === 'open_remote') {
+      setSetupOpen(false);
+      setSettingsDestination({ category: 'services', nonce: Date.now() });
+      setView('settings');
+      setAgentNotice('Turn on KAI Remote in Services and access, then pair each device with its own link.');
     } else if (action === 'start_cognitive1') {
       await controlService('cognitive1', 'start');
     } else {
@@ -1501,7 +1519,7 @@ export function App(): ReactNode {
       case 'usage':
         return <UsageView settings={bootstrap.settings} activeConversationId={activeConversationId} busy={Boolean(busy)} onSave={(update) => void saveSettings(update)} />;
       case 'git':
-        return <GitView activeProject={activeProject} />;
+        return <GitView activeProject={activeProject} onOpenTerminal={() => setTerminalOpen(true)} onSignInGitHub={() => { setTerminalCommand({ command: 'gh auth login', nonce: Date.now() }); setTerminalOpen(true); }} />;
       case 'tasks':
         return <TasksView activeProject={activeProject} cognitive1Ready={serviceFor(bootstrap, 'cognitive1').status === 'ready'} onStartTask={async (prompt) => { setView('workspace'); await createConversation(prompt); }} />;
       case 'graph':
@@ -1544,6 +1562,7 @@ export function App(): ReactNode {
             onCreateBackup={createConfigBackup}
             onRestoreBackup={restoreConfigBackup}
             onDeleteBackup={deleteConfigBackup}
+            destination={settingsDestination}
           />
         );
       case 'workspace':
@@ -1796,6 +1815,7 @@ export function App(): ReactNode {
             activeProject={activeProject}
             open={terminalOpen}
             height={terminalHeight}
+            commandRequest={terminalCommand}
             onClose={() => setTerminalOpen(false)}
             onResizeStart={(event) => {
               event.preventDefault();
@@ -1886,7 +1906,7 @@ export function App(): ReactNode {
       {pendingApproval && (
         <ApprovalDialog approval={pendingApproval} onRespond={(approved, useFullAccess) => void respondToApproval(approved, useFullAccess)} />
       )}
-      {setupOpen && setupStatus && !setupStatus.complete && (
+      {setupOpen && setupStatus && (
         <SetupPanel
           status={setupStatus}
           busy={Boolean(busy)}

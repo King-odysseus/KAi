@@ -61,6 +61,8 @@ export function parseFlows(markdown: string): FlowJourney[] {
 export interface PageEntry {
   name: string;
   route: string;
+  /** What the pages document says about this screen: its purpose, components and states. */
+  details: string;
 }
 
 /** The screens named in the pages artifact, with the first route each section mentions. */
@@ -69,8 +71,9 @@ export function parsePages(markdown: string): PageEntry[] {
   let current: { name: string; text: string[] } | null = null;
   const flush = (): void => {
     if (!current) return;
-    const route = /(?:^|[\s`(])(\/[A-Za-z0-9\-_/:{}.]*)/.exec(current.text.join('\n'))?.[1] ?? '';
-    pages.push({ name: current.name, route });
+    const body = current.text.join('\n').trim();
+    const route = /(?:^|[\s`(])(\/[A-Za-z0-9\-_/:{}.]*)/.exec(body)?.[1] ?? '';
+    pages.push({ name: current.name, route, details: body });
   };
   for (const line of markdown.split(/\r?\n/)) {
     const heading = /^#{2,3}\s+(.+?)\s*#*\s*$/.exec(line);
@@ -83,36 +86,104 @@ export function parsePages(markdown: string): PageEntry[] {
   return pages.filter((page) => page.name);
 }
 
-/** The prompt that tells a KAI agent to draw the project's screens in open-pencil from the Studio's artifacts. */
-export function buildDesignPrompt(input: {
+/** One row of the drawing checklist: a screen from the pages list, from open-pencil, or from both. */
+export interface ScreenRow {
+  name: string;
+  route: string;
+  details: string;
+  inPages: boolean;
+  drawn: boolean;
+}
+
+/**
+ * Every screen the project has: those the pages artifact lists, plus any page that exists only in open-pencil. A
+ * screen counts as drawn when open-pencil has a page of the same name.
+ */
+export function screenRows(pages: readonly PageEntry[], drawnNames: readonly string[]): ScreenRow[] {
+  const key = (name: string): string => name.trim().toLowerCase();
+  const drawn = new Set(drawnNames.map(key));
+  const rows: ScreenRow[] = pages.map((page) => ({ ...page, inPages: true, drawn: drawn.has(key(page.name)) }));
+  const listed = new Set(pages.map((page) => key(page.name)));
+  for (const name of drawnNames) {
+    if (listed.has(key(name))) continue;
+    listed.add(key(name));
+    rows.push({ name, route: '', details: '', inPages: false, drawn: true });
+  }
+  return rows;
+}
+
+/** Rows whose name, route or description contains the search text. */
+export function filterScreens(rows: readonly ScreenRow[], query: string): ScreenRow[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...rows];
+  return rows.filter((row) => `${row.name} ${row.route} ${row.details}`.toLowerCase().includes(needle));
+}
+
+export interface DesignContext {
   projectName: string;
   goal: string;
-  pages: readonly PageEntry[];
   hasTokens: boolean;
   hasStyleGuide: boolean;
   references: readonly string[];
-}): string {
-  const lines = [
-    `Use the open-pencil tools to draw the screens for "${input.projectName}".`,
-    '',
-    `The project: ${input.goal}`,
-    '',
+}
+
+/** Said at the end of every prompt, so one stalled tool call cannot snowball into a half-drawn project. */
+const CAREFULLY = [
+  'Work in small steps and do only what this prompt asks.',
+  'If an open-pencil tool call fails, stop and tell me which one and why. Do not retry it in a loop and do not start other work.',
+  'Leave the document in a good state after each group of changes, so nothing is lost if the editor stops.',
+];
+
+function readFirst(context: DesignContext): string[] {
+  return [
     'Read these first (they are in the project, under .kai/spec):',
-    input.hasStyleGuide ? '- design/style-guide.md for the look and feel' : '',
-    input.hasTokens ? '- design/tokens.json for the colours, type, spacing and radius' : '',
+    context.hasStyleGuide ? '- design/style-guide.md for the look and feel' : '',
+    context.hasTokens ? '- design/tokens.json for the colours, type, spacing and radius' : '',
     '- pages.md for every screen, and flows.md for how people move between them',
-    input.references.length > 0 ? `- design/references/ (${input.references.join(', ')}) for the visual style to match, and design/style-reference.md if it exists` : '',
+    context.references.length > 0 ? `- design/references/ (${context.references.join(', ')}) for the visual style to match, and design/style-reference.md if it exists` : '',
+  ].filter(Boolean);
+}
+
+/** Step 1: the variables and shared components only. No screens, so the first prompt stays small. */
+export function buildFoundationPrompt(context: DesignContext): string {
+  return [
+    `Use the open-pencil tools to set up the design foundation for "${context.projectName}". Do not draw any screens yet.`,
+    '',
+    `The project: ${context.goal}`,
+    '',
+    ...readFirst(context),
     '',
     'Then, in open-pencil:',
-    input.hasTokens ? '1. Create the design variables from tokens.json (light and dark values where it gives both) and use them for every fill, text style, gap and corner radius. Do not type raw values on a screen.' : '1. Create colour, type, spacing and radius variables from the style guide and use them everywhere.',
-    '2. Build the shared components first (buttons, inputs, cards, navigation), then one page per screen below, using the components.',
-    '3. Mark each page as a screen and name it exactly as listed, so Studio can match it to its card.',
-    '4. Show the empty, loading and error state of a screen next to it when pages.md asks for them.',
+    context.hasTokens
+      ? '1. Create the design variables from tokens.json (light and dark values where it gives both): colours, spacing and radius.'
+      : '1. Create colour, spacing and radius variables from the style guide.',
+    '2. Create the text styles for the type scale.',
+    '3. Build the shared components that more than one screen will use: buttons, text inputs, selects, cards, the navigation, a modal shell, and empty, loading and error blocks. Use only the variables and text styles, never raw values.',
+    '4. Name every component plainly so the screens can use them.',
     '',
-    input.pages.length > 0 ? 'Screens to draw:' : 'Screens to draw: take them from pages.md.',
-    ...input.pages.map((page) => `- ${page.name}${page.route ? ` (${page.route})` : ''}`),
+    ...CAREFULLY,
+    'When you are done, list the variables and components you created. The screens come next, one prompt each.',
+  ].join('\n');
+}
+
+/** Step 2..n: one screen. It names exactly what to draw and forbids touching anything else. */
+export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignContext): string {
+  const details = page.details.trim().slice(0, 1_800);
+  return [
+    `Use the open-pencil tools to draw one screen for "${context.projectName}": ${page.name}${page.route ? ` (${page.route})` : ''}.`,
     '',
-    'When you are done, say which screens you drew. I will pull the design back into the Studio.',
-  ];
-  return lines.filter((line, index) => line !== '' || lines[index - 1] !== '').join('\n').replace(/\n{3,}/g, '\n\n');
+    `The project: ${context.goal}`,
+    '',
+    ...readFirst(context),
+    '',
+    details ? `What pages.md says about this screen:\n${details}\n` : '',
+    'Then, in open-pencil:',
+    '1. Create one page named exactly as above and mark it as a screen, so Studio can match it to its card.',
+    '2. Build it from the variables, text styles and components that already exist. Do not type raw colours, sizes or radii, and do not make new shared components unless nothing fits; if you must, name them clearly.',
+    '3. Draw the states it lists (empty, loading, error and so on) next to the main view, and a phone-width version when pages.md or the flows call for one.',
+    '4. Do not change any other page or any shared component.',
+    '',
+    ...CAREFULLY,
+    'When you are done, say what you drew on this screen.',
+  ].filter((line, index, all) => line !== '' || all[index - 1] !== '').join('\n');
 }

@@ -63,7 +63,8 @@ try {
 
   const page = await electronApp.firstWindow();
   page.on('pageerror', (error) => rendererErrors.push(error.message));
-  const setupDialog = page.getByRole('dialog', { name: 'Make KAI ready' });
+  // Found by its role and its dismiss button, not its heading, so a reworded title does not strand the smoke behind it.
+  const setupDialog = page.locator('.setup-panel[role="dialog"]');
   await setupDialog.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
   if (await setupDialog.isVisible().catch(() => false)) {
     await setupDialog.locator('button.secondary-button').filter({ hasText: 'Set up later' }).click({ force: true });

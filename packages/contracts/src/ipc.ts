@@ -23,6 +23,7 @@ import {
 } from './interview';
 import {
   studioArtifactInputSchema,
+  openPencilSaveInputSchema,
   studioArtifactSaveInputSchema,
   studioStyleReferenceAddInputSchema,
   studioStyleReferenceRemoveInputSchema,
@@ -38,6 +39,9 @@ import {
   boardCardSchema,
   studioUiCheckResultSchema,
   type StudioArtifactInput,
+  type OpenPencilSaveInput,
+  type OpenPencilStatus,
+  type OpenPencilTestResult,
   type StudioArtifactSaveInput,
   type StudioStyleReferenceAddInput,
   type StudioStyleReferenceRemoveInput,
@@ -140,7 +144,7 @@ import {
   type Cognitive1OperationInput,
   type Cognitive1OperationResult,
 } from './brain';
-import { setupStatusSchema, type SetupStatus } from './setup';
+import { setupStatusSchema, type AgentConfigImportPreview, type SetupStatus } from './setup';
 import {
   contextChipSchema,
   contextSearchInputSchema,
@@ -404,6 +408,9 @@ export const ipcChannels = [
   'prompt-guide:refine',
   'prompt-guide:refine-prompt',
   'studio:readiness',
+  'design:openpencil-status',
+  'design:openpencil-save',
+  'design:openpencil-test',
   'studio:projects-list',
   'studio:project-archive',
   'studio:project-remove',
@@ -517,6 +524,8 @@ export const ipcChannels = [
   'updates:install',
   'setup:status',
   'setup:complete',
+  'setup:agent-config-preview',
+  'setup:agent-config-import',
   'terminal:start',
   'terminal:write',
   'terminal:resize',
@@ -677,6 +686,9 @@ export const ipcInputSchemas = {
   'prompt-guide:refine': promptGuideInputSchema,
   'prompt-guide:refine-prompt': promptRefineInputSchema,
   'studio:readiness': emptyInputSchema,
+  'design:openpencil-status': emptyInputSchema,
+  'design:openpencil-save': openPencilSaveInputSchema,
+  'design:openpencil-test': emptyInputSchema,
   'studio:projects-list': emptyInputSchema,
   'studio:project-archive': studioProjectArchiveInputSchema,
   'studio:project-remove': interviewProjectInputSchema,
@@ -796,6 +808,8 @@ export const ipcInputSchemas = {
   'updates:install': emptyInputSchema,
   'setup:status': emptyInputSchema,
   'setup:complete': z.object({ complete: z.boolean() }).strict(),
+  'setup:agent-config-preview': emptyInputSchema,
+  'setup:agent-config-import': z.object({ agent: z.enum(['codex', 'claude']) }).strict(),
   'terminal:start': terminalStartInputSchema,
   'terminal:write': terminalWriteInputSchema,
   'terminal:resize': terminalResizeInputSchema,
@@ -1105,6 +1119,12 @@ export interface KaiDesktopBridge {
   studioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
   /** Every file the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */
   studioArtifactFiles(projectId: string): Promise<IpcResponse<string[]>>;
+  /** Whether KAI is set up to reach open-pencil. The token is never returned. */
+  openPencilStatus(): Promise<IpcResponse<OpenPencilStatus>>;
+  /** Saves the open-pencil address and token and turns the connection on or off. */
+  saveOpenPencil(input: OpenPencilSaveInput): Promise<IpcResponse<OpenPencilStatus>>;
+  /** Asks the editor for its pages, so a wrong address or token is found here and not mid-pull. */
+  testOpenPencil(): Promise<IpcResponse<OpenPencilTestResult>>;
   /** One artifact's text, or null when it has not been written yet. */
   studioArtifactText(input: StudioArtifactInput): Promise<IpcResponse<string | null>>;
   /** Saves a hand edit of one artifact and flags everything that reads it as stale. */
@@ -1235,6 +1255,8 @@ export interface KaiDesktopBridge {
   onUpdateState(listener: (state: UpdateState) => void): () => void;
   setupStatus(): Promise<IpcResponse<SetupStatus>>;
   completeSetup(complete: boolean): Promise<IpcResponse<SetupStatus>>;
+  agentConfigImportPreview(): Promise<IpcResponse<AgentConfigImportPreview[]>>;
+  importAgentConfig(agent: 'codex' | 'claude'): Promise<IpcResponse<AgentConfigImportPreview>>;
   startTerminal(projectId: string, shell: TerminalSession['shell'], cols: number, rows: number): Promise<IpcResponse<TerminalSession>>;
   writeTerminal(id: string, data: string): Promise<IpcResponse<boolean>>;
   resizeTerminal(id: string, cols: number, rows: number): Promise<IpcResponse<boolean>>;

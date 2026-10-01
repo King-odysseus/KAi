@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDesignPrompt, parseFlows, parsePages, stepKind } from '../apps/desktop/src/renderer/src/flow-diagram';
+import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, stepKind } from '../apps/desktop/src/renderer/src/flow-diagram';
 
 const FLOWS = `# Flows
 
@@ -16,6 +16,8 @@ const FLOWS = `# Flows
 - The assistant answers
 - Employee presses Download .docx
 `;
+
+const CONTEXT = { projectName: 'ZuriAI', goal: 'An internal AI chat workspace.', hasTokens: true, hasStyleGuide: true, references: ['mood.png'] };
 
 describe('flow diagram parsing', () => {
   it('reads one journey per heading, with one step per top-level list item', () => {
@@ -38,33 +40,57 @@ describe('flow diagram parsing', () => {
   });
 });
 
-describe('pages and the design prompt', () => {
-  it('lists the screens with the first route each section mentions', () => {
-    const pages = parsePages('# Pages\n\n## Sign-in\nRoute: `/sign-in`. For logging in.\n\n## Dashboard\nAt /dashboard, shows chats.\n\n## Settings\nNo route yet.');
-    expect(pages).toEqual([{ name: 'Sign-in', route: '/sign-in' }, { name: 'Dashboard', route: '/dashboard' }, { name: 'Settings', route: '' }]);
+describe('pages and the drawing prompts', () => {
+  const PAGES = '# Pages\n\n## Sign-in\nRoute: `/sign-in`. For logging in. States: empty, error.\n\n## Dashboard\nAt /dashboard, shows chats.\n\n## Settings\nNo route yet.';
+
+  it('lists the screens with the first route and the section text each one mentions', () => {
+    const pages = parsePages(PAGES);
+    expect(pages.map((page) => [page.name, page.route])).toEqual([['Sign-in', '/sign-in'], ['Dashboard', '/dashboard'], ['Settings', '']]);
+    expect(pages[0]?.details).toContain('States: empty, error.');
   });
 
-  it('writes a prompt that names the files, the variables step and every screen', () => {
-    const prompt = buildDesignPrompt({
-      projectName: 'ZuriAI',
-      goal: 'An internal AI chat workspace.',
-      pages: [{ name: 'Sign-in', route: '/sign-in' }, { name: 'Dashboard', route: '' }],
-      hasTokens: true,
-      hasStyleGuide: true,
-      references: ['mood.png'],
-    });
-    expect(prompt).toContain('open-pencil');
-    expect(prompt).toContain('design/tokens.json');
+  it('merges the screens from the pages list with those only in open-pencil, and marks what is drawn', () => {
+    const rows = screenRows(parsePages(PAGES), ['dashboard', 'Admin console']);
+    expect(rows.map((row) => [row.name, row.inPages, row.drawn])).toEqual([
+      ['Sign-in', true, false],
+      ['Dashboard', true, true],
+      ['Settings', true, false],
+      ['Admin console', false, true],
+    ]);
+  });
+
+  it('searches by name, route and description', () => {
+    const rows = screenRows(parsePages(PAGES), []);
+    expect(filterScreens(rows, 'dash').map((row) => row.name)).toEqual(['Dashboard']);
+    expect(filterScreens(rows, '/sign-in').map((row) => row.name)).toEqual(['Sign-in']);
+    expect(filterScreens(rows, 'logging').map((row) => row.name)).toEqual(['Sign-in']);
+    expect(filterScreens(rows, '  ')).toHaveLength(3);
+    expect(filterScreens(rows, 'nothing here')).toEqual([]);
+  });
+
+  it('keeps the foundation prompt to variables and shared components, with no screens', () => {
+    const prompt = buildFoundationPrompt(CONTEXT);
+    expect(prompt).toContain('Do not draw any screens yet');
+    expect(prompt).toContain('tokens.json');
     expect(prompt).toContain('design/references/ (mood.png)');
-    expect(prompt).toContain('- Sign-in (/sign-in)');
-    expect(prompt).toContain('- Dashboard');
+    expect(prompt).toContain('Do not retry it in a loop');
+    expect(prompt.length).toBeLessThan(2_500);
+  });
+
+  it('writes one small prompt per screen that forbids touching anything else', () => {
+    const [signIn] = parsePages(PAGES);
+    const prompt = buildPagePrompt(signIn!, CONTEXT);
+    expect(prompt).toContain('draw one screen for "ZuriAI": Sign-in (/sign-in)');
+    expect(prompt).toContain('States: empty, error.');
+    expect(prompt).toContain('Do not change any other page');
+    expect(prompt).not.toContain('Dashboard');
     expect(prompt).not.toMatch(/\n{3,}/);
+    expect(prompt.length).toBeLessThan(3_000);
   });
 
   it('does not mention files that are not there', () => {
-    const prompt = buildDesignPrompt({ projectName: 'X', goal: 'Y', pages: [], hasTokens: false, hasStyleGuide: false, references: [] });
+    const prompt = buildFoundationPrompt({ projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, references: [] });
     expect(prompt).not.toContain('tokens.json');
     expect(prompt).not.toContain('references');
-    expect(prompt).toContain('take them from pages.md');
   });
 });

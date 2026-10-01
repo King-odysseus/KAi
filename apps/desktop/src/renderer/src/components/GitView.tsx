@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowUp, Copy, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw, TerminalSquare } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { GitChange, GitOverview, GitSyncAction, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
@@ -16,7 +16,7 @@ function describeChange(change: GitChange): string {
   return STATE_WORDS[letter] ?? letter;
 }
 
-export function GitView({ activeProject }: { activeProject: ProjectRecord | null }): ReactNode {
+export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { activeProject: ProjectRecord | null; onOpenTerminal?: () => void; onSignInGitHub?: () => void }): ReactNode {
   const projectId = activeProject?.id ?? null;
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -193,8 +193,14 @@ export function GitView({ activeProject }: { activeProject: ProjectRecord | null
             <>
               <p className="settings-note">
                 {overview.githubRepository}
-                {overview.github.signedInAs ? ` · signed in as ${overview.github.signedInAs}` : overview.github.cliAvailable ? ' · GitHub CLI is not signed in. Run gh auth login in the Terminal to open pull requests.' : ' · Install the GitHub CLI (gh) to open pull requests from KAI. Pushing works without it.'}
+                {overview.github.signedInAs ? ` · signed in as ${overview.github.signedInAs}` : overview.github.cliAvailable ? ' · GitHub CLI is installed but not signed in.' : ' · Install the GitHub CLI (gh) to open pull requests from KAI. Pushing works without it.'}
               </p>
+              {!overview.github.signedInAs && overview.github.cliAvailable && (
+                <div className="ops-actions">
+                  <button type="button" className="primary-button" onClick={onSignInGitHub ?? onOpenTerminal}><TerminalSquare size={14} /><span>Sign in with GitHub</span></button>
+                  <button type="button" className="secondary-button" onClick={() => void navigator.clipboard?.writeText('gh auth login').then(() => setMessage('Copied “gh auth login”. Paste it into the KAI Terminal, then follow GitHub’s browser approval.')).catch(() => setError('Could not copy the command. Run gh auth login in the KAI Terminal.'))}><Copy size={14} /><span>Copy sign-in command</span></button>
+                </div>
+              )}
               {overview.pullRequests.map((request) => (
                 <div key={request.number} className="ops-card-head"><span>#{request.number} {request.title} · {request.state}</span><button type="button" className="secondary-button" onClick={() => window.open(request.url)}><ExternalLink size={12} /><span>Open</span></button></div>
               ))}
