@@ -115,7 +115,8 @@ export class StudioArtifacts {
       generatedBy,
     });
     await this.save(root, next);
-    return { schemaVersion: 1, artifacts: next };
+    // Answer with the reconciled catalog, so a caller never sees the brief missing from it.
+    return this.read(projectId);
   }
 
   /** Records that the user edited an artifact by hand, so its dependents are shown as stale rather than trusted. */
@@ -123,7 +124,7 @@ export class StudioArtifacts {
     const root = await this.ports.projectRoot(projectId);
     const next = markUserEdited((await this.load(root)).artifacts, kind, this.ports.now());
     await this.save(root, next);
-    return { schemaVersion: 1, artifacts: next };
+    return this.read(projectId);
   }
 
   /** Every file the studio has written under `.kai/spec`, for a UI that shows what exists without guessing. */

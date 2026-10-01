@@ -176,6 +176,15 @@ describe('studio generation', () => {
     expect(() => parseBoardDraft('Here are your cards: sign in, export')).toThrow(/The reply began: "Here are your cards/);
   });
 
+  it('still lists the brief after one artifact is written, so the screen keeps showing the project', async () => {
+    const { studio: app } = studio({ kai_studio_prd: JSON.stringify({ content: '# PRD' }) });
+    await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'brief.md'), '# Brief\n');
+    const catalog = await app.generate('p1', 'prd');
+    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd']);
+    expect((await app.markEdited('p1', 'prd')).artifacts.map((item) => item.kind)).toContain('brief');
+  });
+
   it('refuses an artifact whose input has not been written yet', async () => {
     const { studio: app } = studio({});
     await expect(app.generate('p1', 'prd')).rejects.toThrow(/Write brief first/);

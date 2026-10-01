@@ -600,7 +600,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const decided = state ? interviewGivenAnswers(state) : [];
   const showHandoff = Boolean(state?.status === 'done' && projectId && artifacts && board && board.cards.length > 0 && !handoffDismissed && busy !== 'generate' && busy !== 'plan');
   const building = Boolean(state?.status === 'done' && (busy === 'generate' || busy === 'plan'));
-  const briefReady = Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'brief'));
+  // A finished interview has written its brief, whatever the catalog on screen happens to list.
+  const briefReady = state?.status === 'done' || Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'brief'));
   const staleCount = artifacts?.artifacts.filter((entry) => entry.stale).length ?? 0;
 
   if (screen === 'list') {
