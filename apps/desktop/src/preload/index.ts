@@ -70,6 +70,14 @@ const bridge: KaiDesktopBridge = {
   promptGuideReadiness: () => ipcRenderer.invoke('prompt-guide:readiness', {}),
   refineIdea: (request) => ipcRenderer.invoke('prompt-guide:refine', request),
   refinePrompt: (request) => ipcRenderer.invoke('prompt-guide:refine-prompt', request),
+  equalizerScreens: (projectId) => ipcRenderer.invoke('equalizer:screens', { projectId }),
+  runEqualizer: (input) => ipcRenderer.invoke('equalizer:run', input),
+  equalizerImage: (input) => ipcRenderer.invoke('equalizer:image', input),
+  onEqualizerProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof listener>[0]): void => listener(payload);
+    ipcRenderer.on('equalizer:progress', handler);
+    return () => ipcRenderer.removeListener('equalizer:progress', handler);
+  },
   openPencilStatus: () => ipcRenderer.invoke('design:openpencil-status', {}),
   saveOpenPencil: (input) => ipcRenderer.invoke('design:openpencil-save', input),
   testOpenPencil: () => ipcRenderer.invoke('design:openpencil-test', {}),
@@ -104,6 +112,14 @@ const bridge: KaiDesktopBridge = {
   checkStudioCardUi: (projectId, cardId) => ipcRenderer.invoke('studio:board-check-ui', { projectId, cardId }),
   planStudioTeam: (projectId) => ipcRenderer.invoke('studio:board-team-plan', { projectId }),
   workStudioBoard: (request) => ipcRenderer.invoke('studio:board-work', request),
+  startAutopilot: (request) => ipcRenderer.invoke('autopilot:start', request),
+  stopAutopilot: (request) => ipcRenderer.invoke('autopilot:stop', request),
+  autopilotStatus: (request) => ipcRenderer.invoke('autopilot:status', request),
+  onAutopilotChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: import('@kai/contracts').AutopilotStatus): void => listener(payload);
+    ipcRenderer.on('autopilot:changed', handler);
+    return () => ipcRenderer.removeListener('autopilot:changed', handler);
+  },
   studioDesign: (projectId) => ipcRenderer.invoke('studio:design-read', { projectId }),
   pullStudioDesign: (projectId) => ipcRenderer.invoke('studio:design-pull', { projectId }),
   onStudioBoardChanged: (listener) => {

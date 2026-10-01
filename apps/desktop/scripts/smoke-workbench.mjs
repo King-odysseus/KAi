@@ -1,6 +1,6 @@
 // Drives the newer workbench pages (Code, Operations, ...) against a real project on disk.
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -55,6 +55,7 @@ try {
   await verifyStudioAndGraph(page);
   await verifyStudioArtifacts(page);
   await verifySettingsSearch(page);
+  await verifyEqualizer(page);
   await verifyThemes(page);
   await verifyIndependentWindows(electronApp, page);
   }
@@ -379,7 +380,8 @@ async function verifyStudioArtifacts(page) {
   if (shape.decisions < 4 || shape.outcomes < 4) throw new Error(`The long flow did not branch: ${JSON.stringify(shape)}`);
   if (!shape.labels.includes('yes') || !shape.labels.includes('otherwise')) throw new Error(`The connectors are not labelled: ${JSON.stringify(shape)}`);
   if (shape.overlaps !== 0) throw new Error(`Boxes overlap in the long flow: ${JSON.stringify(shape)}`);
-  await page.locator('.flow-diagram .react-flow__node.outcome', { hasText: 'no cookie is set at all' }).click();
+  // The long flow opens zoomed on its start, so this box is off screen: send the click to the box itself.
+  await page.locator('.flow-diagram .react-flow__node.outcome', { hasText: 'no cookie is set at all' }).dispatchEvent('click');
   await page.locator('.flow-detail').getByText(/no cookie is set at all\./).waitFor();
   await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-long-1440x920.png') });
   // Full screen on the long flow: the viewer covers the window and the diagram grows and refits with it.
@@ -443,6 +445,36 @@ async function verifyStudioArtifacts(page) {
   await signIn.locator('.studio-step-prompt').waitFor({ state: 'detached' });
   await assertNoHorizontalOverflow(page);
   await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+}
+
+/** The Equalizer is a composer intent; a design-only run needs no browser, and a fix lands in the composer as a prompt. */
+async function verifyEqualizer(page) {
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  const toggle = page.getByRole('button', { name: /^Work locally$/ });
+  if (await toggle.isVisible().catch(() => false)) await toggle.click();
+  await page.locator('.task-intent-picker').getByRole('button', { name: 'Equalizer', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Equalizer' });
+  await panel.waitFor();
+  // What the user writes picks the target: this wording means the design, not a live page.
+  await page.getByRole('textbox', { name: 'Task prompt' }).fill('I just did the design, check it');
+  await panel.getByText('Picked from your message.').waitFor();
+  if (!(await panel.getByRole('radio', { name: 'Design only' }).isChecked())) throw new Error('The Equalizer did not read the target from the message.');
+  await panel.getByText(/Design only, 2 screens, report first/).waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'equalizer-panel-1440x920.png') });
+  await panel.getByRole('button', { name: /Run the Equalizer/ }).click();
+  const report = panel.getByLabel('Equalizer report');
+  await report.waitFor({ timeout: 30_000 });
+  await report.getByText(/2 screens checked/).waitFor();
+  await report.getByText('Not drawn').first().waitFor();
+  const folders = await readdir(path.join(projectPath, '.kai', 'spec', 'equalizer'));
+  const written = await readFile(path.join(projectPath, '.kai', 'spec', 'equalizer', folders[0], 'report.md'), 'utf8');
+  if (!written.includes('not drawn in open-pencil yet')) throw new Error('The Equalizer report file was not written.');
+  await page.screenshot({ path: path.join(outputDirectory, 'equalizer-report-1440x920.png') });
+  // Fix all puts a prompt in the composer to read and send; it does not send anything itself.
+  await report.getByRole('button', { name: /Fix all/ }).click();
+  const prompt = await page.getByRole('textbox', { name: 'Task prompt' }).inputValue();
+  if (!prompt.includes('finish the design') || !prompt.includes('Sign-in')) throw new Error('Fix all did not put its prompt in the composer.');
+  await page.getByRole('textbox', { name: 'Task prompt' }).fill('');
 }
 
 /** Settings can be searched through every card, and the open-pencil connector is a card of its own. */
@@ -654,6 +686,8 @@ async function waitForProjectName(page, name) {
 
 async function createProject() {
   await mkdir(path.join(projectPath, 'src'), { recursive: true });
+  await mkdir(path.join(projectPath, '.kai', 'spec'), { recursive: true });
+  await writeFile(path.join(projectPath, '.kai', 'spec', 'pages.md'), ['# Pages', '', '## Sign-in', 'Route: `/sign-in`.', '', '## Dashboard', 'At /dashboard.', ''].join('\n'), 'utf8');
   await mkdir(path.join(secondProjectPath, 'src'), { recursive: true });
   await writeFile(path.join(projectPath, 'src', 'hello.ts'), 'export const hello = "world";\r\n', 'utf8');
   await writeFile(path.join(projectPath, 'README.md'), '# Sample\n', 'utf8');

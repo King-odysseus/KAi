@@ -8,6 +8,7 @@ import {
   OPENPENCIL_CREDENTIAL_ID,
   OPENPENCIL_ENDPOINT,
   OPENPENCIL_MCP_SERVER_ID,
+  type EqualizerImageInput,
   type OpenPencilSaveInput,
   type OpenPencilStatus,
   type OpenPencilTestResult,
@@ -112,10 +113,13 @@ import { makeAgentExperience, type AgentExperienceStore } from './experience-sto
 import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
+import type { DesktopAutopilot } from './autopilot';
 import type { DesktopPromptGuide } from './prompt-guide';
 import type { DesktopInterview } from './interview';
 import type { DesktopStudio } from './studio';
 import type { StudioStyleReferenceStore } from './style-references';
+import type { EqualizerService } from './equalizer';
+import { resolveInside } from './project-files';
 import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
@@ -185,10 +189,12 @@ export interface IpcContext {
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
   teamPlanner: DesktopTeamPlanner;
+  autopilot: DesktopAutopilot;
   promptGuide: DesktopPromptGuide;
   interview: DesktopInterview;
   studio: DesktopStudio;
   styleReferences: StudioStyleReferenceStore;
+  equalizer: EqualizerService;
   teamRecord: TeamRecordStore;
   runScores: RunScoreStore;
   experiences: AgentExperienceStore;
@@ -394,6 +400,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
   handle(context, 'prompt-guide:refine', async (input) => context.promptGuide.refine(input));
   handle(context, 'prompt-guide:refine-prompt', async (input) => context.promptGuide.refinePrompt(input));
+  handle(context, 'equalizer:screens', async ({ projectId }) => context.equalizer.screens(projectId));
+  handle(context, 'equalizer:run', async (input) => context.equalizer.run(input));
+  handle(context, 'equalizer:image', async (input) => equalizerImage(context, input));
   handle(context, 'design:openpencil-status', async () => openPencilStatus(context));
   handle(context, 'design:openpencil-save', async (input) => saveOpenPencil(context, input));
   handle(context, 'design:openpencil-test', async () => testOpenPencil(context));
@@ -458,6 +467,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, projectId, await context.studio.board(projectId));
     return worked;
   });
+  handle(context, 'autopilot:start', async (input, request) => context.autopilot.start(input, request.ownerWindowId));
+  handle(context, 'autopilot:stop', async ({ projectId }) => context.autopilot.stop(projectId));
+  handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));
   handle(context, 'studio:design-read', async ({ projectId }) => context.studio.design(projectId));
   handle(context, 'studio:design-pull', async ({ projectId }) => {
     const pulled = await context.studio.pullDesign(projectId);
@@ -3166,5 +3178,20 @@ async function testOpenPencil(context: IpcContext): Promise<OpenPencilTestResult
     return { ok: true, message: `Connected to open-pencil at ${status.endpoint}.` };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'open-pencil did not answer.' };
+  }
+}
+
+/** One of a report's pictures as a data URL. Only files the Equalizer wrote are ever read. */
+async function equalizerImage(context: IpcContext, input: EqualizerImageInput): Promise<string | null> {
+  const relative = input.path.replace(/\\/g, '/');
+  if (!/^\.kai\/spec\/equalizer\/[A-Za-z0-9._\/-]+\.png$/.test(relative) || relative.includes('..')) return null;
+  const project = (await context.projects.list()).find((candidate) => candidate.id === input.projectId);
+  if (!project) return null;
+  try {
+    const bytes = await fs.readFile(await resolveInside(project.path, relative));
+    return `data:image/png;base64,${bytes.toString('base64')}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }

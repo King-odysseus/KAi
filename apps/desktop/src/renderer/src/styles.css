@@ -12269,3 +12269,314 @@ code {
   font-size: 11.5px;
   line-height: 1.55;
 }
+
+/* Autopilot: the board's hands-off mode */
+.autopilot-panel {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 10px;
+}
+.autopilot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.autopilot-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.autopilot-settings summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.autopilot-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+.autopilot-fields label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.autopilot-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.autopilot-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(127, 127, 127, 0.25);
+  overflow: hidden;
+}
+.autopilot-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent, #4f8cff);
+  transition: width 0.4s ease;
+}
+.autopilot-status.phase-cooling .autopilot-bar span {
+  background: #d9a441;
+}
+.autopilot-status.phase-failed .autopilot-bar span {
+  background: #d9534f;
+}
+.autopilot-log {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  max-height: 180px;
+  overflow: auto;
+}
+.autopilot-log time {
+  opacity: 0.6;
+  margin-right: 4px;
+}
+.autopilot-log .log-warn {
+  color: #d9a441;
+}
+.autopilot-log .log-rest {
+  color: #7aa2f7;
+}
+
+/* Equalizer: the panel above the composer and its report. */
+.equalizer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--mint) 35%, var(--border));
+  border-radius: 10px;
+  background: var(--bg-panel);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.equalizer-panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.equalizer-panel > header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.equalizer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.equalizer-grid fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 9px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.equalizer-grid legend {
+  padding: 0 5px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.equalizer-choice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.equalizer-choice code,
+.equalizer-choice em,
+.equalizer-choice small {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.equalizer-url,
+.equalizer-rounds {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.equalizer-rounds {
+  width: 56px;
+}
+
+.equalizer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.equalizer-screens {
+  display: flex;
+  max-height: 150px;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+}
+
+.equalizer-screens-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.equalizer-summary {
+  margin: 0;
+  padding: 5px 9px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  font-size: 11.5px;
+}
+
+.equalizer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.equalizer-report h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.equalizer-results,
+.equalizer-differences {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.equalizer-result {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.equalizer-result.match { border-color: color-mix(in srgb, var(--mint) 40%, var(--border-soft)); }
+.equalizer-result.error,
+.equalizer-result.not-drawn { border-color: color-mix(in srgb, var(--red) 45%, var(--border-soft)); }
+
+.equalizer-result-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.equalizer-result-head code {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.equalizer-result-head .studio-kind {
+  margin-left: auto;
+}
+
+.equalizer-result-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 9px 8px;
+}
+
+.equalizer-images {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.equalizer-images figure {
+  margin: 0;
+}
+
+.equalizer-images img,
+.equalizer-noimage {
+  display: block;
+  width: 100%;
+  min-height: 70px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  object-fit: contain;
+  background: var(--bg-deep, var(--bg-panel));
+  color: var(--text-dim);
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.equalizer-images figcaption {
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: center;
+}
+
+.equalizer-differences label {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.equalizer-severity {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.equalizer-severity.high { border-color: var(--red); color: var(--red); }
+.equalizer-severity.medium { border-color: var(--amber); color: var(--amber); }
+.equalizer-severity.low { color: var(--text-dim); }

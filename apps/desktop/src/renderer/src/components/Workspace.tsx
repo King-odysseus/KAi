@@ -1,4 +1,5 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
+import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
 import {
   Archive,
@@ -170,7 +171,7 @@ interface QueuedPrompt {
   options: WorkspaceSendOptions;
 }
 
-type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn';
+type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer';
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'Ask', description: 'Understand an idea or get advice', placeholder: 'Ask KAI about this project or idea', starter: '' },
@@ -178,6 +179,7 @@ const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: 
   { id: 'build', label: 'Build', description: 'Make a safe, verified change', placeholder: 'Describe what you want KAI to build', starter: 'Build this safely. First state the plan, then make the smallest useful change and run relevant checks:\n\n' },
   { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
   { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
+  { id: 'equalizer', label: 'Equalizer', description: 'Compare the built screens with their design and report every difference', placeholder: 'Say what does not match, for example: the dashboard on my dev server', starter: '' },
 ];
 
 const STATUS_WORDS = [
@@ -676,7 +678,7 @@ export function WorkspaceView({
     setRefiningPrompt(true);
     setWorkbenchNotice(null);
     try {
-      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent }));
+      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' ? 'build' : taskIntent }));
       setPrompt(result.prompt);
       window.setTimeout(() => {
         promptRef.current?.focus();
@@ -699,6 +701,14 @@ export function WorkspaceView({
   function askKai(text: string): void {
     setTaskIntent('learn');
     onSelectAutonomy('plan');
+    setPrompt(text);
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }
+
+  /** A fix chosen in the Equalizer: the prompt goes into the composer for the user to read and send, as a Build. */
+  function applyEqualizerFix(text: string): void {
+    setTaskIntent('build');
+    if (selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
     setPrompt(text);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
@@ -1436,6 +1446,9 @@ export function WorkspaceView({
             if (files.length > 0) void attachImageFiles(files);
           }}
         />
+        {taskIntent === 'equalizer' && activeProject && (
+          <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
+        )}
         <div className="composer-box">
           <textarea
             ref={promptRef}

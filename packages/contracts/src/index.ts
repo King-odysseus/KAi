@@ -1,5 +1,6 @@
 export * from './agents';
 export * from './automation';
+export * from './autopilot';
 export * from './brain';
 export * from './context';
 export * from './coordination';
@@ -36,3 +37,5 @@ export * from './terminal';
 export * from './verification';
 export * from './usage';
 export * from './workbench';
+export * from './equalizer';
+export * from './pages';

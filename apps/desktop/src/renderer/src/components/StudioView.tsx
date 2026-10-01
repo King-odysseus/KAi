@@ -1,6 +1,7 @@
 import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
+import { AutopilotPanel } from './AutopilotPanel';
 import { FlowDiagram } from './FlowDiagram';
 import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, type DesignContext } from '../flow-diagram';
 import { Markdown } from './Markdown';
@@ -1471,6 +1472,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 {busy === 'work' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Work the next card
               </button>
             </div>
+            {projectId && board && board.cards.length > 0 && (
+              <AutopilotPanel projectId={projectId} hasWork={board.cards.some((card) => card.status === 'ready' || card.status === 'inProgress')} disabled={busy !== null} />
+            )}
             {board && board.cards.length > 0 ? (
               <div className="studio-board">
                 {BOARD_STATUSES.map((status) => {

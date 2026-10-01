@@ -22,6 +22,14 @@ import {
   type StudioProjectSummary,
 } from './interview';
 import {
+  autopilotProjectInputSchema,
+  autopilotStartInputSchema,
+  autopilotStatusResponseSchema,
+  type AutopilotProjectInput,
+  type AutopilotStartInput,
+  type AutopilotStatus,
+} from './autopilot';
+import {
   studioArtifactInputSchema,
   openPencilSaveInputSchema,
   studioArtifactSaveInputSchema,
@@ -145,6 +153,16 @@ import {
   type Cognitive1OperationInput,
   type Cognitive1OperationResult,
 } from './brain';
+import {
+  equalizerImageInputSchema,
+  equalizerRunInputSchema,
+  equalizerScreensInputSchema,
+  type EqualizerImageInput,
+  type EqualizerProgress,
+  type EqualizerReport,
+  type EqualizerRunInput,
+  type EqualizerScreens,
+} from './equalizer';
 import { setupGuideAnswerInputSchema, setupStatusSchema, type AgentConfigImportPreview, type SetupGuideAnswer, type SetupGuideAnswerInput, type SetupStatus } from './setup';
 import {
   contextChipSchema,
@@ -409,6 +427,9 @@ export const ipcChannels = [
   'prompt-guide:refine',
   'prompt-guide:refine-prompt',
   'studio:readiness',
+  'equalizer:screens',
+  'equalizer:run',
+  'equalizer:image',
   'design:openpencil-status',
   'design:openpencil-save',
   'design:openpencil-test',
@@ -442,6 +463,9 @@ export const ipcChannels = [
   'studio:board-check-ui',
   'studio:board-team-plan',
   'studio:board-work',
+  'autopilot:start',
+  'autopilot:stop',
+  'autopilot:status',
   'studio:design-pull',
   'studio:design-read',
   'team:start',
@@ -689,6 +713,9 @@ export const ipcInputSchemas = {
   'prompt-guide:refine': promptGuideInputSchema,
   'prompt-guide:refine-prompt': promptRefineInputSchema,
   'studio:readiness': emptyInputSchema,
+  'equalizer:screens': equalizerScreensInputSchema,
+  'equalizer:run': equalizerRunInputSchema,
+  'equalizer:image': equalizerImageInputSchema,
   'design:openpencil-status': emptyInputSchema,
   'design:openpencil-save': openPencilSaveInputSchema,
   'design:openpencil-test': emptyInputSchema,
@@ -722,6 +749,9 @@ export const ipcInputSchemas = {
   'studio:board-check-ui': studioBoardCardInputSchema,
   'studio:board-team-plan': studioProjectInputSchema,
   'studio:board-work': studioBoardWorkInputSchema,
+  'autopilot:start': autopilotStartInputSchema,
+  'autopilot:stop': autopilotProjectInputSchema,
+  'autopilot:status': autopilotProjectInputSchema,
   'studio:design-pull': studioProjectInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'team:start': teamStartInputSchema,
@@ -955,6 +985,7 @@ export const studioDesignResponseSchema = studioDesignSchema;
 export const studioDesignPullResponseSchema = studioDesignPullSchema;
 /** The cards one "work the board" run touched, in the order they ran. */
 export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
+export const autopilotResponseSchema = autopilotStatusResponseSchema;
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
 export const remoteStatusResponseSchema = remoteAccessStatusSchema;
@@ -1124,6 +1155,14 @@ export interface KaiDesktopBridge {
   studioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
   /** Every file the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */
   studioArtifactFiles(projectId: string): Promise<IpcResponse<string[]>>;
+  /** The screens a project can be checked on, from its pages list, and which are already drawn in open-pencil. */
+  equalizerScreens(projectId: string): Promise<IpcResponse<EqualizerScreens>>;
+  /** Compares built screens with their design and writes a report. It never changes the project. */
+  runEqualizer(input: EqualizerRunInput): Promise<IpcResponse<EqualizerReport>>;
+  /** One of a report's pictures as a data URL, or null when it is not there. */
+  equalizerImage(input: EqualizerImageInput): Promise<IpcResponse<string | null>>;
+  /** Progress while a run is under way. */
+  onEqualizerProgress(listener: (payload: EqualizerProgress) => void): () => void;
   /** Whether KAI is set up to reach open-pencil. The token is never returned. */
   openPencilStatus(): Promise<IpcResponse<OpenPencilStatus>>;
   /** Saves the open-pencil address and token and turns the connection on or off. */
@@ -1162,6 +1201,11 @@ export interface KaiDesktopBridge {
   planStudioTeam(projectId: string): Promise<IpcResponse<TeamPlanDraft>>;
   /** Runs ready cards, one agent per card. A card ends in review or blocked, never done. */
   workStudioBoard(request: StudioBoardWorkInput): Promise<IpcResponse<BoardCard[]>>;
+  /** Starts Autopilot on a project's board. It keeps going, resting when a provider rate-limits, until the board is done or it is stopped. */
+  startAutopilot(request: AutopilotStartInput): Promise<IpcResponse<AutopilotStatus>>;
+  stopAutopilot(request: AutopilotProjectInput): Promise<IpcResponse<AutopilotStatus | null>>;
+  autopilotStatus(request: AutopilotProjectInput): Promise<IpcResponse<AutopilotStatus | null>>;
+  onAutopilotChanged(listener: (status: AutopilotStatus) => void): () => void;
   /** What KAI last read from open-pencil. */
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
   /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */

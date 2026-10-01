@@ -261,8 +261,8 @@ export class DesktopStudio {
   }
 
   /** A move made through the app (a drag, the phone) is the person's; agents move cards through the project tools. */
-  async move(projectId: string, cardId: string, status: BoardStatus, note = ''): Promise<BoardCard> {
-    const card = await this.ports.board.move(projectId, cardId, status, note, 'user');
+  async move(projectId: string, cardId: string, status: BoardStatus, note = '', by: 'user' | 'agent' | 'check' = 'user'): Promise<BoardCard> {
+    const card = await this.ports.board.move(projectId, cardId, status, note, by);
     await this.refreshHandoff(projectId);
     return card;
   }

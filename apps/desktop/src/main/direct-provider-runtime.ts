@@ -18,6 +18,7 @@ import {
   type ProjectToolExecution,
 } from './project-tools';
 import { estimateCostUsd } from './usage-budget';
+import { RateLimitError, RequestPacer } from './rate-limit';
 import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, RunLimitError } from './run-guard';
 
 function costFields(
@@ -229,6 +230,8 @@ export interface DirectProviderRuntimeOptions {
   waitIfPaused?: (conversationId: string, signal: AbortSignal) => Promise<void>;
   /** Asks a local server (LM Studio) which models it offers; replaced in tests. */
   probeLocalServer?: (baseUrl: string) => Promise<LocalServerProbe>;
+  /** Spaces requests out; Autopilot sets it so a long job stays under the provider's limit. Off by default. */
+  pacer?: RequestPacer;
   /** Stop a run whose estimated cost passes this many USD. Zero disables it; defaults to KAI_MAX_RUN_COST_USD, then the Usage setting. */
   maxRunCostUsd?: number;
 }
@@ -237,13 +240,35 @@ export class DesktopDirectProviderRuntime {
   private readonly activeRuns = new Map<string, AbortController>();
   /** Set once DeepSeek's Anthropic-style endpoint refuses a call, so later runs go straight to the chat endpoint. */
   private deepSeekAnthropicRejected = false;
+  private pacer: RequestPacer | undefined;
 
   constructor(
     private readonly settings: DirectApiSettingsPort,
     private readonly credentials: DirectApiCredentialPort,
     private readonly externalTools?: ExternalToolPort,
     private readonly options: DirectProviderRuntimeOptions = {},
-  ) {}
+  ) {
+    this.pacer = options.pacer;
+  }
+
+  /** Spaces requests out before the provider has to ask, and tells the pacer how each one went. */
+  private async pacedFetch(url: string, init: RequestInit & { signal: AbortSignal }): Promise<Response> {
+    const pacer = this.pacer;
+    if (!pacer) return fetchWithHeaderTimeout(url, init);
+    await pacer.acquire(init.signal);
+    try {
+      const response = await fetchWithHeaderTimeout(url, init);
+      pacer.report(response.status);
+      return response;
+    } finally {
+      pacer.release();
+    }
+  }
+
+  /** Autopilot turns pacing on for the length of a job and off again after. */
+  setPacer(pacer: RequestPacer | undefined): void {
+    this.pacer = pacer;
+  }
 
   private async newToolRuntime(projectRoot: string, customPermissions?: Partial<Record<PermissionKey, boolean>>): Promise<DesktopProjectToolRuntime> {
     const runtime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
@@ -1209,7 +1234,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        response = await fetchWithHeaderTimeout(chatCompletionsUrl(capability.baseUrl), {
+        response = await this.pacedFetch(chatCompletionsUrl(capability.baseUrl), {
           method: 'POST',
           headers: chatCompletionsHeaders(capability, apiKey),
           body: JSON.stringify({
@@ -1240,7 +1265,7 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
-      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(
         request,
@@ -1270,7 +1295,7 @@ export class DesktopDirectProviderRuntime {
       let response: Response;
       try {
         const tools = anthropicToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
-        response = await fetchWithHeaderTimeout(anthropicMessagesUrl(capability.baseUrl), {
+        response = await this.pacedFetch(anthropicMessagesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
             'x-api-key': apiKey,
@@ -1304,7 +1329,7 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
-      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(
         request,
@@ -1334,7 +1359,7 @@ export class DesktopDirectProviderRuntime {
       let response: Response;
       try {
         const functionDeclarations = geminiToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
-        response = await fetchWithHeaderTimeout(geminiGenerateUrl(capability.baseUrl, capability.model), {
+        response = await this.pacedFetch(geminiGenerateUrl(capability.baseUrl, capability.model), {
           method: 'POST',
           headers: {
             'x-goog-api-key': apiKey,
@@ -1368,7 +1393,7 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
-      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(
         request,
@@ -1397,7 +1422,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        response = await fetchWithHeaderTimeout(responsesUrl(capability.baseUrl), {
+        response = await this.pacedFetch(responsesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -1431,7 +1456,7 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
-      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw new Error(message);
+      if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(
         request,
@@ -2042,6 +2067,14 @@ function chatToolDefinitions(definitions: readonly unknown[]): Array<Record<stri
       },
     }];
   });
+}
+
+/** A 429 becomes a typed error carrying the provider's own wait, so a long job can rest instead of just failing. */
+function providerFailure(status: number, message: string, retryAfter: string | null): Error {
+  if (status !== 429) return new Error(message);
+  const waitMs = parseRetryAfterMs(retryAfter);
+  // The failure reaches the caller as text, so the wait is written into it where the detector can read it back.
+  return new RateLimitError(waitMs ? `${message} The provider asked to wait ${Math.ceil(waitMs / 1_000)}s.` : message, waitMs);
 }
 
 function providerErrorMessage(status: number, detail: string): string {

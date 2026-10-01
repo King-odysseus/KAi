@@ -50,6 +50,11 @@ describe('pages and the drawing prompts', () => {
     expect(pages[0]?.details).toContain('States: empty, error.');
   });
 
+  it('drops the full stop or comma that follows a route at the end of a sentence', () => {
+    const pages = parsePages(['## Dashboard', 'At /dashboard.', '', '## Settings', 'Open /settings, then save.', '', '## Item', 'Shown at /items/:id.'].join('\n'));
+    expect(pages.map((page) => page.route)).toEqual(['/dashboard', '/settings', '/items/:id']);
+  });
+
   it('merges the screens from the pages list with those only in open-pencil, and marks what is drawn', () => {
     const rows = screenRows(parsePages(PAGES), ['dashboard', 'Admin console']);
     expect(rows.map((row) => [row.name, row.inPages, row.drawn])).toEqual([

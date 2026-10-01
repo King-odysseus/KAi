@@ -33,7 +33,7 @@ import { RecoveryStore } from './recovery-store';
 import { TerminalManager } from './terminal';
 import { UpdateController } from './updater';
 import { autoUpdater } from 'electron-updater';
-import { hashFile, recordVerification, runCheckCommand, VerificationStore } from './verification';
+import { hashFile, recordVerification, runCheckCommand, suggestTestCommand, VerificationStore } from './verification';
 import { gitOverview } from './git-tools';
 import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
@@ -45,6 +45,7 @@ import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
+import { DesktopAutopilot } from './autopilot';
 import { DesktopPromptGuide } from './prompt-guide';
 import { DesktopInterview } from './interview';
 import { InterviewStore } from './interview-store';
@@ -53,8 +54,11 @@ import { StudioBoardStore } from './board';
 import { DesktopStudio } from './studio';
 import { writeHandoffFiles } from './handoff-files';
 import { StudioStyleReferenceStore } from './style-references';
+import { DesktopEqualizer, type EqualizerService } from './equalizer';
+import type { DesignPorts } from './design-source';
+import { createEqualizerPorts } from './equalizer-ports';
 import { SPEC_ROOT, SpecStore } from './spec-store';
-import { DesktopUiCheck, playwrightUiCheckPorts } from './ui-check';
+import { DesktopUiCheck, failureSummary, playwrightUiCheckPorts } from './ui-check';
 import { resolveInside } from './project-files';
 import { completeTeam } from './team-assign';
 import { TeamRecordStore } from './team-record-store';
@@ -176,6 +180,7 @@ app.on('before-quit', (event) => {
     .then(() => closeMemorySessions(activeContext))
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
     .then(() => activeContext?.workflows.dispose())
+    .then(() => activeContext?.autopilot.dispose())
     .then(() => activeContext?.scheduler.stop())
     .then(() => activeContext?.terminal.stopAll())
     .then(() => activeContext?.preview.stopAll())
@@ -415,6 +420,7 @@ async function startApplication(): Promise<void> {
   let remote!: RemoteGateway;
   let workflowRunner!: DesktopWorkflowRunner;
   let teamPlanner!: DesktopTeamPlanner;
+  let autopilot!: DesktopAutopilot;
   let promptGuide!: DesktopPromptGuide;
   let interview!: DesktopInterview;
   let studio!: DesktopStudio;
@@ -422,6 +428,27 @@ async function startApplication(): Promise<void> {
   let evals!: DesktopEvals;
   let changeReviewer!: DesktopChangeReviewer;
 
+  // open-pencil is reached through the same MCP runtime as every other server, so its token stays in the vault.
+  const openPencilPorts = async (): Promise<DesignPorts | null> => {
+    const current = await settings.load();
+    const server = current.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID && candidate.enabled);
+    if (!server) return null;
+    return {
+      endpoint: () => (server.transport === 'http' ? server.url : OPENPENCIL_ENDPOINT),
+      call: async (tool, input) => {
+        if (!mcpRuntime) throw new Error('The MCP runtime is not running.');
+        const blocks = await mcpRuntime.callServerTool(OPENPENCIL_MCP_SERVER_ID, tool, input);
+        if (blocks === null) throw new Error('open-pencil is not connected. Check its token in Settings, then try again.');
+        return blocks;
+      },
+    };
+  };
+  // The Equalizer is built once the preview runtime exists; until then a call to it says so.
+  let equalizerService: EqualizerService | null = null;
+  const equalizer: EqualizerService = {
+    screens: (projectId) => (equalizerService ? equalizerService.screens(projectId) : Promise.reject(new Error('The Equalizer is still starting.'))),
+    run: (input) => (equalizerService ? equalizerService.run(input) : Promise.reject(new Error('The Equalizer is still starting.'))),
+  };
   const styleReferences = new StudioStyleReferenceStore({
     settings: () => settings.load(),
     projectRoot: studioProjectRoot,
@@ -470,10 +497,12 @@ async function startApplication(): Promise<void> {
     learningBudget,
     workflows: workflowRunner,
     teamPlanner,
+    autopilot,
     promptGuide,
     interview,
     studio,
     styleReferences,
+    equalizer,
     runControl,
     notifications,
     recovery: new RecoveryStore(path.join(paths.root, 'recovery')),
@@ -678,21 +707,7 @@ async function startApplication(): Promise<void> {
     artifacts: studioArtifacts,
     board: studioBoard,
     uiCheck,
-    // open-pencil is reached through the same MCP runtime as every other server, so its token stays in the vault.
-    openPencil: async () => {
-      const current = await settings.load();
-      const server = current.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID && candidate.enabled);
-      if (!server) return null;
-      return {
-        endpoint: () => (server.transport === 'http' ? server.url : OPENPENCIL_ENDPOINT),
-        call: async (tool, input) => {
-          if (!mcpRuntime) throw new Error('The MCP runtime is not running.');
-          const blocks = await mcpRuntime.callServerTool(OPENPENCIL_MCP_SERVER_ID, tool, input);
-          if (blocks === null) throw new Error('open-pencil is not connected. Check its token in Settings, then pull the design again.');
-          return blocks;
-        },
-      };
-    },
+    openPencil: openPencilPorts,
     handoff: {
       write: async (projectId, board, catalog) => {
         await writeHandoffFiles(await studioProjectRoot(projectId), board, catalog, new Date().toISOString());
@@ -701,6 +716,74 @@ async function startApplication(): Promise<void> {
     now: () => new Date().toISOString(),
   });
   ipcContext.studio = studio;
+  const equalizerPortsFor = createEqualizerPorts({
+    mcp: {
+      callServerTool: (serverId, toolName, input) => {
+        if (!mcpRuntime) return Promise.reject(new Error('The MCP runtime is not running.'));
+        return mcpRuntime.callServerTool(serverId, toolName, input);
+      },
+    },
+    preview: {
+      start: (projectId, projectPath, command) => preview.start(projectId, projectPath, command),
+      status: (projectId, projectPath) => preview.status(projectId, projectPath),
+    },
+    openPencil: openPencilPorts,
+    readSpec: async (root, relativePath) => {
+      try {
+        return await readFile(await resolveInside(root, path.join(SPEC_ROOT, relativePath)), 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    },
+    writeSpec: async (root, relativePath, content) => {
+      const target = await resolveInside(root, path.join(SPEC_ROOT, relativePath));
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content);
+    },
+    resolveRoot: async (projectId) => {
+      const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('Project not found.');
+      return project.path;
+    },
+    sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  }, () => new Date().toISOString(), (projectId, event) => desktopWindows.broadcast('equalizer:progress', { projectId, ...event }));
+  equalizerService = {
+    screens: (projectId) => new DesktopEqualizer(equalizerPortsFor(projectId)).screens(projectId),
+    run: (input) => new DesktopEqualizer(equalizerPortsFor(input.projectId)).run(input),
+  };
+  autopilot = new DesktopAutopilot({
+    settings: () => settings.load(),
+    board: (projectId) => studio.board(projectId),
+    artifactsFor: (projectId) => studio.artifactTexts(projectId),
+    claimCard: (projectId, cardId, agent) => studio.claim(projectId, cardId, agent),
+    recordCardRun: (projectId, cardId, run) => studio.recordRun(projectId, cardId, run),
+    setCheck: (projectId, cardId, check) => studio.setCheck(projectId, cardId, check),
+    moveCard: async (projectId, cardId, status, note, by) => {
+      const card = await studio.move(projectId, cardId, status, note, by);
+      desktopWindows.broadcast('studio:board-changed', { projectId, board: await studio.board(projectId) });
+      return card;
+    },
+    checkUi: async (projectId, card) => {
+      const { result } = await studio.checkUi(projectId, card.id);
+      return { passed: result.passed, summary: failureSummary(result) };
+    },
+    createConversation: createBlankConversation,
+    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
+    runCheck: async (projectId, command, signal) => {
+      const projectPath = await studioProjectRoot(projectId);
+      const check = await runCheckCommand(projectPath, command, signal);
+      const run = await recordVerification(ipcContext!.verification, projectId, projectPath, check).catch(() => null);
+      return { passed: check.exitCode === 0, exitCode: check.exitCode, output: check.output, runId: run?.id ?? null };
+    },
+    suggestCheck: async (projectId) => suggestTestCommand(await studioProjectRoot(projectId)),
+    changedFilesFor: async (projectId) => (await gitOverview(await studioProjectRoot(projectId))).changes.map((change) => change.path),
+    setPacer: (pacer) => directApi.setPacer(pacer),
+    announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'autopilot:changed', status),
+    now: () => Date.now(),
+  });
+  ipcContext.autopilot = autopilot;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);
