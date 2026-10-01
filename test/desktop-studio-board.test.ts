@@ -62,7 +62,7 @@ function run(over: Record<string, unknown> = {}) {
 
 describe('artifacts', () => {
   it('flags every artifact that reads the one that changed, transitively', () => {
-    expect(dependentsOf('brief')).toEqual(['prd', 'stories', 'flows', 'stack', 'style-guide', 'tokens']);
+    expect([...dependentsOf('brief')].sort()).toEqual(['acceptance', 'architecture', 'conventions', 'decisions', 'flows', 'glossary', 'prd', 'risks', 'setup', 'stack', 'stories', 'style-guide', 'tokens']);
     expect(dependentsOf('tokens')).toEqual([]);
     let entries = applyWrite([], 'prd', { version: 0, at: NOW, generatedBy: 'model' });
     entries = applyWrite(entries, 'stories', { version: 0, at: NOW, generatedBy: 'model' });

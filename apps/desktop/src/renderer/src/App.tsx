@@ -47,6 +47,7 @@ import {
   type WorkspaceCommandKind,
   type WorkspaceCommandRequest,
 } from './components/Workspace';
+import { GraphView } from './components/GraphView';
 import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
@@ -275,6 +276,7 @@ export function App(): ReactNode {
     { id: 'code', label: 'Open Code Editor', description: 'Browse and edit project files with the built-in editor', run: () => setView('code') },
     { id: 'preview', label: 'Toggle Live Preview Pane', description: 'Run the project, inspect rendered elements, and capture browser errors', run: () => setPreviewOpen((open) => !open) },
     { id: 'tasks', label: 'Open Tasks, Reviews and Handoffs', description: 'Shared task board, review queue, handoff inbox and decision log', run: () => setView('tasks') },
+    { id: 'graph', label: 'Open Project Graph', description: 'See what blocks what on the board and which agent holds which card', run: () => setView('graph') },
     { id: 'studio', label: 'Open Project Studio', description: 'Interview a project idea and write the brief the board and agents work from', run: () => setView('studio') },
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => openOperations('verification') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
@@ -645,11 +647,11 @@ export function App(): ReactNode {
 
   async function openStudioProject(
     studioProjectId: string,
-    destination: 'composer' | 'editor',
+    destination: 'composer' | 'editor' | 'generate',
   ): Promise<void> {
     const launch = await perform(
       () => window.kaiDesktop.launchStudioProject({ projectId: studioProjectId, destination }).then(unwrap),
-      destination === 'composer' ? 'Preparing the composer' : 'Opening the code editor',
+      destination === 'composer' ? 'Preparing the composer' : destination === 'generate' ? 'Starting project generation' : 'Opening the code editor',
     );
     if (!launch) return;
     const next = await openProject(launch.projectId, 'stay');
@@ -666,6 +668,11 @@ export function App(): ReactNode {
     if (!conversation) return;
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
+    if (destination === 'generate') {
+      setView('workspace');
+      await runConversation(conversation, launch.prompt);
+      return;
+    }
     setWorkspaceCommand({ kind: 'prompt', nonce: Date.now(), prompt: launch.prompt });
     setView('workspace');
   }
@@ -1497,6 +1504,8 @@ export function App(): ReactNode {
         return <GitView activeProject={activeProject} />;
       case 'tasks':
         return <TasksView activeProject={activeProject} cognitive1Ready={serviceFor(bootstrap, 'cognitive1').status === 'ready'} onStartTask={async (prompt) => { setView('workspace'); await createConversation(prompt); }} />;
+      case 'graph':
+        return <GraphView />;
       case 'studio':
         return (
           <StudioView

@@ -331,7 +331,7 @@ export class DesktopLearningTutor {
       this.teachingLibrary ? this.teachingLibrary.profile() : Promise.resolve(null),
       loadProjectTeachingProfile(projectRoot),
       scope === 'project'
-        ? loadProjectContext(projectRoot, request.filePath, request.conversationContext ? MAX_FOLLOW_UP_PROJECT_CONTEXT_CHARS : MAX_PROJECT_CONTEXT_CHARS)
+        ? loadProjectContext(projectRoot, request.filePath, request.conversationContext ? MAX_FOLLOW_UP_PROJECT_CONTEXT_CHARS : MAX_PROJECT_CONTEXT_CHARS, true)
         : scope === 'auto'
           ? searchProjectContext(projectRoot, [request.question ?? '', request.selectedText ?? '', request.errorText ?? ''].join('\n'), request.filePath)
           : Promise.resolve(null),
@@ -814,9 +814,32 @@ async function loadProjectTeachingProfile(projectRoot: string): Promise<string |
   ].filter(Boolean).join('\n\n');
 }
 
-export async function loadProjectContext(projectRoot: string, activeFilePath?: string, maxCharacters = MAX_PROJECT_CONTEXT_CHARS): Promise<string | null> {
+/** The Project Studio files a learner's questions should be answered against, in the order they matter. */
+const STUDIO_PLAN_FILES = ['status.md', 'decisions.md', 'conventions.md', 'architecture.md'] as const;
+const STUDIO_PLAN_FILE_CHARS = 1_500;
+const NEWLINE = String.fromCharCode(10);
+
+/** A short excerpt of each Studio planning file that exists, so the tutor explains code in terms of this project's plan. */
+async function loadStudioPlanContext(projectRoot: string): Promise<string | null> {
+  const parts = await Promise.all(STUDIO_PLAN_FILES.map(async (name) => {
+    try {
+      const text = (await fs.readFile(path.join(projectRoot, '.kai', 'spec', name), 'utf8')).trim();
+      if (!text) return null;
+      const excerpt = text.length > STUDIO_PLAN_FILE_CHARS ? text.slice(0, STUDIO_PLAN_FILE_CHARS) + NEWLINE + '[truncated]' : text;
+      return name + ':' + NEWLINE + excerpt;
+    } catch {
+      return null;
+    }
+  }));
+  const found = parts.filter((part): part is string => part !== null);
+  if (found.length === 0) return null;
+  return 'Project plan written in the KAI Project Studio (.kai/spec; treat it as the project own decisions and conventions):' + NEWLINE + found.join(NEWLINE + NEWLINE);
+}
+
+export async function loadProjectContext(projectRoot: string, activeFilePath?: string, maxCharacters = MAX_PROJECT_CONTEXT_CHARS, includeStudioPlan = false): Promise<string | null> {
   const files = await listProjectFiles(projectRoot);
   if (files.length === 0) return null;
+  const studioPlan = includeStudioPlan ? await loadStudioPlanContext(projectRoot) : null;
 
   const projectBrief = await buildProjectBrief(projectRoot, files);
   const active = activeFilePath ? normaliseProjectPath(activeFilePath) : '';
@@ -827,6 +850,7 @@ export async function loadProjectContext(projectRoot: string, activeFilePath?: s
   }));
   const sections = [
     projectBrief,
+    studioPlan,
     `Project file map (${files.length} files, showing up to ${MAX_PROJECT_TREE_ENTRIES}):\n${files.slice(0, MAX_PROJECT_TREE_ENTRIES).join('\n')}`,
     snapshots.filter((snapshot): snapshot is string => Boolean(snapshot)).join('\n\n'),
   ].filter(Boolean).join('\n\n');

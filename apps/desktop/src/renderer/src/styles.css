@@ -10967,3 +10967,335 @@ code {
 .guided-review-actions .primary-button { display: inline-flex; width: 100%; align-items: center; justify-content: center; gap: 6px; }
 .guided-review-files button.done { color: var(--text-muted); }
 .guided-review-done { color: var(--accent); }
+
+
+.studio-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.studio-bubble {
+  max-width: 88%;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.studio-bubble.ai {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--bg-input);
+}
+
+.studio-bubble.user {
+  align-self: flex-end;
+  border: 1px solid color-mix(in srgb, var(--mint) 40%, var(--border));
+  color: var(--text);
+  background: var(--mint-soft);
+}
+
+.studio-bubble.user.skipped {
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--text-dim);
+  background: transparent;
+  font-style: italic;
+}
+
+.studio-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.studio-options button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.studio-options button.active {
+  border-color: color-mix(in srgb, var(--mint) 55%, var(--border));
+  color: var(--text);
+  background: var(--mint-soft);
+}
+
+.composer-text-button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.composer-text-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.composer-text-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.studio-column.drop-target {
+  outline: 1px dashed color-mix(in srgb, var(--mint) 70%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--mint-soft) 40%, transparent);
+}
+
+.studio-tile.draggable {
+  cursor: grab;
+}
+
+.studio-tile.draggable:active {
+  cursor: grabbing;
+}
+
+.agent-orb {
+  flex: 0 0 auto;
+}
+
+.studio-interview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.studio-interview-head .studio-note {
+  margin: 0;
+}
+
+.studio-handoff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 clamp(18px, 2vw, 32px) 12px;
+}
+
+.studio-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.studio-strip .done {
+  color: var(--mint);
+}
+
+.studio-strip .now {
+  color: var(--text);
+}
+
+.studio-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.studio-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.studio-choice h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.studio-choice .studio-note {
+  margin: 0;
+}
+
+.studio-choice .primary-button {
+  margin-top: auto;
+}
+
+.studio-who {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.studio-who.agent {
+  color: var(--lavender);
+  background: var(--lavender-soft);
+}
+
+.studio-who.user,
+.studio-who.check {
+  color: var(--mint);
+  background: var(--mint-soft);
+}
+
+.graph-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 16px clamp(18px, 2vw, 32px);
+}
+
+.graph-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.graph-head h1 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 15px;
+}
+
+.graph-head .studio-note {
+  margin: 3px 0 0;
+}
+
+.graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.graph-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  font-size: 10.5px;
+}
+
+.graph-chip.done { border-color: color-mix(in srgb, var(--mint) 55%, var(--border)); }
+.graph-chip.inProgress { border-color: color-mix(in srgb, var(--lavender) 60%, var(--border)); }
+.graph-chip.blocked { border-color: color-mix(in srgb, var(--red) 60%, var(--border)); }
+.graph-chip.review { border-color: color-mix(in srgb, var(--amber) 60%, var(--border)); }
+
+.graph-body {
+  display: flex;
+  flex: 1;
+  gap: 10px;
+  min-height: 420px;
+}
+
+.graph-canvas {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.graph-empty {
+  padding: 18px;
+}
+
+.graph-detail {
+  display: flex;
+  flex: 0 0 260px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  overflow-y: auto;
+}
+
+.graph-detail h2,
+.graph-detail h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.graph-detail .graph-chip {
+  align-self: flex-start;
+}
+
+.graph-canvas .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--border);
+  --xy-edge-stroke-selected: var(--mint);
+  --xy-controls-button-background-color: var(--bg-panel);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-attribution-background-color: transparent;
+  --xy-background-pattern-color: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.graph-canvas .react-flow__node.graph-node {
+  width: 220px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--bg-panel);
+  font-size: 12px;
+  text-align: left;
+}
+
+.graph-node.done { border-color: var(--mint) !important; }
+.graph-node.inProgress { border-color: var(--lavender) !important; border-width: 2px !important; }
+.graph-node.review { border-color: var(--amber) !important; }
+.graph-node.blocked { border-color: var(--red) !important; border-style: dashed !important; }
+.graph-node.backlog { color: var(--text-muted) !important; }
+.graph-node.agent { color: var(--lavender) !important; background: var(--lavender-soft) !important; border-color: var(--lavender) !important; width: 150px !important; }
+
+.graph-canvas .react-flow__edge.graph-edge.met .react-flow__edge-path { stroke: var(--mint); }
+.graph-canvas .react-flow__edge.graph-edge.live .react-flow__edge-path { stroke: var(--lavender); }
+
+@media (max-width: 900px) {
+  .graph-body {
+    flex-direction: column;
+  }
+
+  .graph-detail {
+    flex-basis: auto;
+  }
+}

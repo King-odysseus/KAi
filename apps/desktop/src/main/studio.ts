@@ -35,7 +35,7 @@ import { failureSummary, type DesktopUiCheck } from './ui-check';
  */
 
 /** The artifacts a model writes. `brief` comes from the interview and `tokens` from open-pencil. */
-export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flows', 'style-guide'];
+export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flows', 'style-guide', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup'];
 
 const NAMES = { feature: 'the Project Studio', card: 'Project Studio' };
 const GENERATE_CONTEXT_CHARS = 12_000;
@@ -81,6 +81,8 @@ export interface StudioPorts {
    * of failing: everything except the tokens and the design's own cards works without it.
    */
   openPencil?(): Promise<DesignPorts | null>;
+  /** Writes the status file and the root agent instructions. Optional so tests can leave it out. */
+  handoff?: { write(projectId: string, board: StudioBoard, catalog: StudioArtifacts): Promise<void> };
   now(): string;
 }
 
@@ -128,6 +130,7 @@ export class DesktopStudio {
       if (entry && !entry.stale) continue;
       await this.generate(projectId, kind);
     }
+    await this.refreshHandoff(projectId);
     return this.ports.artifacts.read(projectId);
   }
 
@@ -174,15 +177,19 @@ export class DesktopStudio {
     );
     const cards = cardsFromDraft(draft, this.ports.now());
     const catalog = await this.ports.artifacts.read(projectId);
-    return this.ports.board.replace(projectId, cards, catalog.artifacts);
+    const board = await this.ports.board.replace(projectId, cards, catalog.artifacts);
+    await this.refreshHandoff(projectId);
+    return board;
   }
 
   next(projectId: string): Promise<BoardCard | null> {
     return this.ports.board.next(projectId);
   }
 
-  claim(projectId: string, cardId: string, agent: string): Promise<BoardCard> {
-    return this.ports.board.claim(projectId, cardId, agent);
+  async claim(projectId: string, cardId: string, agent: string): Promise<BoardCard> {
+    const card = await this.ports.board.claim(projectId, cardId, agent);
+    await this.refreshHandoff(projectId);
+    return card;
   }
 
   /**
@@ -210,12 +217,30 @@ export class DesktopStudio {
       cardId,
       result.passed ? 'review' : 'ready',
       result.passed ? 'The visual check passed; waiting for a person to approve the screenshots.' : failureSummary(result),
+      'check',
     );
     return { card: moved, result };
   }
 
-  move(projectId: string, cardId: string, status: BoardStatus, note = ''): Promise<BoardCard> {
-    return this.ports.board.move(projectId, cardId, status, note);
+  /** A move made through the app (a drag, the phone) is the person's; agents move cards through the project tools. */
+  async move(projectId: string, cardId: string, status: BoardStatus, note = ''): Promise<BoardCard> {
+    const card = await this.ports.board.move(projectId, cardId, status, note, 'user');
+    await this.refreshHandoff(projectId);
+    return card;
+  }
+
+  /**
+   * Rewrites `status.md` (and the root `AGENTS.md` when KAI owns it) from the board and the catalog. It is a
+   * convenience for whoever picks the project up next, so a failure here never fails the move that triggered it.
+   */
+  async refreshHandoff(projectId: string): Promise<void> {
+    if (!this.ports.handoff) return;
+    try {
+      const [board, catalog] = await Promise.all([this.ports.board.read(projectId), this.ports.artifacts.read(projectId)]);
+      await this.ports.handoff.write(projectId, board, catalog);
+    } catch {
+      // Best effort by design.
+    }
   }
 
   recordRun(projectId: string, cardId: string, run: CardRun): Promise<BoardCard> {
@@ -293,6 +318,13 @@ const ARTIFACT_BRIEFS: Record<ArtifactKind, string> = {
   flows: 'Write the flows document: the main user journeys end to end, each as an ordered list of steps naming the screens or endpoints they pass through.',
   'style-guide': 'Write the design style guide around the token names that exist: colour, type, spacing and radius. Reference tokens by name; never invent values that contradict the token file.',
   tokens: 'Write the token file.',
+  decisions: 'Write the decision log: one entry per significant choice already made in the brief and the stack. Each entry has a number, the decision, the reason, and the alternatives that were dropped, so a new agent does not reverse a choice without knowing why.',
+  architecture: 'Write the architecture map: the folders and modules, what each owns, how data flows between them, and where state lives. A new agent should know which files to touch for a given change.',
+  conventions: 'Write the conventions: naming, file layout, error handling, how tests are written, the exact commands to install, build, test and run, and the areas an agent must not change without asking.',
+  acceptance: 'Write the acceptance and test plan: for each story, the checks that prove it works, as concrete steps or test cases. Keep the story numbering from the stories document.',
+  risks: 'Write the risks and open questions: what could go wrong or is still undecided, each with the impact, a suggested owner (the user or an agent) and the next step to settle it.',
+  glossary: 'Write the glossary of domain terms and product words used in the brief, each with a one-line definition, so people and agents use the same words.',
+  setup: 'Write the setup notes: prerequisites, environment variable NAMES with what each is for (never real values or secrets), services to run, seed data, and the steps from a clean machine to a running project.',
 };
 
 /** The prompt for the board: the stories, the stack, and the rule that a page is blocked by its endpoints. */

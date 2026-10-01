@@ -1,11 +1,13 @@
 import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AgentOrb } from './AgentOrb';
 import {
   ARTIFACT_KINDS,
   BOARD_STATUSES,
   interviewGivenAnswers,
+  interviewOpenOptions,
   interviewOpenQuestions,
-  STUDIO_MAX_ROUNDS,
+  STUDIO_MAX_QUESTIONS,
   type ArtifactKind,
   type BoardCard,
   type BoardStatus,
@@ -30,7 +32,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
   onOpenSettings: () => void;
-  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor') => Promise<void>;
+  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate') => Promise<void>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
 }): ReactNode {
   const [screen, setScreen] = useState<'list' | 'project' | 'new'>('list');
@@ -46,7 +48,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [board, setBoard] = useState<StudioBoard | null>(null);
   const [idea, setIdea] = useState('');
   const [answers, setAnswers] = useState<string[]>([]);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'finish' | 'reset' | 'generate' | 'plan' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | null>(null);
+  // The chat asks one question of the round at a time: `step` is the one on screen, `draft` the reply being written.
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState('');
+  const [handoffDismissed, setHandoffDismissed] = useState(false);
+  const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
+  const threadEnd = useRef<HTMLDivElement | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -81,6 +89,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setDesign(null);
     setIdea('');
     setAnswers([]);
+    setStep(0);
+    setDraft('');
     setNotice(null);
     if (!projectId) {
       setBusy(null);
@@ -102,6 +112,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       setDesign(nextDesign);
       if (interview) setIdea(interview.idea);
       setAnswers(interview ? interviewOpenQuestions(interview).map(() => '') : []);
+      setStep(0);
+      setDraft('');
     }).catch((caught) => {
       if (!cancelled) setError(messageOf(caught));
     }).finally(() => {
@@ -201,7 +213,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
-  async function launchProject(studioProjectId: string, destination: 'composer' | 'editor'): Promise<void> {
+  async function launchProject(studioProjectId: string, destination: 'composer' | 'editor' | 'generate'): Promise<void> {
     if (busy !== null) return;
     setBusy('launch');
     setError(null);
@@ -218,9 +230,33 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     return desktopProjects.find((project) => project.id === linkedProjectId)?.name ?? 'Linked folder';
   }
 
+  // The handoff screen is shown once per project; whether it was dismissed is a per-viewer convenience.
+  useEffect(() => {
+    try {
+      setHandoffDismissed(Boolean(projectId && window.localStorage.getItem(`kai.studio.handoff.${projectId}`)));
+    } catch {
+      setHandoffDismissed(false);
+    }
+  }, [projectId]);
+
+  function dismissHandoff(): void {
+    setHandoffDismissed(true);
+    try {
+      if (projectId) window.localStorage.setItem(`kai.studio.handoff.${projectId}`, '1');
+    } catch {
+      // Remembering the choice is optional.
+    }
+  }
+
+  useEffect(() => {
+    threadEnd.current?.scrollIntoView({ block: 'end' });
+  }, [step, state, busy]);
+
   function adopt(next: InterviewState): void {
     setState(next);
     setAnswers(interviewOpenQuestions(next).map(() => ''));
+    setStep(0);
+    setDraft('');
   }
 
   async function reloadReadiness(): Promise<void> {
@@ -257,16 +293,69 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
-  /** Sends the round on screen. A blank answer is sent as a skip, which tells the studio to decide that one itself. */
-  async function sendAnswers(): Promise<void> {
-    if (!projectId || !state) return;
+  /** Sends the round's answers. A blank answer is sent as a skip, which tells the studio to decide that one itself. */
+  async function sendAnswers(given: string[]): Promise<InterviewState | null> {
+    if (!projectId || !state) return null;
     setBusy('answer');
     setError(null);
     try {
-      adopt(unwrap(await window.kaiDesktop.answerStudioInterview({
+      const next = unwrap(await window.kaiDesktop.answerStudioInterview({
         projectId,
-        answers: interviewOpenQuestions(state).map((question, index) => ({ question, answer: (answers[index] ?? '').trim() })),
-      })));
+        answers: interviewOpenQuestions(state).map((question, index) => ({ question, answer: (given[index] ?? '').trim() })),
+      }));
+      adopt(next);
+      return next;
+    } catch (caught) {
+      setError(messageOf(caught));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Records the reply to the question on screen and moves on; the last one of the round sends them all. */
+  async function submitStep(text: string): Promise<void> {
+    if (busy !== null) return;
+    const value = text.trim();
+    const next = answers.map((existing, index) => (index === step ? value : existing));
+    setAnswers(next);
+    setDraft('');
+    if (step + 1 < next.length) {
+      setStep(step + 1);
+      return;
+    }
+    const sent = await sendAnswers(next);
+    if (!sent) setDraft(value);
+    else if (sent.status === 'done') void buildEverything(sent.projectId);
+  }
+
+  /**
+   * The interview is over, so write the artifacts and build the board without waiting for two more clicks. Each
+   * step reports its own failure, and what was written stays: a failed board never throws the artifacts away.
+   */
+  async function buildEverything(id: string): Promise<void> {
+    setError(null);
+    setHandoffDismissed(false);
+    try {
+      setBusy('generate');
+      setArtifacts(unwrap(await window.kaiDesktop.generateStudioArtifacts(id)));
+      setBusy('plan');
+      setBoard(unwrap(await window.kaiDesktop.planStudioBoard(id)));
+      setProjectsVersion((current) => current + 1);
+    } catch (caught) {
+      setError(`${messageOf(caught)} Nothing already written was lost: use Generate all and Build the board to continue.`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function enhanceText(text: string, apply: (next: string) => void): Promise<void> {
+    if (!text.trim() || busy !== null) return;
+    setBusy('enhance');
+    setError(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.refinePrompt({ text: text.trim(), intent: 'build' }));
+      apply(result.prompt.slice(0, 4_000));
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -274,17 +363,24 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  const enhanceDraft = (): Promise<void> => enhanceText(draft, setDraft);
+  const enhanceIdea = (): Promise<void> => enhanceText(idea, setIdea);
+
   async function finish(): Promise<void> {
     if (!projectId) return;
     setBusy('finish');
     setError(null);
     try {
-      adopt(unwrap(await window.kaiDesktop.finishStudioInterview(projectId)));
+      const done = unwrap(await window.kaiDesktop.finishStudioInterview(projectId));
+      adopt(done);
       setProjectsVersion((current) => current + 1);
+      setBusy(null);
+      void buildEverything(done.projectId);
+      return;
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
-      setBusy(null);
+      setBusy((current) => (current === 'finish' ? null : current));
     }
   }
 
@@ -438,8 +534,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   }
 
   const open = state ? interviewOpenQuestions(state) : [];
+  const openOptions = state ? interviewOpenOptions(state) : [];
   const asking = state?.status === 'asking';
   const decided = state ? interviewGivenAnswers(state) : [];
+  const showHandoff = Boolean(state?.status === 'done' && projectId && artifacts && board && board.cards.length > 0 && !handoffDismissed && busy !== 'generate' && busy !== 'plan');
+  const building = Boolean(state?.status === 'done' && (busy === 'generate' || busy === 'plan'));
   const briefReady = Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'brief'));
   const staleCount = artifacts?.artifacts.filter((entry) => entry.stale).length ?? 0;
 
@@ -508,6 +607,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                           <button type="button" className="primary-button" onClick={() => void launchProject(project.id, 'composer')} disabled={busy !== null}>
                             {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />}
                             <span>Start on composer</span>
+                          </button>
+                          <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'generate')} disabled={busy !== null}>
+                            <Play size={14} />
+                            <span>Start generating</span>
                           </button>
                           <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
                             <Code2 size={14} />
@@ -588,20 +691,23 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           <button type="button" className="secondary-button" onClick={() => void reloadReadiness()} disabled={busy !== null}>
             {busy === 'load' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Check connection
           </button>
-          {state?.status === 'done' && projectId && (
+          {state?.status === 'done' && projectId && !showHandoff && (
             <>
               <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>
                 {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Start on composer
               </button>
+              <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
+                <Play size={14} /> Start generating
+              </button>
               <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
                 <Code2 size={14} /> Open in code editor
               </button>
-              {!state.linkedProjectId && (
-                <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(projectId)} disabled={busy !== null}>
-                  {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />} Create folder
-                </button>
-              )}
             </>
+          )}
+          {state?.status === 'done' && projectId && !state.linkedProjectId && (
+            <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(projectId)} disabled={busy !== null}>
+              {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />} Create folder
+            </button>
           )}
           {state && <button type="button" className="secondary-button" onClick={() => void reset()} disabled={busy !== null}><RotateCcw size={14} /> Start over</button>}
         </div>
@@ -641,6 +747,46 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         </p>
       )}
 
+      {building && (
+        <article className="studio-card studio-handoff" role="status">
+          <h2><Loader2 className="spin" size={16} /> Preparing the project</h2>
+          <p className="studio-note">{busy === 'generate' ? 'Writing the artifacts from the brief…' : 'Building the board from the stories…'}</p>
+          <div className="studio-strip"><span className="done">✓ Brief</span><span className={busy === 'generate' ? 'now' : 'done'}>{busy === 'generate' ? '… Artifacts' : '✓ Artifacts'}</span><span className={busy === 'plan' ? 'now' : ''}>Board</span></div>
+        </article>
+      )}
+      {showHandoff && state && projectId && board && artifacts && (
+        <article className="studio-card studio-handoff">
+          <h2><Check size={16} /> Project ready</h2>
+          <p className="studio-goal">{state.goal || state.idea}</p>
+          <div className="studio-strip">
+            <span className="done">✓ Brief</span>
+            <span className="done">✓ {artifacts.artifacts.length} artifacts</span>
+            <span className="done">✓ Board: {board.cards.length} cards, {board.cards.filter((card) => card.status === 'ready').length} ready</span>
+          </div>
+          <div className="studio-choices">
+            <div className="studio-choice">
+              <h3><Sparkles size={15} /> Generate with KAI</h3>
+              <p className="studio-note">The agent builds from the brief and the board, starting on the first ready card. Each card stops at Review for you.</p>
+              <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
+                {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start building
+              </button>
+            </div>
+            <div className="studio-choice">
+              <h3><Code2 size={15} /> Open code editor</h3>
+              <p className="studio-note">Code it yourself. The learning AI sits beside the editor and reads this project's brief, decisions and conventions.</p>
+              <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
+                <Code2 size={14} /> Open editor
+              </button>
+            </div>
+          </div>
+          <div className="studio-actions">
+            <button type="button" className="secondary-button" onClick={dismissHandoff}>Review the artifacts and board first</button>
+            <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}><Send size={14} /> Start on composer</button>
+          </div>
+          <p className="studio-note">A status file and an <code>AGENTS.md</code> in the project root keep any agent, KAI's or another, pointed at the right files as the board moves.</p>
+        </article>
+      )}
+
       <section className={`studio-grid${state ? '' : ' studio-grid-intake'}`}>
         {state && (
           <article className="studio-card">
@@ -654,7 +800,16 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             ) : (
               <>
                 <p className="studio-goal">{state.goal || state.idea}</p>
-                <p className="studio-note">Interview in progress. A blank answer counts as a skip, and the studio decides those itself.</p>
+                {state.assumptions.length > 0 && <Notes title="Assumptions" items={state.assumptions} />}
+                {decided.length > 0 && (
+                  <>
+                    <h3>Decisions</h3>
+                    <dl className="studio-decisions">
+                      {decided.map((item) => <div key={item.question}><dt>{item.question}</dt><dd>{item.answer}</dd></div>)}
+                    </dl>
+                  </>
+                )}
+                <p className="studio-note">The brief fills in as you answer. A skipped question is decided by the studio.</p>
               </>
             )}
           </article>
@@ -680,26 +835,53 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           )}
           {asking && state && (
             <>
-              <p className="studio-note">Round {state.rounds.length} of {STUDIO_MAX_ROUNDS}. Skip anything you would rather leave to the agents.</p>
-              {state.goal && <p className="studio-goal">{state.goal}</p>}
-              {state.assumptions.length > 0 && <Notes title="Assumed so far" items={state.assumptions} />}
-              {open.map((question, index) => (
-                <label key={question} className="studio-question">
-                  <span>{question}</span>
-                  <textarea
-                    value={answers[index] ?? ''}
-                    onChange={(event) => setAnswers((current) => current.map((value, position) => (position === index ? event.target.value : value)))}
-                    rows={3}
-                    placeholder="Answer, or leave it blank to skip"
+              <div className="studio-interview-head">
+                <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
+                <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, STUDIO_MAX_QUESTIONS)} of up to {STUDIO_MAX_QUESTIONS}. Skip anything you would rather leave to the agents.</p>
+              </div>
+              <div className="studio-thread" role="log" aria-live="polite">
+                <div className="studio-bubble user">{state.idea}</div>
+                {state.rounds.slice(0, -1).flatMap((round) => round.answers).map((item) => (
+                  <ThreadTurn key={item.question} question={item.question} answer={item.answer} />
+                ))}
+                {open.slice(0, step).map((question, index) => (
+                  <ThreadTurn key={question} question={question} answer={answers[index] ?? ''} />
+                ))}
+                {open[step] !== undefined && <div className="studio-bubble ai">{open[step]}</div>}
+                {open.length === 0 && <p className="studio-note">No questions this round.</p>}
+                {busy === 'answer' && <div className="studio-bubble ai"><Loader2 className="spin" size={13} /> Thinking about what to ask next…</div>}
+                <div ref={threadEnd} />
+              </div>
+              {open[step] !== undefined && (
+                <div className="studio-reply">
+                  {(openOptions[step] ?? []).length > 0 && (
+                    <div className="command-chip-row studio-options" role="group" aria-label="Suggested answers">
+                      {(openOptions[step] ?? []).map((option) => (
+                        <button key={option} type="button" className={draft === option ? 'active' : undefined} aria-pressed={draft === option} onClick={() => setDraft(option)} disabled={busy !== null}>{option}</button>
+                      ))}
+                    </div>
+                  )}
+                  <StudioComposer
+                    value={draft}
+                    onChange={setDraft}
+                    onSubmit={() => void submitStep(draft)}
+                    placeholder="Pick a suggestion or type your own answer"
+                    ariaLabel="Your answer"
                     disabled={busy !== null}
+                    sending={busy === 'answer'}
+                    enhancing={busy === 'enhance'}
+                    onEnhance={() => void enhanceDraft()}
+                    extra={(
+                      <>
+                        <button type="button" className="composer-text-button" onClick={() => void submitStep('')} disabled={busy !== null} title="Leave this one to the agents">Skip</button>
+                        <button type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</button>
+                      </>
+                    )}
+                    footer={<><span>Enter to send · Shift+Enter for a new line</span><span>{state.rounds.flatMap((round) => round.questions).length} of up to {STUDIO_MAX_QUESTIONS} questions</span></>}
                   />
-                </label>
-              ))}
-              {open.length === 0 && <p className="studio-note">No questions this round.</p>}
+                </div>
+              )}
               <div className="studio-actions">
-                <button type="button" className="primary-button" onClick={() => void sendAnswers()} disabled={busy !== null}>
-                  {busy === 'answer' ? <Loader2 className="spin" size={14} /> : <SkipForward size={14} />} Send answers
-                </button>
                 <button type="button" className="secondary-button" onClick={() => void finish()} disabled={busy !== null}>
                   {busy === 'finish' ? <Loader2 className="spin" size={14} /> : <FileText size={14} />} Write the brief now
                 </button>
@@ -785,7 +967,19 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 {BOARD_STATUSES.map((status) => {
                   const cards = board.cards.filter((card) => card.status === status);
                   return (
-                    <div key={status} className="studio-column">
+                    <div
+                      key={status}
+                      className={`studio-column${dropColumn === status ? ' drop-target' : ''}`}
+                      onDragOver={(event) => { if (busy === null) { event.preventDefault(); setDropColumn(status); } }}
+                      onDragLeave={() => setDropColumn((current) => (current === status ? null : current))}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setDropColumn(null);
+                        const cardId = event.dataTransfer.getData('text/plain');
+                        const dragged = board.cards.find((card) => card.id === cardId);
+                        if (dragged && dragged.status !== status && busy === null) void move(cardId, status);
+                      }}
+                    >
                       <h3>{status} <span className="studio-count">{cards.length}</span></h3>
                       {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} />)}
                       {cards.length === 0 && <p className="studio-note">Empty</p>}
@@ -803,15 +997,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
       {screen === 'new' && !state && (
         <div className="studio-composer-dock">
-          <div className="composer-box studio-idea-composer studio-composer">
-            <textarea
-              className="studio-idea"
-              value={idea}
-              onChange={(event) => setIdea(event.target.value)}
-              placeholder="A booking site for a two-chair barber shop: customers pick a time, pay a deposit, and the owner sees the day's list on her phone."
-              rows={3}
-              disabled={busy !== null}
-            />
+          <div className="studio-composer">
             <div className="studio-folder-choice">
               <span className="studio-project-label">Project location</span>
               <div role="radiogroup" aria-label="Project location">
@@ -838,17 +1024,20 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </div>
               <small>{currentFolder ? 'Start independent by default, or explicitly use the open folder. You can create a new project folder after the brief is ready.' : 'Plan first. You can create a project folder after the brief is ready.'}</small>
             </div>
-            <div className="composer-toolbar studio-idea-toolbar">
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void start()}
-                disabled={!projectId || !readiness?.ready || !idea.trim() || busy !== null}
-                title={readiness?.reason ?? undefined}
-              >
-                {busy === 'start' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start the discussion
-              </button>
-            </div>
+            <StudioComposer
+              value={idea}
+              onChange={setIdea}
+              onSubmit={() => void start()}
+              placeholder="A booking site for a two-chair barber shop: customers pick a time, pay a deposit, and the owner sees the day's list on her phone."
+              ariaLabel="Describe the project"
+              disabled={busy !== null}
+              canSend={Boolean(projectId && readiness?.ready && idea.trim())}
+              sending={busy === 'start'}
+              sendTitle={readiness?.reason ?? 'Start the discussion'}
+              enhancing={busy === 'enhance'}
+              onEnhance={() => void enhanceIdea()}
+              footer={<><span>Enter to start · Shift+Enter for a new line</span><span>KAI will ask up to {STUDIO_MAX_QUESTIONS} questions</span></>}
+            />
           </div>
         </div>
       )}
@@ -858,13 +1047,23 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
 function BoardCardView({ card, busy, onMove, onCheckUi }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void> }): ReactNode {
   return (
-    <div className={`studio-tile${card.stale ? ' stale' : ''}`}>
+    <div
+      className={`studio-tile${card.stale ? ' stale' : ''}${busy ? '' : ' draggable'}`}
+      draggable={!busy}
+      onDragStart={(event) => { event.dataTransfer.setData('text/plain', card.id); event.dataTransfer.effectAllowed = 'move'; }}
+    >
       <div className="studio-tile-head">
         <strong>{card.title}</strong>
         <span className="studio-kind">{card.kind}</span>
       </div>
       {card.stale && <p className="studio-note"><AlertTriangle size={12} /> {card.staleReason ?? 'Something this card reads changed.'}</p>}
       {card.claimedBy && <p className="studio-note"><Loader2 size={12} /> Held by {card.claimedBy}</p>}
+      {card.movedBy && card.movedAt && (
+        <p className="studio-note studio-moved">
+          <span className={`studio-who ${card.movedBy}`}>{card.movedBy === 'user' ? 'you' : card.movedBy === 'check' ? 'check' : 'agent'}</span>
+          moved {card.movedAt.slice(0, 16).replace('T', ' ')}
+        </p>
+      )}
       {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots</p>}
       {(card.kind === 'component' || card.kind === 'page') && (
         <button type="button" className="secondary-button" onClick={() => void onCheckUi(card.id)} disabled={busy || !card.route}>
@@ -881,6 +1080,70 @@ function BoardCardView({ card, busy, onMove, onCheckUi }: { card: BoardCard; bus
         {BOARD_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
       </select>
     </div>
+  );
+}
+
+/**
+ * The Studio's composer. It is the same box as the workspace composer (textarea, icon toolbar, round send button,
+ * footer hint) so the interview feels like talking to KAI, not filling in a form.
+ */
+function StudioComposer({ value, onChange, onSubmit, placeholder, ariaLabel, disabled, canSend, sending, sendTitle, enhancing, onEnhance, extra, footer }: {
+  value: string;
+  onChange: (next: string) => void;
+  onSubmit: () => void;
+  placeholder: string;
+  ariaLabel: string;
+  disabled: boolean;
+  canSend?: boolean;
+  sending: boolean;
+  sendTitle?: string;
+  enhancing: boolean;
+  onEnhance: () => void;
+  extra?: ReactNode;
+  footer: ReactNode;
+}): ReactNode {
+  const sendable = canSend ?? Boolean(value.trim());
+  return (
+    <>
+      <div className="composer-box">
+        <textarea
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              if (sendable && !disabled) onSubmit();
+            }
+          }}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          maxLength={4_000}
+          rows={3}
+          disabled={disabled}
+        />
+        <div className="composer-toolbar">
+          <div className="composer-leading">{extra}</div>
+          <div className="composer-actions">
+            <button type="button" className={`composer-icon-button ${enhancing ? 'active' : ''}`} disabled={!value.trim() || disabled} onClick={onEnhance} title="Improve this with the Prompt Guide" aria-label="Enhance">
+              {enhancing ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}
+            </button>
+            <button type="button" className="send-button" disabled={!sendable || disabled} onClick={onSubmit} title={sendTitle ?? 'Send'} aria-label="Send">
+              {sending ? <Loader2 className="spin" size={15} /> : <Send size={16} />}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="composer-footer">{footer}</div>
+    </>
+  );
+}
+
+function ThreadTurn({ question, answer }: { question: string; answer: string }): ReactNode {
+  return (
+    <>
+      <div className="studio-bubble ai">{question}</div>
+      <div className={`studio-bubble user${answer ? '' : ' skipped'}`}>{answer || 'Skipped, you decide'}</div>
+    </>
   );
 }
 

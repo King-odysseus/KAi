@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StudioArtifacts } from './artifacts';
 import { StudioBoardStore } from './board';
+import { writeHandoffFiles } from './handoff-files';
 import { createKaiProjectTools } from './kai-project-tools';
 import { SpecStore } from './spec-store';
 
@@ -17,6 +18,7 @@ import { SpecStore } from './spec-store';
 
 /** The one project a server process serves. The stores are addressed by id; here the id is fixed. */
 const PROJECT_ID = 'current';
+const BOARD_TOOLS = new Set(['claim_task', 'move_task', 'submit_output']);
 
 function projectArg(argv: readonly string[]): string | null {
   const index = argv.indexOf('--project');
@@ -53,6 +55,12 @@ export async function runKaiProjectServer(root: string): Promise<void> {
       async (input: Record<string, unknown>) => {
         try {
           const result = await tool.run(input);
+          // An outside agent moved the board, so the status file is rewritten for whoever reads it next.
+          if (BOARD_TOOLS.has(tool.name)) {
+            await Promise.all([ports.board.read(PROJECT_ID), ports.artifacts.read(PROJECT_ID)])
+              .then(([board, catalog]) => writeHandoffFiles(root, board, catalog, now()))
+              .catch(() => undefined);
+          }
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (error) {
           // A refused move is the point of the server, not a crash: report it as a tool error the agent can read.

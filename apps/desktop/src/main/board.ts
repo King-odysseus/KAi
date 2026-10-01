@@ -200,7 +200,7 @@ export class StudioBoardStore {
   }
 
   /** Moves a card to a new status, enforcing the dependency and done rules. */
-  async move(projectId: string, cardId: string, status: BoardStatus, note = ''): Promise<BoardCard> {
+  async move(projectId: string, cardId: string, status: BoardStatus, note = '', by: 'user' | 'agent' | 'check' = 'agent'): Promise<BoardCard> {
     const board = await this.read(projectId);
     const card = this.require(board, cardId);
     if (!BOARD_STATUSES.includes(status)) throw new Error(`Unknown board status ${status}.`);
@@ -209,7 +209,7 @@ export class StudioBoardStore {
       const unmet = card.dependsOn.filter((id) => byId.get(id)?.status !== 'done');
       if (unmet.length > 0) throw new Error(`Card ${cardId} is blocked by ${unmet.join(', ')}.`);
     }
-    let next: BoardCard = { ...card, status, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null };
+    let next: BoardCard = { ...card, status, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null, movedBy: by, movedAt: this.ports.now() };
     if (status === 'done') {
       const blocked = await this.explainDone(projectId, card);
       if (blocked) throw new Error(blocked);
@@ -225,7 +225,7 @@ export class StudioBoardStore {
     const card = this.require(board, cardId);
     if (card.claimedBy && card.claimedBy !== agent) throw new Error(`Card ${cardId} is already held by ${card.claimedBy}.`);
     if (card.status !== 'ready' && card.status !== 'inProgress') throw new Error(`Card ${cardId} is ${card.status}; only a ready card can be claimed.`);
-    const next: BoardCard = { ...card, status: 'inProgress', claimedBy: agent, updatedAt: this.ports.now() };
+    const next: BoardCard = { ...card, status: 'inProgress', claimedBy: agent, movedBy: 'agent', movedAt: this.ports.now(), updatedAt: this.ports.now() };
     await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
     return next;
   }

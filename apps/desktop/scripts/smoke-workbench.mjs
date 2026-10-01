@@ -50,6 +50,7 @@ try {
   await verifyGitAndTerminal(page);
   await verifyOperations(page);
   await verifyTasksAndSettings(page);
+  await verifyStudioAndGraph(page);
   await verifyThemes(page);
   await verifyIndependentWindows(electronApp, page);
   }
@@ -289,6 +290,21 @@ async function verifyOperations(page) {
 
   await page.getByRole('tab', { name: 'Active work' }).click();
   await page.getByText(/Cognitive1 is not running/).waitFor();
+}
+
+/** The Studio composer and the graph page open, fit the window, and show their empty states without a model. */
+async function verifyStudioAndGraph(page) {
+  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await page.getByRole('heading', { name: /Project Studio/ }).first().waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'studio-1440x920.png') });
+
+  await page.getByRole('button', { name: 'Work: Project Graph', exact: true }).click();
+  await page.getByRole('heading', { name: 'Project graph', level: 1 }).waitFor();
+  await page.getByRole('group', { name: 'Graph view' }).waitFor();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(outputDirectory, 'graph-1440x920.png') });
+  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
 }
 
 async function verifyTasksAndSettings(page) {

@@ -9,15 +9,24 @@ import { z } from 'zod';
  * second bill: the studio never asks for its own subscription or a hosted service.
  */
 
-/** Questions asked per round, and the most rounds the interview will ever run. Three rounds of four is the budget. */
+/** Questions asked per round, the maximum rounds, and the interview-wide question budget. */
 export const STUDIO_QUESTIONS_PER_ROUND = 4;
-export const STUDIO_MAX_ROUNDS = 3;
+export const STUDIO_MAX_ROUNDS = 10;
+export const STUDIO_MAX_QUESTIONS = 10;
+/** Each round is one question, asked in its own model call so it can react to the answer before it. */
+export const STUDIO_ROUND_QUESTION_LIMITS = Array.from({ length: STUDIO_MAX_ROUNDS }, () => 1) as readonly number[];
+/** Suggested answers offered under one question. The user can always type their own instead. */
+export const STUDIO_MAX_OPTIONS = 5;
+
+const interviewOptionsSchema = z.array(z.string().trim().min(1).max(120)).max(STUDIO_MAX_OPTIONS);
 
 export const interviewAnswerSchema = z
   .object({
     question: z.string().trim().min(1).max(400),
     // An empty answer means the user skipped the question, which is always allowed.
-    answer: z.string().trim().max(1_000),
+    // Interview answers are often a short requirements note, not a one-line reply.
+    // Keep this aligned with the idea field so a complete v1 scope can be submitted.
+    answer: z.string().trim().max(4_000),
   })
   .strict();
 export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
@@ -25,6 +34,8 @@ export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
 export const interviewRoundSchema = z
   .object({
     questions: z.array(z.string().trim().min(1).max(400)).max(STUDIO_QUESTIONS_PER_ROUND),
+    // Suggested answers, one list per question (same order). Empty for rounds written before choices existed.
+    options: z.array(interviewOptionsSchema).max(STUDIO_QUESTIONS_PER_ROUND).default([]),
     answers: z.array(interviewAnswerSchema).max(STUDIO_QUESTIONS_PER_ROUND),
   })
   .strict();
@@ -68,7 +79,14 @@ export const interviewReplySchema = z
   .object({
     goal: z.string().trim().min(1).max(4_000),
     assumptions: z.array(z.string().trim().min(1).max(400)).max(8).default([]),
-    questions: z.array(z.string().trim().min(1).max(400)).max(STUDIO_QUESTIONS_PER_ROUND).default([]),
+    // A bare string is accepted too, for models that ignore the object shape.
+    questions: z
+      .array(z.union([
+        z.string().trim().min(1).max(400),
+        z.object({ question: z.string().trim().min(1).max(400), options: interviewOptionsSchema.default([]) }).strict(),
+      ]))
+      .max(STUDIO_QUESTIONS_PER_ROUND)
+      .default([]),
   })
   .strict();
 export type InterviewReply = z.infer<typeof interviewReplySchema>;
@@ -92,7 +110,7 @@ export type StudioProjectArchiveInput = z.infer<typeof studioProjectArchiveInput
 export const studioProjectLaunchInputSchema = z
   .object({
     projectId: z.string().min(1),
-    destination: z.enum(['composer', 'editor']),
+    destination: z.enum(['composer', 'editor', 'generate']),
   })
   .strict();
 export type StudioProjectLaunchInput = z.infer<typeof studioProjectLaunchInputSchema>;
@@ -147,6 +165,14 @@ export function interviewOpenQuestions(state: InterviewState): string[] {
   if (!last || state.status === 'done') return [];
   const answered = new Set(last.answers.map((item) => item.question));
   return last.questions.filter((question) => !answered.has(question));
+}
+
+/** The suggested answers for each open question, aligned with `interviewOpenQuestions`. */
+export function interviewOpenOptions(state: InterviewState): string[][] {
+  const last = state.rounds[state.rounds.length - 1];
+  if (!last || state.status === 'done') return [];
+  const answered = new Set(last.answers.map((item) => item.question));
+  return last.questions.flatMap((question, index) => (answered.has(question) ? [] : [last.options[index] ?? []]));
 }
 
 /** Every answer the user gave, oldest round first, with the skipped ones dropped. */

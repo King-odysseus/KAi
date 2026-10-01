@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -72,6 +72,12 @@ function memoryStore(seed: InterviewState | null = null): InterviewPorts['store'
 }
 
 describe('Project Studio interview', () => {
+  it('accepts a detailed requirements answer of up to 4,000 characters', () => {
+    const answer = 'a'.repeat(4_000);
+    expect(interviewAnswerInputSchema.parse({ projectId: 'p1', answers: [{ question: 'What is in scope?', answer }] }).answers[0]?.answer).toBe(answer);
+    expect(() => interviewAnswerInputSchema.parse({ projectId: 'p1', answers: [{ question: 'What is in scope?', answer: `${answer}a` }] })).toThrow();
+  });
+
   it('is off unless the Prompt Guide connection is set up, and says which key to fix', async () => {
     const off = new DesktopInterview(ports({ settings: async () => { const settings = createDefaultSettings(); return { ...settings, promptGuide: { ...settings.promptGuide, enabled: false } }; } }));
     expect((await off.readiness()).reason).toMatch(/Turn it on/);
@@ -90,9 +96,9 @@ describe('Project Studio interview', () => {
     expect(started.status).toBe('asking');
     expect(started.goal).toMatch(/deposits/);
     expect(started.assumptions).toEqual(['Card payments only']);
-    // The repeated question is dropped, so the user is never asked the same thing twice in one round.
-    expect(started.rounds[0]?.questions).toEqual(['How many chairs?', 'Who cancels a booking?']);
-    expect(interviewOpenQuestions(started)).toHaveLength(2);
+    // Each model call asks one question, so the next one can react to the answer before it.
+    expect(started.rounds[0]?.questions).toEqual(['How many chairs?']);
+    expect(interviewOpenQuestions(started)).toHaveLength(1);
   });
 
   it('keeps a new plan independent unless a folder is explicitly linked', async () => {
@@ -163,20 +169,48 @@ describe('Project Studio interview', () => {
     expect(memory.current?.status).toBe('done');
   });
 
-  it('stops after the round budget instead of paying for another round', async () => {
+  it('stops after the question budget instead of paying for another call', async () => {
     const replies = Array.from({ length: STUDIO_MAX_ROUNDS }, (_value, index) => JSON.stringify({
       goal: `Goal ${index + 1}`,
       assumptions: [],
       questions: [`Question ${index + 1}`],
     }));
     const interview = new DesktopInterview(ports({}, replies));
-    await interview.start({ projectId: 'p1', idea: 'Booking site.' });
-    let current = await interview.answer({ projectId: 'p1', answers: [] });
-    current = await interview.answer({ projectId: 'p1', answers: [] });
-    expect(current.status).toBe('asking');
+    let current = await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    for (let answered = 1; answered < STUDIO_MAX_ROUNDS; answered += 1) {
+      current = await interview.answer({ projectId: 'p1', answers: [] });
+      expect(current.status).toBe('asking');
+    }
     current = await interview.answer({ projectId: 'p1', answers: [] });
     expect(current.status).toBe('done');
     expect(current.rounds).toHaveLength(STUDIO_MAX_ROUNDS);
+  });
+
+  it('never asks more than ten questions, one per call, even when the model offers more', async () => {
+    const replies = Array.from({ length: 12 }, (_value, index) => JSON.stringify({
+      goal: `Goal ${index + 1}`,
+      assumptions: [],
+      questions: [`Question ${index + 1} a`, `Question ${index + 1} b`, `Question ${index + 1} c`, `Question ${index + 1} d`],
+    }));
+    const interview = new DesktopInterview(ports({}, replies));
+    let current = await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    expect(current.rounds[0]?.questions).toEqual(['Question 1 a']);
+    while (current.status === 'asking') current = await interview.answer({ projectId: 'p1', answers: [] });
+    expect(current.rounds.flatMap((round) => round.questions)).toHaveLength(STUDIO_MAX_QUESTIONS);
+  });
+
+  it('keeps the suggested answers the model gives for each question', async () => {
+    const interview = new DesktopInterview(ports({}, [JSON.stringify({
+      goal: 'Booking site.',
+      assumptions: [],
+      questions: [
+        { question: 'Which platform?', options: ['React PWA', 'Web app', 'react pwa', 'Desktop app'] },
+        'Who pays the deposit?',
+      ],
+    })]));
+    const state = await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    expect(state.rounds[0]?.questions).toEqual(['Which platform?']);
+    expect(state.rounds[0]?.options).toEqual([['React PWA', 'Web app', 'Desktop app']]);
   });
 
   it('refuses a second interview while one is in progress, and a reset clears it', async () => {

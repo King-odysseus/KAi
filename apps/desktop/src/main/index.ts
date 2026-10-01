@@ -51,6 +51,7 @@ import { InterviewStore } from './interview-store';
 import { StudioArtifacts } from './artifacts';
 import { StudioBoardStore } from './board';
 import { DesktopStudio } from './studio';
+import { writeHandoffFiles } from './handoff-files';
 import { SPEC_ROOT, SpecStore } from './spec-store';
 import { DesktopUiCheck, playwrightUiCheckPorts } from './ui-check';
 import { resolveInside } from './project-files';
@@ -683,6 +684,11 @@ async function startApplication(): Promise<void> {
           return blocks;
         },
       };
+    },
+    handoff: {
+      write: async (projectId, board, catalog) => {
+        await writeHandoffFiles(await studioProjectRoot(projectId), board, catalog, new Date().toISOString());
+      },
     },
     now: () => new Date().toISOString(),
   });

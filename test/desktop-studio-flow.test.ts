@@ -115,16 +115,27 @@ describe('studio generation', () => {
       kai_studio_stack: JSON.stringify({ content: '# Stack' }),
       kai_studio_flows: JSON.stringify({ content: '# Flows' }),
       kai_studio_style_guide: JSON.stringify({ content: '# Style' }),
+      kai_studio_decisions: JSON.stringify({ content: '# Decisions' }),
+      kai_studio_architecture: JSON.stringify({ content: '# Architecture' }),
+      kai_studio_conventions: JSON.stringify({ content: '# Conventions' }),
+      kai_studio_acceptance: JSON.stringify({ content: '# Acceptance' }),
+      kai_studio_risks: JSON.stringify({ content: '# Risks' }),
+      kai_studio_glossary: JSON.stringify({ content: '# Glossary' }),
+      kai_studio_setup: JSON.stringify({ content: '# Setup' }),
     });
     // Seed the brief the interview would have written, then generate everything built on it.
     await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
     await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'brief.md'), '# Brief\n');
     const catalog = await app.generateAll('p1');
-    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stories', 'stack', 'flows', 'style-guide']);
-    expect(calls).toEqual(['kai_studio_prd', 'kai_studio_stories', 'kai_studio_stack', 'kai_studio_flows', 'kai_studio_style_guide']);
+    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stories', 'stack', 'flows', 'style-guide', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup']);
+    expect(calls).toEqual([
+      'kai_studio_prd', 'kai_studio_stories', 'kai_studio_stack', 'kai_studio_flows', 'kai_studio_style_guide',
+      'kai_studio_decisions', 'kai_studio_architecture', 'kai_studio_conventions', 'kai_studio_acceptance',
+      'kai_studio_risks', 'kai_studio_glossary', 'kai_studio_setup',
+    ]);
     const again = await app.generateAll('p1');
     expect(again.artifacts.every((item) => !item.stale)).toBe(true);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(12);
   });
 
   it('refuses an artifact whose input has not been written yet', async () => {

@@ -13,7 +13,11 @@ import { agentIdSchema } from './primitives';
  */
 
 /** The artifacts the studio writes. Each is one plain file, so Git versions it and an agent reads it without MCP. */
-export const ARTIFACT_KINDS = ['brief', 'prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens'] as const;
+export const ARTIFACT_KINDS = [
+  'brief', 'prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens',
+  // The handoff set: what an agent or a person needs to pick the project up without re-reading everything.
+  'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup',
+] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 export const artifactKindSchema = z.enum(ARTIFACT_KINDS);
 
@@ -26,6 +30,13 @@ export const ARTIFACT_PATHS: Record<ArtifactKind, string> = {
   flows: '.kai/spec/flows.md',
   'style-guide': '.kai/spec/design/style-guide.md',
   tokens: '.kai/spec/design/tokens.json',
+  decisions: '.kai/spec/decisions.md',
+  architecture: '.kai/spec/architecture.md',
+  conventions: '.kai/spec/conventions.md',
+  acceptance: '.kai/spec/acceptance.md',
+  risks: '.kai/spec/risks.md',
+  glossary: '.kai/spec/glossary.md',
+  setup: '.kai/spec/setup.md',
 };
 
 /**
@@ -40,7 +51,19 @@ export const ARTIFACT_SPEC_PATHS: Record<ArtifactKind, string> = {
   flows: 'flows.md',
   'style-guide': 'design/style-guide.md',
   tokens: 'design/tokens.json',
+  decisions: 'decisions.md',
+  architecture: 'architecture.md',
+  conventions: 'conventions.md',
+  acceptance: 'acceptance.md',
+  risks: 'risks.md',
+  glossary: 'glossary.md',
+  setup: 'setup.md',
 };
+
+/** Written by code from the board and the artifacts, never by a model, and never part of the dependency table. */
+export const STUDIO_STATUS_PATH = 'status.md';
+/** The agent instructions file lives in the project root so any agent finds it, not only KAI's. */
+export const AGENTS_FILE = 'AGENTS.md';
 
 /** The catalog's own artifact. Written by code, never by a model, so it is always readable. */
 export const STUDIO_ARTIFACTS_PATH = 'artifacts.json';
@@ -60,6 +83,13 @@ export const ARTIFACT_DEPENDENCIES: Record<ArtifactKind, readonly ArtifactKind[]
   flows: ['stories'],
   'style-guide': ['stack'],
   tokens: ['style-guide'],
+  decisions: ['brief', 'stack'],
+  architecture: ['stack', 'flows'],
+  conventions: ['stack'],
+  acceptance: ['stories'],
+  risks: ['prd'],
+  glossary: ['brief'],
+  setup: ['stack'],
 };
 
 export const artifactEntrySchema = z
@@ -212,6 +242,9 @@ export const boardCardSchema = z
     staleReason: z.string().max(300).nullable().default(null),
     /** Set while an agent holds the card, so two agents never take the same one. */
     claimedBy: z.string().max(120).nullable().default(null),
+    /** Who last moved the card, and when: a person dragging it, an agent working it, or the automatic check. */
+    movedBy: z.enum(['user', 'agent', 'check']).nullable().default(null),
+    movedAt: z.string().min(1).nullable().default(null),
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
   })

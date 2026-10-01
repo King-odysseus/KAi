@@ -2529,7 +2529,7 @@ async function chooseStudioProjectFolder(
 async function launchStudioProject(
   context: IpcContext,
   studioProjectId: string,
-  _destination: 'composer' | 'editor',
+  _destination: 'composer' | 'editor' | 'generate',
 ): Promise<{ projectId: string; projectName: string; prompt: string }> {
   const state = await context.interview.read({ projectId: studioProjectId });
   if (!state) throw new NotFoundError('Studio project not found.');

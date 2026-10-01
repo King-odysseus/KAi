@@ -1,6 +1,8 @@
 import {
   STUDIO_MAX_ROUNDS,
-  STUDIO_QUESTIONS_PER_ROUND,
+  STUDIO_MAX_OPTIONS,
+  STUDIO_MAX_QUESTIONS,
+  STUDIO_ROUND_QUESTION_LIMITS,
   directProviderPreset,
   interviewReplySchema,
   interviewStateSchema,
@@ -20,7 +22,7 @@ import { loadProjectContext, parseJsonResponse } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
 
 /**
- * The interview that starts the Project Studio. It reads one paragraph, asks at most a dozen skippable questions
+ * The interview that starts the Project Studio. It reads one paragraph, asks at most ten skippable questions
  * across three rounds, and writes `.kai/spec/brief.md` when it has enough to be specific.
  *
  * It reuses the Prompt Guide's provider connection: the studio adds no second key, no hosted service and no
@@ -39,7 +41,18 @@ const INTERVIEW_JSON_SCHEMA = {
   properties: {
     goal: { type: 'string' },
     assumptions: { type: 'array', items: { type: 'string' } },
-    questions: { type: 'array', items: { type: 'string' } },
+    questions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['question', 'options'],
+        properties: {
+          question: { type: 'string' },
+          options: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
   },
 } as const;
 
@@ -190,12 +203,16 @@ export class DesktopInterview {
       parseInterviewReply,
     );
     const asked = new Set(state.rounds.flatMap((round) => round.questions.map(normalise)));
-    const questions = dedupeQuestions(reply.questions).filter((question) => !asked.has(normalise(question))).slice(0, STUDIO_QUESTIONS_PER_ROUND);
+    const remaining = Math.max(0, STUDIO_MAX_QUESTIONS - asked.size);
+    const fresh = reply.questions
+      .filter((item) => !asked.has(normalise(item.question)))
+      .slice(0, Math.min(roundLimit(state.rounds.length), remaining));
+    const questions = fresh.map((item) => item.question);
     const next: InterviewState = {
       ...state,
       goal: reply.goal,
       assumptions: reply.assumptions.slice(0, 12),
-      rounds: [...state.rounds, { questions, answers: [] }],
+      rounds: [...state.rounds, { questions, options: fresh.map((item) => item.options), answers: [] }],
       updatedAt: this.ports.now(),
     };
     // A round with no questions means the model knows enough: stop asking and write the brief.
@@ -249,7 +266,8 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     'Write:',
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
     '- "assumptions": decisions you made where the description was silent, each short and concrete. Carry forward the ones you still believe.',
-    `- "questions": up to ${STUDIO_QUESTIONS_PER_ROUND} questions only the user can answer, most important first. Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
+    `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${STUDIO_MAX_QUESTIONS} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
+    `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to this project (for example "React PWA", "Web app", "Desktop app" for a platform question). The user can pick one or type their own. Use an empty options array only for a question that is truly open-ended.`,
     'Ask none when you can already write the goal, the stack and the acceptance criteria from what you have. Fewer, better questions beat a full set.',
     'Never repeat a question the user has already answered, and never re-ask one they skipped: a skip means they want you to decide.',
     'Never invent files that the snapshot shows do not exist; say "a new file under <folder>" instead.',
@@ -270,8 +288,8 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
   return { system, user };
 }
 
-/** Reads the model's reply, dropping duplicates and clearing up anything long enough to break the round limit. */
-export function parseInterviewReply(content: string): { goal: string; assumptions: string[]; questions: string[] } {
+/** Reads the model's reply, dropping duplicate questions and options. */
+export function parseInterviewReply(content: string): { goal: string; assumptions: string[]; questions: Array<{ question: string; options: string[] }> } {
   const raw = parseJsonResponse(content, 'Project Studio');
   const parsed = interviewReplySchema.safeParse(raw);
   if (!parsed.success) {
@@ -281,7 +299,7 @@ export function parseInterviewReply(content: string): { goal: string; assumption
   return {
     goal: parsed.data.goal,
     assumptions: parsed.data.assumptions.slice(0, 12),
-    questions: dedupeQuestions(parsed.data.questions),
+    questions: dedupeReplyQuestions(parsed.data.questions),
   };
 }
 
@@ -313,17 +331,37 @@ export function briefMarkdown(state: InterviewState, writtenAt: string): string 
   return `${sections.filter(Boolean).join('\n\n')}\n`;
 }
 
-/** Keeps the questions the model returned, minus exact repeats, capped at a round. */
-function dedupeQuestions(questions: readonly string[]): string[] {
+/** Keeps the questions the model returned, minus exact repeats, with their suggested answers cleaned up. */
+function dedupeReplyQuestions(questions: ReadonlyArray<string | { question: string; options?: readonly string[] }>): Array<{ question: string; options: string[] }> {
   const seen = new Set<string>();
-  const kept: string[] = [];
-  for (const question of questions) {
+  const kept: Array<{ question: string; options: string[] }> = [];
+  for (const item of questions) {
+    const question = typeof item === 'string' ? item : item.question;
     const key = normalise(question);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    kept.push(question.trim());
+    const options = typeof item === 'string' ? [] : dedupeOptions(item.options ?? []);
+    kept.push({ question: question.trim(), options });
   }
   return kept;
+}
+
+function dedupeOptions(options: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return options
+    .map((option) => option.trim())
+    .filter((option) => {
+      const key = normalise(option);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, STUDIO_MAX_OPTIONS);
+}
+
+/** Questions the next round may ask: 3, then 3, then 4, so the interview never passes ten. */
+function roundLimit(roundsAsked: number): number {
+  return STUDIO_ROUND_QUESTION_LIMITS[roundsAsked] ?? 0;
 }
 
 /** Answers for the questions actually asked; anything else in the payload is ignored rather than stored. */
