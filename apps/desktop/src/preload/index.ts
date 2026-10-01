@@ -24,6 +24,7 @@ const bridge: KaiDesktopBridge = {
   updateBrainField: (request) => ipcRenderer.invoke('brain:update-field', request),
   importBrain: () => ipcRenderer.invoke('brain:import', {}),
   brainGitStatus: () => ipcRenderer.invoke('brain:git-status', {}),
+  mirrorBrain: (request) => ipcRenderer.invoke('brain:mirror-now', request),
   brainGitSync: (action) => ipcRenderer.invoke('brain:git-sync', { action }),
   cognitive1Tool: (request) => ipcRenderer.invoke('cognitive1:tool', request),
   cognitive1Operation: (request) => ipcRenderer.invoke('cognitive1:operation', request),

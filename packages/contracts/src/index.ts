@@ -2,6 +2,7 @@ export * from './agents';
 export * from './automation';
 export * from './autopilot';
 export * from './brain';
+export * from './brain-mirror';
 export * from './context';
 export * from './coordination';
 export * from './direct-providers';

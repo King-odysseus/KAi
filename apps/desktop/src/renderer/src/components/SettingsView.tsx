@@ -827,6 +827,18 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <TextField label="Brain data path" value={draft.cognitive1.dataPath ?? ''} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, dataPath: value || null } })} />
               </div>
               <div className="settings-subsection">
+                <div className="settings-subsection-title"><Database size={14} /><span>Second brain</span></div>
+                <label className="toggle-row">
+                  <span><strong>Mirror every lesson</strong><small>Files each lesson into another Cognitive1 daemon as well, such as the standalone one on port 9876 that commits and pushes its brain on a timer. Reads and sessions stay with KAI's own daemon.</small></span>
+                  <input type="checkbox" checked={draft.cognitive1.mirror.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, enabled: event.target.checked } } })} />
+                </label>
+                <div className="field-grid">
+                  <TextField label="Mirror endpoint" value={draft.cognitive1.mirror.endpoint} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, endpoint: value } } })} />
+                  <TextField label="Mirror token" value={draft.cognitive1.mirror.token} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, token: value } } })} />
+                </div>
+                <small className="settings-subsection-note">The standalone daemon needs no token. KAI keeps the two level every fifteen minutes; “Sync the mirror now” on the C1 Brain page forces a pass early.</small>
+              </div>
+              <div className="settings-subsection">
                 <div className="settings-subsection-title"><ShieldCheck size={14} /><span>AI Overwatch</span></div>
                 <label className="toggle-row">
                   <span><strong>Enable Overwatch</strong><small>Runs brain quality audits, draft classification, duplicate detection, and kernel distillation</small></span>

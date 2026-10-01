@@ -33,9 +33,17 @@ export interface Cognitive1LoopbackAccess {
   loopbackAccess(kind: ServiceKind): Promise<{ endpoint: string; token: string }>;
 }
 
+export interface Cognitive1MirrorTarget {
+  endpoint: string;
+  /** Sent as a bearer token when the mirrored daemon is one KAI manages; the standalone one wants none. */
+  token?: string;
+}
+
 export interface Cognitive1ClientOptions {
   access: Cognitive1LoopbackAccess;
   timeoutMs?: number;
+  /** The second daemon every lesson is copied to, or null when the mirror is off. Read per write, so a settings change takes effect at once. */
+  mirror?: () => Promise<Cognitive1MirrorTarget | null>;
 }
 
 const rawRecallEntrySchema = z.object({
@@ -219,8 +227,14 @@ export interface Cognitive1HandoffResult {
   next?: string;
 }
 
+/** The routes a lesson travels on. Everything else stays with the daemon that owns it. */
+const MIRRORED_PATHS = new Set(['/api/brain/learn', '/api/brain/auto-learn']);
+const MIRROR_TIMEOUT_MS = 10_000;
+
 export class Cognitive1Client {
   private readonly timeoutMs: number;
+  /** Set by the caller once the logger is available, so a quiet mirror still leaves a trace. */
+  onMirrorError: ((error: unknown) => void) | undefined;
   private mcpConnection: { fingerprint: string; client: Client } | undefined;
 
   private knownProjectsCache: { at: number; projects: KnownBrainProject[] } | null = null;
@@ -346,7 +360,34 @@ export class Cognitive1Client {
   async operation(input: Cognitive1OperationInput): Promise<Cognitive1OperationResult> {
     const request = cognitive1OperationInputSchema.parse(input);
     const route = operationRoute(request.operation, request.payload);
-    return this.requestJson(route.path, { method: route.method, body: route.body }, z.unknown());
+    const result = await this.requestJson(route.path, { method: route.method, body: route.body }, z.unknown());
+    // Fire and forget: the write here has already succeeded, and the second brain is never allowed to fail it.
+    void this.mirrorLearn(route);
+    return result;
+  }
+
+  /**
+   * Files the same lesson into the second brain. Only the two learn routes are mirrored: claims, sessions and
+   * handoffs are state about *this* daemon, and copying them would make the other one disagree with reality.
+   */
+  private async mirrorLearn(route: { path: string; method: string; body?: Record<string, unknown> }): Promise<void> {
+    if (route.method !== 'POST' || !MIRRORED_PATHS.has(route.path)) return;
+    try {
+      const mirror = await this.options.mirror?.();
+      if (!mirror?.endpoint) return;
+      await fetch(new URL(route.path, mirror.endpoint), {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(mirror.token ? { Authorization: `Bearer ${mirror.token}` } : {}),
+        },
+        body: JSON.stringify(route.body ?? {}),
+        signal: AbortSignal.timeout(MIRROR_TIMEOUT_MS),
+      });
+    } catch (error) {
+      this.onMirrorError?.(error);
+    }
   }
 
   async tool(input: Cognitive1McpToolInput): Promise<Cognitive1McpToolResult> {

@@ -114,6 +114,8 @@ import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopAutopilot } from './autopilot';
+import { syncBrainToMirror } from './brain-mirror';
+import type { BrainMirrorOutcome } from '@kai/contracts';
 import { composeRunLesson, type RunLessonInput } from './run-learning';
 import type { DesktopPromptGuide } from './prompt-guide';
 import type { DesktopInterview } from './interview';
@@ -380,6 +382,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'brain:import', async () => importBrain(context));
   handle(context, 'brain:git-status', async () => brainGitStatus(await sharedBrainPath(context)));
   handle(context, 'brain:git-sync', async ({ action }) => syncBrainGit(await sharedBrainPath(context), action));
+  handle(context, 'brain:mirror-now', async ({ dryRun }) => mirrorBrainNow(context, dryRun));
   handle(context, 'cognitive1:tool', async (request) => context.cognitive1.tool(request));
   handle(context, 'cognitive1:operation', async (request) => context.cognitive1.operation(request));
   handle(context, 'rules:get', async () => context.executionRules.document());
@@ -2291,7 +2294,7 @@ async function readProjectManifestNames(projectPath: string): Promise<{ name?: s
   }
 }
 
-async function cognitive1Ready(context: IpcContext): Promise<boolean> {
+export async function cognitive1Ready(context: IpcContext): Promise<boolean> {
   const settings = await context.settings.load();
   if (!settings.cognitive1.enabled) return false;
   try {
@@ -2410,6 +2413,23 @@ function changedFilePaths(conversation: ConversationRecord | null): string[] {
 
 export function cancelConversationRun(context: IpcContext, conversationId: string): boolean {
   return cancelAgent(context, conversationId);
+}
+
+/**
+ * Brings the mirror brain level with this one. It reads the entries this brain holds rather than intercepting writes,
+ * which is what makes it cover agents that call brain_learn over their own MCP connection as well as KAI's own runs.
+ */
+export async function mirrorBrainNow(context: IpcContext, dryRun: boolean): Promise<BrainMirrorOutcome> {
+  const settings = await context.settings.load();
+  const mirror = settings.cognitive1.mirror;
+  if (!mirror.enabled) throw new Error('Turn on the brain mirror in Settings, then try again.');
+  if (!(await cognitive1Ready(context))) throw new Error('Cognitive1 is not running yet.');
+  return syncBrainToMirror({
+    sourceBrain: await sharedBrainPath(context),
+    endpoint: mirror.endpoint,
+    ...(mirror.token ? { token: mirror.token } : {}),
+    dryRun,
+  });
 }
 
 /** Stops on Stop: the checks and hooks a run's automation is executing, not only the agent. */

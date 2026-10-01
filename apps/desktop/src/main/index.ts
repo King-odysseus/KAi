@@ -21,7 +21,7 @@ import { DesktopEvals, EvalStore } from './evals';
 import { RunScoreStore } from './run-scores';
 import { AgentExperienceStore } from './experience-store';
 import { DesktopScheduler, ScheduleStore } from './scheduler';
-import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
+import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, cognitive1Ready, mirrorBrainNow, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
 import { UniversalProxyClient } from './proxy-client';
 import { DesktopProxyRouting } from './proxy-routing';
@@ -46,6 +46,7 @@ import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
+import { BrainMirrorLoop } from './brain-mirror';
 import { DesktopPromptGuide } from './prompt-guide';
 import { DesktopInterview } from './interview';
 import { InterviewStore } from './interview-store';
@@ -83,6 +84,8 @@ let mcpRuntime: DesktopMcpRuntime | null = null;
 let remoteGateway: RemoteGateway | null = null;
 let shutdownPromise: Promise<void> | null = null;
 let desktopShell: DesktopShell | null = null;
+/** Levels KAI's brain with the mirror brain in the background; null until the app is built. */
+let mirrorLoop: BrainMirrorLoop | null = null;
 let quitting = false;
 const desktopWindows = new DesktopWindowRegistry();
 const forceClosing = new Set<number>();
@@ -181,6 +184,7 @@ app.on('before-quit', (event) => {
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
     .then(() => activeContext?.workflows.dispose())
     .then(() => activeContext?.autopilot.dispose())
+    .then(() => mirrorLoop?.stop())
     .then(() => activeContext?.scheduler.stop())
     .then(() => activeContext?.terminal.stopAll())
     .then(() => activeContext?.preview.stopAll())
@@ -308,7 +312,30 @@ async function startApplication(): Promise<void> {
       for (const file of moved) logger.info('internal', `Agent proxy route moved to port ${port}`, file);
     },
   });
-  const cognitive1 = new Cognitive1Client({ access: serviceController });
+  const cognitive1 = new Cognitive1Client({
+    access: serviceController,
+    // The second brain, when one is configured: every lesson KAI files is filed there too, so the daemon that
+    // commits and pushes its brain keeps up without the two writing the same files.
+    mirror: async () => {
+      const current = (await settings.load()).cognitive1.mirror;
+      return current.enabled && current.endpoint ? { endpoint: current.endpoint, ...(current.token ? { token: current.token } : {}) } : null;
+    },
+  });
+  // Levels KAI's brain and the mirror brain every few minutes, which is what carries lessons an agent filed
+  // straight to the daemon over MCP across as well.
+  mirrorLoop = new BrainMirrorLoop({
+    // Both halves matter: no point reading the brain's files while the daemon that owns them is stopped.
+    ready: async () => (await settings.load()).cognitive1.mirror.enabled && (await cognitive1Ready(ipcContext!)),
+    sync: async () => {
+      const outcome = await mirrorBrainNow(ipcContext!, false);
+      return outcome;
+    },
+    onError: (error) => logger.warn('internal', 'The brain mirror sync failed', error instanceof Error ? error.message : String(error)),
+    onSync: (outcome) => logger.info('internal', `Brain mirror: filed ${outcome.posted} entr${outcome.posted === 1 ? 'y' : 'ies'} in the second brain`),
+  });
+  // The mirror is quiet by design, so its failures go to the log rather than to the screen.
+  cognitive1.onMirrorError = (error) =>
+    logger.warn('internal', 'The brain mirror rejected a write', error instanceof Error ? error.message : String(error));
   const proxy = new UniversalProxyClient({ access: serviceController });
   const proxyRouting: DesktopProxyRouting = new DesktopProxyRouting({
     locateEngine: () => serviceController!.engineInstallation('universalProxy'),
@@ -790,6 +817,8 @@ async function startApplication(): Promise<void> {
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);
+  // Started once the context is complete: the first pass waits a little so it does not race the app's own startup.
+  mirrorLoop.start();
   const registry = registerIpc(ipcContext);
   remote = new RemoteGateway({
     credentials,

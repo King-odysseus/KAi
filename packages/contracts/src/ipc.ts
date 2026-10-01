@@ -21,6 +21,7 @@ import {
   type StudioProjectLaunchResult,
   type StudioProjectSummary,
 } from './interview';
+import { brainMirrorInputSchema, brainMirrorOutcomeSchema, type BrainMirrorInput, type BrainMirrorOutcome } from './brain-mirror';
 import {
   autopilotProjectInputSchema,
   autopilotStartInputSchema,
@@ -377,11 +378,13 @@ export const ipcChannels = [
   'services:rotate-token',
   'services:copy-token',
   'brain:overview',
+  'brain:mirror-now',
   'brain:search',
   'brain:update-field',
   'brain:import',
   'brain:git-status',
   'brain:git-sync',
+  'brain:mirror-now',
   'cognitive1:tool',
   'cognitive1:operation',
   'rules:get',
@@ -659,6 +662,7 @@ export const ipcInputSchemas = {
   'services:rotate-token': z.object({ kind: serviceKindSchema }).strict(),
   'services:copy-token': z.object({ kind: serviceKindSchema }).strict(),
   'brain:overview': emptyInputSchema,
+  'brain:mirror-now': brainMirrorInputSchema,
   'brain:search': brainSearchInputSchema,
   'brain:update-field': brainFieldUpdateInputSchema,
   'brain:import': emptyInputSchema,
@@ -988,6 +992,7 @@ export const studioDesignPullResponseSchema = studioDesignPullSchema;
 /** The cards one "work the board" run touched, in the order they ran. */
 export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
 export const autopilotResponseSchema = autopilotStatusResponseSchema;
+export const brainMirrorResponseSchema = brainMirrorOutcomeSchema;
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
 export const remoteStatusResponseSchema = remoteAccessStatusSchema;
@@ -1318,6 +1323,8 @@ export interface KaiDesktopBridge {
   onTerminalEvent(listener: (event: TerminalEvent) => void): () => void;
   brainGitStatus(): Promise<IpcResponse<BrainGitStatus>>;
   brainGitSync(action: 'init' | 'commit' | 'pull' | 'push'): Promise<IpcResponse<BrainGitSyncResult>>;
+  /** Copies this brain's entries into the other one, so switching the mirror on does not leave earlier work behind. */
+  mirrorBrain(request: BrainMirrorInput): Promise<IpcResponse<BrainMirrorOutcome>>;
   gitOverview(projectId: string): Promise<IpcResponse<GitOverview>>;
   gitStage(projectId: string, paths: string[], stage: boolean): Promise<IpcResponse<GitActionResult>>;
   gitCommit(projectId: string, message: string): Promise<IpcResponse<GitActionResult>>;

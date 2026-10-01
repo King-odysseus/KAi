@@ -50,11 +50,28 @@ export const cognitive1OverwatchSettingsSchema = z
   })
   .strict();
 
+/**
+ * The second brain: another C1 daemon that gets a copy of everything KAI learns. It is how a person who already runs
+ * C1 elsewhere — the standalone daemon the VS Code side uses, which commits and pushes its brain on a timer — keeps
+ * one record without the two daemons writing the same files.
+ */
+export const cognitive1MirrorSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** The other daemon's address. The standalone one listens on 9876 by default. */
+    endpoint: z.string().url().default('http://127.0.0.1:9876'),
+    /** Only needed when that daemon is one KAI manages, which asks for a token. */
+    token: z.string().default(''),
+  })
+  .strict();
+export type Cognitive1MirrorSettings = z.infer<typeof cognitive1MirrorSettingsSchema>;
+
 export const cognitive1ServiceSettingsSchema = z
   .object({
     enabled: z.boolean(),
     endpoint: z.string().url(),
     dataPath: z.string().nullable(),
+    mirror: cognitive1MirrorSettingsSchema.default({ enabled: false, endpoint: 'http://127.0.0.1:9876', token: '' }),
     overwatch: cognitive1OverwatchSettingsSchema.default({
       enabled: false,
       provider: 'deepseek',
@@ -480,6 +497,7 @@ export function createDefaultSettings(): AppSettings {
       // 9876 belongs to the standalone Cognitive1 daemon, so KAI's own managed copy uses the next port.
       endpoint: 'http://127.0.0.1:9877',
       dataPath: null,
+      mirror: { enabled: false, endpoint: 'http://127.0.0.1:9876', token: '' },
       overwatch: {
         enabled: false,
         provider: 'deepseek',

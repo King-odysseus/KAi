@@ -5,6 +5,7 @@ import {
   CloudDownload,
   CloudUpload,
   FileText,
+  Copy,
   FolderPlus,
   GitBranch,
   GitCommitHorizontal,
@@ -73,6 +74,8 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
   const [gitStatus, setGitStatus] = useState<BrainGitStatus | null>(null);
   const [gitBusy, setGitBusy] = useState<BrainGitSyncAction | 'refresh' | null>(null);
   const [gitFeedback, setGitFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [mirrorBusy, setMirrorBusy] = useState(false);
+  const [mirrorFeedback, setMirrorFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const latestRequest = useRef(0);
 
   useEffect(() => {
@@ -197,6 +200,32 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
       setGitFeedback({ kind: 'error', message: messageOf(caught) });
     } finally {
       setGitBusy(null);
+    }
+  }
+
+  /**
+   * Copies the entries this brain already holds into the mirror. The receiving daemon compares titles itself, so
+   * nothing is duplicated by running it twice; what it turns away is reported rather than hidden.
+   */
+  async function copyIntoMirror(): Promise<void> {
+    const confirmed = await confirmDialog({
+      title: 'Bring the mirror up to date?',
+      detail: 'Entries this brain holds that the mirror does not are filed into it. The mirror applies its own duplicate and quality rules, and it already keeps itself level every 15 minutes, so this only forces a pass early.',
+      confirmLabel: 'Copy entries',
+    });
+    if (!confirmed) return;
+    setMirrorBusy(true);
+    setMirrorFeedback(null);
+    try {
+      const outcome = await window.kaiDesktop.mirrorBrain({ dryRun: false }).then(unwrap);
+      setMirrorFeedback({
+        kind: 'success',
+        message: `Read ${outcome.read} entries: ${outcome.posted} filed, ${outcome.skipped} already in the mirror, ${outcome.rejected} turned away, ${outcome.failed} failed.`,
+      });
+    } catch (caught) {
+      setMirrorFeedback({ kind: 'error', message: messageOf(caught) });
+    } finally {
+      setMirrorBusy(false);
     }
   }
 
@@ -451,6 +480,9 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
             <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('push')}>
               <CloudUpload size={14} /><span>{gitBusy === 'push' ? 'Pushing' : 'Push'}</span>
             </button>
+            <button type="button" className="secondary-button" disabled={mirrorBusy} onClick={() => void copyIntoMirror()} title="Files any entry this brain holds that the mirror is missing. Agents writing through MCP are carried over by this too.">
+              <Copy size={14} /><span>{mirrorBusy ? 'Syncing' : 'Sync the mirror now'}</span>
+            </button>
           </div>
           {gitStatus.error && !gitFeedback && (
             <div className="brain-git-feedback error" role="alert">
@@ -461,6 +493,12 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
             <div className={`brain-git-feedback ${gitFeedback.kind}`} role={gitFeedback.kind === 'error' ? 'alert' : 'status'}>
               {gitFeedback.kind === 'success' ? <Check size={14} /> : <AlertTriangle size={14} />}
               <span>{gitFeedback.message}</span>
+            </div>
+          )}
+          {mirrorFeedback && (
+            <div className={`brain-git-feedback ${mirrorFeedback.kind}`} role={mirrorFeedback.kind === 'error' ? 'alert' : 'status'}>
+              {mirrorFeedback.kind === 'success' ? <Check size={14} /> : <AlertTriangle size={14} />}
+              <span>{mirrorFeedback.message}</span>
             </div>
           )}
         </section>
