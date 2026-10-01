@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import {
   ARTIFACT_KINDS,
+  directDependencies,
   BOARD_STATUSES,
   interviewGivenAnswers,
   interviewOpenOptions,
@@ -51,6 +52,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // The chat asks one question of the round at a time: `step` is the one on screen, `draft` the reply being written.
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState('');
+  const [progress, setProgress] = useState<ArtifactProgress | null>(null);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
@@ -343,6 +345,43 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   }
 
   /**
+   * Writes the artifacts one at a time, so the screen can show which one is being written and keep each as it lands.
+   * One the model gets wrong is recorded and skipped, along with anything built from it; the rest still get written.
+   * Returns a message per problem, empty when everything was written.
+   */
+  async function writeArtifacts(id: string): Promise<string[]> {
+    let catalog = unwrap(await window.kaiDesktop.studioArtifacts(id));
+    setArtifacts(catalog);
+    const todo = ARTIFACT_KINDS.filter((kind) => {
+      if (kind === 'brief' || kind === 'tokens') return false;
+      const entry = catalog.artifacts.find((item) => item.kind === kind);
+      return !entry || entry.stale;
+    });
+    const failed: Partial<Record<ArtifactKind, string>> = {};
+    let finished = 0;
+    for (const kind of todo) {
+      const blockedBy = directDependencies(kind).find((dependency) => failed[dependency]);
+      if (blockedBy) {
+        failed[kind] = `Needs ${blockedBy}, which could not be written.`;
+      } else {
+        setProgress({ done: finished, total: todo.length, current: kind, failed: { ...failed } });
+        try {
+          catalog = unwrap(await window.kaiDesktop.generateStudioArtifact({ projectId: id, kind }));
+          setArtifacts(catalog);
+        } catch (caught) {
+          failed[kind] = messageOf(caught);
+        }
+      }
+      finished += 1;
+    }
+    setProgress({ done: finished, total: todo.length, current: null, failed });
+    const names = Object.keys(failed);
+    if (names.length === 0) return [];
+    const cause = Object.entries(failed).find(([, reason]) => !reason?.startsWith('Needs '));
+    return [`Wrote ${todo.length - names.length} of ${todo.length} artifacts. Could not write: ${names.join(', ')}.${cause ? ` ${cause[0]}: ${cause[1]}` : ''}`];
+  }
+
+  /**
    * The interview is over, so write the artifacts and build the board without waiting for two more clicks. Each
    * step reports its own failure, and what was written stays: a failed board never throws the artifacts away.
    */
@@ -353,7 +392,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     const problems: string[] = [];
     try {
       setBusy('generate');
-      setArtifacts(unwrap(await window.kaiDesktop.generateStudioArtifacts(id)));
+      problems.push(...(await writeArtifacts(id)));
     } catch (caught) {
       problems.push(messageOf(caught));
       await reloadSpec(id);
@@ -437,7 +476,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBusy('generate');
     setError(null);
     try {
-      setArtifacts(unwrap(await window.kaiDesktop.generateStudioArtifacts(projectId)));
+      const problems = await writeArtifacts(projectId);
+      if (problems.length > 0) setError(problems.join(' '));
     } catch (caught) {
       setError(messageOf(caught));
       await reloadSpec(projectId);
@@ -783,7 +823,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       {building && (
         <article className="studio-card studio-handoff" role="status">
           <h2><Loader2 className="spin" size={16} /> Preparing the project</h2>
-          <p className="studio-note">{busy === 'generate' ? 'Writing the artifacts from the brief…' : 'Building the board from the stories…'}</p>
+          <p className="studio-note">{busy === 'generate' ? 'Writing the artifacts from the brief. Each one appears below as soon as it is written.' : 'Building the board from the stories…'}</p>
+          {busy === 'generate' && progress && <GenerationProgress progress={progress} />}
           <div className="studio-strip"><span className="done">✓ Brief</span><span className={busy === 'generate' ? 'now' : 'done'}>{busy === 'generate' ? '… Artifacts' : '✓ Artifacts'}</span><span className={busy === 'plan' ? 'now' : ''}>Board</span></div>
         </article>
       )}
@@ -940,16 +981,20 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </button>
               {staleCount > 0 && <span className="studio-model">{staleCount} stale</span>}
             </div>
+            {busy === 'generate' && progress && <GenerationProgress progress={progress} />}
             <ul className="studio-artifacts">
               {ARTIFACT_KINDS.map((kind) => {
                 const entry = artifacts?.artifacts.find((item) => item.kind === kind);
                 return (
-                  <li key={kind} className={entry?.stale ? 'stale' : undefined}>
+                  <li key={kind} className={[entry?.stale ? 'stale' : '', progress?.current === kind && busy === 'generate' ? 'writing' : '', progress?.failed[kind] ? 'failed' : ''].filter(Boolean).join(' ') || undefined}>
                     <div>
                       <strong>{kind}</strong>
                       <span className="studio-note">
-                        {entry ? <>{entry.generatedBy} · v{entry.version}{entry.stale ? ` · ${entry.staleReason ?? 'stale'}` : ''}</> : 'Not written yet'}
+                        {progress?.current === kind && busy === 'generate'
+                          ? <><Loader2 className="spin" size={11} /> Writing…</>
+                          : entry ? <>{entry.generatedBy} · v{entry.version}{entry.stale ? ` · ${entry.staleReason ?? 'stale'}` : ''}</> : 'Not written yet'}
                       </span>
+                      {progress?.failed[kind] && busy !== 'generate' && <span className="studio-fail">{progress.failed[kind]}</span>}
                     </div>
                     {kind !== 'brief' && kind !== 'tokens' && (
                       <button type="button" className="secondary-button" onClick={() => void generateOne(kind)} disabled={busy !== null || !readiness?.ready}>
@@ -1176,6 +1221,28 @@ function StudioComposer({ value, onChange, onSubmit, placeholder, ariaLabel, dis
       </div>
       <div className="composer-footer">{footer}</div>
     </>
+  );
+}
+
+interface ArtifactProgress {
+  done: number;
+  total: number;
+  current: ArtifactKind | null;
+  failed: Partial<Record<ArtifactKind, string>>;
+}
+
+function GenerationProgress({ progress }: { progress: ArtifactProgress }): ReactNode {
+  const percent = progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100);
+  return (
+    <div className="studio-progress" role="status">
+      <div className="studio-progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done} aria-label="Artifacts written">
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <span className="studio-progress-label">
+        <Loader2 className="spin" size={11} />
+        {progress.current ? `Writing ${progress.current} (${Math.min(progress.done + 1, progress.total)} of ${progress.total})…` : 'Finishing up…'}
+      </span>
+    </div>
   );
 }
 

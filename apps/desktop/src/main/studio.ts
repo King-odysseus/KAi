@@ -170,7 +170,9 @@ export class DesktopStudio {
       CONTENT_SCHEMA,
       (raw) => parseArtifact(raw, kind),
     );
-    return this.ports.artifacts.write(projectId, kind, content, settings.promptGuide.model);
+    const catalog = await this.ports.artifacts.write(projectId, kind, content, settings.promptGuide.model);
+    await this.refreshHandoff(projectId);
+    return catalog;
   }
 
   /** Turns the stories and the stack into board cards, keeping the work already done on cards that survive. */
