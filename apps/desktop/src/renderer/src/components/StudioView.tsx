@@ -67,7 +67,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [viewMode, setViewMode] = useState<'diagram' | 'text'>('diagram');
   const [pagesText, setPagesText] = useState<string | null>(null);
   const [styleRefs, setStyleRefs] = useState<StudioStyleReferences | null>(null);
-  const [drawPrompt, setDrawPrompt] = useState<{ title: string; text: string } | null>(null);
+  // Which drawing step's prompt is open under its row, and which one was just copied.
+  const [openPrompt, setOpenPrompt] = useState<string | null>(null);
+  const [copiedPrompt, setCopiedPrompt] = useState<string | null>(null);
   const [screenQuery, setScreenQuery] = useState('');
   // What KAI says back after the user attaches style images in the interview.
   const [attachNote, setAttachNote] = useState<string | null>(null);
@@ -399,17 +401,26 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     };
   }
 
+  /** The prompt for one drawing step, by its key: "Foundation", or a screen's name. */
+  function promptFor(key: string): string {
+    if (key === 'Foundation') return buildFoundationPrompt(designContext());
+    const row = designRows.find((item) => item.name === key);
+    return row ? buildPagePrompt(row, designContext()) : '';
+  }
+
   /**
-   * Copies one drawing step. The prompts are small on purpose: a single prompt for a whole project is what can
-   * stall the editor, so the foundation and each screen are their own, run one after another.
+   * Copies one drawing step and shows it right under its row, so you can read what was copied. The prompts are small
+   * on purpose: a single prompt for a whole project is what can stall the editor, so the foundation and each screen
+   * are their own, run one after another.
    */
-  async function copyDrawPrompt(title: string, text: string): Promise<void> {
-    setDrawPrompt({ title, text });
+  async function copyDrawPrompt(key: string): Promise<void> {
+    setOpenPrompt(key);
     try {
-      await navigator.clipboard.writeText(text);
-      setNotice(`Copied: ${title}. Paste it into the Workspace composer for a KAi agent that has open-pencil connected, and let it finish before the next one.`);
+      await navigator.clipboard.writeText(promptFor(key));
+      setCopiedPrompt(key);
+      window.setTimeout(() => setCopiedPrompt((current) => (current === key ? null : current)), 2_500);
     } catch {
-      setNotice('Could not reach the clipboard. Select the prompt below and copy it by hand.');
+      setNotice('Could not reach the clipboard. Select the prompt under the row and copy it by hand.');
     }
   }
 
@@ -1381,9 +1392,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                       <input type="checkbox" checked={foundationDone} onChange={(event) => toggleFoundation(event.target.checked)} aria-label="Foundation step finished" />
                       <span><strong>1 · Foundation</strong><small>Variables from the tokens, text styles and the shared components. No screens.</small></span>
                     </label>
-                    <button type="button" className="secondary-button" onClick={() => void copyDrawPrompt('Foundation', buildFoundationPrompt(designContext()))}>
-                      <Send size={13} /> Copy prompt
-                    </button>
+                    <PromptButtons id="Foundation" openPrompt={openPrompt} copiedPrompt={copiedPrompt} onToggle={setOpenPrompt} onCopy={(key) => void copyDrawPrompt(key)} />
+                    {openPrompt === 'Foundation' && <PromptPanel text={promptFor('Foundation')} copied={copiedPrompt === 'Foundation'} onCopy={() => void copyDrawPrompt('Foundation')} onClose={() => setOpenPrompt(null)} />}
                   </li>
                 </ul>
                 <label className="studio-search">
@@ -1401,23 +1411,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                             {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
                           </small>
                         </div>
-                        {row.inPages && (
-                          <button type="button" className="secondary-button" onClick={() => void copyDrawPrompt(row.name, buildPagePrompt(row, designContext()))}>
-                            <Send size={13} /> Copy prompt
-                          </button>
-                        )}
+                        {row.inPages && <PromptButtons id={row.name} openPrompt={openPrompt} copiedPrompt={copiedPrompt} onToggle={setOpenPrompt} onCopy={(key) => void copyDrawPrompt(key)} />}
+                        {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
                       </li>
                     ))}
                     {visibleRows.length === 0 && <li className="studio-note">No screen matches "{screenQuery}".</li>}
                   </ul>
                 ) : (
                   <p className="studio-note">{pagesText === null ? 'No pages list yet. Write it, or generate all artifacts.' : 'The pages artifact has no screens in it yet.'}</p>
-                )}
-                {drawPrompt && (
-                  <>
-                    <p className="studio-note">Prompt for <strong>{drawPrompt.title}</strong>:</p>
-                    <textarea className="studio-viewer-edit" readOnly value={drawPrompt.text} rows={10} aria-label="Prompt to copy" onFocus={(event) => event.currentTarget.select()} />
-                  </>
                 )}
               </article>
 
@@ -1664,6 +1665,41 @@ function GenerationProgress({ progress }: { progress: ArtifactProgress }): React
       <span className="studio-progress-label">
         <Loader2 className="spin" size={11} />
         {progress.current ? `Writing ${progress.current} (${Math.min(progress.done + 1, progress.total)} of ${progress.total})…` : 'Finishing up…'}
+      </span>
+    </div>
+  );
+}
+
+/** View and Copy for one drawing step. Copy also opens the prompt, so what was copied is never hidden. */
+function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy }: {
+  id: string;
+  openPrompt: string | null;
+  copiedPrompt: string | null;
+  onToggle: (key: string | null) => void;
+  onCopy: (key: string) => void;
+}): ReactNode {
+  const open = openPrompt === id;
+  return (
+    <span className="studio-step-buttons">
+      <button type="button" className="secondary-button" onClick={() => onToggle(open ? null : id)} aria-expanded={open} aria-label={`${open ? 'Hide' : 'View'} the prompt for ${id}`}>
+        <Eye size={13} /> {open ? 'Hide' : 'View'}
+      </button>
+      <button type="button" className="secondary-button" onClick={() => onCopy(id)} aria-label={`Copy the prompt for ${id}`}>
+        {copiedPrompt === id ? <Check size={13} /> : <Send size={13} />} {copiedPrompt === id ? 'Copied' : 'Copy prompt'}
+      </button>
+    </span>
+  );
+}
+
+/** The prompt itself, under its row: read it, copy it again, or close it. */
+function PromptPanel({ text, copied, onCopy, onClose }: { text: string; copied: boolean; onCopy: () => void; onClose: () => void }): ReactNode {
+  return (
+    <div className="studio-step-prompt">
+      <p className="studio-note">{copied ? 'Copied to the clipboard.' : 'This is the prompt.'} Paste it into the Workspace composer for a KAI agent that has open-pencil connected, and let it finish before the next one.</p>
+      <textarea readOnly value={text} rows={Math.min(14, text.split('\n').length + 1)} aria-label="The prompt" onFocus={(event) => event.currentTarget.select()} />
+      <span className="studio-step-buttons">
+        <button type="button" className="secondary-button" onClick={onCopy}><Send size={13} /> Copy again</button>
+        <button type="button" className="secondary-button" onClick={onClose}>Close</button>
       </span>
     </div>
   );

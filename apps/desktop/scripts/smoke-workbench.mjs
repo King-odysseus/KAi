@@ -388,10 +388,13 @@ async function verifyStudioArtifacts(page) {
   await viewer.waitFor();
   const size = await page.evaluate(() => {
     const viewerBox = document.querySelector('.studio-viewer-full')?.getBoundingClientRect();
+    const titlebarBottom = document.querySelector('.titlebar')?.getBoundingClientRect().bottom ?? 0;
     const diagramBox = document.querySelector('.studio-viewer-full .flow-diagram')?.getBoundingClientRect();
-    return { viewerWidth: viewerBox?.width ?? 0, viewerHeight: viewerBox?.height ?? 0, diagramHeight: diagramBox?.height ?? 0, windowWidth: window.innerWidth, windowHeight: window.innerHeight };
+    return { viewerTop: viewerBox?.top ?? 0, titlebarBottom, viewerBottom: viewerBox?.bottom ?? 0, viewerWidth: viewerBox?.width ?? 0, viewerHeight: viewerBox?.height ?? 0, diagramHeight: diagramBox?.height ?? 0, windowWidth: window.innerWidth, windowHeight: window.innerHeight };
   });
-  if (size.viewerWidth < size.windowWidth - 2 || size.viewerHeight < size.windowHeight - 2) throw new Error(`The artifact is not full screen: ${JSON.stringify(size)}`);
+  // Full screen fills the window below the title bar: the window controls up there must never sit on its buttons.
+  if (size.viewerWidth < size.windowWidth - 2 || size.viewerBottom < size.windowHeight - 2) throw new Error(`The artifact is not full screen: ${JSON.stringify(size)}`);
+  if (size.viewerTop < size.titlebarBottom - 1) throw new Error(`The full screen artifact covers the title bar and its window controls: ${JSON.stringify(size)}`);
   if (size.diagramHeight < size.windowHeight * 0.55) throw new Error(`The diagram did not grow in full screen: ${JSON.stringify(size)}`);
   // After the resize the view must stay readable and keep the selected step in view.
   await page.waitForTimeout(700);
@@ -419,8 +422,25 @@ async function verifyStudioArtifacts(page) {
   await page.getByRole('tab', { name: /Board/ }).click();
   await page.getByRole('button', { name: 'Full screen' }).click();
   await page.locator('.studio-fullscreen').waitFor();
+  const boardTop = await page.evaluate(() => ({ top: document.querySelector('.studio-fullscreen')?.getBoundingClientRect().top ?? 0, titlebar: document.querySelector('.titlebar')?.getBoundingClientRect().bottom ?? 0 }));
+  if (boardTop.top < boardTop.titlebar - 1) throw new Error(`The full screen board covers the title bar and its window controls: ${JSON.stringify(boardTop)}`);
   await page.keyboard.press('Escape');
   await page.locator('.studio-fullscreen').waitFor({ state: 'detached' });
+  // The Design tab: each drawing step's prompt opens right under its own row, so what is copied can be read.
+  await page.getByRole('tab', { name: 'Design' }).click();
+  await page.getByRole('heading', { name: /Draw in open-pencil/ }).waitFor();
+  await page.getByRole('button', { name: 'Copy the prompt for Foundation' }).click();
+  const foundation = page.locator('.studio-steps li', { hasText: '1 · Foundation' });
+  await foundation.locator('.studio-step-prompt textarea').waitFor();
+  const foundationText = await foundation.locator('.studio-step-prompt textarea').inputValue();
+  if (!foundationText.includes('Do not draw any screens yet')) throw new Error('The foundation prompt is not shown under its row.');
+  await page.getByRole('button', { name: 'View the prompt for Sign-in' }).click();
+  const signIn = page.locator('.studio-steps li', { hasText: 'Sign-in' });
+  const signInText = await signIn.locator('.studio-step-prompt textarea').inputValue();
+  if (!signInText.includes('Sign-in (/sign-in)') || signInText.includes('Dashboard')) throw new Error('The Sign-in prompt is missing, or mixes in another screen.');
+  await page.screenshot({ path: path.join(outputDirectory, 'design-prompt-1440x920.png') });
+  await signIn.getByRole('button', { name: 'Close' }).click();
+  await signIn.locator('.studio-step-prompt').waitFor({ state: 'detached' });
   await assertNoHorizontalOverflow(page);
   await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
 }
@@ -717,8 +737,9 @@ async function seedStudioProject(now) {
     '1. Customer opens the link in the reminder', '2. Is the booking more than a day away?', '3. Customer confirms the cancellation', '4. DELETE /api/bookings/:id frees the slot', '',
   ].join('\n');
   await writeFile(path.join(spec, 'flows.md'), flows, 'utf8');
+  await writeFile(path.join(spec, 'pages.md'), ['# Pages', '', '## Sign-in', 'Route: `/sign-in`. For logging in. States: empty, error.', '', '## Dashboard', 'At /dashboard, shows chats.', ''].join('\n'), 'utf8');
   const entry = (kind, file, dependsOn) => ({ kind, path: `.kai/spec/${file}`, version: 0, updatedAt: now, generatedBy: 'smoke', dependsOn, stale: false, staleReason: null });
-  await writeFile(path.join(spec, 'artifacts.json'), `${JSON.stringify({ schemaVersion: 1, artifacts: [entry('brief', 'brief.md', []), entry('flows', 'flows.md', ['stories'])] }, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(spec, 'artifacts.json'), `${JSON.stringify({ schemaVersion: 1, artifacts: [entry('brief', 'brief.md', []), entry('flows', 'flows.md', ['stories']), entry('pages', 'pages.md', ['stories', 'flows'])] }, null, 2)}\n`, 'utf8');
 }
 
 async function resizeWindow(application, width, height) {
