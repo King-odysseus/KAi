@@ -11,3 +11,8 @@ apps/desktop/test-results/
 .env.*
 .vscode/shared-memory/log/
 work/
+
+# Scratch output from tools and one-off documents, not part of the app
+output/
+tmp/
+.playwright-mcp/
