@@ -563,14 +563,21 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
    * One the model gets wrong is recorded and skipped, along with anything built from it; the rest still get written.
    * Returns a message per problem, empty when everything was written.
    */
-  async function writeArtifacts(id: string): Promise<string[]> {
+  async function writeArtifacts(id: string, everything = false): Promise<string[]> {
     let catalog = unwrap(await window.kaiDesktop.studioArtifacts(id));
     setArtifacts(catalog);
+    // Missing or stale ones by default; every one except the interview's brief when the user asks to regenerate all.
     const todo = ARTIFACT_KINDS.filter((kind) => {
       if (kind === 'brief') return false;
       const entry = catalog.artifacts.find((item) => item.kind === kind);
+      // Tokens pulled from open-pencil belong to the design tool; a model rewriting them would undo the design.
+      if (everything) return !(kind === 'tokens' && entry?.generatedBy === 'open-pencil');
       return !entry || entry.stale;
     });
+    if (todo.length === 0) {
+      setNotice('Every artifact is already written and up to date. Use Regenerate all to rewrite them.');
+      return [];
+    }
     const failed: Partial<Record<ArtifactKind, string>> = {};
     let finished = 0;
     for (const kind of todo) {
@@ -699,12 +706,26 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   }
 
   /** Runs the model over the whole artifact set. Each artifact is one call, so this is the expensive button. */
-  async function generate(): Promise<void> {
+  /** Rewrites every artifact. The copies it replaces stay in the spec history, but a hand edit is replaced, so it asks first. */
+  async function regenerateAll(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    const confirmed = await confirmDialog({
+      title: 'Regenerate every artifact?',
+      detail: 'Each artifact is written again from the brief, one model call each. The copies now on disk are kept under .kai/spec/.history, but anything you edited by hand will be replaced by the new version.',
+      confirmLabel: 'Regenerate all',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    await generate(true);
+  }
+
+  async function generate(everything = false): Promise<void> {
     if (!projectId) return;
     setBusy('generate');
     setError(null);
+    setNotice(null);
     try {
-      const problems = await writeArtifacts(projectId);
+      const problems = await writeArtifacts(projectId, everything);
       if (problems.length > 0) setError(problems.join(' '));
     } catch (caught) {
       setError(messageOf(caught));
@@ -1215,8 +1236,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               One file each under <code>.kai/spec</code>. Regenerating one flags everything that reads it stale, so the board never trusts a document built on an old decision.
             </p>
             <div className="page-actions">
-              <button type="button" className="primary-button" onClick={() => void generate()} disabled={busy !== null || !readiness?.ready}>
+              <button type="button" className="primary-button" onClick={() => void generate()} disabled={busy !== null || !readiness?.ready} title="Write the artifacts that are missing or stale">
                 {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} Generate all
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void regenerateAll()} disabled={busy !== null || !readiness?.ready} title="Rewrite every artifact from the brief, even the ones that are up to date">
+                <RefreshCw size={14} /> Regenerate all
               </button>
               {staleCount > 0 && <span className="studio-model">{staleCount} stale</span>}
             </div>
