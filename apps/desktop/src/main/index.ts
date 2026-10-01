@@ -218,6 +218,11 @@ function endOwnProcessTree(): void {
   }
 }
 
+/** The KAI icon for the window and taskbar. A packaged app carries it beside its resources; a dev run reads it from the source tree. */
+function appIconPath(): string {
+  return app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : path.join(__dirname, '../../build/icon.png');
+}
+
 app.on('activate', () => {
   const window = desktopWindows.focused()?.window;
   if (!window || window.isDestroyed()) {
@@ -862,6 +867,7 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
     show: false,
     backgroundColor: '#08111f',
     title: 'KAI',
+    icon: appIconPath(),
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#08111f',

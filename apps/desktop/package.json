@@ -82,6 +82,10 @@
       {
         "from": "resources/kai-cli",
         "to": "kai-cli"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
       }
     ],
     "win": {
@@ -89,14 +93,17 @@
       "target": [
         "nsis"
       ],
-      "signAndEditExecutable": false
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": true
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }
