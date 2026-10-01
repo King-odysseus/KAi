@@ -11372,3 +11372,66 @@ code {
   font-size: 10.5px;
   overflow-wrap: anywhere;
 }
+
+.studio-artifacts > li > .studio-artifact-open {
+  flex: 1;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.studio-artifacts > li > .studio-artifact-open:hover strong,
+.studio-artifacts > li > .studio-artifact-open[aria-expanded='true'] strong {
+  color: var(--mint);
+}
+
+.studio-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--mint) 40%, var(--border));
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.studio-viewer > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.studio-viewer-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.studio-viewer-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px 4px 4px 2px;
+  font-size: 12px;
+}
+
+.studio-viewer-code {
+  max-height: 60vh;
+  margin: 0;
+  overflow: auto;
+  font-size: 11.5px;
+}
+
+.studio-viewer-edit {
+  width: 100%;
+  min-height: 50vh;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--bg-input);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+}

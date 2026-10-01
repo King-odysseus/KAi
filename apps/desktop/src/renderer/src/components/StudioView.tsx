@@ -1,8 +1,10 @@
 import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, LayoutGrid, Loader2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
+import { Markdown } from './Markdown';
 import {
   ARTIFACT_KINDS,
+  ARTIFACT_PATHS,
   directDependencies,
   BOARD_STATUSES,
   interviewGivenAnswers,
@@ -52,6 +54,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // The chat asks one question of the round at a time: `step` is the one on screen, `draft` the reply being written.
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState('');
+  // The artifact open in the viewer, its text, and the hand edit being written, if any.
+  const [viewing, setViewing] = useState<ArtifactKind | null>(null);
+  const [viewText, setViewText] = useState<string | null>(null);
+  const [editText, setEditText] = useState<string | null>(null);
   const [progress, setProgress] = useState<ArtifactProgress | null>(null);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
   const [handoffDismissed, setHandoffDismissed] = useState(false);
@@ -94,6 +100,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setAnswers([]);
     setStep(0);
     setDraft('');
+    setViewing(null);
+    setViewText(null);
+    setEditText(null);
     setNotice(null);
     if (!projectId) {
       setBusy(null);
@@ -264,6 +273,40 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     if (next.status === 'done') setTab('artifacts');
   }
 
+  /** Opens an artifact in the viewer. Clicking the open one again closes it. */
+  async function viewArtifact(kind: ArtifactKind): Promise<void> {
+    if (!projectId) return;
+    if (viewing === kind) {
+      setViewing(null);
+      return;
+    }
+    setViewing(kind);
+    setViewText(null);
+    setEditText(null);
+    try {
+      setViewText((await window.kaiDesktop.studioArtifactText({ projectId, kind }).then(unwrap)) ?? '');
+    } catch (caught) {
+      setError(messageOf(caught));
+      setViewing(null);
+    }
+  }
+
+  async function saveArtifactEdit(): Promise<void> {
+    if (!projectId || !viewing || editText === null) return;
+    setBusy('card');
+    setError(null);
+    try {
+      setArtifacts(unwrap(await window.kaiDesktop.saveStudioArtifact({ projectId, kind: viewing, content: editText })));
+      setViewText(editText.endsWith('\n') ? editText : `${editText}\n`);
+      setEditText(null);
+      setNotice('Saved. Anything built from this artifact is now marked stale.');
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** After a partial failure, shows what was written instead of leaving the screen on its old catalog. */
   async function reloadSpec(id: string): Promise<void> {
     try {
@@ -353,7 +396,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     let catalog = unwrap(await window.kaiDesktop.studioArtifacts(id));
     setArtifacts(catalog);
     const todo = ARTIFACT_KINDS.filter((kind) => {
-      if (kind === 'brief' || kind === 'tokens') return false;
+      if (kind === 'brief') return false;
       const entry = catalog.artifacts.find((item) => item.kind === kind);
       return !entry || entry.stale;
     });
@@ -988,7 +1031,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 const entry = artifacts?.artifacts.find((item) => item.kind === kind);
                 return (
                   <li key={kind} className={[entry?.stale ? 'stale' : '', progress?.current === kind && busy === 'generate' ? 'writing' : '', progress?.failed[kind] ? 'failed' : ''].filter(Boolean).join(' ') || undefined}>
-                    <div>
+                    <div className={entry ? 'studio-artifact-open' : undefined} role={entry ? 'button' : undefined} tabIndex={entry ? 0 : undefined} aria-expanded={entry ? viewing === kind : undefined} onClick={entry ? () => void viewArtifact(kind) : undefined} onKeyDown={entry ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void viewArtifact(kind); } } : undefined} title={entry ? `Open ${kind}` : undefined}>
                       <strong>{kind}</strong>
                       <span className="studio-note">
                         {progress?.current === kind && busy === 'generate'
@@ -997,7 +1040,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                       </span>
                       {progress?.failed[kind] && busy !== 'generate' && <span className="studio-fail">{progress.failed[kind]}</span>}
                     </div>
-                    {kind !== 'brief' && kind !== 'tokens' && (
+                    {kind !== 'brief' && (
                       <button type="button" className="secondary-button" onClick={() => void generateOne(kind)} disabled={busy !== null || !readiness?.ready}>
                         {entry ? <RefreshCw size={13} /> : <Play size={13} />} {entry ? 'Regenerate' : 'Generate'}
                       </button>
@@ -1006,6 +1049,38 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 );
               })}
             </ul>
+            {viewing && (
+              <section className="studio-viewer" aria-label={`${viewing} artifact`}>
+                <header>
+                  <strong>{viewing}</strong>
+                  <span className="studio-note"><code>{ARTIFACT_PATHS[viewing]}</code></span>
+                  <span className="studio-viewer-actions">
+                    {editText === null ? (
+                      <button type="button" className="secondary-button" onClick={() => setEditText(viewText ?? '')} disabled={viewText === null || busy !== null}>Edit</button>
+                    ) : (
+                      <>
+                        <button type="button" className="primary-button" onClick={() => void saveArtifactEdit()} disabled={busy !== null || !editText.trim()}>
+                          {busy === 'card' ? <Loader2 className="spin" size={13} /> : <Check size={13} />} Save
+                        </button>
+                        <button type="button" className="secondary-button" onClick={() => setEditText(null)} disabled={busy !== null}>Cancel</button>
+                      </>
+                    )}
+                    <button type="button" className="secondary-button" onClick={() => { setViewing(null); setEditText(null); }}>Close</button>
+                  </span>
+                </header>
+                {viewText === null ? (
+                  <p className="studio-note"><Loader2 className="spin" size={13} /> Reading…</p>
+                ) : editText !== null ? (
+                  <textarea className="studio-viewer-edit" value={editText} onChange={(event) => setEditText(event.target.value)} spellCheck={false} aria-label={`Edit ${viewing}`} />
+                ) : !viewText.trim() ? (
+                  <p className="studio-note">This artifact is empty.</p>
+                ) : viewing === 'tokens' ? (
+                  <pre className="studio-viewer-code">{viewText}</pre>
+                ) : (
+                  <div className="studio-viewer-body"><Markdown text={viewText} /></div>
+                )}
+              </section>
+            )}
           </article>
           )}
 

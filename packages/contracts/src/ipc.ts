@@ -23,6 +23,7 @@ import {
 } from './interview';
 import {
   studioArtifactInputSchema,
+  studioArtifactSaveInputSchema,
   studioBoardCardInputSchema,
   studioBoardClaimInputSchema,
   studioBoardMoveInputSchema,
@@ -35,6 +36,7 @@ import {
   boardCardSchema,
   studioUiCheckResultSchema,
   type StudioArtifactInput,
+  type StudioArtifactSaveInput,
   type StudioArtifacts,
   type StudioBoard,
   type StudioBoardCardInput,
@@ -409,6 +411,8 @@ export const ipcChannels = [
   'studio:interview-reset',
   'studio:artifacts-read',
   'studio:artifacts-files',
+  'studio:artifacts-text',
+  'studio:artifacts-save',
   'studio:artifacts-generate',
   'studio:artifacts-generate-all',
   'studio:artifacts-mark-edited',
@@ -675,6 +679,8 @@ export const ipcInputSchemas = {
   'studio:interview-reset': interviewProjectInputSchema,
   'studio:artifacts-read': studioProjectInputSchema,
   'studio:artifacts-files': studioProjectInputSchema,
+  'studio:artifacts-text': studioArtifactInputSchema,
+  'studio:artifacts-save': studioArtifactSaveInputSchema,
   'studio:artifacts-generate': studioArtifactInputSchema,
   'studio:artifacts-generate-all': studioProjectInputSchema,
   'studio:artifacts-mark-edited': studioArtifactInputSchema,
@@ -1082,6 +1088,10 @@ export interface KaiDesktopBridge {
   studioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
   /** Every file the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */
   studioArtifactFiles(projectId: string): Promise<IpcResponse<string[]>>;
+  /** One artifact's text, or null when it has not been written yet. */
+  studioArtifactText(input: StudioArtifactInput): Promise<IpcResponse<string | null>>;
+  /** Saves a hand edit of one artifact and flags everything that reads it as stale. */
+  saveStudioArtifact(input: StudioArtifactSaveInput): Promise<IpcResponse<StudioArtifacts>>;
   /** Generates one artifact from the artifacts it reads. Runs one model call. */
   generateStudioArtifact(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
   /** Generates every artifact that is missing or stale, in dependency order. Runs one model call per artifact. */

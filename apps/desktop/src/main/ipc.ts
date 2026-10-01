@@ -380,6 +380,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:interview-reset', async ({ projectId }) => context.interview.reset({ projectId }));
   handle(context, 'studio:artifacts-read', async ({ projectId }) => context.studio.artifacts(projectId));
   handle(context, 'studio:artifacts-files', async ({ projectId }) => context.studio.files(projectId));
+  handle(context, 'studio:artifacts-text', async ({ projectId, kind }) => context.studio.artifactText(projectId, kind));
+  handle(context, 'studio:artifacts-save', async ({ projectId, kind, content }) => context.studio.saveArtifact(projectId, kind, content));
   handle(context, 'studio:artifacts-generate', async ({ projectId, kind }) => context.studio.generate(projectId, kind));
   handle(context, 'studio:artifacts-generate-all', async ({ projectId }) => context.studio.generateAll(projectId));
   handle(context, 'studio:artifacts-mark-edited', async ({ projectId, kind }) => context.studio.markEdited(projectId, kind));

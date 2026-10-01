@@ -81,7 +81,7 @@ export const ARTIFACT_DEPENDENCIES: Record<ArtifactKind, readonly ArtifactKind[]
   stories: ['prd'],
   stack: ['brief'],
   flows: ['stories'],
-  'style-guide': ['stack'],
+  'style-guide': ['brief', 'stack'],
   tokens: ['style-guide'],
   decisions: ['brief', 'stack'],
   architecture: ['stack', 'flows'],
@@ -360,6 +360,12 @@ export const studioArtifactInputSchema = z
   .object({ projectId: z.string().min(1), kind: artifactKindSchema })
   .strict();
 export type StudioArtifactInput = z.infer<typeof studioArtifactInputSchema>;
+
+/** A hand edit from the artifact viewer. The text is the whole file, so a save replaces it. */
+export const studioArtifactSaveInputSchema = z
+  .object({ projectId: z.string().min(1), kind: artifactKindSchema, content: z.string().max(400_000) })
+  .strict();
+export type StudioArtifactSaveInput = z.infer<typeof studioArtifactSaveInputSchema>;
 
 export const studioBoardCardInputSchema = z
   .object({ projectId: z.string().min(1), cardId: z.string().min(1).max(120) })

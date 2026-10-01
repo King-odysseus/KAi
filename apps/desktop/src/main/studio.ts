@@ -35,8 +35,11 @@ import { boardDraftFromStories, replySnippet } from './studio-fallbacks';
  * decides what goes stale.
  */
 
-/** The artifacts a model writes. `brief` comes from the interview and `tokens` from open-pencil. */
-export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flows', 'style-guide', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup'];
+/**
+ * The artifacts a model writes. `brief` comes from the interview. `tokens` is written here from the style guide so a
+ * project always has them; pulling the design from open-pencil replaces them, because the design tool is the source of truth.
+ */
+export const MODEL_ARTIFACTS: ArtifactKind[] = ['prd', 'stories', 'stack', 'flows', 'style-guide', 'tokens', 'decisions', 'architecture', 'conventions', 'acceptance', 'risks', 'glossary', 'setup'];
 
 const NAMES = { feature: 'the Project Studio', card: 'Project Studio' };
 const GENERATE_CONTEXT_CHARS = 12_000;
@@ -280,6 +283,18 @@ export class DesktopStudio {
     return this.ports.board.setCheck(projectId, cardId, check);
   }
 
+  /**
+   * Saves a hand edit. The copy it replaces is kept in the spec history, the catalog records that a person wrote it,
+   * and everything that reads it is flagged stale so nothing trusts a document built on the old text.
+   */
+  async saveArtifact(projectId: string, kind: ArtifactKind, content: string): Promise<StudioArtifacts> {
+    if (!content.trim()) throw new Error('An artifact cannot be saved empty. Regenerate it instead if you want it rewritten.');
+    await this.ports.artifacts.write(projectId, kind, content.endsWith('\n') ? content : content + '\n', 'user');
+    const catalog = await this.ports.artifacts.markEdited(projectId, kind);
+    await this.refreshHandoff(projectId);
+    return catalog;
+  }
+
   markEdited(projectId: string, kind: ArtifactKind): Promise<StudioArtifacts> {
     return this.ports.artifacts.markEdited(projectId, kind);
   }
@@ -346,7 +361,7 @@ const ARTIFACT_BRIEFS: Record<ArtifactKind, string> = {
   stack: 'Write the stack document: the languages, frameworks, data store, and hosting, each with the one-line reason it was chosen. Name the concrete packages and versions where it matters, and say where the code lives.',
   flows: 'Write the flows document: the main user journeys end to end, each as an ordered list of steps naming the screens or endpoints they pass through.',
   'style-guide': 'Write the design style guide around the token names that exist: colour, type, spacing and radius. Reference tokens by name; never invent values that contradict the token file.',
-  tokens: 'Write the token file.',
+  tokens: 'Write the design tokens as one JSON object, with no commentary: "colors" (semantic names such as background, surface, text, muted, primary, accent, success, warning, danger, each with "light" and "dark" hex values), "typography" (font families and a size scale), "spacing" and "radius" scales. Take the colours and the feel from the style guide and the brief. Where none were chosen, pick a restrained palette that fits the product and explain the choice in a top-level "notes" string. Put the whole JSON document, as text, in "content".',
   decisions: 'Write the decision log: one entry per significant choice already made in the brief and the stack. Each entry has a number, the decision, the reason, and the alternatives that were dropped, so a new agent does not reverse a choice without knowing why.',
   architecture: 'Write the architecture map: the folders and modules, what each owns, how data flows between them, and where state lives. A new agent should know which files to touch for a given change.',
   conventions: 'Write the conventions: naming, file layout, error handling, how tests are written, the exact commands to install, build, test and run, and the areas an agent must not change without asking.',
@@ -392,6 +407,10 @@ export function parseArtifact(content: string, kind: ArtifactKind): string {
     return `${plain}\n`;
   }
   const record = parsed && typeof parsed === 'object' ? (parsed as { content?: unknown }) : {};
+  // A model asked for a token file often returns the tokens themselves instead of wrapping them as text.
+  if (kind === 'tokens' && typeof record.content !== 'string' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return `${JSON.stringify(parsed, null, 2)}\n`;
+  }
   if (typeof record.content !== 'string' || !record.content.trim()) {
     throw new Error(`The Project Studio reply for ${kind} did not match the expected shape.`);
   }
