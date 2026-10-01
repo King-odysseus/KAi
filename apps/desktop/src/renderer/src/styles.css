@@ -11299,3 +11299,32 @@ code {
     flex-basis: auto;
   }
 }
+
+.studio-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 clamp(18px, 2vw, 32px) 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.studio-tabs button {
+  margin-bottom: -1px;
+  padding: 7px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.studio-tabs button:hover {
+  color: var(--text);
+}
+
+.studio-tabs button.active {
+  border-bottom-color: var(--mint);
+  color: var(--text);
+}

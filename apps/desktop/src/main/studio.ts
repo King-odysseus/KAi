@@ -23,6 +23,7 @@ import type { StudioArtifacts as ArtifactStore } from './artifacts';
 import type { StudioBoardStore } from './board';
 import { changedNodes, designErrorMessage, readDesign, type DesignPorts, type DesignRead } from './design-source';
 import { failureSummary, type DesktopUiCheck } from './ui-check';
+import { boardDraftFromStories, replySnippet } from './studio-fallbacks';
 
 /**
  * The rest of the studio: it turns the interview's brief into the artifact set, and the stories into a board of
@@ -124,13 +125,29 @@ export class DesktopStudio {
     if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
     const catalog = await this.ports.artifacts.read(projectId);
     const byKind = new Map(catalog.artifacts.map((entry) => [entry.kind, entry]));
+    // One artifact the model gets wrong must not stop the rest: write what can be written, then say what could not.
+    const failed = new Map<ArtifactKind, string>();
     for (const kind of ARTIFACT_KINDS) {
       if (!MODEL_ARTIFACTS.includes(kind)) continue;
       const entry = byKind.get(kind);
       if (entry && !entry.stale) continue;
-      await this.generate(projectId, kind);
+      const blockedBy = directDependencies(kind).find((dependency) => failed.has(dependency));
+      if (blockedBy) {
+        failed.set(kind, `it is built from ${blockedBy}, which could not be written`);
+        continue;
+      }
+      try {
+        await this.generate(projectId, kind);
+      } catch (error) {
+        failed.set(kind, error instanceof Error ? error.message : String(error));
+      }
     }
     await this.refreshHandoff(projectId);
+    if (failed.size > 0) {
+      const cause = [...failed.entries()].find(([, reason]) => !reason.startsWith('it is built from'));
+      const wrote = MODEL_ARTIFACTS.filter((kind) => !failed.has(kind)).length;
+      throw new Error(`Wrote ${wrote} of ${MODEL_ARTIFACTS.length} artifacts. Could not write: ${[...failed.keys()].join(', ')}.${cause ? ` ${cause[0]}: ${cause[1]}` : ''}`);
+    }
     return this.ports.artifacts.read(projectId);
   }
 
@@ -167,6 +184,8 @@ export class DesktopStudio {
     ]);
     if (!stories?.trim()) throw new Error('Write the stories first: the board is built from them.');
     const context = await loadProjectContext(root, undefined, GENERATE_CONTEXT_CHARS).catch(() => null);
+    // A model that will not return the card JSON must not leave the project with no board: the stories already say
+    // what the cards are, so fall back to reading them directly.
     const draft = await this.ports.requester.structuredRequest(
       settings.promptGuide,
       NAMES,
@@ -174,7 +193,11 @@ export class DesktopStudio {
       'kai_studio_board',
       BOARD_SCHEMA,
       parseBoardDraft,
-    );
+    ).catch((error: unknown) => {
+      const fallback = boardDraftFromStories(stories);
+      if (fallback.cards.length === 0) throw error;
+      return fallback;
+    });
     const cards = cardsFromDraft(draft, this.ports.now());
     const catalog = await this.ports.artifacts.read(projectId);
     const board = await this.ports.board.replace(projectId, cards, catalog.artifacts);
@@ -359,7 +382,7 @@ export function parseArtifact(content: string, kind: ArtifactKind): string {
     // Some providers ignore the JSON wrapper and answer with the document itself. A document is plain markdown, so
     // accept it as one — unless it opens like JSON, which means a broken wrapper and not a document.
     const plain = content.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```$/, '').trim();
-    if (plain.length < 20 || /^[{[]/.test(plain)) throw error;
+    if (plain.length < 20 || /^[{[]/.test(plain)) throw new Error(`${error instanceof Error ? error.message : String(error)} ${replySnippet(content)}`);
     return `${plain}\n`;
   }
   const record = parsed && typeof parsed === 'object' ? (parsed as { content?: unknown }) : {};
@@ -371,7 +394,13 @@ export function parseArtifact(content: string, kind: ArtifactKind): string {
 
 /** Reads the model's reply as a board draft. */
 export function parseBoardDraft(content: string) {
-  const parsed = studioBoardDraftSchema.safeParse(parseJsonResponse(content, 'Project Studio'));
+  let json: unknown;
+  try {
+    json = parseJsonResponse(content, 'Project Studio');
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${replySnippet(content)}`);
+  }
+  const parsed = studioBoardDraftSchema.safeParse(json);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new Error(`The Project Studio board reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);

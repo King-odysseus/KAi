@@ -51,6 +51,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // The chat asks one question of the round at a time: `step` is the one on screen, `draft` the reply being written.
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState('');
+  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
@@ -114,6 +115,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       setAnswers(interview ? interviewOpenQuestions(interview).map(() => '') : []);
       setStep(0);
       setDraft('');
+      setTab(interview?.status === 'done' ? 'artifacts' : 'interview');
     }).catch((caught) => {
       if (!cancelled) setError(messageOf(caught));
     }).finally(() => {
@@ -257,6 +259,17 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setAnswers(interviewOpenQuestions(next).map(() => ''));
     setStep(0);
     setDraft('');
+    if (next.status === 'done') setTab('artifacts');
+  }
+
+  /** After a partial failure, shows what was written instead of leaving the screen on its old catalog. */
+  async function reloadSpec(id: string): Promise<void> {
+    try {
+      setArtifacts(unwrap(await window.kaiDesktop.studioArtifacts(id)));
+      setBoard(unwrap(await window.kaiDesktop.studioBoard(id)));
+    } catch {
+      // The error already on screen says what failed; a failed reload adds nothing.
+    }
   }
 
   async function reloadReadiness(): Promise<void> {
@@ -336,17 +349,24 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   async function buildEverything(id: string): Promise<void> {
     setError(null);
     setHandoffDismissed(false);
+    setTab('artifacts');
+    const problems: string[] = [];
     try {
       setBusy('generate');
       setArtifacts(unwrap(await window.kaiDesktop.generateStudioArtifacts(id)));
+    } catch (caught) {
+      problems.push(messageOf(caught));
+      await reloadSpec(id);
+    }
+    try {
       setBusy('plan');
       setBoard(unwrap(await window.kaiDesktop.planStudioBoard(id)));
-      setProjectsVersion((current) => current + 1);
     } catch (caught) {
-      setError(`${messageOf(caught)} Nothing already written was lost: use Generate all and Build the board to continue.`);
-    } finally {
-      setBusy(null);
+      problems.push(`The board was not built: ${messageOf(caught)}`);
     }
+    setBusy(null);
+    setProjectsVersion((current) => current + 1);
+    if (problems.length > 0) setError(`${problems.join(' ')} What was written is kept: fix the connection if needed, then use Generate all and Build the board.`);
   }
 
   async function enhanceText(text: string, apply: (next: string) => void): Promise<void> {
@@ -420,6 +440,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       setArtifacts(unwrap(await window.kaiDesktop.generateStudioArtifacts(projectId)));
     } catch (caught) {
       setError(messageOf(caught));
+      await reloadSpec(projectId);
     } finally {
       setBusy(null);
     }
@@ -747,6 +768,18 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         </p>
       )}
 
+      {state?.status === 'done' && (
+        <div className="studio-tabs" role="tablist" aria-label="Project sections">
+          {([
+            ['interview', 'Interview'],
+            ['artifacts', `Artifacts${artifacts ? ` (${artifacts.artifacts.length})` : ''}`],
+            ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
+            ['design', 'Design'],
+          ] as const).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</button>
+          ))}
+        </div>
+      )}
       {building && (
         <article className="studio-card studio-handoff" role="status">
           <h2><Loader2 className="spin" size={16} /> Preparing the project</h2>
@@ -754,7 +787,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           <div className="studio-strip"><span className="done">✓ Brief</span><span className={busy === 'generate' ? 'now' : 'done'}>{busy === 'generate' ? '… Artifacts' : '✓ Artifacts'}</span><span className={busy === 'plan' ? 'now' : ''}>Board</span></div>
         </article>
       )}
-      {showHandoff && state && projectId && board && artifacts && (
+      {showHandoff && tab === 'artifacts' && state && projectId && board && artifacts && (
         <article className="studio-card studio-handoff">
           <h2><Check size={16} /> Project ready</h2>
           <p className="studio-goal">{state.goal || state.idea}</p>
@@ -787,6 +820,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         </article>
       )}
 
+      {(!state || state.status !== 'done' || tab === 'interview') && (
       <section className={`studio-grid${state ? '' : ' studio-grid-intake'}`}>
         {state && (
           <article className="studio-card">
@@ -890,9 +924,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           )}
         </article>
       </section>
+      )}
 
       {state && briefReady && (
         <section className="studio-stack">
+          {tab === 'artifacts' && (
           <article className="studio-card">
             <h2><FileText size={16} /> Artifacts</h2>
             <p className="studio-note">
@@ -925,7 +961,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               })}
             </ul>
           </article>
+          )}
 
+          {tab === 'design' && (
           <article className="studio-card">
             <h2><Palette size={16} /> Design</h2>
             <p className="studio-note">
@@ -947,7 +985,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </ul>
             )}
           </article>
+          )}
 
+          {tab === 'board' && (
           <article className="studio-card">
             <h2><LayoutGrid size={16} /> Board</h2>
             <p className="studio-note">Cards built from the stories. A card reaches done only through a passing check that still matches the working tree.</p>
@@ -991,6 +1031,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               <p className="studio-note">No board yet. Generate the stories, then build the board.</p>
             )}
           </article>
+          )}
         </section>
       )}
       </div>

@@ -144,6 +144,38 @@ describe('studio generation', () => {
     expect(calls).toHaveLength(12);
   });
 
+  it('keeps writing the other artifacts when the model gets one wrong, and says which failed', async () => {
+    const { studio: app } = studio({
+      kai_studio_prd: JSON.stringify({ content: '# PRD' }),
+      kai_studio_stack: JSON.stringify({ content: '# Stack' }),
+      kai_studio_style_guide: JSON.stringify({ content: '# Style' }),
+      kai_studio_decisions: JSON.stringify({ content: '# Decisions' }),
+      kai_studio_conventions: JSON.stringify({ content: '# Conventions' }),
+      kai_studio_risks: JSON.stringify({ content: '# Risks' }),
+      kai_studio_glossary: JSON.stringify({ content: '# Glossary' }),
+      kai_studio_setup: JSON.stringify({ content: '# Setup' }),
+    });
+    await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'brief.md'), '# Brief\n');
+    // The stories are the one reply the model never produced, so what is built from them cannot be written either.
+    await expect(app.generateAll('p1')).rejects.toThrow(/Wrote 8 of 12 artifacts\. Could not write: stories, flows, architecture, acceptance\. stories: no canned reply/);
+    const catalog = await app.artifacts('p1');
+    expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stack', 'style-guide', 'decisions', 'conventions', 'risks', 'glossary', 'setup']);
+  });
+
+  it('builds the board from the stories when the model will not return the card JSON', async () => {
+    const { studio: app } = studio({});
+    await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'stories.md'), '# Stories\n\n## 1. Sign in\n- Employees sign in with a company email\n- A wrong password shows an error\n\n## 2. Export a document\n- The chat output downloads as a .docx file\n');
+    const board = await app.plan('p1');
+    expect(board.cards.map((card) => card.title)).toEqual(['1. Sign in', '2. Export a document']);
+    expect(board.cards[0]?.acceptance).toEqual(['Employees sign in with a company email', 'A wrong password shows an error']);
+  });
+
+  it('names what the model actually sent when a board reply is not JSON', () => {
+    expect(() => parseBoardDraft('Here are your cards: sign in, export')).toThrow(/The reply began: "Here are your cards/);
+  });
+
   it('refuses an artifact whose input has not been written yet', async () => {
     const { studio: app } = studio({});
     await expect(app.generate('p1', 'prd')).rejects.toThrow(/Write brief first/);
