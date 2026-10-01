@@ -352,7 +352,16 @@ export function boardPrompt(brief: string, stories: string, stack: string, conte
 
 /** Reads the model's reply as markdown content, trimming fences it may have added anyway. */
 export function parseArtifact(content: string, kind: ArtifactKind): string {
-  const parsed = parseJsonResponse(content, 'Project Studio');
+  let parsed: unknown;
+  try {
+    parsed = parseJsonResponse(content, 'Project Studio');
+  } catch (error) {
+    // Some providers ignore the JSON wrapper and answer with the document itself. A document is plain markdown, so
+    // accept it as one — unless it opens like JSON, which means a broken wrapper and not a document.
+    const plain = content.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```$/, '').trim();
+    if (plain.length < 20 || /^[{[]/.test(plain)) throw error;
+    return `${plain}\n`;
+  }
   const record = parsed && typeof parsed === 'object' ? (parsed as { content?: unknown }) : {};
   if (typeof record.content !== 'string' || !record.content.trim()) {
     throw new Error(`The Project Studio reply for ${kind} did not match the expected shape.`);

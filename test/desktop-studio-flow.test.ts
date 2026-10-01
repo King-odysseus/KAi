@@ -90,6 +90,12 @@ describe('studio drafts', () => {
   it('reads artifact markdown, stripping a fence the model added anyway', () => {
     expect(parseArtifact(JSON.stringify({ content: '```markdown\n# PRD\n\nBody\n```' }), 'prd')).toBe('# PRD\n\nBody\n');
     expect(() => parseArtifact(JSON.stringify({ content: '  ' }), 'prd')).toThrow(/did not match the expected shape/);
+    // A provider that answers with the document itself, instead of the JSON wrapper, still gets its document kept.
+    expect(parseArtifact('# PRD\n\nThe problem, who it is for, and the features in order.', 'prd')).toBe('# PRD\n\nThe problem, who it is for, and the features in order.\n');
+    expect(parseArtifact('```markdown\n# Setup\n\nRun `npm install`, then `npm run dev` ({port} is 3000).\n```', 'setup')).toContain('# Setup');
+    // A reply that opens like JSON but is broken is a failed wrapper, not a document.
+    expect(() => parseArtifact('{"content": "# PRD', 'prd')).toThrow();
+    expect(() => parseArtifact('ok', 'prd')).toThrow();
   });
 
   it('rejects an empty board draft rather than writing a board with no cards', () => {
