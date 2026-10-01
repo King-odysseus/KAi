@@ -106,7 +106,7 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
             {busy ? <Loader2 className="spin" size={14} /> : <Square size={14} />} Stop
           </button>
         ) : (
-          <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : 'Build the board first'}>
+          <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedCount > 0 ? 'Every card on the board is blocked. Put them back in the queue below, then start.' : 'Build the board first'}>
             {busy ? <Loader2 className="spin" size={14} /> : <Plane size={14} />} {status?.phase === 'finished' || status?.phase === 'stopped' || status?.phase === 'failed' ? 'Run again' : 'Start Autopilot'}
           </button>
         )}

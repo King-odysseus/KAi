@@ -10671,11 +10671,36 @@ code {
 .studio-note {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 0;
   color: var(--text-dim);
   font-size: 11px;
   line-height: 1.45;
+}
+
+/* An action that reads as the rest of the note's sentence. A note is a flex row, so without this the label is
+   squeezed into a narrow column and wraps to ribbons; flex: 0 0 auto keeps it whole and lets it take its own line. */
+.link-button {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.link-button:disabled {
+  color: var(--text-dim);
+  cursor: default;
 }
 
 .studio-list {
