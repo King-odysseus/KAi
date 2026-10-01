@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Background,
   Controls,
@@ -13,84 +13,99 @@ import {
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { layoutSteps, type FlowJourney } from '../flow-diagram';
+import { ArrowDown, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { buildFlowGraph, type FlowGraph, type FlowJourney } from '../flow-diagram';
+import { layoutFlowGraph, type FlowDirection } from '../flow-layout';
 
 /**
- * The user journeys from the flows artifact, drawn with React Flow. Each journey has its own tab, so a project with
- * many flows is not one wall of boxes. The diagram is interactive: pan and zoom, drag boxes to tidy them, click a
- * step to light up its path, step through with Previous and Next, and open it full screen. It is drawn from the
- * document's text, so editing the flows and saving redraws it, and nothing here can drift from the file.
+ * The user journeys from the flows artifact, drawn with React Flow. Each journey has its own tab. A question in the
+ * document becomes a decision that branches (its yes outcome beside it, "otherwise" carrying on), and the boxes are
+ * laid out in layers so lines avoid crossing. It is interactive: pan and zoom, drag boxes to tidy them, click a step
+ * to light up its path, step through with Previous and Next. It is drawn from the document's text, so editing the
+ * flows and saving redraws it, and nothing here can drift from the file.
  */
 
-const KIND_LABELS = { step: 'Step', screen: 'Screen', api: 'Endpoint', decision: 'Decision' } as const;
+/** Flows with more boxes than this open zoomed in, because fitted whole they are too small to read. */
+const LONG_FLOW = 8;
 
-function buildNodes(journey: FlowJourney, selected: number | null): Node[] {
-  const positions = layoutSteps(journey.steps.length);
-  return [
-    {
-      id: 'title',
-      position: positions[0]!,
-      data: { label: journey.title },
-      className: 'flow-node flow-title',
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-    },
-    ...journey.steps.map((step, index): Node => ({
-      id: `s${index}`,
-      position: positions[index + 1]!,
-      data: { label: step.text },
-      className: `flow-node ${step.kind}${selected === index ? ' selected' : ''}`,
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-    })),
-  ];
+const KIND_LABELS = { title: 'Flow', step: 'Step', screen: 'Screen', api: 'Endpoint', decision: 'Decision', outcome: 'Outcome' } as const;
+
+/** The title box keeps its own class, which the stylesheet colours; every other box is named after its kind. */
+function kindClass(kind: string): string {
+  return kind === 'title' ? 'flow-title' : kind;
 }
 
-function buildEdges(journey: FlowJourney, selected: number | null): Edge[] {
-  const ids = ['title', ...journey.steps.map((_step, index) => `s${index}`)];
-  return ids.slice(1).map((target, index): Edge => {
-    const source = ids[index]!;
-    // Selecting step n lights the line into it and the line out of it.
-    const hot = selected !== null && (target === `s${selected}` || source === `s${selected}`);
+function buildNodes(graph: FlowGraph, direction: FlowDirection, selected: string | null): Node[] {
+  const boxes = layoutFlowGraph(graph, direction);
+  const horizontal = direction === 'LR';
+  return graph.nodes.map((node): Node => {
+    const box = boxes.get(node.id)!;
     return {
-      id: `${source}->${target}`,
-      source,
-      target,
-      markerEnd: { type: MarkerType.ArrowClosed },
-      className: `flow-edge${hot ? ' hot' : ''}`,
-      animated: hot,
+      id: node.id,
+      position: { x: box.x, y: box.y },
+      data: { label: node.text },
+      className: `flow-node ${kindClass(node.kind)}${selected === node.id ? ' selected' : ''}`,
+      style: { width: box.width },
+      sourcePosition: horizontal ? Position.Right : Position.Bottom,
+      targetPosition: horizontal ? Position.Left : Position.Top,
     };
   });
 }
 
-function JourneyCanvas({ journey, selected, fill, onSelect }: { journey: FlowJourney; selected: number | null; fill: boolean; onSelect: (index: number | null) => void }): ReactNode {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(buildNodes(journey, null));
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(buildEdges(journey, null));
+function buildEdges(graph: FlowGraph, selected: string | null): Edge[] {
+  return graph.edges.map((edge): Edge => {
+    const hot = selected !== null && (edge.source === selected || edge.target === selected);
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      markerEnd: { type: MarkerType.ArrowClosed },
+      className: `flow-edge${hot ? ' hot' : ''}${edge.label ? ` labelled ${edge.label}` : ''}`,
+      animated: hot,
+      ...(edge.label ? { label: edge.label, labelShowBg: true, labelStyle: { fontSize: 10 }, labelBgPadding: [5, 2] as [number, number], labelBgBorderRadius: 4 } : {}),
+    };
+  });
+}
+
+function JourneyCanvas({ graph, direction, selected, fill, onSelect }: { graph: FlowGraph; direction: FlowDirection; selected: string | null; fill: boolean; onSelect: (id: string | null) => void }): ReactNode {
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(buildNodes(graph, direction, null));
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(buildEdges(graph, null));
   const flow = useReactFlow();
+  // The flow instance is kept in a ref so the effects below run when their own inputs change, not on every render.
+  const flowRef = useRef(flow);
+  flowRef.current = flow;
+  const kinds = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node.kind])), [graph]);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   // Selecting restyles the boxes in place, so a box the user dragged keeps where they put it.
   useEffect(() => {
-    setNodes((current) => current.map((node) => {
-      if (node.id === 'title') return node;
-      const index = Number(node.id.slice(1));
-      const kind = journey.steps[index]?.kind ?? 'step';
-      return { ...node, className: `flow-node ${kind}${selected === index ? ' selected' : ''}` };
-    }));
-    setEdges(buildEdges(journey, selected));
-  }, [selected, journey, setNodes, setEdges]);
+    setNodes((current) => current.map((node) => ({ ...node, className: `flow-node ${kindClass(kinds.get(node.id) ?? 'step')}${selected === node.id ? ' selected' : ''}` })));
+    setEdges(buildEdges(graph, selected));
+  }, [selected, graph, kinds, setNodes, setEdges]);
 
-  // Going full screen (or back) changes the size of the canvas, so fit the whole flow to the new size.
+  // The starting view. A short flow fits whole. A long one fitted whole is a strip of text too small to read, so it
+  // opens zoomed in on its beginning; the fit button in the corner shows all of it, and Walk through follows it.
+  const showStart = useCallback(() => {
+    const starting = graph.nodes.length > LONG_FLOW ? graph.nodes.slice(0, 5).map((node) => ({ id: node.id })) : undefined;
+    void flowRef.current.fitView({ ...(starting ? { nodes: starting, maxZoom: 1, padding: 0.25 } : { padding: 0.12 }), duration: 200 });
+  }, [graph]);
+
+  // On opening, and when the canvas changes size (full screen and back): back to the selected step, else the start.
   useEffect(() => {
-    const timer = window.setTimeout(() => { void flow.fitView({ duration: 200, padding: 0.14 }); }, 120);
+    const timer = window.setTimeout(() => {
+      if (selectedRef.current) void flowRef.current.fitView({ nodes: [{ id: selectedRef.current }], duration: 200, maxZoom: 1.1, padding: 1.4 });
+      else showStart();
+    }, 120);
     return () => window.clearTimeout(timer);
-  }, [fill, flow]);
+  }, [fill, showStart]);
 
   // Previous and Next move the view to the chosen step as well as lighting it up.
   useEffect(() => {
     if (selected === null) return;
-    void flow.fitView({ nodes: [{ id: `s${selected}` }], duration: 250, maxZoom: 1.1, padding: 1.6 });
-  }, [selected, flow]);
+    void flowRef.current.fitView({ nodes: [{ id: selected }], duration: 250, maxZoom: 1.1, padding: 1.4 });
+  }, [selected]);
 
   return (
     <ReactFlow
@@ -98,13 +113,11 @@ function JourneyCanvas({ journey, selected, fill, onSelect }: { journey: FlowJou
       edges={edges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
-      onNodeClick={(_event, node) => onSelect(node.id === 'title' ? null : Number(node.id.slice(1)))}
+      onNodeClick={(_event, node) => onSelect(node.id === 'title' ? null : node.id)}
       onPaneClick={() => onSelect(null)}
       nodesConnectable={false}
-      fitView
-      fitViewOptions={{ padding: 0.14 }}
       proOptions={{ hideAttribution: true }}
-      minZoom={0.15}
+      minZoom={0.1}
     >
       <Background gap={22} />
       <Controls showInteractive={false} />
@@ -115,22 +128,26 @@ function JourneyCanvas({ journey, selected, fill, onSelect }: { journey: FlowJou
 /** `fill` makes the diagram take the height it is given (the artifact viewer's full screen) instead of a fixed one. */
 export function FlowDiagram({ journeys, fill = false }: { journeys: readonly FlowJourney[]; fill?: boolean }): ReactNode {
   const [active, setActive] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [direction, setDirection] = useState<FlowDirection>('LR');
 
   const journey = journeys[Math.min(active, journeys.length - 1)];
+  const graph = useMemo(() => (journey ? buildFlowGraph(journey) : null), [journey]);
   const choose = useCallback((index: number) => {
     setActive(index);
     setSelected(null);
   }, []);
 
-  const step = journey && selected !== null ? journey.steps[selected] : undefined;
-  const height = useMemo(() => {
-    if (!journey) return 320;
-    const rows = Math.ceil((journey.steps.length + 1) / 6);
-    return Math.min(560, Math.max(300, rows * 130 + 90));
-  }, [journey]);
+  if (!journey || !graph) return null;
 
-  if (!journey) return null;
+  const node = selected === null ? undefined : graph.nodes.find((item) => item.id === selected);
+  const position = selected === null ? -1 : graph.order.indexOf(selected);
+  const move = (offset: number): void => {
+    const next = graph.order[Math.min(graph.order.length - 1, Math.max(0, position + offset))];
+    if (next) setSelected(next);
+  };
+  const branches = graph.nodes.filter((item) => item.kind === 'decision').length;
+  const height = Math.min(620, Math.max(320, 120 + graph.nodes.length * 34));
 
   return (
     <div className={`flow-panel${fill ? ' flow-fill' : ''}`}>
@@ -142,33 +159,38 @@ export function FlowDiagram({ journeys, fill = false }: { journeys: readonly Flo
             </button>
           ))}
         </div>
+        <button type="button" className="secondary-button" onClick={() => setDirection((current) => (current === 'LR' ? 'TB' : 'LR'))} title="Switch between laying the flow out left to right and top to bottom">
+          {direction === 'LR' ? <ArrowRight size={13} /> : <ArrowDown size={13} />} {direction === 'LR' ? 'Left to right' : 'Top to bottom'}
+        </button>
       </div>
       <div className="flow-diagram" style={fill ? undefined : { height }}>
-        <ReactFlowProvider key={`${active}-${journey.title}`}>
-          <JourneyCanvas journey={journey} selected={selected} fill={fill} onSelect={setSelected} />
+        <ReactFlowProvider key={`${active}-${journey.title}-${direction}`}>
+          <JourneyCanvas graph={graph} direction={direction} selected={selected} fill={fill} onSelect={setSelected} />
         </ReactFlowProvider>
         <ul className="flow-legend" aria-label="Legend">
           <li className="screen">Screen</li>
           <li className="api">Endpoint</li>
           <li className="decision">Decision</li>
-          <li className="step">Step</li>
+          <li className="outcome">Outcome</li>
         </ul>
       </div>
       <div className="flow-detail" role="status">
-        {step && selected !== null ? (
+        {node && position >= 0 ? (
           <>
-            <span className={`flow-kind ${step.kind}`}>{KIND_LABELS[step.kind]}</span>
-            <span className="flow-detail-text"><strong>Step {selected + 1} of {journey.steps.length}.</strong> {step.text}</span>
+            <span className={`flow-kind ${node.kind}`}>{KIND_LABELS[node.kind]}</span>
+            <span className="flow-detail-text"><strong>Step {position + 1} of {graph.order.length}.</strong> {node.text}</span>
             <span className="flow-detail-buttons">
-              <button type="button" className="secondary-button" onClick={() => setSelected(Math.max(0, selected - 1))} disabled={selected === 0} aria-label="Previous step"><ChevronLeft size={13} /> Previous</button>
-              <button type="button" className="secondary-button" onClick={() => setSelected(Math.min(journey.steps.length - 1, selected + 1))} disabled={selected >= journey.steps.length - 1} aria-label="Next step">Next <ChevronRight size={13} /></button>
+              <button type="button" className="secondary-button" onClick={() => move(-1)} disabled={position <= 0} aria-label="Previous step"><ChevronLeft size={13} /> Previous</button>
+              <button type="button" className="secondary-button" onClick={() => move(1)} disabled={position >= graph.order.length - 1} aria-label="Next step">Next <ChevronRight size={13} /></button>
             </span>
           </>
         ) : (
-          <span className="studio-note">Click a step to light up its path. Drag to move around, scroll to zoom, drag a box to tidy it. {journey.steps.length} steps in this flow.</span>
-        )}
-        {step === undefined && selected === null && journey.steps.length > 0 && (
-          <button type="button" className="secondary-button" onClick={() => setSelected(0)}>Walk through <ChevronRight size={13} /></button>
+          <>
+            <span className="studio-note">
+              {graph.order.length} steps{branches > 0 ? `, ${branches} decision${branches === 1 ? '' : 's'} that branch` : ''}. Click a step to light up its path and read all of it. Drag a box to tidy it, scroll to zoom, and use the fit button at the bottom left to see the whole flow.
+            </span>
+            <button type="button" className="secondary-button" onClick={() => setSelected(graph.order[0] ?? null)}>Walk through <ChevronRight size={13} /></button>
+          </>
         )}
       </div>
     </div>

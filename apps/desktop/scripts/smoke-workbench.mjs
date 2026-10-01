@@ -341,7 +341,7 @@ async function verifyStudioArtifacts(page) {
   const tabs = page.getByRole('tablist', { name: 'Flows' });
   await tabs.waitFor();
   const titles = await tabs.getByRole('tab').allInnerTexts();
-  if (titles.join('|') !== 'Book a haircut|Owner sees the day|Cancel a booking') throw new Error(`The flow tabs are wrong: ${titles.join('|')}`);
+  if (titles.join('|') !== 'Book a haircut|Owner sees the day|Sign in, hold a session, change password, sign out|Cancel a booking') throw new Error(`The flow tabs are wrong: ${titles.join('|')}`);
   // Each flow is its own diagram: the second tab shows three steps, not the first flow's seven.
   await tabs.getByRole('tab', { name: 'Owner sees the day' }).click();
   await page.locator('.flow-diagram .react-flow__node.flow-title').getByText('Owner sees the day').waitFor();
@@ -352,7 +352,37 @@ async function verifyStudioArtifacts(page) {
   await page.getByRole('button', { name: 'Next step' }).click();
   await page.locator('.flow-detail').getByText('Step 3 of 3').waitFor();
   await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-1440x920.png') });
-  // Full screen: the viewer covers the window and the diagram grows with it, then Escape returns.
+  // A long journey with questions: decisions branch, the connectors are labelled, no box covers another, and a
+  // step that the box has to clip is shown whole in the detail strip.
+  await tabs.getByRole('tab', { name: /^Sign in, hold a session/ }).click();
+  await page.locator('.flow-diagram .react-flow__node.flow-title').getByText(/^Sign in, hold a session/).waitFor();
+  await page.waitForTimeout(500);
+  const shape = await page.evaluate(() => {
+    const nodes = [...document.querySelectorAll('.flow-diagram .react-flow__node')];
+    const boxes = nodes.map((node) => node.getBoundingClientRect());
+    let overlaps = 0;
+    for (let a = 0; a < boxes.length; a += 1) for (let b = a + 1; b < boxes.length; b += 1) {
+      const x = boxes[a]; const y = boxes[b];
+      if (x.left < y.right - 1 && x.right > y.left + 1 && x.top < y.bottom - 1 && x.bottom > y.top + 1) overlaps += 1;
+    }
+    return {
+      nodes: nodes.length,
+      decisions: document.querySelectorAll('.flow-diagram .flow-node.decision').length,
+      outcomes: document.querySelectorAll('.flow-diagram .flow-node.outcome').length,
+      labels: [...document.querySelectorAll('.flow-diagram .react-flow__edge-text')].map((label) => label.textContent),
+      overlaps,
+    };
+  });
+  // Opened on a 21 box flow, the text must still be readable: zoomed in on the start, not the whole flow squeezed small.
+  const startZoom = await page.evaluate(() => Number(/scale\(([\d.]+)\)/.exec(document.querySelector('.flow-diagram .react-flow__viewport')?.style.transform ?? '')?.[1] ?? 0));
+  if (startZoom < 0.6) throw new Error(`The long flow opens too small to read (zoom ${startZoom}).`);
+  if (shape.decisions < 4 || shape.outcomes < 4) throw new Error(`The long flow did not branch: ${JSON.stringify(shape)}`);
+  if (!shape.labels.includes('yes') || !shape.labels.includes('otherwise')) throw new Error(`The connectors are not labelled: ${JSON.stringify(shape)}`);
+  if (shape.overlaps !== 0) throw new Error(`Boxes overlap in the long flow: ${JSON.stringify(shape)}`);
+  await page.locator('.flow-diagram .react-flow__node.outcome', { hasText: 'no cookie is set at all' }).click();
+  await page.locator('.flow-detail').getByText(/no cookie is set at all\./).waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-long-1440x920.png') });
+  // Full screen on the long flow: the viewer covers the window and the diagram grows and refits with it.
   await page.getByRole('button', { name: 'Full screen' }).first().click();
   const viewer = page.locator('.studio-viewer-full');
   await viewer.waitFor();
@@ -363,6 +393,18 @@ async function verifyStudioArtifacts(page) {
   });
   if (size.viewerWidth < size.windowWidth - 2 || size.viewerHeight < size.windowHeight - 2) throw new Error(`The artifact is not full screen: ${JSON.stringify(size)}`);
   if (size.diagramHeight < size.windowHeight * 0.55) throw new Error(`The diagram did not grow in full screen: ${JSON.stringify(size)}`);
+  // After the resize the view must stay readable and keep the selected step in view.
+  await page.waitForTimeout(700);
+  const view = await page.evaluate(() => {
+    const canvas = document.querySelector('.studio-viewer-full .flow-diagram')?.getBoundingClientRect();
+    const selected = document.querySelector('.studio-viewer-full .react-flow__node.selected')?.getBoundingClientRect();
+    const transform = document.querySelector('.studio-viewer-full .react-flow__viewport')?.style.transform ?? '';
+    const zoom = Number(/scale\(([\d.]+)\)/.exec(transform)?.[1] ?? 0);
+    const inside = Boolean(canvas && selected && selected.left >= canvas.left - 1 && selected.right <= canvas.right + 1 && selected.top >= canvas.top - 1 && selected.bottom <= canvas.bottom + 1);
+    return { zoom, inside, hasSelected: Boolean(selected) };
+  });
+  if (!view.hasSelected || !view.inside) throw new Error(`The selected step is not in view in full screen: ${JSON.stringify(view)}`);
+  if (view.zoom < 0.6) throw new Error(`The full screen flow is too small to read: ${JSON.stringify(view)}`);
   await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-fullscreen-1440x920.png') });
   await page.keyboard.press('Escape');
   await viewer.waitFor({ state: 'detached' });
@@ -652,6 +694,25 @@ async function seedStudioProject(now) {
     '1. Customer opens the Home page (/)', '2. Customer picks a time on the Calendar page (/calendar)', '3. Is the slot still free?', '4. POST /api/bookings reserves it', '5. Customer pays the deposit', '6. Confirmation page (/confirmed) shows the booking', '7. Customer receives a reminder', '',
     '## Owner sees the day',
     '1. Owner signs in on the Sign-in page (/sign-in)', '2. Owner opens the Day list page (/day)', '3. Owner marks a customer as arrived', '',
+    '## Sign in, hold a session, change password, sign out',
+    '1. Employee opens the sign-in page (/sign-in), rendered by a new page.tsx under app/sign-in/.',
+    '2. Employee submits email and password to POST /api/auth/sign-in, a new route.ts under app/api/auth/sign-in/.',
+    '3. If the address is outside the approved company domain? It is rejected with a visible error before any password check.',
+    '4. Otherwise lib/auth/password.ts verifies the argon2id hash.',
+    '5. If the email is unknown or the password is wrong? The same generic failure message and the same response time envelope are returned, and no cookie is set at all.',
+    '6. Otherwise one httpOnly, Secure, SameSite=Lax session cookie is set and one sessions row is written.',
+    '7. Employee lands in the chat workspace (/).',
+    '8. Every later request passes middleware.ts at the repo root, which checks only cookie presence and well-formedness, and imports nothing but jose and the standard library.',
+    '9. The handler on the other side calls requireUser() in lib/auth/session.ts, which loads the sessions row and slides expires_at on activity.',
+    '10. If the session row is gone or the 12-hour idle window has passed? Page requests redirect to /sign-in and API requests return 401.',
+    '11. Employee opens the settings page (/settings), rendered by a new page.tsx under app/settings/.',
+    '12. Employee submits current and new passwords to the server action in a new app/settings/actions.ts.',
+    '13. If the current password is wrong, the new one is too short, or the confirmation mismatches? A field-level error is returned and the session is preserved.',
+    '14. Otherwise the new argon2id hash is stored and the sessions row is kept, so the employee stays signed in.',
+    '15. Employee chooses sign out, POST /api/auth/sign-out, a new route.ts under app/api/auth/sign-out/.',
+    "16. The route deletes that sessions row only and clears the cookie; the employee's other sessions stay alive.",
+    '17. The next protected page request redirects to /sign-in and the next protected API request returns 401.',
+    '',
     '## Cancel a booking',
     '1. Customer opens the link in the reminder', '2. Is the booking more than a day away?', '3. Customer confirms the cancellation', '4. DELETE /api/bookings/:id frees the slot', '',
   ].join('\n');

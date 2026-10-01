@@ -52,7 +52,7 @@ export function parseFlows(markdown: string): FlowJourney[] {
       current = { title: 'Flow', steps: [] };
       journeys.push(current);
     }
-    const text = plain(item[1]!).slice(0, 140);
+    const text = plain(item[1]!).slice(0, 600);
     if (text) current.steps.push({ text, kind: stepKind(text) });
   }
   return journeys.filter((journey) => journey.steps.length > 0).slice(0, 12);
@@ -188,16 +188,104 @@ export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignCont
   ].filter((line, index, all) => line !== '' || all[index - 1] !== '').join('\n');
 }
 
-export const FLOW_COLUMN = 230;
-export const FLOW_ROW = 118;
+// --- The graph ---------------------------------------------------------------------------------------------
+
+export type FlowNodeKind = 'title' | FlowStepKind | 'outcome';
+
+export interface FlowGraphNode {
+  id: string;
+  text: string;
+  kind: FlowNodeKind;
+}
+
+export interface FlowGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface FlowGraph {
+  nodes: FlowGraphNode[];
+  edges: FlowGraphEdge[];
+  /** The step nodes in the order the document tells them, which is the order Previous and Next walk. */
+  order: string[];
+}
+
+const OTHERWISE = /^(?:otherwise|else|if not)\b[,:]?\s*/i;
+const IF_START = /^(?:if|when)\b/i;
+const ARROW = /^\s*(?:→|->|—|–|:)\s*/;
+
+/** A decision step split into the question it asks and what happens when the answer is yes, if the step says. */
+export function splitDecision(text: string): { condition: string; outcome: string } {
+  const mark = text.indexOf('?');
+  if (mark >= 0) return { condition: text.slice(0, mark + 1).trim(), outcome: text.slice(mark + 1).replace(ARROW, '').trim() };
+  const arrow = /\s(?:→|->)\s/.exec(text);
+  if (arrow) return { condition: text.slice(0, arrow.index).trim(), outcome: text.slice(arrow.index + arrow[0].length).trim() };
+  if (IF_START.test(text)) {
+    const comma = text.indexOf(',');
+    if (comma > 0) return { condition: text.slice(0, comma).trim(), outcome: text.slice(comma + 1).trim() };
+  }
+  return { condition: text.trim(), outcome: '' };
+}
 
 /**
- * Where each step of one journey sits. A long journey wraps after `perRow` steps, like lines of text, so it stays
- * readable at a glance instead of running off to the right. Index 0 is the journey's own title box.
+ * The journey as a graph with real branches. A step that asks a question becomes a decision: what the step says
+ * happens when the answer is yes becomes its own box off to the side, and "Otherwise ..." carries the main path on
+ * from the decision. A decision with no stated outcome simply continues on its yes. Everything else chains on.
  */
-export function layoutSteps(count: number, perRow = 5): Array<{ x: number; y: number }> {
-  return Array.from({ length: count + 1 }, (_value, index) => ({
-    x: (index % (perRow + 1)) * FLOW_COLUMN,
-    y: Math.floor(index / (perRow + 1)) * FLOW_ROW,
-  }));
+export function buildFlowGraph(journey: FlowJourney): FlowGraph {
+  const nodes: FlowGraphNode[] = [{ id: 'title', text: journey.title, kind: 'title' }];
+  const edges: FlowGraphEdge[] = [];
+  const order: string[] = [];
+  let previous = 'title';
+  let pendingLabel: string | undefined;
+  /** A decision that has stated its yes outcome and is waiting for its "Otherwise". */
+  let openDecision: string | null = null;
+
+  const add = (node: FlowGraphNode): void => {
+    nodes.push(node);
+    order.push(node.id);
+  };
+  const connect = (source: string, target: string, label?: string): void => {
+    edges.push({ id: `${source}->${target}`, source, target, ...(label ? { label } : {}) });
+  };
+
+  journey.steps.forEach((step, index) => {
+    const id = `s${index}`;
+    const otherwise = OTHERWISE.exec(step.text);
+    if (otherwise && openDecision) {
+      add({ id, text: step.text.slice(otherwise[0].length).trim() || step.text, kind: stepKind(step.text.slice(otherwise[0].length)) });
+      connect(openDecision, id, 'otherwise');
+      previous = id;
+      pendingLabel = undefined;
+      openDecision = null;
+      return;
+    }
+    if (step.kind === 'decision') {
+      const { condition, outcome } = splitDecision(step.text);
+      add({ id, text: condition, kind: 'decision' });
+      connect(previous, id, pendingLabel);
+      pendingLabel = undefined;
+      if (outcome) {
+        const outcomeId = `${id}o`;
+        add({ id: outcomeId, text: outcome, kind: 'outcome' });
+        connect(id, outcomeId, 'yes');
+        // The main path carries on from the decision, as "otherwise" if the next step says so, else on its no.
+        openDecision = id;
+        pendingLabel = 'no';
+      } else {
+        openDecision = null;
+        pendingLabel = 'yes';
+      }
+      previous = id;
+      return;
+    }
+    add({ id, text: step.text, kind: step.kind });
+    connect(previous, id, pendingLabel);
+    pendingLabel = undefined;
+    openDecision = null;
+    previous = id;
+  });
+  return { nodes, edges, order };
 }

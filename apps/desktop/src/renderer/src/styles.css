@@ -12207,4 +12207,30 @@ code {
   margin-left: 6px;
   color: var(--text-muted);
   font-style: normal;
-}
+}
+
+/* Flow boxes show at most four lines; the detail strip under the diagram shows all of a step. */
+.flow-diagram .react-flow__node.flow-node {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+
+.flow-node.outcome { border-style: dotted !important; border-color: var(--red) !important; color: var(--text-muted) !important; }
+.flow-kind.outcome { border-style: dotted; border-color: var(--red); }
+.flow-legend li.outcome { border-style: dotted; border-color: var(--red); }
+
+.flow-diagram .react-flow__edge-text {
+  fill: var(--text-muted);
+}
+
+.flow-diagram .react-flow__edge-textbg {
+  fill: var(--bg-panel);
+}
+
+.flow-diagram .react-flow__edge.flow-edge.labelled.otherwise .react-flow__edge-path,
+.flow-diagram .react-flow__edge.flow-edge.labelled.no .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+}
