@@ -49,6 +49,7 @@ import {
   type WorkspaceCommandRequest,
 } from './components/Workspace';
 import { GraphView } from './components/GraphView';
+import { composerSettingsFor } from './components/composer-settings';
 import { TourGuide } from './components/TourGuide';
 import { TOUR_STORAGE_KEY, parseTourProgress, type TourProgress } from './tour-lessons';
 import { clamp, unwrap, type ViewId } from './types';
@@ -835,18 +836,28 @@ export function App(): ReactNode {
   }
 
   /**
-   * Takes the composer's agent, mode, route and autonomy from the conversation about to be worked in.
+   * Takes the composer's agent, mode, route and autonomy for the conversation about to be worked in.
    *
-   * A record that states none of them — one opened blank for a run, a workflow or a schedule — leaves the composer
-   * as the person left it. Filling those from the app's defaults is what moved a chosen API run back to CLI the
-   * moment Auto opened the conversation it had just made for the task: the choices were the person's, and the
-   * record had no opinion to overrule them with.
+   * The order of who has the last word is in `composerSettingsFor`, and the first of the three is the point: the
+   * choice the person made *in this conversation* outlives anything the record says, so opening it again — from a
+   * thread, from the Studio, from Auto making its own tab — cannot quietly put the composer back to CLI and Ask.
+   * Before this, a reopen overwrote what they had chosen, and the record's own last run (or its absence) decided.
    */
   function adoptConversationSettings(conversation: ConversationRecord): void {
-    setSelectedAgent(conversation.activeAgent ?? selectedAgent);
-    setExecutionMode(conversation.execution ?? executionMode);
-    setSelectedRoute(conversation.route ?? selectedRoute);
-    setSelectedAutonomy(conversation.autonomy ?? selectedAutonomy);
+    const chosen = composerSettingsFor({
+      stored: composerSelections[conversation.id],
+      recorded: {
+        ...(conversation.activeAgent ? { agent: conversation.activeAgent } : {}),
+        ...(conversation.execution ? { execution: conversation.execution } : {}),
+        ...(conversation.route ? { route: conversation.route } : {}),
+        ...(conversation.autonomy ? { autonomy: conversation.autonomy } : {}),
+      },
+      current: { agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy },
+    });
+    setSelectedAgent(chosen.agent);
+    setExecutionMode(chosen.execution);
+    setSelectedRoute(chosen.route);
+    setSelectedAutonomy(chosen.autonomy);
   }
 
   async function openConversation(id: string): Promise<void> {
@@ -900,10 +911,9 @@ export function App(): ReactNode {
     setConversations((current) => [conversation, ...current]);
     setOpenConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
     setActiveConversationId(conversation.id);
-    setSelectedAgent(bootstrap.settings.defaultAgent);
-    setExecutionMode('cli');
-    setSelectedRoute(bootstrap.settings.defaultRoute);
-    setSelectedAutonomy(bootstrap.settings.defaultAutonomy);
+    // The composer keeps the choices it is showing. A new thread is the same person in the same moment, and this used
+    // to hand them the app's defaults instead — including a hardcoded CLI, which undid an API choice on the way past.
+    // The defaults still have their say where they belong: at startup, and in Settings.
     setError(null);
     setAgentNotice(null);
     setProxyContinuationAgent(null);

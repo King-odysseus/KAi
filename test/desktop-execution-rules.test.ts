@@ -6,6 +6,7 @@ import {
   buildExecutionRulesBriefing,
   DesktopExecutionRules,
   RULES_MARKER,
+  shouldCarryRules,
 } from '../apps/desktop/src/main/execution-rules';
 
 const bundledRulesPath = path.resolve('apps/desktop/resources/agent-rules/Cognitive1-Rules.md');
@@ -49,5 +50,37 @@ describe('desktop authoritative execution rules', () => {
     }, briefing);
     expect(request.prompt).toBe(prompt);
     expect(request.conversationId).toBe('conv-rules');
+  });
+});
+
+/**
+ * Who carries the rules into a run.
+ *
+ * The API path used to carry them twice on every turn — once in the context block and once in front of the request —
+ * because the check that was meant to notice they were already there could never see them. Eighteen kilobytes, twice,
+ * on the path most runs take.
+ */
+describe('who carries the standing rules', () => {
+  it('has a fresh CLI session carry them, and a continued one not', () => {
+    expect(shouldCarryRules({ execution: 'cli', rulesInContext: false, historyCarriesRules: false })).toBe(true);
+    expect(shouldCarryRules({ execution: 'cli', resumeSessionId: 'sess-1', rulesInContext: false, historyCarriesRules: false })).toBe(false);
+  });
+
+  it('leaves them to the context block on the API path, which always states them', () => {
+    expect(shouldCarryRules({ execution: 'api', rulesInContext: true, historyCarriesRules: false })).toBe(false);
+  });
+
+  it('carries them itself when nothing else does', () => {
+    // No context block with the rules — a project with nothing to put in one — so the request has to hold them.
+    expect(shouldCarryRules({ execution: 'api', rulesInContext: false, historyCarriesRules: false })).toBe(true);
+    // And a summarised history that still holds the turn which carried them is enough.
+    expect(shouldCarryRules({ execution: 'api', rulesInContext: false, historyCarriesRules: true })).toBe(false);
+  });
+
+  it('does not trust history alone, because the turns saved never hold the briefed prompt', () => {
+    // The trap: a conversation's turns keep the request as the person wrote it, so this flag is false in practice —
+    // which is why the context block is what the decision turns on.
+    const real = shouldCarryRules({ execution: 'api', rulesInContext: true, historyCarriesRules: false });
+    expect(real).toBe(false);
   });
 });

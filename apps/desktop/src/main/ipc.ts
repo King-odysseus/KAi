@@ -80,7 +80,7 @@ import { buildHistoryNote } from './run-history';
 import { clearInterjections, interject } from './interjections';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, RULES_MARKER } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, RULES_MARKER, shouldCarryRules } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -1418,18 +1418,26 @@ export async function runConversationAgent(
     : conversation.turns;
   const preparedRequest: AgentRunRequest = { ...request, prompt: effectivePrompt };
   /*
-   * Whether this run has to carry the standing rules itself.
+   * Whether this run has to carry the standing rules itself, or whether they are already going with it.
    *
-   * A CLI run does not, past its first turn: the session is alive and remembers them, which is what the original rule
-   * was written for. A Direct API run has no such session — a request is whatever is sent with it — so this used to
-   * leave the API path, which is the one most runs take, executing with none of the rules that were set for it.
+   * A CLI run does not, past its first turn: the session is alive and remembers them. A Direct API run has no such
+   * session — a request is whatever is sent with it — so the rules go in the prompt, unless the context block being
+   * sent already carries them, which is where the API path puts them every time.
    *
-   * The test is whether the turns actually being sent still contain them, rather than "is this the first turn": a
-   * compaction drops everything before a point, so the turn that first carried the rules can quietly stop being sent
-   * and the run would go on without them.
+   * The test is what is actually being sent rather than "is this the first turn". It used to ask whether any turn in
+   * the history contained the rules — and those turns hold the request as the person wrote it, never the briefed
+   * prompt, so the answer was always no and every API request carried the whole rule set twice: once in the context
+   * block and once in front of the request: eighteen kilobytes — about 2,800 words — twice, on every turn of every
+   * API run, and most runs are API runs.
    */
+  const rulesInContext = contextText.includes(RULES_MARKER) || contextText.includes('Cognitive1 standing instructions');
   const carried = historyTurns.some((turn) => (turn.text ?? '').includes(RULES_MARKER));
-  const carryRules = executionMode === 'cli' ? !resumeSessionId : !carried;
+  const carryRules = shouldCarryRules({
+    execution: executionMode,
+    resumeSessionId,
+    rulesInContext,
+    historyCarriesRules: carried,
+  });
   const executionRequest = carryRules
     ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
     : preparedRequest;

@@ -9325,6 +9325,10 @@ button.tool-call-head:hover strong { color: var(--mint); }
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  /* Its own row, so the controls that belong together stay together instead of breaking wherever the width runs
+     out — and so the row above it is the same three controls every time. */
+  flex: 1 0 100%;
+  min-width: 0;
   gap: 6px;
   padding: 6px;
   border: 1px solid var(--border-soft);

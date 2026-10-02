@@ -116,6 +116,30 @@ export function applyExecutionRulesToRequest(request: AgentRunRequest, briefing:
   return { ...request, prompt: applyExecutionRulesToPrompt(request.prompt, briefing) };
 }
 
+/**
+ * Whether a run has to carry the standing rules itself, or whether they are already going with it.
+ *
+ * A CLI run past its first turn does not: the session is alive and remembers them. A Direct API run has no such
+ * session, so the rules go in the prompt — unless the context block being sent already carries them, which is where
+ * the API path puts them every time.
+ *
+ * This lives here because it failed silently once. The test used to be "does any turn in the history contain the
+ * rules", and those turns hold the request as the person wrote it, never the briefed prompt, so the answer was always
+ * no: every API request carried the full rule set twice, once in the context block and once in front of the request.
+ */
+export function shouldCarryRules(input: {
+  execution: 'cli' | 'api';
+  /** Set when a CLI session is being continued, which is the case that does not need them again. */
+  resumeSessionId?: string | undefined;
+  /** Whether the context block being sent already states the rules. */
+  rulesInContext: boolean;
+  /** Whether a turn actually being sent still carries them — a compacted history may have dropped the one that did. */
+  historyCarriesRules: boolean;
+}): boolean {
+  if (input.execution === 'cli') return !input.resumeSessionId;
+  return !input.rulesInContext && !input.historyCarriesRules;
+}
+
 function parseRules(markdown: string): DesktopRule[] {
   const lines = markdown.split(/\r?\n/);
   const start = lines.findIndex((line) => /^##\s+Rules\s*$/.test(line));

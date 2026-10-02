@@ -646,7 +646,9 @@ async function verifyIndependentWindows(application, page) {
   await third.close();
 
   await second.locator('.project-picker-button').click();
-  await second.getByRole('button', { name: /Second Project/ }).click();
+  // Anchored to the row's own control: the row also carries a remove button whose label names the project, so a
+  // loose name match would resolve to two elements and fail the run.
+  await second.locator('.project-popover .project-row-open', { hasText: 'Second Project' }).click();
   await waitForProjectName(second, 'Second Project');
   await waitForProjectName(page, 'Sample Project');
 

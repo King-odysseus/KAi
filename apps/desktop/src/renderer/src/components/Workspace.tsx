@@ -409,6 +409,10 @@ export function WorkspaceView({
   const refineReason = refineTarget
     ? null
     : promptGuideReadiness?.reason ?? directApiCapability?.unavailableReason ?? 'Checking the available model connection.';
+  /** What the provider is called on screen. The model beside it belongs to the model control, and only there. */
+  const providerLabel = effectiveRoute === 'proxy'
+    ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}`
+    : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`;
   const activeGoal = activeConversation?.goal ?? null;
   const activeTaskIntent = TASK_INTENTS.find((intent) => intent.id === taskIntent) ?? TASK_INTENTS[0];
   const allContextChips: ContextChip[] = [
@@ -803,7 +807,7 @@ export function WorkspaceView({
 
   /** Puts a question about something KAI just showed into the composer, read-only, ready to send. */
   function askKai(text: string): void {
-    setTaskIntent('learn');
+    rememberIntent('learn');
     onSelectAutonomy('plan');
     setPrompt(text);
     window.setTimeout(() => promptRef.current?.focus(), 0);
@@ -811,17 +815,26 @@ export function WorkspaceView({
 
   /** A fix chosen in the Equalizer: the prompt goes into the composer for the user to read and send, as a Build. */
   function applyEqualizerFix(text: string): void {
-    setTaskIntent('build');
+    rememberIntent('build');
     if (selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
     setPrompt(text);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
 
+  /**
+   * Sets the intent and keeps it, so every path that changes it lasts as long as the person's choice rather than as
+   * long as this screen stays mounted — leaving for the Studio and coming back used to lose an intent set from a
+   * panel rather than from the row.
+   */
+  function rememberIntent(intent: TaskIntent): void {
+    setTaskIntent(intent);
+    // A window with storage locked down keeps it in memory instead.
+    try { window.localStorage.setItem(INTENT_KEY, intent); } catch { /* memory only */ }
+  }
+
   function chooseTaskIntent(intent: TaskIntent): void {
     const definition = TASK_INTENTS.find((item) => item.id === intent)!;
-    setTaskIntent(intent);
-    // Kept for the next time this screen mounts; a window with storage locked down keeps it in memory instead.
-    try { window.localStorage.setItem(INTENT_KEY, intent); } catch { /* memory only */ }
+    rememberIntent(intent);
     if (intent === 'plan' || intent === 'review' || intent === 'learn') onSelectAutonomy('plan');
     // Leaving plan-only for Build lands on the level the person's experience setting asks for, not always on auto-edit.
     if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
@@ -1634,10 +1647,14 @@ export function WorkspaceView({
                   <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
                 </div>
                 {apiRun ? (
-                  <button type="button" className="chip-button api-provider-chip" title="Configure the direct API provider" onClick={onOpenSettings} disabled={busy}><Cloud size={14} /><span className="truncate">{selectedRoute === 'proxy' ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}` : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`}</span></button>
+                  // The provider and its model were spelled out here as well as in the model control on the right, in
+                  // two different words for the same thing. This is the way to the provider's settings and nothing
+                  // more, so it reads as a button rather than as a second answer to a question already answered.
+                  <button type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></button>
                 ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason} value={selectedAgent} />}
                 <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
-                <SelectMenu ariaLabel="Autonomy" className="control-select autonomy-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={COMPACT_ACCESS_OPTIONS} title="Choose how much project access the active run has" value={selectedAutonomy} />
+                {/* The access level is not repeated here: it is in the composer's own row, always visible, and two
+                    controls for one setting is how a person stops being sure which one they are looking at. */}
               </div>}
             </div>
             <div className="composer-actions">
@@ -2086,10 +2103,8 @@ interface SelectMenuOption<T extends string> {
   disabled?: boolean;
 }
 
-/** The access choices with what each one lets KAI do. The wider dropdown uses the full labels, the compact one the short ones. */
+/** The access choices with what each one lets KAI do. There is one control for them, in the composer's own row. */
 const ACCESS_OPTIONS: readonly SelectMenuOption<AutonomyMode>[] = ACCESS_LEVELS.map((level) => ({ value: level.value, label: level.label, description: level.description }));
-const SHORT_ACCESS_LABEL: Record<AutonomyMode, string> = { plan: 'Plan', ask: 'Ask', autoEdit: 'Auto-edit', full: 'Full control', custom: 'Custom' };
-const COMPACT_ACCESS_OPTIONS: readonly SelectMenuOption<AutonomyMode>[] = ACCESS_OPTIONS.map((option) => ({ ...option, label: SHORT_ACCESS_LABEL[option.value] }));
 
 function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = false, icon, onChange, options, title, value }: {
   ariaLabel: string;
