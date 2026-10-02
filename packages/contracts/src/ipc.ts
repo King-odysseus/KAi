@@ -447,6 +447,7 @@ export const ipcChannels = [
   'studio:projects-list',
   'studio:project-archive',
   'studio:project-remove',
+  'studio:project-link',
   'studio:project-folder',
   'studio:project-launch',
   'studio:interview-read',
@@ -746,6 +747,7 @@ export const ipcInputSchemas = {
   'studio:projects-list': emptyInputSchema,
   'studio:project-archive': studioProjectArchiveInputSchema,
   'studio:project-remove': interviewProjectInputSchema,
+  'studio:project-link': z.object({ projectId: z.string().min(1), linkedProjectId: z.string().min(1).nullable() }).strict(),
   'studio:project-folder': studioProjectFolderInputSchema,
   'studio:project-launch': studioProjectLaunchInputSchema,
   'studio:interview-read': interviewProjectInputSchema,
@@ -1230,6 +1232,11 @@ export interface KaiDesktopBridge {
   studioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
   /** Rebuilds the board from the artifacts and the design, keeping the work already done. Runs one model call. */
   planStudioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
+  /**
+   * Points a Studio plan at a folder, or at none at all. Needed when the folder it was linked to is renamed or moved:
+   * without it the plan is stranded on a path that no longer exists and there is no way to say where it went.
+   */
+  linkStudioProject(request: { projectId: string; linkedProjectId: string | null }): Promise<IpcResponse<StudioProjectSummary>>;
   /** Puts an existing board in a sensible build order and sets the dependencies that hold it. Runs one model call. */
   arrangeStudioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
   /** The next card an agent should pick up, or null when nothing is ready. */

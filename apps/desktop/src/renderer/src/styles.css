@@ -744,6 +744,23 @@ button:disabled {
   .app-tooltip { animation: none; }
 }
 
+/* Which folder a Studio plan uses. A plan is linked by project id, so the folder being renamed strands it; this is the
+   way to say where it lives now. */
+.studio-relink { display: block; margin-top: 5px; }
+
+.studio-relink select {
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.studio-relink select:hover:not(:disabled) { color: var(--text); }
+
 /* The plan the run is working to. One line by default: the transcript is busy, and a plan that is going well does not
    need room. */
 .plan-strip {

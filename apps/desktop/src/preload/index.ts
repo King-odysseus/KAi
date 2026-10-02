@@ -84,6 +84,7 @@ const bridge: KaiDesktopBridge = {
   testOpenPencil: () => ipcRenderer.invoke('design:openpencil-test', {}),
   studioReadiness: () => ipcRenderer.invoke('studio:readiness', {}),
   studioProjects: () => ipcRenderer.invoke('studio:projects-list', {}),
+  linkStudioProject: (request) => ipcRenderer.invoke('studio:project-link', request),
   setStudioProjectArchived: (request) => ipcRenderer.invoke('studio:project-archive', request),
   deleteStudioProject: (projectId) => ipcRenderer.invoke('studio:project-remove', { projectId }),
   chooseStudioProjectFolder: (request) => ipcRenderer.invoke('studio:project-folder', request),

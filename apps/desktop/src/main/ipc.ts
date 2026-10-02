@@ -435,6 +435,13 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'design:openpencil-test', async () => testOpenPencil(context));
   handle(context, 'studio:readiness', async () => context.interview.readiness());
   handle(context, 'studio:projects-list', async () => context.interview.list());
+  // Pointing a plan at a folder, or at none. The plan is otherwise stranded on whatever path it was linked to,
+  // which is no help once that folder is renamed or moved.
+  handle(context, 'studio:project-link', async ({ projectId, linkedProjectId }) => {
+    const summary = await context.interview.setLinkedProject(projectId, linkedProjectId);
+    await broadcastSharedState(context);
+    return summary;
+  });
   handle(context, 'studio:project-archive', async (input) => context.interview.setArchived(input));
   handle(context, 'studio:project-remove', async ({ projectId }) => {
     await context.interview.remove({ projectId });

@@ -97,7 +97,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -809,6 +809,27 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   }
 
   /**
+   * Points this plan at a folder, or at none.
+   *
+   * A plan is linked to a folder by its id, so renaming or moving the folder leaves the plan stranded on a path that
+   * no longer exists — and every read of it fails. This is the way back: say where the folder lives now.
+   */
+  async function relink(linkedProjectId: string | null): Promise<void> {
+    if (!projectId) return;
+    setBusy('link');
+    setError(null);
+    try {
+      await window.kaiDesktop.linkStudioProject({ projectId, linkedProjectId }).then(unwrap);
+      setProjectsVersion((current) => current + 1);
+      setNotice(linkedProjectId ? 'This plan now uses that folder.' : 'This plan keeps its own workspace again.');
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
    * Reorders an existing board by what should be built first. A plan written before anything was built tends to hand
    * back hosting and managed services early; this is the second pass that moves them to where they belong. Every
    * card's status, runs and checks survive, so arranging never costs work.
@@ -1109,6 +1130,19 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   ? `Using ${linkedProjectName(state.linkedProjectId)}`
                   : 'Independent Studio workspace'}
             </small>
+            {screen === 'project' && (
+              <span className="studio-relink">
+                <select
+                  aria-label="The folder this plan uses"
+                  value={state?.linkedProjectId ?? ''}
+                  disabled={busy !== null}
+                  onChange={(event) => void relink(event.target.value || null)}
+                >
+                  <option value="">Independent (KAI's own folder)</option>
+                  {desktopProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+              </span>
+            )}
           </div>
         </div>
       </div>

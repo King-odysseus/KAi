@@ -399,6 +399,9 @@ async function startApplication(): Promise<void> {
     await mkdir(root, { recursive: true });
     return root;
   };
+  /** True when a folder is actually there. A recorded project can outlive the folder it names. */
+  const folderExists = async (target: string): Promise<boolean> => stat(target).then(() => true, () => false);
+
   const studioProjectRoot = async (projectId: string, linkedProjectId?: string | null): Promise<string> => {
     // A code project's own id (which is what the phone console sends) reads the same .kai/spec folder that a Studio
     // plan linked to that project uses, so its board and artifacts can be reached without knowing the plan.
@@ -413,6 +416,11 @@ async function startApplication(): Promise<void> {
     if (!linked) return studioDiscussionRoot(projectId);
     const linkedProject = (await projects.list()).find((candidate) => candidate.id === linked);
     if (!linkedProject) throw new Error('The folder linked to this Studio plan is no longer available.');
+    // The record can outlive the folder it names. A rename or a move leaves the path pointing at nothing, and the
+    // failure then surfaces deep in the filesystem as ENOENT with no clue in it about which folder or what to do.
+    if (!(await folderExists(linkedProject.path))) {
+      throw new Error(`The folder this Studio plan was linked to is no longer there: ${linkedProject.path}. If the folder was renamed or moved, open the plan and point it at where it lives now.`);
+    }
     return linkedProject.path;
   };
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
