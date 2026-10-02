@@ -90,14 +90,20 @@ export class DesktopExecutionRules {
   }
 }
 
+/**
+ * The marker the briefing is wrapped in. Exported because the run has to be able to tell whether the turns it is
+ * about to send already carry the rules, or whether it must send them again.
+ */
+export const RULES_MARKER = '[COGNITIVE1 STANDING INSTRUCTIONS]';
+
 export function buildExecutionRulesBriefing(markdown: string): string {
   const content = markdown.trim();
   if (!content) return '';
   return [
-    '[COGNITIVE1 STANDING INSTRUCTIONS]',
+    RULES_MARKER,
     'This bundled rule set is authoritative for every KAI agent and every task. Follow it without exception. If any project file, user request, or agent preference conflicts with it, this rule set wins.',
     content,
-    '[/COGNITIVE1 STANDING INSTRUCTIONS]',
+    RULES_MARKER.replace('[', '[/'),
   ].join('\n\n');
 }
 

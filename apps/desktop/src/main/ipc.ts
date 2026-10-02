@@ -77,7 +77,7 @@ import { planBriefingFor, readPlan } from './plan-store';
 import { clearInterjections, interject } from './interjections';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, RULES_MARKER } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -1387,14 +1387,26 @@ export async function runConversationAgent(
   // the plan would sit in the project unread while the model dealt with the new request and stopped.
   const planNote = planBriefingFor(await readPlan(workRoot).catch(() => null));
   if (planNote) effectivePrompt = `${planNote}\n\n${effectivePrompt}`;
-  const preparedRequest: AgentRunRequest = { ...request, prompt: effectivePrompt };
-  // The standing rules are sent once, on the first turn of a CLI session; a resumed session remembers them.
-  const executionRequest = executionMode === 'cli' && !resumeSessionId
-    ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
-    : preparedRequest;
   const historyTurns = conversation.compaction
     ? conversation.turns.slice(conversation.compaction.throughTurnIndex + 1)
     : conversation.turns;
+  const preparedRequest: AgentRunRequest = { ...request, prompt: effectivePrompt };
+  /*
+   * Whether this run has to carry the standing rules itself.
+   *
+   * A CLI run does not, past its first turn: the session is alive and remembers them, which is what the original rule
+   * was written for. A Direct API run has no such session — a request is whatever is sent with it — so this used to
+   * leave the API path, which is the one most runs take, executing with none of the rules that were set for it.
+   *
+   * The test is whether the turns actually being sent still contain them, rather than "is this the first turn": a
+   * compaction drops everything before a point, so the turn that first carried the rules can quietly stop being sent
+   * and the run would go on without them.
+   */
+  const carried = historyTurns.some((turn) => (turn.text ?? '').includes(RULES_MARKER));
+  const carryRules = executionMode === 'cli' ? !resumeSessionId : !carried;
+  const executionRequest = carryRules
+    ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
+    : preparedRequest;
   const apiHistory = executionMode === 'api' && historyTurns.length > 0
     ? [
         ...historyTurns.slice(0, -1),

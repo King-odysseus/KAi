@@ -5,6 +5,7 @@ import {
   applyExecutionRulesToRequest,
   buildExecutionRulesBriefing,
   DesktopExecutionRules,
+  RULES_MARKER,
 } from '../apps/desktop/src/main/execution-rules';
 
 const bundledRulesPath = path.resolve('apps/desktop/resources/agent-rules/Cognitive1-Rules.md');
@@ -16,6 +17,17 @@ describe('desktop authoritative execution rules', () => {
     expect(rules).toContain('## Session Checklist');
     expect(rules).toContain('1. **No API keys ever**');
     expect(rules).toContain('57. **Keep the brain clean**');
+  });
+
+  it('wraps the briefing in the marker the run looks for, at both ends', () => {
+    // The run decides whether to send the rules by asking whether the turns it is about to send already carry them,
+    // which it does by looking for this marker. If the briefing stopped carrying it, every run would silently send the
+    // rules again — or, worse, stop recognising them — so the contract is worth pinning rather than assuming.
+    const briefing = buildExecutionRulesBriefing('# Cognitive1\n\n## Rules\n\n1. **No secrets** - Never commit keys.\n');
+
+    expect(briefing.startsWith(RULES_MARKER)).toBe(true);
+    expect(briefing.endsWith('[/COGNITIVE1 STANDING INSTRUCTIONS]')).toBe(true);
+    expect(briefing.split(RULES_MARKER)).toHaveLength(2);
   });
 
   it('marks the bundled rules as authoritative in API and CLI prompts', () => {
