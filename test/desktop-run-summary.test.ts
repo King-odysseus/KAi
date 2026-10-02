@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeRunOutcome } from '../apps/desktop/src/main/run-summary';
+import { describeRunOutcome, outstandingLine } from '../apps/desktop/src/main/run-summary';
 
 /**
  * The closing line when the model gave none. It is written from facts KAI holds, so the thing worth testing is that
@@ -36,6 +36,21 @@ describe('saying what a run did', () => {
     expect(summary).toContain('stopped before it finished');
     expect(summary).toContain('The provider returned no output.');
     expect(summary).toContain('Checks failed: npm test.');
+  });
+
+  it('says what is still outstanding, which is the half a model leaves out', () => {
+    const summary = describeRunOutcome({
+      status: 'completed',
+      files: ['a.ts'],
+      checks: [],
+      remaining: ['Add the tests', 'Wire it into the page'],
+    });
+
+    expect(summary).toContain('Still to do: Add the tests, Wire it into the page.');
+    // The line is also offered on its own, so a run where the model did speak still says what it did not reach.
+    expect(outstandingLine(['Add the tests'])).toBe('Still to do: Add the tests.');
+    expect(outstandingLine([])).toBe('');
+    expect(outstandingLine(undefined)).toBe('');
   });
 
   it('shortens a long file list instead of reciting it', () => {

@@ -21,6 +21,7 @@ import {
   type AgentRunRequest,
   type AgentRunResult,
   type AppSettings,
+  openPlanItems,
   type BrainEntry,
   type ConversationRecord,
   type ContextChip,
@@ -69,7 +70,8 @@ import type { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService
 import type { CredentialVault } from './credential-vault';
 import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime';
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
-import { describeRunOutcome } from './run-summary';
+import { describeRunOutcome, outstandingLine } from './run-summary';
+import { readPlan } from './plan-store';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
@@ -1461,14 +1463,19 @@ export async function runConversationAgent(
   if (lessonEvent) execution.events.push(lessonEvent);
   // The model's own account when it gave one. When it did not, the run used to end in silence — commands in the
   // activity list and nothing saying what they added up to — so KAI states the outcome from the facts it holds.
-  const closing = execution.output?.trim()
-    ? execution.output
+  // What the plan still lists. Said either way, because a model's own account describes what it did and reliably
+  // leaves out what it did not get to — which is the half the reader needs to decide what happens next.
+  const remaining = openPlanItems(await readPlan(workRoot).catch(() => null)).map((item) => item.text);
+  const spoken = execution.output?.trim();
+  const closing = spoken
+    ? [spoken, outstandingLine(remaining)].filter(Boolean).join('\n\n')
     : describeRunOutcome({
         status: execution.status,
         files: (userTurn.fileChanges ?? []).map((change) => change.path),
         checks: agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
           .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0 })),
         error: execution.error,
+        remaining,
       });
   conversation.turns.push({
     id: `turn_${crypto.randomUUID()}`,

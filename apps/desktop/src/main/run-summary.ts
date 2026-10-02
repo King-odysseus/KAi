@@ -16,6 +16,8 @@ export interface RunOutcome {
   checks: ReadonlyArray<{ command: string; passed: boolean | null }>;
   /** Why it failed, when it did. */
   error?: string;
+  /** What the plan still lists, so the closing line can say what is left rather than only what was done. */
+  remaining?: readonly string[];
 }
 
 /** How many files to name before summarising the rest as a count. */
@@ -35,6 +37,17 @@ function checkVerdict(checks: RunOutcome['checks']): string {
   return `Checks failed: ${failed.map((check) => check.command).join(', ')}.`;
 }
 
+/**
+ * What is still outstanding, said plainly, or nothing when the plan has no work left on it.
+ *
+ * Separate from the summary itself because it is worth saying either way: the model's own account of a run tends to
+ * describe what it did, and the one thing it reliably leaves out is what it did not get to.
+ */
+export function outstandingLine(remaining: readonly string[] | undefined): string {
+  if (!remaining || remaining.length === 0) return '';
+  return `Still to do: ${listOf(remaining)}.`;
+}
+
 export function describeRunOutcome(outcome: RunOutcome): string {
   const headline = outcome.status === 'completed' ? 'The run finished.' : 'The run stopped before it finished.';
   const why = outcome.status === 'failed' && outcome.error ? ` ${outcome.error}` : '';
@@ -43,5 +56,6 @@ export function describeRunOutcome(outcome: RunOutcome): string {
     ? 'It changed no files.'
     : `It changed ${outcome.files.length} file${outcome.files.length === 1 ? '' : 's'}: ${listOf(outcome.files)}.`;
 
-  return `${headline}${why} ${changed} ${checkVerdict(outcome.checks)}`;
+  const left = outstandingLine(outcome.remaining);
+  return [`${headline}${why} ${changed} ${checkVerdict(outcome.checks)}`, left].filter(Boolean).join(' ');
 }
