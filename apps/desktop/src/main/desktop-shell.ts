@@ -27,6 +27,8 @@ export interface DesktopShellDeps {
   center: NotificationCenter;
   getWindow: () => BrowserWindow | null;
   stopRun: (conversationId: string) => void;
+  /** Whether the process may end now: nothing else is in flight that quitting would cut short. */
+  canExit: () => boolean;
 }
 
 /** Owns the system tray, close-to-tray behaviour and native notifications. */
@@ -34,18 +36,50 @@ export class DesktopShell {
   private tray: Tray | null = null;
   private trayEnabled = false;
   private quitting = false;
+  /** Set when a window went away to keep a run alive, so the process can end once that run does. */
+  private residentForWork = false;
   private readonly notificationsOff = process.env.KAI_DESKTOP_NOTIFICATIONS === 'off';
 
   constructor(private readonly deps: DesktopShellDeps) {
-    deps.center.onRunsChanged(() => this.refreshMenu());
+    deps.center.onRunsChanged(() => {
+      this.refreshMenu();
+      this.endResidencyIfWorkFinished();
+    });
     app.on('before-quit', () => {
       this.quitting = true;
     });
   }
 
-  /** Keep the app resident only when closing would otherwise abandon active work. */
-  shouldHideOnClose(): boolean {
-    return this.trayEnabled && !this.quitting && this.deps.center.activeRunIds().length > 0;
+  /**
+   * Whether closing the window should hide it instead, because a run would be abandoned by closing.
+   *
+   * Yes only while there is work to protect, and it remembers that it said yes: the app is resident for a reason
+   * that can expire, and this is what tells it so.
+   */
+  hideForActiveWork(): boolean {
+    if (!this.trayEnabled || this.quitting || this.deps.center.activeRunIds().length === 0) return false;
+    this.residentForWork = true;
+    return true;
+  }
+
+  /**
+   * Ends the process once the work it stayed up for has finished.
+   *
+   * A window hidden to protect a run is not a window anyone asked to keep running. When the last run ends there is
+   * nothing left to protect and nothing that will bring the window back, so KAI was left resident with no window —
+   * invisible, and with notifications off not even a tray icon to reach it by, which is a process the person
+   * believed they had closed. Hiding the window on purpose is untouched: that never sets the flag this reads.
+   */
+  private endResidencyIfWorkFinished(): void {
+    if (!this.residentForWork || this.quitting) return;
+    if (this.deps.center.activeRunIds().length > 0) return;
+    const window = this.deps.getWindow();
+    if (window?.isVisible()) {
+      // The window came back, so closing it again is a fresh decision to act on.
+      this.residentForWork = false;
+      return;
+    }
+    if (this.deps.canExit()) app.quit();
   }
 
   apply(settings: NotificationSettings): void {

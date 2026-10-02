@@ -451,6 +451,9 @@ async function startApplication(): Promise<void> {
     stopRun: (conversationId) => {
       if (ipcContext) cancelConversationRun(ipcContext, conversationId);
     },
+    // A headless job has no window of its own, so the shell ending the process on a quiet moment would cut its
+    // run short. It waits for those the same way the startup job path does.
+    canExit: () => headlessJobsInFlight === 0,
   });
   shell.apply((await settings.load()).notifications);
   const editorSessions = new EditorSessionManager();
@@ -1080,7 +1083,7 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
   });
   window.on('close', (event) => {
     if (forceClosing.has(session.id)) return;
-    if (desktopShell?.shouldHideOnClose()) {
+    if (desktopShell?.hideForActiveWork()) {
       event.preventDefault();
       window.hide();
       return;
