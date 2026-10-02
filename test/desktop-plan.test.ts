@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PLAN_PATH, openPlanItems, planIsUnfinished, openPlanReminder, type Plan } from '@kai/contracts';
-import { readPlan, writePlan } from '../apps/desktop/src/main/plan-store';
+import { planBriefingFor, readPlan, writePlan } from '../apps/desktop/src/main/plan-store';
 
 const NOW = '2026-10-02T10:00:00.000Z';
 const directories: string[] = [];
@@ -50,6 +50,22 @@ describe('the task plan', () => {
     expect(planIsUnfinished(plan([{ text: 'a', state: 'done' }]))).toBe(false);
     expect(planIsUnfinished(plan([{ text: 'a', state: 'done' }, { text: 'b', state: 'pending' }]))).toBe(true);
     expect(planIsUnfinished(null)).toBe(false);
+  });
+
+  it('tells a new run what it interrupted, which is what makes a diversion survivable', () => {
+    // Steering cancels the run and starts the next instruction fresh, so this note is the only thing that connects
+    // the new run to the work it interrupted.
+    const briefing = planBriefingFor(plan([
+      { text: 'Read the spec', state: 'done' },
+      { text: 'Write the parser', state: 'pending' },
+    ]));
+
+    expect(briefing).toContain('plan in progress');
+    expect(briefing).toContain('Write the parser');
+    expect(briefing).toContain('may be a diversion');
+    // Nothing to say when there is no plan, or nothing left on it.
+    expect(planBriefingFor(null)).toBe('');
+    expect(planBriefingFor(plan([{ text: 'done', state: 'done' }]))).toBe('');
   });
 
   it('hands back the outstanding items by name, so a model that lost the thread gets it back', () => {

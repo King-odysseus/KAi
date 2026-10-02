@@ -71,7 +71,7 @@ import type { CredentialVault } from './credential-vault';
 import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime';
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { describeRunOutcome, outstandingLine } from './run-summary';
-import { readPlan } from './plan-store';
+import { planBriefingFor, readPlan } from './plan-store';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
@@ -1362,6 +1362,11 @@ export async function runConversationAgent(
   if (executionMode === 'cli' && contextText) {
     effectivePrompt = `${contextText}\n\n[USER REQUEST]\n${effectivePrompt}`;
   }
+  // A run started while a plan is unfinished is very often a diversion: the person steered, or asked a question, and
+  // the run that was doing the work is gone. Told what it interrupted, it can answer and then carry on; without this
+  // the plan would sit in the project unread while the model dealt with the new request and stopped.
+  const planNote = planBriefingFor(await readPlan(workRoot).catch(() => null));
+  if (planNote) effectivePrompt = `${planNote}\n\n${effectivePrompt}`;
   const preparedRequest: AgentRunRequest = { ...request, prompt: effectivePrompt };
   // The standing rules are sent once, on the first turn of a CLI session; a resumed session remembers them.
   const executionRequest = executionMode === 'cli' && !resumeSessionId

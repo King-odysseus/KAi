@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { PLAN_PATH, planSchema, type Plan, type PlanItem } from '@kai/contracts';
+import { PLAN_PATH, openPlanItems, planSchema, type Plan, type PlanItem } from '@kai/contracts';
 
 /**
  * Reading and writing the task plan.
@@ -21,6 +21,24 @@ export async function readPlan(root: string): Promise<Plan | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * What to tell a run about the plan already in hand, or nothing when there is none or it is finished.
+ *
+ * This is what makes a diversion survivable. Steering cancels the run and starts the next instruction fresh, so
+ * without this the new run has no idea it interrupted anything — the plan would be sitting in the project, unread,
+ * while the model answered the new question and stopped. Told about it, the run answers, and then carries on.
+ */
+export function planBriefingFor(plan: Plan | null): string {
+  const open = openPlanItems(plan);
+  if (open.length === 0) return '';
+  return [
+    'You have a plan in progress in this project. It still has these items outstanding:',
+    ...open.map((item) => `- ${item.state === 'active' ? '(in progress) ' : ''}${item.text}`),
+    '',
+    'The request below may be a diversion from it. Deal with the request first, then carry on with the plan and keep it up to date with update_plan. If the request replaces the plan, record the new one instead.',
+  ].join('\n');
 }
 
 export async function writePlan(root: string, items: readonly PlanItem[], now: string): Promise<Plan> {
