@@ -11,6 +11,15 @@ const projectCollectionSchema = z
 
 type ProjectCollection = z.infer<typeof projectCollectionSchema>;
 
+/**
+ * A folder's identity for comparison. Windows does not distinguish case or slash direction in a path, so neither
+ * should this: \ZuriIAI and \zuriAI are one folder, and a duplicate that only differs that way is the one most
+ * worth catching.
+ */
+export function pathKey(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 export class ProjectStore {
   private readonly store: AtomicJsonStore<ProjectCollection>;
   private writeTail: Promise<void> = Promise.resolve();
@@ -29,12 +38,29 @@ export class ProjectStore {
     return [...collection.projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   }
 
+  /**
+   * Adds a project, or updates the one already recorded for that folder.
+   *
+   * The match is on the folder as well as the id. It used to be the id alone, and since opening a folder mints a fresh
+   * id, opening the same folder twice added it twice — three entries for one folder, which is how a person ends up
+   * unsure which of three "ZuriIAI" they are looking at. Worse, anything keyed to a project id then points at a
+   * different entry than the one in front of them: a Studio plan linked to one of them stops looking connected.
+   *
+   * Comparison is case-insensitive and separator-insensitive because Windows treats \ZuriIAI and \zuriAI as the same
+   * folder, so a textual comparison would miss the duplicate it most needs to catch.
+   */
   async upsert(project: ProjectRecord): Promise<void> {
     await this.serialiseWrite(async () => {
       const collection = await this.store.load();
-      const index = collection.projects.findIndex((item) => item.id === project.id);
-      if (index >= 0) collection.projects[index] = project;
-      else collection.projects.push(project);
+      const key = pathKey(project.path);
+      const index = collection.projects.findIndex((item) => item.id === project.id || pathKey(item.path) === key);
+      if (index >= 0) {
+        // The existing id wins: preferences, Studio links and conversations are keyed to it, and changing it would
+        // orphan every one of them.
+        collection.projects[index] = { ...project, id: collection.projects[index]!.id };
+      } else {
+        collection.projects.push(project);
+      }
       await this.store.save(collection);
     });
   }
