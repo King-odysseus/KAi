@@ -31,6 +31,7 @@ import {
   Terminal,
   Trash2,
   Wallet,
+  X,
   Workflow,
 } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
@@ -102,7 +103,7 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal, onOpenTour, tourListOpen }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void; onOpenTour: () => void; tourListOpen: boolean }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onRemoveProject, onClearProjects, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal, onOpenTour, tourListOpen }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onRemoveProject: (id: string) => void; onClearProjects: () => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void; onOpenTour: () => void; tourListOpen: boolean }): ReactNode {
   const newWindowShortcut = shortcutLabel(shortcuts, 'new-window');
   const searchShortcut = shortcutLabel(shortcuts, 'command-palette');
   const threadsShortcut = shortcutLabel(shortcuts, 'threads');
@@ -111,7 +112,7 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
-        <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} />
+        <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} onRemove={onRemoveProject} onClear={onClearProjects} />
       </div>
       <div className="titlebar-actions">
         <button type="button" className="icon-button" title={`New window${newWindowShortcut ? ` (${newWindowShortcut})` : ''}`} aria-label="New window" onClick={onNewWindow}>
@@ -254,7 +255,7 @@ export function CommandPalette({ items, onClose, onSearch }: { items: CommandPal
   );
 }
 
-function ProjectPicker({ projects, activeProject, onChoose, onOpen }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; onChoose: () => void; onOpen: (id: string) => void }): ReactNode {
+function ProjectPicker({ projects, activeProject, onChoose, onOpen, onRemove, onClear }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; onChoose: () => void; onOpen: (id: string) => void; onRemove: (id: string) => void; onClear: () => void }): ReactNode {
   const [open, setOpen] = useState(false);
   return (
     <div className="project-picker">
@@ -266,15 +267,31 @@ function ProjectPicker({ projects, activeProject, onChoose, onOpen }: { projects
       {open && (
         <div className="popover project-popover">
           <div className="popover-label">Recent projects</div>
+          {/* The row is the way in; the small control beside it is the way out, so a list that has collected a
+              folder twice, or one renamed since, can be tidied without opening it first. */}
           {projects.map((project) => (
-            <button type="button" key={project.id} className={project.id === activeProject?.id ? 'selected' : ''} onClick={() => { onOpen(project.id); setOpen(false); }}>
-              <span className="project-glyph small">{project.name.slice(0, 1).toUpperCase()}</span>
-              <span className="truncate">{project.name}</span>
-              {project.id === activeProject?.id && <Check size={14} />}
-            </button>
+            <div key={project.id} className={`project-row${project.id === activeProject?.id ? ' selected' : ''}`}>
+              <button type="button" className="project-row-open" onClick={() => { onOpen(project.id); setOpen(false); }}>
+                <span className="project-glyph small">{project.name.slice(0, 1).toUpperCase()}</span>
+                <span className="truncate">{project.name}</span>
+                {project.id === activeProject?.id && <Check size={14} />}
+              </button>
+              <button
+                type="button"
+                className="project-row-remove"
+                title={`Remove ${project.name} from the list`}
+                aria-label={`Remove ${project.name} from the list`}
+                onClick={() => onRemove(project.id)}
+              >
+                <X size={13} />
+              </button>
+            </div>
           ))}
           <div className="popover-divider" />
           <button type="button" onClick={() => { onChoose(); setOpen(false); }}><Plus size={15} /><span>Open project</span></button>
+          {projects.length > 0 && (
+            <button type="button" className="project-clear" onClick={() => { onClear(); setOpen(false); }}><Trash2 size={15} /><span>Clear list</span></button>
+          )}
         </div>
       )}
     </div>

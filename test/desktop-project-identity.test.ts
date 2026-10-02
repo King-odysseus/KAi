@@ -89,4 +89,21 @@ describe('recognising a project you already have', () => {
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ id: 'project_one', name: 'One renamed' });
   });
+
+  it('empties the list without touching the folders, and still takes new projects afterwards', async () => {
+    // The list collects what a person is done with: a folder renamed since, the same one added twice under another
+    // spelling, projects finished with. Clearing it forgets the records, not the folders on disk.
+    const projects = await store();
+    await projects.upsert(record('project_one', 'One', 'C:\\work\\One'));
+    await projects.upsert(record('project_two', 'Two', 'C:\\work\\Two'));
+
+    await projects.clear();
+    expect(await projects.list()).toEqual([]);
+
+    // A cleared store is still a usable one, and the same folder comes back as a project of its own.
+    await projects.upsert(record('project_three', 'One again', 'C:\\work\\One'));
+    const listed = await projects.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ id: 'project_three', path: 'C:\\work\\One' });
+  });
 });

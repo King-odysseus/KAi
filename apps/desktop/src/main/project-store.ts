@@ -78,6 +78,17 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * Forgets every project in the list. The folders themselves are untouched — this is the list KAI keeps, and a
+   * folder that is opened again comes back. It exists because the list collects what a person no longer wants:
+   * folders renamed since, a duplicate of the same folder under another spelling, projects finished with.
+   */
+  async clear(): Promise<void> {
+    await this.serialiseWrite(async () => {
+      await this.store.save({ schemaVersion: 1, projects: [] });
+    });
+  }
+
   /** Runs one write after the last, whatever it returns, so two windows cannot interleave a read and a write. */
   private serialiseWrite<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.writeTail.then(operation);

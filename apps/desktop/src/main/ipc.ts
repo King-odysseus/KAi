@@ -289,6 +289,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'projects:choose', async (_input, request) => chooseProject(context, request.session));
   handle(context, 'projects:open', async ({ id }, request) => openProject(context, id, request.session));
   handle(context, 'projects:remove', async ({ id }, request) => removeProject(context, id, request.session));
+  handle(context, 'projects:clear', async (_input, request) => clearProjects(context, request.session));
   handle(context, 'settings:get', async () => context.settings.load());
   handle(context, 'setup:agent-config-preview', async () => agentConfigImportPreview());
   handle(context, 'setup:agent-config-import', async ({ agent }) => importAgentConfig(context, agent));
@@ -2888,6 +2889,29 @@ async function removeProject(
     projectOrder: settings.projectOrder.filter((projectId) => projectId !== id),
   }));
   if (session?.projectId === id) {
+    session.projectId = null;
+    session.conversationId = null;
+  }
+  await broadcastSharedState(context);
+  return createBootstrap(context, session);
+}
+
+/**
+ * Forgets every project in the list, the way removing one already does — the record, its preferences and its place in
+ * the order — because a list that can only be emptied one entry at a time is a list nobody tidies. The folders are
+ * not touched; opening one again brings it back with a fresh id.
+ */
+async function clearProjects(context: IpcContext, session: DesktopWindowSession | null): Promise<BootstrapPayload> {
+  if (session?.projectId && !(await confirmEditorNavigation(context, session, 'clear the project list'))) {
+    return createBootstrap(context, session);
+  }
+  const projects = await context.projects.list();
+  for (const project of projects) {
+    await context.projects.remove(project.id);
+    await context.preferences.remove(project.id);
+  }
+  await context.settings.update((settings) => ({ ...settings, activeProjectId: null, projectOrder: [] }));
+  if (session) {
     session.projectId = null;
     session.conversationId = null;
   }

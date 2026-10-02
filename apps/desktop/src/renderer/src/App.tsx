@@ -820,6 +820,21 @@ export function App(): ReactNode {
   }
 
   /**
+   * Empties the project list. Asked first, because the folders stay but KAI forgets which ones it had and every
+   * per-project setting that went with them — the list is a convenience, and losing it by a stray click would not be.
+   */
+  async function clearProjects(): Promise<void> {
+    const confirmed = await confirmDialog({
+      title: 'Clear the project list?',
+      detail: 'KAI forgets every project in the list, along with its per-project settings. The folders themselves are not touched — open one again and it comes back with a fresh start.',
+      confirmLabel: 'Clear list',
+    });
+    if (!confirmed) return;
+    const next = await perform(() => window.kaiDesktop.clearProjects().then(unwrap), 'Clearing projects');
+    if (next) setBootstrap(next);
+  }
+
+  /**
    * Takes the composer's agent, mode, route and autonomy from the conversation about to be worked in.
    *
    * A record that states none of them — one opened blank for a run, a workflow or a schedule — leaves the composer
@@ -1805,6 +1820,8 @@ export function App(): ReactNode {
         shortcuts={shortcuts}
         onChoose={() => void chooseProject()}
         onOpenProject={(id) => void openProject(id)}
+        onRemoveProject={(id) => void removeProject(id)}
+        onClearProjects={() => void clearProjects()}
         onNewWindow={() => void openNewWindow()}
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setCommandPaletteOpen(true)}

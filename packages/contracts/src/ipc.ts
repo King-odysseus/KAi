@@ -380,6 +380,7 @@ export const ipcChannels = [
   'projects:choose',
   'projects:open',
   'projects:remove',
+  'projects:clear',
   'settings:get',
   'settings:update',
   'providers:list-models',
@@ -627,6 +628,7 @@ export const ipcInputSchemas = {
   'projects:choose': emptyInputSchema,
   'projects:open': z.object({ id: z.string().min(1) }).strict(),
   'projects:remove': z.object({ id: z.string().min(1) }).strict(),
+  'projects:clear': emptyInputSchema,
   'settings:get': emptyInputSchema,
   'settings:update': z
     .object({
@@ -1123,6 +1125,8 @@ export interface KaiDesktopBridge {
   chooseProject(): Promise<IpcResponse<ProjectRecord | null>>;
   openProject(id: string): Promise<IpcResponse<BootstrapPayload>>;
   removeProject(id: string): Promise<IpcResponse<BootstrapPayload>>;
+  /** Forgets every project in the list. The folders themselves are untouched. */
+  clearProjects(): Promise<IpcResponse<BootstrapPayload>>;
   getSettings(): Promise<IpcResponse<AppSettings>>;
   updateSettings(update: SettingsUpdate): Promise<IpcResponse<AppSettings>>;
   onSharedDesktopState(listener: (state: SharedDesktopState) => void): () => void;

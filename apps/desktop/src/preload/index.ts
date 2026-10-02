@@ -6,6 +6,7 @@ const bridge: KaiDesktopBridge = {
   chooseProject: () => ipcRenderer.invoke('projects:choose', {}),
   openProject: (id) => ipcRenderer.invoke('projects:open', { id }),
   removeProject: (id) => ipcRenderer.invoke('projects:remove', { id }),
+  clearProjects: () => ipcRenderer.invoke('projects:clear', {}),
   getSettings: () => ipcRenderer.invoke('settings:get', {}),
   updateSettings: (update) => ipcRenderer.invoke('settings:update', update),
   onSharedDesktopState: (listener) => {

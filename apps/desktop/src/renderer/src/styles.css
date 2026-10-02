@@ -327,6 +327,70 @@ button:disabled {
   color: var(--mint);
 }
 
+/* A project row: the name opens it, the small control beside it takes it off the list. The control stays out of the
+   way until the row is under the pointer or it has keyboard focus, so the list reads as names rather than buttons. */
+.project-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.project-row:hover,
+.project-row.selected {
+  background: var(--bg-hover);
+}
+
+.project-row.selected .project-row-open {
+  color: var(--mint);
+}
+
+.project-row-open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-row-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.project-row:hover .project-row-remove,
+.project-row-remove:focus-visible {
+  opacity: 1;
+}
+
+.project-row-remove:hover {
+  background: var(--bg-panel, var(--bg-hover));
+  color: var(--text);
+}
+
+.popover > button.project-clear {
+  color: var(--text-dim);
+}
+
 .popover-label {
   padding: 6px 8px 5px;
   color: var(--text-dim);
