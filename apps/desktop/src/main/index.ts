@@ -166,6 +166,16 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
+/**
+ * The backstop for a quit that never reaches the handler below: the default one taken when the app is asked to
+ * quit before its context exists, or on a second attempt while the first is still running. Those paths left KAI
+ * without ending what it had started, which is the one thing the tree kill is for. `app.exit` does not emit this,
+ * so it cannot re-enter the handler from here.
+ */
+app.on('will-quit', () => {
+  endOwnProcessTree();
+});
+
 app.on('before-quit', (event) => {
   quitting = true;
   const activeContext = ipcContext;
@@ -181,6 +191,10 @@ app.on('before-quit', (event) => {
     // processes after the window is gone.
     const forceExit = setTimeout(() => {
       ipcContext?.logger.warn('internal', 'Shutdown took too long; exiting anyway');
+      // Exiting is not enough on its own: on Windows a child outlives its parent, so leaving without this strands
+      // the services, the agents, the terminals and every dev server KAI started — the very thing this path was
+      // written to avoid lingering. It is also the last chance, since nothing runs after it.
+      endOwnProcessTree();
       app.exit(0);
     }, 15_000);
     forceExit.unref();
