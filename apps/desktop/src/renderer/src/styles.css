@@ -10531,19 +10531,22 @@ code {
 .studio-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px;
+  gap: 6px;
+  /* Tighter than it was, so a card is still readable in a board column narrow enough for six buckets to sit side by
+     side. The padding was the largest cost: 14px on each side is 28px of a 130px column. */
+  padding: 10px;
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--bg-panel);
 }
 
 .studio-card h2 {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
   margin: 0 0 2px;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.35;
   color: var(--text);
 }
 
@@ -11082,11 +11085,12 @@ code {
 
 .studio-board {
   display: grid;
-  /* As many buckets as will fit, rather than a fixed three. A board is worth reading only when the whole flow is in
-     front of you: three columns across six statuses parked half the board below the fold, which is why the later
-     buckets only appeared in full screen. Narrow windows fall back to fewer columns on their own. */
-  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
-  gap: 8px;
+  /* As many buckets as will fit, rather than a fixed number. A board is worth reading only when the whole flow is in
+     front of you, and the later buckets used to be reachable only in full screen. The minimum is deliberately small:
+     six columns want 6 x 132px plus the gaps, which is under 900px, so the whole board fits a normal window rather
+     than only a maximised one. A narrow window still falls back to fewer columns on its own. */
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 6px;
   align-items: start;
 }
 
@@ -11176,7 +11180,9 @@ code {
   }
 
   .studio-board {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* This used to drop to a fixed two columns, which put the other four buckets below the fold on a laptop screen —
+       the same complaint the wide layout had. They are narrowed instead, so every bucket stays reachable. */
+    grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
   }
 }
 
