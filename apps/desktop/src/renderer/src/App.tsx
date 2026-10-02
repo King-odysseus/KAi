@@ -32,6 +32,7 @@ import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
 import { CodeView } from './components/CodeView';
 import { GitView } from './components/GitView';
+import { CommandsView } from './components/CommandsView';
 import { TasksView } from './components/TasksView';
 import { StudioView } from './components/StudioView';
 import { TerminalView } from './components/TerminalView';
@@ -1562,6 +1563,8 @@ export function App(): ReactNode {
         );
       case 'usage':
         return <UsageView settings={bootstrap.settings} activeConversationId={activeConversationId} busy={Boolean(busy)} onSave={(update) => void saveSettings(update)} />;
+      case 'commands':
+        return <CommandsView onOpenTerminal={() => setTerminalOpen(true)} />;
       case 'git':
         return <GitView activeProject={activeProject} onOpenTerminal={() => setTerminalOpen(true)} onSignInGitHub={() => { setTerminalCommand({ command: 'gh auth login', nonce: Date.now() }); setTerminalOpen(true); }} />;
       case 'tasks':
