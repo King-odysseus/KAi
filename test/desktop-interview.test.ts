@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -414,6 +414,50 @@ describe('Project Studio interview', () => {
 
     // One enormous word has nowhere to break, so it is cut where it falls rather than returned over-length.
     expect(clipOption('x'.repeat(300)).length).toBe(STUDIO_MAX_OPTION_CHARS);
+  });
+
+  it('shortens an over-long assumption instead of failing the round', () => {
+    // The reported failure, after the one about a long suggested answer. A reply is a single object, so a field
+    // over its limit took the goal, the question and the other assumptions down with it.
+    const long = 'The brief has to explain how spend is recorded in Naira at the current rate, and why provider fees are paid with a USD virtual card from a Nigerian fintech, because Naira debit cards often fail on foreign API charges. '.repeat(3).trim();
+    expect(long.length).toBeGreaterThan(STUDIO_MAX_ASSUMPTION_CHARS);
+    const reply = JSON.stringify({
+      goal: 'Build ZuriAi.',
+      assumptions: [long, 'Naira pricing.'],
+      questions: ['How should a mode work?'],
+    });
+
+    const parsed = parseInterviewReply(reply);
+
+    expect(parsed.goal).toBe('Build ZuriAi.');
+    expect(parsed.questions[0].question).toBe('How should a mode work?');
+    expect(parsed.assumptions).toHaveLength(2);
+    for (const assumption of parsed.assumptions) expect(assumption.length).toBeLessThanOrEqual(STUDIO_MAX_ASSUMPTION_CHARS);
+    expect(parsed.assumptions[0]?.endsWith('…')).toBe(true);
+  });
+
+  it('shortens an over-long question, and drops blank assumptions and blank answers', () => {
+    const longQuestion = `Which of these best describes how a member of staff picks a mode and then a provider for it, given the choice changes the price and the speed ${'and then some more'.repeat(20)}`;
+    const reply = JSON.stringify({
+      goal: 'Build ZuriAi.',
+      assumptions: ['   ', 'Naira pricing.'],
+      questions: [{ question: longQuestion, options: ['', 'Web app', '  ', 'Desktop app'] }],
+    });
+
+    const parsed = parseInterviewReply(reply);
+
+    expect(parsed.assumptions).toEqual(['Naira pricing.']);
+    expect(parsed.questions[0].question.length).toBeLessThanOrEqual(STUDIO_MAX_QUESTION_CHARS);
+    expect(parsed.questions[0].options).toEqual(['Web app', 'Desktop app']);
+  });
+
+  it('cuts text at a word boundary, and to the limit when there is no space to cut at', () => {
+    expect(clipToLength('a b', 400)).toBe('a b');
+    const words = clipToLength('alpha beta gamma delta epsilon zeta eta theta iota kappa', 20);
+    expect(words.length).toBeLessThanOrEqual(20);
+    expect(words).not.toMatch(/\s…$/);
+    // Nothing to break at, so it is cut where it falls rather than returned over-length.
+    expect(clipToLength('y'.repeat(500), 20).length).toBe(20);
   });
 
   it('keeps the copy it replaced, so a regenerate never loses the last good brief', async () => {

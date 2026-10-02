@@ -23,26 +23,41 @@ export const STUDIO_ROUND_QUESTION_LIMITS = Array.from({ length: STUDIO_QUESTION
 export const STUDIO_MAX_OPTIONS = 6;
 /** How long one suggested answer may be. They are chips beside the answer box, so a paragraph does not fit. */
 export const STUDIO_MAX_OPTION_CHARS = 120;
+/** The goal is the whole idea restated, so it gets room. */
+export const STUDIO_MAX_GOAL_CHARS = 4_000;
+/** How many assumptions one reply may draw, and how many the brief keeps. */
+export const STUDIO_MAX_ASSUMPTIONS = 8;
+/** A question is one conversational line; an assumption is a decision stated in a sentence. */
+export const STUDIO_MAX_QUESTION_CHARS = 400;
+export const STUDIO_MAX_ASSUMPTION_CHARS = 400;
 
 const interviewOptionsSchema = z.array(z.string().trim().min(1).max(STUDIO_MAX_OPTION_CHARS)).max(STUDIO_MAX_OPTIONS);
 
 /**
- * A suggested answer cut down to chip length.
+ * Text cut to a length, at a word boundary and marked with an ellipsis.
  *
- * The model is told the limit and overshoots it anyway, and one option a character too long used to fail the whole
- * reply — taking the question, the sharpened goal and every assumption with it. A suggestion is worth shortening
- * rather than throwing away, and the recommended one is offered first, so dropping it would be the worse trade.
- * The cut is at a word boundary, so the chip reads as a summary instead of a sentence that stops mid-word.
+ * Every field the model writes has a limit, and it is told each of them and overshoots them anyway. One field a few
+ * characters over used to fail the whole reply, and the whole reply is the goal, the assumptions and the next
+ * question together — so a long sentence in any one of them cost the entire round. Text this long is worth
+ * shortening rather than throwing away.
+ *
+ * The cut is at a word boundary so it reads as a summary rather than a sentence that stops mid-word, and it only
+ * falls back to cutting mid-word when there is no space in the second half to cut at, which means one enormous word
+ * with nowhere to break.
  */
-export function clipOption(option: string): string {
-  const collapsed = option.trim().replace(/\s+/g, ' ');
-  if (collapsed.length <= STUDIO_MAX_OPTION_CHARS) return collapsed;
+export function clipToLength(value: string, limit: number): string {
+  const collapsed = value.trim().replace(/\s+/g, ' ');
+  if (collapsed.length <= limit) return collapsed;
   // Room for the ellipsis, which is what keeps the result inside the limit.
-  const room = collapsed.slice(0, STUDIO_MAX_OPTION_CHARS - 1);
+  const room = collapsed.slice(0, limit - 1);
   const lastSpace = room.lastIndexOf(' ');
-  // Only cut at a space if that still leaves most of the option; a very long first word is cut where it falls.
-  const cut = lastSpace >= STUDIO_MAX_OPTION_CHARS / 2 ? room.slice(0, lastSpace) : room;
+  const cut = lastSpace >= limit / 2 ? room.slice(0, lastSpace) : room;
   return `${cut.trimEnd()}…`;
+}
+
+/** A suggested answer cut to chip length. The recommended one is offered first, so it is shortened, never dropped. */
+export function clipOption(option: string): string {
+  return clipToLength(option, STUDIO_MAX_OPTION_CHARS);
 }
 
 export const interviewAnswerSchema = z
@@ -58,7 +73,7 @@ export type InterviewAnswer = z.infer<typeof interviewAnswerSchema>;
 
 export const interviewRoundSchema = z
   .object({
-    questions: z.array(z.string().trim().min(1).max(400)).max(STUDIO_QUESTIONS_PER_ROUND),
+    questions: z.array(z.string().trim().min(1).max(STUDIO_MAX_QUESTION_CHARS)).max(STUDIO_QUESTIONS_PER_ROUND),
     // Suggested answers, one list per question (same order). Empty for rounds written before choices existed.
     options: z.array(interviewOptionsSchema).max(STUDIO_QUESTIONS_PER_ROUND).default([]),
     answers: z.array(interviewAnswerSchema).max(STUDIO_QUESTIONS_PER_ROUND),
@@ -76,9 +91,9 @@ export const interviewStateSchema = z
     linkedProjectId: z.string().min(1).nullable().default(null),
     idea: z.string().trim().min(1).max(4_000),
     // The idea restated as one clear goal, refreshed each round; empty until the first reply lands.
-    goal: z.string().trim().max(4_000).default(''),
+    goal: z.string().trim().max(STUDIO_MAX_GOAL_CHARS).default(''),
     // What the model assumed where the idea was silent. The user can correct any of them in the brief.
-    assumptions: z.array(z.string().trim().min(1).max(400)).max(12).default([]),
+    assumptions: z.array(z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS)).max(12).default([]),
     rounds: z.array(interviewRoundSchema).max(STUDIO_QUESTION_CEILING).default([]),
     // Questions the user asked for beyond the first ten, because they wanted to be walked through more.
     extraQuestions: z.number().int().min(0).max(STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS).default(0),
@@ -104,13 +119,13 @@ export type InterviewStartInput = z.infer<typeof interviewStartInputSchema>;
 /** The shape the model is asked to return. Goal and assumptions are refreshed each round, questions drive the next. */
 export const interviewReplySchema = z
   .object({
-    goal: z.string().trim().min(1).max(4_000),
-    assumptions: z.array(z.string().trim().min(1).max(400)).max(8).default([]),
+    goal: z.string().trim().min(1).max(STUDIO_MAX_GOAL_CHARS),
+    assumptions: z.array(z.string().trim().min(1).max(STUDIO_MAX_ASSUMPTION_CHARS)).max(STUDIO_MAX_ASSUMPTIONS).default([]),
     // A bare string is accepted too, for models that ignore the object shape.
     questions: z
       .array(z.union([
-        z.string().trim().min(1).max(400),
-        z.object({ question: z.string().trim().min(1).max(400), options: interviewOptionsSchema.default([]) }).strict(),
+        z.string().trim().min(1).max(STUDIO_MAX_QUESTION_CHARS),
+        z.object({ question: z.string().trim().min(1).max(STUDIO_MAX_QUESTION_CHARS), options: interviewOptionsSchema.default([]) }).strict(),
       ]))
       .max(STUDIO_QUESTIONS_PER_ROUND)
       .default([]),
