@@ -28,8 +28,17 @@ describe('composeRunLesson', () => {
     expect(composeRunLesson({ ...base, checks: [] })?.summary).toContain('No check was run.');
   });
 
-  it('files nothing for a failed or cancelled run', () => {
-    expect(composeRunLesson({ ...base, status: 'failed' })).toBeNull();
+  it('files a run that failed, with the failure leading, because that is the half worth remembering', () => {
+    const lesson = composeRunLesson({ ...base, status: 'failed', error: 'The build could not find the Prisma engine DLL' });
+    expect(lesson).not.toBeNull();
+    expect(lesson!.summary).toContain('Did not finish: The build could not find the Prisma engine DLL');
+  });
+
+  it('files nothing for a run somebody stopped, since that teaches nothing', () => {
+    // The three ways a stop reaches here: the runtime's own wording, an abort, and the app's.
+    for (const error of ['DeepSeek API run cancelled.', 'The run was aborted.', 'Stopped by the user.']) {
+      expect(composeRunLesson({ ...base, status: 'failed', error }), error).toBeNull();
+    }
   });
 
   it('files nothing when no file changed, so a plain question and answer stays out of the queue', () => {
