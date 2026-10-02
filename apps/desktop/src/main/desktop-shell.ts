@@ -29,6 +29,10 @@ export interface DesktopShellDeps {
   stopRun: (conversationId: string) => void;
   /** Whether the process may end now: nothing else is in flight that quitting would cut short. */
   canExit: () => boolean;
+  /** Whether any window is on screen at all. A window that is not is one nobody can reach. */
+  hasVisibleWindow: () => boolean;
+  /** Records why KAI ended itself, so a window that went missing says so rather than leaving a mystery. */
+  log: (message: string) => void;
 }
 
 /** Owns the system tray, close-to-tray behaviour and native notifications. */
@@ -60,6 +64,28 @@ export class DesktopShell {
     if (!this.trayEnabled || this.quitting || this.deps.center.activeRunIds().length === 0) return false;
     this.residentForWork = true;
     return true;
+  }
+
+  /**
+   * Ends KAI when nothing of it is left on screen and there is no tray to bring it back.
+   *
+   * A window that is not on screen is not reachable. With the tray off there is no way back to it at all, so the
+   * process runs on with nothing anyone can see or click — which is what closing KAI kept leaving behind, and why
+   * every install ended with Task Manager. Whatever leaves a window out of sight, this catches it: hidden, moved to
+   * a display that is no longer attached, or a renderer that died and left its window standing.
+   *
+   * A window hidden on purpose is the one case where staying up is the whole point, and hiding the window by hand
+   * is only possible with the tray on, so the tray being enabled is what this leaves alone.
+   */
+  windowVisibilityChanged(): void {
+    if (this.quitting || this.trayEnabled) return;
+    if (this.deps.hasVisibleWindow()) {
+      this.residentForWork = false;
+      return;
+    }
+    if (!this.deps.canExit()) return;
+    this.deps.log('No KAI window is on screen and the tray is off; ending KAI rather than leaving it unreachable.');
+    app.quit();
   }
 
   /**

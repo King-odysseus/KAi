@@ -42,14 +42,17 @@ function harness(options: { visible?: boolean; canExit?: boolean; settings?: Not
     isWindowFocused: () => false,
     show: () => undefined,
   });
+  const log = vi.fn();
   const shell = new DesktopShell({
     center,
     getWindow: () => window as never,
     stopRun: vi.fn(),
     canExit: () => options.canExit ?? true,
+    hasVisibleWindow: () => options.visible ?? false,
+    log,
   });
   shell.apply(settings);
-  return { shell, center, window };
+  return { shell, center, window, log };
 }
 
 describe('desktop shell residency', () => {
@@ -120,5 +123,33 @@ describe('desktop shell residency', () => {
     const { shell, center } = harness({ settings: { ...TRAY_ON, trayEnabled: false } });
     center.runStarted('run-1');
     expect(shell.hideForActiveWork()).toBe(false);
+  });
+
+  it('ends KAI when no window is on screen and there is no tray to bring one back', () => {
+    // The state that kept needing Task Manager: nothing on screen, nothing to click, the process still there.
+    const { shell, log } = harness({ visible: false, settings: { ...TRAY_ON, trayEnabled: false } });
+
+    shell.windowVisibilityChanged();
+
+    expect(electron.quit).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('No KAI window is on screen'));
+  });
+
+  it('leaves KAI alone while a window is on screen', () => {
+    const { shell } = harness({ visible: true, settings: { ...TRAY_ON, trayEnabled: false } });
+    shell.windowVisibilityChanged();
+    expect(electron.quit).not.toHaveBeenCalled();
+  });
+
+  it('leaves a hidden window alone when the tray is on, because that is how it comes back', () => {
+    const { shell } = harness({ visible: false });
+    shell.windowVisibilityChanged();
+    expect(electron.quit).not.toHaveBeenCalled();
+  });
+
+  it('waits for a headless job before ending an unreachable KAI', () => {
+    const { shell } = harness({ visible: false, canExit: false, settings: { ...TRAY_ON, trayEnabled: false } });
+    shell.windowVisibilityChanged();
+    expect(electron.quit).not.toHaveBeenCalled();
   });
 });

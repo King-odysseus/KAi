@@ -157,6 +157,9 @@ app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin') return;
+  // On the record, because its absence is the interesting case: a close that leaves this unsaid is a close that
+  // never reached here, which is the state that used to leave KAI running with nothing on screen.
+  ipcContext?.logger.info('internal', 'The last window closed; ending KAI and everything it started.');
   // Closing the last window ends KAI and every process it started (Cognitive1, the proxy, MCP servers, terminals),
   // even with KAI Remote on: the phone console is only reachable while KAI is open. Someone who wants KAI to keep
   // running in the background can turn on the tray option, which keeps the app alive while an agent is working.
@@ -454,6 +457,10 @@ async function startApplication(): Promise<void> {
     // A headless job has no window of its own, so the shell ending the process on a quiet moment would cut its
     // run short. It waits for those the same way the startup job path does.
     canExit: () => headlessJobsInFlight === 0,
+    // A window that is minimized still counts: it is on the taskbar, so it can be reached. Only a window nobody
+    // can see is one nobody can reach.
+    hasVisibleWindow: () => BrowserWindow.getAllWindows().some((window) => !window.isDestroyed() && window.isVisible()),
+    log: (message) => ipcContext?.logger.info('internal', message),
   });
   shell.apply((await settings.load()).notifications);
   const editorSessions = new EditorSessionManager();
@@ -1106,7 +1113,12 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
     ipcContext?.notifications.removeWindow(session.id);
     desktopWindows.remove(session.id);
     forceClosing.delete(session.id);
+    // The window that just went may have been the only one on screen, with another left hidden behind it. Closing
+    // the visible one fires no `window-all-closed` in that case, so the shell is asked directly.
+    desktopShell?.windowVisibilityChanged();
   });
+  window.on('hide', () => { desktopShell?.windowVisibilityChanged(); });
+  window.on('show', () => { desktopShell?.windowVisibilityChanged(); });
   window.webContents.setWindowOpenHandler(({ url }) => {
     openExternalIfSafe(url);
     return { action: 'deny' };
