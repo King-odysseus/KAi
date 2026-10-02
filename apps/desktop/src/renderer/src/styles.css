@@ -1687,6 +1687,74 @@ button:disabled {
 /* A hidden pane must not keep a flex display, or `hidden` would have nothing to do. */
 .context-pane-body > .context-pane[hidden] { display: none; }
 
+/* The Build pane brings its own gutter, the same 14px the Context pane's blocks use. Context's blocks each carry
+   their own padding, so they sit correctly without this; these do not, and would otherwise run to the panel edge. */
+.build-progress {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 16px;
+}
+
+.build-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.build-head h2 {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+/* The card being worked, set off from the notes around it the way a context section is. */
+.build-now {
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+
+.build-now-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.build-now-card {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.build-now-card span {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.build-now-card small {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* The bar is the one element that should reach both edges, so it takes no extra margin of its own. */
+.build-progress .autopilot-bar { margin: 0; }
+.build-eta { color: var(--text); }
+
 .context-heading {
   display: flex;
   flex: 0 0 68px;

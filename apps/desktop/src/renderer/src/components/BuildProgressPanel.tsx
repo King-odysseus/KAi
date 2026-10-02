@@ -108,21 +108,24 @@ export function BuildProgressPanel({ projectId, conversationId, onBuildingChange
         : 'Nothing is running. These are the board\'s own figures.';
 
   return (
-    <div className={`autopilot-status phase-${progress!.driver === 'idle' ? 'idle' : 'working'}`}>
-      <div className="context-heading">
-        <div><span className="eyebrow">Build</span><h2>{progress!.cardsDone} of {progress!.cardsTotal} done</h2></div>
+    <div className="build-progress">
+      <div className="build-head">
+        <div>
+          <span className="eyebrow">Build</span>
+          <h2>{progress!.cardsDone} of {progress!.cardsTotal} done</h2>
+        </div>
         {progress!.driver !== 'idle' && <Loader2 className="spin" size={16} />}
       </div>
 
       <p className="studio-note">{driverLine}</p>
 
       {progress!.currentCardTitle && (
-        <div className="context-section">
-          <div className="context-label">
-            {progress!.driver === 'autopilot' && autopilot?.phase === 'cooling' ? <Moon size={14} /> : null}
+        <div className="build-now">
+          <div className="build-now-label">
+            {progress!.driver === 'autopilot' && autopilot?.phase === 'cooling' ? <Moon size={13} /> : null}
             <span>Now</span>
           </div>
-          <div className="context-item">
+          <div className="build-now-card">
             <span>{progress!.currentCardTitle}</span>
             <small>{progress!.currentCardAttempt ? `attempt ${progress!.currentCardAttempt}` : (progress!.actor ?? '')}</small>
           </div>
@@ -144,12 +147,12 @@ export function BuildProgressPanel({ projectId, conversationId, onBuildingChange
 
       {pace ? (
         <p className="studio-note">
-          <strong>About {humanMs(new Date(pace.etaAt).getTime() - now)} left</strong>{' '}
+          <strong className="build-eta">About {humanMs(new Date(pace.etaAt).getTime() - now)} left</strong>{' '}
           ({clock(pace.etaAt)}), roughly {humanMs(pace.msPerCard)} a card.
         </p>
       ) : null}
 
-      {progress!.paceNote && <p className="studio-note">{progress!.paceNote}</p>}
+      {progress!.paceNote && <p className="studio-note build-caveat">{progress!.paceNote}</p>}
     </div>
   );
 }
