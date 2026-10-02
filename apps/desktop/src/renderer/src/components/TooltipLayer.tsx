@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -92,6 +92,9 @@ function isExcluded(element: Element): boolean {
 
 export function TooltipLayer(): ReactNode {
   const [shown, setShown] = useState<Shown | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  /** How far the measured panel had to move to stay in the window, applied to the placement. */
+  const [nudge, setNudge] = useState<{ dx: number; dy: number } | null>(null);
 
   useEffect(() => {
     // The element whose title is currently held, so it can be put back exactly where it came from.
@@ -176,15 +179,39 @@ export function TooltipLayer(): ReactNode {
     };
   }, []);
 
+  // `placeTooltip` decides the side from how much room there looks to be above the control, which it has to guess:
+  // the panel has not been rendered yet, so its height is unknown and a long tooltip is taller than the guess. That is
+  // how one near the top of the window ended up running past the edge with its first line cut off. Measure it once it
+  // exists and move it the rest of the way in, which also settles the left and right edges.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const box = panel.getBoundingClientRect();
+    let dx = 0;
+    let dy = 0;
+    if (box.top < EDGE) dy = EDGE - box.top;
+    else if (box.bottom > window.innerHeight - EDGE) dy = window.innerHeight - EDGE - box.bottom;
+    if (box.left < EDGE) dx = EDGE - box.left;
+    else if (box.right > window.innerWidth - EDGE) dx = window.innerWidth - EDGE - box.right;
+    // Applied to the placement rather than the element, so the arrow keeps pointing at the control. Setting the same
+    // value again is a no-op, so this settles after one pass.
+    setNudge(dx !== 0 || dy !== 0 ? { dx, dy } : null);
+  }, [shown]);
+
   if (!shown) return null;
 
   // Rendered into the body so no ancestor transform or overflow on the way up can clip or shift it.
   return createPortal(
     <div
+      ref={panelRef}
       className="app-tooltip"
       data-side={shown.side}
       role="tooltip"
-      style={{ left: shown.left, top: shown.top, maxWidth: Math.min(320, Math.max(180, shown.width * 4)) }}
+      style={{
+        left: shown.left + (nudge?.dx ?? 0),
+        top: shown.top + (nudge?.dy ?? 0),
+        maxWidth: Math.min(320, Math.max(180, shown.width * 4)),
+      }}
     >
       {shown.text}
     </div>,
