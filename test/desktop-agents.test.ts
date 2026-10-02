@@ -9,12 +9,18 @@ import {
   cliProxyEnvironment,
   codexProxyProviderArgs,
   DesktopAgentRuntime,
+  isMcpTransportNoise,
   isSignInError,
   kimiSignedIn,
   qwenProxySettings,
   resolveWindowsExecutable,
   singleLinePrompt,
 } from '../apps/desktop/src/main/agent-runtime';
+
+/** The line Codex prints on every run while a server in its config is down, taken verbatim from a real one. */
+const MCP_OUTAGE_LINE =
+  '2026-10-02T09:06:54.984662Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, '
+  + 'when Client(HttpRequest(HttpRequest("http/request failed: error sending request for url (http://127.0.0.1:7600/mcp)")))';
 
 const temporaryDirectories: string[] = [];
 
@@ -107,6 +113,44 @@ describe('desktop agent runtime', () => {
     for (const message of ['Rate limit reached', 'TypeError: cannot read properties of undefined', 'Build failed with 2 errors']) {
       expect(isSignInError(message), message).toBe(false);
     }
+  });
+
+  it('tells a server the CLI could not reach apart from the run failing', () => {
+    for (const message of [
+      MCP_OUTAGE_LINE,
+      'error sending request for url (https://design.penpot.app/mcp/stream?userToken=abc)',
+    ]) expect(isMcpTransportNoise(message), message).toBe(true);
+    // A tool that was reached and then failed is a failure of the run, not an outage, and stays reportable.
+    for (const message of [
+      'MCP tool open-pencil__get_document failed: no document is open',
+      'Error: unable to write to disk',
+      'error sending request for url (https://api.openai.com/v1/responses)',
+    ]) expect(isMcpTransportNoise(message), message).toBe(false);
+  });
+
+  it('does not fail a run over a server it could not reach', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, { silent: true, stderr: [MCP_OUTAGE_LINE] });
+    const runtime = new DesktopAgentRuntime({ codex: command });
+
+    // The only thing the CLI said was that a design server is closed. Nothing was asked of it and nothing failed.
+    await expect(runtime.run(runRequest(), root)).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  it('blames a failed run for its own reason, not for a server it could not reach', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, {
+      silent: true,
+      exitCode: 1,
+      // The outage arrives last, so reading the last line would report the design server instead of the disk.
+      stderr: ['Error: unable to write to disk', MCP_OUTAGE_LINE],
+    });
+    const runtime = new DesktopAgentRuntime({ codex: command });
+
+    await expect(runtime.run(runRequest(), root)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'Error: unable to write to disk',
+    });
   });
 
   it('reads Kimi Code sign-in from its credentials or configured providers', async () => {
@@ -531,7 +575,20 @@ async function temporaryDirectory(): Promise<string> {
 
 async function fakeAgent(
   root: string,
-  options: { reply?: string; sessionId?: string; resultFile?: string; fail?: boolean; lines?: unknown[]; authenticated?: boolean },
+  options: {
+    reply?: string;
+    sessionId?: string;
+    resultFile?: string;
+    fail?: boolean;
+    lines?: unknown[];
+    authenticated?: boolean;
+    /** Lines the CLI writes to stderr, as a real one does for its own diagnostics. */
+    stderr?: string[];
+    /** Write nothing to stdout and exit with `exitCode`, the way a CLI does when it has nothing to say. */
+    silent?: boolean;
+    /** The exit status for a `silent` run. */
+    exitCode?: number;
+  },
 ): Promise<string> {
   const scriptPath = path.join(root, 'fake-agent.mjs');
   const commandPath = path.join(root, process.platform === 'win32' ? 'fake-agent.cmd' : 'fake-agent');
@@ -553,6 +610,9 @@ function fakeAgentScript(options: {
   fail?: boolean;
   lines?: unknown[];
   authenticated?: boolean;
+  stderr?: string[];
+  silent?: boolean;
+  exitCode?: number;
 }): string {
   return `
     import fs from 'node:fs';
@@ -585,6 +645,10 @@ function fakeAgentScript(options: {
         console.error('authentication required');
         process.exit(2);
       }
+      // A synchronous write, because a piped stderr is not flushed by process.exit() on Windows and a line that
+      // never arrived would make these cases pass for the wrong reason.
+      for (const line of ${JSON.stringify(options.stderr ?? [])}) fs.writeSync(2, line + '\\n');
+      if (${Boolean(options.silent)}) process.exit(${options.exitCode ?? 0});
       const lines = ${JSON.stringify(options.lines ?? [])};
       if (lines.length > 0) {
         for (const line of lines) console.log(JSON.stringify(line));

@@ -12,7 +12,7 @@ import type {
   PermissionKey,
   PersistedEvent,
 } from '@kai/contracts';
-
+
 /** How long to keep reading a finished process's output before giving up on pipes a background process still holds. */
 const OUTPUT_DRAIN_GRACE_MS = 1_000;
 
@@ -231,6 +231,18 @@ export function isSignInError(message: string): boolean {
  */
 export function isUnknownModelError(message: string): boolean {
   return /model[^.\n]{0,60}(?:does not exist|doesn't exist|not found|is unknown|is invalid|is not (?:a )?(?:valid|supported|recognized))|issue with the selected model|may not exist or you (?:may not|don't|do not) have access/i.test(message);
+}
+
+/**
+ * True when a line is an agent CLI reporting that it could not reach an MCP server. That is a statement about the
+ * machine, not about the run: an editor that is closed leaves its server down, and Codex prints one of these on
+ * every run for as long as a server it was told about stays unreachable. Counting such a line as the run's error
+ * blames the request for a server it never used; counting it as the only evidence of failure invents a failure.
+ */
+export function isMcpTransportNoise(message: string): boolean {
+  // Codex's Rust client names its own transport module. Other clients phrase it as a request that never reached a
+  // server's `/mcp` endpoint. Neither wording can come from a failure of the request the user actually made.
+  return /rmcp::transport/i.test(message) || /error sending request for url\s*\(\s*https?:\/\/[^\s)]*\/mcp\b/i.test(message);
 }
 
 interface ActiveAgentRun {
@@ -503,13 +515,18 @@ export class DesktopAgentRuntime {
           const lines = buffered.split(/\r?\n/);
           stderrCarry = lines.pop() ?? '';
           for (const line of lines) {
-            if (line.trim()) errors.push(stripAnsi(line.trim()));
+            const trimmed = stripAnsi(line.trim());
+            // A server the CLI could not reach is not a failure of this run, so it is not kept where the run's
+            // error is read from — neither as the reason nor as the sole evidence that there was one.
+            if (trimmed && !isMcpTransportNoise(trimmed)) errors.push(trimmed);
           }
         }
       }
 
       if (stdoutCarry.trim()) consumeLine(stdoutCarry);
-      if (stderrCarry.trim()) errors.push(stripAnsi(stderrCarry.trim()));
+      // The line still in the carry never got its newline, and it counts like any other.
+      const trailingStderr = stripAnsi(stderrCarry.trim());
+      if (trailingStderr && !isMcpTransportNoise(trailingStderr)) errors.push(trailingStderr);
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
       exitCode = 1;
