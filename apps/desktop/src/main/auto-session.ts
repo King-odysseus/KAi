@@ -300,6 +300,9 @@ export class DesktopAutoSession {
         if (state.waitReason === 'approval') { state.waitReason = null; state.waitDetail = null; }
 
         if (turn.kind === 'failed') {
+          // Stopped, not broken. Auto stops with it, and says so, rather than counting it towards the failures that
+          // would park the session on a person.
+          if (turn.cancelled) return this.settle(conversationId, owner, 'stopped', 'The run was stopped, so Auto stopped too.');
           this.record(conversationId, owner, 'warn', `The turn ended with an error: ${turn.error.slice(0, 300)}`);
           if (await this.noteFailure(input, active, `turn:${turn.error.slice(-400)}`)) continue;
           await this.pauseForHuman(conversationId, active, 'repeated-failure',
@@ -351,7 +354,7 @@ export class DesktopAutoSession {
     first: boolean,
   ): Promise<
     | { kind: 'ok'; output: string }
-    | { kind: 'failed'; error: string }
+    | { kind: 'failed'; error: string; cancelled?: boolean }
     | { kind: 'switch' }
     | { kind: 'parked'; reason: AutoWaitReason; detail: string }
   > {
@@ -367,10 +370,19 @@ export class DesktopAutoSession {
       }
       if (result?.costUsd) this.state(conversationId).costUsd += result.costUsd;
 
+      // A run the person cancelled is not a failure. Counting it as one fed the repeat detector, and the repeat
+      // detector parks the session on a human — so stopping a run made Auto stop and wait to be resumed, which is the
+      // behaviour that had to be reset by hand every time.
+      const cancelled = (result?.conversation?.events ?? []).some(
+        (event) => (event as { type?: string; status?: string }).type === 'agent.lifecycle'
+          && (event as { status?: string }).status === 'cancelled',
+      );
+
       const failed = thrown !== null || result?.status === 'failed' || Boolean(result?.error);
       if (!failed) return { kind: 'ok', output: result?.output ?? '' };
 
       const message = thrown instanceof Error ? thrown.message : thrown ? String(thrown) : (result?.error ?? result?.output.slice(-600) ?? 'The agent failed.');
+      if (cancelled) return { kind: 'failed', error: message, cancelled };
       const limited = detectRateLimit(thrown ?? message);
       if (!limited) return { kind: 'failed', error: message };
 
