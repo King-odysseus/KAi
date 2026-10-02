@@ -7,6 +7,7 @@ import { StudioArtifacts } from '../apps/desktop/src/main/artifacts';
 import { StudioBoardStore } from '../apps/desktop/src/main/board';
 import { createKaiProjectTools, type KaiProjectPorts } from '../apps/desktop/src/main/kai-project-tools';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
+import { readPlan } from '../apps/desktop/src/main/plan-store';
 
 /**
  * The `kai-project` server is how an outside agent works KAI's board. These tests run it against a real spec folder,
@@ -73,9 +74,23 @@ afterEach(async () => {
 });
 
 describe('the kai-project tools an outside agent is given', () => {
-  it('exposes the six the plan names, and nothing else', async () => {
+  it('exposes the seven the plan names, and nothing else', async () => {
     server = await Server.create();
-    expect(server.names().sort()).toEqual(['claim_task', 'get_board', 'list_artifacts', 'move_task', 'read_artifact', 'submit_output']);
+    // update_plan is here so a CLI session can keep the same plan the Direct API path does. The run briefing tells
+    // every run to maintain one, so a CLI agent without this tool would be told to use something it does not have.
+    expect(server.names().sort()).toEqual(['claim_task', 'get_board', 'list_artifacts', 'move_task', 'read_artifact', 'submit_output', 'update_plan']);
+  });
+
+  it('writes the plan an outside agent records, so the same file serves both paths', async () => {
+    server = await Server.create();
+    const result = await server.tool('update_plan')({
+      items: [{ text: 'Read the spec', state: 'done' }, { text: 'Write the parser', state: 'active' }],
+    });
+
+    expect(result).toMatchObject({ summary: 'Plan recorded: 1 of 2 done, 1 still to do.' });
+    expect(await readPlan(server.root)).toMatchObject({
+      items: [{ text: 'Read the spec', state: 'done' }, { text: 'Write the parser', state: 'active' }],
+    });
   });
 });
 

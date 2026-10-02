@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { ARTIFACT_KINDS, artifactKindSchema, boardStatusSchema, readyCards, type ArtifactKind, type BoardCard } from '@kai/contracts';
+import { ARTIFACT_KINDS, artifactKindSchema, boardStatusSchema, planItemStateSchema, readyCards, type ArtifactKind, type BoardCard } from '@kai/contracts';
+import { writePlan } from './plan-store';
 import type { StudioArtifacts } from './artifacts';
 import type { StudioBoardStore } from './board';
 import type { SpecStore } from './spec-store';
@@ -49,6 +50,34 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
   });
 
   return [
+    {
+      // The same plan the Direct API path keeps, so a CLI session is not told to maintain something it cannot write.
+      // CLAUDE.md and the run briefing both assume this tool exists.
+      name: 'update_plan',
+      description:
+        'Record or revise your plan for the current task: a short list of steps and which are done. Call this first for anything that takes more than a couple of steps, and again whenever a step finishes or the plan changes. It is what tells KAI whether the task is finished, so keep it current rather than describing the plan in your reply.',
+      input: {
+        items: z
+          .array(
+            z.object({
+              text: z.string().min(1).max(300).describe('One step, short enough to read at a glance.'),
+              state: planItemStateSchema.describe('How far this step has got.'),
+            }),
+          )
+          .max(50)
+          .describe('The whole plan, in order. Replace the list rather than appending to it.'),
+      },
+      run: async (input) => {
+        const items = z.array(z.object({ text: z.string().min(1).max(300), state: planItemStateSchema })).max(50).parse(input.items);
+        const plan = await writePlan(await ports.projectRoot(), items, ports.now());
+        const done = plan.items.filter((item) => item.state === 'done').length;
+        const open = plan.items.length - done;
+        return {
+          summary: `Plan recorded: ${done} of ${plan.items.length} done${open > 0 ? `, ${open} still to do` : ', nothing outstanding'}.`,
+          items: plan.items,
+        };
+      },
+    },
     {
       name: 'list_artifacts',
       description:
