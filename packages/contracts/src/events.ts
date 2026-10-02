@@ -30,6 +30,18 @@ export const approvalRequestEventSchema = eventBaseSchema.extend({
   title: z.string().min(1),
   detail: z.string(),
   risk: z.enum(['low', 'medium', 'high']),
+  /**
+   * Present when the run is asking about itself — "carry on, or stop and sum up?" — rather than a tool asking for
+   * permission. Its two answers are named actions, not allow and deny, so a surface that shows this must use these
+   * words: offering "Allow once" for a question about spending money reads as consent to spend, and the full-access
+   * button next to it turns a limit prompt into a permanent grant.
+   */
+  runQuestion: z
+    .object({
+      continueLabel: z.string().min(1),
+      finishLabel: z.string().min(1),
+    })
+    .optional(),
 });
 
 export const diffProposalEventSchema = eventBaseSchema.extend({

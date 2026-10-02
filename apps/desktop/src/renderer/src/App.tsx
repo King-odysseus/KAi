@@ -55,6 +55,7 @@ import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
 import { TooltipLayer } from './components/TooltipLayer';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
+import { approvalActions } from './approval-actions';
 import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from './agent-memory';
 import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
@@ -69,6 +70,8 @@ interface PendingApproval {
   detail: string;
   risk: 'low' | 'medium' | 'high';
   tool?: string;
+  /** Set when the run is asking about itself, so the dialog offers these answers instead of allow and deny. */
+  runQuestion?: { continueLabel: string; finishLabel: string };
 }
 
 interface ComposerSelection {
@@ -547,6 +550,7 @@ export function App(): ReactNode {
             detail: event.detail,
             risk: event.risk,
             tool: event.tool,
+            runQuestion: event.runQuestion,
           }]);
       return;
     }
@@ -1083,7 +1087,11 @@ export function App(): ReactNode {
         requestId: approval.requestId,
         approved,
       }).then(unwrap),
-      approved ? 'Approving project change' : 'Denying project change',
+      // Answering a question about the run is not approving a change to the project, and saying so would name the
+      // wrong thing in the one place the person looks to check what their click did.
+      approval.runQuestion
+        ? (approved ? 'Continuing the run' : 'Finishing the run')
+        : (approved ? 'Approving project change' : 'Denying project change'),
     );
   }
 
@@ -1998,20 +2006,33 @@ function ApprovalDialog({
   approval: PendingApproval;
   onRespond: (approved: boolean, useFullAccess?: boolean) => void;
 }): ReactNode {
+  // A guard asking whether to carry on is not a tool asking for permission. Its answers are named actions, and the
+  // full-access button that belongs on a permission prompt has no meaning here — next to a spend limit it would read
+  // as consent to keep spending, permanently. So it is a different dialog with the two answers it actually has.
+  const question = approval.runQuestion;
+  const actions = approvalActions(approval);
   return (
     <div className="approval-overlay">
       <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
         <div className="approval-dialog-head">
-          <ShieldCheck size={20} />
-          <div><span className="eyebrow">Project approval</span><h2 id="approval-title">{approval.title}</h2></div>
+          {question ? <AlertTriangle size={20} /> : <ShieldCheck size={20} />}
+          <div>
+            <span className="eyebrow">{question ? 'About this run' : 'Project approval'}</span>
+            <h2 id="approval-title">{approval.title}</h2>
+          </div>
           <span className={`risk-badge ${approval.risk}`}>{approval.risk} risk</span>
         </div>
         {approval.tool && <code className="approval-tool">{approval.tool}</code>}
         <pre className="approval-detail">{approval.detail}</pre>
         <div className="approval-dialog-actions">
-          <button type="button" className="secondary-button" onClick={() => onRespond(false)}>Deny</button>
-          <button type="button" className="primary-button" autoFocus onClick={() => onRespond(true)}>Allow once</button>
-          <button type="button" className="primary-button" onClick={() => onRespond(true, true)}>Allow &amp; use full access</button>
+          <button type="button" className="secondary-button" onClick={() => onRespond(false)}>{actions.cancelLabel}</button>
+          {/* A tool being allowed is what the person expects to have focused. A question about the run is not, so
+              neither answer is: Enter would take the permissive one, and these questions exist because the run is
+              already past a limit. */}
+          <button type="button" className="primary-button" autoFocus={!question} onClick={() => onRespond(true)}>{actions.confirmLabel}</button>
+          {actions.offersFullAccess && (
+            <button type="button" className="primary-button" onClick={() => onRespond(true, true)}>Allow &amp; use full access</button>
+          )}
         </div>
       </section>
     </div>

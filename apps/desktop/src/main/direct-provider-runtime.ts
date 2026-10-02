@@ -300,6 +300,12 @@ interface GeminiContent {
   parts: Array<Record<string, unknown>>;
 }
 
+/** The two named answers to a question about the run itself, for a dialog that must not offer allow and deny. */
+export interface RunQuestion {
+  continueLabel: string;
+  finishLabel: string;
+}
+
 export interface DirectApiApprovalRequest {
   requestId: string;
   /** The tool being approved. Absent for a question about the run itself, such as one of its limits. */
@@ -307,6 +313,8 @@ export interface DirectApiApprovalRequest {
   title: string;
   detail: string;
   risk: 'low' | 'medium' | 'high';
+  /** Set for a question about the run, so the prompt says what its answers do instead of what allow and deny do. */
+  runQuestion?: RunQuestion;
 }
 
 export interface DirectApiApprovalPort {
@@ -1813,7 +1821,7 @@ export class DesktopDirectProviderRuntime {
  */
 async function askToContinue(
   approvals: DirectApiApprovalPort | undefined,
-  question: { title: string; detail: string; risk: 'low' | 'medium' | 'high' },
+  question: Omit<DirectApiApprovalRequest, 'requestId'>,
 ): Promise<'continue' | 'wrap-up'> {
   if (!approvals) return 'wrap-up';
   try {
@@ -1825,23 +1833,32 @@ async function askToContinue(
   }
 }
 
+/**
+ * Every question a guard asks about a run ends the same two ways, so they share one pair of labels. The detail line
+ * already said "Continue" and "Finish"; the buttons are the part that never did.
+ */
+const CONTINUE_OR_FINISH: RunQuestion = { continueLabel: 'Continue', finishLabel: 'Finish' };
+
 /** The model has promised work this many times in a row without calling a tool: enough rope before it is interrupted. */
 const TALK_ONLY_QUESTION = {
   title: 'This run keeps describing work without doing any',
   detail: 'The model has said what it is about to do many times in a row without calling a tool. Continue gives it another stretch; Finish stops here and keeps what it has written.',
   risk: 'low' as const,
+  runQuestion: CONTINUE_OR_FINISH,
 };
 
 const SPEND_QUESTION = (costUsd: number, limitUsd: number) => ({
   title: `This run has spent about $${costUsd.toFixed(2)}, past its $${limitUsd.toFixed(2)} limit`,
   detail: 'Continue lifts the per-run limit for the rest of this run. Finish stops here and asks the model to sum up what it has done.',
   risk: 'medium' as const,
+  runQuestion: CONTINUE_OR_FINISH,
 });
 
 const REPEAT_QUESTION = (message: string) => ({
   title: 'The agent is repeating itself',
   detail: `${message} Continue lets it carry on; Finish stops here and asks it to sum up.`,
   risk: 'medium' as const,
+  runQuestion: CONTINUE_OR_FINISH,
 });
 
 function finishProviderRun(input: {

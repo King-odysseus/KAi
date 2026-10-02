@@ -34,6 +34,8 @@ export interface Alert {
   conversationId: string;
   /** The request an approval is waiting on. Absent on an event that carried none, which cannot be answered. */
   requestId: string | null;
+  /** Set when the run is asking about itself, so the card offers these two answers instead of approve and deny. */
+  runQuestion: { continueLabel: string; finishLabel: string } | null;
   /** The window the event came from. An approval may only be answered by the window that raised it. */
   windowId: number | null;
   at: number;
@@ -208,13 +210,15 @@ function alertFor(event: PersistedEvent, payload: AgentRunEvent, windowId: numbe
     risk: null as string | null,
     tool: null as string | null,
     requestId: null as string | null,
+    runQuestion: null as Alert['runQuestion'],
   };
   switch (event.type) {
     case 'approval.request':
       return {
         ...base,
         kind: 'approval',
-        chip: 'Approval',
+        // A question about the run is not a request to change the project, and the chip is the first thing read.
+        chip: event.runQuestion ? 'Question' : 'Approval',
         title: event.title,
         detail: event.detail || `Risk: ${event.risk}`,
         // Kept apart from `detail` so the phone can show the command, the risk and the window on its own
@@ -222,6 +226,7 @@ function alertFor(event: PersistedEvent, payload: AgentRunEvent, windowId: numbe
         risk: event.risk,
         tool: event.tool ?? null,
         requestId: event.requestId ?? null,
+        runQuestion: event.runQuestion ?? null,
       };
     case 'error':
       return { ...base, kind: 'failure', chip: 'Failed', title: 'A run reported an error', detail: event.message };
@@ -371,6 +376,7 @@ export function sendTurn(conversationId: string, prompt: string, model?: string 
       risk: null,
       tool: null,
       requestId: null,
+      runQuestion: null,
       conversationId,
       windowId: null,
       at: Date.now(),

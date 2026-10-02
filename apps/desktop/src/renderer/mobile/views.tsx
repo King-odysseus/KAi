@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { UsageSummary, Workflow, WorkflowRun, WorkflowStep } from '@kai/contracts';
+import { approvalActions } from '../src/approval-actions';
 import { TopBar } from './chrome';
 import {
   alerts,
@@ -167,13 +168,16 @@ function at(alert: Alert): string {
 function ApprovalCard({ alert, state, onOpen }: { alert: Alert; state: RemoteState; onOpen: (alert: Alert) => void }) {
   const { busy, problem, run } = useAction();
   const [armed, setArmed] = useState(false);
-  const high = alert.risk === 'high';
+  const actions = approvalActions(alert);
+  // A high-risk command takes two taps: on a phone in another room, a mis-tap must not be enough. Only a command
+  // asking for permission is armed — a question about the run is not one, and the two-tap wording would be a lie.
+  const arming = actions.offersFullAccess && alert.risk === 'high';
   const answerable = Boolean(alert.requestId);
   const answer = (approved: boolean): void => run(() => answerApproval(alert, approved));
   return (
     <div className="card alert">
       <div className="row">
-        <Chip tone="wait">Approval</Chip>
+        <Chip tone="wait">{alert.chip}</Chip>
         <span className="meta mono flush">{at(alert)}{alert.risk ? ` · ${alert.risk} risk` : ''}</span>
       </div>
       <div className="title">{alert.title}</div>
@@ -185,15 +189,16 @@ function ApprovalCard({ alert, state, onOpen }: { alert: Alert; state: RemoteSta
       )}
       {problem && <div className="meta danger">{problem}</div>}
       <div className="actions">
-        <button type="button" className="act" disabled={busy || !answerable} onClick={() => answer(false)}>Deny</button>
+        <button type="button" className="act" disabled={busy || !answerable} onClick={() => answer(false)}>
+          {actions.cancelLabel}
+        </button>
         <button
           type="button"
-          className={`act approve ${high ? 'high' : ''}`}
+          className={`act approve ${arming ? 'high' : ''}`}
           disabled={busy || !answerable}
-          // A high-risk command takes two taps: on a phone in another room, a mis-tap must not be enough.
-          onClick={() => (high && !armed ? setArmed(true) : answer(true))}
+          onClick={() => (arming && !armed ? setArmed(true) : answer(true))}
         >
-          {high && armed ? 'Tap again to approve' : 'Approve'}
+          {arming && armed ? 'Tap again to approve' : actions.confirmLabel}
         </button>
       </div>
       <button type="button" className="linky" onClick={() => onOpen(alert)}>Open the run</button>

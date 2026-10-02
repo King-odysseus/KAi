@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, type AgentRunRequest, type AppSettings } from '../packages/contracts/src';
-import { DesktopDirectProviderRuntime, outputBudgetRejected } from '../apps/desktop/src/main/direct-provider-runtime';
+import {
+  DesktopDirectProviderRuntime,
+  outputBudgetRejected,
+  type DirectApiApprovalRequest,
+} from '../apps/desktop/src/main/direct-provider-runtime';
 
 const servers: http.Server[] = [];
 const temporaryDirectories: string[] = [];
@@ -370,7 +374,7 @@ data: {"type":"message_stop"}
   });
 
   it('asks before a per-run spend limit ends the run, once, and carries on when told to', async () => {
-    const questions: Array<{ title: string; detail: string }> = [];
+    const questions: DirectApiApprovalRequest[] = [];
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-spend-'));
     temporaryDirectories.push(projectRoot);
     await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
@@ -417,10 +421,13 @@ data: {"type":"message_stop"}
     expect(questions).toHaveLength(1);
     expect(questions[0]!.title).toContain('limit');
     expect(questions[0]!.detail).toContain('Continue');
+    // The prompt the person sees is built from these. Without them the dialog offered "Deny / Allow once / Allow &
+    // use full access" for a question about spending money, and the third of those lifts the limit for good.
+    expect(questions[0]!.runQuestion).toEqual({ continueLabel: 'Continue', finishLabel: 'Finish' });
   }, 30_000);
 
   it('asks before a repeated call ends the run, and carries on when told to', async () => {
-    const questions: Array<{ title: string }> = [];
+    const questions: DirectApiApprovalRequest[] = [];
     const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-repeat-'));
     temporaryDirectories.push(projectRoot);
     await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
@@ -461,6 +468,7 @@ data: {"type":"message_stop"}
 
     expect(questions).toHaveLength(1);
     expect(questions[0]!.title).toContain('repeating');
+    expect(questions[0]!.runQuestion).toEqual({ continueLabel: 'Continue', finishLabel: 'Finish' });
     // Told to carry on, so the run does rather than ending at the fifth identical call.
     expect(result.status).toBe('completed');
     expect(result.output).toContain('All done.');

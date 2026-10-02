@@ -22,6 +22,8 @@ import {
   type AgentRunResult,
   type AppSettings,
   openPlanItems,
+  openPlanReminder,
+  planIsUnfinished,
   type BrainEntry,
   type ConversationRecord,
   type ContextChip,
@@ -1320,6 +1322,9 @@ export async function runConversationAgent(
         detail: approval.detail,
         risk: approval.risk,
         ...(approval.tool ? { tool: approval.tool } : {}),
+        // Carried through so the prompt can name its own answers; without it the run's question is put to the person
+        // in the words of a permission request, which is the one thing it is not.
+        ...(approval.runQuestion ? { runQuestion: approval.runQuestion } : {}),
       };
       context.pendingApprovals.set(approval.requestId, { conversationId: conversation.id, ownerWindowId, event, resolve });
     }),
@@ -1413,6 +1418,25 @@ export async function runConversationAgent(
           preferences?.customPermissions,
         )
       : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note, chipContext.imagePaths);
+
+    // A CLI run is a single process, so an agent that stops with its plan unfinished simply stops — unlike the Direct
+    // API path, which loops inside the run and can push it to carry on. The only way to continue here is to invoke the
+    // agent again with the outstanding items, which is what this does.
+    //
+    // Bounded, and only after a run that finished cleanly: a run that failed or was cancelled stopped for a reason,
+    // and asking it to carry on would be arguing with the person. Each round is a full invocation, so the cap is low.
+    if (executionMode === 'cli') {
+      execution = await continueWhilePlanOpen(workRoot, execution, (prompt, sessionId) => context.agents.run(
+        { ...executionRequest, prompt },
+        workRoot,
+        sessionId ?? resumeSessionId,
+        emit,
+        preferences?.customPermissions,
+        request.model ?? autoPick?.model ?? settings.agentModels[request.agent],
+        autoPick?.note,
+        chipContext.imagePaths,
+      ));
+    }
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
@@ -2284,6 +2308,42 @@ function insideRoot(root: string, candidate: string): boolean {
 
 /** How many memories a run is grounded in. Enough to be useful, few enough to leave room for the actual prompt. */
 const RECALL_LIMIT = 8;
+
+/**
+ * How many times a CLI run may be invoked again to finish a plan it left open. Each one is a whole agent run, so this
+ * is deliberately small: it is for the agent that stopped a step short, not for driving a long task, which is what
+ * Auto mode is for.
+ */
+const MAX_PLAN_CONTINUATIONS = 3;
+
+/**
+ * Carries a finished CLI run on, while the plan it wrote still has items open.
+ *
+ * Split out from the run itself so the behaviour can be tested without an agent: the decision is only ever "is the
+ * plan unfinished, and may we ask again", and both of those are worth pinning down.
+ *
+ * A run that did not finish cleanly is never asked to carry on — it stopped for a reason, and if that reason was the
+ * person, arguing with them would be the worst possible response. Each round is a whole invocation, so the cap is low.
+ */
+export async function continueWhilePlanOpen(
+  workRoot: string,
+  first: AgentExecutionResult,
+  runAgain: (prompt: string, sessionId?: string) => Promise<AgentExecutionResult>,
+  limit = MAX_PLAN_CONTINUATIONS,
+): Promise<AgentExecutionResult> {
+  let execution = first;
+  for (let round = 0; round < limit && execution.status === 'completed'; round += 1) {
+    const plan = await readPlan(workRoot).catch(() => null);
+    if (!planIsUnfinished(plan)) break;
+    const again = await runAgain(openPlanReminder(plan!), execution.sessionId ?? undefined);
+    execution = {
+      ...again,
+      output: [execution.output, again.output].filter((part) => part.trim()).join('\n\n'),
+      events: [...execution.events, ...again.events],
+    };
+  }
+  return execution;
+}
 
 /**
  * Whether a failure means the daemon could not be reached at all, as opposed to reaching it and being refused.
