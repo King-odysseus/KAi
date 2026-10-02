@@ -2,10 +2,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   gitBranchNameSchema,
+  githubRepoNameSchema,
   type GitActionResult,
   type GitBranch,
   type GitChange,
+  type GitCreateRepositoryResult,
   type GitOverview,
+  type GitRepositoryVisibility,
   type GitSyncAction,
 } from '@kai/contracts';
 import { isGitRepo } from './checkpoints';
@@ -231,6 +234,28 @@ export async function gitDiffAgainstHead(cwd: string, filePath: string): Promise
       // `git diff --no-index` exits 1 when the files differ, which is the normal case here.
       .catch((error: GitCommandError) => error.stdout ?? '');
   return output.length > MAX_DIFF_CHARS ? `${output.slice(0, MAX_DIFF_CHARS)}\n\n[diff truncated]` : output;
+}
+
+/**
+ * The `gh repo create` arguments for a repository that is already a folder on disk: the repository is named, its
+ * visibility is stated outright rather than left to a prompt, and `--source . --remote origin` makes this folder the
+ * repository's working copy. There is deliberately no `--push`, so creating the repository never uploads code; the
+ * Publish branch button is the one confirmed step that sends work off the machine.
+ */
+export function createRepositoryArgs(name: string, visibility: GitRepositoryVisibility): string[] {
+  return ['repo', 'create', name, visibility === 'private' ? '--private' : '--public', '--source', '.', '--remote', 'origin'];
+}
+
+/**
+ * Creates the repository on GitHub under the signed-in account and wires it up as `origin`. Nothing is uploaded:
+ * a repository with no commits is a valid result, and the Git page offers Publish branch next.
+ */
+export async function gitCreateRepository(cwd: string, name: string, visibility: GitRepositoryVisibility): Promise<GitCreateRepositoryResult> {
+  githubRepoNameSchema.parse(name);
+  const output = await run('gh', cwd, createRepositoryArgs(name, visibility), NETWORK_TIMEOUT_MS);
+  const url = output.split('\n').map((line) => line.trim()).find((line) => /^https:\/\/github\.com\//.test(line)) ?? '';
+  const repository = parseGithubRepository(url) ?? name;
+  return { repository, url: url || `https://github.com/${repository}` };
 }
 
 export async function gitCreatePullRequest(cwd: string, title: string, body: string): Promise<{ url: string }> {

@@ -285,7 +285,7 @@ import {
   type TerminalEvent,
   type TerminalSession,
 } from './terminal';
-import { gitActionResultSchema, gitCheckoutInputSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitOverview, type GitSyncAction } from './git';
+import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
 import {
@@ -579,6 +579,8 @@ export const ipcChannels = [
   'git:commit',
   'git:checkout',
   'git:create-branch',
+  'git:create-repository',
+  'git:github-status',
   'git:sync',
   'git:diff',
   'review:change',
@@ -880,6 +882,8 @@ export const ipcInputSchemas = {
   'git:commit': gitCommitInputSchema,
   'git:checkout': gitCheckoutInputSchema,
   'git:create-branch': gitCreateBranchInputSchema,
+  'git:create-repository': gitCreateRepositoryInputSchema,
+  'git:github-status': z.object({ projectId: z.string().min(1) }).strict(),
   'git:sync': gitSyncInputSchema,
   'git:diff': gitDiffInputSchema,
   'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
@@ -996,6 +1000,8 @@ export const terminalEventResponseSchema = terminalEventSchema;
 export const gitOverviewResponseSchema = gitOverviewSchema;
 export const gitActionResponseSchema = gitActionResultSchema;
 export const gitPullRequestResponseSchema = gitPullRequestResultSchema;
+export const gitCreateRepositoryResponseSchema = gitCreateRepositoryResultSchema;
+export const gitGithubStatusResponseSchema = gitGithubStateSchema;
 export const verificationOverviewResponseSchema = verificationOverviewSchema;
 export const verificationRunResponseSchema = verificationRunSchema;
 export const recoveryListResponseSchema = z.array(recoveryRecordSchema);
@@ -1367,6 +1373,13 @@ export interface KaiDesktopBridge {
   gitCommit(projectId: string, message: string): Promise<IpcResponse<GitActionResult>>;
   gitCheckout(projectId: string, branch: string): Promise<IpcResponse<GitActionResult>>;
   gitCreateBranch(projectId: string, name: string, checkout: boolean): Promise<IpcResponse<GitActionResult>>;
+  /** Creates a repository on GitHub under the signed-in account and sets it as `origin`. Uploads nothing. */
+  gitCreateRepository(projectId: string, name: string, visibility: GitRepositoryVisibility): Promise<IpcResponse<GitCreateRepositoryResult>>;
+  /**
+   * Whether `gh` is installed and signed in. The Git page asks for this when the project has no GitHub remote, so it
+   * can offer to create one; the overview itself does not run `gh` for a project that has nowhere to publish to.
+   */
+  gitGithubStatus(projectId: string): Promise<IpcResponse<GitGithubState>>;
   gitSync(projectId: string, action: GitSyncAction): Promise<IpcResponse<GitActionResult>>;
   gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
   reviewChange(request: string, diff: string, mode: 'novice' | 'intermediate' | 'expert'): Promise<IpcResponse<string | null>>;

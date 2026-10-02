@@ -89,7 +89,7 @@ import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUr
 import type { TerminalManager } from './terminal';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
-import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitStage, gitSync } from './git-tools';
+import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
@@ -889,6 +889,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'git:commit', async ({ projectId, message }) => gitCommit(await projectPath(projectId), message));
   handle(context, 'git:checkout', async ({ projectId, branch }) => gitCheckout(await projectPath(projectId), branch));
   handle(context, 'git:create-branch', async ({ projectId, name, checkout }) => gitCreateBranch(await projectPath(projectId), name, checkout));
+  // Creating a repository on GitHub is outward-facing, so the renderer confirms the name and visibility first.
+  handle(context, 'git:create-repository', async ({ projectId, name, visibility }) => gitCreateRepository(await projectPath(projectId), name, visibility));
+  handle(context, 'git:github-status', async ({ projectId }) => githubCliStatus(await projectPath(projectId)));
   // Pushing sends work off this machine, so the renderer confirms it with the user before calling this.
   handle(context, 'git:sync', async ({ projectId, action }) => gitSync(await projectPath(projectId), action));
   handle(context, 'git:diff', async ({ projectId, path: filePath, staged }) => gitDiffFile(await projectPath(projectId), filePath, staged));
@@ -1434,6 +1437,7 @@ export async function runConversationAgent(
     prompt: userTurn.text,
     output: execution.output ?? '',
     status: execution.status,
+    error: execution.error,
     files: (userTurn.fileChanges ?? []).map((change) => change.path),
     checks: agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
       .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0 })),
@@ -2240,6 +2244,9 @@ function insideRoot(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+/** How many memories a run is grounded in. Enough to be useful, few enough to leave room for the actual prompt. */
+const RECALL_LIMIT = 8;
+
 async function recallScopedMemories(
   context: IpcContext,
   projectPath: string,
@@ -2249,18 +2256,48 @@ async function recallScopedMemories(
   if (!(await cognitive1Ready(context))) return { memories: [], note: null };
   try {
     const resolution = await resolveProjectMemoryName(context, projectPath, fallbackProjectName);
-    const memories = await context.cognitive1.search({
-      query: recallQuery(prompt),
-      project: resolution.name,
-      maxResults: 8,
-    });
+    const query = recallQuery(prompt);
+    const memories = await context.cognitive1.search({ query, project: resolution.name, maxResults: RECALL_LIMIT });
+
+    // Every project's lessons, not only this one's. Most of what a codebase will bite you with has already bitten
+    // someone: a stale closure, a date derived from toISOString, a credential keyed by the wrong thing. So the recall
+    // is topped up across the whole brain rather than left at whatever this project happens to hold — a project with
+    // nothing filed still gets grounding, and a project with a little still benefits from the rest.
+    const seen = new Set(memories.map((entry) => `${entry.type}|${entry.title}`));
+    const elsewhere = await context.cognitive1
+      .search({ query, global: true, maxResults: RECALL_LIMIT * 2 })
+      .catch(() => [] as BrainEntry[]);
+    let borrowed = 0;
+    for (const entry of elsewhere) {
+      if (memories.length >= RECALL_LIMIT) break;
+      const key = `${entry.type}|${entry.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      memories.push(entry);
+      borrowed += 1;
+    }
+
     if (memories.length === 0 && !resolution.matched) {
       context.logger.info(
         'internal',
         `C1 has no project named "${resolution.name}"; recall returned nothing for ${projectPath}`,
       );
+    } else if (borrowed > 0) {
+      context.logger.info(
+        'internal',
+        `Recalled ${memories.length} memories for "${resolution.name}", ${borrowed} of them from other projects.`,
+      );
     }
-    return { memories, note: brainProjectNote(resolution, memories.length) };
+
+    const note = brainProjectNote(resolution, memories.length - borrowed);
+    if (borrowed === 0 || memories.length === 0) return { memories, note };
+    // Said plainly, because grounding a project in another project's answers is only honest when the reader can see
+    // that is what happened — and can weigh it accordingly.
+    const from = memories[memories.length - 1]?.project;
+    return {
+      memories,
+      note: `${note ? `${note} ` : ''}${borrowed} of them come from other projects${from ? `, such as "${from}"` : ''}.`,
+    };
   } catch (error) {
     context.logger.error('service_error', 'C1 scoped recall failed', undefined, error);
     return { memories: [], note: 'Memory recall failed, so this run has no recalled memories.' };

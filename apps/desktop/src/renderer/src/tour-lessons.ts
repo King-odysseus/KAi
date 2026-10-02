@@ -117,7 +117,7 @@ export const TOUR_LESSONS: TourLesson[] = [
     steps: [
       RAIL,
       { title: 'Source control without the terminal', body: 'See the changes, stage and commit them, and push or pull. KAI always asks before it pushes, and it never force-pushes.' },
-      { title: 'GitHub', body: 'Pull requests open through the GitHub CLI when you are signed in to it. KAI stores no GitHub token.' },
+      { title: 'GitHub', body: 'No remote yet? The GitHub section creates the repository for you — you choose private or public — and points origin at it, without uploading anything. Pull requests open through the GitHub CLI when you are signed in to it, and KAI stores no GitHub token.' },
     ],
   },
   {

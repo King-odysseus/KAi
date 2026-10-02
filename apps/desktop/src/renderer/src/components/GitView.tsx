@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowUp, Copy, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw, TerminalSquare } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import type { GitChange, GitOverview, GitSyncAction, ProjectRecord } from '@kai/contracts';
+import type { GitChange, GitGithubState, GitOverview, GitRepositoryVisibility, GitSyncAction, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { GitBadge } from './GitBadge';
@@ -16,6 +16,21 @@ function describeChange(change: GitChange): string {
   return STATE_WORDS[letter] ?? letter;
 }
 
+/**
+ * A repository name GitHub will accept, taken from the project's own name so the field arrives filled in. GitHub's
+ * rules are narrower than a folder name's: lowercase letters, digits, dots, dashes and underscores only.
+ */
+function repositoryNameFrom(projectName: string): string {
+  return projectName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/[.-]+$/, '')
+    .slice(0, 100);
+}
+
 export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { activeProject: ProjectRecord | null; onOpenTerminal?: () => void; onSignInGitHub?: () => void }): ReactNode {
   const projectId = activeProject?.id ?? null;
   const [overview, setOverview] = useState<GitOverview | null>(null);
@@ -29,6 +44,10 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
   // The file being staged or unstaged, so its row shows a spinner until Git answers.
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [pr, setPr] = useState({ title: '', body: '' });
+  // Creating the remote: the name to register on GitHub, who may see it, and what `gh` last said about the account.
+  const [repoName, setRepoName] = useState('');
+  const [repoVisibility, setRepoVisibility] = useState<GitRepositoryVisibility>('private');
+  const [githubState, setGithubState] = useState<GitGithubState | null>(null);
 
   const refresh = useCallback(async () => {
     if (!projectId) return;
@@ -47,10 +66,28 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
     setError(null);
     setMessage(null);
     setSelectedBranch('');
+    setRepoName(repositoryNameFrom(activeProject?.name ?? ''));
     void refresh();
     const timer = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, activeProject?.name]);
+
+  /**
+   * Whether `gh` is installed and signed in. The overview only reports that for a project that already publishes to
+   * GitHub, so a project with nowhere to push asks separately — the create flow needs the answer before it can offer
+   * anything. Re-asked on each poll so signing in elsewhere shows up here without a reload.
+   */
+  useEffect(() => {
+    if (!projectId || !overview?.isRepository || overview.githubRepository) {
+      setGithubState(null);
+      return;
+    }
+    let cancelled = false;
+    void window.kaiDesktop.gitGithubStatus(projectId).then((response) => {
+      if (!cancelled && response.ok) setGithubState(response.data);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [projectId, overview]);
 
   async function act(label: string, action: () => Promise<string | void>, done?: string): Promise<void> {
     setBusy(label);
@@ -77,6 +114,38 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
     }, 'Repository started.');
   }
 
+  /**
+   * Creates the repository on GitHub and points `origin` at it, after the person confirms the name and who will be
+   * able to see it. Nothing is uploaded: `gh` is asked not to push, so sending code stays the separate, confirmed
+   * Publish branch step.
+   */
+  async function createRepository(): Promise<void> {
+    if (!activeProject) return;
+    const name = repoName.trim();
+    const visibility = repoVisibility;
+    const confirmed = await confirmDialog({
+      title: `Create ${name} on GitHub?`,
+      detail: visibility === 'private'
+        ? `This creates the private repository "${name}" on your GitHub account and sets it as this project's origin. Only you and the people you invite will be able to see it.\n\nYour code is not uploaded yet — press Publish branch when you are ready for that.`
+        : `This creates the public repository "${name}" on your GitHub account. Anyone on the internet will be able to see it and clone it.\n\nIt is set as this project's origin. Your code is not uploaded yet — press Publish branch when you are ready for that.`,
+      confirmLabel: 'Create repository',
+    });
+    if (!confirmed) return;
+    await act('Create repository', async () => {
+      const result = unwrap(await window.kaiDesktop.gitCreateRepository(activeProject.id, name, visibility));
+      return `Created ${result.repository} on GitHub and set it as origin. Publish the branch when you are ready to upload your commits.`;
+    });
+  }
+
+  // Signing in is needed in both places the GitHub section appears: a project with no remote yet, and one whose
+  // remote exists but has no signed-in account behind it.
+  const signInActions = (
+    <div className="ops-actions">
+      <button type="button" className="primary-button" onClick={onSignInGitHub ?? onOpenTerminal}><TerminalSquare size={14} /><span>Sign in with GitHub</span></button>
+      <button type="button" className="secondary-button" onClick={() => void navigator.clipboard?.writeText('gh auth login').then(() => setMessage('Copied “gh auth login”. Paste it into the KAI Terminal, then follow GitHub’s browser approval.')).catch(() => setError('Could not copy the command. Run gh auth login in the KAI Terminal.'))}><Copy size={14} /><span>Copy sign-in command</span></button>
+    </div>
+  );
+
   if (!activeProject) {
     return <div className="page-view"><header className="page-header"><div><h1>Git</h1><p>Open a project to see its branches and changes</p></div></header><div className="empty-list">No project is open</div></div>;
   }
@@ -100,7 +169,8 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           </div>
           <p className="studio-note">
             What comes next: <code>git add -A</code> to stage everything, <code>git commit -m &quot;first commit&quot;</code> to record it,
-            then <code>git remote add origin &lt;url&gt;</code> once you have somewhere to push to.
+            then somewhere to push to. Once there is a first commit, this page's GitHub section creates that repository
+            for you — private or public — so you never have to type <code>git remote add origin &lt;url&gt;</code> yourself.
           </p>
           {error && <div className="workbench-error" role="alert">{error}</div>}
           {message && <div className="workbench-notice" role="status">{message}</div>}
@@ -112,6 +182,70 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
   const staged = overview.changes.filter((change) => change.staged);
   const onMain = overview.branch === 'main' || overview.branch === 'master';
   const sync = (action: GitSyncAction, label: string): Promise<void> => act(label, async () => unwrap(await window.kaiDesktop.gitSync(activeProject.id, action)).output);
+  const createCommand = `gh repo create ${repoName.trim() || 'my-project'} --${repoVisibility} --source . --remote origin`;
+
+  /**
+   * What the GitHub section shows when the project does not publish to GitHub yet. The pointed part is the create
+   * step: a person who has never made a repository should leave this page with one, not with a command to go and run.
+   */
+  const githubPanel = overview.remotes.length > 0 ? (
+    // A project that already pushes somewhere else keeps that remote: `origin` is taken, and repointing it would
+    // quietly send the next push somewhere new.
+    <p className="settings-note">
+      This project's remote ({overview.remotes.map((remote) => remote.name).join(', ')}) is not on GitHub, so pull requests
+      cannot be offered here. Pushing still works with any Git remote.
+    </p>
+  ) : (
+    <>
+      <p className="settings-note">
+        This project has no remote yet, so its work lives only on this machine. KAI can create the repository on GitHub
+        and point <code>origin</code> at it.
+      </p>
+      {!githubState ? <p className="settings-note">Checking for the GitHub CLI…</p> : !githubState.cliAvailable ? (
+        <>
+          <p className="settings-note">
+            The GitHub CLI (<code>gh</code>) is not installed, so KAI cannot create the repository for you. Install it
+            from cli.github.com and reopen this page, or set up any other Git host yourself with{' '}
+            <code>git remote add origin &lt;url&gt;</code> in the Terminal. Pushing works with any Git remote.
+          </p>
+          <div className="ops-actions">
+            <button type="button" className="secondary-button" onClick={() => window.open('https://cli.github.com')}><ExternalLink size={14} /><span>Open the install page</span></button>
+            {onOpenTerminal && <button type="button" className="secondary-button" onClick={onOpenTerminal}><TerminalSquare size={14} /><span>Open the Terminal</span></button>}
+          </div>
+        </>
+      ) : !githubState.signedInAs ? (
+        <>
+          <p className="settings-note">GitHub CLI is installed but not signed in. Sign in once, and KAI can create the repository here.</p>
+          {signInActions}
+        </>
+      ) : (
+        <>
+          <div className="field-grid">
+            <label className="field"><span>Repository name</span><input value={repoName} placeholder="my-project" onChange={(event) => setRepoName(event.target.value)} /></label>
+            <label className="field">
+              <span>Who can see it</span>
+              <Select value={repoVisibility} onChange={(event) => setRepoVisibility(event.target.value === 'public' ? 'public' : 'private')}>
+                <option value="private">Private — only you and the people you invite</option>
+                <option value="public">Public — anyone can see and clone it</option>
+              </Select>
+            </label>
+          </div>
+          <p className="settings-note">
+            KAI runs <code>{createCommand}</code> in this project's folder. That registers the repository on GitHub under{' '}
+            {githubState.signedInAs} and sets it as <code>origin</code>. Nothing is uploaded: press{' '}
+            <strong>Publish branch</strong> when you are ready to send your commits.
+          </p>
+          <div className="ops-actions">
+            <button type="button" className="primary-button" disabled={busy !== null || !repoName.trim()} title="Creates the repository on GitHub and sets it as origin. Your code stays here until you publish." onClick={() => void createRepository()}>
+              {busy === 'Create repository' ? <Loader2 className="spin" size={14} /> : <Plus size={14} />} Create repository on GitHub
+            </button>
+            <button type="button" className="secondary-button" disabled={busy !== null} title="The same command, for running in a Terminal yourself" onClick={() => void navigator.clipboard?.writeText(createCommand).then(() => setMessage('Copied the create command. Paste it into the KAI Terminal to run it yourself.')).catch(() => setError('Could not copy the command.'))}><Copy size={14} /><span>Copy command</span></button>
+            {onOpenTerminal && <button type="button" className="secondary-button" onClick={onOpenTerminal} disabled={busy !== null}><TerminalSquare size={14} /><span>Open the Terminal</span></button>}
+          </div>
+        </>
+      )}
+    </>
+  );
 
   return (
     <div className="page-view git-view">
@@ -128,7 +262,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
         <div className="page-actions">
           <button type="button" className="secondary-button" disabled={busy !== null} title="Ask the remote what has changed. Changes nothing on your machine." onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></button>
           <button type="button" className="secondary-button" disabled={busy !== null || !overview.upstream} title="Fast-forward only; never merges or rewrites history" onClick={() => void sync('pull', 'Pull')}><ArrowDown size={14} /><span>Pull</span></button>
-          <button type="button" className="primary-button" disabled={busy !== null || !overview.branch || (overview.upstream !== null && overview.ahead === 0)} onClick={() => void (async () => {
+          <button type="button" className="primary-button" disabled={busy !== null || !overview.branch || overview.remotes.length === 0 || (overview.upstream !== null && overview.ahead === 0)} title={overview.remotes.length === 0 ? 'There is nowhere to push to yet — create a repository on GitHub in the GitHub section below' : undefined} onClick={() => void (async () => {
             const target = overview.githubRepository ? `origin (${overview.githubRepository})` : 'the remote';
             const confirmed = await confirmDialog({
               title: 'Push this branch?',
@@ -150,6 +284,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
         <ol>
           <li><strong>Stage</strong> — choose which changed files go into the next save. Nothing else is affected.</li>
           <li><strong>Commit</strong> — save those files as one labelled point in the project's history, on your machine.</li>
+          <li><strong>Create repository on GitHub</strong> — make the remote that the next two steps send to. You choose whether it is private or public; nothing is uploaded yet.</li>
           <li><strong>Publish branch</strong> — the first send of a branch to the remote, so it exists somewhere other than here.</li>
           <li><strong>Push</strong> — send later commits to that remote. KAI never force-pushes, so it cannot overwrite somebody else's work.</li>
           <li><strong>Fetch</strong> — ask the remote what has changed. It changes nothing on your machine; check first, act after.</li>
@@ -239,18 +374,13 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
 
         <section className="settings-section span-two">
           <div className="section-title"><GitPullRequest size={16} /><span>GitHub</span></div>
-          {!overview.githubRepository ? <p className="settings-note">This project's remote is not on GitHub{overview.remotes.length === 0 ? ' (no remote is set)' : ''}. Pushing still works with any Git remote.</p> : (
+          {!overview.githubRepository ? githubPanel : (
             <>
               <p className="settings-note">
                 {overview.githubRepository}
                 {overview.github.signedInAs ? ` · signed in as ${overview.github.signedInAs}` : overview.github.cliAvailable ? ' · GitHub CLI is installed but not signed in.' : ' · Install the GitHub CLI (gh) to open pull requests from KAI. Pushing works without it.'}
               </p>
-              {!overview.github.signedInAs && overview.github.cliAvailable && (
-                <div className="ops-actions">
-                  <button type="button" className="primary-button" onClick={onSignInGitHub ?? onOpenTerminal}><TerminalSquare size={14} /><span>Sign in with GitHub</span></button>
-                  <button type="button" className="secondary-button" onClick={() => void navigator.clipboard?.writeText('gh auth login').then(() => setMessage('Copied “gh auth login”. Paste it into the KAI Terminal, then follow GitHub’s browser approval.')).catch(() => setError('Could not copy the command. Run gh auth login in the KAI Terminal.'))}><Copy size={14} /><span>Copy sign-in command</span></button>
-                </div>
-              )}
+              {!overview.github.signedInAs && overview.github.cliAvailable && signInActions}
               {overview.pullRequests.map((request) => (
                 <div key={request.number} className="ops-card-head"><span>#{request.number} {request.title} · {request.state}</span><button type="button" className="secondary-button" onClick={() => window.open(request.url)}><ExternalLink size={12} /><span>Open</span></button></div>
               ))}

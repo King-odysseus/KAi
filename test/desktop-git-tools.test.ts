@@ -3,9 +3,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { gitBranchNameSchema } from '../packages/contracts/src';
+import { gitBranchNameSchema, githubRepoNameSchema } from '../packages/contracts/src';
 import {
   GitCommandError,
+  createRepositoryArgs,
   gitCheckout,
   gitCommit,
   gitCreateBranch,
@@ -165,6 +166,27 @@ describe('branches', () => {
     await fs.writeFile(path.join(root, 'a.txt'), 'uncommitted\n');
     await expect(gitCheckout(root, 'other')).rejects.toThrow();
     expect(await fs.readFile(path.join(root, 'a.txt'), 'utf8')).toBe('uncommitted\n');
+  });
+});
+
+describe('creating the remote', () => {
+  it('states the name and the visibility, and never uploads anything', () => {
+    expect(createRepositoryArgs('my-project', 'private')).toEqual([
+      'repo', 'create', 'my-project', '--private', '--source', '.', '--remote', 'origin',
+    ]);
+    // Visibility is always explicit: gh would otherwise stop and ask, and an unattended run has nobody to answer.
+    const publicArgs = createRepositoryArgs('my-project', 'public');
+    expect(publicArgs).toContain('--public');
+    expect(publicArgs).not.toContain('--private');
+    // Pushing is the separate, confirmed step; creating a repository must not upload code.
+    expect(publicArgs).not.toContain('--push');
+  });
+
+  it('accepts names GitHub accepts and refuses anything that could act as an option', () => {
+    for (const name of ['KAi', 'my-project', 'notes.v2', 'a_b']) expect(githubRepoNameSchema.safeParse(name).success, name).toBe(true);
+    for (const name of ['', '-x', '--public', '--source', 'my project', 'repo/', 'x.git', 'x.']) {
+      expect(githubRepoNameSchema.safeParse(name).success, name).toBe(false);
+    }
   });
 });
 
