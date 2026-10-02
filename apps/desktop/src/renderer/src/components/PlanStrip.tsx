@@ -1,0 +1,63 @@
+import { Check, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { Plan } from '@kai/contracts';
+import { unwrap } from '../types';
+import { useRunPanelCollapsed } from './run-panel-collapse';
+
+/**
+ * The plan the agent is working to, shown above the composer.
+ *
+ * It is the run's own account of what it is doing, so showing it is what makes the mechanism visible: without it the
+ * plan is a file on disk and the only way to know whether the run has a thread is to infer it from behaviour.
+ *
+ * One line by default, because the transcript is already busy and a plan that is going well does not need room. It
+ * opens to the steps when anyone wants them, and remembers that choice.
+ */
+export function PlanStrip({ projectId, refreshKey }: { projectId: string | null; refreshKey?: string }): ReactNode {
+  const [collapsed, toggle] = useRunPanelCollapsed('plan');
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!projectId) { setPlan(null); return undefined; }
+    let cancelled = false;
+    setLoading(true);
+    void window.kaiDesktop.readTaskPlan(projectId).then(unwrap)
+      .then((next) => { if (!cancelled) setPlan(next); })
+      .catch(() => { if (!cancelled) setPlan(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectId, refreshKey]);
+
+  // Nothing to show until the agent has written one, and an empty strip on every conversation would be noise.
+  if (!projectId || (!plan && !loading)) return null;
+
+  const items = plan?.items ?? [];
+  const done = items.filter((item) => item.state === 'done').length;
+  const active = items.find((item) => item.state === 'active');
+
+  return (
+    <section className="plan-strip" aria-label="Task plan">
+      <button type="button" className="plan-strip-head" onClick={toggle} aria-expanded={!collapsed}>
+        {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+        <span>Plan</span>
+        <small>
+          {loading && items.length === 0
+            ? 'reading…'
+            : `${done} of ${items.length} done${active ? ` · ${active.text}` : ''}`}
+        </small>
+        {loading && items.length === 0 ? <Loader2 className="spin" size={12} /> : null}
+      </button>
+      {!collapsed && items.length > 0 && (
+        <ol className="plan-strip-items">
+          {items.map((item, index) => (
+            <li key={`${index}-${item.text}`} className={`plan-item ${item.state}`}>
+              <span className="plan-item-mark">{item.state === 'done' ? <Check size={11} /> : null}</span>
+              <span>{item.text}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}

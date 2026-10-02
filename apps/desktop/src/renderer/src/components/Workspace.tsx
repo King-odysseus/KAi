@@ -1,5 +1,6 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
 import { AutoModePanel } from './AutoPanel';
+import { PlanStrip } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
 import {
@@ -1461,6 +1462,7 @@ export function WorkspaceView({
             if (files.length > 0) void attachImageFiles(files);
           }}
         />
+        {activeProject && <PlanStrip projectId={activeProject.id} refreshKey={activeConversation?.updatedAt} />}
         {taskIntent === 'auto' && activeProject && (
           <AutoModePanel
             projectId={activeProject.id}

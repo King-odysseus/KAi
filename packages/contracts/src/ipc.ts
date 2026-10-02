@@ -285,6 +285,7 @@ import {
   type TerminalEvent,
   type TerminalSession,
 } from './terminal';
+import { planSchema, type Plan } from './plan';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
@@ -573,6 +574,7 @@ export const ipcChannels = [
   'terminal:write',
   'terminal:resize',
   'terminal:stop',
+  'plan:read',
   'git:overview',
   'git:init',
   'git:stage',
@@ -876,6 +878,7 @@ export const ipcInputSchemas = {
   'terminal:write': terminalWriteInputSchema,
   'terminal:resize': terminalResizeInputSchema,
   'terminal:stop': terminalStopInputSchema,
+  'plan:read': z.object({ projectId: z.string().min(1) }).strict(),
   'git:overview': z.object({ projectId: z.string().min(1) }).strict(),
   'git:init': z.object({ projectId: z.string().min(1) }).strict(),
   'git:stage': gitStageInputSchema,
@@ -1012,6 +1015,8 @@ export const studioProjectSummariesResponseSchema = z.array(studioProjectSummary
 export const studioProjectFolderResponseSchema = studioProjectFolderResultSchema;
 export const studioProjectLaunchResponseSchema = studioProjectLaunchResultSchema;
 export const studioBoardResponseSchema = studioBoardSchema;
+/** A project's task plan, or null when it has none. */
+export const planResponseSchema = planSchema.nullable();
 export const studioBoardCardResponseSchema = boardCardSchema.nullable();
 export const studioUiCheckResponseSchema = studioUiCheckResultSchema;
 export const studioDesignResponseSchema = studioDesignSchema;
@@ -1367,6 +1372,8 @@ export interface KaiDesktopBridge {
   /** Copies this brain's entries into the other one, so switching the mirror on does not leave earlier work behind. */
   mirrorBrain(request: BrainMirrorInput): Promise<IpcResponse<BrainMirrorOutcome>>;
   gitOverview(projectId: string): Promise<IpcResponse<GitOverview>>;
+  /** The plan the agent is working to for this project, so it can be shown rather than inferred. */
+  readTaskPlan(projectId: string): Promise<IpcResponse<Plan | null>>;
   /** Starts a repository in the project folder. Safe to call when one already exists. */
   gitInit(projectId: string): Promise<IpcResponse<GitOverview>>;
   gitStage(projectId: string, paths: string[], stage: boolean): Promise<IpcResponse<GitActionResult>>;

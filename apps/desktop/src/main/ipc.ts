@@ -900,6 +900,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'terminal:write', async ({ id, data }) => context.terminal.write(id, data));
   handle(context, 'terminal:resize', async ({ id, cols, rows }) => context.terminal.resize(id, cols, rows));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
+  handle(context, 'plan:read', async ({ projectId }) => readPlan(await projectPath(projectId)));
   handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
   // Idempotent, so the Git page can offer it as an ordinary button rather than a one-shot action.
   handle(context, 'git:init', async ({ projectId }) => gitInit(await projectPath(projectId)));
