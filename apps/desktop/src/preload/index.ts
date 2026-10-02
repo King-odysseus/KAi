@@ -224,6 +224,7 @@ const bridge: KaiDesktopBridge = {
   startPreview: (request) => ipcRenderer.invoke('preview:start', request),
   stopPreview: (projectId) => ipcRenderer.invoke('preview:stop', { projectId }),
   runAgent: (request) => ipcRenderer.invoke('agents:run', request),
+  interjectAgent: (request) => ipcRenderer.invoke('agents:interject', request),
   cancelAgent: (conversationId) => ipcRenderer.invoke('agents:cancel', { conversationId }),
   pauseAgent: (conversationId) => ipcRenderer.invoke('agents:pause', { conversationId }),
   resumeAgent: (conversationId) => ipcRenderer.invoke('agents:resume', { conversationId }),

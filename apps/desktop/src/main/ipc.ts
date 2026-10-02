@@ -74,6 +74,7 @@ import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime'
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
+import { clearInterjections, interject } from './interjections';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing } from './execution-rules';
@@ -666,6 +667,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return context.preview.stop(project.id, project.path);
   });
   handle(context, 'agents:run', async (request, ipcRequest) => runInteractiveAgent(context, request, ipcRequest.ownerWindowId));
+  // Saying something to a run already going, rather than waiting for it to end or cancelling it. It reaches the
+  // agent at its next turn, so it answers or takes the correction and carries on.
+  handle(context, 'agents:interject', async ({ conversationId, text }) => {
+    interject(conversationId, text);
+    return { queued: true };
+  });
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
   handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
   handle(context, 'agents:resume', async ({ conversationId }) => context.runControl.resume(conversationId));
@@ -1440,6 +1447,9 @@ export async function runConversationAgent(
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
+    // Anything still waiting came too late to reach the run it was meant for, and handing it to the next one would be
+    // answering a question nobody is asking any more.
+    clearInterjections(conversation.id);
     await context.recovery.end(conversation.id).catch(() => undefined);
     // Released on every exit path: completion, failure, cancellation and thrown errors.
     if (claimedProject) await releaseAgentClaim(context, request.agent);

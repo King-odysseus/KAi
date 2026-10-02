@@ -670,6 +670,29 @@ export function WorkspaceView({
     }
   };
 
+  /**
+   * Says something to the run that is already going, instead of waiting for it to end or stopping it.
+   *
+   * The difference from steering matters: steering cancels, which throws away whatever the agent was in the middle of,
+   * and the next instruction starts from the same place. This is answered at the agent's next turn, so a question or a
+   * correction lands while the work is still in hand.
+   */
+  const interjectNow = (): void => {
+    const text = prompt.trim();
+    const conversationId = activeConversation?.id;
+    if (!text || !conversationId || !running) return;
+    setPrompt('');
+    clearComposerContext();
+    setSelectedSkills([]);
+    void window.kaiDesktop.interjectAgent({ conversationId, text }).then(unwrap)
+      .then(() => setWorkbenchNotice('Sent to the run in progress, which will answer at its next step.'))
+      .catch((caught) => {
+        // Put the words back rather than losing them to a failed send.
+        setPrompt(text);
+        setWorkbenchNotice(caught instanceof Error ? caught.message : 'The message could not be sent to the run.');
+      });
+  };
+
   const steerQueuedPrompt = (index: number): void => {
     const item = queuedPrompts[index];
     if (!item || busy || !activeProject || !ready) return;
@@ -1517,7 +1540,10 @@ export function WorkspaceView({
               }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                if (event.ctrlKey || event.metaKey) steerNow();
+                // Alt is the one that keeps the run; Ctrl stops it and starts over, which is the destructive one and so
+                // the one that asks for the deliberate modifier.
+                if (event.altKey && running) interjectNow();
+                else if (event.ctrlKey || event.metaKey) steerNow();
                 else send();
               }
               if (event.key === 'Escape') {
@@ -1576,7 +1602,7 @@ export function WorkspaceView({
         )}
         <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
         {profile.explainAccess && <p className="access-hint" role="note"><ShieldCheck size={12} /><span><strong>{ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.label}:</strong> {ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.description}</span></p>}
-        <div className="composer-footer"><span>Enter to queue · Ctrl+Enter to interrupt &amp; steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
+        <div className="composer-footer"><span>Enter to queue · Alt+Enter to send into the running turn · Ctrl+Enter to interrupt &amp; steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
   );

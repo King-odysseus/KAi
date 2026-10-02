@@ -544,6 +544,7 @@ export const ipcChannels = [
   'backups:delete',
   'agents:capabilities',
   'agents:run',
+  'agents:interject',
   'agents:cancel',
   'agents:pause',
   'agents:resume',
@@ -848,6 +849,7 @@ export const ipcInputSchemas = {
   'backups:delete': configBackupRestoreInputSchema,
   'agents:capabilities': emptyInputSchema,
   'agents:run': agentRunRequestSchema,
+  'agents:interject': z.object({ conversationId: z.string().min(1), text: z.string().min(1).max(20_000) }).strict(),
   'agents:cancel': agentCancelInputSchema,
   'agents:pause': agentCancelInputSchema,
   'agents:resume': agentCancelInputSchema,
@@ -1340,6 +1342,11 @@ export interface KaiDesktopBridge {
   stopPreview(projectId: string): Promise<IpcResponse<PreviewState>>;
   runAgent(request: AgentRunRequest): Promise<IpcResponse<AgentRunResult>>;
   cancelAgent(conversationId: string): Promise<IpcResponse<boolean>>;
+  /**
+   * Says something to a run that is already going, answered at its next turn rather than waiting for the run to end
+   * or cancelling it. Only a run KAI loops itself can take one; a CLI run has no turn to interrupt.
+   */
+  interjectAgent(request: { conversationId: string; text: string }): Promise<IpcResponse<{ queued: boolean }>>;
   pauseAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   resumeAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   signInAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;

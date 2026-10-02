@@ -10,6 +10,7 @@ import type {
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
 import { readPlan } from './plan-store';
+import { takeInterjection } from './interjections';
 import { probeLocalServer, type LocalServerProbe } from './local-provider';
 import {
   DesktopProjectToolRuntime,
@@ -650,6 +651,14 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+
+        // Something the person said while this run was going. It is put to the model at its next turn, so it
+        // answers — or takes the correction — and carries on, rather than the run being cancelled and started
+        // again from the same prompt.
+        const interjected = takeInterjection(request.conversationId);
+        if (interjected) {
+        providerInput = interjected;
+        }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
           providerInput = WRAP_UP_MESSAGE;
@@ -898,6 +907,14 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+
+        // Something the person said while this run was going. It is put to the model at its next turn, so it
+        // answers — or takes the correction — and carries on, rather than the run being cancelled and started
+        // again from the same prompt.
+        const interjected = takeInterjection(request.conversationId);
+        if (interjected) {
+          messages.push({ role: 'user', content: interjected });
+        }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
           messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
@@ -1165,6 +1182,14 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+
+        // Something the person said while this run was going. It is put to the model at its next turn, so it
+        // answers — or takes the correction — and carries on, rather than the run being cancelled and started
+        // again from the same prompt.
+        const interjected = takeInterjection(request.conversationId);
+        if (interjected) {
+          messages.push({ role: 'user', content: interjected });
+        }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
           messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
@@ -1400,6 +1425,14 @@ export class DesktopDirectProviderRuntime {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
         await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+
+        // Something the person said while this run was going. It is put to the model at its next turn, so it
+        // answers — or takes the correction — and carries on, rather than the run being cancelled and started
+        // again from the same prompt.
+        const interjected = takeInterjection(request.conversationId);
+        if (interjected) {
+          contents.push({ role: 'user', parts: [{ text: interjected }] });
+        }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
           contents.push({ role: 'user', parts: [{ text: WRAP_UP_MESSAGE }] });
