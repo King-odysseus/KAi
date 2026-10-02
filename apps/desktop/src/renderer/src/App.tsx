@@ -971,6 +971,10 @@ export function App(): ReactNode {
 
   async function cancelConversation(): Promise<void> {
     if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
+    // Auto keeps a session alive across turns, keyed by conversation. Cancelling the run in flight on its own leaves
+    // that session free to start the next turn, so Stop looked as though it had done nothing. End the session first.
+    // A conversation with no Auto session simply has nothing to stop, so a refusal here is not worth reporting.
+    await window.kaiDesktop.stopAuto({ conversationId: activeConversationId }).catch(() => undefined);
     const cancelled = await perform(
       () => window.kaiDesktop.cancelAgent(activeConversationId).then(unwrap),
       'Stopping agent',
@@ -978,6 +982,9 @@ export function App(): ReactNode {
     if (cancelled) {
       setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== activeConversationId));
       setAgentNotice('Stopping the current agent run.');
+      // The run's own `finally` clears this, but only once the promise it is awaiting settles. Clearing it here makes
+      // Stop take effect on screen at once instead of leaving the activity strip spinning under "Reviewing results".
+      setRunningConversationIds((current) => current.filter((id) => id !== activeConversationId));
     }
   }
 
