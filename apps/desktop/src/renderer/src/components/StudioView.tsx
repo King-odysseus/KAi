@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { AutopilotPanel } from './AutopilotPanel';
 import { FlowDiagram } from './FlowDiagram';
+import { ImageCard } from './ImageAttachment';
 import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, type DesignContext } from '../flow-diagram';
 import { Markdown } from './Markdown';
 import {
@@ -451,6 +452,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     if (!projectId || !files || files.length === 0) return;
     setBusy('design');
     setError(null);
+    let latest: StudioStyleReferences | null = null;
     setAttachNote('Looking at your image…');
     try {
       for (const file of [...files]) {
@@ -460,8 +462,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
           reader.readAsDataURL(file);
         });
-        unwrap(await window.kaiDesktop.addStudioStyleReference({ projectId, name: file.name, data }));
+        latest = unwrap(await window.kaiDesktop.addStudioStyleReference({ projectId, name: file.name, data }));
       }
+      // The thread shows these from the same set the style guide is written from, so it has to be the live one.
+      if (latest) setStyleRefs(latest);
     } catch (caught) {
       setAttachNote(null);
       setError(messageOf(caught));
@@ -1328,6 +1332,17 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   <ThreadTurn key={question} question={question} answer={answers[index] ?? ''} />
                 ))}
                 {open[step] !== undefined && <div className="studio-bubble ai">{open[step]}</div>}
+                {styleRefs && styleRefs.images.length > 0 && (
+                  <div className="studio-bubble user studio-attached" aria-label="Images you attached">
+                    <div className="message-attachments">
+                      {styleRefs.images.map((image) => (
+                        image.preview
+                          ? <ImageCard key={image.name} name={image.name} dataUrl={image.preview} />
+                          : <span key={image.name} className="studio-note">{image.name}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {attachNote && <div className="studio-bubble ai">{attachNote}</div>}
                 {open.length === 0 && <p className="studio-note">No questions this round.</p>}
                 {busy === 'answer' && <div className="studio-bubble ai"><Loader2 className="spin" size={13} /> Thinking about what to ask next…</div>}

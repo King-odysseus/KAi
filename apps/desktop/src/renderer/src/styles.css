@@ -11664,6 +11664,10 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .studio-correcting strong { color: var(--text); font-weight: 600; }
 .studio-correcting .composer-text-button { flex: 0 0 auto; }
 
+/* Images attached to the interview, shown in the thread where they were added rather than only described. */
+.studio-attached { max-width: 100%; }
+.studio-attached .message-attachments { padding: 0; }
+
 .studio-reply {
   display: flex;
   flex-direction: column;
