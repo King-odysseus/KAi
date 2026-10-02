@@ -23,6 +23,7 @@ export * from './model-tiers';
 export * from './notifications';
 export * from './primitives';
 export * from './prompt-guide';
+export * from './plan';
 export * from './preview';
 export * from './proxy';
 export * from './recovery';

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
-import { directProviderPreset, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, type ProviderId } from '@kai/contracts';
+import { directProviderPreset, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, planIsUnfinished, type ProviderId } from '@kai/contracts';
 import type {
   AppSettings,
   AgentRunRequest,
@@ -9,6 +9,7 @@ import type {
   PersistedEvent,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
+import { readPlan } from './plan-store';
 import { probeLocalServer, type LocalServerProbe } from './local-provider';
 import {
   DesktopProjectToolRuntime,
@@ -157,11 +158,29 @@ const AWAITS_THE_USER = /\?|\b(tell me|let me know|which (?:remote|one|option|br
  * True when a reply that used no tools only says what the model is about to do ("Let me read the files"). Some models
  * end their turn there, which would end the run with the work not started.
  */
+/**
+ * The last two sentences of the reply's final block. A model that is about to act says so as its last word, and the
+ * same place is where it asks for something it cannot get itself.
+ */
+export function closingSentences(text: string): string {
+  const said = text.trim();
+  const block = said.split(/\n{2,}/).at(-1) ?? said;
+  return block.split(/(?<=[.!?])\s+/).slice(-2).join(' ');
+}
+
+/**
+ * Whether the reply is asking the person for something. Exported because it decides more than one thing: it stops the
+ * prose nudge, and it stops the plan from pushing the run on. A model waiting on an answer cannot be carried past it
+ * by any means — doing so is what produced the behaviour that started all of this.
+ */
+export function awaitsTheUser(text: string): boolean {
+  return AWAITS_THE_USER.test(closingSentences(text));
+}
+
 export function announcesUnfinishedWork(text: string): boolean {
   const said = text.trim();
   if (!said || said.endsWith('?')) return false;
-  const block = said.split(/\n{2,}/).at(-1) ?? said;
-  const closing = block.split(/(?<=[.!?])\s+/).slice(-2).join(' ');
+  const closing = closingSentences(said);
   // Checked before the pattern, so a question wins over an "I will" in the same breath.
   if (AWAITS_THE_USER.test(closing)) return false;
   return ANNOUNCEMENT.test(closing);
@@ -197,6 +216,25 @@ const TRUNCATED_TURN_CONTINUATION = 'Your previous turn reached the output limit
 
 /** Names the real problem when a reasoning model thinks until the budget runs out and never writes a reply. */
 const REASONING_ONLY = ' produced only reasoning and no reply: the model spent its whole output budget thinking. Raise the output limit for this model, or choose one that does not reason.';
+
+/**
+ * What to say next because the plan is unfinished, or null when there is nothing to say.
+ *
+ * This is the run's answer to "is it finished?", and it is looked up rather than inferred — which is the whole point
+ * of the plan existing. The prose nudge below it stays as a fallback for runs with no plan at all; it is a guess about
+ * the model's wording, and it has been wrong twice.
+ *
+ * Two things stop it carrying on, and both matter more than finishing the plan:
+ * A reply that asks the person something is not a cue to proceed, however much the plan still lists. And the nudge
+ * budget is shared, so a model that keeps stalling on an open item ends the run instead of looping.
+ */
+async function planContinuation(projectRoot: string, roundText: string, nudges: number): Promise<string | null> {
+  if (nudges >= MAX_UNFINISHED_NUDGES) return null;
+  if (awaitsTheUser(roundText)) return null;
+  const plan = await readPlan(projectRoot).catch(() => null);
+  if (!plan || !planIsUnfinished(plan)) return null;
+  return openPlanReminder(plan);
+}
 
 /** A blank line to put before the first text of a round when earlier rounds already wrote some, so they do not run together. */
 function roundBreak(outputParts: readonly string[]): string {
@@ -693,6 +731,14 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
+          // The plan is consulted first, because it answers the question the prose can only guess at: open items mean
+          // the work is not done, whatever the wording of the reply looked like.
+          const planned = await planContinuation(projectRoot, roundText, nudges);
+          if (planned) {
+            nudges += 1;
+            providerInput = planned;
+            continue;
+          }
           if (announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
@@ -930,6 +976,13 @@ export class DesktopDirectProviderRuntime {
             continue;
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
+          const planned = await planContinuation(projectRoot, roundText, nudges);
+          if (!forceFinalAnswer && planned) {
+            nudges += 1;
+            messages.push({ role: 'assistant', content: roundText });
+            messages.push({ role: 'user', content: planned });
+            continue;
+          }
           if (!forceFinalAnswer && announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
@@ -1215,6 +1268,13 @@ export class DesktopDirectProviderRuntime {
             continue;
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
+          const planned = await planContinuation(projectRoot, roundText, nudges);
+          if (planned) {
+            nudges += 1;
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
+            messages.push({ role: 'user', content: planned });
+            continue;
+          }
           if (announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
@@ -1397,6 +1457,13 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
+          const planned = await planContinuation(projectRoot, roundText, nudges);
+          if (planned) {
+            nudges += 1;
+            contents.push({ role: 'model', parts: [{ text: roundText }] });
+            contents.push({ role: 'user', parts: [{ text: planned }] });
+            continue;
+          }
           if (announcesUnfinishedWork(roundText)) {
             // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
             if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {

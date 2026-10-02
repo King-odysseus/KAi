@@ -2,8 +2,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { AutonomyMode, PermissionKey } from '@kai/contracts';
+import { planItemStateSchema, type AutonomyMode, type PermissionKey } from '@kai/contracts';
 import { RunGuard } from './run-guard';
+import { writePlan } from './plan-store';
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_READ_LINES = 400;
@@ -110,6 +111,12 @@ const createFileInputSchema = z
   })
   .strict();
 
+const updatePlanInputSchema = z
+  .object({
+    items: z.array(z.object({ text: z.string().trim().min(1).max(300), state: planItemStateSchema }).strict()).max(50),
+  })
+  .strict();
+
 const runCommandInputSchema = z
   .object({
     command: z.string().trim().min(1).max(MAX_COMMAND_LENGTH),
@@ -119,6 +126,32 @@ const runCommandInputSchema = z
   .strict();
 
 export const projectToolDefinitions = [
+  {
+    type: 'function',
+    name: 'update_plan',
+    description: 'Record or revise your plan for the current task: a short list of steps and which are done. Call this first for anything that takes more than a couple of steps, and again whenever a step finishes or the plan changes. It is what tells KAI whether the task is finished, so keep it current rather than describing the plan in your reply.',
+    parameters: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          maxItems: 50,
+          description: 'The whole plan, in order. Replace the list rather than appending to it.',
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'One step, short enough to read at a glance.' },
+              state: { type: 'string', enum: ['pending', 'active', 'done'], description: 'How far this step has got.' },
+            },
+            required: ['text', 'state'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['items'],
+      additionalProperties: false,
+    },
+  },
   {
     type: 'function',
     name: 'read_file',
@@ -395,11 +428,32 @@ export class DesktopProjectToolRuntime {
       if (name === 'move_file') return await this.moveFile(moveFileInputSchema.parse(rawInput));
       if (name === 'delete_file') return await this.deleteFile(deleteFileInputSchema.parse(rawInput));
       if (name === 'run_command') return await this.runCommand(runCommandInputSchema.parse(rawInput), signal);
+      if (name === 'update_plan') return await this.updatePlan(updatePlanInputSchema.parse(rawInput));
       return toolFailure(`Unknown project tool: ${name}.`);
     } catch (error) {
       if (error instanceof z.ZodError) return toolFailure(describeArgumentError(name, rawInput, error));
       return toolFailure(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  /**
+   * Records the plan for this task. The whole list is replaced each time, so the model reports the plan as it now
+   * stands rather than a diff it could get wrong.
+   *
+   * The reply says how many are done, which is the one thing the model needs back: it is what tells a model that has
+   * lost the thread whether it is finished, without it having to remember.
+   */
+  private async updatePlan(input: z.infer<typeof updatePlanInputSchema>): Promise<ProjectToolExecution> {
+    const plan = await writePlan(this.root, input.items, new Date().toISOString());
+    const done = plan.items.filter((item) => item.state === 'done').length;
+    const open = plan.items.length - done;
+    return {
+      ok: true,
+      output: {
+        summary: `Plan recorded: ${done} of ${plan.items.length} done${open > 0 ? `, ${open} still to do` : ', nothing outstanding'}.`,
+        items: plan.items,
+      },
+    };
   }
 
   private async readFile(input: z.infer<typeof readFileInputSchema>): Promise<ProjectToolExecution> {
