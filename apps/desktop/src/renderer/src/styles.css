@@ -670,6 +670,55 @@ button:disabled {
   text-align: center;
 }
 
+/* The Git page's empty state offers the command and a button to run it, rather than naming a command and leaving the
+   person to find a terminal. */
+.git-starter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+
+.git-starter code {
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--bg-inset);
+  font-size: 12px;
+}
+
+.empty-list p { margin: 0 0 8px; }
+.empty-list code { color: var(--text); }
+
+/* Git's vocabulary explained in order, folded away for people who already know it. */
+.git-explainer {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.git-explainer summary {
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.git-explainer ol {
+  margin: 10px 0 8px;
+  padding-left: 20px;
+  line-height: 1.6;
+}
+
+.git-explainer li { margin-bottom: 4px; }
+.git-explainer strong { color: var(--text); }
+
 .app-main {
   position: relative;
   flex: 1;

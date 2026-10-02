@@ -107,6 +107,7 @@ const bridge: KaiDesktopBridge = {
   markStudioArtifactEdited: (input) => ipcRenderer.invoke('studio:artifacts-mark-edited', input),
   studioBoard: (projectId) => ipcRenderer.invoke('studio:board-read', { projectId }),
   planStudioBoard: (projectId) => ipcRenderer.invoke('studio:board-plan', { projectId }),
+  arrangeStudioBoard: (projectId) => ipcRenderer.invoke('studio:board-arrange', { projectId }),
   nextStudioCard: (projectId) => ipcRenderer.invoke('studio:board-next', { projectId }),
   moveStudioCard: (input) => ipcRenderer.invoke('studio:board-move', input),
   claimStudioCard: (input) => ipcRenderer.invoke('studio:board-claim', input),
@@ -263,6 +264,7 @@ const bridge: KaiDesktopBridge = {
     return () => ipcRenderer.removeListener('terminal:event', handler);
   },
   gitOverview: (projectId) => ipcRenderer.invoke('git:overview', { projectId }),
+  gitInit: (projectId) => ipcRenderer.invoke('git:init', { projectId }),
   gitStage: (projectId, paths, stage) => ipcRenderer.invoke('git:stage', { projectId, paths, stage }),
   gitCommit: (projectId, message) => ipcRenderer.invoke('git:commit', { projectId, message }),
   gitCheckout: (projectId, branch) => ipcRenderer.invoke('git:checkout', { projectId, branch }),

@@ -8,11 +8,14 @@ import {
   createDefaultSettings,
   defaultNeeds,
   studioBoardDraftSchema,
+  type BoardCard,
+  type BoardStatus,
+  type StudioBoard,
   type StudioReadiness,
 } from '../packages/contracts/src';
 import { StudioArtifacts } from '../apps/desktop/src/main/artifacts';
 import { StudioBoardStore } from '../apps/desktop/src/main/board';
-import { DesktopStudio, artifactPrompt, boardPrompt, parseArtifact, parseBoardDraft, type StudioPorts } from '../apps/desktop/src/main/studio';
+import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseArrangePlan, parseArtifact, parseBoardDraft, type StudioPorts } from '../apps/desktop/src/main/studio';
 import { DesktopUiCheck } from '../apps/desktop/src/main/ui-check';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { hashFile } from '../apps/desktop/src/main/verification';
@@ -115,6 +118,34 @@ describe('studio drafts', () => {
     expect(board.system).toContain('comes LAST');
     expect(board.system).not.toContain('backend and setup first');
     expect(prompt.system).toContain('deployment, hosting and a managed database are the last stories');
+  });
+
+  it('asks for an existing board to be reordered, naming the cards it already has', () => {
+    const boardCard = (id: string, kind: BoardCard['kind'], status: BoardStatus): BoardCard => ({
+      id, title: `Card ${id}`, kind, story: '', acceptance: [], prompt: '', designRef: null, route: '', dependsOn: [],
+      needsArtifacts: [], status, checks: [], check: null, runs: [], notes: '', stale: false, staleReason: null,
+      claimedBy: null, movedBy: null, movedAt: null, createdAt: NOW, updatedAt: NOW,
+    });
+    const board: StudioBoard = {
+      schemaVersion: 1,
+      cards: [
+        { ...boardCard('railway', 'backend', 'ready'), title: 'Use Railway-managed Postgres' },
+        { ...boardCard('home', 'page', 'done'), title: 'Build the home page' },
+      ],
+    };
+    const prompt = arrangeBoardPrompt(board, '# Brief', '# Stack', null);
+
+    // It rearranges what is there rather than writing new cards.
+    expect(prompt.system).toContain('Return every card exactly once');
+    expect(prompt.system).toContain('comes LAST');
+    expect(prompt.system).toContain('Use the ids exactly as given');
+    expect(prompt.user).toContain('railway');
+    expect(prompt.user).toContain('already done');
+
+    // A reply that names nothing is refused, so arranging can never empty a board.
+    expect(() => parseArrangePlan('{"cards":[]}')).toThrow();
+    expect(parseArrangePlan('{"cards":[{"id":"home","dependsOn":["railway"]}]}').cards)
+      .toEqual([{ id: 'home', dependsOn: ['railway'] }]);
   });
 });
 

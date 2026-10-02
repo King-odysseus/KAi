@@ -66,12 +66,47 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
     }
   }
 
+  /**
+   * Starts a repository in the project folder. `git init` does nothing when one is already there, so the button is
+   * safe to press twice; `act` refreshes the page afterwards, which is what turns the empty state into the Git view.
+   */
+  function startRepository(): Promise<void> {
+    if (!activeProject) return Promise.resolve();
+    return act('Starting a repository', async () => {
+      unwrap(await window.kaiDesktop.gitInit(activeProject.id));
+    }, 'Repository started.');
+  }
+
   if (!activeProject) {
     return <div className="page-view"><header className="page-header"><div><h1>Git</h1><p>Open a project to see its branches and changes</p></div></header><div className="empty-list">No project is open</div></div>;
   }
   if (!overview) return <div className="page-view"><header className="page-header"><div><h1>Git</h1></div></header>{error ? <div className="workbench-error" role="alert">{error}</div> : <div className="empty-list">Loading…</div>}</div>;
   if (!overview.isRepository) {
-    return <div className="page-view"><header className="page-header"><div><h1>Git</h1><p>{activeProject.name}</p></div></header><div className="empty-list">This project is not a Git repository. Run <code>git init</code> in the Terminal to start one.</div></div>;
+    return (
+      <div className="page-view">
+        <header className="page-header"><div><h1>Git</h1><p>{activeProject.name}</p></div></header>
+        <div className="empty-list">
+          <p>This project is not a Git repository yet. Starting one is a single command, and KAI can run it for you.</p>
+          <div className="git-starter">
+            <code>git init</code>
+            <button type="button" className="primary-button" onClick={() => void startRepository()} disabled={busy !== null} title="Runs git init in this project's folder and names the first branch main">
+              {busy ? <Loader2 className="spin" size={14} /> : <GitBranch size={14} />} Start a repository
+            </button>
+            {onOpenTerminal && (
+              <button type="button" className="secondary-button" onClick={onOpenTerminal} disabled={busy !== null} title="Open the Terminal to run the commands yourself">
+                <TerminalSquare size={14} /> Open the Terminal
+              </button>
+            )}
+          </div>
+          <p className="studio-note">
+            What comes next: <code>git add -A</code> to stage everything, <code>git commit -m &quot;first commit&quot;</code> to record it,
+            then <code>git remote add origin &lt;url&gt;</code> once you have somewhere to push to.
+          </p>
+          {error && <div className="workbench-error" role="alert">{error}</div>}
+          {message && <div className="workbench-notice" role="status">{message}</div>}
+        </div>
+      </div>
+    );
   }
 
   const staged = overview.changes.filter((change) => change.staged);
@@ -91,7 +126,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           </p>
         </div>
         <div className="page-actions">
-          <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></button>
+          <button type="button" className="secondary-button" disabled={busy !== null} title="Ask the remote what has changed. Changes nothing on your machine." onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></button>
           <button type="button" className="secondary-button" disabled={busy !== null || !overview.upstream} title="Fast-forward only; never merges or rewrites history" onClick={() => void sync('pull', 'Pull')}><ArrowDown size={14} /><span>Pull</span></button>
           <button type="button" className="primary-button" disabled={busy !== null || !overview.branch || (overview.upstream !== null && overview.ahead === 0)} onClick={() => void (async () => {
             const target = overview.githubRepository ? `origin (${overview.githubRepository})` : 'the remote';
@@ -107,6 +142,21 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
 
       {message && <div className="workbench-notice" role="status"><span className="git-message">{message}</span></div>}
       {error && <div className="workbench-error" role="alert"><span className="git-message">{error}</span></div>}
+
+      {/* Git's words mean nothing to someone who has not used it, so the workflow is spelled out in order before the
+          controls that carry it out. Each step is one of the buttons on this page. */}
+      <details className="git-explainer">
+        <summary>New to Git? What these buttons do</summary>
+        <ol>
+          <li><strong>Stage</strong> — choose which changed files go into the next save. Nothing else is affected.</li>
+          <li><strong>Commit</strong> — save those files as one labelled point in the project's history, on your machine.</li>
+          <li><strong>Publish branch</strong> — the first send of a branch to the remote, so it exists somewhere other than here.</li>
+          <li><strong>Push</strong> — send later commits to that remote. KAI never force-pushes, so it cannot overwrite somebody else's work.</li>
+          <li><strong>Fetch</strong> — ask the remote what has changed. It changes nothing on your machine; check first, act after.</li>
+          <li><strong>Pull</strong> — bring those changes down. Fast-forward only, so it refuses rather than merging behind your back.</li>
+        </ol>
+        <p className="settings-note">The everyday loop is: stage, commit, push. A branch is a separate line of work you can throw away without touching the main one.</p>
+      </details>
 
       <div className="settings-grid">
         <section className="settings-section">

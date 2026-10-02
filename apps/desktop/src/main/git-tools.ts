@@ -101,6 +101,19 @@ export async function githubCliStatus(cwd: string): Promise<GitOverview['github'
   return githubState(cwd);
 }
 
+/**
+ * Starts a repository in the project folder, and answers with the overview the Git page needs either way.
+ *
+ * `git init` is idempotent, so this is safe to offer as a plain button. The initial branch is named explicitly
+ * because an empty repository otherwise sits on an unborn branch whose name the page cannot show, and a person is
+ * left with no branch to choose.
+ */
+export async function gitInit(cwd: string): Promise<GitOverview> {
+  await git(cwd, ['init']);
+  await git(cwd, ['symbolic-ref', 'HEAD', 'refs/heads/main']).catch(() => '');
+  return gitOverview(cwd);
+}
+
 export async function gitOverview(cwd: string): Promise<GitOverview> {
   const empty: GitOverview = {
     isRepository: false, branch: null, detached: false, upstream: null, ahead: 0, behind: 0, remotes: [],

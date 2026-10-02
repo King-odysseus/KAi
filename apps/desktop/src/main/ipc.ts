@@ -89,7 +89,7 @@ import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUr
 import type { TerminalManager } from './terminal';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
-import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitOverview, gitStage, gitSync } from './git-tools';
+import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
@@ -446,6 +446,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:artifacts-mark-edited', async ({ projectId, kind }) => context.studio.markEdited(projectId, kind));
   handle(context, 'studio:board-read', async ({ projectId }) => context.studio.board(projectId));
   handle(context, 'studio:board-plan', async ({ projectId }) => announceBoard(context, projectId, await context.studio.plan(projectId)));
+  // Arranging rewrites the order of an existing board, so every window is told, not only the one that asked.
+  handle(context, 'studio:board-arrange', async ({ projectId }) => announceBoard(context, projectId, await context.studio.arrange(projectId)));
   handle(context, 'studio:board-next', async ({ projectId }) => context.studio.next(projectId));
   handle(context, 'studio:board-move', async (input) => {
     const card = await context.studio.move(input.projectId, input.cardId, input.status, input.note);
@@ -881,6 +883,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'terminal:resize', async ({ id, cols, rows }) => context.terminal.resize(id, cols, rows));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
   handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
+  // Idempotent, so the Git page can offer it as an ordinary button rather than a one-shot action.
+  handle(context, 'git:init', async ({ projectId }) => gitInit(await projectPath(projectId)));
   handle(context, 'git:stage', async ({ projectId, paths, stage }) => gitStage(await projectPath(projectId), paths, stage));
   handle(context, 'git:commit', async ({ projectId, message }) => gitCommit(await projectPath(projectId), message));
   handle(context, 'git:checkout', async ({ projectId, branch }) => gitCheckout(await projectPath(projectId), branch));

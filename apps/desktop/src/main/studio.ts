@@ -220,6 +220,57 @@ export class DesktopStudio {
     return board;
   }
 
+  /**
+   * Puts an existing board in a better order, and sets the dependencies that hold that order.
+   *
+   * The board is planned once, from the stories, and a plan made before anything was built rarely survives contact
+   * with the work: hosting and managed services written early stay early, and a person opening the board is handed a
+   * cloud database as their first task. This is the second pass, for a board that already exists.
+   *
+   * Nothing is lost. The model returns ids, cards it leaves out keep their place at the end, and `replace` merges by
+   * id — so every status, run and check survives arranging.
+   */
+  async arrange(projectId: string): Promise<StudioBoard> {
+    const settings = await this.ports.settings();
+    const root = await this.ports.projectRoot(projectId);
+    const [brief, stack, board] = await Promise.all([
+      this.ports.artifacts.readText(projectId, 'brief'),
+      this.ports.artifacts.readText(projectId, 'stack'),
+      this.ports.board.read(projectId),
+    ]);
+    if (board.cards.length === 0) throw new Error('This project has no board to arrange yet.');
+    const context = await loadProjectContext(root, undefined, GENERATE_CONTEXT_CHARS).catch(() => null);
+    const plan = await this.ports.requester.structuredRequest(
+      settings.promptGuide,
+      NAMES,
+      arrangeBoardPrompt(board, brief ?? '', stack ?? '', context),
+      'kai_studio_arrange',
+      ARRANGE_SCHEMA,
+      parseArrangePlan,
+      { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
+    );
+
+    const known = new Map(board.cards.map((card) => [card.id, card]));
+    const ordered: BoardCard[] = [];
+    const placed = new Set<string>();
+    for (const entry of plan.cards) {
+      const card = known.get(entry.id);
+      // A card named twice, or one that does not exist, is skipped rather than duplicated.
+      if (!card || placed.has(card.id)) continue;
+      placed.add(card.id);
+      // A dependency on a card that is not on the board, or on itself, would make a card unworkable for good.
+      const dependsOn = entry.dependsOn.filter((id) => id !== card.id && known.has(id));
+      ordered.push({ ...card, dependsOn, updatedAt: this.ports.now() });
+    }
+    // Whatever the model did not name keeps its place, so arranging can never drop a card.
+    for (const card of board.cards) if (!placed.has(card.id)) ordered.push(card);
+
+    const catalog = await this.ports.artifacts.read(projectId);
+    const arranged = await this.ports.board.replace(projectId, ordered, catalog.artifacts);
+    await this.refreshHandoff(projectId);
+    return arranged;
+  }
+
   next(projectId: string): Promise<BoardCard | null> {
     return this.ports.board.next(projectId);
   }
@@ -400,6 +451,84 @@ export function boardPrompt(brief: string, stories: string, stack: string, conte
     context ? `Project snapshot (read-only; for naming real files and folders):\n${context}` : 'No project snapshot is available.',
   ].filter(Boolean).join('\n\n');
   return { system, user };
+}
+
+/** One card's place in an arranged board: which card, and what it must wait for. */
+export interface StudioArrangeEntry {
+  id: string;
+  dependsOn: string[];
+}
+
+const ARRANGE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['cards'],
+  properties: {
+    cards: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'dependsOn'],
+        properties: {
+          id: { type: 'string' },
+          dependsOn: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+} as const;
+
+/**
+ * The prompt for arranging a board that already exists. Unlike the board prompt, these cards carry work — runs,
+ * checks, a status — so this asks only for their order and their dependencies, and names them by id rather than
+ * asking for new cards. The order is the list; dependencies are what make the order hold when Autopilot picks work.
+ */
+export function arrangeBoardPrompt(board: StudioBoard, brief: string, stack: string, context: string | null): { system: string; user: string } {
+  const cards = board.cards
+    .map((card) => `- ${card.id} [${card.kind}${card.status === 'done' ? ', already done' : ''}] ${card.title}${card.dependsOn.length > 0 ? ` (currently waiting on: ${card.dependsOn.join(', ')})` : ''}`)
+    .join('\n');
+  const system = [
+    'You are the Project Studio inside KAI. You are given the cards of a board that already exists, and you put them in the order a person should work them.',
+    'Return only JSON matching the schema.',
+    '',
+    'Rules:',
+    '- Return every card exactly once. The order of your list is the order the work happens in.',
+    '- Put the work that makes the product run on a developer server first: the data model, then the endpoints, then the shared components, then the pages.',
+    '- Anything that only matters once the product is hosted comes LAST: deploying, containerising, a hosted or managed database, release pipelines, domains and production secrets. A managed database is never before the features that use it.',
+    '- "dependsOn" lists the ids of the cards that must be finished before it, and only those. Use it so a card cannot be reached before what it needs. An empty list is normal for the cards that come first.',
+    '- Use the ids exactly as given. Do not invent a card, do not leave one out, and do not rewrite any title.',
+  ].join('\n');
+  const user = [
+    `CARDS:\n${cards}`,
+    brief ? `BRIEF:\n${brief}` : '',
+    stack ? `STACK:\n${stack}` : '',
+    context ? `Project snapshot (read-only; for naming real files and folders):\n${context}` : '',
+  ].filter(Boolean).join('\n\n');
+  return { system, user };
+}
+
+/** Reads an arranged order. A reply that names no card is refused rather than applied as an empty board. */
+export function parseArrangePlan(content: string): { cards: StudioArrangeEntry[] } {
+  let json: unknown;
+  try {
+    json = parseJsonResponse(content, 'Project Studio');
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${replySnippet(content)}`);
+  }
+  const raw = (json as { cards?: unknown } | null)?.cards;
+  if (!Array.isArray(raw)) throw new Error(`The arrange reply had no card list. ${replySnippet(content)}`);
+  const cards: StudioArrangeEntry[] = [];
+  for (const item of raw) {
+    const entry = item as { id?: unknown; dependsOn?: unknown };
+    if (typeof entry?.id !== 'string' || !entry.id.trim()) continue;
+    const dependsOn = Array.isArray(entry.dependsOn)
+      ? entry.dependsOn.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim())
+      : [];
+    cards.push({ id: entry.id.trim(), dependsOn });
+  }
+  if (cards.length === 0) throw new Error(`The arrange reply named no cards. ${replySnippet(content)}`);
+  return { cards };
 }
 
 /** Reads the model's reply as markdown content, trimming fences it may have added anyway. */

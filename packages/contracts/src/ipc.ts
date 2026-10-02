@@ -467,6 +467,7 @@ export const ipcChannels = [
   'studio:artifacts-mark-edited',
   'studio:board-read',
   'studio:board-plan',
+  'studio:board-arrange',
   'studio:board-next',
   'studio:board-move',
   'studio:board-claim',
@@ -573,6 +574,7 @@ export const ipcChannels = [
   'terminal:resize',
   'terminal:stop',
   'git:overview',
+  'git:init',
   'git:stage',
   'git:commit',
   'git:checkout',
@@ -760,6 +762,7 @@ export const ipcInputSchemas = {
   'studio:artifacts-mark-edited': studioArtifactInputSchema,
   'studio:board-read': studioProjectInputSchema,
   'studio:board-plan': studioProjectInputSchema,
+  'studio:board-arrange': studioProjectInputSchema,
   'studio:board-next': studioProjectInputSchema,
   'studio:board-move': studioBoardMoveInputSchema,
   'studio:board-claim': studioBoardClaimInputSchema,
@@ -872,6 +875,7 @@ export const ipcInputSchemas = {
   'terminal:resize': terminalResizeInputSchema,
   'terminal:stop': terminalStopInputSchema,
   'git:overview': z.object({ projectId: z.string().min(1) }).strict(),
+  'git:init': z.object({ projectId: z.string().min(1) }).strict(),
   'git:stage': gitStageInputSchema,
   'git:commit': gitCommitInputSchema,
   'git:checkout': gitCheckoutInputSchema,
@@ -1213,6 +1217,8 @@ export interface KaiDesktopBridge {
   studioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
   /** Rebuilds the board from the artifacts and the design, keeping the work already done. Runs one model call. */
   planStudioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
+  /** Puts an existing board in a sensible build order and sets the dependencies that hold it. Runs one model call. */
+  arrangeStudioBoard(projectId: string): Promise<IpcResponse<StudioBoard>>;
   /** The next card an agent should pick up, or null when nothing is ready. */
   nextStudioCard(projectId: string): Promise<IpcResponse<BoardCard | null>>;
   /** Moves a card; `done` is refused unless the check still covers the working tree. */
@@ -1355,6 +1361,8 @@ export interface KaiDesktopBridge {
   /** Copies this brain's entries into the other one, so switching the mirror on does not leave earlier work behind. */
   mirrorBrain(request: BrainMirrorInput): Promise<IpcResponse<BrainMirrorOutcome>>;
   gitOverview(projectId: string): Promise<IpcResponse<GitOverview>>;
+  /** Starts a repository in the project folder. Safe to call when one already exists. */
+  gitInit(projectId: string): Promise<IpcResponse<GitOverview>>;
   gitStage(projectId: string, paths: string[], stage: boolean): Promise<IpcResponse<GitActionResult>>;
   gitCommit(projectId: string, message: string): Promise<IpcResponse<GitActionResult>>;
   gitCheckout(projectId: string, branch: string): Promise<IpcResponse<GitActionResult>>;

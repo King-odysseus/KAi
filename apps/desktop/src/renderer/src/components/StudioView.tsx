@@ -97,7 +97,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -808,6 +808,24 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /**
+   * Reorders an existing board by what should be built first. A plan written before anything was built tends to hand
+   * back hosting and managed services early; this is the second pass that moves them to where they belong. Every
+   * card's status, runs and checks survive, so arranging never costs work.
+   */
+  async function arrange(): Promise<void> {
+    if (!projectId) return;
+    setBusy('arrange');
+    setError(null);
+    try {
+      setBoard(unwrap(await window.kaiDesktop.arrangeStudioBoard(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** Reads the design from open-pencil: the tokens go to `.kai/spec`, and a changed node restales its card. */
   async function pullDesign(): Promise<void> {
     if (!projectId) return;
@@ -1483,6 +1501,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </button>
               <button type="button" className="secondary-button" onClick={() => void workCard()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="Runs the next ready card with one agent. The card stops at review; the board decides when it is done.">
                 {busy === 'work' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Work the next card
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void arrange()} disabled={busy !== null || !board?.cards.length} title="Puts the cards in the order they should be built, so the product runs on your machine before anything is hosted. Status, runs and checks are kept.">
+                {busy === 'arrange' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Arrange with AI
               </button>
             </div>
             {projectId && board && board.cards.length > 0 && (
