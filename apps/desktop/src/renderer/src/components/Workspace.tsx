@@ -84,6 +84,8 @@ import type {
 import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
+import { ToolCallCard } from './ToolCallCard';
+import { isPreviewableTool } from '../tool-call-preview';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
@@ -1085,7 +1087,7 @@ export function WorkspaceView({
     if (!next) trailingInlineEvents.push(event);
     else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
   }
-  const renderInlineEvent = (event: PersistedEvent): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
+  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
@@ -1232,7 +1234,7 @@ export function WorkspaceView({
           <>
             {activeConversation?.turns.map((turn) => (
               <Fragment key={turn.id}>
-                {(inlineEventsByTurn.get(turn.id) ?? []).map(renderInlineEvent)}
+                {(inlineEventsByTurn.get(turn.id) ?? []).map((event) => renderInlineEvent(event, false))}
                 <MessageTurn turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} />
               </Fragment>
             ))}
@@ -1251,7 +1253,8 @@ export function WorkspaceView({
             {running && (
               <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
             )}
-            {trailingInlineEvents.map(renderInlineEvent)}
+            {/* The run in progress shows its changes as they happen; a finished one keeps them closed. */}
+            {trailingInlineEvents.map((event) => renderInlineEvent(event, running))}
             {runDetails.length > 0 && (
               <section className="run-details" aria-label="Activity timeline">
                 <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
@@ -1261,7 +1264,7 @@ export function WorkspaceView({
                 </button>
                 {showRunDetails && (
                   <div className="run-details-list">
-                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={false} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
                   </div>
                 )}
               </section>
@@ -1683,7 +1686,7 @@ function MessageContent({ text, markdown = false }: { text: string; markdown?: b
   );
 }
 
-function RunEventCardBase({ event, projectId, reviewMode, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
+function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; defaultExpanded: boolean; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);
   const [explanation, setExplanation] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; result?: ChangeReviewResult; error?: string }>({ state: 'idle' });
   async function explainChanges(paths: string[]): Promise<void> {
@@ -1709,6 +1712,8 @@ function RunEventCardBase({ event, projectId, reviewMode, onAskKai, onReview, on
   }, [event.id, event.type, projectId]);
   if (event.type === 'text.delta') return null;
   if (event.type === 'tool.call') {
+    // An edit or a command carries the change itself, so it is worth the space in the transcript.
+    if (isPreviewableTool(event.name)) return <ToolCallCard event={event} defaultExpanded={defaultExpanded} />;
     return (
       <div className={`run-event tool ${event.status}`}>
         <span>Tool</span><strong>{event.name}</strong><small>{event.status}</small>
@@ -1802,8 +1807,9 @@ function RunEventCardBase({ event, projectId, reviewMode, onAskKai, onReview, on
 
 function isRunDetailEvent(event: PersistedEvent): boolean {
   if (event.type === 'turn.changes') return event.files.length === 0;
-  return event.type === 'tool.call'
-    || event.type === 'diff.proposal'
+  // An edit or a command renders in the conversation, so the Activity list would only repeat it.
+  if (event.type === 'tool.call') return !isPreviewableTool(event.name);
+  return event.type === 'diff.proposal'
     || event.type === 'file.edit.applied'
     || event.type === 'file.change'
     || event.type === 'memory.event'
