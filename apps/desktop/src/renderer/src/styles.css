@@ -28,6 +28,10 @@
   --red: #f27d87;
   --radius: 8px;
   --titlebar-height: 42px;
+  /* How wide the conversation is allowed to grow before it stops and centres. Past about this much, prose
+     is unpleasant to read across, so the transcript and the composer both stop here. Below it they fill
+     whatever room they have, which is what makes closing a side pane widen them by the room it freed. */
+  --reading-column: 1600px;
 }
 
 * {
@@ -6953,7 +6957,11 @@ code {
 }
 
 .message {
-  width: min(900px, 100%);
+  /*
+   * The canvas already holds every message to --reading-column, so an inner 900px cap could only ever pull
+   * the transcript narrower than the composer it sits above and leave it hanging off the left of the column.
+   */
+  width: min(var(--reading-column), 100%);
   max-width: 100%;
   margin: 0;
 }
@@ -9902,10 +9910,16 @@ button.tool-call-head:hover strong { color: var(--mint); }
 /*
  * Compact conversation: smaller type and tighter padding, a centred reading column, and a lighter composer.
  * Kept last so it wins over the earlier surface rules; themes only recolour these selectors.
+ *
+ * The column is a maximum, not a width. This used to be a flat 820px, which read as the conversation being
+ * pinned to the middle however much room it had; the composer in particular stayed put when the side panes
+ * were collapsed, because the space it freed went into the gutters instead. Both surfaces now take the room
+ * they have and only centre once they reach --reading-column, so the two always share one measure and close
+ * together — widening one by hand would leave the composer off the transcript's axis.
  */
 .conversation-canvas {
   gap: 10px;
-  padding: 16px max(16px, calc((100% - 820px) / 2));
+  padding: 16px max(16px, calc((100% - var(--reading-column)) / 2));
 }
 
 .message-role {
@@ -9944,7 +9958,7 @@ button.tool-call-head:hover strong { color: var(--mint); }
 
 .composer {
   gap: 5px;
-  padding: 4px max(14px, calc((100% - 820px) / 2)) 12px;
+  padding: 4px max(14px, calc((100% - var(--reading-column)) / 2)) 12px;
   border-top: 0;
   background: transparent;
 }
