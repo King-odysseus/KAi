@@ -121,6 +121,16 @@ export const TOUR_LESSONS: TourLesson[] = [
     ],
   },
   {
+    view: 'commands',
+    title: 'Terminal Commands',
+    summary: 'What the common terminal commands do, and when you would reach for them',
+    steps: [
+      RAIL,
+      { title: 'Written for someone who has not used a terminal', body: 'Each command says what it does, shows a real line with what that line does, and says when you would reach for it — so you can understand a command an agent ran rather than trusting it.' },
+      { title: 'Search by what you want, not by name', body: 'Type "search files" and it finds grep. You do not need to know a command exists to find it.' },
+    ],
+  },
+  {
     view: 'brain',
     title: 'C1 Brain',
     summary: 'The memory agents share',
