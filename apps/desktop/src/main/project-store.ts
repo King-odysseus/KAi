@@ -49,19 +49,24 @@ export class ProjectStore {
    * Comparison is case-insensitive and separator-insensitive because Windows treats \ZuriIAI and \zuriAI as the same
    * folder, so a textual comparison would miss the duplicate it most needs to catch.
    */
-  async upsert(project: ProjectRecord): Promise<void> {
-    await this.serialiseWrite(async () => {
+  async upsert(project: ProjectRecord): Promise<ProjectRecord> {
+    return this.serialiseWrite(async () => {
       const collection = await this.store.load();
       const key = pathKey(project.path);
       const index = collection.projects.findIndex((item) => item.id === project.id || pathKey(item.path) === key);
-      if (index >= 0) {
-        // The existing id wins: preferences, Studio links and conversations are keyed to it, and changing it would
-        // orphan every one of them.
-        collection.projects[index] = { ...project, id: collection.projects[index]!.id };
-      } else {
-        collection.projects.push(project);
-      }
+      // The existing id wins: preferences, Studio links and conversations are keyed to it, and changing it would
+      // orphan every one of them.
+      //
+      // The record that survived is returned, and callers must use it rather than the one they passed in. A caller
+      // that keeps its own id would go on to key something — a Studio plan's link, for instance — to an id this store
+      // has just discarded, which is worse than the duplicate it was trying to avoid.
+      const stored: ProjectRecord = index >= 0
+        ? { ...project, id: collection.projects[index]!.id }
+        : project;
+      if (index >= 0) collection.projects[index] = stored;
+      else collection.projects.push(stored);
       await this.store.save(collection);
+      return stored;
     });
   }
 
@@ -73,7 +78,8 @@ export class ProjectStore {
     });
   }
 
-  private serialiseWrite(operation: () => Promise<void>): Promise<void> {
+  /** Runs one write after the last, whatever it returns, so two windows cannot interleave a read and a write. */
+  private serialiseWrite<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.writeTail.then(operation);
     this.writeTail = result.then(() => undefined, () => undefined);
     return result;

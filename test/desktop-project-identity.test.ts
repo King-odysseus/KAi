@@ -59,6 +59,17 @@ describe('recognising a project you already have', () => {
     expect(await projects.list()).toHaveLength(1);
   });
 
+  it('answers with the record that survived, so a caller cannot key to a discarded id', async () => {
+    // This is the one that matters most. A Studio plan links itself to the id upsert returns; if a caller kept its own
+    // freshly-minted id instead, the plan would point at an entry the store had just thrown away.
+    const projects = await store();
+    await projects.upsert(record('project_first', 'ZuriIAI', 'C:\\work\\ZuriIAI'));
+
+    const stored = await projects.upsert(record('project_again', 'ZuriIAI', 'c:/work/zuriiai/'));
+    expect(stored.id).toBe('project_first');
+    await expect(projects.list()).resolves.toHaveLength(1);
+  });
+
   it('still adds a different folder as its own project', async () => {
     const projects = await store();
     await projects.upsert(record('project_one', 'One', 'C:\\work\\One'));

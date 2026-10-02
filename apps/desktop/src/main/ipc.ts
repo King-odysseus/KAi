@@ -2827,8 +2827,10 @@ async function chooseStudioProjectFolder(
     lastOpenedAt: now,
   };
   project.name = projectName;
-  await context.projects.upsert(project);
-  await context.interview.setLinkedProject(studioProjectId, project.id);
+  // The store may already hold this folder under another id, and it keeps the one it has. The link has to name the
+  // record that actually survives, or the plan points at an id that is not in the list.
+  const stored = await context.projects.upsert(project);
+  await context.interview.setLinkedProject(studioProjectId, stored.id);
   await broadcastSharedState(context);
   return { projectId: project.id, projectName: project.name, path: project.path };
 }
