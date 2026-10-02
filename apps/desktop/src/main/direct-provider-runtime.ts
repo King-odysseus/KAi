@@ -144,6 +144,16 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
 const ANNOUNCEMENT = /\b(let me (?!know\b)|i'll|i will|i'm going to|i am going to|now i(?:'ll| will)?|i now (?:have|know)|next,? i)\b/i;
 
 /**
+ * A reply that asks the person something is not a stall, and must not be answered with "the work is not done, do it
+ * now". The model cannot go on until they reply, so nudging it produces exactly the wrong behaviour: it works around
+ * the missing answer instead of waiting for it, and the question never gets asked properly.
+ *
+ * This is what a real run looked like: the model finished by saying "tell me the remote and I will push", which the
+ * announcement pattern read as `i will` and treated as a promise. It was a question.
+ */
+const AWAITS_THE_USER = /\?|\b(tell me|let me know|which (?:remote|one|option|branch|account)|please (?:provide|confirm|tell|share)|where should|should i|do you want|would you like)\b/i;
+
+/**
  * True when a reply that used no tools only says what the model is about to do ("Let me read the files"). Some models
  * end their turn there, which would end the run with the work not started.
  */
@@ -152,6 +162,8 @@ export function announcesUnfinishedWork(text: string): boolean {
   if (!said || said.endsWith('?')) return false;
   const block = said.split(/\n{2,}/).at(-1) ?? said;
   const closing = block.split(/(?<=[.!?])\s+/).slice(-2).join(' ');
+  // Checked before the pattern, so a question wins over an "I will" in the same breath.
+  if (AWAITS_THE_USER.test(closing)) return false;
   return ANNOUNCEMENT.test(closing);
 }
 
@@ -728,11 +740,12 @@ export class DesktopDirectProviderRuntime {
 
     const output = outputParts.join('').trim();
     const failed = !aborted && (errors.length > 0 || !output);
-    const error = aborted
-      ? `${capability.displayName} run cancelled.`
-      : failed
-        ? errors.at(-1) || `${capability.displayName} returned no output.`
-        : undefined;
+    // Stopping a run is not a failure. The person stopped it, or steered it, and the next instruction is already on
+    // its way — so it is reported as cancelled, not as an error. Reporting it as an error is what put a red
+    // "run cancelled" box in the transcript for something the reader had just deliberately done.
+    const error = failed
+      ? errors.at(-1) || `${capability.displayName} returned no output.`
+      : undefined;
 
     if (output) events.push(textEvent(request, output));
     if (inputTokens !== undefined || outputTokens !== undefined) {
@@ -765,8 +778,8 @@ export class DesktopDirectProviderRuntime {
     emit(
       lifecycleEvent(
         request,
-        failed || aborted ? 'failed' : 'completed',
-        failed || aborted ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
+        aborted ? 'cancelled' : failed ? 'failed' : 'completed',
+        aborted ? `${capability.displayName} stopped before it finished.` : failed ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
       ),
     );
 
@@ -997,11 +1010,12 @@ export class DesktopDirectProviderRuntime {
 
     const output = outputParts.join('').trim();
     const failed = !aborted && (errors.length > 0 || !output);
-    const error = aborted
-      ? `${capability.displayName} run cancelled.`
-      : failed
-        ? errors.at(-1) || `${capability.displayName} returned no output.`
-        : undefined;
+    // Stopping a run is not a failure. The person stopped it, or steered it, and the next instruction is already on
+    // its way — so it is reported as cancelled, not as an error. Reporting it as an error is what put a red
+    // "run cancelled" box in the transcript for something the reader had just deliberately done.
+    const error = failed
+      ? errors.at(-1) || `${capability.displayName} returned no output.`
+      : undefined;
 
     if (output) events.push(textEvent(request, output));
     if (inputTokens !== undefined || outputTokens !== undefined) {
@@ -1032,8 +1046,8 @@ export class DesktopDirectProviderRuntime {
     }
     emit(lifecycleEvent(
       request,
-      failed || aborted ? 'failed' : 'completed',
-      failed || aborted ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
+      aborted ? 'cancelled' : failed ? 'failed' : 'completed',
+      aborted ? `${capability.displayName} stopped before it finished.` : failed ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
     ));
 
     return {
@@ -1777,11 +1791,12 @@ function finishProviderRun(input: {
   const { request, capability, events, emit, outputParts, errors, inputTokens, outputTokens, aborted } = input;
   const output = outputParts.join('').trim();
   const failed = !aborted && (errors.length > 0 || !output);
-  const error = aborted
-    ? `${capability.displayName} run cancelled.`
-    : failed
-      ? errors.at(-1) || `${capability.displayName} returned no output.`
-      : undefined;
+  // Stopping a run is not a failure. The person stopped it, or steered it, and the next instruction is already on its
+  // way — so it is reported as cancelled, not as an error. Reporting it as an error put a red "run cancelled" box in
+  // the transcript for something the reader had just deliberately done.
+  const error = failed
+    ? errors.at(-1) || `${capability.displayName} returned no output.`
+    : undefined;
 
   if (output) events.push(textEvent(request, output));
   if (inputTokens !== undefined || outputTokens !== undefined) {
@@ -1812,8 +1827,8 @@ function finishProviderRun(input: {
   }
   emit(lifecycleEvent(
     request,
-    failed || aborted ? 'failed' : 'completed',
-    failed || aborted ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
+    aborted ? 'cancelled' : failed ? 'failed' : 'completed',
+    aborted ? `${capability.displayName} stopped before it finished.` : failed ? error || `${capability.displayName} failed.` : `${capability.displayName} completed.`,
   ));
 
   return {
@@ -2523,7 +2538,7 @@ function toolCallEvent(
 
 function lifecycleEvent(
   request: AgentRunRequest,
-  status: 'starting' | 'completed' | 'failed',
+  status: 'starting' | 'completed' | 'failed' | 'cancelled',
   detail: string,
 ): PersistedEvent {
   return {

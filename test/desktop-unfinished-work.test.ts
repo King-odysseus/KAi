@@ -17,6 +17,16 @@ describe('a reply that only announces work', () => {
     expect(announcesUnfinishedWork(`${readUp}\n\nI'll stop reading and start building. Let me pull the exact content of the files I need to write correct code (data model, env vars, deps, tokens, board task IDs), then scaffold immediately.`)).toBe(true);
   });
 
+  it('leaves a reply that asks the person something alone, even when it promises what comes next', () => {
+    // The exact ending of a real run. It reads as a promise ("I will push") and the pattern took it for one, so the
+    // model was told the work was not done and pushed to carry on — instead of the question ever being put to the
+    // person, who could not tell what it was waiting for.
+    expect(announcesUnfinishedWork('The branch is committed locally. Tell me the remote and I will push.')).toBe(false);
+    expect(announcesUnfinishedWork('I need one thing from you: which remote should I push to? All the tests pass now.')).toBe(false);
+    expect(announcesUnfinishedWork('Let me know which account to use. I will then finish the deploy.')).toBe(false);
+    expect(announcesUnfinishedWork('Do you want me to change the selected link colour too? I will wait here.')).toBe(false);
+  });
+
   it('does not read a polite sign-off as a promise', () => {
     expect(announcesUnfinishedWork('The nav link is in and the em dashes are gone. Let me know if you want anything else.')).toBe(false);
     expect(announcesUnfinishedWork('All three changes are in place. Let me know if you need more.')).toBe(false);

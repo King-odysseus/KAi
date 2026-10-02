@@ -645,7 +645,14 @@ data: {"type":"message_stop"}
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.cancel('conv-direct')).toBe(true);
 
-    await expect(pending).resolves.toMatchObject({ status: 'failed', error: 'OpenRouter run cancelled.' });
+    // A run the person stopped is not an error: it still did not complete, but nothing went wrong, and reporting it
+    // as one put a red "run cancelled" box in the transcript for something they had just done deliberately.
+    const outcome = await pending;
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'agent.lifecycle', status: 'cancelled' }),
+    ]));
   });
 
   it('executes fragmented Chat Completions tool calls and returns durable results', async () => {
@@ -998,10 +1005,13 @@ data: {"type":"message_stop"}
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.cancel('conv-direct')).toBe(true);
 
-    await expect(pending).resolves.toMatchObject({
-      status: 'failed',
-      error: 'OpenAI Responses API run cancelled.',
-    });
+    // Same as the chat path: stopped, not broken.
+    const outcome = await pending;
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'agent.lifecycle', status: 'cancelled' }),
+    ]));
   });
 });
 
