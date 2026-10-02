@@ -53,6 +53,7 @@ import { TourGuide } from './components/TourGuide';
 import { TOUR_STORAGE_KEY, parseTourProgress, type TourProgress } from './tour-lessons';
 import { clamp, unwrap, type ViewId } from './types';
 import { confirmDialog, DialogHost } from './components/AppDialog';
+import { TooltipLayer } from './components/TooltipLayer';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
 import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from './agent-memory';
 import { SetupPanel } from './components/SetupPanel';
@@ -1984,6 +1985,8 @@ export function App(): ReactNode {
         />
       )}
       <DialogHost />
+      {/* Last, so the styled tooltip sits above everything it might be describing. */}
+      <TooltipLayer />
     </div>
   );
 }
