@@ -179,6 +179,22 @@ interface QueuedPrompt {
 
 type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
 
+/**
+ * Where the chosen intent is remembered. It is a working preference rather than part of a message, so it is kept for
+ * the app rather than for one conversation.
+ */
+const INTENT_KEY = 'kai.composer.intent';
+
+/**
+ * The intent a stored value names, or Ask when it names nothing KAI still offers.
+ *
+ * Storage is outliving the code that wrote it: an intent that has since been renamed or removed would otherwise leave
+ * the composer showing a mode that no longer exists, so anything unrecognised falls back rather than being trusted.
+ */
+export function savedTaskIntent(stored: string | null): TaskIntent {
+  return TASK_INTENTS.some((intent) => intent.id === stored) ? stored as TaskIntent : 'ask';
+}
+
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'Ask', description: 'Understand an idea or get advice', placeholder: 'Ask KAI about this project or idea', starter: '' },
   { id: 'plan', label: 'Plan', description: 'Inspect first; do not change files', placeholder: 'Describe the outcome you want to plan', starter: 'Plan this work. Inspect the project first. Do not change files. Explain the approach, affected areas, risks, and how you would verify it:\n\n' },
@@ -340,7 +356,16 @@ export function WorkspaceView({
   const [compareAgent, setCompareAgent] = useState<AgentId>('claude');
   const [compareResult, setCompareResult] = useState<CompareRun | null>(null);
   const [comparing, setComparing] = useState(false);
-  const [taskIntent, setTaskIntent] = useState<TaskIntent>('ask');
+  // Remembered, because the composer is unmounted whenever the person looks at another screen. Plain component state
+  // meant picking Auto, glancing at the Studio, and coming back to Ask — the choice silently discarded, which reads as
+  // the app forgetting what you told it.
+  const [taskIntent, setTaskIntent] = useState<TaskIntent>(() => {
+    try {
+      return savedTaskIntent(window.localStorage.getItem(INTENT_KEY));
+    } catch {
+      return 'ask';
+    }
+  });
   const [advancedComposerOpen, setAdvancedComposerOpen] = useState(false);
   const [checkpointReview, setCheckpointReview] = useState<CheckpointReview | null>(null);
   const [brainDraft, setBrainDraft] = useState<string | null>(null);
@@ -750,6 +775,8 @@ export function WorkspaceView({
   function chooseTaskIntent(intent: TaskIntent): void {
     const definition = TASK_INTENTS.find((item) => item.id === intent)!;
     setTaskIntent(intent);
+    // Kept for the next time this screen mounts; a window with storage locked down keeps it in memory instead.
+    try { window.localStorage.setItem(INTENT_KEY, intent); } catch { /* memory only */ }
     if (intent === 'plan' || intent === 'review' || intent === 'learn') onSelectAutonomy('plan');
     // Leaving plan-only for Build lands on the level the person's experience setting asks for, not always on auto-edit.
     if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
