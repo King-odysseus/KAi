@@ -348,6 +348,9 @@ export function isPublishingCommand(command: string): boolean {
 
 const EDIT_TOOLS = new Set(['replace_in_file', 'create_file', 'multi_edit', 'write_file', 'move_file', 'delete_file']);
 
+/** A file a text reader has no business opening, and which the refusal should name as such. */
+const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|bmp|ico|avif|tiff?)$/i;
+
 /**
  * What a model needs to fix a call with bad arguments. The raw validation dump is meant for programmers: a model that
  * sent no arguments at all reads it as noise and repeats the same call.
@@ -469,7 +472,12 @@ export class DesktopProjectToolRuntime {
       throw new Error(`${input.path} is ${stat.size} bytes; the read limit is ${MAX_READ_BYTES} bytes.`);
     }
     const content = await fs.readFile(target, 'utf8');
-    if (looksBinary(content)) throw new Error(`${input.path} does not appear to be a UTF-8 text file.`);
+    if (looksBinary(content)) {
+      // Named for what it is: an agent handed an image used to be told only that the file was not UTF-8 text, so it
+      // tried the next thing it could think of — once, a browser — instead of saying it could not see the picture.
+      const image = IMAGE_FILE.test(input.path) ? ` It is an image (${path.extname(input.path).slice(1).toLowerCase()}), and this tool reads text: images travel with the run as attachments, not through here.` : '';
+      throw new Error(`${input.path} does not appear to be a UTF-8 text file.${image}`);
+    }
     const lines = content.split(/\r?\n/);
     const start = input.start_line ?? 1;
     const requestedEnd = input.end_line ?? Math.min(lines.length, start + MAX_READ_LINES - 1);

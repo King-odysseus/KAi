@@ -11,6 +11,16 @@ import type {
 import type { AgentExecutionResult } from './agent-runtime';
 import { readPlan } from './plan-store';
 import { takeInterjection } from './interjections';
+import {
+  anthropicImagePart,
+  attachedImages,
+  geminiImagePart,
+  hasImageParts,
+  isImageRefusal,
+  openAiImagePart,
+  withoutImageParts,
+  type AttachedImage,
+} from './image-attachments';
 import { probeLocalServer, type LocalServerProbe } from './local-provider';
 import {
   DesktopProjectToolRuntime,
@@ -46,7 +56,8 @@ export interface DirectApiHistoryTurn {
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string | null;
+  /** Text, or the parts a message with an image in it is made of. */
+  content?: string | Array<Record<string, unknown>> | null;
   tool_calls?: ChatToolCall[];
   tool_call_id?: string;
 }
@@ -109,6 +120,19 @@ function toolResultFailed(content: string | null | undefined): boolean {
  * The tool activity of a run so far, as a short plain-text list. It replaces the raw tool calls and results in the
  * history when a run continues in a fresh request, so the model keeps what it learned without the request growing.
  */
+/**
+ * The text of a message's content, whether it is plain text or the parts a message with an image is made of. Tool
+ * results and replies are always the former; this is here so the two can share one type.
+ */
+function textOfContent(content: string | Array<Record<string, unknown>> | null | undefined): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
   const results = new Map<string, ChatMessage>();
   for (const message of tail) {
@@ -117,12 +141,13 @@ export function compactChatToolHistory(tail: readonly ChatMessage[]): string {
   const entries: string[] = [];
   for (const message of tail) {
     if (message.role !== 'assistant') continue;
-    const said = message.content?.trim();
+    const said = textOfContent(message.content).trim();
     if (said) entries.push(`You said: ${clip(said, CONTINUATION_TEXT_LIMIT)}`);
     for (const call of message.tool_calls ?? []) {
       const result = results.get(call.id);
-      const status = result ? (toolResultFailed(result.content) ? 'failed' : 'ok') : 'no result';
-      entries.push(`${call.function.name} ${clip(call.function.arguments, CONTINUATION_TEXT_LIMIT)} -> ${status}${result?.content ? `: ${clip(result.content, CONTINUATION_TEXT_LIMIT)}` : ''}`);
+      const resultText = textOfContent(result?.content);
+      const status = result ? (toolResultFailed(resultText) ? 'failed' : 'ok') : 'no result';
+      entries.push(`${call.function.name} ${clip(call.function.arguments, CONTINUATION_TEXT_LIMIT)} -> ${status}${resultText ? `: ${clip(resultText, CONTINUATION_TEXT_LIMIT)}` : ''}`);
     }
   }
   const shown = entries.slice(-CONTINUATION_ENTRY_LIMIT);
@@ -1601,6 +1626,9 @@ export class DesktopDirectProviderRuntime {
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
+    // A model without vision refuses the whole request over one image. Losing a run to an attachment the person did
+    // not have to think about is worse than losing the attachment, so the images go and the request is made again.
+    let outgoing: readonly ChatMessage[] = messages;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
@@ -1610,7 +1638,7 @@ export class DesktopDirectProviderRuntime {
           headers: chatCompletionsHeaders(capability, apiKey),
           body: JSON.stringify({
             model: capability.model,
-            messages,
+            messages: outgoing,
             stream: true,
             stream_options: { include_usage: true },
             ...(includeTools
@@ -1636,6 +1664,13 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
+      // A model without vision refuses the whole request over one image. Losing a run to an attachment the person did
+      // not have to think about would be worse than losing the attachment, so it goes and the request is made again.
+      if (isImageRefusal(response.status, detail) && hasImageParts(outgoing)) {
+        outgoing = withoutImageParts(outgoing);
+        emit(lifecycleEvent(request, 'starting', `${capability.displayName} would not take the attached image, so this request was sent without it; the file is still named in the prompt.`));
+        continue;
+      }
       if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(
@@ -1664,6 +1699,9 @@ export class DesktopDirectProviderRuntime {
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
+    // Mutable for the same reason as the chat sender's: an image a provider refuses can be dropped and the request
+    // made again, rather than the run ending over an attachment.
+    let outgoing: readonly AnthropicMessage[] = messages;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
@@ -1681,7 +1719,7 @@ export class DesktopDirectProviderRuntime {
             model: capability.model,
             max_tokens: maxTokens,
             stream: true,
-            ...withAnthropicPromptCaching(capability.baseUrl, { messages, system: system?.trim(), tools }),
+            ...withAnthropicPromptCaching(capability.baseUrl, { messages: outgoing, system: system?.trim(), tools }),
             ...(tools.length > 0 ? { tool_choice: { type: 'auto' } } : {}),
           }),
           signal,
@@ -1703,6 +1741,13 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
+      // A model without vision refuses the whole request over one image. Losing a run to an attachment the person did
+      // not have to think about would be worse than losing the attachment, so it goes and the request is made again.
+      if (isImageRefusal(response.status, detail) && hasImageParts(outgoing)) {
+        outgoing = withoutImageParts(outgoing);
+        emit(lifecycleEvent(request, 'starting', `${capability.displayName} would not take the attached image, so this request was sent without it; the file is still named in the prompt.`));
+        continue;
+      }
       if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(
@@ -2010,14 +2055,44 @@ function rememberGeminiToolCall(
   toolCalls.set(key, existing);
 }
 
-function anthropicMessages(
+export function anthropicMessages(
   request: AgentRunRequest,
   history?: readonly DirectApiHistoryTurn[],
 ): AnthropicMessage[] {
   const turns = history?.length ? history : [{ role: 'user' as const, text: request.prompt }];
-  return turns
+  const messages = turns
     .filter((turn) => turn.text.trim())
     .map((turn) => ({ role: turn.role, content: turn.text }));
+  return withImages(messages, request, anthropicImagePart);
+}
+
+/**
+ * The images a run was given, put on the turn being sent rather than the ones already there.
+ *
+ * They belong with the request they were attached to: the last user turn is the one the person has just written, and
+ * the chips are the composer's — it clears them when the turn is sent, so an older turn never has any.
+ */
+function withImages<T extends { role: string; content?: string | Array<Record<string, unknown>> | null }>(
+  messages: T[],
+  request: AgentRunRequest,
+  part: (image: AttachedImage) => Record<string, unknown>,
+): T[] {
+  const images = attachedImages(request.contextChips);
+  if (images.length === 0) return messages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role !== 'user') continue;
+    const parts = images.map(part);
+    messages[index] = {
+      ...message,
+      content: [
+        ...(typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content ?? []),
+        ...parts,
+      ],
+    } as T;
+    break;
+  }
+  return messages;
 }
 
 function geminiContents(
@@ -2025,12 +2100,21 @@ function geminiContents(
   history?: readonly DirectApiHistoryTurn[],
 ): GeminiContent[] {
   const turns = history?.length ? history : [{ role: 'user' as const, text: request.prompt }];
-  return turns
+  const contents: GeminiContent[] = turns
     .filter((turn) => turn.text.trim())
-    .map((turn) => ({
+    .map((turn): GeminiContent => ({
       role: turn.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: turn.text }],
     }));
+  const images = attachedImages(request.contextChips);
+  if (images.length === 0) return contents;
+  for (let index = contents.length - 1; index >= 0; index -= 1) {
+    const content = contents[index]!;
+    if (content.role !== 'user') continue;
+    content.parts.push(...images.map(geminiImagePart));
+    break;
+  }
+  return contents;
 }
 
 /**
@@ -2432,7 +2516,7 @@ function responsesUrl(baseUrl: string): string {
   return /\/responses$/i.test(trimmed) ? trimmed : `${trimmed}/responses`;
 }
 
-function chatMessages(
+export function chatMessages(
   request: AgentRunRequest,
   contextText?: string,
   history?: readonly DirectApiHistoryTurn[],
@@ -2443,7 +2527,7 @@ function chatMessages(
   for (const turn of turns) {
     if (turn.text.trim()) messages.push({ role: turn.role, content: turn.text });
   }
-  return messages;
+  return withImages(messages, request, openAiImagePart);
 }
 
 function chatCompletionsUrl(baseUrl: string): string {

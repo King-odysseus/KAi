@@ -44,7 +44,8 @@ function trimSlots(slots: readonly ResultSlot[]): number {
 
 interface ChatLike {
   role: string;
-  content?: string | null;
+  /** Text, or the parts a message with an image is made of — a tool result is always the former. */
+  content?: string | Array<Record<string, unknown>> | null;
 }
 
 /** Chat Completions: tool results are messages with role "tool". */
