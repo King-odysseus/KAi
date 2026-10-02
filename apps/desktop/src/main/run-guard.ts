@@ -1,5 +1,8 @@
-/** Default per-run spend ceiling for direct API runs, in USD. Zero turns the check off. */
-export const DEFAULT_MAX_RUN_COST_USD = 5;
+/**
+ * Default per-run spend ceiling for direct API runs, in USD. Zero turns the check off, which is the default: a run is
+ * not cut off by a number unless the person set one under Usage.
+ */
+export const DEFAULT_MAX_RUN_COST_USD = 0;
 
 const REPEAT_WARN_AT = 3;
 const REPEAT_STOP_AT = 5;
@@ -28,11 +31,17 @@ export function maxRunCostFromEnvironment(env: NodeJS.ProcessEnv = process.env):
 export class RunGuard {
   private lastKey = '';
   private streak = 0;
+  private wrapUp = false;
 
   constructor(private maxCostUsd: number = DEFAULT_MAX_RUN_COST_USD) {}
 
   setMaxCost(maxCostUsd: number): void {
     this.maxCostUsd = maxCostUsd;
+  }
+
+  /** The limit in force, so a caller can ask about it instead of only being refused by it. Zero means no limit. */
+  get maxCostLimitUsd(): number {
+    return this.maxCostUsd;
   }
 
   /** Throws once the run's estimated cost passes the ceiling. An unpriced model (null) cannot be checked. */
@@ -60,6 +69,24 @@ export class RunGuard {
 
   get repeatCount(): number {
     return this.streak;
+  }
+
+  /** The count is set aside once the person has been asked, so it takes five more before they are asked again. */
+  resetRepeat(): void {
+    this.lastKey = '';
+    this.streak = 0;
+  }
+
+  /**
+   * Set when a guard has been told to stop, so the loops stop offering tools and ask the model to sum up what it did.
+   * A run that ends this way keeps its work; one that ends with a thrown error throws it away.
+   */
+  get wrapUpRequested(): boolean {
+    return this.wrapUp;
+  }
+
+  requestWrapUp(): void {
+    this.wrapUp = true;
   }
 }
 

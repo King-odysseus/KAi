@@ -161,7 +161,8 @@ describe('usage limits', () => {
 describe('usage budget settings contract', () => {
   it('fills budget defaults so settings saved before this feature still load', () => {
     const defaults = createDefaultSettings();
-    expect(defaults.usageBudget).toEqual({ mode: 'warn', perRunUsd: 5, perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {} });
+    // No per-run cap unless the person sets one: a run is not interrupted by a number they did not choose.
+    expect(defaults.usageBudget).toEqual({ mode: 'warn', perRunUsd: 0, perConversationUsd: 0, dailyUsd: 0, monthlyUsd: 0, providerDailyUsd: {} });
     const { usageBudget: _omitted, ...legacy } = defaults;
     expect(appSettingsV1Schema.parse(legacy).usageBudget.mode).toBe('warn');
   });

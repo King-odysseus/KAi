@@ -19,7 +19,7 @@ import {
 } from './project-tools';
 import { estimateCostUsd } from './usage-budget';
 import { RateLimitError, RequestPacer } from './rate-limit';
-import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, RunLimitError } from './run-guard';
+import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING } from './run-guard';
 
 function costFields(
   provider: string,
@@ -57,19 +57,28 @@ interface ChatToolCall {
     arguments: string;
   };
 }
-const MAX_PROVIDER_ROUNDS = 101;
-const MAX_TOOL_ROUNDS = 100;
+/**
+ * The tool-round ceiling for every provider. A real task is nowhere near this; a run that reaches it is either enormous
+ * or stuck, and the cost cap and repeat detection stop a stuck one long before. It is deliberately not a small round
+ * number: a limit of a hundred cut productive runs off mid-task, which is not something the CLIs do.
+ */
+const MAX_TOTAL_TOOL_ROUNDS = 1_000;
+/** Provider iterations allowed beyond the tool rounds, for nudges and truncated continuations. */
+const PROVIDER_ROUND_HEADROOM = 40;
 const DEEPSEEK_MAX_TOOL_ROUNDS = 7;
 /**
- * DeepSeek refuses more than DEEPSEEK_MAX_TOOL_ROUNDS tool rounds in one request. Rather than cutting the task short and
- * telling the user to finish it, a run continues in a fresh request whose history folds the earlier tool activity into a
- * short summary. These bound the whole run: the cost cap and repeat detection still apply on top.
+ * DeepSeek's chat endpoint refuses more than DEEPSEEK_MAX_TOOL_ROUNDS tool rounds in one request. Rather than cutting the
+ * task short and telling the user to finish it, a run continues in a fresh request whose history folds the earlier tool
+ * activity into a short summary. These bound the whole run: the cost cap and repeat detection still apply on top.
  */
 const DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS = 300;
-const DEEPSEEK_MAX_PROVIDER_ROUNDS = 340;
 const CONTINUATION_ENTRY_LIMIT = 40;
 const CONTINUATION_TEXT_LIMIT = 200;
-const DEEPSEEK_WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
+/**
+ * Said at the ceiling instead of failing the run, so the work done is reported rather than thrown away with an error.
+ * The user sees what was finished and what is left, which is what they would ask for anyway.
+ */
+const WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
 const MAX_APPROVAL_DETAIL = 4_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
@@ -149,13 +158,14 @@ export function announcesUnfinishedWork(text: string): boolean {
 const UNFINISHED_WORK_NUDGE = 'Your turn ended with no tool call, so the work is not done. Call the tools yourself now — do not restate the plan, do not describe what you are about to do, and do not ask for permission. If the task is genuinely complete, say what you changed and stop.';
 
 /**
- * How many stalls in a row to nudge through before the run is ended. The budget resets on every real tool round, so
- * this bounds a model that keeps promising without acting, not the whole run. Claude Code ends a turn after eight
- * consecutive Stop-hook continuations; matching that keeps a stubborn model from looping forever.
+ * How many stalls in a row to nudge through before the run is interrupted. The budget resets on every real tool round,
+ * so this bounds a model that keeps promising without acting, not the whole run. It is generous because a reasoning
+ * model writing out a long plan can easily promise work several times before it acts; and when it is reached the
+ * person is asked rather than the run being failed.
  */
-const MAX_UNFINISHED_NUDGES = 8;
+const MAX_UNFINISHED_NUDGES = 20;
 
-/** Ends a run whose model kept describing work instead of doing it, so the stop is explained rather than silent. */
+/** Explains a run that ended because the model kept describing work instead of doing it, rather than stopping silently. */
 const UNFINISHED_STALL = 'The model kept describing what it would do instead of calling its tools, so the run ended with the task unfinished. Send "continue" to carry on, or switch to a model that uses tools more readily.';
 
 /**
@@ -242,7 +252,8 @@ interface GeminiContent {
 
 export interface DirectApiApprovalRequest {
   requestId: string;
-  tool: string;
+  /** The tool being approved. Absent for a question about the run itself, such as one of its limits. */
+  tool?: string;
   title: string;
   detail: string;
   risk: 'low' | 'medium' | 'high';
@@ -278,6 +289,11 @@ export interface DirectProviderRuntimeOptions {
   pacer?: RequestPacer;
   /** Stop a run whose estimated cost passes this many USD. Zero disables it; defaults to KAI_MAX_RUN_COST_USD, then the Usage setting. */
   maxRunCostUsd?: number;
+  /**
+   * Tool rounds allowed in one run before it is asked to sum up. Defaults to MAX_TOTAL_TOOL_ROUNDS, which no real task
+   * reaches; a test sets it low to exercise the wrap-up without driving a thousand rounds.
+   */
+  maxToolRounds?: number;
 }
 
 export class DesktopDirectProviderRuntime {
@@ -312,6 +328,29 @@ export class DesktopDirectProviderRuntime {
   /** Autopilot turns pacing on for the length of a job and off again after. */
   setPacer(pacer: RequestPacer | undefined): void {
     this.pacer = pacer;
+  }
+
+  /**
+   * Checks the run's spend, and asks before a limit the person set ends their run. Either answer lifts the limit for
+   * the rest of this run, so the question is asked once rather than every round, and the wrap-up request - which also
+   * costs money - is not blocked by the very limit that asked for it.
+   */
+  private async checkRunSpend(
+    toolRuntime: DesktopProjectToolRuntime,
+    capability: DirectApiCapability,
+    inputTokens: number | undefined,
+    outputTokens: number | undefined,
+    approvals: DirectApiApprovalPort | undefined,
+  ): Promise<void> {
+    if (inputTokens === undefined && outputTokens === undefined) return;
+    const limitUsd = toolRuntime.guard.maxCostLimitUsd;
+    if (limitUsd <= 0) return;
+    const costUsd = costFields(capability.provider, capability.model, inputTokens, outputTokens).amountUsd;
+    // An unpriced model cannot be checked, so it never asks.
+    if (costUsd === undefined || costUsd < limitUsd) return;
+    toolRuntime.guard.setMaxCost(0);
+    const answer = await askToContinue(approvals, SPEND_QUESTION(costUsd, limitUsd));
+    if (answer === 'wrap-up') toolRuntime.guard.requestWrapUp();
   }
 
   private async newToolRuntime(projectRoot: string, customPermissions?: Partial<Record<PermissionKey, boolean>>): Promise<DesktopProjectToolRuntime> {
@@ -543,14 +582,21 @@ export class DesktopDirectProviderRuntime {
     let aborted = false;
     let toolRounds = 0;
     let nudges = 0;
+    let forceFinalAnswer = false;
+    const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
     let providerInput: unknown = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
       : request.prompt;
 
     try {
-      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+      for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
-        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+        if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
+          forceFinalAnswer = true;
+          providerInput = WRAP_UP_MESSAGE;
+          emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
+        }
         const pendingToolCalls = new Map<string, PendingToolCall>();
         let roundEmittedText = false;
         let roundText = '';
@@ -565,6 +611,7 @@ export class DesktopDirectProviderRuntime {
           previousResponseId,
           controller.signal,
           emit,
+          !forceFinalAnswer,
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -635,17 +682,29 @@ export class DesktopDirectProviderRuntime {
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
           if (announcesUnfinishedWork(roundText)) {
+            // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
+            if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
+              nudges = 0;
+            }
             if (nudges < MAX_UNFINISHED_NUDGES) {
               nudges += 1;
               providerInput = UNFINISHED_WORK_NUDGE;
               continue;
             }
-            errors.push(UNFINISHED_STALL);
+            // Ended, not failed: the words the model did write are kept, and this says why it stopped.
+            emit(lifecycleEvent(request, 'starting', UNFINISHED_STALL));
           }
           break;
         }
-        if (toolRounds >= MAX_TOOL_ROUNDS) {
-          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+        if (toolRounds >= toolRoundLimit) {
+          // Not a failure: the run is enormous or stuck, and the person wants what was done, not an error that throws
+          // it away. Ask for a summary with the tools taken away, so the answer is words rather than more calls.
+          if (!forceFinalAnswer) {
+            forceFinalAnswer = true;
+            providerInput = WRAP_UP_MESSAGE;
+            emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached this run's tool limit; asking it to sum up what it has done.`));
+            continue;
+          }
           break;
         }
         toolRounds += 1;
@@ -759,8 +818,8 @@ export class DesktopDirectProviderRuntime {
     // after each block the history is compacted and the run carries on in a fresh request.
     const deepSeek = isDeepSeekCapability(capability);
     const segmentLimit = deepSeek ? DEEPSEEK_MAX_TOOL_ROUNDS : Number.POSITIVE_INFINITY;
-    const totalToolRoundLimit = deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
-    const providerRoundLimit = deepSeek ? DEEPSEEK_MAX_PROVIDER_ROUNDS : MAX_PROVIDER_ROUNDS;
+    const totalToolRoundLimit = this.options.maxToolRounds ?? (deepSeek ? DEEPSEEK_MAX_TOTAL_TOOL_ROUNDS : MAX_TOTAL_TOOL_ROUNDS);
+    const providerRoundLimit = totalToolRoundLimit + PROVIDER_ROUND_HEADROOM;
     let segmentRounds = 0;
     let segmentStart = messages.length;
     let forceFinalAnswer = false;
@@ -771,7 +830,12 @@ export class DesktopDirectProviderRuntime {
     try {
       for (let providerRound = 0; providerRound < providerRoundLimit; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
-        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+        if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
+          forceFinalAnswer = true;
+          messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
+          emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
+        }
         const trimmedResults = trimChatToolResults(messages);
         if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<number, PendingChatToolCall>();
@@ -854,18 +918,30 @@ export class DesktopDirectProviderRuntime {
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
           if (!forceFinalAnswer && announcesUnfinishedWork(roundText)) {
+            // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
+            if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
+              nudges = 0;
+            }
             if (nudges < MAX_UNFINISHED_NUDGES) {
               nudges += 1;
               messages.push({ role: 'assistant', content: roundText });
               messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
               continue;
             }
-            errors.push(UNFINISHED_STALL);
+            // Ended, not failed: the words the model did write are kept, and this says why it stopped.
+            emit(lifecycleEvent(request, 'starting', UNFINISHED_STALL));
           }
           break;
         }
         if (toolRounds >= totalToolRoundLimit) {
-          errors.push(`The provider exceeded the ${totalToolRoundLimit}-round tool limit.`);
+          // Not a failure: the run is enormous or stuck, and the person wants what was done, not an error that throws
+          // it away. Ask for a summary with the tools taken away, so the answer is words rather than more calls.
+          if (!forceFinalAnswer) {
+            forceFinalAnswer = true;
+            messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
+            emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached this run's tool limit; asking it to sum up what it has done.`));
+            continue;
+          }
           break;
         }
         toolRounds += 1;
@@ -904,7 +980,7 @@ export class DesktopDirectProviderRuntime {
             emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached its per-request tool limit; continuing in a fresh request.`));
           } else {
             forceFinalAnswer = true;
-            messages.push({ role: 'user', content: DEEPSEEK_WRAP_UP_MESSAGE });
+            messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
           }
         }
       }
@@ -1007,11 +1083,18 @@ export class DesktopDirectProviderRuntime {
     let nudges = 0;
     let continuations = 0;
     let reasoningOnly = false;
+    let forceFinalAnswer = false;
+    const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
 
     try {
-      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+      for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
-        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+        if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
+          forceFinalAnswer = true;
+          messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
+          emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
+        }
         const trimmedResults = trimAnthropicToolResults(messages);
         if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<string, PendingToolCall>();
@@ -1029,6 +1112,7 @@ export class DesktopDirectProviderRuntime {
           controller.signal,
           emit,
           maxTokens,
+          !forceFinalAnswer,
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -1118,18 +1202,30 @@ export class DesktopDirectProviderRuntime {
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
           if (announcesUnfinishedWork(roundText)) {
+            // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
+            if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
+              nudges = 0;
+            }
             if (nudges < MAX_UNFINISHED_NUDGES) {
               nudges += 1;
               messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
               messages.push({ role: 'user', content: UNFINISHED_WORK_NUDGE });
               continue;
             }
-            errors.push(UNFINISHED_STALL);
+            // Ended, not failed: the words the model did write are kept, and this says why it stopped.
+            emit(lifecycleEvent(request, 'starting', UNFINISHED_STALL));
           }
           break;
         }
-        if (toolRounds >= MAX_TOOL_ROUNDS) {
-          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+        if (toolRounds >= toolRoundLimit) {
+          // Not a failure: the run is enormous or stuck, and the person wants what was done, not an error that throws
+          // it away. Ask for a summary with the tools taken away, so the answer is words rather than more calls.
+          if (!forceFinalAnswer) {
+            forceFinalAnswer = true;
+            messages.push({ role: 'user', content: WRAP_UP_MESSAGE });
+            emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached this run's tool limit; asking it to sum up what it has done.`));
+            continue;
+          }
           break;
         }
         toolRounds += 1;
@@ -1215,11 +1311,18 @@ export class DesktopDirectProviderRuntime {
     let aborted = false;
     let toolRounds = 0;
     let nudges = 0;
+    let forceFinalAnswer = false;
+    const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
 
     try {
-      for (let providerRound = 0; providerRound < MAX_PROVIDER_ROUNDS; providerRound += 1) {
+      for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
-        assertRunSpend(toolRuntime, capability, inputTokens, outputTokens);
+        await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+        if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
+          forceFinalAnswer = true;
+          contents.push({ role: 'user', parts: [{ text: WRAP_UP_MESSAGE }] });
+          emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
+        }
         const trimmedResults = trimGeminiToolResults(contents);
         if (trimmedResults > 0) emit(lifecycleEvent(request, 'starting', `Trimmed ${trimmedResults} earlier tool results to keep the request small.`));
         const pendingToolCalls = new Map<string, PendingToolCall>();
@@ -1234,6 +1337,7 @@ export class DesktopDirectProviderRuntime {
           externalToolDefinitions,
           controller.signal,
           emit,
+          !forceFinalAnswer,
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -1280,18 +1384,30 @@ export class DesktopDirectProviderRuntime {
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
           if (announcesUnfinishedWork(roundText)) {
+            // Out of nudges: ask rather than end the run. Continue buys another stretch of the same nudging.
+            if (nudges >= MAX_UNFINISHED_NUDGES && (await askToContinue(approvals, TALK_ONLY_QUESTION)) === 'continue') {
+              nudges = 0;
+            }
             if (nudges < MAX_UNFINISHED_NUDGES) {
               nudges += 1;
               contents.push({ role: 'model', parts: [{ text: roundText }] });
               contents.push({ role: 'user', parts: [{ text: UNFINISHED_WORK_NUDGE }] });
               continue;
             }
-            errors.push(UNFINISHED_STALL);
+            // Ended, not failed: the words the model did write are kept, and this says why it stopped.
+            emit(lifecycleEvent(request, 'starting', UNFINISHED_STALL));
           }
           break;
         }
-        if (toolRounds >= MAX_TOOL_ROUNDS) {
-          errors.push(`The provider exceeded the ${MAX_TOOL_ROUNDS}-round tool limit.`);
+        if (toolRounds >= toolRoundLimit) {
+          // Not a failure: the run is enormous or stuck, and the person wants what was done, not an error that throws
+          // it away. Ask for a summary with the tools taken away, so the answer is words rather than more calls.
+          if (!forceFinalAnswer) {
+            forceFinalAnswer = true;
+            contents.push({ role: 'user', parts: [{ text: WRAP_UP_MESSAGE }] });
+            emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached this run's tool limit; asking it to sum up what it has done.`));
+            continue;
+          }
           break;
         }
         toolRounds += 1;
@@ -1421,6 +1537,8 @@ export class DesktopDirectProviderRuntime {
     signal: AbortSignal,
     emit: (event: PersistedEvent) => void,
     maxTokens: number = OUTPUT_TOKEN_BUDGET,
+    // Off only for the last round of a run that has hit its tool ceiling, so the model answers instead of calling more.
+    toolsEnabled = true,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1428,7 +1546,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        const tools = anthropicToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
+        const tools = toolsEnabled ? anthropicToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]) : [];
         response = await this.pacedFetch(anthropicMessagesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
@@ -1485,6 +1603,8 @@ export class DesktopDirectProviderRuntime {
     externalToolDefinitions: readonly unknown[],
     signal: AbortSignal,
     emit: (event: PersistedEvent) => void,
+    // Off only for the last round of a run that has hit its tool ceiling, so the model answers instead of calling more.
+    toolsEnabled = true,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1492,7 +1612,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        const functionDeclarations = geminiToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]);
+        const functionDeclarations = toolsEnabled ? geminiToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]) : [];
         response = await this.pacedFetch(geminiGenerateUrl(capability.baseUrl, capability.model), {
           method: 'POST',
           headers: {
@@ -1549,6 +1669,8 @@ export class DesktopDirectProviderRuntime {
     previousResponseId: string | undefined,
     signal: AbortSignal,
     emit: (event: PersistedEvent) => void,
+    // Off only for the last round of a run that has hit its tool ceiling, so the model answers instead of calling more.
+    toolsEnabled = true,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1567,8 +1689,7 @@ export class DesktopDirectProviderRuntime {
             model: capability.model,
             input: providerInput,
             stream: true,
-            tools: [...projectToolDefinitions, ...externalToolDefinitions],
-            tool_choice: 'auto',
+            ...(toolsEnabled ? { tools: [...projectToolDefinitions, ...externalToolDefinitions], tool_choice: 'auto' } : {}),
             ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           }),
           signal,
@@ -1604,15 +1725,43 @@ export class DesktopDirectProviderRuntime {
   }
 }
 
-function assertRunSpend(
-  toolRuntime: DesktopProjectToolRuntime,
-  capability: DirectApiCapability,
-  inputTokens: number | undefined,
-  outputTokens: number | undefined,
-): void {
-  if (inputTokens === undefined && outputTokens === undefined) return;
-  toolRuntime.guard.assertSpend(costFields(capability.provider, capability.model, inputTokens, outputTokens).amountUsd);
+/**
+ * Asks the person before a guard ends their run, through the approval prompt the composer already shows. With nobody
+ * to ask - a scheduled or team run, a test - the answer is to finish rather than to wait forever on a question that
+ * has no one behind it.
+ */
+async function askToContinue(
+  approvals: DirectApiApprovalPort | undefined,
+  question: { title: string; detail: string; risk: 'low' | 'medium' | 'high' },
+): Promise<'continue' | 'wrap-up'> {
+  if (!approvals) return 'wrap-up';
+  try {
+    const approved = await approvals.request({ requestId: `limit_${randomUUID()}`, ...question });
+    return approved ? 'continue' : 'wrap-up';
+  } catch {
+    // A prompt that cannot be delivered must not strand the run; ending it is the safe reading.
+    return 'wrap-up';
+  }
 }
+
+/** The model has promised work this many times in a row without calling a tool: enough rope before it is interrupted. */
+const TALK_ONLY_QUESTION = {
+  title: 'This run keeps describing work without doing any',
+  detail: 'The model has said what it is about to do many times in a row without calling a tool. Continue gives it another stretch; Finish stops here and keeps what it has written.',
+  risk: 'low' as const,
+};
+
+const SPEND_QUESTION = (costUsd: number, limitUsd: number) => ({
+  title: `This run has spent about $${costUsd.toFixed(2)}, past its $${limitUsd.toFixed(2)} limit`,
+  detail: 'Continue lifts the per-run limit for the rest of this run. Finish stops here and asks the model to sum up what it has done.',
+  risk: 'medium' as const,
+});
+
+const REPEAT_QUESTION = (message: string) => ({
+  title: 'The agent is repeating itself',
+  detail: `${message} Continue lets it carry on; Finish stops here and asks it to sum up.`,
+  risk: 'medium' as const,
+});
 
 function finishProviderRun(input: {
   request: AgentRunRequest;
@@ -1934,8 +2083,13 @@ async function executeToolCalls(
     );
     const repeat = toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
     if (repeat === 'stop') {
-      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: REPEAT_STOP_MESSAGE }));
-      throw new RunLimitError(REPEAT_STOP_MESSAGE);
+      // Stuck, not broken: ask rather than throw the run away. Continue sets the count aside, so it takes five more
+      // identical calls before the person is bothered again; Finish leaves the run to sum itself up.
+      const answer = await askToContinue(approvals, REPEAT_QUESTION(REPEAT_STOP_MESSAGE));
+      if (answer === 'wrap-up') toolRuntime.guard.requestWrapUp();
+      else toolRuntime.guard.resetRepeat();
+      const notice = answer === 'wrap-up' ? REPEAT_STOP_MESSAGE : `${REPEAT_STOP_MESSAGE} Carrying on because you asked.`;
+      execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: notice };
     }
     if (repeat === 'warn') {
       execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: REPEAT_WARNING };

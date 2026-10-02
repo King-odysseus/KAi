@@ -270,6 +270,246 @@ data: [DONE]
     expect(String(summary?.content)).toContain('Run any remaining commands and edits yourself');
   });
 
+  it('keeps an Anthropic-shaped run going well past 100 tool rounds instead of stopping it', async () => {
+    // The shape of DeepSeek's Anthropic-style endpoint, which is the path an official DeepSeek run actually takes.
+    // It used to end at a flat 100 rounds with "The provider exceeded the 100-round tool limit." mid-task.
+    const requests: Array<{ tools?: unknown[] }> = [];
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-anthropic-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { tools?: unknown[] };
+        requests.push(body);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n');
+        // A hundred and twenty rounds: past the old ceiling, and every call differs so repeat detection leaves it alone.
+        if (requests.length <= 120) {
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${requests.length}`, name: 'read_file', input: { path: 'notes.txt', start_line: requests.length } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        response.end(`event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"All done."}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run({ ...runRequest(), autonomy: 'full' }, projectRoot);
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('All done.');
+    expect(result.error).toBeUndefined();
+    expect(requests.length).toBeGreaterThan(120);
+  }, 60_000);
+
+  it('asks a run at its tool ceiling to sum up, with the tools taken away, instead of failing it', async () => {
+    const requests: Array<{ tools?: unknown[]; messages: Array<Record<string, unknown>> }> = [];
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-ceiling-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { tools?: unknown[]; messages: Array<Record<string, unknown>> };
+        requests.push(body);
+        const wrappingUp = body.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n');
+        if (wrappingUp) {
+          response.end(`event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I changed notes.txt; the parser is still unwritten."}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${requests.length}`, name: 'read_file', input: { path: 'notes.txt', start_line: requests.length } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+      undefined,
+      { maxToolRounds: 3 },
+    );
+
+    const result = await runtime.run({ ...runRequest(), autonomy: 'full' }, projectRoot);
+
+    // The work is reported rather than thrown away with an error, and the run still ends cleanly.
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('the parser is still unwritten');
+    expect(result.error).toBeUndefined();
+    // The last request has no tools at all, so the model answers in words rather than calling again.
+    expect(requests.length).toBeGreaterThan(3);
+    expect(requests.at(-1)?.tools ?? []).toHaveLength(0);
+  });
+
+  it('asks before a per-run spend limit ends the run, once, and carries on when told to', async () => {
+    const questions: Array<{ title: string; detail: string }> = [];
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-spend-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { messages: Array<Record<string, unknown>> };
+        const wrappingUp = body.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1200,"output_tokens":900}}}\n\n');
+        if (wrappingUp || body.messages.length > 6) {
+          response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"All done."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+          return;
+        }
+        response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${body.messages.length}`, name: 'read_file', input: { path: 'notes.txt', start_line: body.messages.length } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+      undefined,
+      // A limit small enough that the first usage report passes it, so the question is reached quickly.
+      { maxRunCostUsd: 0.000001 },
+    );
+
+    const result = await runtime.run(
+      { ...runRequest(), autonomy: 'full' },
+      projectRoot,
+      undefined,
+      undefined,
+      { request: async (approval) => { questions.push(approval); return true; } },
+    );
+
+    expect(result.status).toBe('completed');
+    expect(result.error).toBeUndefined();
+    expect(questions).toHaveLength(1);
+    expect(questions[0]!.title).toContain('limit');
+    expect(questions[0]!.detail).toContain('Continue');
+  }, 30_000);
+
+  it('asks before a repeated call ends the run, and carries on when told to', async () => {
+    const questions: Array<{ title: string }> = [];
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-repeat-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
+    let calls = 0;
+    const server = http.createServer((request, response) => {
+      request.setEncoding('utf8');
+      request.on('data', () => undefined);
+      request.on('end', () => {
+        calls += 1;
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":5}}}\n\n');
+        // The same call with the same arguments and the same result, five times over.
+        if (calls <= 6) {
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${calls}`, name: 'read_file', input: { path: 'notes.txt' } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"All done."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run(
+      { ...runRequest(), autonomy: 'full' },
+      projectRoot,
+      undefined,
+      undefined,
+      { request: async (approval) => { questions.push(approval); return true; } },
+    );
+
+    expect(questions).toHaveLength(1);
+    expect(questions[0]!.title).toContain('repeating');
+    // Told to carry on, so the run does rather than ending at the fifth identical call.
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('All done.');
+  }, 30_000);
+
+  it('wraps a limited run up with a summary when there is nobody to ask', async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), 'kai-headless-'));
+    temporaryDirectories.push(projectRoot);
+    await writeFile(path.join(projectRoot, 'notes.txt'), 'hello' + String.fromCharCode(10));
+    let calls = 0;
+    let sawWrapUp = false;
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        calls += 1;
+        const body = JSON.parse(raw) as { messages: Array<Record<string, unknown>> };
+        const wrappingUp = body.messages.some((message) => typeof message.content === 'string' && message.content.includes('Stop calling tools'));
+        if (wrappingUp) sawWrapUp = true;
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":5}}}\n\n');
+        if (calls <= 5) {
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${calls}`, name: 'read_file', input: { path: 'notes.txt' } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I read notes.txt and did not get further."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    // No approval port: a scheduled or team run, where nobody can answer a question.
+    const result = await runtime.run({ ...runRequest(), autonomy: 'full' }, projectRoot);
+
+    expect(sawWrapUp).toBe(true);
+    expect(result.status).toBe('completed');
+    expect(result.error).toBeUndefined();
+    expect(result.output).toContain('did not get further');
+  }, 30_000);
+
   it('streams native Anthropic Messages with the Anthropic credential headers', async () => {
     const requests: Array<{ path?: string; apiKey?: string; version?: string; body: Record<string, unknown> }> = [];
     const server = http.createServer((request, response) => {
