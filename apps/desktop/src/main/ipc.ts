@@ -386,7 +386,22 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'brain:git-sync', async ({ action }) => syncBrainGit(await sharedBrainPath(context), action));
   handle(context, 'brain:mirror-now', async ({ dryRun }) => mirrorBrainNow(context, dryRun));
   handle(context, 'cognitive1:tool', async (request) => context.cognitive1.tool(request));
-  handle(context, 'cognitive1:operation', async (request) => context.cognitive1.operation(request));
+  handle(context, 'cognitive1:operation', async (request) => {
+    try {
+      return await context.cognitive1.operation(request);
+    } catch (error) {
+      if (!looksUnreachable(error)) throw error;
+      // A daemon that stops answering without exiting is invisible to the restart policy, which only hears about a
+      // process that died. Every read and write then fails — quietly, because the caller sees an empty result rather
+      // than an error — and the brain looks empty instead of unreachable. The first failed call is the health check:
+      // bring it back and ask once more. One retry only, so a genuinely broken endpoint cannot become a restart loop.
+      context.logger.warn('service_error', 'Cognitive1 did not answer; restarting it and trying once more.', messageOf(error));
+      await context.services.restart('cognitive1').catch((restartError: unknown) => {
+        context.logger.error('service_error', 'Cognitive1 could not be restarted', messageOf(restartError));
+      });
+      return context.cognitive1.operation(request);
+    }
+  });
   handle(context, 'rules:get', async () => context.executionRules.document());
   handle(context, 'rules:save', async (rule) => context.executionRules.save(rule));
   handle(context, 'skills:list', async ({ projectId }) => listSkills(context, projectId));
@@ -2246,6 +2261,18 @@ function insideRoot(root: string, candidate: string): boolean {
 
 /** How many memories a run is grounded in. Enough to be useful, few enough to leave room for the actual prompt. */
 const RECALL_LIMIT = 8;
+
+/**
+ * Whether a failure means the daemon could not be reached at all, as opposed to reaching it and being refused.
+ *
+ * Only an unreachable daemon is worth restarting: a refusal is the daemon's own answer, and restarting it would lose
+ * whatever it was saying. The wording comes from Node's fetch, which is what the client uses.
+ */
+export function looksUnreachable(error: unknown): boolean {
+  const text = messageOf(error).toLowerCase();
+  return ['econnrefused', 'econnreset', 'etimedout', 'ehostunreach', 'fetch failed', 'socket hang up', 'unable to connect']
+    .some((needle) => text.includes(needle));
+}
 
 async function recallScopedMemories(
   context: IpcContext,

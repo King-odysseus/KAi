@@ -100,6 +100,8 @@ export function Cognitive1Panel({
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Why the queue headline could not be read, when it could not. Kept apart from `error`, which is about an action. */
+  const [headlineError, setHeadlineError] = useState<string | null>(null);
   const ready = service.status === 'ready';
 
   useEffect(() => {
@@ -123,8 +125,13 @@ export function Cognitive1Panel({
   useEffect(() => {
     if (!ready || tab === 'review') return;
     let active = true;
-    void loadOperations(headlineLoads).then(({ values }) => {
-      if (active) setData((current) => ({ ...current, ...values }));
+    // The failures matter as much as the values here. Without them a brain that cannot be reached renders as an empty
+    // queue — the two are opposite facts and they used to look identical, which is exactly how a hundred waiting
+    // drafts went unnoticed.
+    void loadOperations(headlineLoads).then(({ values, failures }) => {
+      if (!active) return;
+      setData((current) => ({ ...current, ...values }));
+      setHeadlineError(failures[0] ?? null);
     });
     return () => { active = false; };
   }, [ready, service.updatedAt, tab]);
@@ -189,7 +196,11 @@ export function Cognitive1Panel({
           <p>
             C1 is the shared memory your AI agents write to. While they work they file <b>drafts</b> (candidate notes).
             <b> Overwatch</b> is an AI reviewer that reads each draft and labels it keep, noise or borderline, so you only approve what is worth remembering.
-            {headline.total > 0 ? ` ${headline.total} draft(s) are waiting right now.` : ' Nothing is waiting right now.'}
+            {headlineError
+              ? ` The brain could not be reached (${headlineError}) — this is not an empty queue.`
+              : headline.total > 0
+                ? ` ${headline.total} draft(s) are waiting right now.`
+                : ' Nothing is waiting right now.'}
           </p>
         </div>
         <button type="button" className="secondary-button" disabled={disabled} onClick={() => void refreshCore()}>
