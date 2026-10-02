@@ -110,6 +110,11 @@ describe('studio drafts', () => {
     const board = boardPrompt('# Brief', '# Stories', '# Stack', null);
     expect(board.system).toContain('One card per story');
     expect(board.user).toContain('STORIES:\n# Stories');
+    // Hosting and managed infrastructure are ordered last, so the first cards an agent reaches are the ones that make
+    // the product run locally. The old rule said the opposite, which put a hosted database near the front of the board.
+    expect(board.system).toContain('comes LAST');
+    expect(board.system).not.toContain('backend and setup first');
+    expect(prompt.system).toContain('deployment, hosting and a managed database are the last stories');
   });
 });
 

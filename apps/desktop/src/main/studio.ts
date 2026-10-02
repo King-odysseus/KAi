@@ -363,7 +363,7 @@ export function artifactPrompt(kind: ArtifactKind, inputs: Record<string, string
 const ARTIFACT_BRIEFS: Record<ArtifactKind, string> = {
   brief: 'Write the brief.',
   prd: 'Write the PRD: the product requirements — the problem, who it is for, the features in priority order, and what is explicitly out of scope. Every requirement should be checkable.',
-  stories: 'Write the user stories: a numbered list of small, independent stories. Each says who wants it, what they want, and why, then its acceptance criteria as a short list. These become the board cards, so make them small enough for one agent to finish.',
+  stories: 'Write the user stories: a numbered list of small, independent stories. Each says who wants it, what they want, and why, then its acceptance criteria as a short list. These become the board cards, so make them small enough for one agent to finish. Order them so the product works on a developer server first; deployment, hosting and a managed database are the last stories, not the first.',
   stack: 'Write the stack document: the languages, frameworks, data store, and hosting, each with the one-line reason it was chosen. Name the concrete packages and versions where it matters, and say where the code lives.',
   flows: 'Write the flows document: the main user journeys end to end. Use a "## Journey name" heading for each journey, then a numbered list with one short step per line. Name screens with their route, like "Sign-in page (/sign-in)", and endpoints like "POST /api/sessions". Start a step with "If ...?" when the journey branches, and say where each branch goes. A diagram is drawn from this, so keep the format.',
   pages: 'Write the page inventory for a designer drawing in open-pencil: one "## Page name" section for EVERY screen the project will have, not only the main pages. Include sign-in, sign-up and password screens, settings and profile, admin screens, error and not-found pages, modals and dialogs, and confirmation screens. Each section gives its route, what it is for, the main components on it, the states it must show (empty, loading, error, disabled), whether it needs a phone version, and the story numbers it serves. These become the screens drawn in the design tool and the page cards on the board.',
@@ -389,7 +389,8 @@ export function boardPrompt(brief: string, stories: string, stack: string, conte
     '- "kind" is "backend" for an endpoint or data work, "component" for a reusable UI piece, "page" for a screen, "flow" for tying pages together, "chore" for setup.',
     '- "key" is a short stable slug, unique on the board. "dependsOnKeys" names other cards by their key.',
     '- "route" is the path the screen is reached at ("/sign-up"), for a page card and for a component that owns one; leave it empty for a component that only appears inside a page.',
-    '- Order the work: backend and setup first, then shared components, then pages; a page card depends on the endpoint and component cards it needs.',
+    '- Order the work so the product runs locally first: the data model, the endpoints and the screens on a developer server, then shared components, then pages. A page card depends on the endpoint and component cards it needs.',
+    '- Anything that only matters once the product is hosted comes LAST: deploying, containerising, a hosted or managed database, a release pipeline, domains and production secrets. Those cards depend on the work that makes the product run without them, so an agent reaches them only when everything else is done. Never put hosting or a managed database before the feature that uses it.',
     '- Each "acceptance" item is one checkable statement. These are what the card is closed on.',
   ].join('\n');
   const user = [
