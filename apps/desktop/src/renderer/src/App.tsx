@@ -201,6 +201,12 @@ export function App(): ReactNode {
   const [busy, setBusy] = useState('Starting KAI');
   const [runningConversationIds, setRunningConversationIds] = useState<string[]>([]);
   const [pausedConversationIds, setPausedConversationIds] = useState<string[]>([]);
+  /**
+   * Conversations where an Auto run has stopped and is waiting for a person: a cap reached, a repeated wall, an
+   * approval, no provider left. Auto keeps its session alive across turns, so from the composer's side this is a run
+   * paused on you — and it is the reason Resume has to stay reachable once Auto's own buttons are gone.
+   */
+  const [autoWaitingConversationIds, setAutoWaitingConversationIds] = useState<string[]>([]);
   const [failedConversationIds, setFailedConversationIds] = useState<string[]>([]);
   const [streamingTextByConversation, setStreamingTextByConversation] = useState<Record<string, string>>({});
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
@@ -227,7 +233,10 @@ export function App(): ReactNode {
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
-  const activePaused = Boolean(activeConversationId && pausedConversationIds.includes(activeConversationId));
+  const activePaused = Boolean(
+    activeConversationId
+    && (pausedConversationIds.includes(activeConversationId) || autoWaitingConversationIds.includes(activeConversationId)),
+  );
   const streamingText = activeConversationId ? streamingTextByConversation[activeConversationId] ?? '' : '';
   const openConversations = openConversationIds.map((id) => conversations.find((conversation) => conversation.id === id)).filter((conversation): conversation is ConversationRecord => Boolean(conversation));
   const activeDraftKey = activeConversationId ?? '__new__';
@@ -568,6 +577,31 @@ export function App(): ReactNode {
       )));
   }), []);
 
+  // A run begun in the main process — Auto carrying a task, the board working a card, a schedule firing — announces
+  // itself here, because the composer's own send is not the only way a conversation gets worked on. Taking it up is
+  // what lets its events through the gate below, and pulling the record shows the turn the run was given: the window
+  // was holding the conversation as it stood before that turn was saved, so Auto worked an empty-looking transcript.
+  useEffect(() => window.kaiDesktop.onAgentRunState(({ conversationId, status }) => {
+    if (status === 'started') {
+      setRunningConversationIds((current) => current.includes(conversationId) ? current : [...current, conversationId]);
+      setFailedConversationIds((current) => current.filter((id) => id !== conversationId));
+    } else {
+      setRunningConversationIds((current) => current.filter((id) => id !== conversationId));
+      setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversationId]; return next; });
+    }
+    // On both ends: the request is saved before the run starts, the reply and its events after it ends.
+    void refreshConversationRecord(conversationId).catch(() => undefined);
+  }), []);
+
+  // Auto parking on a person is not visible in the run's own state — the session stays alive across turns — so the
+  // parked conversations are tracked here. Without it a run stopped at a cap would show a Pause button and no way to
+  // carry on from the screen it was started on.
+  useEffect(() => window.kaiDesktop.onAutoChanged((status) => {
+    setAutoWaitingConversationIds((current) => status.phase === 'waiting-for-you'
+      ? (current.includes(status.conversationId) ? current : [...current, status.conversationId])
+      : current.filter((id) => id !== status.conversationId));
+  }), []);
+
   useEffect(() => {
     void window.kaiDesktop.reportView(view, activeConversationId).catch(() => undefined);
   }, [view, activeConversationId]);
@@ -785,15 +819,26 @@ export function App(): ReactNode {
     if (next) setBootstrap(next);
   }
 
+  /**
+   * Takes the composer's agent, mode, route and autonomy from the conversation about to be worked in.
+   *
+   * A record that states none of them — one opened blank for a run, a workflow or a schedule — leaves the composer
+   * as the person left it. Filling those from the app's defaults is what moved a chosen API run back to CLI the
+   * moment Auto opened the conversation it had just made for the task: the choices were the person's, and the
+   * record had no opinion to overrule them with.
+   */
+  function adoptConversationSettings(conversation: ConversationRecord): void {
+    setSelectedAgent(conversation.activeAgent ?? selectedAgent);
+    setExecutionMode(conversation.execution ?? executionMode);
+    setSelectedRoute(conversation.route ?? selectedRoute);
+    setSelectedAutonomy(conversation.autonomy ?? selectedAutonomy);
+  }
+
   async function openConversation(id: string): Promise<void> {
     const existing = conversations.find((conversation) => conversation.id === id);
     if (existing) {
       setActiveConversationId(id);
-      setSelectedAgent(existing.activeAgent ?? bootstrap?.settings.defaultAgent ?? 'codex');
-      const mode = existing.execution ?? 'cli';
-      setExecutionMode(mode);
-      setSelectedRoute(existing.route ?? bootstrap?.settings.defaultRoute ?? 'direct');
-      setSelectedAutonomy(existing.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
+      adoptConversationSettings(existing);
       // A failure from whatever chat was open before must not bleed into the one being switched to.
       setError(null);
       setAgentNotice(null);
@@ -808,11 +853,7 @@ export function App(): ReactNode {
     if (!conversation) return;
     setConversations((current) => [conversation, ...current.filter((item) => item.id !== id)]);
     setActiveConversationId(id);
-    setSelectedAgent(conversation.activeAgent ?? bootstrap?.settings.defaultAgent ?? 'codex');
-    const mode = conversation.execution ?? 'cli';
-    setExecutionMode(mode);
-    setSelectedRoute(conversation.route ?? bootstrap?.settings.defaultRoute ?? 'direct');
-    setSelectedAutonomy(conversation.autonomy ?? bootstrap?.settings.defaultAutonomy ?? 'ask');
+    adoptConversationSettings(conversation);
     setAgentNotice(null);
     setProxyContinuationAgent(null);
     setView('workspace');
@@ -1420,20 +1461,22 @@ export function App(): ReactNode {
 
   async function pauseConversation(): Promise<void> {
     if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
-    const paused = await perform(() => window.kaiDesktop.pauseAgent(activeConversationId).then(unwrap), 'Pausing agent');
-    if (paused) {
-      setPausedConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
-      setAgentNotice('The run is paused. It will continue from the same point.');
-    }
+    // Both levels, the same treatment Stop already gives: Auto's own loop, or it would go on starting turns while the
+    // one in flight sits paused. A call with nothing to do refuses without an error, so neither has to know which
+    // kind of run this is.
+    await window.kaiDesktop.pauseAuto({ conversationId: activeConversationId }).catch(() => undefined);
+    await window.kaiDesktop.pauseAgent(activeConversationId).catch(() => undefined);
+    setPausedConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
+    setAgentNotice('The run is paused. It will continue from the same point.');
   }
 
   async function resumeConversation(): Promise<void> {
     if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
-    const resumed = await perform(() => window.kaiDesktop.resumeAgent(activeConversationId).then(unwrap), 'Resuming agent');
-    if (resumed) {
-      setPausedConversationIds((current) => current.filter((id) => id !== activeConversationId));
-      setAgentNotice(null);
-    }
+    await window.kaiDesktop.resumeAuto({ conversationId: activeConversationId }).catch(() => undefined);
+    await window.kaiDesktop.resumeAgent(activeConversationId).catch(() => undefined);
+    setPausedConversationIds((current) => current.filter((id) => id !== activeConversationId));
+    setAutoWaitingConversationIds((current) => current.filter((id) => id !== activeConversationId));
+    setAgentNotice(null);
   }
 
   async function clearCredential(id: string): Promise<boolean> {

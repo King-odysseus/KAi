@@ -111,11 +111,29 @@ interface ProcessResult {
   signal: NodeJS.Signals | null;
 }
 
+/** A command or tool the CLI reported it was running, as the line said it. */
+export interface ParsedToolCall {
+  name: string;
+  status: 'started' | 'completed' | 'failed';
+  input?: unknown;
+  output?: unknown;
+}
+
+/** A file the CLI reported changing, which is how KAI sees the work without reading the whole tree. */
+export interface ParsedFileChange {
+  path: string;
+  action: 'created' | 'edited' | 'deleted';
+}
+
 interface ParsedAgentLine {
   text?: string;
   resultText?: string;
   sessionId?: string;
   error?: string;
+  tools?: ParsedToolCall[];
+  changes?: ParsedFileChange[];
+  /** What the CLI said the run cost, when it says so at all — claude reports the figure, codex only tokens. */
+  cost?: { amountUsd?: number; inputTokens?: number; outputTokens?: number };
 }
 
 interface SignInLaunchOptions {
@@ -478,6 +496,17 @@ export class DesktopAgentRuntime {
     const events: PersistedEvent[] = [lifecycleEvent(request, 'starting', model
       ? `${definition.displayName} starting on ${model}${modelNote ? ` (${modelNote})` : ''}.`
       : `${definition.displayName} starting.`)];
+    /**
+     * One event, both places it has to be: the window watching the run, and the list this run returns.
+     *
+     * Only the returned list is saved with the conversation, so an event sent to the window alone would show while
+     * the run was going and then disappear when the saved record replaced it. The Direct API runtime emits the same
+     * way.
+     */
+    const emit = (event: PersistedEvent): void => {
+      events.push(event);
+      onEvent?.(event);
+    };
     const outputParts: string[] = [];
     const errors: string[] = [];
     let sessionId = resumeSessionId;
@@ -614,6 +643,9 @@ export class DesktopAgentRuntime {
         hasOutputText = true;
         onEvent?.(streamTextEvent(request, parsed.resultText));
       }
+      // What the CLI was doing, which is what makes an unattended run legible — and what lets a check the agent ran
+      // itself be recorded. Text is left on the path above so nothing is emitted twice.
+      for (const event of lineEvents(request, parsed)) emit(event);
     }
   }
 
@@ -747,7 +779,11 @@ export function buildAgentArgs(
 
   if (request.agent === 'claude') {
     const permissionMode = claudePermission(request.autonomy, customPermissions);
-    const args = ['-p', '--output-format', 'json', '--permission-mode', permissionMode];
+    // stream-json, not one JSON result at the end: it reports each message as it is written and names the tools the
+    // run used, which is the difference between a claude run being legible while it works and being a blank hour
+    // followed by a paragraph. `--verbose` is what the format requires. The CLI's own notices go to stderr, so they
+    // never reach the reply.
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
     if (permissionMode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
     args.push(...modelArgs);
     if (resumeSessionId) args.push('--resume', resumeSessionId);
@@ -827,7 +863,7 @@ function geminiApproval(autonomy: AutonomyMode): 'plan' | 'auto_edit' | 'yolo' {
   return 'plan';
 }
 
-function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
+export function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -845,6 +881,42 @@ function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
     if (value.type === 'item.completed' && item?.type === 'agent_message' && typeof item.text === 'string') {
       return { resultText: item.text };
     }
+    // What the CLI did, as `codex exec --json` reports it. The tool is named `run_command` rather than codex's own
+    // `command_execution` because the rest of KAI reads that name: the verification record and the command card both
+    // look for a command in the call's input, and the exit code in its output.
+    if (item?.type === 'command_execution') {
+      const command = typeof item.command === 'string' ? item.command : '';
+      if (value.type === 'item.started' && command) {
+        return { tools: [{ name: 'run_command', status: 'started', input: { command } }] };
+      }
+      if (value.type === 'item.completed' && command) {
+        return {
+          tools: [{
+            name: 'run_command',
+            status: item.exit_code === 0 ? 'completed' : 'failed',
+            input: { command },
+            output: {
+              ...(typeof item.exit_code === 'number' ? { exitCode: item.exit_code } : {}),
+              ...(typeof item.aggregated_output === 'string' ? { output: item.aggregated_output } : {}),
+            },
+          }],
+        };
+      }
+    }
+    if (value.type === 'item.completed' && item?.type === 'file_change') {
+      const changes = Array.isArray(item.changes) ? item.changes : [];
+      const mapped = changes.flatMap((change) => {
+        const record = asRecord(change);
+        const path = typeof record?.path === 'string' ? record.path : '';
+        if (!path) return [];
+        const kind = typeof record?.kind === 'string' ? record.kind : 'update';
+        return [{
+          path,
+          action: (kind === 'add' ? 'created' : kind === 'delete' ? 'deleted' : 'edited') as ParsedFileChange['action'],
+        }];
+      });
+      if (mapped.length > 0) return { changes: mapped };
+    }
     const error = errorText(value);
     return error ? { error } : {};
   }
@@ -852,14 +924,23 @@ function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
   if (agent === 'claude') {
     const sessionId = commonSessionId(value);
     if (value.type === 'result') {
+      const usage = asRecord(value.usage);
+      const amountUsd = typeof value.total_cost_usd === 'number' ? value.total_cost_usd : undefined;
       return {
         sessionId,
         resultText: typeof value.result === 'string' ? value.result : undefined,
         error: errorText(value),
+        ...(amountUsd === undefined ? {} : {
+          cost: {
+            amountUsd,
+            ...(typeof usage?.input_tokens === 'number' ? { inputTokens: usage.input_tokens } : {}),
+            ...(typeof usage?.output_tokens === 'number' ? { outputTokens: usage.output_tokens } : {}),
+          },
+        }),
       };
     }
-    if (value.type === 'assistant') {
-      return { sessionId, text: textFromClaudeMessage(value.message) };
+    if (value.type === 'assistant' || value.type === 'message') {
+      return { sessionId, text: textFromClaudeMessage(value.message), tools: toolCallsFromClaudeMessage(value.message) };
     }
     return { sessionId, error: errorText(value) };
   }
@@ -898,6 +979,22 @@ function textFromClaudeMessage(message: unknown): string | undefined {
     .filter((part): part is string => typeof part === 'string')
     .join('');
   return text || undefined;
+}
+
+/** The tools a Claude message asked for, named the way its `tool_use` blocks name them. */
+function toolCallsFromClaudeMessage(message: unknown): ParsedToolCall[] | undefined {
+  const content = asRecord(message)?.content;
+  if (!Array.isArray(content)) return undefined;
+  const calls = content.flatMap((block) => {
+    const record = asRecord(block);
+    if (record?.type !== 'tool_use' || typeof record.name !== 'string') return [];
+    return [{
+      name: record.name,
+      status: 'started' as const,
+      ...(record.input === undefined ? {} : { input: record.input }),
+    }];
+  });
+  return calls.length > 0 ? calls : undefined;
 }
 
 function textFromCandidates(candidates: unknown): string | undefined {
@@ -1245,6 +1342,59 @@ function streamTextEvent(request: Pick<AgentRunRequest, 'agent' | 'conversationI
     channel: 'assistant',
     text,
   };
+}
+
+/**
+ * The tool calls and file changes one parsed line carries, as events the rest of KAI reads.
+ *
+ * Exported beside the parser so the mapping can be pinned on its own: what a command call puts in `input` and
+ * `output` decides whether the verification record and the command card can read it at all.
+ */
+export function lineEvents(
+  request: Pick<AgentRunRequest, 'agent' | 'conversationId'>,
+  parsed: ParsedAgentLine,
+): PersistedEvent[] {
+  const built: PersistedEvent[] = [];
+  for (const tool of parsed.tools ?? []) {
+    built.push({
+      schemaVersion: 1,
+      id: eventId(),
+      taskId: request.conversationId,
+      timestamp: nowIso(),
+      agent: request.agent,
+      type: 'tool.call',
+      name: tool.name,
+      status: tool.status,
+      ...(tool.input === undefined ? {} : { input: tool.input }),
+      ...(tool.output === undefined ? {} : { output: tool.output }),
+    });
+  }
+  for (const change of parsed.changes ?? []) {
+    built.push({
+      schemaVersion: 1,
+      id: eventId(),
+      taskId: request.conversationId,
+      timestamp: nowIso(),
+      agent: request.agent,
+      type: 'file.change',
+      path: change.path,
+      action: change.action,
+    });
+  }
+  // A CLI that states what the run cost is believed: the run's spend, the scorecard's cost and Auto's own figure all
+  // read it from here. A CLI that only reports tokens is left alone rather than guessed at.
+  if (parsed.cost) {
+    built.push({
+      schemaVersion: 1,
+      id: eventId(),
+      taskId: request.conversationId,
+      timestamp: nowIso(),
+      agent: request.agent,
+      type: 'cost.update',
+      ...parsed.cost,
+    });
+  }
+  return built;
 }
 
 function eventId(): string {

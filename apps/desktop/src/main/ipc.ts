@@ -20,6 +20,7 @@ import {
   type AgentConfigImportPreview,
   type AgentRunRequest,
   type AgentRunResult,
+  type AgentRunState,
   type AppSettings,
   openPlanItems,
   openPlanReminder,
@@ -74,6 +75,8 @@ import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime'
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
+import { diagnoseRun, diagnosisLine } from './run-doctor';
+import { buildHistoryNote } from './run-history';
 import { clearInterjections, interject } from './interjections';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
@@ -656,7 +659,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       .reverse()
       .find((turn) => turn.role === 'user')
       ?.text ?? '';
-    return (await buildConversationContext(context, project.path, project.name, conversation, prompt)).preview;
+    return (await buildConversationContext(context, project.path, project.name, project.id, conversation, prompt)).preview;
   });
   handle(context, 'preview:info', async ({ projectId }) => {
     const project = await resolveProject(context, projectId, true);
@@ -1142,6 +1145,10 @@ export async function runInteractiveAgent(
       checkPassed: outcome.checkPassed,
       fixRounds: outcome.fixRounds,
       filesChanged: outcome.filesChanged,
+      // The paths, not just the count: the next run on these files reads them to see what was already tried here.
+      ...(changedPathsOf(outcome.result.conversation).length
+        ? { files: changedPathsOf(outcome.result.conversation).slice(0, 100) }
+        : {}),
       durationMs: Date.now() - startedAt,
       ...(outcome.result.costUsd !== undefined ? { costUsd: outcome.result.costUsd } : {}),
     }).catch(() => undefined);
@@ -1185,6 +1192,21 @@ export async function runScheduledGoal(context: IpcContext, schedule: Schedule):
   );
   const summary = result.status === 'completed' ? result.output.replace(/\s+/g, ' ').trim().slice(0, 300) || 'Completed.' : result.error ?? 'The run failed.';
   return { status: result.status === 'completed' ? 'completed' : 'failed', summary, conversationId: conversation.id };
+}
+
+/**
+ * Says that a conversation is being worked on, and again when the work is over.
+ *
+ * Every run announces itself here, whoever asked for it. A window only renders an agent's events for the
+ * conversations it has taken up, and the composer's own send used to be the only thing that took one up — so a run
+ * started in the main process (Auto carrying a task, the board working a card, a schedule firing) worked with
+ * nothing appearing in the conversation it was working in.
+ *
+ * Broadcast rather than sent to the window that asked, because any window showing the conversation should be able
+ * to follow it, and a run the main process began has no window of its own.
+ */
+function announceRunState(context: IpcContext, conversationId: string, status: AgentRunState['status']): void {
+  context.windows.broadcast('agents:run-state', { conversationId, status } satisfies AgentRunState);
 }
 
 export async function runConversationAgent(
@@ -1349,6 +1371,7 @@ export async function runConversationAgent(
         context,
         workRoot,
         project.name,
+        project.id,
         conversation,
         request.prompt,
         authoritativeRules,
@@ -1362,6 +1385,7 @@ export async function runConversationAgent(
         context,
         workRoot,
         project.name,
+        project.id,
         conversation,
         request.prompt,
         undefined,
@@ -1431,6 +1455,9 @@ export async function runConversationAgent(
       payload: { agent: request.agent, project: claimedProject, what: conversation.title, files: selectedPaths.join(',') },
     }).catch(() => undefined);
   }
+  // Announced once the turn is on disk and everything that could still refuse the run is behind us, so a window
+  // that takes it up fetches a record that already holds the request.
+  announceRunState(context, conversation.id, 'started');
   context.notifications.runStarted(conversation.id);
   try {
     execution = executionMode === 'api'
@@ -1464,6 +1491,11 @@ export async function runConversationAgent(
         chipContext.imagePaths,
       ));
     }
+  } catch (error) {
+    // A run that threw never reaches the save at the end, so it is announced here instead: a window left believing
+    // the conversation is still running would show a spinner and a Stop button for work that is already over.
+    announceRunState(context, conversation.id, 'finished');
+    throw error;
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
@@ -1487,8 +1519,12 @@ export async function runConversationAgent(
   // Files may have changed, so the next run's project outline must be rebuilt.
   invalidateRepoMap(workRoot);
   for (const check of agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)) {
-    await recordVerification(context.verification, project.id, project.path, check).catch(() => undefined);
-    await logRegression(context, project.path, project.name, check);
+    // The recorded run knows the commit the check ran against; the brain gets it below so a regression can be
+    // traced to the change behind it rather than filed against "unknown".
+    const recorded = await recordVerification(context.verification, project.id, project.path, check).catch(() => null);
+    // Reporting the totals to C1 is a courtesy, like the lesson filed below it: the brain being slow or down must
+    // not cost the run its saved turn, which is what a throw here would do.
+    await logRegression(context, project.path, project.name, check, recorded?.head).catch(() => undefined);
   }
   conversation.updatedAt = new Date().toISOString();
   if (checkpoint) {
@@ -1527,16 +1563,26 @@ export async function runConversationAgent(
   // leaves out what it did not get to — which is the half the reader needs to decide what happens next.
   const remaining = openPlanItems(await readPlan(workRoot).catch(() => null)).map((item) => item.text);
   const spoken = execution.output?.trim();
-  const closing = spoken
-    ? [spoken, outstandingLine(remaining)].filter(Boolean).join('\n\n')
-    : describeRunOutcome({
-        status: execution.status,
-        files: (userTurn.fileChanges ?? []).map((change) => change.path),
-        checks: agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
-          .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0 })),
-        error: execution.error,
-        remaining,
-      });
+  // A failed run's own words are usually the symptom — an exit code, a stderr tail, "the provider returned no
+  // output" — so KAI names the cause under them when it can tell what it was.
+  const diagnosis = diagnoseRun({
+    status: execution.status,
+    error: execution.error,
+    events: execution.events as Array<{ type?: string; name?: string; status?: string; message?: string }>,
+  });
+  const closing = [
+    spoken
+      ? [spoken, outstandingLine(remaining)].filter(Boolean).join('\n\n')
+      : describeRunOutcome({
+          status: execution.status,
+          files: (userTurn.fileChanges ?? []).map((change) => change.path),
+          checks: agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
+            .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0 })),
+          error: execution.error,
+          remaining,
+        }),
+    diagnosis ? diagnosisLine(diagnosis) : null,
+  ].filter(Boolean).join('\n\n');
   conversation.turns.push({
     id: `turn_${crypto.randomUUID()}`,
     role: 'assistant' as const,
@@ -1546,6 +1592,9 @@ export async function runConversationAgent(
   conversation.events.push(...execution.events);
   conversation.agentSessionId = execution.sessionId;
   await context.conversations.save(conversation);
+  // Only now, once the turn it produced is on disk: a window that did not run this pulls the record when it hears
+  // the run is over, and pulling it before the save would show a reply that stops at the user's own message.
+  announceRunState(context, conversation.id, 'finished');
 
   // Keep a local, redacted record of observable work only (never hidden reasoning). Content capture is separately
   // controlled by the user's privacy setting; metadata-only records still support reliability/evaluation metrics.
@@ -1627,12 +1676,27 @@ function costResult(events: ReadonlyArray<Record<string, unknown>>): { costUsd?:
 }
 
 /** Send test totals to Cognitive1's regression history when the runner's summary could be read. */
-async function logRegression(context: IpcContext, projectPath: string, projectName: string, check: RecordedCheck): Promise<void> {
+async function logRegression(
+  context: IpcContext,
+  projectPath: string,
+  projectName: string,
+  check: RecordedCheck,
+  /** The commit the check ran against, so a regression can be traced to the change that caused it. */
+  commit?: string | null,
+): Promise<void> {
   const counts = parseTestCounts(check.output);
   if (counts.passed === null || !(await cognitive1Ready(context))) return;
   await context.cognitive1.tool({
     tool: 'regression_log',
-    arguments: { project: await memoryProjectName(context, projectPath, projectName), passed: counts.passed, failed: counts.failed ?? 0, notes: `${check.source}: ${check.command}`.slice(0, 300), agent: 'kai-desktop' },
+    arguments: {
+      project: await memoryProjectName(context, projectPath, projectName),
+      passed: counts.passed,
+      failed: counts.failed ?? 0,
+      notes: `${check.source}: ${check.command}`.slice(0, 300),
+      agent: 'kai-desktop',
+      // Without this the brain files every regression against "unknown", which is what it did until now.
+      ...(commit ? { commit } : {}),
+    },
   }).catch(() => undefined);
 }
 
@@ -1810,6 +1874,7 @@ async function buildConversationContext(
   context: IpcContext,
   projectPath: string,
   projectName: string,
+  projectId: string,
   conversation: ConversationRecord | null,
   prompt: string,
   authoritativeRules?: string,
@@ -1819,13 +1884,20 @@ async function buildConversationContext(
   includeRepoMap = false,
 ) {
   const recall = await recallScopedMemories(context, projectPath, projectName, prompt);
+  const filesInPlay = [...new Set([...changedFilePaths(conversation), ...selectedPaths])];
+  // What KAI's own runs already did here, chosen by the files this one is about. Read from the scores every scored
+  // run writes, so it works with the brain stopped and never leaves the machine.
+  const history = await context.runScores.list()
+    .then((runs) => buildHistoryNote({ runs, files: filesInPlay, projectId, now: Date.now() }))
+    .catch(() => null);
   const projectContext = await buildProjectContext(projectPath, {
-    selectedPaths: [...new Set([...changedFilePaths(conversation), ...selectedPaths])].slice(-12),
+    selectedPaths: filesInPlay.slice(-12),
     memories: recall.memories,
     memoryNote: recall.note,
     authoritativeRules,
     omitStatic,
     includeRepoMap,
+    ...(history ? { history } : {}),
   });
   if (!compaction) return projectContext;
   return {
@@ -2577,6 +2649,23 @@ function memoryEvent(
     action,
     summary,
   };
+}
+
+/**
+ * The paths a finished run changed, from the turn it recorded them on.
+ *
+ * The score keeps these so a later run can ask "has anything happened to these files before?" — a count alone
+ * cannot answer that, which is why every score used to be useless for it.
+ */
+function changedPathsOf(conversation: ConversationRecord | null): string[] {
+  if (!conversation) return [];
+  for (let index = conversation.turns.length - 1; index >= 0; index -= 1) {
+    const turn = conversation.turns[index];
+    if (turn?.role !== 'user') continue;
+    const paths = (turn.fileChanges ?? []).map((change) => change.path);
+    if (paths.length > 0) return [...new Set(paths)];
+  }
+  return [];
 }
 
 function changedFilePaths(conversation: ConversationRecord | null): string[] {

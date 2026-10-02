@@ -34,7 +34,7 @@ describe('CLI model selection', () => {
 
   it('passes --model to claude, qwen and gemini without disturbing their other arguments', () => {
     expect(buildAgentArgs({ ...base, agent: 'claude' }, 'C:/repo', undefined, undefined, 'claude-sonnet-5')).toEqual(
-      expect.arrayContaining(['-p', '--output-format', 'json', '--model', 'claude-sonnet-5']),
+      expect.arrayContaining(['-p', '--output-format', 'stream-json', '--model', 'claude-sonnet-5']),
     );
     const qwen = buildAgentArgs({ ...base, agent: 'qwen' }, 'C:/repo', undefined, undefined, 'qwen3.8-max');
     expect(qwen).toEqual(expect.arrayContaining(['--model', 'qwen3.8-max']));

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
@@ -377,6 +377,11 @@ export class DesktopProjectToolRuntime {
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
     if (name === 'read_file' || name === 'search_files' || name === 'list_files') return { decision: 'allow' };
+    // The plan is the model's own note about where the task has got to, and KAI reads it to decide whether a task
+    // is finished — so it is allowed at every level, plan mode included. It writes `.kai/plan.json` and nothing
+    // else: it cannot touch project source. Without this line it fell through to the deny below as an unknown tool,
+    // and every API-run plan was refused, which left the finish signal with nothing to read.
+    if (name === 'update_plan') return { decision: 'allow' };
     if (name === 'run_command') {
       if (autonomy === 'plan') {
         return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
@@ -789,11 +794,8 @@ export class DesktopProjectToolRuntime {
     return new Promise((resolve) => {
       const child = spawn(command, {
         cwd,
-        shell: true,
-        windowsHide: true,
-        detached: true,
         env: { ...process.env, BROWSER: 'none', FORCE_COLOR: '1' },
-        stdio: 'ignore',
+        ...backgroundServerOptions(process.platform),
       });
       child.once('error', (error) => resolve(commandFailure(error.message, '', '', undefined)));
       child.once('spawn', () => {
@@ -932,6 +934,21 @@ function commandFailure(
       error: message,
     },
   };
+}
+
+/**
+ * How a dev server the agent starts for itself is spawned.
+ *
+ * Detaching is what lets the server outlive KAI on Unix, and on Windows it does the opposite of what it looks like:
+ * a detached child is given a console of its own, and `CREATE_NO_WINDOW` — what `windowsHide` sets — is ignored
+ * while `DETACHED_PROCESS` is set. So `detached: true` with `windowsHide: true` opened a bare `C:\WINDOWS\System32`
+ * console with the server's own output in it, and the agent's work nowhere. On Windows the server is left in KAI's
+ * process tree instead, which KAI already ends on quit.
+ */
+export function backgroundServerOptions(
+  platform: NodeJS.Platform,
+): Pick<SpawnOptions, 'shell' | 'windowsHide' | 'detached' | 'stdio'> {
+  return { shell: true, windowsHide: true, detached: platform !== 'win32', stdio: 'ignore' };
 }
 
 function isDevServerCommand(command: string): boolean {

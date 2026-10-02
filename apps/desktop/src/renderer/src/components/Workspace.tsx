@@ -1,5 +1,6 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
 import { AutoModePanel } from './AutoPanel';
+import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
 import { PlanStrip } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
@@ -202,7 +203,7 @@ const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: 
   { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
   { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
   { id: 'equalizer', label: 'Equalizer', description: 'Compare the built screens with their design and report every difference', placeholder: 'Say what does not match, for example: the dashboard on my dev server', starter: '' },
-  { id: 'auto', label: 'Auto', description: 'Work this task on its own until the check passes, switching provider when a limit is hit', placeholder: 'Describe the task; Auto keeps going until the check passes', starter: '' },
+  { id: 'auto', label: 'Auto', description: 'Send the task and KAI works it on its own until the agent says it is done, switching provider when a limit is hit', placeholder: 'Describe the task; send it and Auto works it until it is done', starter: '' },
 ];
 
 const STATUS_WORDS = [
@@ -373,6 +374,8 @@ export function WorkspaceView({
   const [rawEventsOpen, setRawEventsOpen] = useState(false);
   const [showRunDetails, setShowRunDetails] = useState(false);
   const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
+  /** Set while Auto is being asked to start, so the composer's send cannot be pressed twice into it. */
+  const [startingAuto, setStartingAuto] = useState(false);
   const [refiningPrompt, setRefiningPrompt] = useState(false);
   const [promptGuideReadiness, setPromptGuideReadiness] = useState<PromptGuideReadiness | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -629,6 +632,12 @@ export function WorkspaceView({
       baseCount: activeConversation?.turns.length ?? 0,
       images: contextChips.flatMap((chip) => (chip.type === 'image' && chip.dataUrl ? [{ name: chip.name, dataUrl: chip.dataUrl }] : [])),
     });
+    // Auto is a mode of this composer, not a second one: the same box, the same send. Decided here rather than at the
+    // button, so a steered or queued task behaves the same as one typed straight in.
+    if (taskIntent === 'auto') {
+      void startAuto(text, options);
+      return;
+    }
     if (activeConversation) onSend(text, options);
     else onCreateConversation(text, options);
   };
@@ -680,6 +689,42 @@ export function WorkspaceView({
     clearComposerContext();
     setSelectedSkills([]);
   };
+
+  /**
+   * Starts Auto on the task in the composer, under the composer's own choices — agent, mode, route, autonomy and
+   * model are the ones on screen, and Auto's own tuning is what the panel below was last set to.
+   */
+  async function startAuto(text: string, options: WorkspaceSendOptions | undefined): Promise<void> {
+    if (!activeProject) return;
+    if (!AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
+      setWorkbenchNotice(`Auto runs at Edit files or Full access, not ${selectedAutonomy}. It cannot answer the questions a lower level asks.`);
+      return;
+    }
+    setStartingAuto(true);
+    setWorkbenchNotice(null);
+    try {
+      const request = buildAutoStartRequest({
+        projectId: activeProject.id,
+        prompt: text,
+        settings: readAutoSettings(activeProject.id),
+        execution: executionMode,
+        agent: selectedAgent,
+        route: selectedRoute,
+        autonomy: selectedAutonomy,
+        ...(activeConversation ? { conversationId: activeConversation.id } : {}),
+        ...(selectedModel ? { model: selectedModel } : {}),
+        ...(options?.goal ? { goal: options.goal } : {}),
+        ...(options?.skills?.length ? { skills: options.skills } : {}),
+        ...(options?.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
+        ...(options?.contextChips?.length ? { contextChips: options.contextChips } : {}),
+      });
+      await window.kaiDesktop.startAuto(request).then(unwrap);
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    } finally {
+      setStartingAuto(false);
+    }
+  }
 
   const steerNow = (): void => {
     const text = prompt.trim();
@@ -1517,17 +1562,7 @@ export function WorkspaceView({
           <AutoModePanel
             projectId={activeProject.id}
             conversationId={activeConversation?.id ?? null}
-            prompt={prompt}
-            agent={selectedAgent}
-            route={selectedRoute}
-            autonomy={selectedAutonomy}
             execution={executionMode}
-            model={selectedModel}
-            goal={activeConversation?.goal ?? undefined}
-            skills={selectedSkills.map((skill) => skill.name)}
-            selectedPaths={selectedFiles}
-            contextChips={contextChips}
-            disabled={busy}
           />
         )}
         {taskIntent === 'equalizer' && activeProject && (
@@ -1613,7 +1648,7 @@ export function WorkspaceView({
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
                   <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
                 </>
-              ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || refiningPrompt || !ready} onClick={send} title={activeConversation ? 'Send message' : 'Start conversation'} aria-label={activeConversation ? 'Send message' : 'Start conversation'}><Send size={16} /></button>}
+              ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={taskIntent === 'auto' ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={taskIntent === 'auto' ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</button>}
             </div>
           </div>
         </div>
@@ -2231,6 +2266,7 @@ export function ContextPanel({ activeProject, conversation, services, contextPre
 function contextSectionIcon(kind: ContextPreview['sections'][number]['kind']): ReactNode {
   if (kind === 'memories') return <BrainIcon />;
   if (kind === 'skills') return <Sparkles size={14} />;
+  if (kind === 'history') return <History size={14} />;
   return <FileDiff size={14} />;
 }
 

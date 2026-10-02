@@ -10,16 +10,28 @@ import {
   type AutoStatus,
   type AutoWaitReason,
   type ConversationRecord,
+  type Plan,
+  type PlanItem,
+  openPlanItems,
+  openPlanReminder,
+  planIsUnfinished,
 } from '@kai/contracts';
 import { formatDuration } from './autopilot';
 import { cooldownMs, detectRateLimit, RequestPacer, sleepAbortable } from './rate-limit';
+import { diagnoseRun, diagnosisLine } from './run-doctor';
 
 /**
- * Auto mode: one task, one conversation, worked on its own until the check command passes.
+ * Auto mode: one task, one conversation, worked on its own until the agent says it is finished.
+ *
+ * The finish is the agent's own, read from the plan it keeps in `.kai/plan.json` through `update_plan`: while that
+ * plan still has items open, Auto hands the run back to it with what is left; when the plan is done, the task is
+ * done. A check command does not define the ending — it confirms it, in the person's own terms, and a failure is
+ * handed straight back to the agent. That is the shape Claude Code's loop has: the model works, says what is left,
+ * and stops when there is nothing left, and an independent test confirms rather than decides.
  *
  * It is deliberately not the Studio's Autopilot. That one walks a board of cards and closes each through the board's
- * own rule; this one carries a single task across turns and calls it done only when the person's own check command
- * passes. The two share the rate-limit vocabulary and nothing else, which is why the board loop is left alone.
+ * own rule; this one carries a single task across turns. The two share the rate-limit vocabulary and nothing else,
+ * which is why the board loop is left alone.
  *
  * The one judgement Auto adds is the provider: when the CLI's usage window is spent it moves to the API model and
  * keeps working, then returns to the CLI once the window reopens. Everything it cannot decide - an approval, a wall
@@ -66,6 +78,15 @@ export interface AutoSessionPorts {
   runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;
   cancelAgent(conversationId: string): boolean;
   runCheck(projectId: string, command: string, signal: AbortSignal): Promise<AutoCheckResult>;
+  /** The agent's own plan, which is how the task says it is finished. Null when it kept none. */
+  readPlan(projectId: string): Promise<Plan | null>;
+  /**
+   * A second model's read of the plan against the task, added to the plan: the steps it named that the plan never
+   * mentioned. Empty when the plan covers the task, null when there is no plan or no model to ask.
+   */
+  reviewPlan(projectId: string, request: string): Promise<PlanItem[] | null>;
+  /** What the check will and will not confirm about the files this run changed, or null when there is nothing to say. */
+  checkCoverage(projectId: string, command: string, changedFiles: string[]): Promise<string | null>;
   changedFilesFor(projectId: string): Promise<string[]>;
   suggestCheck(projectId: string): Promise<string | null>;
   capability(): Promise<AutoProviderCapability>;
@@ -162,10 +183,9 @@ export class DesktopAutoSession {
   async start(input: AutoStartInput, ownerWindowId: number, options: { opened?: boolean } = {}): Promise<AutoStatus> {
     const conversation = await this.resolveConversation(input);
     if (this.runs.has(conversation.id)) throw new Error('Auto is already running on this conversation.');
+    // A blank box means the project's own test command, when there is one. With neither, the agent's plan is the
+    // only account of the work and nothing confirms it — which is a legitimate way to run, not a reason to refuse.
     const command = input.checkCommand.trim() || (await this.ports.suggestCheck(input.projectId).catch(() => null)) || '';
-    if (!command) {
-      throw new Error("Auto needs a check command: it is the only honest sign that the task is done. Set one, or let KAI detect the project's test command.");
-    }
     const active: ActiveAutoRun = {
       controller: new AbortController(),
       ownerWindowId,
@@ -186,6 +206,10 @@ export class DesktopAutoSession {
     this.runs.set(conversation.id, active);
     this.statuses.set(conversation.id, state);
     this.record(conversation.id, ownerWindowId, 'info', 'Auto started.');
+    // Said once, up front, because it is what the run will be judged by and it is worth knowing before the work.
+    this.record(conversation.id, ownerWindowId, 'info', command
+      ? `The agent decides when the task is done; \`${command}\` is run to confirm it.`
+      : 'No check command to confirm with, so the agent\'s own plan is the finish.');
     if (!active.opened) {
       active.opened = true;
       this.ports.openConversation(ownerWindowId, conversation);
@@ -255,7 +279,18 @@ export class DesktopAutoSession {
       if (!existing) throw new Error('Conversation not found.');
       return existing;
     }
-    return this.ports.createConversation(input.projectId, input.prompt.slice(0, 64));
+    // A conversation opened for the task carries the settings the task was started with, the way a split's
+    // remainder does. A record that states none of them sends the composer back to its defaults, so Auto used to
+    // open the conversation it had just made and reset the very choices the run was started from: the person picked
+    // Auto and the API provider, and watched the composer go back to CLI as the run began.
+    const created = await this.ports.createConversation(input.projectId, input.prompt.slice(0, 64));
+    return this.ports.saveConversation({
+      ...created,
+      activeAgent: input.agent,
+      execution: input.execution,
+      route: input.route,
+      autonomy: input.autonomy,
+    });
   }
 
   private async drive(input: AutoStartInput, conversationId: string, command: string, active: ActiveAutoRun): Promise<void> {
@@ -264,6 +299,8 @@ export class DesktopAutoSession {
     const deadline = input.maxHours > 0 ? startedAt + input.maxHours * 3_600_000 : Infinity;
     let first = true;
     let prompt = input.prompt;
+    /** The plan is read against the task once per run, not once per turn. */
+    let reviewed = false;
     try {
       for (;;) {
         if (active.controller.signal.aborted) return this.settle(conversationId, owner, 'stopped', 'Auto was stopped.');
@@ -310,22 +347,69 @@ export class DesktopAutoSession {
           continue;
         }
 
-        this.phase(conversationId, owner, 'checking', `Checking with \`${command}\`.`);
-        const check = await this.ports.runCheck(input.projectId, command, active.controller.signal);
-        state.checkStatus = check.passed ? 'passing' : 'failing';
-        if (check.passed) {
-          this.record(conversationId, owner, 'check', `The check passed after ${state.turnCount} turn${state.turnCount === 1 ? '' : 's'}.`);
-          return this.settle(conversationId, owner, 'finished', `Done: \`${command}\` passed after ${state.turnCount} turn${state.turnCount === 1 ? '' : 's'}.`);
-        }
-
+        // The model may say the task is bigger than one session can finish. That is a request for help rather than a
+        // status, and it is taken before anything else — pushing such a run on with its own plan would be arguing
+        // with the one account of the work that matters.
         const split = parseAutoSplitDirective(turn.output);
         if (split) {
           await this.split(input, conversationId, active, split);
           return this.settle(conversationId, owner, 'finished', `Handed the rest to a new tab: "${split.title}".`);
         }
 
+        // What is left, in the agent's own words. The plan is the finish signal; no plan at all is not a finished
+        // one but an absent one, which leaves the check as the only thing to judge by — what Auto did before plans.
+        let plan = await this.ports.readPlan(input.projectId).catch(() => null);
+
+        // Once a run, before the loop starts following it: a second reader that adds what the plan never mentioned.
+        // The plan is what closes an unattended run, so a thin one is a way to look finished; nothing the agent wrote
+        // is ever removed, and this only runs while there is a plan to read.
+        if (!reviewed && plan) {
+          reviewed = true;
+          const added = await this.ports.reviewPlan(input.projectId, input.prompt).catch(() => null);
+          if (added?.length) {
+            this.record(conversationId, owner, 'info',
+              `The plan did not mention ${added.length} thing${added.length === 1 ? '' : 's'} the task asks for; added: ${added.map((item) => item.text).join('; ')}`);
+            plan = await this.ports.readPlan(input.projectId).catch(() => null);
+          }
+        }
+
+        if (plan && planIsUnfinished(plan)) {
+          const open = openPlanItems(plan);
+          this.record(conversationId, owner, 'info', `The plan still has ${open.length} item${open.length === 1 ? '' : 's'}; carrying on with the next one.`);
+          // Judged the same way a failing check is: the same items and the same working tree twice running means
+          // nothing is moving, however the model describes it.
+          if (!(await this.noteFailure(input, active, `plan:${open.map((item) => item.text).join('\n')}`))) {
+            await this.pauseForHuman(conversationId, active, 'repeated-failure',
+              `The same plan came back unchanged ${input.maxRepeatedFailures} times with no files changed in between, so pushing on is not moving it. Left on the plan: ${open[0]?.text ?? ''}`);
+            continue;
+          }
+          prompt = openPlanReminder(plan);
+          continue;
+        }
+
+        if (!command) {
+          // Nothing to confirm it with, and the plan says the work is done: the agent's own account is the finish.
+          // Said plainly rather than dressed up as verification that never happened.
+          return this.settle(conversationId, owner, 'finished',
+            `Done: the agent finished the task after ${turns(state.turnCount)}, with no check command to confirm it.`);
+        }
+
+        this.phase(conversationId, owner, 'checking', `Checking with \`${command}\`.`);
+        const check = await this.ports.runCheck(input.projectId, command, active.controller.signal);
+        state.checkStatus = check.passed ? 'passing' : 'failing';
+        if (check.passed) {
+          this.record(conversationId, owner, 'check', `The check passed after ${turns(state.turnCount)}.`);
+          // Said right under it, because this is the sentence the run closes on: a lint that passed is not the same
+          // claim as a test that passed, and files nothing is named for are not confirmed by either.
+          const coverage = await this.ports
+            .checkCoverage(input.projectId, command, await this.ports.changedFilesFor(input.projectId).catch(() => []))
+            .catch(() => null);
+          if (coverage) this.record(conversationId, owner, 'info', coverage);
+          return this.settle(conversationId, owner, 'finished', `Done: \`${command}\` passed after ${turns(state.turnCount)}.`);
+        }
+
         const failure = `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}`;
-        this.record(conversationId, owner, 'check', `Check failed after ${state.turnCount} turn${state.turnCount === 1 ? '' : 's'}.`);
+        this.record(conversationId, owner, 'check', `Check failed after ${turns(state.turnCount)}.`);
         if (!(await this.noteFailure(input, active, `check:${check.output.slice(-400)}`))) {
           await this.pauseForHuman(conversationId, active, 'repeated-failure',
             `The check failed the same way ${input.maxRepeatedFailures} times with no files changed in between, so running it again will not help: \`${command}\``);
@@ -384,7 +468,16 @@ export class DesktopAutoSession {
       const message = thrown instanceof Error ? thrown.message : thrown ? String(thrown) : (result?.error ?? result?.output.slice(-600) ?? 'The agent failed.');
       if (cancelled) return { kind: 'failed', error: message, cancelled };
       const limited = detectRateLimit(thrown ?? message);
-      if (!limited) return { kind: 'failed', error: message };
+      if (!limited) {
+        // A wall the rate-limit reader does not recognise is still often nameable, and the name is what the person
+        // is shown when Auto parks on it. The runtime's own string is the symptom.
+        const diagnosis = diagnoseRun({
+          status: 'failed',
+          error: message,
+          events: (result?.conversation?.events ?? []) as Array<{ type?: string; name?: string; status?: string; message?: string }>,
+        });
+        return { kind: 'failed', error: diagnosis ? `${message} ${diagnosisLine(diagnosis)}` : message };
+      }
 
       if (limited.window) {
         if (execution === 'cli') {
@@ -477,7 +570,9 @@ export class DesktopAutoSession {
     deadline: number,
   ): { reason: AutoWaitReason; detail: string } | null {
     const state = this.state(conversationId);
-    if (state.turnCount >= input.maxTurns && !active.acknowledged.has('turn-cap')) {
+    // A cap of zero is no cap: a long, productive run is not cut off by a round number, and one that is set parks
+    // for the person rather than ending the work.
+    if (input.maxTurns > 0 && state.turnCount >= input.maxTurns && !active.acknowledged.has('turn-cap')) {
       return { reason: 'turn-cap', detail: `Reached the ${input.maxTurns}-turn limit set for this run.` };
     }
     if (input.maxCostUsd > 0 && state.costUsd >= input.maxCostUsd && !active.acknowledged.has('cost-cap')) {
@@ -643,4 +738,9 @@ export class DesktopAutoSession {
 
 function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** "1 turn" / "3 turns", so a status line never reads like a filled-in template. */
+function turns(count: number): string {
+  return `${count} turn${count === 1 ? '' : 's'}`;
 }

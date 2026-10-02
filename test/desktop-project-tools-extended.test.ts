@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DesktopProjectToolRuntime, globToRegExp, projectToolDefinitions } from '../apps/desktop/src/main/project-tools';
+import { DesktopProjectToolRuntime, backgroundServerOptions, globToRegExp, projectToolDefinitions } from '../apps/desktop/src/main/project-tools';
 import { runCheckCommand } from '../apps/desktop/src/main/verification';
 
 describe('extended project tools', () => {
@@ -134,6 +134,20 @@ describe('commands that leave a background process behind', () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(result.ok).toBe(true);
     expect((result.output as { stdout: string }).stdout).toContain('server started');
+  });
+
+  it('never detaches the dev server on Windows, where detaching would open a console anyway', () => {
+    // A detached child on Windows gets its own console, and CREATE_NO_WINDOW — what windowsHide sets — is ignored
+    // while DETACHED_PROCESS is set. So the old options opened a bare console with the server's output in it.
+    expect(backgroundServerOptions('win32')).toEqual({
+      shell: true,
+      windowsHide: true,
+      detached: false,
+      stdio: 'ignore',
+    });
+    // Detaching is what lets the server outlive KAI on the platforms where it costs nothing.
+    expect(backgroundServerOptions('linux')).toMatchObject({ detached: true, windowsHide: true, stdio: 'ignore' });
+    expect(backgroundServerOptions('darwin')).toMatchObject({ detached: true });
   });
 
   it('does the same for a check command', async () => {

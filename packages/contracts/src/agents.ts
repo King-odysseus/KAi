@@ -142,6 +142,18 @@ export const agentRunEventSchema = z
   })
   .strict();
 
+/**
+ * A run arriving and leaving, announced to every window. A window renders an agent's events only for the
+ * conversations it has taken up, and the composer's own send was the only thing that ever took one up — so a run
+ * started in the main process worked with nothing appearing in the conversation it was working in.
+ */
+export const agentRunStateSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    status: z.enum(['started', 'finished']),
+  })
+  .strict();
+
 export type AgentCapability = z.infer<typeof agentCapabilitySchema>;
 export type AgentRunRequest = z.infer<typeof agentRunRequestSchema>;
 export type AgentRunResult = z.infer<typeof agentRunResultSchema>;
@@ -151,3 +163,4 @@ export type AgentSignInResult = z.infer<typeof agentSignInResultSchema>;
 export type AgentApprovalResponseInput = z.infer<typeof agentApprovalResponseInputSchema>;
 export type DirectApiCapability = z.infer<typeof directApiCapabilitySchema>;
 export type AgentRunEvent = z.infer<typeof agentRunEventSchema>;
+export type AgentRunState = z.infer<typeof agentRunStateSchema>;

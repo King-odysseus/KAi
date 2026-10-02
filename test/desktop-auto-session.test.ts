@@ -6,6 +6,8 @@ import {
   type AgentRunResult,
   type AutoStatus,
   type ConversationRecord,
+  type Plan,
+  type PlanItem,
 } from '@kai/contracts';
 import { DesktopAutoSession, parseAutoSplitDirective, type AutoSessionPorts, type AutoWindowPort } from '../apps/desktop/src/main/auto-session';
 
@@ -40,6 +42,8 @@ interface Harness {
   saved: ConversationRecord[];
   windows: AutoWindowPort & { entries: Map<string, string> };
   ports: AutoSessionPorts;
+  /** How many times the plan was read against the task by the second model. */
+  reviewCalls: () => number;
 }
 
 function harness(options: {
@@ -48,6 +52,12 @@ function harness(options: {
   capabilityAvailable?: boolean;
   changedFiles?: () => string[];
   suggestCheck?: string | null;
+  /** The agent's plan as it stands after each turn, which is what Auto reads to decide the task is finished. */
+  plan?: (call: number) => Plan | null;
+  /** The steps a second model added when it read the plan against the task. */
+  planAdditions?: () => PlanItem[] | null;
+  /** What the passing check does not confirm, as the coverage reader would put it. */
+  coverage?: string | null;
 } = {}): Harness {
   const prompts: string[] = [];
   const executions: Array<'cli' | 'api' | undefined> = [];
@@ -58,6 +68,8 @@ function harness(options: {
   const conversations = new Map<string, ConversationRecord>([[CONVERSATION, conversation(CONVERSATION)]]);
   let agentCalls = 0;
   let checkCalls = 0;
+  let planCalls = 0;
+  let reviewCalls = 0;
 
   const ports: AutoSessionPorts = {
     getConversation: async (id) => conversations.get(id) ?? null,
@@ -81,6 +93,15 @@ function harness(options: {
       const passed = options.check?.(checkCalls) ?? true;
       return { passed, exitCode: passed ? 0 : 1, output: passed ? '' : 'FAIL: expected 1 to be 2' };
     },
+    readPlan: async () => {
+      planCalls += 1;
+      return options.plan?.(planCalls) ?? null;
+    },
+    reviewPlan: async () => {
+      reviewCalls += 1;
+      return options.planAdditions?.() ?? null;
+    },
+    checkCoverage: async () => options.coverage ?? null,
     changedFilesFor: async () => options.changedFiles?.() ?? [],
     // `??` would swallow an explicit null, which is exactly the "nothing was detected" case under test.
     suggestCheck: async () => (options.suggestCheck === undefined ? 'npm test' : options.suggestCheck),
@@ -92,7 +113,11 @@ function harness(options: {
     now: () => Date.now(),
   };
   const windows = memoryWindows();
-  return { session: new DesktopAutoSession(ports, windows), prompts, executions, announced, opened, openedTabs, saved, windows, ports };
+  return {
+    session: new DesktopAutoSession(ports, windows),
+    prompts, executions, announced, opened, openedTabs, saved, windows, ports,
+    reviewCalls: () => reviewCalls,
+  };
 }
 
 const start = (h: Harness, overrides: Record<string, unknown> = {}) =>
@@ -155,9 +180,97 @@ describe('desktop auto session', () => {
     expect(h.prompts).toHaveLength(1);
   });
 
-  it('refuses to start without a check command, since it is the only honest sign of done', async () => {
+  it('runs without a check command, and finishes when the agent has nothing left on its plan', async () => {
+    // Nothing to confirm with is a way to run, not a reason to refuse: the agent's own account is then the finish.
     const h = harness({ suggestCheck: null });
-    await expect(start(h, { checkCommand: '' })).rejects.toThrow(/check command/i);
+    await start(h, { checkCommand: '' });
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.checkCommand).toBe('');
+    expect(final.checkStatus).toBe('unknown');
+    expect(final.turnCount).toBe(1);
+  });
+
+  it('carries on while the agent\'s own plan still has items, and stops when it is done', async () => {
+    const plan = (call: number): Plan => ({
+      schemaVersion: 1,
+      items: [{ text: 'Wire the parser', state: call <= 2 ? 'pending' : 'done' }],
+      updatedAt: new Date(2026, 9, 2, 0, 0, call).toISOString(),
+    });
+    let checks = 0;
+    const h = harness({ plan, check: () => { checks += 1; return true; } });
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.turnCount).toBe(3);
+    // The continuation hands the model its own outstanding item back rather than restating the task.
+    expect(h.prompts[1]).toContain('Wire the parser');
+    expect(h.prompts[1]).toContain('outstanding');
+    // The check confirms the finish rather than causing it: it ran once, after the plan was done.
+    expect(checks).toBe(1);
+  });
+
+  it('has the plan read against the task once, and follows what it named', async () => {
+    // The plan is what closes an unattended run, so a thin one is a way to look finished. The second reader only
+    // ever adds: the agent's own items are left exactly as it wrote them.
+    // The second read is the one after the merge, and the third is after the agent has done what was added.
+    const plan = (call: number): Plan => ({
+      schemaVersion: 1,
+      items: [
+        { text: 'Wire the parser', state: 'done' },
+        ...(call >= 2 ? [{ text: 'Go through every page', state: (call >= 3 ? 'done' : 'pending') as PlanItem['state'] }] : []),
+      ],
+      updatedAt: new Date(2026, 9, 2, 0, 0, call).toISOString(),
+    });
+    const h = harness({ plan, planAdditions: () => [{ text: 'Go through every page', state: 'pending' }] });
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    // Turn two exists only because the review added an item the plan never mentioned.
+    expect(final.turnCount).toBe(2);
+    expect(h.prompts[1]).toContain('Go through every page');
+    expect(h.reviewCalls()).toBe(1);
+    expect(final.log.some((entry) => entry.text.includes('did not mention'))).toBe(true);
+  });
+
+  it('leaves the plan alone when the review has nothing to add', async () => {
+    const h = harness({
+      plan: () => ({ schemaVersion: 1, items: [{ text: 'Wire the parser', state: 'done' }], updatedAt: '2026-10-02T00:00:00.000Z' }),
+    });
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.turnCount).toBe(1);
+    expect(h.reviewCalls()).toBe(1);
+    expect(final.log.some((entry) => entry.text.includes('did not mention'))).toBe(false);
+  });
+
+  it('says under a passing check what that check did not confirm', async () => {
+    // The complaint this comes from: a task about going through every page closed on `npm run lint` passing.
+    const h = harness({ coverage: '`npm test` is the project\'s test command, but no test is named for what this run changed (src/pages/a.tsx), so passing does not confirm it.' });
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    const lines = final.log.map((entry) => entry.text);
+    const checkLine = lines.findIndex((line) => line.startsWith('The check passed'));
+    expect(checkLine).toBeGreaterThanOrEqual(0);
+    expect(lines[checkLine + 1]).toContain('does not confirm');
+  });
+
+  it('parks on the person when the plan stops moving and no files change', async () => {
+    const h = harness({
+      plan: () => ({
+        schemaVersion: 1,
+        items: [{ text: 'Wire the parser', state: 'pending' }],
+        updatedAt: '2026-10-02T00:00:00.000Z',
+      }),
+      changedFiles: () => [],
+    });
+    await start(h);
+    const parked = await settled(h);
+    expect(parked.phase).toBe('waiting-for-you');
+    expect(parked.waitReason).toBe('repeated-failure');
+    expect(parked.waitDetail).toContain('Wire the parser');
   });
 
   it('hands off to the API provider when the CLI window is spent, and returns to the CLI when it reopens', async () => {
@@ -270,6 +383,22 @@ describe('desktop auto session', () => {
     expect(h.announced.some((status) => status.phase === 'waiting-for-you' && status.waitReason === 'approval')).toBe(true);
   });
 
+  it('opens the task in a conversation that states the settings it was started with', async () => {
+    // The composer reads a conversation's settings back when the window is taken to it, and fills the gaps from the
+    // app's defaults — so a conversation opened blank sent the person's API choice back to CLI as their run began.
+    const h = harness();
+    await start(h, { conversationId: undefined, execution: 'api', autonomy: 'autoEdit' });
+    await settled(h, h.opened[0]!);
+    const opened = h.saved.find((record) => record.id === h.opened[0]);
+    expect(opened).toMatchObject({
+      activeAgent: 'claude',
+      execution: 'api',
+      route: 'direct',
+      autonomy: 'autoEdit',
+    });
+    await h.session.dispose();
+  });
+
   it('opens a tab for the remainder when the model says the task is too big', async () => {
     const h = harness({
       // Only the original conversation asks for a split; the tab it opens is a normal run.
@@ -333,7 +462,8 @@ describe('desktop auto session', () => {
     await start(h);
     const final = await settled(h);
     expect(h.announced.length).toBeGreaterThan(0);
-    expect(final).toMatchObject({ conversationId: CONVERSATION, projectId: 'p1', maxTurns: 40, activeProvider: 'cli' });
+    // Uncapped by default: a productive run is not cut off by a round number, so the panel has no fraction to draw.
+    expect(final).toMatchObject({ conversationId: CONVERSATION, projectId: 'p1', maxTurns: 0, activeProvider: 'cli' });
     expect(final.startedAt).not.toBeNull();
   });
 });

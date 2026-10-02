@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -43,6 +43,17 @@ describe('desktop project tool runtime', () => {
     expect(tools.policy('replace_in_file', 'plan')).toMatchObject({ decision: 'deny' });
     expect(tools.policy('replace_in_file', 'ask')).toMatchObject({ decision: 'ask', risk: 'medium' });
     expect(tools.policy('read_file', 'plan')).toEqual({ decision: 'allow' });
+    // The plan is the model's own note about where the task has got to — it writes `.kai/plan.json` and no project
+    // source, so it is allowed at every level. It used to fall through to the unknown-tool deny, which is why an API
+    // run could never record one and the finish signal had nothing to read.
+    for (const autonomy of ['plan', 'ask', 'autoEdit', 'full', 'custom'] as const) {
+      expect(tools.policy('update_plan', autonomy)).toEqual({ decision: 'allow' });
+    }
+    await expect(tools.execute('update_plan', {
+      items: [{ text: 'Wire the parser', state: 'pending' }],
+    })).resolves.toMatchObject({ ok: true });
+    const plan = JSON.parse(await readFile(path.join(root, '.kai', 'plan.json'), 'utf8')) as { items: unknown[] };
+    expect(plan.items).toEqual([{ text: 'Wire the parser', state: 'pending' }]);
     await expect(tools.execute('replace_in_file', {
       path: 'package.json',
       old_text: '"missing"',

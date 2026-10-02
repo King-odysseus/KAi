@@ -400,10 +400,13 @@ describe('desktop agent runtime', () => {
       'C:/kai/attachments/capture.png',
       '-',
     ]);
+    // stream-json: the run's own messages as they are written, and the tools it used, rather than one JSON blob at
+    // the end. `--verbose` is required by that format.
     expect(buildAgentArgs({ ...base, agent: 'claude' }, 'C:/repo')).toEqual([
       '-p',
       '--output-format',
-      'json',
+      'stream-json',
+      '--verbose',
       '--permission-mode',
       'plan',
     ]);

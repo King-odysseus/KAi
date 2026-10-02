@@ -12,6 +12,24 @@ afterEach(async () => {
 });
 
 describe('desktop project context builder', () => {
+  it('carries what earlier runs did here, framed as a record rather than instructions', async () => {
+    const root = await fixtureProject();
+    const built = await buildProjectContext(root, {
+      history: ['- today: changed src/app.ts — the check passed.', 'The most recent of those did not finish cleanly.'],
+    });
+    expect(built.text).toContain('## Earlier runs here');
+    expect(built.text).toContain('- today: changed src/app.ts — the check passed.');
+    // A record the model may check, not something it must follow.
+    expect(built.text).toContain('not instructions');
+    expect(built.preview.sections.find((section) => section.kind === 'history')?.label).toBe('Earlier runs here');
+
+    // With nothing to say, nothing is written into the prompt — the panel still lists the section, as it does for
+    // every other kind, so an empty history reads as "none recorded" rather than as a missing feature.
+    const bare = await buildProjectContext(root, {});
+    expect(bare.text).not.toContain('Earlier runs here');
+    expect(bare.preview.sections.find((section) => section.kind === 'history')?.items ?? ['something']).toHaveLength(0);
+  });
+
   it('leaves out instructions, rules and skills for a resumed session but keeps the selected files', async () => {
     const root = await fixtureProject();
     await writeFile(path.join(root, 'AGENTS.md'), '# Rules\nAlways run focused tests.\n', 'utf8');

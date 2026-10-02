@@ -71,10 +71,13 @@ export const autoStartInputSchema = z
     model: cliModelNameSchema.optional(),
     route: routeModeSchema,
     autonomy: autonomyModeSchema,
-    /** The command that decides the task is done. Auto refuses to start without one: it is the only honest "done". */
+    /**
+     * The command that confirms the task is done, run once the agent's own plan says it is. Blank means the
+     * project's test command when one can be found, and nothing to confirm with when there is not.
+     */
     checkCommand: z.string().trim().max(1_000).default(''),
-    /** Stops after this many turns, so a task that never converges still ends. */
-    maxTurns: z.number().int().min(1).max(500).default(40),
+    /** Parks for the person after this many turns; zero means no limit, which is the default. */
+    maxTurns: z.number().int().min(0).max(500).default(0),
     /** Stops once the run's estimated spend passes this many USD; zero means no limit. */
     maxCostUsd: z.number().min(0).max(10_000).default(0),
     /** Stops after this many hours, cooling included; zero means no limit. */
@@ -134,7 +137,7 @@ export const autoStatusSchema = z
     message: z.string().max(600),
     /** Turns run so far, and the cap they count against. */
     turnCount: z.number().int().min(0),
-    maxTurns: z.number().int().min(1),
+    maxTurns: z.number().int().min(0),
     checkCommand: z.string().max(1_000),
     checkStatus: z.enum(['unknown', 'passing', 'failing']),
     /** The provider the current (or next) turn runs on. */

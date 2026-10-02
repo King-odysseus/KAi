@@ -16,6 +16,9 @@ import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
 import { DesktopChangeReviewer } from './change-review';
 import { configureCopyCheckpoints } from './copy-checkpoints';
+import { readPlan, writePlan } from './plan-store';
+import { DesktopPlanReviewer, mergePlanItems } from './plan-review';
+import { coverageNote, isSourceNeedingCoverage, testNamedFor } from './check-coverage';
 import { jobFileFromArgv, processHeadlessJobFile } from './headless';
 import { DesktopEvals, EvalStore } from './evals';
 import { RunScoreStore } from './run-scores';
@@ -490,6 +493,7 @@ async function startApplication(): Promise<void> {
   let scheduler!: DesktopScheduler;
   let evals!: DesktopEvals;
   let changeReviewer!: DesktopChangeReviewer;
+  let planReviewer!: DesktopPlanReviewer;
 
   // open-pencil is reached through the same MCP runtime as every other server, so its token stays in the vault.
   const openPencilPorts = async (): Promise<DesignPorts | null> => {
@@ -682,6 +686,8 @@ async function startApplication(): Promise<void> {
   ipcContext.promptGuide = promptGuide;
   changeReviewer = new DesktopChangeReviewer({ pickConnection: () => promptGuide.pickConnection(), requester: learningTutor });
   ipcContext.changeReviewer = changeReviewer;
+  // The same connection as the change review: whoever the person picked to read their work reads the plan too.
+  planReviewer = new DesktopPlanReviewer({ pickConnection: () => promptGuide.pickConnection(), requester: learningTutor });
   const projectById = async (projectId: string) => {
     const found = (await projects.list()).find((candidate) => candidate.id === projectId);
     if (!found) throw new Error('That project is no longer in KAI.');
@@ -877,6 +883,29 @@ async function startApplication(): Promise<void> {
     },
     changedFilesFor: async (projectId) => (await gitOverview(await projectRootFor(projectId))).changes.map((change) => change.path),
     suggestCheck: async (projectId) => suggestTestCommand(await projectRootFor(projectId)),
+    // Auto's finish signal: the agent's own plan, read fresh after every turn. A missing or unreadable plan is no
+    // plan — readPlan says so rather than throwing, which leaves the check as the thing to judge by.
+    readPlan: async (projectId) => readPlan(await projectRootFor(projectId)),
+    // A second model reads the plan against the task and KAI writes what it named. Nothing is removed, and a review
+    // that cannot run — no connection, a refusal, a daft reply — leaves the plan exactly as the agent set it.
+    reviewPlan: async (projectId, request) => {
+      const root = await projectRootFor(projectId);
+      const plan = await readPlan(root);
+      if (!plan || plan.items.length === 0) return null;
+      const review = await planReviewer.review(request, plan).catch(() => null);
+      if (!review || review.missing.length === 0) return [];
+      const merged = mergePlanItems(plan.items, review.missing);
+      const added = merged.slice(plan.items.length);
+      await writePlan(root, merged, new Date().toISOString()).catch(() => undefined);
+      return added;
+    },
+    checkCoverage: async (projectId, command, changedFiles) => {
+      const root = await projectRootFor(projectId);
+      const sources = changedFiles.filter(isSourceNeedingCoverage).slice(0, 20);
+      const tested = new Map<string, boolean>();
+      for (const file of sources) tested.set(file, await testNamedFor(root, file).catch(() => false));
+      return coverageNote(command, changedFiles, (file) => tested.get(file) ?? false);
+    },
     capability: async () => {
       const capability = await directApi.capability();
       return { available: capability.available, name: capability.displayName, model: capability.model ?? null };

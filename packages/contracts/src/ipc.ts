@@ -136,6 +136,7 @@ import {
   type AgentApprovalResponseInput,
   type AgentRunEvent,
   type AgentRunRequest,
+  type AgentRunState,
   type AgentRunResult,
   type AgentSignInResult,
   type DirectApiCapability,
@@ -1367,6 +1368,12 @@ export interface KaiDesktopBridge {
   installAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;
   respondToApproval(request: AgentApprovalResponseInput): Promise<IpcResponse<boolean>>;
   onAgentEvent(listener: (payload: AgentRunEvent) => void): () => void;
+  /**
+   * Told when a run starts and when it ends, whoever started it. The composer only ever took up the runs it began
+   * itself; this is how a window takes up one it did not — Auto carrying a task, the board working a card, a
+   * schedule firing — so the conversation shows what is being done to it.
+   */
+  onAgentRunState(listener: (payload: AgentRunState) => void): () => void;
   usageSummary(conversationId?: string): Promise<IpcResponse<UsageSummary>>;
   reportView(view: string, conversationId: string | null): Promise<IpcResponse<boolean>>;
   coordinationOverview(): Promise<IpcResponse<CoordinationOverview>>;

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentRunEvent, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, SharedDesktopState, TerminalEvent, UpdateState } from '@kai/contracts';
+import type { AgentRunEvent, AgentRunState, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, SharedDesktopState, TerminalEvent, UpdateState } from '@kai/contracts';
 
 const bridge: KaiDesktopBridge = {
   bootstrap: () => ipcRenderer.invoke('app:get-bootstrap', {}),
@@ -237,6 +237,11 @@ const bridge: KaiDesktopBridge = {
     const handler = (_event: Electron.IpcRendererEvent, payload: AgentRunEvent): void => listener(payload);
     ipcRenderer.on('agents:event', handler);
     return () => ipcRenderer.removeListener('agents:event', handler);
+  },
+  onAgentRunState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: AgentRunState): void => listener(payload);
+    ipcRenderer.on('agents:run-state', handler);
+    return () => ipcRenderer.removeListener('agents:run-state', handler);
   },
   usageSummary: (conversationId) => ipcRenderer.invoke('usage:summary', conversationId ? { conversationId } : {}),
   reportView: (view, conversationId) => ipcRenderer.invoke('ui:report-view', { view, conversationId }),

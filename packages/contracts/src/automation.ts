@@ -185,6 +185,11 @@ export const runScoreSchema = z
     /** How many automatic fix rounds the run needed. */
     fixRounds: z.number().int().nonnegative(),
     filesChanged: z.number().int().nonnegative(),
+    /**
+     * The paths it changed, so a later run can see that this one touched the same ground. Optional because scores
+     * written before KAI kept them have only the count.
+     */
+    files: z.array(z.string().min(1).max(1_024)).max(100).optional(),
     durationMs: z.number().nonnegative(),
     costUsd: z.number().nonnegative().optional(),
   })
