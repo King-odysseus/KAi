@@ -1665,7 +1665,7 @@ button:disabled {
 }
 
 /* The pane body is the scroller. The column was overflow:hidden with no rule on the panel, so it clipped its content
-   rather than scrolling it â€” a tab strip's worth of height would have gone the same way. */
+   rather than scrolling it — a tab strip's worth of height would have gone the same way. */
 .context-pane-body {
   display: flex;
   flex: 1 1 auto;
@@ -12423,6 +12423,22 @@ code {
   align-items: center;
   gap: 6px;
   margin: 0;
+}
+.autopilot-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* A minimised panel keeps its head and one line of status, so it can sit above the composer without taking it over. */
+.autopilot-panel.collapsed {
+  gap: 2px;
+  padding: 8px 14px;
+}
+.autopilot-panel.collapsed .run-panel-summary {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .autopilot-settings summary {
   cursor: pointer;

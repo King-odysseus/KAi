@@ -122,6 +122,16 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('autopilot:changed', handler);
     return () => ipcRenderer.removeListener('autopilot:changed', handler);
   },
+  startAuto: (request) => ipcRenderer.invoke('auto:start', request),
+  stopAuto: (request) => ipcRenderer.invoke('auto:stop', request),
+  autoStatus: (request) => ipcRenderer.invoke('auto:status', request),
+  pauseAuto: (request) => ipcRenderer.invoke('auto:pause', request),
+  resumeAuto: (request) => ipcRenderer.invoke('auto:resume', request),
+  onAutoChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: import('@kai/contracts').AutoStatus): void => listener(payload);
+    ipcRenderer.on('auto:changed', handler);
+    return () => ipcRenderer.removeListener('auto:changed', handler);
+  },
   studioDesign: (projectId) => ipcRenderer.invoke('studio:design-read', { projectId }),
   pullStudioDesign: (projectId) => ipcRenderer.invoke('studio:design-pull', { projectId }),
   onStudioBoardChanged: (listener) => {

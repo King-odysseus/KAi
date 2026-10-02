@@ -21,7 +21,11 @@ export const viewReportSchema = z
   .strict();
 
 // `projectId`, when given, is the project the conversation belongs to, so the window can switch to it first.
-export const openConversationEventSchema = z.object({ conversationId: z.string().min(1), projectId: z.string().min(1).optional() }).strict();
+// `openTab` adds the conversation to the window's tabs rather than only showing it, which is how a split from Auto
+// gives its remainder somewhere of its own to run.
+export const openConversationEventSchema = z
+  .object({ conversationId: z.string().min(1), projectId: z.string().min(1).optional(), openTab: z.boolean().optional() })
+  .strict();
 
 export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
 export type NotificationKind = z.infer<typeof notificationKindSchema>;

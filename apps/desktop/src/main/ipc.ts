@@ -114,6 +114,7 @@ import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopAutopilot } from './autopilot';
+import type { DesktopAutoSession } from './auto-session';
 import { syncBrainToMirror } from './brain-mirror';
 import type { BrainMirrorOutcome } from '@kai/contracts';
 import { composeRunLesson, type RunLessonInput } from './run-learning';
@@ -193,6 +194,7 @@ export interface IpcContext {
   workflows: DesktopWorkflowRunner;
   teamPlanner: DesktopTeamPlanner;
   autopilot: DesktopAutopilot;
+  auto: DesktopAutoSession;
   promptGuide: DesktopPromptGuide;
   interview: DesktopInterview;
   studio: DesktopStudio;
@@ -475,6 +477,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'autopilot:stop', async ({ projectId }) => context.autopilot.stop(projectId));
   handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));
   handle(context, 'autopilot:requeue', async ({ projectId }) => ({ requeued: await context.autopilot.requeueBlocked(projectId) }));
+  handle(context, 'auto:start', async (input, request) => context.auto.start(input, request.ownerWindowId));
+  handle(context, 'auto:stop', async ({ conversationId }) => context.auto.stop(conversationId));
+  handle(context, 'auto:status', async ({ conversationId }) => context.auto.status(conversationId));
+  handle(context, 'auto:pause', async ({ conversationId }) => context.auto.pause(conversationId));
+  handle(context, 'auto:resume', async ({ conversationId }) => context.auto.resume(conversationId));
   handle(context, 'studio:design-read', async ({ projectId }) => context.studio.design(projectId));
   handle(context, 'studio:design-pull', async ({ projectId }) => {
     const pulled = await context.studio.pullDesign(projectId);
@@ -1265,6 +1272,9 @@ export async function runConversationAgent(
     if (activity) void context.recovery.touch(conversation.id, activity).catch(() => undefined);
     if (event.type === 'approval.request') {
       void context.notifications.notifyApproval(conversation.id, conversation.title, event.title, ownerWindowId ?? undefined);
+      // An Auto run cannot answer a prompt, so it stops and asks the person instead of looking stuck. Optional
+      // because a context assembled for a single run (tests, headless callers) may have no Auto loop at all.
+      context.auto?.onApprovalRequest(conversation.id, event.title);
     }
     const payload = { conversationId: conversation.id, event } satisfies AgentRunEvent;
     if (ownerWindowId !== null && context.windows.send(ownerWindowId, 'agents:event', payload)) return;

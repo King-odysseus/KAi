@@ -1,7 +1,8 @@
-import { Loader2, Moon, Plane, Square } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, Moon, Plane, Square } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import type { AutopilotStatus, StudioBoard } from '@kai/contracts';
+import type { AutopilotStatus } from '@kai/contracts';
 import { unwrap } from '../types';
+import { useRunPanelCollapsed } from './run-panel-collapse';
 
 interface Props {
   projectId: string;
@@ -38,6 +39,7 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
   const [maxCostUsd, setMaxCostUsd] = useState(0);
   const [attemptsPerCard, setAttemptsPerCard] = useState(3);
   const [minGapSeconds, setMinGapSeconds] = useState(0);
+  const [collapsed, toggleCollapsed] = useRunPanelCollapsed('autopilot');
 
   useEffect(() => {
     let cancelled = false;
@@ -98,19 +100,33 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
   const progress = status && status.cardsTotal > 0 ? Math.round((status.cardsDone / status.cardsTotal) * 100) : 0;
 
   return (
-    <section className="autopilot-panel" aria-label="Autopilot">
+    <section className={`autopilot-panel${collapsed ? ' collapsed' : ''}`} aria-label="Autopilot">
       <div className="autopilot-head">
         <h3><Plane size={15} /> Autopilot</h3>
-        {running ? (
-          <button type="button" className="secondary-button" onClick={() => void stop()} disabled={busy}>
-            {busy ? <Loader2 className="spin" size={14} /> : <Square size={14} />} Stop
+        <div className="autopilot-head-actions">
+          {running ? (
+            <button type="button" className="secondary-button" onClick={() => void stop()} disabled={busy}>
+              {busy ? <Loader2 className="spin" size={14} /> : <Square size={14} />} Stop
+            </button>
+          ) : (
+            <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedCount > 0 ? 'Every card on the board is blocked. Put them back in the queue below, then start.' : 'Build the board first'}>
+              {busy ? <Loader2 className="spin" size={14} /> : <Plane size={14} />} {status?.phase === 'finished' || status?.phase === 'stopped' || status?.phase === 'failed' ? 'Run again' : 'Start Autopilot'}
+            </button>
+          )}
+          <button
+            type="button"
+            className="composer-icon-button"
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Show Autopilot details' : 'Minimise Autopilot'}
+            aria-label={collapsed ? 'Show Autopilot details' : 'Minimise Autopilot'}
+          >
+            {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
           </button>
-        ) : (
-          <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedCount > 0 ? 'Every card on the board is blocked. Put them back in the queue below, then start.' : 'Build the board first'}>
-            {busy ? <Loader2 className="spin" size={14} /> : <Plane size={14} />} {status?.phase === 'finished' || status?.phase === 'stopped' || status?.phase === 'failed' ? 'Run again' : 'Start Autopilot'}
-          </button>
-        )}
+        </div>
       </div>
+      {collapsed && <p className="studio-note run-panel-summary">{status ? status.message : 'Ready when you are.'}</p>}
+      {!collapsed && <>
       <p className="studio-note">
         Works the whole board on its own: one agent per card, a check after each, a retry with the failure when it fails, and a rest when the provider rate-limits.
         A card is only closed when its check passes; a card that never passes is parked as blocked and the rest carry on.
@@ -185,55 +201,7 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
           )}
         </div>
       )}
+      </>}
     </section>
-  );
-}
-
-/**
- * Autopilot as a composer intent. The board belongs to a Studio plan, which is the open project itself or the plan
- * linked to its folder, so the plan is found first and the same panel the Studio shows is placed above the composer.
- */
-export function AutopilotIntentPanel({ projectId }: { projectId: string }): ReactNode {
-  const [planId, setPlanId] = useState<string | null | undefined>(undefined);
-  const [board, setBoard] = useState<StudioBoard | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setPlanId(undefined);
-    setBoard(null);
-    void window.kaiDesktop.studioProjects().then(unwrap).then((plans) => {
-      if (cancelled) return;
-      const plan = plans.find((item) => !item.archivedAt && (item.id === projectId || item.linkedProjectId === projectId));
-      setPlanId(plan?.id ?? null);
-    }).catch(() => { if (!cancelled) setPlanId(null); });
-    return () => { cancelled = true; };
-  }, [projectId]);
-
-  useEffect(() => {
-    if (!planId) return undefined;
-    let cancelled = false;
-    void window.kaiDesktop.studioBoard(planId).then(unwrap).then((next) => { if (!cancelled) setBoard(next); }).catch(() => undefined);
-    const off = window.kaiDesktop.onStudioBoardChanged((payload) => {
-      if (payload.projectId === planId) setBoard(payload.board);
-    });
-    return () => { cancelled = true; off(); };
-  }, [planId]);
-
-  if (planId === undefined) return <section className="autopilot-panel" aria-label="Autopilot"><p className="studio-note"><Loader2 className="spin" size={13} /> Looking for this project's board…</p></section>;
-  if (planId === null || !board) {
-    return (
-      <section className="autopilot-panel" aria-label="Autopilot">
-        <p className="studio-note">{planId === null ? 'Autopilot works the board of a Studio plan, and this project has none. Plan it in the Studio first.' : 'Loading the board…'}</p>
-      </section>
-    );
-  }
-  const cards = board.cards;
-  return (
-    <AutopilotPanel
-      projectId={planId}
-      blockedCount={cards.filter((card) => card.status === 'blocked').length}
-      hasWork={cards.some((card) => card.status === 'ready' || card.status === 'inProgress')}
-      disabled={false}
-    />
   );
 }

@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type ConversationRecord, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
@@ -46,6 +46,8 @@ import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
 import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
+import { DesktopAutoSession } from './auto-session';
+import { AutoWindowStore } from './auto-session-store';
 import { BrainMirrorLoop } from './brain-mirror';
 import { DesktopPromptGuide } from './prompt-guide';
 import { DesktopInterview } from './interview';
@@ -184,6 +186,7 @@ app.on('before-quit', (event) => {
     .then(() => (activeContext ? closeCompareRuns(activeContext) : Promise.resolve()))
     .then(() => activeContext?.workflows.dispose())
     .then(() => activeContext?.autopilot.dispose())
+    .then(() => activeContext?.auto.dispose())
     .then(() => mirrorLoop?.stop())
     .then(() => activeContext?.scheduler.stop())
     .then(() => activeContext?.terminal.stopAll())
@@ -448,6 +451,7 @@ async function startApplication(): Promise<void> {
   let workflowRunner!: DesktopWorkflowRunner;
   let teamPlanner!: DesktopTeamPlanner;
   let autopilot!: DesktopAutopilot;
+  let auto!: DesktopAutoSession;
   let promptGuide!: DesktopPromptGuide;
   let interview!: DesktopInterview;
   let studio!: DesktopStudio;
@@ -525,6 +529,7 @@ async function startApplication(): Promise<void> {
     workflows: workflowRunner,
     teamPlanner,
     autopilot,
+    auto,
     promptGuide,
     interview,
     studio,
@@ -814,6 +819,45 @@ async function startApplication(): Promise<void> {
     now: () => Date.now(),
   });
   ipcContext.autopilot = autopilot;
+  const projectRootFor = async (projectId: string): Promise<string> => {
+    const project = (await projects.list()).find((candidate) => candidate.id === projectId);
+    if (!project) throw new Error('Project not found.');
+    return project.path;
+  };
+  const openConversationInWindow = (ownerWindowId: number, conversation: ConversationRecord, openTab: boolean): void => {
+    desktopWindows.send(ownerWindowId, 'app:open-conversation', {
+      conversationId: conversation.id,
+      ...(conversation.projectId ? { projectId: conversation.projectId } : {}),
+      ...(openTab ? { openTab: true } : {}),
+    });
+  };
+  auto = new DesktopAutoSession({
+    getConversation: (conversationId) => conversations.get(conversationId),
+    saveConversation: async (conversation) => { await conversations.save(conversation); return conversation; },
+    createConversation: (projectId, title) => createBlankConversation(projectId, title),
+    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
+    runCheck: async (projectId, command, signal) => {
+      const projectPath = await projectRootFor(projectId);
+      const check = await runCheckCommand(projectPath, command, signal);
+      await recordVerification(ipcContext!.verification, projectId, projectPath, check).catch(() => null);
+      return { passed: check.exitCode === 0, exitCode: check.exitCode, output: check.output };
+    },
+    changedFilesFor: async (projectId) => (await gitOverview(await projectRootFor(projectId))).changes.map((change) => change.path),
+    suggestCheck: async (projectId) => suggestTestCommand(await projectRootFor(projectId)),
+    capability: async () => {
+      const capability = await directApi.capability();
+      return { available: capability.available, name: capability.displayName, model: capability.model ?? null };
+    },
+    setPacer: (pacer) => directApi.setPacer(pacer),
+    // Auto always gives its conversation a tab: it is the one the run is working in, and a split's remainder needs
+    // somewhere of its own to carry on.
+    openConversation: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true),
+    openNewTab: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true),
+    announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'auto:changed', status),
+    now: () => Date.now(),
+  }, new AutoWindowStore(path.join(paths.root, 'auto-windows.json')));
+  ipcContext.auto = auto;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);

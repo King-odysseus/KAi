@@ -31,6 +31,14 @@ import {
   type AutopilotStatus,
 } from './autopilot';
 import {
+  autoConversationInputSchema,
+  autoStartInputSchema,
+  autoStatusResponseSchema,
+  type AutoConversationInput,
+  type AutoStartRequest,
+  type AutoStatus,
+} from './auto';
+import {
   studioArtifactInputSchema,
   openPencilSaveInputSchema,
   studioArtifactSaveInputSchema,
@@ -469,6 +477,11 @@ export const ipcChannels = [
   'autopilot:stop',
   'autopilot:status',
   'autopilot:requeue',
+  'auto:start',
+  'auto:stop',
+  'auto:status',
+  'auto:pause',
+  'auto:resume',
   'studio:design-pull',
   'studio:design-read',
   'team:start',
@@ -757,6 +770,11 @@ export const ipcInputSchemas = {
   'autopilot:stop': autopilotProjectInputSchema,
   'autopilot:status': autopilotProjectInputSchema,
   'autopilot:requeue': autopilotProjectInputSchema,
+  'auto:start': autoStartInputSchema,
+  'auto:stop': autoConversationInputSchema,
+  'auto:status': autoConversationInputSchema,
+  'auto:pause': autoConversationInputSchema,
+  'auto:resume': autoConversationInputSchema,
   'studio:design-pull': studioProjectInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'team:start': teamStartInputSchema,
@@ -1214,6 +1232,18 @@ export interface KaiDesktopBridge {
   /** Puts the cards a stopped or failed Autopilot run left blocked back in the queue. */
   requeueAutopilot(request: AutopilotProjectInput): Promise<IpcResponse<{ requeued: number }>>;
   onAutopilotChanged(listener: (status: AutopilotStatus) => void): () => void;
+  /**
+   * Starts Auto mode on one composer task. It carries the task across turns until the check command passes, cooling
+   * on a burst limit and moving to the API model when the CLI's usage window is spent.
+   */
+  startAuto(request: AutoStartRequest): Promise<IpcResponse<AutoStatus>>;
+  stopAuto(request: AutoConversationInput): Promise<IpcResponse<AutoStatus | null>>;
+  autoStatus(request: AutoConversationInput): Promise<IpcResponse<AutoStatus | null>>;
+  /** Stops Auto from starting another turn; the turn in flight is left alone. */
+  pauseAuto(request: AutoConversationInput): Promise<IpcResponse<AutoStatus | null>>;
+  /** Picks a paused Auto back up, re-checking that there is a provider to run on. */
+  resumeAuto(request: AutoConversationInput): Promise<IpcResponse<AutoStatus | null>>;
+  onAutoChanged(listener: (status: AutoStatus) => void): () => void;
   /** What KAI last read from open-pencil. */
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
   /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */

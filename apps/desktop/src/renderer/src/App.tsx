@@ -613,10 +613,12 @@ export function App(): ReactNode {
   openProjectRef.current = openProject;
   const activeProjectIdRef = useRef<string | null>(null);
   activeProjectIdRef.current = bootstrap?.activeProjectId ?? null;
-  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId, projectId }) => {
+  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId, projectId, openTab }) => {
     void (async () => {
       // A conversation belongs to a project; switch to it first or the composer would show the wrong one.
       if (projectId && projectId !== activeProjectIdRef.current) await openProjectRef.current(projectId, 'stay');
+      // Auto hands a split's remainder to a conversation of its own, so it needs a tab, not just to be shown.
+      if (openTab) setOpenConversationIds((current) => current.includes(conversationId) ? current : [...current, conversationId]);
       await openConversationRef.current(conversationId);
     })();
   }), []);

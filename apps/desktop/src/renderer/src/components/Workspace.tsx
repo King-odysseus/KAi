@@ -1,5 +1,5 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
-import { AutopilotIntentPanel } from './AutopilotPanel';
+import { AutoModePanel } from './AutoPanel';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
 import {
@@ -174,7 +174,7 @@ interface QueuedPrompt {
   options: WorkspaceSendOptions;
 }
 
-type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'autopilot';
+type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'Ask', description: 'Understand an idea or get advice', placeholder: 'Ask KAI about this project or idea', starter: '' },
@@ -183,7 +183,7 @@ const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: 
   { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
   { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
   { id: 'equalizer', label: 'Equalizer', description: 'Compare the built screens with their design and report every difference', placeholder: 'Say what does not match, for example: the dashboard on my dev server', starter: '' },
-  { id: 'autopilot', label: 'Autopilot', description: 'Work every card on the project board, one after another, checking each', placeholder: 'Autopilot works the board by itself; start it above', starter: '' },
+  { id: 'auto', label: 'Auto', description: 'Work this task on its own until the check passes, switching provider when a limit is hit', placeholder: 'Describe the task; Auto keeps going until the check passes', starter: '' },
 ];
 
 const STATUS_WORDS = [
@@ -686,7 +686,7 @@ export function WorkspaceView({
     setRefiningPrompt(true);
     setWorkbenchNotice(null);
     try {
-      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || taskIntent === 'autopilot' ? 'build' : taskIntent }));
+      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || taskIntent === 'auto' ? 'build' : taskIntent }));
       setPrompt(result.prompt);
       window.setTimeout(() => {
         promptRef.current?.focus();
@@ -727,6 +727,10 @@ export function WorkspaceView({
     if (intent === 'plan' || intent === 'review' || intent === 'learn') onSelectAutonomy('plan');
     // Leaving plan-only for Build lands on the level the person's experience setting asks for, not always on auto-edit.
     if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
+    // Auto cannot answer the questions a plan or ask level raises, so choosing it lifts the level to one that works.
+    if (intent === 'auto' && (selectedAutonomy === 'plan' || selectedAutonomy === 'ask')) {
+      onSelectAutonomy(profile.autonomy === 'plan' || profile.autonomy === 'ask' ? 'autoEdit' : profile.autonomy);
+    }
     if (!prompt.trim() && definition.starter) setPrompt(definition.starter);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
@@ -1454,7 +1458,23 @@ export function WorkspaceView({
             if (files.length > 0) void attachImageFiles(files);
           }}
         />
-        {taskIntent === 'autopilot' && activeProject && <AutopilotIntentPanel projectId={activeProject.id} />}
+        {taskIntent === 'auto' && activeProject && (
+          <AutoModePanel
+            projectId={activeProject.id}
+            conversationId={activeConversation?.id ?? null}
+            prompt={prompt}
+            agent={selectedAgent}
+            route={selectedRoute}
+            autonomy={selectedAutonomy}
+            execution={executionMode}
+            model={selectedModel}
+            goal={activeConversation?.goal ?? undefined}
+            skills={selectedSkills.map((skill) => skill.name)}
+            selectedPaths={selectedFiles}
+            contextChips={contextChips}
+            disabled={busy}
+          />
+        )}
         {taskIntent === 'equalizer' && activeProject && (
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}

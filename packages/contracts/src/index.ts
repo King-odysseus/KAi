@@ -1,4 +1,5 @@
 export * from './agents';
+export * from './auto';
 export * from './automation';
 export * from './autopilot';
 export * from './brain';
