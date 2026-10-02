@@ -36,12 +36,12 @@ import { TasksView } from './components/TasksView';
 import { StudioView } from './components/StudioView';
 import { TerminalView } from './components/TerminalView';
 import { PreviewView } from './components/PreviewView';
+import { RightPane } from './components/RightPane';
 import { UrgentBanner } from './components/CoordinationPanel';
 import { UpdateBanner } from './components/UpdatesPanel';
 import { OperationsView, type OperationsTab } from './components/OperationsView';
 import { UsageView } from './components/UsageView';
 import {
-  ContextPanel,
   WorkspaceView,
   type WorkspaceSendOptions,
   type WorkspaceCommandKind,
@@ -1897,7 +1897,7 @@ export function App(): ReactNode {
               onKeyDown={(event) => resizePaneWithKeyboard('context', event)}
             />
             <div className="context-column" style={{ width: contextWidth }}>
-              <ContextPanel
+              <RightPane
                 activeProject={activeProject}
                 conversation={activeConversation}
                 services={bootstrap.services}

@@ -510,7 +510,13 @@ async function verifyControlsOnEveryPage(page, size) {
 async function selectMenuOption(page, triggerLabel, optionName) {
   await openSelectMenu(page, triggerLabel);
   const listbox = page.getByRole('listbox', { name: triggerLabel, exact: true });
-  const option = listbox.getByRole('option', { name: optionName });
+  // An option's accessible name is its label followed by its description, and the descriptions overlap: "Ask" is a
+  // prefix of "Ask KAI asks your permission" but also sits inside "asks before risky commands" and "without asking",
+  // so a plain name match resolved to three options. A string names the label, so anchor it there. A regular
+  // expression is passed through, since the caller already knows what it wants.
+  const option = typeof optionName === 'string'
+    ? listbox.getByRole('option', { name: new RegExp(`^${optionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`) })
+    : listbox.getByRole('option', { name: optionName });
   await option.click({ force: true });
 }
 

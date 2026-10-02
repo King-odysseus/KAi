@@ -2113,7 +2113,7 @@ function setupSuffix(capability: AgentCapability): string {
 
 export function ContextPanel({ activeProject, conversation, services, contextPreview, contextPreviewLoading }: { activeProject: ProjectRecord | null; conversation: ConversationRecord | null; services: ServiceState[]; contextPreview: ContextPreview | null; contextPreviewLoading: boolean }): ReactNode {
   return (
-    <aside className="context-panel">
+    <div className="context-body">
       <div className="context-heading"><div><span className="eyebrow">Context</span><h2>{activeProject?.name ?? 'No project'}</h2></div><FileDiff size={17} /></div>
       <div className="context-meter">
         <span>Estimated direct API context</span>
@@ -2143,7 +2143,7 @@ export function ContextPanel({ activeProject, conversation, services, contextPre
         {services.map((service) => <div key={service.kind} className="service-row"><span className={`status-dot ${service.status}`} /><span>{service.kind === 'cognitive1' ? 'C1 Brain' : 'Universal Proxy'}</span><small>{statusLabel(service.status)}</small></div>)}
       </div>
       <div className="context-section context-foot"><span>Updated</span><strong>{conversation ? relativeTime(conversation.updatedAt) : 'Not active'}</strong></div>
-    </aside>
+    </div>
   );
 }
 

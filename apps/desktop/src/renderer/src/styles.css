@@ -522,6 +522,8 @@ button:disabled {
 }
 
 .context-column {
+  display: flex;
+  flex-direction: column;
   min-width: 230px;
   max-width: 560px;
   border-left: 1px solid var(--border-soft);
@@ -1617,8 +1619,73 @@ button:disabled {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  min-height: 0;
   background: #091422;
 }
+
+/* The tabs sit above whichever view is showing; the body below them is what scrolls. */
+.context-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+}
+
+.context-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.context-tabs button:hover { color: var(--text); }
+.context-tabs button.active { border-bottom-color: var(--mint-strong); color: var(--mint-strong); }
+
+/* Says a build is running while Context is the pane on show, so the tab is worth looking at. */
+.context-tab-live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mint);
+}
+
+/* The pane body is the scroller. The column was overflow:hidden with no rule on the panel, so it clipped its content
+   rather than scrolling it â€” a tab strip's worth of height would have gone the same way. */
+.context-pane-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Grows to fill a short pane so the pinned foot still sits at the bottom, but never shrinks below its content, which
+   is what lets a tall one overflow into the scroller instead of being squashed. */
+.context-pane,
+.context-body {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A hidden pane must not keep a flex display, or `hidden` would have nothing to do. */
+.context-pane-body > .context-pane[hidden] { display: none; }
 
 .context-heading {
   display: flex;

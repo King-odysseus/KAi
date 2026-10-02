@@ -4,6 +4,7 @@ export * from './autopilot';
 export * from './brain';
 export * from './brain-mirror';
 export * from './context';
+export * from './build-progress';
 export * from './coordination';
 export * from './direct-providers';
 export * from './domain';
