@@ -34,6 +34,19 @@ import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
 /**
+ * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
+ * one word — the buckets were there, they just could not be read.
+ */
+const BOARD_STATUS_LABEL: Record<BoardStatus, string> = {
+  backlog: 'Backlog',
+  ready: 'Ready',
+  inProgress: 'In progress',
+  review: 'In review',
+  done: 'Done',
+  blocked: 'Blocked',
+};
+
+/**
  * The Project Studio. The first part of it is the interview: one paragraph in, a short set of skippable questions,
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
@@ -1493,7 +1506,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                         if (dragged && dragged.status !== status && busy === null) void move(cardId, status);
                       }}
                     >
-                      <h3>{status} <span className="studio-count">{cards.length}</span></h3>
+                      <h3>{BOARD_STATUS_LABEL[status]} <span className="studio-count">{cards.length}</span></h3>
                       {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} />)}
                       {cards.length === 0 && <p className="studio-note">Empty</p>}
                     </div>
@@ -1591,7 +1604,7 @@ function BoardCardView({ card, busy, onMove, onCheckUi }: { card: BoardCard; bus
         disabled={busy}
         aria-label={`Move ${card.title}`}
       >
-        {BOARD_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+        {BOARD_STATUSES.map((status) => <option key={status} value={status}>{BOARD_STATUS_LABEL[status]}</option>)}
       </select>
     </div>
   );

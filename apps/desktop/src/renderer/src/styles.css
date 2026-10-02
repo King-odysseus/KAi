@@ -10915,8 +10915,12 @@ code {
 
 .studio-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  /* As many buckets as will fit, rather than a fixed three. A board is worth reading only when the whole flow is in
+     front of you: three columns across six statuses parked half the board below the fold, which is why the later
+     buckets only appeared in full screen. Narrow windows fall back to fewer columns on their own. */
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: 8px;
+  align-items: start;
 }
 
 .studio-column {
