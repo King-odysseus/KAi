@@ -60,12 +60,25 @@ describe('the task plan', () => {
       { text: 'Write the parser', state: 'pending' },
     ]));
 
-    expect(briefing).toContain('plan in progress');
+    expect(briefing).toContain('plan is already in progress');
     expect(briefing).toContain('Write the parser');
     expect(briefing).toContain('may be a diversion');
-    // Nothing to say when there is no plan, or nothing left on it.
-    expect(planBriefingFor(null)).toBe('');
-    expect(planBriefingFor(plan([{ text: 'done', state: 'done' }]))).toBe('');
+  });
+
+  it('tells a run with no plan to write one, which is the half that was missing', () => {
+    // It used to say nothing at all without an existing plan — the wrong way round, since a run with no plan is
+    // exactly the one that needs telling, and nothing else ever starts one.
+    const none = planBriefingFor(null);
+    expect(none).toContain('update_plan');
+    expect(none).toContain('before you start anything that takes more than a couple of steps');
+    // But it does not pretend to have items to report.
+    expect(none).not.toContain('already in progress');
+    expect(none).not.toContain('may be a diversion');
+
+    // A finished plan is treated the same way: ready for the next task rather than carrying a stale list.
+    const finished = planBriefingFor(plan([{ text: 'done', state: 'done' }]));
+    expect(finished).toContain('update_plan');
+    expect(finished).not.toContain('already in progress');
   });
 
   it('hands back the outstanding items by name, so a model that lost the thread gets it back', () => {
