@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -300,6 +300,52 @@ describe('Project Studio interview', () => {
   it('fails clearly when the reply is missing the goal', () => {
     // Assumptions and questions default when absent, so the goal is the one field a reply cannot omit.
     expect(() => parseInterviewReply('{"assumptions":[],"questions":[]}')).toThrow(/did not match the expected shape/);
+  });
+
+  it('shortens an over-long suggested answer instead of failing the round', () => {
+    // The reported failure: one option past the limit rejected the whole reply, and the question went with it.
+    const long = 'Use a curated prompt template plus fixed settings for each mode, so staff pick a mode and the app fills in the provider, model, temperature, output format and the required inputs for it';
+    expect(long.length).toBeGreaterThan(STUDIO_MAX_OPTION_CHARS);
+    const reply = JSON.stringify({
+      goal: 'Build ZuriAi.',
+      assumptions: ['Naira pricing.'],
+      questions: [{ question: 'How should a mode work?', options: [long, 'Not sure, you decide'] }],
+    });
+
+    const parsed = parseInterviewReply(reply);
+
+    expect(parsed.goal).toBe('Build ZuriAi.');
+    expect(parsed.assumptions).toEqual(['Naira pricing.']);
+    expect(parsed.questions[0].question).toBe('How should a mode work?');
+    const [first] = parsed.questions[0].options;
+    expect(first.length).toBeLessThanOrEqual(STUDIO_MAX_OPTION_CHARS);
+    // Cut at a word boundary, so the chip reads as a shortened answer rather than one that stops mid-word.
+    expect(first.endsWith('…')).toBe(true);
+    expect(first).not.toMatch(/\s…$/);
+    // The recommended answer is offered first, so it is shortened rather than dropped.
+    expect(parsed.questions[0].options).toHaveLength(2);
+  });
+
+  it('keeps the question when the model offers more answers than there are chips', () => {
+    const reply = JSON.stringify({
+      goal: 'Build ZuriAi.',
+      questions: [{ question: 'How should a mode work?', options: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] }],
+    });
+
+    expect(parseInterviewReply(reply).questions[0].options).toHaveLength(STUDIO_MAX_OPTIONS);
+  });
+
+  it('cuts a suggested answer at a word boundary, and to the limit when there is no space to cut at', () => {
+    expect(clipOption('  a   b  ')).toBe('a b');
+    expect(clipOption('short enough')).toBe('short enough');
+
+    const words = clipOption('alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega and more words to push it well past the limit');
+    expect(words.length).toBeLessThanOrEqual(STUDIO_MAX_OPTION_CHARS);
+    expect(words.endsWith('…')).toBe(true);
+    expect(words).not.toMatch(/\s…$/);
+
+    // One enormous word has nowhere to break, so it is cut where it falls rather than returned over-length.
+    expect(clipOption('x'.repeat(300)).length).toBe(STUDIO_MAX_OPTION_CHARS);
   });
 
   it('keeps the copy it replaced, so a regenerate never loses the last good brief', async () => {

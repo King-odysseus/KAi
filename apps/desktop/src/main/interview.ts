@@ -2,9 +2,12 @@ import {
   STUDIO_EXTRA_QUESTIONS,
   STUDIO_MAX_EXTENSIONS,
   STUDIO_MAX_OPTIONS,
+  STUDIO_MAX_OPTION_CHARS,
   STUDIO_QUESTION_CEILING,
+  STUDIO_QUESTIONS_PER_ROUND,
   STUDIO_STYLE_REFERENCE_NOTES_PATH,
   STUDIO_ROUND_QUESTION_LIMITS,
+  clipOption,
   interviewQuestionBudget,
   directProviderPreset,
   interviewReplySchema,
@@ -283,7 +286,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
     '- "assumptions": decisions you made where the description was silent, each short and concrete. Carry forward the ones you still believe.',
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
-    `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
+    `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Keep every option to ${STUDIO_MAX_OPTION_CHARS} characters or fewer: they are shown as chips beside the answer box, and a longer one is cut short. Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
     'Many users are new to building software. When their wording suggests that (no technical terms, "I don\'t know", very broad answers), write in plain language, explain what each option means in a few words, and prefer the simplest choice that works. Never assume they know what a framework, database or hosting service is.',
     'The documents written after this interview need: who uses it and in which roles, the data and where it lives, integrations and hosting, how the result is judged, and, for anything with a screen, the visual design (brand or preferred colours, light or dark, the feel, products it should resemble). Use your questions on whatever of that the user has not already said. Two topics are required before you finish: (1) the technology to build it with (language and framework, where it is hosted, the database), unless the user already chose it; offer options suited to the project with a recommended one, and for a newcomer explain the recommendation in a few words; (2) for anything with a screen, the visual design, with options such as palettes or styles. Do not finish without either. When you ask about the visual design, add that they can attach reference images of a look they like with the image button next to the answer box.',
     'Ask none when you can already write the goal, the stack, the design direction and the acceptance criteria from what you have. Fewer, better questions beat a full set.',
@@ -307,9 +310,36 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
   return { system, user };
 }
 
+/**
+ * Holds a reply to the shape before it is validated: suggested answers cut to chip length, and the lists capped.
+ *
+ * The prompt states all of this and the model overshoots anyway. Validating as it arrived meant one option a
+ * character too long, or one option too many, rejected the entire reply — and with it the question, the goal the
+ * model had just sharpened and every assumption it had drawn, over a suggestion nobody had to accept. What fits is
+ * kept and what does not is shortened, so a reply that is substantially right still becomes a round.
+ */
+function withinShape(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null) return raw;
+  const reply = raw as { questions?: unknown };
+  if (!Array.isArray(reply.questions)) return raw;
+  // Typed as unknown elements: Array.isArray narrows to any[], and passing those straight back reads as unsafe.
+  const listed: unknown[] = reply.questions;
+  const questions = listed.slice(0, STUDIO_QUESTIONS_PER_ROUND).map((item) => {
+    if (typeof item !== 'object' || item === null) return item;
+    const question = item as { options?: unknown };
+    if (!Array.isArray(question.options)) return item;
+    const offered: unknown[] = question.options;
+    return {
+      ...question,
+      options: offered.filter((option): option is string => typeof option === 'string').slice(0, STUDIO_MAX_OPTIONS).map(clipOption),
+    };
+  });
+  return { ...reply, questions };
+}
+
 /** Reads the model's reply, dropping duplicate questions and options. */
 export function parseInterviewReply(content: string): { goal: string; assumptions: string[]; questions: Array<{ question: string; options: string[] }> } {
-  const raw = parseJsonResponse(content, 'Project Studio');
+  const raw = withinShape(parseJsonResponse(content, 'Project Studio'));
   const parsed = interviewReplySchema.safeParse(raw);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

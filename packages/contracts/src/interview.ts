@@ -21,8 +21,29 @@ export const STUDIO_QUESTION_CEILING = STUDIO_MAX_QUESTIONS + STUDIO_EXTRA_QUEST
 export const STUDIO_ROUND_QUESTION_LIMITS = Array.from({ length: STUDIO_QUESTION_CEILING }, () => 1) as readonly number[];
 /** Suggested answers offered under one question. The user can always type their own instead. */
 export const STUDIO_MAX_OPTIONS = 6;
+/** How long one suggested answer may be. They are chips beside the answer box, so a paragraph does not fit. */
+export const STUDIO_MAX_OPTION_CHARS = 120;
 
-const interviewOptionsSchema = z.array(z.string().trim().min(1).max(120)).max(STUDIO_MAX_OPTIONS);
+const interviewOptionsSchema = z.array(z.string().trim().min(1).max(STUDIO_MAX_OPTION_CHARS)).max(STUDIO_MAX_OPTIONS);
+
+/**
+ * A suggested answer cut down to chip length.
+ *
+ * The model is told the limit and overshoots it anyway, and one option a character too long used to fail the whole
+ * reply — taking the question, the sharpened goal and every assumption with it. A suggestion is worth shortening
+ * rather than throwing away, and the recommended one is offered first, so dropping it would be the worse trade.
+ * The cut is at a word boundary, so the chip reads as a summary instead of a sentence that stops mid-word.
+ */
+export function clipOption(option: string): string {
+  const collapsed = option.trim().replace(/\s+/g, ' ');
+  if (collapsed.length <= STUDIO_MAX_OPTION_CHARS) return collapsed;
+  // Room for the ellipsis, which is what keeps the result inside the limit.
+  const room = collapsed.slice(0, STUDIO_MAX_OPTION_CHARS - 1);
+  const lastSpace = room.lastIndexOf(' ');
+  // Only cut at a space if that still leaves most of the option; a very long first word is cut where it falls.
+  const cut = lastSpace >= STUDIO_MAX_OPTION_CHARS / 2 ? room.slice(0, lastSpace) : room;
+  return `${cut.trimEnd()}…`;
+}
 
 export const interviewAnswerSchema = z
   .object({
