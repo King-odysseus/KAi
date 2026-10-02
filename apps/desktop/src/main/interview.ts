@@ -16,6 +16,7 @@ import {
   type AppSettings,
   type InterviewAnswer,
   type InterviewAnswerInput,
+  type InterviewCorrectionInput,
   type InterviewProjectInput,
   type InterviewRound,
   type InterviewStartInput,
@@ -153,6 +154,33 @@ export class DesktopInterview {
     if (rounds.length >= interviewQuestionBudget(state)) {
       return this.persist(await this.complete({ ...state, rounds }));
     }
+    return this.persist(await this.ask({ ...state, rounds }));
+  }
+
+  /**
+   * Replaces an answer already given, and asks again from that point.
+   *
+   * A question the user has answered stops being writable the moment they answer it, because answering asks the
+   * next question and the round it belonged to is no longer the newest one. That left a wrong or misread answer
+   * with nowhere to go: it kept being sent as something already settled, and the model kept building on it. The
+   * only recourse was to correct it inside the next answer, which works about as well as it sounds.
+   *
+   * The rounds after the corrected one are dropped rather than kept. Their questions were chosen from the answer
+   * being corrected, so keeping them beside the correction would leave the interview arguing with itself. That
+   * costs the answers given in those rounds; the model asks them again from the corrected point, which is the
+   * point of correcting at all. Correcting the newest answer drops nothing.
+   */
+  async correct(input: InterviewCorrectionInput): Promise<InterviewState> {
+    const state = await this.requireAsking(input.projectId);
+    const wanted = normalise(input.question);
+    const at = state.rounds.findIndex((round) => round.questions.some((question) => normalise(question) === wanted));
+    if (at === -1) throw new Error('That question is not part of this interview.');
+
+    const round = state.rounds[at];
+    // Sent through mergeAnswers like any other answer, so only questions this round actually asked are stored, and
+    // the round's other answers are carried over rather than blanked by the one being corrected.
+    const corrected = round.answers.map((item) => (normalise(item.question) === wanted ? { ...item, answer: input.answer.trim() } : item));
+    const rounds = [...state.rounds.slice(0, at), { ...round, answers: mergeAnswers(round, corrected) }];
     return this.persist(await this.ask({ ...state, rounds }));
   }
 

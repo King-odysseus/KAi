@@ -11620,6 +11620,50 @@ button.tool-call-head:hover strong { color: var(--mint); }
   font-style: italic;
 }
 
+/* The Edit affordance on an answer already given. Inline, so it follows the answer rather than claiming a line
+   of its own under a one-word one. */
+.studio-answer-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  font: inherit;
+  font-size: 10.5px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.studio-answer-edit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--mint) 55%, var(--border));
+  color: var(--text);
+}
+
+.studio-answer-edit:disabled { opacity: 0.5; cursor: default; }
+
+/* What is being corrected, with the warning that the questions asked after it come back. */
+.studio-correcting {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border));
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.studio-correcting > svg { flex: 0 0 auto; margin-top: 2px; color: var(--amber); }
+.studio-correcting > span { flex: 1 1 auto; min-width: 0; }
+.studio-correcting strong { color: var(--text); font-weight: 600; }
+.studio-correcting .composer-text-button { flex: 0 0 auto; }
+
 .studio-reply {
   display: flex;
   flex-direction: column;

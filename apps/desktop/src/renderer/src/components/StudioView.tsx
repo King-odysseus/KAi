@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { AutopilotPanel } from './AutopilotPanel';
@@ -74,6 +74,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // The chat asks one question of the round at a time: `step` is the one on screen, `draft` the reply being written.
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState('');
+  // The answer from an earlier round being rewritten, held by question: that is what the studio's correction takes.
+  const [correcting, setCorrecting] = useState<{ question: string; answer: string } | null>(null);
   // The artifact open in the viewer, its text, and the hand edit being written, if any.
   const [viewing, setViewing] = useState<ArtifactKind | null>(null);
   const [viewText, setViewText] = useState<string | null>(null);
@@ -304,6 +306,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setAnswers(interviewOpenQuestions(next).map(() => ''));
     setStep(0);
     setDraft('');
+    // Adopting state settles whatever correction was in flight: it has either just been sent or been overtaken.
+    setCorrecting(null);
     if (next.status === 'done') setTab('artifacts');
   }
 
@@ -588,11 +592,52 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /**
+   * Replaces an answer already given and asks again from that point.
+   *
+   * The studio drops the rounds that followed, because their questions were chosen from the answer being
+   * corrected — so the next state comes back with the interview rewound and a fresh question to answer.
+   */
+  async function sendCorrection(question: string, answer: string): Promise<InterviewState | null> {
+    if (!projectId) return null;
+    setBusy('answer');
+    setError(null);
+    try {
+      const next = unwrap(await window.kaiDesktop.correctStudioInterviewAnswer({ projectId, question, answer }));
+      adopt(next);
+      return next;
+    } catch (caught) {
+      setError(messageOf(caught));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Opens an answered question for rewriting, with what was said before already in the box. */
+  function startCorrection(question: string, answer: string): void {
+    if (busy !== null) return;
+    setAttachNote(null);
+    setCorrecting({ question, answer });
+    setDraft(answer);
+  }
+
+  function cancelCorrection(): void {
+    setCorrecting(null);
+    setDraft('');
+  }
+
   /** Records the reply to the question on screen and moves on; the last one of the round sends them all. */
   async function submitStep(text: string): Promise<void> {
     if (busy !== null) return;
     const value = text.trim();
     setAttachNote(null);
+    if (correcting) {
+      const sent = await sendCorrection(correcting.question, value);
+      // A failed correction keeps the box and the question it belongs to, so it can be sent again.
+      if (!sent) setDraft(value);
+      return;
+    }
     const next = answers.map((existing, index) => (index === step ? value : existing));
     setAnswers(next);
     setDraft('');
@@ -1271,7 +1316,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               <div className="studio-thread" role="log" aria-live="polite">
                 <div className="studio-bubble user">{state.idea}</div>
                 {state.rounds.slice(0, -1).flatMap((round) => round.answers).map((item) => (
-                  <ThreadTurn key={item.question} question={item.question} answer={item.answer} />
+                  <ThreadTurn
+                    key={item.question}
+                    question={item.question}
+                    answer={item.answer}
+                    disabled={busy !== null}
+                    onEdit={() => startCorrection(item.question, item.answer)}
+                  />
                 ))}
                 {open.slice(0, step).map((question, index) => (
                   <ThreadTurn key={question} question={question} answer={answers[index] ?? ''} />
@@ -1282,9 +1333,16 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 {busy === 'answer' && <div className="studio-bubble ai"><Loader2 className="spin" size={13} /> Thinking about what to ask next…</div>}
                 <div ref={threadEnd} />
               </div>
-              {open[step] !== undefined && (
+              {(open[step] !== undefined || correcting !== null) && (
                 <div className="studio-reply">
-                  {(openOptions[step] ?? []).length > 0 && (
+                  {correcting && (
+                    <div className="studio-correcting" role="status">
+                      <PencilLine size={13} />
+                      <span>Correcting: <strong>{correcting.question}</strong>. KAI asks again from here, so anything you answered after it is asked again too.</span>
+                      <button type="button" className="composer-text-button" onClick={cancelCorrection} disabled={busy !== null}>Cancel</button>
+                    </div>
+                  )}
+                  {!correcting && (openOptions[step] ?? []).length > 0 && (
                     <div className="command-chip-row studio-options" role="group" aria-label="Suggested answers">
                       {(openOptions[step] ?? []).map((option) => (
                         <button key={option} type="button" className={draft === option ? 'active' : undefined} aria-pressed={draft === option} onClick={() => setDraft(option)} disabled={busy !== null}>{option}</button>
@@ -1295,7 +1353,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     value={draft}
                     onChange={setDraft}
                     onSubmit={() => void submitStep(draft)}
-                    placeholder="Pick a suggestion or type your own answer"
+                    placeholder={correcting ? 'Rewrite your answer' : 'Pick a suggestion or type your own answer'}
                     ariaLabel="Your answer"
                     disabled={busy !== null}
                     sending={busy === 'answer'}
@@ -1303,12 +1361,17 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     onEnhance={() => void enhanceDraft()}
                     extra={(
                       <>
-                        <label className="composer-text-button studio-file-button" title="Attach images of a look you like (PNG, JPEG or WebP)">
-                          <ImagePlus size={13} /> Image
-                          <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy !== null} onChange={(event) => { void attachStyleImages(event.target.files); event.target.value = ''; }} />
-                        </label>
-                        <button type="button" className="composer-text-button" onClick={() => void submitStep('')} disabled={busy !== null} title="Leave this one to the agents">Skip</button>
-                        <button type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</button>
+                        {/* Reference images and the suggestions belong to the question on screen, not to a correction. */}
+                        {!correcting && (
+                          <label className="composer-text-button studio-file-button" title="Attach images of a look you like (PNG, JPEG or WebP)">
+                            <ImagePlus size={13} /> Image
+                            <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy !== null} onChange={(event) => { void attachStyleImages(event.target.files); event.target.value = ''; }} />
+                          </label>
+                        )}
+                        <button type="button" className="composer-text-button" onClick={() => void submitStep('')} disabled={busy !== null} title={correcting ? 'Change this answer to a skip, and let the agents decide' : 'Leave this one to the agents'}>Skip</button>
+                        {!correcting && (
+                          <button type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</button>
+                        )}
                       </>
                     )}
                     footer={<><span>Enter to send · Shift+Enter for a new line</span><span>{state.rounds.flatMap((round) => round.questions).length} of up to {interviewQuestionBudget(state)} questions</span></>}
@@ -1777,11 +1840,18 @@ function PromptPanel({ text, copied, onCopy, onClose }: { text: string; copied: 
   );
 }
 
-function ThreadTurn({ question, answer }: { question: string; answer: string }): ReactNode {
+function ThreadTurn({ question, answer, onEdit, disabled }: { question: string; answer: string; onEdit?: () => void; disabled?: boolean }): ReactNode {
   return (
     <>
       <div className="studio-bubble ai">{question}</div>
-      <div className={`studio-bubble user${answer ? '' : ' skipped'}`}>{answer || 'Skipped, you decide'}</div>
+      <div className={`studio-bubble user${answer ? '' : ' skipped'}`}>
+        {answer || 'Skipped, you decide'}
+        {onEdit && (
+          <button type="button" className="studio-answer-edit" onClick={onEdit} disabled={disabled} title="Change this answer; KAI asks again from here">
+            <PencilLine size={12} /> Edit
+          </button>
+        )}
+      </div>
     </>
   );
 }

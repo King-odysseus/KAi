@@ -213,6 +213,74 @@ describe('Project Studio interview', () => {
     expect(state.rounds[0]?.options).toEqual([['React PWA', 'Web app', 'Desktop app']]);
   });
 
+  it('rewrites an answer and asks again from there, dropping the rounds that followed it', async () => {
+    const replies = [
+      JSON.stringify({ goal: 'Goal one', assumptions: [], questions: ['Which platform?'] }),
+      JSON.stringify({ goal: 'Goal two', assumptions: [], questions: ['Who pays?'] }),
+      JSON.stringify({ goal: 'Goal three', assumptions: [], questions: ['Which currency?'] }),
+      JSON.stringify({ goal: 'Goal four', assumptions: [], questions: ['How do you take payment?'] }),
+    ];
+    const interview = new DesktopInterview(ports({}, replies));
+    let current = await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    current = await interview.answer({ projectId: 'p1', answers: [{ question: 'Which platform?', answer: 'A web app' }] });
+    current = await interview.answer({ projectId: 'p1', answers: [{ question: 'Who pays?', answer: 'The salon' }] });
+    expect(current.rounds.flatMap((round) => round.questions)).toEqual(['Which platform?', 'Who pays?', 'Which currency?']);
+
+    current = await interview.correct({ projectId: 'p1', question: 'Which platform?', answer: 'A native phone app' });
+
+    // The corrected answer stands, and the questions chosen from the old one are gone rather than left arguing
+    // with it. The model asks again from the corrected point.
+    expect(current.rounds[0]?.answers).toEqual([{ question: 'Which platform?', answer: 'A native phone app' }]);
+    expect(current.rounds.flatMap((round) => round.questions)).toEqual(['Which platform?', 'How do you take payment?']);
+    expect(current.goal).toBe('Goal four');
+  });
+
+  it('discards no answered question when the most recent answer is the one corrected', async () => {
+    const replies = [
+      JSON.stringify({ goal: 'Goal one', assumptions: [], questions: ['Which platform?'] }),
+      JSON.stringify({ goal: 'Goal two', assumptions: [], questions: ['Who pays?'] }),
+      JSON.stringify({ goal: 'Goal three', assumptions: [], questions: ['Who pays, then?'] }),
+    ];
+    const interview = new DesktopInterview(ports({}, replies));
+    await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+    await interview.answer({ projectId: 'p1', answers: [{ question: 'Which platform?', answer: 'A web app' }] });
+
+    const current = await interview.correct({ projectId: 'p1', question: 'Which platform?', answer: 'A native app' });
+
+    // Only the question nobody had answered yet is asked again.
+    expect(current.rounds.flatMap((round) => round.answers).filter((answer) => answer.answer)).toEqual([
+      { question: 'Which platform?', answer: 'A native app' },
+    ]);
+  });
+
+  it('keeps the answers beside the corrected one when a round holds more than one', async () => {
+    // Rounds normally ask one question, but the shape allows four; correcting one must not blank the others.
+    const seeded = state({
+      rounds: [{
+        questions: ['Which platform?', 'Who pays?'],
+        options: [['Web app'], ['The salon']],
+        answers: [{ question: 'Which platform?', answer: 'A web app' }, { question: 'Who pays?', answer: 'The salon' }],
+      }],
+    });
+    const interview = new DesktopInterview(ports({ store: memoryStore(seeded) }, [
+      JSON.stringify({ goal: 'Goal', assumptions: [], questions: ['Which currency?'] }),
+    ]));
+
+    const current = await interview.correct({ projectId: 'p1', question: 'Who pays?', answer: 'The client' });
+
+    expect(current.rounds[0]?.answers).toEqual([
+      { question: 'Which platform?', answer: 'A web app' },
+      { question: 'Who pays?', answer: 'The client' },
+    ]);
+  });
+
+  it('refuses to correct a question the interview never asked', async () => {
+    const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Goal', assumptions: [], questions: ['Which platform?'] })]));
+    await interview.start({ projectId: 'p1', idea: 'Booking site.' });
+
+    await expect(interview.correct({ projectId: 'p1', question: 'Who pays?', answer: 'The salon' })).rejects.toThrow(/not part of this interview/);
+  });
+
   it('lets a newcomer ask for five more questions at a time, up to twenty, and no further', async () => {
     const replies = Array.from({ length: 25 }, (_value, index) => JSON.stringify({ goal: `Goal ${index + 1}`, assumptions: [], questions: [`Question ${index + 1}`] }));
     const interview = new DesktopInterview(ports({}, replies));

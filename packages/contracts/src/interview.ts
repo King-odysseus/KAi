@@ -126,6 +126,21 @@ export const interviewAnswerInputSchema = z
   .strict();
 export type InterviewAnswerInput = z.infer<typeof interviewAnswerInputSchema>;
 
+/**
+ * A second go at a question already answered, named by the question rather than by its place in the interview.
+ *
+ * Position would be wrong for this: the question is the thing the user is correcting, and it is also how the
+ * answers are stored and merged. Questions are never repeated, so naming one identifies the round it is in.
+ */
+export const interviewCorrectionInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    question: z.string().trim().min(1).max(400),
+    answer: z.string().trim().max(4_000),
+  })
+  .strict();
+export type InterviewCorrectionInput = z.infer<typeof interviewCorrectionInputSchema>;
+
 export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;
 

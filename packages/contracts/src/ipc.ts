@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { autoModelSettingsSchema } from './model-tiers';
 import {
   interviewAnswerInputSchema,
+  interviewCorrectionInputSchema,
   interviewProjectInputSchema,
   interviewStartInputSchema,
   studioProjectArchiveInputSchema,
@@ -11,6 +12,7 @@ import {
   studioProjectLaunchResultSchema,
   studioProjectSummarySchema,
   type InterviewAnswerInput,
+  type InterviewCorrectionInput,
   type InterviewStartInput,
   type InterviewState,
   type StudioReadiness,
@@ -453,6 +455,7 @@ export const ipcChannels = [
   'studio:interview-read',
   'studio:interview-start',
   'studio:interview-answer',
+  'studio:interview-correct',
   'studio:interview-finish',
   'studio:interview-reset',
   'studio:interview-extend',
@@ -753,6 +756,7 @@ export const ipcInputSchemas = {
   'studio:interview-read': interviewProjectInputSchema,
   'studio:interview-start': interviewStartInputSchema,
   'studio:interview-answer': interviewAnswerInputSchema,
+  'studio:interview-correct': interviewCorrectionInputSchema,
   'studio:interview-finish': interviewProjectInputSchema,
   'studio:interview-reset': interviewProjectInputSchema,
   'studio:interview-extend': interviewProjectInputSchema,
@@ -1190,6 +1194,8 @@ export interface KaiDesktopBridge {
   startStudioInterview(request: InterviewStartInput): Promise<IpcResponse<InterviewState>>;
   /** Records the answers on screen and asks the next round, or writes the brief when there is nothing left to ask. */
   answerStudioInterview(request: InterviewAnswerInput): Promise<IpcResponse<InterviewState>>;
+  /** Replaces an answer already given and asks again from that point, dropping the rounds that followed it. */
+  correctStudioInterviewAnswer(request: InterviewCorrectionInput): Promise<IpcResponse<InterviewState>>;
   finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   resetStudioInterview(projectId: string): Promise<IpcResponse<null>>;
   /** Lets the interview ask five more questions, up to twenty in all, for someone who wants to be walked through. */
