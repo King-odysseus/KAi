@@ -26,6 +26,27 @@ describe('tooltip placement', () => {
     expect(placeTooltip(target(500, 0), VIEWPORT).top).toBe(30 + 8);
   });
 
+  it('answers a small control in the left rail sideways, clear of the rail itself', () => {
+    // The navigation rail is a narrow column at the window edge. A panel above an icon there covers the rail it is
+    // describing, which is what made this wrong.
+    const placed = placeTooltip(target(8, 400, 40, 40), VIEWPORT);
+    expect(placed.side).toBe('right');
+    expect(placed.left).toBe(48 + 8); // the control's right edge, plus the gap
+    expect(placed.top).toBe(420); // its vertical centre, since the panel is anchored on that
+  });
+
+  it('answers a small control at the right edge sideways too, to its left', () => {
+    const placed = placeTooltip(target(1152, 400, 40, 40), VIEWPORT);
+    expect(placed.side).toBe('left');
+    expect(placed.left).toBe(1152 - 8);
+  });
+
+  it('still answers above and below for wide controls near an edge', () => {
+    // A sidebar row spans most of its column: it is at the edge but is not a rail item, so the usual placement holds.
+    const placed = placeTooltip(target(0, 400, 260, 32), VIEWPORT);
+    expect(placed.side).toBe('top');
+  });
+
   it('keeps the panel inside the window at both edges', () => {
     const left = placeTooltip(target(0, 400), VIEWPORT);
     expect(left.left).toBeGreaterThan(0);

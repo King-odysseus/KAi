@@ -17,8 +17,12 @@ import { createPortal } from 'react-dom';
  * lose the titles on its own controls.
  */
 
-/** Where the panel sits relative to its target, chosen by how much room is above and below. */
-export type TipSide = 'top' | 'bottom';
+/**
+ * Where the panel sits relative to its target. Above and below is the default, but a small control inside a vertical
+ * rail gets a panel to its side: the navigation rail is a narrow column at the window edge, so a tooltip above an icon
+ * there sits on top of the rail it is describing instead of beside it.
+ */
+export type TipSide = 'top' | 'bottom' | 'left' | 'right';
 
 export interface TipPlacement {
   side: TipSide;
@@ -31,6 +35,11 @@ const GAP = 8;
 /** Room a panel needs above or below before flipping to the other side. */
 const NEEDED = 44;
 const EDGE = 8;
+/** How near the window edge a control must be, and how small, to be treated as a rail item and answered sideways. */
+const RAIL_ZONE = 96;
+const RAIL_WIDTH = 140;
+/** Half a panel's width, used to keep a centred panel clear of the window edges. */
+const HALF_PANEL = 120;
 
 /**
  * Places the panel against a target rectangle, kept inside the window.
@@ -39,14 +48,29 @@ const EDGE = 8;
  * ends up off-screen or upside down, and neither is visible without a browser.
  */
 export function placeTooltip(target: { left: number; right: number; top: number; bottom: number; width: number }, viewport: { width: number; height: number }): TipPlacement {
-  const centre = target.left + target.width / 2;
+  const centreX = target.left + target.width / 2;
+  const centreY = target.top + (target.bottom - target.top) / 2;
+
+  if (target.left < RAIL_ZONE && target.width <= RAIL_WIDTH) {
+    // A control in the left rail: answer to its right, clear of the rail itself.
+    return { side: 'right', left: target.right + GAP, top: clampY(centreY, viewport.height) };
+  }
+  if (target.right > viewport.width - RAIL_ZONE && target.width <= RAIL_WIDTH) {
+    return { side: 'left', left: target.left - GAP, top: clampY(centreY, viewport.height) };
+  }
+
   // Below when there is no room above, so a control near the top of the window does not open into the title bar.
   const side: TipSide = target.top < NEEDED ? 'bottom' : 'top';
   const top = side === 'top' ? target.top - GAP : target.bottom + GAP;
   // Clamped so a control at the window edge does not push its panel off-screen; the panel is transformed back by half
   // its own width in CSS, so the edge allowance covers that.
-  const left = Math.min(Math.max(centre, EDGE + 120), Math.max(EDGE + 120, viewport.width - EDGE - 120));
+  const left = Math.min(Math.max(centreX, EDGE + HALF_PANEL), Math.max(EDGE + HALF_PANEL, viewport.width - EDGE - HALF_PANEL));
   return { side, left, top };
+}
+
+/** Keeps a sideways panel within the window without moving it off its control more than it has to. */
+function clampY(centreY: number, viewportHeight: number): number {
+  return Math.min(Math.max(centreY, EDGE + 20), Math.max(EDGE + 20, viewportHeight - EDGE - 20));
 }
 
 interface Shown {

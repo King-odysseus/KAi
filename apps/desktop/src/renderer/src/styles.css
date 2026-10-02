@@ -715,6 +715,9 @@ button:disabled {
 }
 
 .app-tooltip[data-side='bottom'] { transform: translate(-50%, 0); }
+/* A rail item is answered sideways, anchored on its vertical centre rather than its top edge. */
+.app-tooltip[data-side='right'] { transform: translate(0, -50%); }
+.app-tooltip[data-side='left'] { transform: translate(-100%, -50%); }
 
 /* Flowbite's arrow: a square turned 45 degrees, so only a corner shows past the panel edge. */
 .app-tooltip::after {
@@ -728,6 +731,9 @@ button:disabled {
 
 .app-tooltip[data-side='top']::after { left: 50%; bottom: -4px; margin-left: -4px; }
 .app-tooltip[data-side='bottom']::after { left: 50%; top: -4px; margin-left: -4px; }
+/* The arrow follows the side, so it still points at the control the panel is describing. */
+.app-tooltip[data-side='right']::after { left: -4px; top: 50%; margin-top: -4px; }
+.app-tooltip[data-side='left']::after { right: -4px; top: 50%; margin-top: -4px; }
 
 @keyframes app-tooltip-in {
   from { opacity: 0; }
@@ -7505,12 +7511,12 @@ code {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-soft);
-  border-left: 3px solid var(--mint);
   border-radius: 8px;
   background: var(--bg-panel);
 }
-.tool-call-card.command { border-left-color: var(--amber); }
-.tool-call-card.failed { border-left-color: var(--red); }
+/* The colour that was on the edge now lives in the icon and the status mark. A failed call is the one
+   state the edge still carries, because nothing else in the header says it as plainly. */
+.tool-call-card.failed { border-left: 3px solid var(--red); }
 
 .tool-call-head {
   display: flex;
