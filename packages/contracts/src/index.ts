@@ -3,6 +3,7 @@ export * from './auto';
 export * from './automation';
 export * from './autopilot';
 export * from './brain';
+export * from './blocked';
 export * from './brain-mirror';
 export * from './context';
 export * from './build-progress';

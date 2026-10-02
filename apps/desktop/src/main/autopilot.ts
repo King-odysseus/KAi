@@ -74,10 +74,23 @@ interface ActiveRun {
   opened: boolean;
   /** Cards this run parked as blocked, and why, so a setup failure can put them back. */
   blocked: Array<{ id: string; reason: string }>;
+  /** Cards this run actually closed. Any at all means the setup works and a block is about that card. */
+  completed: number;
 }
 
-/** Every card fails the same way: the cause is the setup, not the cards, so the run stops instead of parking the board. */
+/** Nothing works: several cards parked and not one finished, so the run stops and puts them back rather than the board. */
 class SystemicFailure extends Error {}
+
+/**
+ * How many cards one run may park before giving up, provided it has not closed a single one in the meantime.
+ *
+ * It used to give up after two cards failed with the same message, which sounded like a setup problem but is also
+ * exactly what a missing resource looks like: a design tool that is not open, a service that is down, a credential
+ * nobody has added yet. Those block the cards that need them and nothing else, and stopping the whole run for them
+ * means the work that needs nothing stops too — while the person goes off to open the tool. Park them, say so, and
+ * carry on with the rest.
+ */
+const BLOCKED_BEFORE_GIVING_UP = 3;
 
 /**
  * Works a Project Studio board to the end without anyone watching. It is deliberately a thin loop over what already
@@ -106,7 +119,7 @@ export class DesktopAutopilot {
     await this.ports.preflight(input.projectId);
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
-    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversationId: null, done: Promise.resolve(), opened: false, blocked: [] };
+    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversationId: null, done: Promise.resolve(), opened: false, blocked: [], completed: 0 };
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
