@@ -402,6 +402,13 @@ export const conversationTurnSchema = z
      * only; absent when the turn made no tool calls.
      */
     toolDigest: z.string().optional(),
+    /**
+     * Set on an assistant turn whose own words end in a genuine question to the user (see `awaitsTheUser` in
+     * `main/direct-provider-runtime.ts`). The run already ended by the time this is set — a CLI process has
+     * exited, and an API run stopped rather than guess — so this does not reopen it; it marks the turn so the
+     * composer can show an answer box under it instead of leaving a question that looks like idle completion.
+     */
+    awaitingAnswer: z.boolean().optional(),
     attachments: z.array(z.object({
       name: z.string().min(1).max(500),
       dataUrl: z.string().min(1).max(30_000_000),

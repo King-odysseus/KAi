@@ -4,7 +4,14 @@ Scope: `apps/desktop` Direct API path (`main/direct-provider-runtime.ts`, `main/
 and the composer UI (`renderer/src/components/Workspace.tsx`). Goal: close the gap between the composer's own
 agent loop and Claude Code's, in the four areas identified by inspection (2026-10-03).
 
-Status as of 2026-10-03: items 1-4 implemented below. `desktop:typecheck` clean; full `desktop:test` suite green (1503 passed, 3 pre-existing skips), including new tests for the turn digest, `ask_user`, and `explore`.
+Status as of 2026-10-03: items 1-5 implemented below. `desktop:typecheck` clean; full `desktop:test` suite green
+(1503 passed, 3 pre-existing skips), including new tests for the turn digest, `ask_user`, and `explore`. Items
+1-4 are committed (`ed9d4e2`). Item 5's `main/ipc.ts` and `packages/contracts/src/domain.ts` pieces are committed;
+its `Workspace.tsx` piece (the answer box under a turn) is correct and working on disk but **not yet committed**
+— `apps/desktop/src/renderer/src/components/Workspace.tsx` was mid-rewrite by a concurrent session (a composer
+queue/steering feature) at the time, and splicing one more change into that diff by hand risked corrupting
+either piece. Whoever next commits a clean `Workspace.tsx` should confirm the `AnswerBox`/`awaitingAnswer`
+wiring (search for `awaitingAnswer`) is still intact and include it.
 
 ## 1. Carry what earlier turns *did*, not just what they said
 
@@ -46,8 +53,28 @@ per-turn, so it does not grow the request.
 - `Workspace.tsx`: an `explore` tool call renders as "Explored: <question>" with the answer, collapsed by
   default, like other grouped tool calls.
 
+## 5. Surface a trailing question instead of letting it look like idle completion
+
+Added 2026-10-03, after confirming `ask_user` and `explore` cannot reach the CLI agents: both are KAI's own
+Direct API tools, and every CLI is invoked with `-p` (one piped, non-interactive turn per invocation; see
+`agent-runtime.ts`), so there is no live channel into a CLI turn for KAI to push an answer back through mid-run.
+Building one would mean switching every CLI's invocation to a persistent stdin/stdout protocol (where one exists)
+and handling each CLI's own permission-callback shape — a new architecture, not an extension of `ask_user`.
+
+What *is* feasible, and applies to both the CLI and the API path alike: when a completed run's own words end in a
+genuine question (`awaitsTheUser`, already used to stop the API loop from nudging a real question), the assistant
+turn is marked `awaitingAnswer` (`packages/contracts/src/domain.ts`). The composer (`Workspace.tsx`) renders a
+small reply box under that turn; answering it calls the same `queueOrSend` a typed message would, which resumes
+the conversation. This does not reopen the run that asked — it cannot — it only makes the question impossible to
+miss and turns the reply into a one-click resume instead of the person having to notice it themselves and retype
+it into the composer below. `main/ipc.ts` sets the flag only for a `completed` run whose own output (not the
+synthesized `describeRunOutcome` fallback) is the question.
+
 ## Deferred (not in this round)
 
+- A persistent, mid-turn channel into a CLI agent, which `ask_user` for CLIs and a true live `explore` for CLIs
+  would both need. Scoping it further needs a decision on which CLIs' own protocols actually support a
+  stay-alive session (Claude Code's does, under `--input-format stream-json`; not confirmed for the others).
 - Plan-mode "approve, then execute" handoff.
 - Live thinking display / sending reasoning back between rounds.
 - Parallel tool execution and background long-running commands.

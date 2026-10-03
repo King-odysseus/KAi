@@ -82,6 +82,7 @@ import { buildHistoryNote } from './run-history';
 import { clearInterjections, interject } from './interjections';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
+import { awaitsTheUser } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, RULES_MARKER, shouldCarryRules } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
@@ -1618,11 +1619,15 @@ export async function runConversationAgent(
     diagnosis ? diagnosisLine(diagnosis) : null,
   ].filter(Boolean).join('\n\n');
   const toolDigest = buildTurnDigest(execution.events);
+  // Only the model's own words count as a question — the synthesized `describeRunOutcome` fallback never is one —
+  // and only a run that actually finished: a failed or cancelled run did not stop because it was asking anything.
+  const awaitingAnswer = execution.status === 'completed' && Boolean(spoken) && awaitsTheUser(spoken!);
   conversation.turns.push({
     id: `turn_${crypto.randomUUID()}`,
     role: 'assistant' as const,
     text: closing,
     createdAt: conversation.updatedAt,
+    ...(awaitingAnswer ? { awaitingAnswer: true } : {}),
     ...(toolDigest ? { toolDigest } : {}),
   });
   conversation.events.push(...execution.events);
