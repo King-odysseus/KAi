@@ -9412,6 +9412,22 @@ button.tool-call-head:hover strong { color: var(--mint); }
   background: color-mix(in srgb, var(--mint) 12%, var(--bg-subtle));
 }
 
+/* How many read-only helper agents KAI has used in this conversation. */
+.composer-helper-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--mint) 40%, var(--border-soft));
+  border-radius: 999px;
+  color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 10%, var(--bg-subtle));
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
 .composer-advanced-controls {
   display: flex;
   align-items: center;

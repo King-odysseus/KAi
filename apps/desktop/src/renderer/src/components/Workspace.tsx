@@ -1231,6 +1231,11 @@ export function WorkspaceView({
     return !query || skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query);
   });
   const cost = activeConversation?.events.reduce((sum, event) => sum + (event.type === 'cost.update' ? event.amountUsd ?? 0 : 0), 0) ?? 0;
+  // How many times KAI has sent a read-only helper (the `explore` tool) off in this conversation. Counted here,
+  // not read off the transcript, because a finished helper's own card is collapsed by default and easy to miss.
+  const helperAgentCount = (activeConversation?.events ?? [])
+    .filter((event): event is Extract<PersistedEvent, { type: 'tool.call' }> => event.type === 'tool.call' && event.name === 'explore' && event.status === 'completed')
+    .length;
   const rawEvents = (activeConversation?.events ?? [])
     .filter((event): event is Extract<PersistedEvent, { type: 'raw.fallback' }> => event.type === 'raw.fallback')
     .slice(-50)
@@ -1699,6 +1704,14 @@ export function WorkspaceView({
               <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
               <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
               <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
+              {helperAgentCount > 0 && (
+                <span
+                  className="composer-helper-pill"
+                  title={`KAI sent ${helperAgentCount} read-only helper agent${helperAgentCount === 1 ? '' : 's'} off to look into something in this conversation`}
+                >
+                  <Search size={12} /><span>{helperAgentCount}</span>
+                </span>
+              )}
               <button type="button" className={`composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}>
                 <span>{advancedComposerOpen ? 'Hide' : 'Work locally'}</span><ChevronDown size={13} />
               </button>
