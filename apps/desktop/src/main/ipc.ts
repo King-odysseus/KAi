@@ -99,6 +99,8 @@ import { buildSkillPrompt, discoverDesktopSkills, skillSummaries } from './skill
 import type { DesktopShell } from './desktop-shell';
 import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUrgentNotes } from './coordination';
 import type { TerminalManager } from './terminal';
+import { findGitBash } from './terminal';
+import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitStage, gitSync } from './git-tools';
@@ -1419,7 +1421,7 @@ export async function runConversationAgent(
   let effectivePrompt = `${workingMethodBriefing()}\n\n${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
-  if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing()}\n\n${effectivePrompt}`;
+  if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing(executionMode)}\n\n${effectivePrompt}`;
   // A route/agent switch starts a fresh CLI session. Carry enough transcript
   // forward that the new provider treats this as a continuation, not a new task.
   if (executionMode === 'cli' && !canResume) {
@@ -1982,15 +1984,22 @@ function renderConversationHandoff(turns: readonly ConversationRecord['turns'][n
   return `# Conversation handoff\nYou are continuing an existing conversation after the user changed agent, route, or provider. Preserve the prior intent, decisions, and context; do not ask them to repeat it.\n\n${lines.slice(-60_000)}`;
 }
 
-function fullAccessExecutionBriefing(): string {
+function fullAccessExecutionBriefing(executionMode: ExecutionMode): string {
   const windows = process.platform === 'win32';
+  // The Direct API's run_command tool spawns through Git Bash when it is installed (project-tools.ts,
+  // agentShell()), not cmd.exe or PowerShell — so the advice below has to match what the command actually runs
+  // in. A CLI agent's own shell tool is outside KAI's control and unverified, so it keeps the Windows-specific
+  // wording unchanged rather than being told something that may not hold for it.
+  const usesGitBash = windows && executionMode === 'api' && Boolean(findGitBash());
   return [
     '# Full access execution policy',
     'The user explicitly selected Full access for this run. You may edit project files, run shell commands, and, when the user explicitly asks, commit and push changes without requesting an additional confirmation.',
     'Complete the requested workflow yourself. Do not stop after a command error merely to give the user instructions when a safe retry or equivalent command can be run.',
-    windows
-      ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
-      : 'Use commands compatible with the current project shell.',
+    usesGitBash
+      ? 'This is Windows, but your commands run through Git Bash, not cmd.exe or PowerShell. Write ordinary POSIX/Unix-style commands — pipes, `grep`, `tail`, `&&`, `$(...)` all work normally; do not switch to PowerShell syntax.'
+      : windows
+        ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
+        : 'Use commands compatible with the current project shell.',
     'For build → commit → push work: make the requested change, run the verification command, fix actionable failures, then commit and push only if the user requested commit/push. Report the command results and commit hash at the end.',
   ].join('\n');
 }

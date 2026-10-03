@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DesktopProjectToolRuntime, backgroundServerOptions, globToRegExp, projectToolDefinitions } from '../apps/desktop/src/main/project-tools';
 import { runCheckCommand } from '../apps/desktop/src/main/verification';
+import { findGitBash } from '../apps/desktop/src/main/terminal';
 
 describe('extended project tools', () => {
   let root: string;
@@ -117,6 +118,24 @@ describe('extended project tools', () => {
     expect(String((explore.output as { error?: string }).error)).toContain('must be handled by the run loop');
   });
 
+  it.runIf(process.platform === 'win32' && findGitBash() !== null)('runs agent commands through Git Bash on Windows, not cmd.exe', async () => {
+    // cmd.exe has no $(...) command substitution; this only succeeds if the command actually ran in bash, which
+    // is the point — the agent writes ordinary Unix-style commands and they work, the same shell KAI's own
+    // in-app terminal defaults to.
+    const result = await runtime.execute('run_command', { command: 'echo "it is $(echo bash)"' });
+    expect(result.ok).toBe(true);
+    expect((result.output as { stdout: string }).stdout).toContain('it is bash');
+  });
+
+  it('resolves the background-server shell the same way run_command does', () => {
+    const options = backgroundServerOptions(process.platform);
+    if (process.platform === 'win32' && findGitBash() !== null) {
+      expect(options.shell).toBe(findGitBash());
+    } else if (process.platform !== 'win32') {
+      expect(options.shell).toBe(true);
+    }
+  });
+
   it('turns globs into path matchers', () => {
     expect(globToRegExp('src/**/*.ts').test('src/a.ts')).toBe(true);
     expect(globToRegExp('src/**/*.ts').test('src/x/y/a.ts')).toBe(true);
@@ -158,7 +177,8 @@ describe('commands that leave a background process behind', () => {
     // A detached child on Windows gets its own console, and CREATE_NO_WINDOW — what windowsHide sets — is ignored
     // while DETACHED_PROCESS is set. So the old options opened a bare console with the server's output in it.
     expect(backgroundServerOptions('win32')).toEqual({
-      shell: true,
+      // Git Bash when installed (this test's own machine has it), the platform default otherwise.
+      shell: findGitBash() ?? true,
       windowsHide: true,
       detached: false,
       stdio: 'ignore',

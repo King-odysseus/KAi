@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { planItemStateSchema, type AutonomyMode, type PermissionKey } from '@kai/contracts';
 import { RunGuard } from './run-guard';
 import { writePlan } from './plan-store';
+import { findGitBash } from './terminal';
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_READ_LINES = 400;
@@ -789,7 +790,7 @@ export class DesktopProjectToolRuntime {
     let timeout: NodeJS.Timeout | undefined;
     const child = spawn(input.command, {
       cwd,
-      shell: true,
+      shell: agentShell(),
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1019,7 +1020,26 @@ function commandFailure(
 export function backgroundServerOptions(
   platform: NodeJS.Platform,
 ): Pick<SpawnOptions, 'shell' | 'windowsHide' | 'detached' | 'stdio'> {
-  return { shell: true, windowsHide: true, detached: platform !== 'win32', stdio: 'ignore' };
+  return { shell: agentShell(platform), windowsHide: true, detached: platform !== 'win32', stdio: 'ignore' };
+}
+
+/**
+ * The shell an agent-issued command actually runs in.
+ *
+ * `spawn(..., { shell: true })` takes the platform default, which on Windows is `cmd.exe` — a different shell
+ * from the one KAI's own in-app terminal offers by default (Git Bash, see `terminal.ts`) and from the POSIX
+ * shell every other platform already gets. An agent writes commands in the shape almost all of them are
+ * trained on, which is Unix-style, and then hits cmd.exe quirks it had no reason to expect. Node runs a shell
+ * given as a path the same way regardless of what the path is — `<shell> -c "<command>"` — which is exactly
+ * what Git Bash wants, so pointing it there instead of at `true` is a drop-in change, not a new code path.
+ * Falls back to the platform default when Git Bash is not installed, so a command still runs either way.
+ *
+ * Takes the platform rather than reading `process.platform` directly so `backgroundServerOptions`, which is
+ * already written to be tested against a platform other than the one the tests actually run on, stays that way.
+ */
+function agentShell(platform: NodeJS.Platform = process.platform): string | true {
+  if (platform !== 'win32') return true;
+  return findGitBash() ?? true;
 }
 
 function isDevServerCommand(command: string): boolean {
