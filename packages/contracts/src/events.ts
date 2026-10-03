@@ -42,6 +42,14 @@ export const approvalRequestEventSchema = eventBaseSchema.extend({
       finishLabel: z.string().min(1),
     })
     .optional(),
+  /**
+   * Present when the model asked a question through the `ask_user` tool rather than a tool asking for permission.
+   * The person's chosen option (or free text, when the tool allowed it) travels back as `answer` on the response
+   * and becomes the tool's output, so this is not an allow/deny decision — a surface rendering this must show these
+   * as answer choices, not as permission buttons.
+   */
+  options: z.array(z.string().min(1).max(200)).min(2).max(4).optional(),
+  allowFreeText: z.boolean().optional(),
 });
 
 export const diffProposalEventSchema = eventBaseSchema.extend({

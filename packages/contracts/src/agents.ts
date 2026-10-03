@@ -116,6 +116,9 @@ export const agentApprovalResponseInputSchema = z
     conversationId: z.string().min(1),
     requestId: z.string().min(1),
     approved: z.boolean(),
+    // The option text the person picked, for a request that asked a question rather than asked for permission
+    // (`approval.request` events carrying `options`). Absent for an ordinary allow/deny response.
+    answer: z.string().min(1).max(2_000).optional(),
   })
   .strict();
 

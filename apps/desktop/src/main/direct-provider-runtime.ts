@@ -23,7 +23,10 @@ import {
 } from './image-attachments';
 import { probeLocalServer, type LocalServerProbe } from './local-provider';
 import {
+  askUserInputSchema,
+  describeArgumentError,
   DesktopProjectToolRuntime,
+  exploreInputSchema,
   projectToolDefinitions,
   type ExternalToolPort,
   isPublishingCommand,
@@ -76,6 +79,9 @@ interface ChatToolCall {
  * number: a limit of a hundred cut productive runs off mid-task, which is not something the CLIs do.
  */
 const MAX_TOTAL_TOOL_ROUNDS = 1_000;
+/** A helper's own loop is bounded much tighter than the main run's: it answers one question, not a whole task. */
+const EXPLORE_MAX_ROUNDS = 6;
+const EXPLORE_OUTPUT_TOKEN_BUDGET = 4_096;
 /** Provider iterations allowed beyond the tool rounds, for nudges and truncated continuations. */
 const PROVIDER_ROUND_HEADROOM = 40;
 const DEEPSEEK_MAX_TOOL_ROUNDS = 7;
@@ -341,10 +347,21 @@ export interface DirectApiApprovalRequest {
   risk: 'low' | 'medium' | 'high';
   /** Set for a question about the run, so the prompt says what its answers do instead of what allow and deny do. */
   runQuestion?: RunQuestion;
+  /** Set for a question the model asked via `ask_user`: the choices to show instead of allow/deny buttons. */
+  options?: readonly string[];
+  /** Whether a typed answer is also acceptable for an `options` question, not only one of the choices. */
+  allowFreeText?: boolean;
 }
 
 export interface DirectApiApprovalPort {
   request(approval: DirectApiApprovalRequest): Promise<boolean>;
+  /**
+   * Puts a question with options to the person and returns the one they chose (or typed, when the question allows
+   * free text), or null if they declined to answer or no one was there to ask. Optional because most callers of
+   * this port never ask a question with options — only `ask_user` does — and a caller without this method is
+   * treated the same as one nobody answered.
+   */
+  requestChoice?(approval: DirectApiApprovalRequest): Promise<string | null>;
 }
 
 export interface DirectApiProxyRoute {
@@ -443,6 +460,121 @@ export class DesktopDirectProviderRuntime {
     const fromSettings = await this.settings.load().then((loaded) => loaded.usageBudget.perRunUsd, () => undefined);
     runtime.guard.setMaxCost(this.options.maxRunCostUsd ?? maxRunCostFromEnvironment() ?? fromSettings ?? DEFAULT_MAX_RUN_COST_USD);
     return runtime;
+  }
+
+  /**
+   * A read-only helper the main run can hand a question off to: it reads and searches on its own and reports back
+   * a short answer, so the question's intermediate reads never land in the parent run's own context — only the
+   * answer does.
+   *
+   * Written against the Anthropic Messages protocol (and DeepSeek's Anthropic-shaped endpoint, which already
+   * takes the same request body) because that is the one existing request/parse path this reuses rather than
+   * duplicates. A provider on a different protocol gets a clear message instead of a fabricated answer; the
+   * person can still read the files themselves, which is no worse than before this tool existed.
+   */
+  private async runExploreQuery(
+    question: string,
+    projectRoot: string,
+    capability: DirectApiCapability,
+    apiKey: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const preset = directProviderPreset(capability.provider);
+    const anthropicBase = preset.protocol === 'anthropic-messages'
+      ? capability.baseUrl
+      : preset.protocol === 'chat-completions' ? deepSeekAnthropicBaseUrl(capability) : undefined;
+    if (!anthropicBase) {
+      return 'Explore could not run: this provider is not reachable through an Anthropic-shaped endpoint in this build. Read the files yourself instead.';
+    }
+    const exploreCapability: DirectApiCapability = { ...capability, baseUrl: anthropicBase };
+    // A plain instance, not `newToolRuntime`: explore reads only, so it needs no spend guard of its own — its
+    // tokens are folded into the parent run's totals by the caller, which is where the parent's guard already is.
+    const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
+    const readOnlyTools = projectToolDefinitions.filter(
+      (definition) => definition.name === 'read_file' || definition.name === 'search_files' || definition.name === 'list_files',
+    );
+    const messages: AnthropicMessage[] = [{
+      role: 'user',
+      content: `Answer this question about the project by reading and searching files as needed. Give a short, direct answer. Do not propose or make any edits.\n\nQuestion: ${question}`,
+    }];
+    const noop = (): void => {};
+    const fakeRequest = { conversationId: 'explore', prompt: question, agent: 'codex' as const, route: 'direct' as const, autonomy: 'plan' as const } as AgentRunRequest;
+    let answer = '';
+    for (let round = 0; round < EXPLORE_MAX_ROUNDS; round += 1) {
+      const pendingToolCalls = new Map<string, PendingToolCall>();
+      let roundText = '';
+      const response = await this.requestAnthropicResponse(
+        fakeRequest,
+        exploreCapability,
+        apiKey,
+        messages,
+        undefined,
+        [],
+        signal,
+        noop,
+        EXPLORE_OUTPUT_TOKEN_BUDGET,
+        true,
+        readOnlyTools,
+      );
+      if (!response.body) return 'Explore could not run: the provider returned no response.';
+      for await (const streamEvent of readSseEvents(response.body)) {
+        let value: Record<string, unknown>;
+        try {
+          value = asRecord(JSON.parse(streamEvent.data)) ?? {};
+        } catch {
+          continue;
+        }
+        const type = streamEvent.event || stringValue(value.type) || '';
+        if (type === 'content_block_start') {
+          const block = asRecord(value.content_block);
+          if (block?.type === 'tool_use') rememberAnthropicToolCall(pendingToolCalls, block, integerValue(value.index));
+          const initialText = block?.type === 'text' ? stringValue(block.text) : undefined;
+          if (initialText) roundText += initialText;
+          continue;
+        }
+        if (type === 'content_block_delta') {
+          const delta = asRecord(value.delta);
+          if (delta?.type === 'text_delta') {
+            const text = stringValue(delta.text);
+            if (text) roundText += text;
+          } else if (delta?.type === 'input_json_delta') {
+            rememberAnthropicToolArguments(pendingToolCalls, value, stringValue(delta.partial_json));
+          }
+          continue;
+        }
+      }
+      const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
+      if (toolCalls.length === 0) {
+        answer = roundText.trim();
+        break;
+      }
+      for (const call of toolCalls) call.callId ||= `toolu_${randomUUID()}`;
+      const assistantContent: Array<Record<string, unknown>> = [];
+      if (roundText) assistantContent.push({ type: 'text', text: roundText });
+      assistantContent.push(...toolCalls.map((call) => ({
+        type: 'tool_use',
+        id: call.callId,
+        name: call.name,
+        input: safeToolArguments(call.argumentsText),
+      })));
+      messages.push({ role: 'assistant', content: assistantContent });
+      const toolResults: unknown[] = [];
+      for (const call of toolCalls) {
+        const callId = call.callId!;
+        let argumentsValue: unknown;
+        try {
+          argumentsValue = parseToolArguments(call.argumentsText);
+        } catch (error) {
+          toolResults.push(anthropicToolOutput(callId, { error: error instanceof Error ? error.message : String(error) }));
+          continue;
+        }
+        const execution = await toolRuntime.execute(call.name || 'unknown', argumentsValue, signal);
+        toolResults.push(anthropicToolOutput(callId, execution?.output ?? { error: 'No output.' }));
+      }
+      messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
+      if (round === EXPLORE_MAX_ROUNDS - 1) answer = roundText.trim();
+    }
+    return answer || 'The helper made no finding to report.';
   }
 
   async capability(): Promise<DirectApiCapability> {
@@ -817,6 +949,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalTools,
           emit,
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
         );
       }
     } catch (error) {
@@ -1080,6 +1213,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalTools,
           emit,
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           chatToolOutput,
         );
         messages.push(...toolResults as ChatMessage[]);
@@ -1380,6 +1514,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalTools,
           emit,
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           anthropicToolOutput,
         );
         messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
@@ -1576,6 +1711,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalTools,
           emit,
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           (callId, output) => geminiToolOutput(
             toolCalls.find((call) => call.callId === callId)?.name || 'unknown',
             output,
@@ -1696,6 +1832,9 @@ export class DesktopDirectProviderRuntime {
     maxTokens: number = OUTPUT_TOKEN_BUDGET,
     // Off only for the last round of a run that has hit its tool ceiling, so the model answers instead of calling more.
     toolsEnabled = true,
+    // Overridden by `runExploreQuery`, which must not offer the full project tool set (writes, commands, another
+    // `explore`) to its read-only helper. Every ordinary caller takes the default, so this is additive.
+    baseToolDefinitions: readonly unknown[] = projectToolDefinitions,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1706,7 +1845,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        const tools = toolsEnabled ? anthropicToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]) : [];
+        const tools = toolsEnabled ? anthropicToolDefinitions([...baseToolDefinitions, ...externalToolDefinitions]) : [];
         response = await this.pacedFetch(anthropicMessagesUrl(capability.baseUrl), {
           method: 'POST',
           headers: {
@@ -2225,6 +2364,8 @@ async function executeToolCalls(
   approvals: DirectApiApprovalPort | undefined,
   externalTools: ExternalToolPort | undefined,
   emit: (event: PersistedEvent) => void,
+  /** Runs a read-only helper's nested loop for `explore` and returns its answer. See `runExploreQuery`. */
+  explore: (question: string) => Promise<string>,
   formatOutput: (callId: string, output: unknown) => unknown = functionCallOutput,
 ): Promise<unknown[]> {
   const results: unknown[] = [];
@@ -2243,6 +2384,67 @@ async function executeToolCalls(
     }
 
     emit(toolCallEvent(request, name, 'started', argumentsValue));
+
+    // Handled here rather than through the normal policy/execute path: `ask_user` needs the approval port to put
+    // a question (not a permission) to a person, and `explore` needs a nested provider loop, neither of which
+    // `DesktopProjectToolRuntime.execute` can do on its own.
+    if (name === 'ask_user') {
+      const parsed = askUserInputSchema.safeParse(argumentsValue);
+      if (!parsed.success) {
+        const message = describeArgumentError(name, argumentsValue, parsed.error);
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: message }));
+        results.push(formatOutput(callId, { error: message }));
+        continue;
+      }
+      const approvalRequest: DirectApiApprovalRequest = {
+        requestId: `question_${randomUUID()}`,
+        tool: name,
+        title: parsed.data.question,
+        detail: parsed.data.allow_free_text ? 'Choose one of the options, or answer in your own words.' : 'Choose one of the options below.',
+        risk: 'low',
+        options: parsed.data.options,
+        allowFreeText: parsed.data.allow_free_text,
+      };
+      emit({
+        schemaVersion: 1,
+        id: eventId(),
+        taskId: request.conversationId,
+        timestamp: nowIso(),
+        agent: request.agent,
+        type: 'approval.request',
+        requestId: approvalRequest.requestId,
+        tool: name,
+        title: approvalRequest.title,
+        detail: approvalRequest.detail,
+        risk: approvalRequest.risk,
+        options: approvalRequest.options ? [...approvalRequest.options] : undefined,
+        allowFreeText: approvalRequest.allowFreeText,
+      });
+      const answer = approvals?.requestChoice ? await approvals.requestChoice(approvalRequest) : null;
+      const output = answer ? { answer } : { error: 'Nobody answered the question; no approval channel was available for this run.' };
+      emit(toolCallEvent(request, name, answer ? 'completed' : 'failed', argumentsValue, output));
+      results.push(formatOutput(callId, output));
+      continue;
+    }
+    if (name === 'explore') {
+      const parsed = exploreInputSchema.safeParse(argumentsValue);
+      if (!parsed.success) {
+        const message = describeArgumentError(name, argumentsValue, parsed.error);
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: message }));
+        results.push(formatOutput(callId, { error: message }));
+        continue;
+      }
+      let output: { answer: string } | { error: string };
+      try {
+        output = { answer: await explore(parsed.data.question) };
+      } catch (error) {
+        output = { error: error instanceof Error ? error.message : String(error) };
+      }
+      emit(toolCallEvent(request, name, 'error' in output ? 'failed' : 'completed', argumentsValue, output));
+      results.push(formatOutput(callId, output));
+      continue;
+    }
+
     let policy = externalTools?.policy(name, request.autonomy) ?? toolRuntime.policy(name, request.autonomy);
     // Ask-first protects publishing operations, but an explicit Full access choice in
     // the composer authorizes the entire run, including Git commit/push.

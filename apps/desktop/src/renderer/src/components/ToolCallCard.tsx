@@ -1,4 +1,4 @@
-import { Check, ChevronDown, FileDiff, FilePlus, Loader2, MoveRight, Terminal, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, FileDiff, FilePlus, Loader2, MoveRight, Search, Terminal, Trash2, X } from 'lucide-react';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { describeToolCall, renderToolCallPreview, type ToolCallPreview } from '../tool-call-preview';
@@ -23,7 +23,7 @@ export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded 
   }
 
   const failed = event.status === 'failed';
-  const unapplied = failed && preview.kind !== 'command';
+  const unapplied = failed && preview.kind !== 'command' && preview.kind !== 'explore';
   const hasBody = view.lines.length > 0 || view.note !== null || unapplied;
   const expanded = hasBody && (override ?? defaultExpanded);
 
@@ -71,6 +71,7 @@ function iconFor(preview: ToolCallPreview): ReactNode {
   if (preview.kind === 'write') return <FilePlus size={12} />;
   if (preview.kind === 'delete') return <Trash2 size={12} />;
   if (preview.kind === 'move') return <MoveRight size={12} />;
+  if (preview.kind === 'explore') return <Search size={12} />;
   return <Terminal size={12} />;
 }
 

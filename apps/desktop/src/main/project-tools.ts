@@ -125,6 +125,21 @@ const runCommandInputSchema = z
   })
   .strict();
 
+export const askUserInputSchema = z
+  .object({
+    question: z.string().trim().min(1).max(1_000),
+    options: z.array(z.string().trim().min(1).max(200)).min(2).max(4),
+    // When true, a person may answer with their own words instead of one of the options.
+    allow_free_text: z.boolean().optional(),
+  })
+  .strict();
+
+export const exploreInputSchema = z
+  .object({
+    question: z.string().trim().min(1).max(1_000),
+  })
+  .strict();
+
 export const projectToolDefinitions = [
   {
     type: 'function',
@@ -296,6 +311,40 @@ export const projectToolDefinitions = [
   },
   {
     type: 'function',
+    name: 'ask_user',
+    description: 'Ask the user a question with a short list of answers to choose from, when the task genuinely cannot proceed without a decision only they can make. Use this instead of ending your turn with a question in your reply — that leaves the run looking stuck rather than visibly waiting for an answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question, short enough to read at a glance.' },
+        options: {
+          type: 'array',
+          minItems: 2,
+          maxItems: 4,
+          description: 'Two to four short, mutually exclusive answers the user can pick from.',
+          items: { type: 'string' },
+        },
+        allow_free_text: { type: 'boolean', description: 'Set true if a typed answer is also acceptable, not only one of the options.' },
+      },
+      required: ['question', 'options'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'explore',
+    description: 'Hand a question off to a read-only helper that searches and reads files to answer it, then reports back a short answer. Use this for a broad "where/how does X work" question instead of reading many files yourself — the helper\'s intermediate reads do not fill up your own context, only its answer does. The helper cannot edit files, run commands, or ask further questions; give it a question it can answer by reading.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'What to find out, specific enough for the helper to search for.' },
+      },
+      required: ['question'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
     name: 'run_command',
     description: 'Run a shell command in the active project. Commands use your user permissions and may access resources outside the project, so approval is required outside Full mode.',
     parameters: {
@@ -385,6 +434,12 @@ export class DesktopProjectToolRuntime {
     // else: it cannot touch project source. Without this line it fell through to the deny below as an unknown tool,
     // and every API-run plan was refused, which left the finish signal with nothing to read.
     if (name === 'update_plan') return { decision: 'allow' };
+    // Both only ever ask or read; neither can touch a project file. `direct-provider-runtime.ts` intercepts them
+    // before they would reach `execute()` below — `ask_user` to raise the question through the approval port,
+    // `explore` to run its own bounded read-only sub-loop — so allowing them here only governs whether the model
+    // is offered the tool at all, which is also how nesting is prevented: a nested explore run is simply never
+    // given these two tool definitions.
+    if (name === 'ask_user' || name === 'explore') return { decision: 'allow' };
     if (name === 'run_command') {
       if (autonomy === 'plan') {
         return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
@@ -437,6 +492,12 @@ export class DesktopProjectToolRuntime {
       if (name === 'delete_file') return await this.deleteFile(deleteFileInputSchema.parse(rawInput));
       if (name === 'run_command') return await this.runCommand(runCommandInputSchema.parse(rawInput), signal);
       if (name === 'update_plan') return await this.updatePlan(updatePlanInputSchema.parse(rawInput));
+      // Both are handled earlier, in `direct-provider-runtime.ts`'s `executeToolCalls`, before a call ever reaches
+      // here — `ask_user` needs the approval port to put the question to a person, and `explore` needs the
+      // provider runtime to run its nested sub-loop. Reaching this branch means that interception was skipped.
+      if (name === 'ask_user' || name === 'explore') {
+        return toolFailure(`${name} must be handled by the run loop, not called directly.`);
+      }
       return toolFailure(`Unknown project tool: ${name}.`);
     } catch (error) {
       if (error instanceof z.ZodError) return toolFailure(describeArgumentError(name, rawInput, error));

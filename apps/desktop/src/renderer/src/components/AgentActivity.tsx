@@ -39,6 +39,12 @@ export function deriveAgentActivity(events: readonly PersistedEvent[], running: 
 function classifyTool(name: string, input: unknown): { kind: AgentActivityKind; label: string; detail: string } {
   const normalized = name.toLowerCase();
   const detail = toolDetail(input);
+  if (normalized === 'explore') {
+    return { kind: 'reading', label: 'Exploring', detail: detail || name };
+  }
+  if (normalized === 'ask_user') {
+    return { kind: 'waiting', label: 'Asking a question', detail: detail || name };
+  }
   if (/(read|search|grep|glob|list|find|open|cat|view)/.test(normalized)) {
     return { kind: 'reading', label: 'Reading files', detail: detail || name };
   }
@@ -57,7 +63,7 @@ function classifyTool(name: string, input: unknown): { kind: AgentActivityKind; 
 function toolDetail(input: unknown): string {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
   const record = input as Record<string, unknown>;
-  const value = record.command ?? record.path ?? record.filePath ?? record.pattern ?? record.query ?? record.description;
+  const value = record.command ?? record.path ?? record.filePath ?? record.pattern ?? record.query ?? record.question ?? record.description;
   return typeof value === 'string' ? value.slice(0, 500) : '';
 }
 

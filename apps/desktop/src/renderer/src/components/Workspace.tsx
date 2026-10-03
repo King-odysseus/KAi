@@ -146,6 +146,7 @@ interface WorkspaceViewProps {
   onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
   onBranchTurn: (turnId: string) => void;
   onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
+  onSendQueued: (conversationId: string, queuedId: string, prompt: string, options?: WorkspaceSendOptions) => Promise<boolean>;
   onHandoff: (agent: AgentId, prompt: string) => void;
   onCompare: (prompt: string, targetAgent: AgentId) => Promise<CompareRun>;
   onPickCompare: (id: string, side: 'left' | 'right') => Promise<void>;
@@ -174,8 +175,25 @@ interface WorkspaceViewProps {
 }
 
 interface QueuedPrompt {
+  id: string;
   text: string;
   options: WorkspaceSendOptions;
+}
+
+const QUEUE_KEY = 'kai.composer.queuedPrompts';
+const dispatchingQueues = new Set<string>();
+
+function loadQueuedPrompts(): Record<string, QueuedPrompt[]> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(QUEUE_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).map(([id, items]) => [id,
+      Array.isArray(items) ? items.filter((item): item is QueuedPrompt =>
+        Boolean(item && typeof item.id === 'string' && typeof item.text === 'string' && item.options && typeof item.options === 'object')) : [],
+    ]));
+  } catch {
+    return {};
+  }
 }
 
 type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
@@ -312,6 +330,7 @@ export function WorkspaceView({
   onCreateConversation,
   onBranchTurn,
   onSend,
+  onSendQueued,
   onHandoff,
   onCompare,
   onPickCompare,
@@ -350,7 +369,24 @@ export function WorkspaceView({
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const [goalEditor, setGoalEditor] = useState<GoalInput | null>(null);
-  const [queuedPrompts, setQueuedPrompts] = useState<QueuedPrompt[]>([]);
+  const [queues, setQueues] = useState<Record<string, QueuedPrompt[]>>(loadQueuedPrompts);
+  const queueConversationId = activeConversation?.id ?? null;
+  const queuedPrompts = queueConversationId ? queues[queueConversationId] ?? [] : [];
+  const failedQueuedIdRef = useRef<string | null>(null);
+  const setQueuedPrompts = (update: (current: QueuedPrompt[]) => QueuedPrompt[]): void => {
+    if (!queueConversationId) return;
+    setQueues((current) => ({ ...current, [queueConversationId]: update(current[queueConversationId] ?? []) }));
+  };
+
+  useEffect(() => {
+    try { window.localStorage.setItem(QUEUE_KEY, JSON.stringify(queues)); } catch { /* Keep the in-memory queue. */ }
+  }, [queues]);
+
+  useEffect(() => {
+    const refresh = (): void => setQueues(loadQueuedPrompts());
+    window.addEventListener('kai:queue-updated', refresh);
+    return () => window.removeEventListener('kai:queue-updated', refresh);
+  }, []);
   const [statusWord, setStatusWord] = useState<(typeof STATUS_WORDS)[number]>('Thinking');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [compareMode, setCompareMode] = useState(false);
@@ -584,15 +620,28 @@ export function WorkspaceView({
 
   useEffect(() => {
     const next = queuedPrompts[0];
-    if (running || busy || !next || !activeProject || !ready) return;
-    setQueuedPrompts((current) => current.slice(1));
-    if (steerPendingRef.current) {
-      steerPendingRef.current = false;
-      setWorkbenchNotice('Steered instruction started.');
-    }
-    if (activeConversation) onSend(next.text, next.options);
-    else onCreateConversation(next.text, next.options);
-  }, [activeConversation, activeProject, busy, onCreateConversation, onSend, queuedPrompts, ready, running]);
+    if (running || busy || !next || !activeProject || !ready || !queueConversationId
+      || dispatchingQueues.has(queueConversationId) || failedQueuedIdRef.current === next.id) return;
+    dispatchingQueues.add(queueConversationId);
+    void onSendQueued(queueConversationId, next.id, next.text, next.options).then((accepted) => {
+      if (accepted) {
+        setQueues((current) => ({ ...current, [queueConversationId]: (current[queueConversationId] ?? []).filter((item) => item.id !== next.id) }));
+        if (steerPendingRef.current) {
+          steerPendingRef.current = false;
+          setWorkbenchNotice('Steered instruction started.');
+        }
+      } else {
+        failedQueuedIdRef.current = next.id;
+        setWorkbenchNotice('Queued instruction could not be delivered. It is still in the queue; edit or retry it.');
+      }
+    }).catch(() => {
+      failedQueuedIdRef.current = next.id;
+      setWorkbenchNotice('Queued instruction could not be delivered. It is still in the queue; edit or retry it.');
+    }).finally(() => {
+      dispatchingQueues.delete(queueConversationId);
+      setQueues((current) => ({ ...current }));
+    });
+  }, [activeProject, busy, onSendQueued, queueConversationId, queuedPrompts, ready, running]);
 
   useEffect(() => {
     if (wasRunningRef.current && !running) setPendingUser(null);
@@ -627,7 +676,7 @@ export function WorkspaceView({
   const queueOrSend = (text: string, options = sendOptions): void => {
     if (!text || !activeProject || !ready) return;
     if (running) {
-      setQueuedPrompts((current) => [...current, { text, options: options ?? {} }]);
+      setQueuedPrompts((current) => [...current, { id: crypto.randomUUID(), text, options: options ?? {} }]);
       return;
     }
     stickToBottomRef.current = true;
@@ -733,7 +782,7 @@ export function WorkspaceView({
   const steerNow = (): void => {
     const text = prompt.trim();
     if (!text || !activeProject || busy || refiningPrompt || !ready) return;
-    setQueuedPrompts((current) => [{ text, options: optionsForPrompt(text) ?? {} }, ...current]);
+    setQueuedPrompts((current) => [{ id: crypto.randomUUID(), text, options: optionsForPrompt(text) ?? {} }, ...current]);
     setPrompt('');
     clearComposerContext();
     setSelectedSkills([]);
@@ -1490,6 +1539,7 @@ export function WorkspaceView({
             {queuedPrompts.map((item, index) => (
               <div className="queue-row" key={`${item.text}:${index}`}>
                 <span className="queue-label" title="Queued instruction"><GitFork size={12} /></span><span className="truncate">{item.text}</span>
+                {failedQueuedIdRef.current === item.id && <button type="button" aria-label="Retry queued prompt" title="Retry queued prompt" onClick={() => { failedQueuedIdRef.current = null; setQueues((current) => ({ ...current })); }}><RefreshCw size={12} /></button>}
                 <button type="button" className="queue-steer-button" aria-label="Interrupt and steer with queued prompt" title="Stop the current run and start this instruction next" onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Interrupt & steer</span></button>
                 <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" onClick={() => { setPrompt(item.text); setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index)); promptRef.current?.focus(); }}><Pencil size={12} /></button>
                 <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" onClick={() => setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={12} /></button>

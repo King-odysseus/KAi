@@ -1021,6 +1021,147 @@ data: {"type":"message_stop"}
       expect.objectContaining({ type: 'agent.lifecycle', status: 'cancelled' }),
     ]));
   });
+
+  it('asks the user through ask_user and feeds the chosen option back as the tool result', async () => {
+    const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { messages: Array<Record<string, unknown>> };
+        requests.push(body);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (requests.length === 1) {
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_ask', name: 'ask_user', input: { question: 'Which branch should I use?', options: ['main', 'release'] } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Using main, as chosen."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+    const approvalRequests: DirectApiApprovalRequest[] = [];
+    const approvals = {
+      request: async () => false,
+      requestChoice: async (approval: DirectApiApprovalRequest) => {
+        approvalRequests.push(approval);
+        return 'main';
+      },
+    };
+
+    const result = await runtime.run(runRequest(), process.cwd(), undefined, undefined, approvals);
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('Using main, as chosen.');
+    expect(approvalRequests).toEqual([
+      expect.objectContaining({ title: 'Which branch should I use?', options: ['main', 'release'] }),
+    ]);
+    const followUp = requests[1]!.messages;
+    const toolResult = followUp.find((message) =>
+      message.role === 'user'
+      && Array.isArray(message.content)
+      && (message.content as Array<Record<string, unknown>>).some((block) => block.type === 'tool_result'));
+    expect(JSON.stringify(toolResult)).toContain('main');
+  });
+
+  it('asks the user through ask_user and reports it clearly when nobody is there to answer', async () => {
+    let calls = 0;
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        calls += 1;
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (calls === 1) {
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_ask', name: 'ask_user', input: { question: 'Continue?', options: ['Yes', 'No'] } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Nobody answered, so I stopped here."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    // No approvals port at all: the same as a scheduled or unattended run.
+    const result = await runtime.run(runRequest(), process.cwd());
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('Nobody answered, so I stopped here.');
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'tool.call',
+        name: 'ask_user',
+        status: 'failed',
+        output: expect.objectContaining({ error: expect.stringContaining('Nobody answered') }),
+      }),
+    ]));
+  });
+
+  it('hands a question to explore and returns only its answer to the main run', async () => {
+    const requests: Array<{ tools?: Array<{ name: string }>; messages: Array<Record<string, unknown>> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { tools?: Array<{ name: string }>; messages: Array<Record<string, unknown>> };
+        requests.push(body);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const toolNames = (body.tools ?? []).map((tool) => tool.name);
+        const isExploreSubRun = toolNames.length > 0 && toolNames.every((name) => name === 'read_file' || name === 'search_files' || name === 'list_files');
+        if (requests.length === 1) {
+          // The main run's first turn: it hands the question off instead of reading files itself.
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_explore', name: 'explore', input: { question: 'How does login work?' } } })}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`);
+          return;
+        }
+        if (isExploreSubRun) {
+          response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Login uses JWT in auth.ts."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+          return;
+        }
+        // The main run's second turn, now holding the helper's answer as the tool result.
+        response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done: login uses JWT."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run(runRequest(), process.cwd());
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('Done: login uses JWT.');
+    expect(requests).toHaveLength(3);
+    // The helper was offered only the three read-only tools, never the full project tool set.
+    expect(requests[1]!.tools).toHaveLength(3);
+    expect(JSON.stringify(requests[1]!.messages)).toContain('How does login work?');
+    // Its answer, not its (nonexistent, in this test) intermediate reads, is what reaches the main run.
+    expect(JSON.stringify(requests[2]!.messages)).toContain('Login uses JWT in auth.ts.');
+  });
 });
 
 function runRequest(): AgentRunRequest {

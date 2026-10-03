@@ -75,11 +75,13 @@ import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime'
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
+import { buildTurnDigest } from './turn-digest';
+import { workingMethodBriefing } from './working-method';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
 import { buildHistoryNote } from './run-history';
 import { clearInterjections, interject } from './interjections';
 import { buildProjectContext } from './context-builder';
-import type { DesktopDirectProviderRuntime, DirectApiApprovalPort } from './direct-provider-runtime';
+import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, RULES_MARKER, shouldCarryRules } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
@@ -194,7 +196,9 @@ export interface IpcContext {
     conversationId: string;
     ownerWindowId: number | null;
     event: Extract<AgentRunEvent['event'], { type: 'approval.request' }>;
-    resolve: (approved: boolean) => void;
+    // `answer` carries the option (or free text) chosen for a question raised with `options`; absent for an
+    // ordinary allow/deny response, and ignored by a caller that only reads `approved`.
+    resolve: (result: { approved: boolean; answer?: string }) => void;
   }>;
   windows: DesktopWindowRegistry;
   editorSessions: EditorSessionManager;
@@ -690,12 +694,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'agents:resume', async ({ conversationId }) => context.runControl.resume(conversationId));
   handle(context, 'agents:sign-in', async ({ agent }) => context.agents.signIn(agent));
   handle(context, 'agents:install', async ({ agent }) => context.agents.install(agent));
-  handle(context, 'agents:approval-response', async ({ conversationId, requestId, approved }, request) => {
+  handle(context, 'agents:approval-response', async ({ conversationId, requestId, approved, answer }, request) => {
     const pending = context.pendingApprovals.get(requestId);
     if (!pending || pending.conversationId !== conversationId) return false;
     if (pending.ownerWindowId !== null && pending.ownerWindowId !== request.ownerWindowId) return false;
     context.pendingApprovals.delete(requestId);
-    pending.resolve(approved);
+    pending.resolve({ approved, answer });
     return true;
   });
   handle(context, 'usage:summary', async ({ conversationId }) =>
@@ -1346,25 +1350,40 @@ export async function runConversationAgent(
     if (ownerWindowId !== null && context.windows.send(ownerWindowId, 'agents:event', payload)) return;
     context.windows.broadcast('agents:event', payload);
   };
+  const approvalEvent = (approval: DirectApiApprovalRequest): Extract<AgentRunEvent['event'], { type: 'approval.request' }> => ({
+    schemaVersion: 1,
+    id: `evt_${crypto.randomUUID()}`,
+    taskId: conversation.id,
+    timestamp: new Date().toISOString(),
+    agent: request.agent,
+    type: 'approval.request',
+    requestId: approval.requestId,
+    title: approval.title,
+    detail: approval.detail,
+    risk: approval.risk,
+    ...(approval.tool ? { tool: approval.tool } : {}),
+    // Carried through so the prompt can name its own answers; without it the run's question is put to the person
+    // in the words of a permission request, which is the one thing it is not.
+    ...(approval.runQuestion ? { runQuestion: approval.runQuestion } : {}),
+    // Carried through for `ask_user`: the approval card renders these as answer choices, never as allow/deny.
+    ...(approval.options ? { options: [...approval.options], ...(approval.allowFreeText ? { allowFreeText: true } : {}) } : {}),
+  });
   const approvals: DirectApiApprovalPort = {
     request: (approval) => new Promise<boolean>((resolve) => {
-      const event: Extract<AgentRunEvent['event'], { type: 'approval.request' }> = {
-        schemaVersion: 1,
-        id: `evt_${crypto.randomUUID()}`,
-        taskId: conversation.id,
-        timestamp: new Date().toISOString(),
-        agent: request.agent,
-        type: 'approval.request',
-        requestId: approval.requestId,
-        title: approval.title,
-        detail: approval.detail,
-        risk: approval.risk,
-        ...(approval.tool ? { tool: approval.tool } : {}),
-        // Carried through so the prompt can name its own answers; without it the run's question is put to the person
-        // in the words of a permission request, which is the one thing it is not.
-        ...(approval.runQuestion ? { runQuestion: approval.runQuestion } : {}),
-      };
-      context.pendingApprovals.set(approval.requestId, { conversationId: conversation.id, ownerWindowId, event, resolve });
+      context.pendingApprovals.set(approval.requestId, {
+        conversationId: conversation.id,
+        ownerWindowId,
+        event: approvalEvent(approval),
+        resolve: (result) => resolve(result.approved),
+      });
+    }),
+    requestChoice: (approval) => new Promise<string | null>((resolve) => {
+      context.pendingApprovals.set(approval.requestId, {
+        conversationId: conversation.id,
+        ownerWindowId,
+        event: approvalEvent(approval),
+        resolve: (result) => resolve(result.approved ? result.answer ?? null : null),
+      });
     }),
   };
   const contextText = executionMode === 'api'
@@ -1395,7 +1414,7 @@ export async function runConversationAgent(
         // A resumed session already holds the rules, instruction files and skills from its first turn.
         Boolean(resumeSessionId),
       )).text;
-  let effectivePrompt = `${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
+  let effectivePrompt = `${workingMethodBriefing()}\n\n${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
   if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing()}\n\n${effectivePrompt}`;
@@ -1443,7 +1462,13 @@ export async function runConversationAgent(
     : preparedRequest;
   const apiHistory = executionMode === 'api' && historyTurns.length > 0
     ? [
-        ...historyTurns.slice(0, -1),
+        // Earlier turns carry what they actually did, not just what they said — see `buildTurnDigest`. Without
+        // this a follow-up message only ever saw the previous turn's closing prose and had no idea which files
+        // were already read or changed, or what a command it ran had printed.
+        ...historyTurns.slice(0, -1).map((turn) => ({
+          role: turn.role,
+          text: turn.toolDigest ? `${turn.text}\n\n[What this turn actually did]\n${turn.toolDigest}` : turn.text,
+        })),
         { ...historyTurns[historyTurns.length - 1], text: effectivePrompt },
       ]
     : undefined;
@@ -1592,11 +1617,13 @@ export async function runConversationAgent(
         }),
     diagnosis ? diagnosisLine(diagnosis) : null,
   ].filter(Boolean).join('\n\n');
+  const toolDigest = buildTurnDigest(execution.events);
   conversation.turns.push({
     id: `turn_${crypto.randomUUID()}`,
     role: 'assistant' as const,
     text: closing,
     createdAt: conversation.updatedAt,
+    ...(toolDigest ? { toolDigest } : {}),
   });
   conversation.events.push(...execution.events);
   conversation.agentSessionId = execution.sessionId;
@@ -2769,7 +2796,7 @@ function resolvePendingApprovals(context: IpcContext, conversationId: string, ap
   for (const [requestId, pending] of context.pendingApprovals) {
     if (pending.conversationId !== conversationId) continue;
     context.pendingApprovals.delete(requestId);
-    pending.resolve(approved);
+    pending.resolve({ approved });
   }
 }
 
@@ -3083,7 +3110,7 @@ export function handleRendererWindowClosed(context: IpcContext, windowId: number
         event: pending.event,
       } satisfies AgentRunEvent);
     } else {
-      pending.resolve(false);
+      pending.resolve({ approved: false });
     }
   }
 }

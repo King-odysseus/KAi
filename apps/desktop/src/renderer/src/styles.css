@@ -1267,6 +1267,34 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.approval-dialog-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+
+.approval-option {
+  flex: 1 1 auto;
+  min-width: 120px;
+  text-align: left;
+}
+
+.approval-dialog-freetext {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.approval-dialog-freetext input {
+  flex: 1 1 auto;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  background: rgba(8, 17, 31, 0.7);
+}
+
 .approval-dialog-actions {
   display: flex;
   justify-content: flex-end;

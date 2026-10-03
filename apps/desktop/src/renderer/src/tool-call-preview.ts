@@ -15,7 +15,8 @@ export type ToolCallPreview =
   | { kind: 'write'; path: string; content: string; creates: boolean }
   | { kind: 'delete'; path: string }
   | { kind: 'move'; from: string; to: string }
-  | { kind: 'command'; command: string; cwd: string | null; output: string; exitCode: number | null };
+  | { kind: 'command'; command: string; cwd: string | null; output: string; exitCode: number | null }
+  | { kind: 'explore'; question: string; answer: string | null };
 
 export interface PreviewLine {
   kind: 'context' | 'removed' | 'added' | 'gap';
@@ -56,6 +57,7 @@ const PREVIEW_TOOLS = new Set([
   'run_command',
   'bash',
   'shell_command',
+  'explore',
 ]);
 
 export function isPreviewableTool(name: string): boolean {
@@ -113,6 +115,13 @@ export function describeToolCall(name: string, input: unknown, output: unknown):
         exitCode: result && typeof result.exitCode === 'number' ? result.exitCode : null,
       };
     }
+    case 'explore': {
+      const question = typeof args.question === 'string' ? args.question : null;
+      if (!question) return null;
+      const result = asRecord(output);
+      const answer = result && typeof result.answer === 'string' ? result.answer : result && typeof result.error === 'string' ? `Could not answer: ${result.error}` : null;
+      return { kind: 'explore', question, answer };
+    }
     default:
       return null;
   }
@@ -161,6 +170,8 @@ export function renderToolCallPreview(preview: ToolCallPreview): ToolCallPreview
   } else if (preview.kind === 'command') {
     for (const line of tail(preview.output, MAX_OUTPUT_CHARS).split(/\r?\n/)) push('context', line);
     if (preview.exitCode !== null && preview.exitCode !== 0) note = `Exit code ${preview.exitCode}`;
+  } else if (preview.kind === 'explore') {
+    for (const line of (preview.answer ?? 'Still exploring…').split(/\r?\n/)) push('context', line);
   }
 
   if (omitted > 0) lines.push({ kind: 'gap', text: `… ${omitted} more ${omitted === 1 ? 'line' : 'lines'}` });
@@ -173,6 +184,7 @@ function headerFor(preview: ToolCallPreview): { verb: string; target: string } {
   if (preview.kind === 'write') return { verb: preview.creates ? 'Create file' : 'Write file', target: preview.path };
   if (preview.kind === 'delete') return { verb: 'Delete file', target: preview.path };
   if (preview.kind === 'move') return { verb: 'Move file', target: `${preview.from} → ${preview.to}` };
+  if (preview.kind === 'explore') return { verb: 'Explored', target: preview.question };
   return { verb: 'Command', target: preview.cwd ? `${preview.command}  (in ${preview.cwd})` : preview.command };
 }
 

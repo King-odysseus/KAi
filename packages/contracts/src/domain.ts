@@ -395,6 +395,13 @@ export const conversationTurnSchema = z
     createdAt: timestampSchema,
     checkpoint: checkpointRecordSchema.nullable().optional(),
     fileChanges: z.array(turnFileChangeSchema).optional(),
+    /**
+     * A short, factual account of what this turn's tool calls did — files touched, commands run and their
+     * outcome — built from its events (see `main/turn-digest.ts`). Carried into later turns' Direct API history so
+     * a follow-up message knows what actually happened, not just what the model said about it. Assistant turns
+     * only; absent when the turn made no tool calls.
+     */
+    toolDigest: z.string().optional(),
     attachments: z.array(z.object({
       name: z.string().min(1).max(500),
       dataUrl: z.string().min(1).max(30_000_000),

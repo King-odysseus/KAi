@@ -99,6 +99,24 @@ describe('extended project tools', () => {
     expect(runtime.policy('list_files', 'plan').decision).toBe('allow');
   });
 
+  it('offers ask_user and explore, and always allows them regardless of autonomy', () => {
+    const names = projectToolDefinitions.map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining(['ask_user', 'explore']));
+    for (const autonomy of ['plan', 'ask', 'autoEdit', 'full', 'custom'] as const) {
+      expect(runtime.policy('ask_user', autonomy).decision).toBe('allow');
+      expect(runtime.policy('explore', autonomy).decision).toBe('allow');
+    }
+  });
+
+  it('refuses ask_user and explore if called directly, since the run loop must intercept them first', async () => {
+    const askUser = await runtime.execute('ask_user', { question: 'Continue?', options: ['Yes', 'No'] });
+    expect(askUser.ok).toBe(false);
+    expect(String((askUser.output as { error?: string }).error)).toContain('must be handled by the run loop');
+    const explore = await runtime.execute('explore', { question: 'How does X work?' });
+    expect(explore.ok).toBe(false);
+    expect(String((explore.output as { error?: string }).error)).toContain('must be handled by the run loop');
+  });
+
   it('turns globs into path matchers', () => {
     expect(globToRegExp('src/**/*.ts').test('src/a.ts')).toBe(true);
     expect(globToRegExp('src/**/*.ts').test('src/x/y/a.ts')).toBe(true);

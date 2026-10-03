@@ -73,6 +73,10 @@ interface PendingApproval {
   tool?: string;
   /** Set when the run is asking about itself, so the dialog offers these answers instead of allow and deny. */
   runQuestion?: { continueLabel: string; finishLabel: string };
+  /** Set when the model asked a question via `ask_user`: the choices to show instead of allow/deny buttons. */
+  options?: string[];
+  /** Whether a typed answer is also acceptable for an `options` question, not only one of the choices. */
+  allowFreeText?: boolean;
 }
 
 interface ComposerSelection {
@@ -561,6 +565,8 @@ export function App(): ReactNode {
             risk: event.risk,
             tool: event.tool,
             runQuestion: event.runQuestion,
+            options: event.options,
+            allowFreeText: event.allowFreeText,
           }]);
       return;
     }
@@ -1138,7 +1144,7 @@ export function App(): ReactNode {
     return result;
   }
 
-  async function respondToApproval(approved: boolean, useFullAccess = false): Promise<void> {
+  async function respondToApproval(approved: boolean, useFullAccess = false, answer?: string): Promise<void> {
     const approval = pendingApproval;
     if (!approval) return;
     if (useFullAccess) {
@@ -1152,12 +1158,15 @@ export function App(): ReactNode {
         conversationId: approval.conversationId,
         requestId: approval.requestId,
         approved,
+        ...(answer ? { answer } : {}),
       }).then(unwrap),
       // Answering a question about the run is not approving a change to the project, and saying so would name the
       // wrong thing in the one place the person looks to check what their click did.
-      approval.runQuestion
-        ? (approved ? 'Continuing the run' : 'Finishing the run')
-        : (approved ? 'Approving project change' : 'Denying project change'),
+      approval.options
+        ? (answer ? `Answered: ${answer}` : 'Declined to answer')
+        : approval.runQuestion
+          ? (approved ? 'Continuing the run' : 'Finishing the run')
+          : (approved ? 'Approving project change' : 'Denying project change'),
     );
   }
 
@@ -1761,6 +1770,24 @@ export function App(): ReactNode {
             onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
             onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
             onSend={(prompt, options) => void sendPrompt(prompt, options)}
+            onSendQueued={async (conversationId, queuedId, prompt, options) => {
+              const conversation = conversations.find((item) => item.id === conversationId);
+              if (!conversation) return false;
+              const previousTurnIds = new Set(conversation.turns.map((turn) => turn.id));
+              await runConversation(conversation, prompt, options);
+              const updated = await window.kaiDesktop.getConversation(conversationId).then(unwrap).catch(() => null);
+              const delivered = Boolean(updated?.turns.some((turn) => turn.role === 'user' && turn.text === prompt && !previousTurnIds.has(turn.id)));
+              if (delivered) {
+                try {
+                  const key = 'kai.composer.queuedPrompts';
+                  const saved = JSON.parse(window.localStorage.getItem(key) ?? '{}') as Record<string, Array<{ id: string }>>;
+                  saved[conversationId] = (saved[conversationId] ?? []).filter((item) => item.id !== queuedId);
+                  window.localStorage.setItem(key, JSON.stringify(saved));
+                  window.dispatchEvent(new Event('kai:queue-updated'));
+                } catch { /* The mounted composer also clears its in-memory queue. */ }
+              }
+              return delivered;
+            }}
             onHandoff={(agent, prompt) => void handoffConversation(agent, prompt)}
             onCompare={compareConversation}
             onPickCompare={pickCompareWinner}
@@ -2033,7 +2060,7 @@ export function App(): ReactNode {
         </div>
       )}
       {pendingApproval && (
-        <ApprovalDialog approval={pendingApproval} onRespond={(approved, useFullAccess) => void respondToApproval(approved, useFullAccess)} />
+        <ApprovalDialog approval={pendingApproval} onRespond={(approved, useFullAccess, answer) => void respondToApproval(approved, useFullAccess, answer)} />
       )}
       <TourGuide
         view={view}
@@ -2074,8 +2101,46 @@ function ApprovalDialog({
   onRespond,
 }: {
   approval: PendingApproval;
-  onRespond: (approved: boolean, useFullAccess?: boolean) => void;
+  onRespond: (approved: boolean, useFullAccess?: boolean, answer?: string) => void;
 }): ReactNode {
+  // A question the model asked with `ask_user` is neither a permission prompt nor a question about the run itself:
+  // it has its own named choices, so it gets its own rendering rather than being squeezed into allow/deny.
+  const [freeText, setFreeText] = useState('');
+  if (approval.options) {
+    return (
+      <div className="approval-overlay">
+        <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+          <div className="approval-dialog-head">
+            <AlertTriangle size={20} />
+            <div>
+              <span className="eyebrow">KAI is asking</span>
+              <h2 id="approval-title">{approval.title}</h2>
+            </div>
+          </div>
+          <div className="approval-dialog-options">
+            {approval.options.map((option) => (
+              <button key={option} type="button" className="secondary-button approval-option" onClick={() => onRespond(true, false, option)}>{option}</button>
+            ))}
+          </div>
+          {approval.allowFreeText && (
+            <div className="approval-dialog-freetext">
+              <input
+                type="text"
+                value={freeText}
+                placeholder="Or type your own answer"
+                onChange={(event) => setFreeText(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter' && freeText.trim()) onRespond(true, false, freeText.trim()); }}
+              />
+              <button type="button" className="primary-button" disabled={!freeText.trim()} onClick={() => onRespond(true, false, freeText.trim())}>Answer</button>
+            </div>
+          )}
+          <div className="approval-dialog-actions">
+            <button type="button" className="secondary-button" onClick={() => onRespond(false)}>Skip for now</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
   // A guard asking whether to carry on is not a tool asking for permission. Its answers are named actions, and the
   // full-access button that belongs on a permission prompt has no meaning here — next to a spend limit it would read
   // as consent to keep spending, permanently. So it is a different dialog with the two answers it actually has.
