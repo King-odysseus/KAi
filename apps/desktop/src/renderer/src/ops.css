@@ -1906,6 +1906,21 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .preview-stop-button { color: var(--text-muted); }
 .preview-toolbar .secondary-button.active { color: var(--mint-strong); border-color: rgba(102, 227, 189, 0.42); background: var(--mint-soft); }
 
+/* A project can offer more than one way to start (a front end dev server beside an API server), so the detected
+   commands are shown as chips and the field above stays free for anything else. */
+.preview-starts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+.preview-starts-label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .preview-notice {
   display: flex;
   align-items: flex-start;

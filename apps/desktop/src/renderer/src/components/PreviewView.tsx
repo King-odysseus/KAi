@@ -264,7 +264,7 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
       <div className="preview-toolbar">
         <label className="input-with-icon preview-command">
           <Terminal size={13} />
-          <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="npm run dev" aria-label="Preview command" />
+          <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="The command that starts this project" aria-label="Preview command" />
         </label>
         <button type="button" className="primary-button preview-run-button" aria-label={running || starting ? 'Restart project' : 'Start project'} disabled={!command.trim() || Boolean(busy)} onClick={() => void start()}>
           {starting ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}
@@ -287,6 +287,24 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
           </button>
         </div>
       </div>
+
+      {info && info.candidates.length > 1 && (
+        <div className="preview-starts" role="group" aria-label="Ways to start this project">
+          <span className="preview-starts-label">Start with</span>
+          {info.candidates.map((candidate) => (
+            <button
+              key={candidate.command}
+              type="button"
+              className="chip-button"
+              title={candidate.command}
+              aria-pressed={candidate.command === command.trim()}
+              onClick={() => setCommand(candidate.command)}
+            >
+              {candidate.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {notice && <div className="preview-notice" role="status"><span>{notice}</span><button type="button" className="icon-button compact" aria-label="Dismiss preview notice" onClick={() => setNotice(null)}><X size={13} /></button></div>}
       {state?.message && <div className={`preview-notice ${state.status === 'failed' ? 'preview-error' : ''}`} role={state.status === 'failed' ? 'alert' : 'status'}><span>{state.message}</span></div>}
@@ -312,7 +330,7 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
             <div className="preview-placeholder">
               <AppWindow size={32} />
               <strong>{info?.available ? 'Run the project to load its preview' : 'Enter a preview command or URL'}</strong>
-              <span>{info?.available ? `Detected script: ${info.command}` : 'No package dev script was found for this project.'}</span>
+              <span>{info?.available ? `Detected: ${info.command}` : 'No start command was found for this project. Type the one that starts it.'}</span>
             </div>
           )}
         </div>
