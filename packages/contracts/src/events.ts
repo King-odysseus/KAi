@@ -145,6 +145,16 @@ export const turnChangesEventSchema = eventBaseSchema.extend({
   hasCheckpoint: z.boolean(),
 });
 
+/**
+ * A short, factual statement about the run that the person should see in the conversation itself, not buried in the
+ * collapsible Activity list — standing rules having been applied this turn is the first use. Unlike `agent.lifecycle`
+ * (which has no rendering of its own and exists only to feed the Activity summary), this is meant to be read.
+ */
+export const noticeEventSchema = eventBaseSchema.extend({
+  type: z.literal('notice'),
+  message: z.string().min(1),
+});
+
 export const sessionLifecycleEventSchema = eventBaseSchema.extend({
   type: z.literal('session.lifecycle'),
   lifecycleType: z.enum(['session_start', 'session_end', 'handoff', 'agent_switch', 'interrupted']),
@@ -170,6 +180,7 @@ export const persistedEventV1Schema = z.discriminatedUnion('type', [
   planUpdateEventSchema,
   turnChangesEventSchema,
   sessionLifecycleEventSchema,
+  noticeEventSchema,
 ]);
 
 export const persistedEventSchema = persistedEventV1Schema;

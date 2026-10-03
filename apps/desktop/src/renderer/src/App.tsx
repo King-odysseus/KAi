@@ -281,7 +281,10 @@ export function App(): ReactNode {
   const runningConversationIdsRef = useRef<string[]>([]);
   const shortcutsRef = useRef(bootstrap?.settings.shortcuts ?? {});
   const shortcutSheetOpenRef = useRef(false);
-  const pendingApproval = pendingApprovals.find((approval) => approval.conversationId === activeConversationId) ?? pendingApprovals[0] ?? null;
+  const pendingApproval = pendingApprovals.find((approval) => approval.conversationId === activeConversationId && !approval.options)
+    ?? pendingApprovals.find((approval) => !approval.options)
+    ?? null;
+  const activeQuestion = pendingApprovals.find((approval) => approval.conversationId === activeConversationId && approval.options !== undefined);
   runningConversationIdsRef.current = runningConversationIds;
   shortcutsRef.current = bootstrap?.settings.shortcuts ?? {};
   shortcutSheetOpenRef.current = shortcutSheetOpen;
@@ -1290,8 +1293,10 @@ export function App(): ReactNode {
     return result;
   }
 
-  async function respondToApproval(approved: boolean, useFullAccess = false, answer?: string): Promise<void> {
-    const approval = pendingApproval;
+  async function respondToApproval(approved: boolean, useFullAccess = false, answer?: string, requestId?: string): Promise<void> {
+    const approval = requestId
+      ? pendingApprovals.find((item) => item.requestId === requestId)
+      : pendingApproval;
     if (!approval) return;
     if (useFullAccess) {
       setSelectedAutonomy('full');
@@ -1881,7 +1886,9 @@ export function App(): ReactNode {
             streamingText={streamingText}
             running={activeRunning}
             paused={activePaused}
-            awaitingApproval={isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
+            awaitingApproval={Boolean(activeQuestion) || isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
+            pendingQuestion={activeQuestion?.options ? { ...activeQuestion, options: activeQuestion.options } : null}
+            onAnswerQuestion={(requestId, answer) => void respondToApproval(Boolean(answer), false, answer ?? undefined, requestId)}
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
@@ -2247,44 +2254,6 @@ function ApprovalDialog({
   approval: PendingApproval;
   onRespond: (approved: boolean, useFullAccess?: boolean, answer?: string) => void;
 }): ReactNode {
-  // A question the model asked with `ask_user` is neither a permission prompt nor a question about the run itself:
-  // it has its own named choices, so it gets its own rendering rather than being squeezed into allow/deny.
-  const [freeText, setFreeText] = useState('');
-  if (approval.options) {
-    return (
-      <div className="approval-overlay">
-        <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
-          <div className="approval-dialog-head">
-            <AlertTriangle size={20} />
-            <div>
-              <span className="eyebrow">KAI is asking</span>
-              <h2 id="approval-title">{approval.title}</h2>
-            </div>
-          </div>
-          <div className="approval-dialog-options">
-            {approval.options.map((option) => (
-              <button key={option} type="button" className="secondary-button approval-option" onClick={() => onRespond(true, false, option)}>{option}</button>
-            ))}
-          </div>
-          {approval.allowFreeText && (
-            <div className="approval-dialog-freetext">
-              <input
-                type="text"
-                value={freeText}
-                placeholder="Or type your own answer"
-                onChange={(event) => setFreeText(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter' && freeText.trim()) onRespond(true, false, freeText.trim()); }}
-              />
-              <button type="button" className="primary-button" disabled={!freeText.trim()} onClick={() => onRespond(true, false, freeText.trim())}>Answer</button>
-            </div>
-          )}
-          <div className="approval-dialog-actions">
-            <button type="button" className="secondary-button" onClick={() => onRespond(false)}>Skip for now</button>
-          </div>
-        </section>
-      </div>
-    );
-  }
   // A guard asking whether to carry on is not a tool asking for permission. Its answers are named actions, and the
   // full-access button that belongs on a permission prompt has no meaning here — next to a spend limit it would read
   // as consent to keep spending, permanently. So it is a different dialog with the two answers it actually has.

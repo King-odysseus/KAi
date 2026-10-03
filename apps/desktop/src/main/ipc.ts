@@ -1462,6 +1462,21 @@ export async function runConversationAgent(
   const executionRequest = carryRules
     ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
     : preparedRequest;
+  // Visible in the conversation itself, not just true in the code: asked plainly, this answers it without
+  // anyone having to trust that `shouldCarryRules` did the right thing.
+  const rulesNotice: PersistedEvent = {
+    schemaVersion: 1,
+    id: `evt_${crypto.randomUUID()}`,
+    taskId: conversation.id,
+    timestamp: new Date().toISOString(),
+    agent: request.agent,
+    type: 'notice',
+    message: carryRules
+      ? 'Standing execution rules (57 rules from Cognitive1) were included in this turn.'
+      : executionMode === 'cli'
+        ? 'Standing execution rules were sent on this session’s first turn and do not need to be resent while it stays open.'
+        : 'Standing execution rules are already carried in this turn’s context, so they were not sent twice.',
+  };
   const apiHistory = executionMode === 'api' && historyTurns.length > 0
     ? [
         // Earlier turns carry what they actually did, not just what they said — see `buildTurnDigest`. Without
@@ -1563,7 +1578,7 @@ export async function runConversationAgent(
     );
     if (ended) execution.events.push(ended);
   }
-  execution.events.unshift(...memoryEvents);
+  execution.events.unshift(rulesNotice, ...memoryEvents);
   resolvePendingApprovals(context, conversation.id, false);
   // Files may have changed, so the next run's project outline must be rebuilt.
   invalidateRepoMap(workRoot);

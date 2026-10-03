@@ -10,7 +10,7 @@ import type {
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
 import { readPlan } from './plan-store';
-import { takeInterjection } from './interjections';
+import { steeringInstruction, takeInterjection } from './interjections';
 import {
   anthropicImagePart,
   attachedImages,
@@ -806,6 +806,7 @@ export class DesktopDirectProviderRuntime {
     let toolRounds = 0;
     let nudges = 0;
     let forceFinalAnswer = false;
+    let resumeAfterSteer = false;
     const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
     let providerInput: unknown = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
@@ -821,7 +822,8 @@ export class DesktopDirectProviderRuntime {
         // again from the same prompt.
         const interjected = takeInterjection(request.conversationId);
         if (interjected) {
-          providerInput = appendUserInput(providerInput, interjected);
+          resumeAfterSteer = true;
+          providerInput = appendUserInput(providerInput, steeringInstruction(interjected));
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -912,6 +914,11 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
+          if (resumeAfterSteer && !forceFinalAnswer) {
+            resumeAfterSteer = false;
+            providerInput = 'Now resume the original task from where you paused. Keep working through its unfinished steps; do not stop after only addressing the interruption.';
+            continue;
+          }
           // The plan is consulted first, because it answers the question the prose can only guess at: open items mean
           // the work is not done, whatever the wording of the reply looked like.
           const planned = await planContinuation(projectRoot, roundText, nudges);
@@ -1065,6 +1072,7 @@ export class DesktopDirectProviderRuntime {
     let segmentStart = messages.length;
     let forceFinalAnswer = false;
     let nudges = 0;
+    let resumeAfterSteer = false;
     let continuations = 0;
     let reasoningOnly = false;
 
@@ -1078,7 +1086,8 @@ export class DesktopDirectProviderRuntime {
         // again from the same prompt.
         const interjected = takeInterjection(request.conversationId);
         if (interjected) {
-          messages.push({ role: 'user', content: interjected });
+          resumeAfterSteer = true;
+          messages.push({ role: 'user', content: steeringInstruction(interjected) });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1166,6 +1175,12 @@ export class DesktopDirectProviderRuntime {
             continue;
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
+          if (resumeAfterSteer && !forceFinalAnswer) {
+            resumeAfterSteer = false;
+            messages.push({ role: 'assistant', content: roundText });
+            messages.push({ role: 'user', content: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' });
+            continue;
+          }
           const planned = await planContinuation(projectRoot, roundText, nudges);
           if (!forceFinalAnswer && planned) {
             nudges += 1;
@@ -1342,6 +1357,7 @@ export class DesktopDirectProviderRuntime {
     let continuations = 0;
     let reasoningOnly = false;
     let forceFinalAnswer = false;
+    let resumeAfterSteer = false;
     const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
 
     try {
@@ -1354,7 +1370,8 @@ export class DesktopDirectProviderRuntime {
         // again from the same prompt.
         const interjected = takeInterjection(request.conversationId);
         if (interjected) {
-          messages.push({ role: 'user', content: interjected });
+          resumeAfterSteer = true;
+          messages.push({ role: 'user', content: steeringInstruction(interjected) });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1467,6 +1484,12 @@ export class DesktopDirectProviderRuntime {
             continue;
           }
           if (truncated && roundThinking && !roundText) reasoningOnly = true;
+          if (resumeAfterSteer && !forceFinalAnswer) {
+            resumeAfterSteer = false;
+            messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText || '(reasoning only)' }] });
+            messages.push({ role: 'user', content: [{ type: 'text', text: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' }] });
+            continue;
+          }
           const planned = await planContinuation(projectRoot, roundText, nudges);
           if (planned) {
             nudges += 1;
@@ -1586,6 +1609,7 @@ export class DesktopDirectProviderRuntime {
     let toolRounds = 0;
     let nudges = 0;
     let forceFinalAnswer = false;
+    let resumeAfterSteer = false;
     const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
 
     try {
@@ -1598,7 +1622,8 @@ export class DesktopDirectProviderRuntime {
         // again from the same prompt.
         const interjected = takeInterjection(request.conversationId);
         if (interjected) {
-          contents.push({ role: 'user', parts: [{ text: interjected }] });
+          resumeAfterSteer = true;
+          contents.push({ role: 'user', parts: [{ text: steeringInstruction(interjected) }] });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1665,6 +1690,12 @@ export class DesktopDirectProviderRuntime {
 
         const toolCalls = [...pendingToolCalls.values()].filter((call) => call.name);
         if (toolCalls.length === 0) {
+          if (resumeAfterSteer && !forceFinalAnswer) {
+            resumeAfterSteer = false;
+            contents.push({ role: 'model', parts: [{ text: roundText || '(no text)' }] });
+            contents.push({ role: 'user', parts: [{ text: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' }] });
+            continue;
+          }
           const planned = await planContinuation(projectRoot, roundText, nudges);
           if (planned) {
             nudges += 1;
@@ -2407,7 +2438,7 @@ async function executeToolCalls(
         requestId: `question_${randomUUID()}`,
         tool: name,
         title: parsed.data.question,
-        detail: parsed.data.allow_free_text ? 'Choose one of the options, or answer in your own words.' : 'Choose one of the options below.',
+        detail: parsed.data.context ?? '',
         risk: 'low',
         options: parsed.data.options,
         allowFreeText: parsed.data.allow_free_text,
@@ -2441,6 +2472,18 @@ async function executeToolCalls(
         results.push(formatOutput(callId, { error: message }));
         continue;
       }
+      // A notice, not just the tool-call card: the card only appears once the helper has already finished and is
+      // collapsed by default, so without this the only sign a helper ran at all was a line easy to miss or expand
+      // after the fact. This is said up front, while the helper is still working.
+      emit({
+        schemaVersion: 1,
+        id: eventId(),
+        taskId: request.conversationId,
+        timestamp: nowIso(),
+        agent: request.agent,
+        type: 'notice',
+        message: `KAI sent a read-only helper to look into: ${parsed.data.question}`,
+      });
       let output: { answer: string } | { error: string };
       try {
         output = { answer: await explore(parsed.data.question) };

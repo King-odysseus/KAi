@@ -1042,7 +1042,7 @@ data: {"type":"message_stop"}
         requests.push(body);
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
         if (requests.length === 1) {
-          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_ask', name: 'ask_user', input: { question: 'Which branch should I use?', options: ['main', 'release'] } } })}
+          response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_ask', name: 'ask_user', input: { question: 'Which branch should I use?', context: 'The change is ready; main publishes it now, while release holds it for the next batch.', options: ['main', 'release'] } } })}
 
 event: message_stop
 data: {"type":"message_stop"}
@@ -1072,7 +1072,7 @@ data: {"type":"message_stop"}
     expect(result.status).toBe('completed');
     expect(result.output).toContain('Using main, as chosen.');
     expect(approvalRequests).toEqual([
-      expect.objectContaining({ title: 'Which branch should I use?', options: ['main', 'release'] }),
+      expect.objectContaining({ title: 'Which branch should I use?', detail: 'The change is ready; main publishes it now, while release holds it for the next batch.', options: ['main', 'release'] }),
     ]);
     const followUp = requests[1]!.messages;
     const toolResult = followUp.find((message) =>

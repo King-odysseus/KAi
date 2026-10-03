@@ -128,6 +128,7 @@ const runCommandInputSchema = z
 export const askUserInputSchema = z
   .object({
     question: z.string().trim().min(1).max(1_000),
+    context: z.string().trim().min(1).max(2_000).optional(),
     options: z.array(z.string().trim().min(1).max(200)).min(2).max(4),
     // When true, a person may answer with their own words instead of one of the options.
     allow_free_text: z.boolean().optional(),
@@ -312,11 +313,12 @@ export const projectToolDefinitions = [
   {
     type: 'function',
     name: 'ask_user',
-    description: 'Ask the user a question with a short list of answers to choose from, when the task genuinely cannot proceed without a decision only they can make. Use this instead of ending your turn with a question in your reply — that leaves the run looking stuck rather than visibly waiting for an answer.',
+    description: 'Ask the user a question with a short list of answers when the task genuinely cannot proceed without their decision. The question appears in the conversation, so explain the relevant findings and trade-offs in context. Make each option understandable without relying on unexplained item numbers. Use this instead of ending your turn with a question in your reply.',
     parameters: {
       type: 'object',
       properties: {
-        question: { type: 'string', description: 'The question, short enough to read at a glance.' },
+        question: { type: 'string', description: 'A self-contained question, short enough to read at a glance.' },
+        context: { type: 'string', description: 'Why this decision is needed now, what was found, and what each choice changes. Explain any item numbers or project-specific names used in the question or options.' },
         options: {
           type: 'array',
           minItems: 2,

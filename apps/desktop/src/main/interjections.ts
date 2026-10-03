@@ -66,3 +66,8 @@ export function clearInterjections(conversationId: string): void {
 export function hasInterjections(conversationId: string): boolean {
   return (waiting.get(conversationId)?.length ?? 0) > 0;
 }
+
+/** Keep the active task alive while handling a time-sensitive instruction at the next model step. */
+export function steeringInstruction(text: string): string {
+  return `The user has an immediate instruction for this active run. At the next safe boundary, handle it first: ${text}\n\nThen resume the original task from where you left off, preserving its plan, pending tool results, and unfinished work. Do not treat this interruption as a cancellation or final answer. Report completion only after both the immediate instruction and the original task are addressed.`;
+}

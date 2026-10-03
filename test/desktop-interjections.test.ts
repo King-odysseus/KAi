@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearInterjections, hasInterjections, interject, setInterjectionActive, takeDeliveredInterjections, takeInterjection } from '../apps/desktop/src/main/interjections';
+import { clearInterjections, hasInterjections, interject, setInterjectionActive, steeringInstruction, takeDeliveredInterjections, takeInterjection } from '../apps/desktop/src/main/interjections';
 
 const A = 'conv-a';
 const B = 'conv-b';
@@ -10,6 +10,12 @@ const B = 'conv-b';
  * later run answers a question nobody is asking any more.
  */
 describe('messages waiting for a run in progress', () => {
+  it('frames a steer as immediate work followed by resuming the original task', () => {
+    const instruction = steeringInstruction('check the execution rules');
+    expect(instruction).toContain('handle it first: check the execution rules');
+    expect(instruction).toContain('resume the original task');
+    expect(instruction).toContain('Do not treat this interruption as a cancellation');
+  });
   beforeEach(() => {
     clearInterjections(A);
     clearInterjections(B);

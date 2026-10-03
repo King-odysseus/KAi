@@ -106,6 +106,14 @@ export interface WorkspaceSendOptions {
 
 export type WorkspaceCommandKind = 'goal' | 'skills' | 'context' | 'checkpoint' | 'raw' | 'handoff' | 'preview-change' | 'prompt';
 
+export interface WorkspaceQuestion {
+  requestId: string;
+  title: string;
+  detail: string;
+  options: string[];
+  allowFreeText?: boolean;
+}
+
 export interface WorkspaceCommandRequest {
   kind: WorkspaceCommandKind;
   nonce: number;
@@ -133,6 +141,8 @@ interface WorkspaceViewProps {
   running: boolean;
   paused: boolean;
   awaitingApproval: boolean;
+  pendingQuestion: WorkspaceQuestion | null;
+  onAnswerQuestion: (requestId: string, answer: string | null) => void;
   notice: string | null;
   streamingText: string;
   agentCapabilities: AgentCapability[];
@@ -304,6 +314,8 @@ export function WorkspaceView({
   running,
   paused,
   awaitingApproval,
+  pendingQuestion,
+  onAnswerQuestion,
   notice,
   streamingText,
   agentCapabilities,
@@ -604,7 +616,16 @@ export function WorkspaceView({
     // Let React lay out the incoming message/change summary before following it.
     const frame = window.requestAnimationFrame(() => { canvas.scrollTop = canvas.scrollHeight; });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeConversation?.turns.length, activeConversation?.events.length, compareResult, queuedPrompts.length, streamingText, pendingUser, running]);
+  }, [activeConversation?.turns.length, activeConversation?.events.length, compareResult, queuedPrompts.length, streamingText, pendingUser, pendingQuestion?.requestId, running]);
+
+  useEffect(() => {
+    if (!pendingQuestion) return;
+    const frame = window.requestAnimationFrame(() => {
+      const canvas = canvasRef.current;
+      if (canvas) canvas.scrollTop = canvas.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingQuestion?.requestId]);
 
   // Opening a different conversation (including a branch) starts at its latest message with the composer ready.
   useEffect(() => {
@@ -740,6 +761,14 @@ export function WorkspaceView({
   const steerNow = (): void => {
     const text = prompt.trim();
     if (!text || !activeProject || busy || refiningPrompt || !ready || !queueConversationId) return;
+    if (!running) {
+      send();
+      return;
+    }
+    if (apiRun) {
+      interjectNow();
+      return;
+    }
     onQueuePrompt({
       id: crypto.randomUUID(), conversationId: queueConversationId, text,
       options: { ...(optionsForPrompt(text) ?? {}), agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy, ...(selectedModel ? { model: selectedModel } : {}) },
@@ -748,18 +777,13 @@ export function WorkspaceView({
     setPrompt('');
     clearComposerContext();
     setSelectedSkills([]);
-    if (running) {
-      setWorkbenchNotice('Stopping this run, then starting the new instruction.');
-      onCancel();
-    }
+    setWorkbenchNotice('This CLI run cannot take a live message. Your instruction is queued for its next turn; the current work continues.');
   };
 
   /**
    * Says something to the run that is already going, instead of waiting for it to end or stopping it.
    *
-   * The difference from steering matters: steering cancels, which throws away whatever the agent was in the middle of,
-   * and the next instruction starts from the same place. This is answered at the agent's next turn, so a question or a
-   * correction lands while the work is still in hand.
+   * The model handles the immediate instruction at its next step, then resumes the original task.
    */
   const interjectNow = (): void => {
     const text = prompt.trim();
@@ -782,16 +806,37 @@ export function WorkspaceView({
       }).finally(() => setInterjecting(false));
   };
 
+  /**
+   * Calling a queued instruction forward while a run is going. The run is not in the way — this is not a
+   * replacement for it — so the preferred move is the same in-run message `interjectNow` sends: it reaches the
+   * agent at its next turn, is answered or taken as a correction, and the run carries on with what it was doing.
+   * Stopping and restarting is the fallback, used only for a run that genuinely cannot take a mid-turn message
+   * (a CLI run, or one that has already ended by the time this reaches it) — never the first move.
+   */
   const steerQueuedPrompt = (index: number): void => {
     const item = queuedPrompts[index];
     if (!item || busy || !activeProject || !ready) return;
-    // Promote the selected instruction, then stop the active run. The normal
-    // queue effect starts it as soon as cancellation has settled.
-    onUpdateQueuedPrompt(item.id, 'promote');
-    if (running) {
-      setWorkbenchNotice('Stopping this run, then starting the queued instruction.');
-      onCancel();
+    const conversationId = activeConversation?.id;
+    if (running && conversationId && apiRun) {
+      setWorkbenchNotice('Sending this to the active run…');
+      void window.kaiDesktop.interjectAgent({ conversationId, text: item.text }).then(unwrap)
+        .then(({ queued }) => {
+          if (queued) {
+            onInterjectionDelivered(conversationId, item.text);
+            onUpdateQueuedPrompt(item.id, 'remove');
+            setWorkbenchNotice('Sent to the active run; it will answer this and carry on with the rest.');
+          } else {
+            setWorkbenchNotice('The active run could not take this message. It remains queued for the next turn; nothing was stopped.');
+          }
+        })
+        .catch(() => setWorkbenchNotice('Could not reach the active run. The instruction remains queued; nothing was stopped.'));
+      return;
     }
+    if (running) {
+      setWorkbenchNotice('This CLI run cannot take a live message. The instruction remains queued for its next turn.');
+      return;
+    }
+    onUpdateQueuedPrompt(item.id, 'promote');
   };
 
   async function refinePromptDraft(): Promise<void> {
@@ -1344,7 +1389,7 @@ export function WorkspaceView({
       , document.body)}
 
       <div ref={canvasRef} className="conversation-canvas" onScroll={onCanvasScroll}>
-        {activeConversation?.turns.length || streamingText || pendingUser ? (
+        {activeConversation?.turns.length || streamingText || pendingUser || pendingQuestion ? (
           <>
             {activeConversation?.turns.map((turn, index) => (
               <Fragment key={turn.id}>
@@ -1371,6 +1416,7 @@ export function WorkspaceView({
               </article>
             )}
             {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} /></article>}
+            {pendingQuestion && <InlineQuestion key={pendingQuestion.requestId} question={pendingQuestion} onAnswer={onAnswerQuestion} />}
             {running && (
               <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
             )}
@@ -1504,7 +1550,14 @@ export function WorkspaceView({
                 <span className="queue-label" title={item.status === 'sending' ? 'Sending instruction' : item.status === 'blocked' ? 'Delivery failed' : 'Queued instruction'}><GitFork size={12} /></span><span className="truncate">{item.text}</span>
                 <span className="queue-status">{item.status === 'sending' ? 'Sending' : item.status === 'blocked' ? 'Needs retry' : 'Waiting'}</span>
                 {item.status === 'blocked' && <button type="button" aria-label="Retry queued prompt" title={item.error ?? 'Retry queued prompt'} onClick={() => onUpdateQueuedPrompt(item.id, 'retry')}><RefreshCw size={12} /></button>}
-                <button type="button" className="queue-steer-button" aria-label="Stop and restart with queued prompt" title="Stop the current run and start this instruction next" disabled={item.status === 'sending'} onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Stop &amp; restart</span></button>
+                <button
+                  type="button"
+                  className="queue-steer-button"
+                  aria-label="Send queued prompt now"
+                  title={running ? apiRun ? 'Handle this instruction now, then resume the active task' : 'CLI runs cannot accept live messages; this will send after the run ends' : 'Send this instruction next'}
+                  disabled={item.status === 'sending' || (running && !apiRun)}
+                  onClick={() => steerQueuedPrompt(index)}
+                ><ArrowRight size={12} /><span>{running && !apiRun ? 'After run' : 'Steer now'}</span></button>
                 <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></button>
                 <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" disabled={item.status === 'sending'} onClick={() => onUpdateQueuedPrompt(item.id, 'remove')}><Trash2 size={12} /></button>
               </div>
@@ -1629,10 +1682,7 @@ export function WorkspaceView({
               }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                // Alt is the one that keeps the run; Ctrl stops it and starts over, which is the destructive one and so
-                // the one that asks for the deliberate modifier.
-                if (event.altKey && running && apiRun) interjectNow();
-                else if (event.ctrlKey || event.metaKey) steerNow();
+                if ((event.altKey || event.ctrlKey || event.metaKey) && running) steerNow();
                 else send();
               }
               if (event.key === 'Escape') {
@@ -1700,7 +1750,7 @@ export function WorkspaceView({
         )}
         <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
         {profile.explainAccess && <p className="access-hint" role="note"><ShieldCheck size={12} /><span><strong>{ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.label}:</strong> {ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.description}</span></p>}
-        <div className="composer-footer"><span>{running ? `Enter to queue${apiRun ? ' · Alt+Enter to steer' : ''} · Ctrl+Enter to stop & restart` : 'Enter to send · Shift+Enter for a new line'} · Shift+Tab to change access</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
+        <div className="composer-footer"><span>{running ? `Enter to queue${apiRun ? ' · Alt/Ctrl+Enter to steer' : ''}` : 'Enter to send · Shift+Enter for a new line'} · Shift+Tab to change access</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
   );
@@ -1852,6 +1902,9 @@ function MessageContent({ text, markdown = false }: { text: string; markdown?: b
 function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; defaultExpanded: boolean; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);
   const [explanation, setExplanation] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; result?: ChangeReviewResult; error?: string }>({ state: 'idle' });
+  if (event.type === 'approval.request' && event.options) {
+    return <article className="message assistant inline-question" aria-label="Question KAI asked"><div className="message-role">KAI asked</div><h3>{event.title}</h3>{event.detail && <p className="inline-question-context">{event.detail}</p>}</article>;
+  }
   async function explainChanges(paths: string[]): Promise<void> {
     if (!projectId || paths.length === 0) return;
     setExplanation({ state: 'loading' });
@@ -1892,6 +1945,9 @@ function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, onAsk
   }
   if (event.type === 'memory.event') {
     return <div className="run-event memory"><span>Memory</span><strong>{event.action.replace('_', ' ')}</strong><small>{event.summary}</small></div>;
+  }
+  if (event.type === 'notice') {
+    return <div className="run-event notice"><ShieldCheck size={12} /><span>{event.message}</span></div>;
   }
   if (event.type === 'cost.update') {
     const details = [event.amountUsd != null ? `$${event.amountUsd.toFixed(4)}` : '', event.inputTokens != null ? `${event.inputTokens} in` : '', event.outputTokens != null ? `${event.outputTokens} out` : ''].filter(Boolean).join(' · ');
@@ -2157,6 +2213,32 @@ interface SelectMenuOption<T extends string> {
   /** A line under the label that says what the choice does. */
   description?: string;
   disabled?: boolean;
+}
+
+function InlineQuestion({ question, onAnswer }: {
+  question: WorkspaceQuestion;
+  onAnswer: (requestId: string, answer: string | null) => void;
+}): ReactNode {
+  const [answer, setAnswer] = useState('');
+  return (
+    <section className="message assistant inline-question" aria-label="KAI question">
+      <div className="message-role">KAI is asking</div>
+      <h3>{question.title}</h3>
+      {question.detail && <p className="inline-question-context">{question.detail}</p>}
+      <div className="inline-question-options">
+        {question.options.map((option) => (
+          <button key={option} type="button" className="secondary-button" onClick={() => onAnswer(question.requestId, option)}>{option}</button>
+        ))}
+      </div>
+      {question.allowFreeText && (
+        <form className="inline-question-answer" onSubmit={(event) => { event.preventDefault(); if (answer.trim()) onAnswer(question.requestId, answer.trim()); }}>
+          <input aria-label="Your answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Or type your own answer" />
+          <button type="submit" className="primary-button" disabled={!answer.trim()}>Answer</button>
+        </form>
+      )}
+      <button type="button" className="inline-question-skip" onClick={() => onAnswer(question.requestId, null)}>Skip for now</button>
+    </section>
+  );
 }
 
 /** The access choices with what each one lets KAI do. There is one control for them, in the composer's own row. */
