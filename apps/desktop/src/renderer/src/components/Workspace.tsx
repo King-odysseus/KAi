@@ -203,7 +203,7 @@ export function savedTaskIntent(stored: string | null): TaskIntent {
 }
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
-  { id: 'ask', label: 'Ask', description: 'Understand an idea or get advice', placeholder: 'Ask KAI about this project or idea', starter: '' },
+  { id: 'ask', label: 'General', description: 'Ask a question or describe a task in your own words', placeholder: 'Ask KAI about this project or describe a task', starter: '' },
   { id: 'plan', label: 'Plan', description: 'Inspect first; do not change files', placeholder: 'Describe the outcome you want to plan', starter: 'Plan this work. Inspect the project first. Do not change files. Explain the approach, affected areas, risks, and how you would verify it:\n\n' },
   { id: 'build', label: 'Build', description: 'Make a safe, verified change', placeholder: 'Describe what you want KAI to build', starter: 'Build this safely. First state the plan, then make the smallest useful change and run relevant checks:\n\n' },
   { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
@@ -664,6 +664,10 @@ export function WorkspaceView({
   const send = (): void => {
     const text = prompt.trim();
     if (!text || !activeProject || busy || refiningPrompt || !ready) return;
+    if (taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
+      setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
+      return;
+    }
     const goalAndImplementation = goalAndImplementationFor(text);
     if (goalAndImplementation) {
       setPrompt('');
@@ -818,7 +822,6 @@ export function WorkspaceView({
   /** Puts a question about something KAI just showed into the composer, read-only, ready to send. */
   function askKai(text: string): void {
     rememberIntent('learn');
-    onSelectAutonomy('plan');
     setPrompt(text);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
@@ -826,7 +829,6 @@ export function WorkspaceView({
   /** A fix chosen in the Equalizer: the prompt goes into the composer for the user to read and send, as a Build. */
   function applyEqualizerFix(text: string): void {
     rememberIntent('build');
-    if (selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
     setPrompt(text);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
@@ -845,13 +847,6 @@ export function WorkspaceView({
   function chooseTaskIntent(intent: TaskIntent): void {
     const definition = TASK_INTENTS.find((item) => item.id === intent)!;
     rememberIntent(intent);
-    if (intent === 'plan' || intent === 'review' || intent === 'learn') onSelectAutonomy('plan');
-    // Leaving plan-only for Build lands on the level the person's experience setting asks for, not always on auto-edit.
-    if (intent === 'build' && selectedAutonomy === 'plan') onSelectAutonomy(profile.autonomy === 'plan' ? 'ask' : profile.autonomy);
-    // Auto cannot answer the questions a plan or ask level raises, so choosing it lifts the level to one that works.
-    if (intent === 'auto' && (selectedAutonomy === 'plan' || selectedAutonomy === 'ask')) {
-      onSelectAutonomy(profile.autonomy === 'plan' || profile.autonomy === 'ask' ? 'autoEdit' : profile.autonomy);
-    }
     if (!prompt.trim() && definition.starter) setPrompt(definition.starter);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
@@ -1652,15 +1647,12 @@ export function WorkspaceView({
           <div className="composer-toolbar">
             <div className="composer-leading">
               <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
-              <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
+              <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
+              <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <button type="button" className={`composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}>
                 <span>{advancedComposerOpen ? 'Hide' : 'Work locally'}</span><ChevronDown size={13} />
               </button>
               {advancedComposerOpen && <div className="composer-advanced-controls">
-                <div className="task-intent-picker" role="group" aria-label="What would you like KAI to do?">
-                  <span className="task-intent-label">Intent</span>
-                  {TASK_INTENTS.map((intent) => <button key={intent.id} type="button" className={taskIntent === intent.id ? 'active' : ''} aria-pressed={taskIntent === intent.id} title={intent.description} onClick={() => chooseTaskIntent(intent.id)} disabled={busy}>{intent.label}</button>)}
-                </div>
                 <div className="mode-toggle" role="group" aria-label="Execution mode">
                   <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
                   <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
@@ -1690,6 +1682,12 @@ export function WorkspaceView({
             </div>
           </div>
         </div>
+        {taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
+          <p className="composer-task-guidance" role="note">Auto needs Edit files or Full access. Choose one in Access before sending.</p>
+        )}
+        {taskIntent === 'build' && selectedAutonomy === 'plan' && (
+          <p className="composer-task-guidance" role="note">With Plan only access, KAI can plan this build but cannot edit files.</p>
+        )}
         {advancedComposerOpen && selectedAutonomy === 'custom' && activeProject && (
           <div className="permission-grid">
             {PERMISSIONS.map((permission) => (
@@ -2164,11 +2162,12 @@ interface SelectMenuOption<T extends string> {
 /** The access choices with what each one lets KAI do. There is one control for them, in the composer's own row. */
 const ACCESS_OPTIONS: readonly SelectMenuOption<AutonomyMode>[] = ACCESS_LEVELS.map((level) => ({ value: level.value, label: level.label, description: level.description }));
 
-function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = false, icon, onChange, options, title, value }: {
+function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = false, icon, labelPrefix, onChange, options, title, value }: {
   ariaLabel: string;
   className?: string;
   disabled?: boolean;
   icon: ReactNode;
+  labelPrefix?: string;
   onChange: (value: T) => void;
   options: readonly SelectMenuOption<T>[];
   title?: string;
@@ -2258,7 +2257,7 @@ function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = fa
         title={title}
       >
         {icon}
-        <span className="select-menu-value truncate">{selectedOption?.label ?? value}</span>
+        <span className="select-menu-value truncate">{labelPrefix ? `${labelPrefix}: ` : ''}{selectedOption?.label ?? value}</span>
         <ChevronDown className="select-menu-chevron" size={12} />
       </button>
       {open && (

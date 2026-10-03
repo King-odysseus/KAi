@@ -10132,6 +10132,7 @@ button.tool-call-head:hover strong { color: var(--mint); }
   padding: 4px 10px 9px;
 }
 
+.composer-task-select,
 .composer-access-select,
 .composer-model-select {
   width: auto;
@@ -10144,6 +10145,16 @@ button.tool-call-head:hover strong { color: var(--mint); }
 
 .composer-model-select {
   color: #bdb1ff;
+}
+
+.composer-task-select {
+  color: #bdb1ff;
+}
+
+.composer-task-guidance {
+  margin: 5px 11px 0;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .composer-access-select .kai-select-value::before {
