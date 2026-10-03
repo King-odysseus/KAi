@@ -31,6 +31,7 @@ const bridge: KaiDesktopBridge = {
   cognitive1Operation: (request) => ipcRenderer.invoke('cognitive1:operation', request),
   getRules: () => ipcRenderer.invoke('rules:get', {}),
   saveRule: (request) => ipcRenderer.invoke('rules:save', request),
+  injectRulesIntoProjects: () => ipcRenderer.invoke('rules:inject-projects', {}),
   listSkills: (projectId) => ipcRenderer.invoke('skills:list', projectId ? { projectId } : {}),
   chooseFiles: (projectId) => ipcRenderer.invoke('files:choose', { projectId }),
   searchFiles: (request) => ipcRenderer.invoke('files:search', request),

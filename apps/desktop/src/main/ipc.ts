@@ -83,7 +83,7 @@ import { canInterject, clearInterjections, interject, setInterjectionActive, tak
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, RULES_MARKER, shouldCarryRules } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, RULES_MARKER, shouldCarryRules } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -421,6 +421,17 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'rules:get', async () => context.executionRules.document());
   handle(context, 'rules:save', async (rule) => context.executionRules.save(rule));
+  handle(context, 'rules:inject-projects', async () => {
+    const document = await context.executionRules.document();
+    const projects = await context.projects.list();
+    return {
+      results: await injectRulesIntoProjects(
+        document.markdown,
+        document.path,
+        projects.map((project) => ({ name: project.name || project.path, path: project.path })),
+      ),
+    };
+  });
   handle(context, 'skills:list', async ({ projectId }) => listSkills(context, projectId));
   handle(context, 'files:choose', async ({ projectId }) => chooseProjectFiles(context, projectId));
   handle(context, 'files:search', async ({ projectId, query }) => searchProjectFiles(context, projectId, query));

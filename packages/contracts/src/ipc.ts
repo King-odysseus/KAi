@@ -271,8 +271,10 @@ import {
 } from './proxy';
 import {
   executionRuleDocumentSchema,
+  executionRuleInjectionReportSchema,
   executionRuleSaveInputSchema,
   type ExecutionRuleDocument,
+  type ExecutionRuleInjectionReport,
   type ExecutionRuleSaveInput,
 } from './rules';
 import { coordinationOverviewSchema, preflightInputSchema, preflightResultSchema, type CoordinationOverview, type PreflightResult } from './coordination';
@@ -401,6 +403,7 @@ export const ipcChannels = [
   'cognitive1:operation',
   'rules:get',
   'rules:save',
+  'rules:inject-projects',
   'skills:list',
   'files:choose',
   'files:search',
@@ -698,6 +701,7 @@ export const ipcInputSchemas = {
   'cognitive1:operation': cognitive1OperationInputSchema,
   'rules:get': emptyInputSchema,
   'rules:save': executionRuleSaveInputSchema,
+  'rules:inject-projects': emptyInputSchema,
   'skills:list': z.object({ projectId: z.string().min(1).optional() }).strict(),
   'files:choose': z.object({ projectId: z.string().min(1) }).strict(),
   'files:search': contextSearchInputSchema,
@@ -951,6 +955,7 @@ export const brainGitSyncResponseSchema = brainGitSyncResultSchema;
 export const cognitive1McpToolResponseSchema = cognitive1McpToolResultSchema;
 export const cognitive1OperationResponseSchema = cognitive1OperationResultSchema;
 export const executionRuleDocumentResponseSchema = executionRuleDocumentSchema;
+export const executionRuleInjectionReportResponseSchema = executionRuleInjectionReportSchema;
 export const skillSummaryListResponseSchema = z.array(skillSummarySchema);
 export const selectedFilesResponseSchema = z.array(z.string().min(1));
 export const gitDiffStatResponseSchema = gitDiffStatResultSchema;
@@ -1144,6 +1149,7 @@ export interface KaiDesktopBridge {
   cognitive1Operation(request: Cognitive1OperationInput): Promise<IpcResponse<Cognitive1OperationResult>>;
   getRules(): Promise<IpcResponse<ExecutionRuleDocument>>;
   saveRule(request: ExecutionRuleSaveInput): Promise<IpcResponse<ExecutionRuleDocument>>;
+  injectRulesIntoProjects(): Promise<IpcResponse<ExecutionRuleInjectionReport>>;
   listSkills(projectId?: string): Promise<IpcResponse<SkillSummary[]>>;
   chooseFiles(projectId: string): Promise<IpcResponse<string[]>>;
   searchFiles(request: ContextSearchInput): Promise<IpcResponse<string[]>>;

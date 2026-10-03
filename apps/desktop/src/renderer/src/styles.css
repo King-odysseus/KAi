@@ -6930,6 +6930,62 @@ code {
   white-space: nowrap;
 }
 
+.rules-injection {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  background: var(--bg-panel);
+}
+
+.rules-injection-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mint-strong);
+}
+
+.rules-injection-heading strong {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.rules-injection-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.rules-injection-name {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rules-injection-file {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rules-injection-status {
+  color: var(--text-muted);
+}
+
+.rules-injection-row.is-failed .rules-injection-status {
+  color: #ffc7ce;
+}
+
 .rules-error {
   display: flex;
   align-items: center;

@@ -1,6 +1,6 @@
-import { AlertTriangle, Check, FileText, Pencil, Plus, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Check, FileText, FolderInput, Pencil, Plus, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { ExecutionRule, ExecutionRuleDocument } from '@kai/contracts';
+import type { ExecutionRule, ExecutionRuleDocument, ExecutionRuleInjectionReport } from '@kai/contracts';
 import { unwrap } from '../types';
 
 interface RuleEditor {
@@ -16,6 +16,8 @@ export function RulesView(): ReactNode {
   const [editor, setEditor] = useState<RuleEditor | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [injecting, setInjecting] = useState(false);
+  const [injection, setInjection] = useState<ExecutionRuleInjectionReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -52,6 +54,18 @@ export function RulesView(): ReactNode {
     }
   }
 
+  async function injectIntoProjects(): Promise<void> {
+    setInjecting(true);
+    try {
+      setInjection(await window.kaiDesktop.injectRulesIntoProjects().then(unwrap));
+      setError(null);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setInjecting(false);
+    }
+  }
+
   const rules = document?.rules ?? [];
   const normalizedQuery = query.trim().toLowerCase();
   const visibleRules = rules.filter((rule) => {
@@ -74,6 +88,16 @@ export function RulesView(): ReactNode {
             <RefreshCw size={15} className={loading ? 'spin' : undefined} />
             <span>Refresh</span>
           </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!document || loading || injecting}
+            title="Writes these rules into the .kai/instructions.md of every project KAI has open, so a project still carries them if a run does not."
+            onClick={() => void injectIntoProjects()}
+          >
+            <FolderInput size={15} className={injecting ? 'spin' : undefined} />
+            <span>Inject into projects</span>
+          </button>
           <button type="button" className="primary-button" disabled={!document || saving} onClick={() => setEditor({ id: '', title: '', body: '' })}>
             <Plus size={16} />
             <span>Add rule</span>
@@ -88,6 +112,25 @@ export function RulesView(): ReactNode {
           <span>{document?.path ?? 'The rules file is prepared on first use.'}</span>
         </div>
       </section>
+
+      {injection && (
+        <section className="rules-injection" aria-label="Rule injection results">
+          <div className="rules-injection-heading">
+            {injection.results.some((result) => result.status === 'failed') ? <AlertTriangle size={15} /> : <Check size={15} />}
+            <strong>{describeInjection(injection)}</strong>
+            <button type="button" className="icon-button compact" aria-label="Dismiss injection results" onClick={() => setInjection(null)}>
+              <X size={14} />
+            </button>
+          </div>
+          {injection.results.map((result) => (
+            <div key={result.file} className={`rules-injection-row is-${result.status}`}>
+              <span className="rules-injection-name">{result.name}</span>
+              <span className="rules-injection-file" title={result.file}>{result.file}</span>
+              <span className="rules-injection-status">{result.message}</span>
+            </div>
+          ))}
+        </section>
+      )}
 
       {error && (
         <div className="rules-error" role="alert">
@@ -177,4 +220,19 @@ function RuleRow({ rule, onEdit }: { rule: ExecutionRule; onEdit: () => void }):
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The rules request failed.';
+}
+
+/** Said as a sentence rather than a count, because "nothing to do" and "wrote it" are read very differently. */
+function describeInjection(report: ExecutionRuleInjectionReport): string {
+  const { results } = report;
+  if (results.length === 0) return 'No projects are open, so there was nothing to write into.';
+  const written = results.filter((result) => result.status === 'written').length;
+  const unchanged = results.filter((result) => result.status === 'unchanged').length;
+  const failed = results.filter((result) => result.status === 'failed').length;
+  if (!written && !failed) return `All ${results.length} projects already carry the current rules.`;
+  return [
+    written ? `${written} written` : '',
+    unchanged ? `${unchanged} already current` : '',
+    failed ? `${failed} failed` : '',
+  ].filter(Boolean).join(', ');
 }

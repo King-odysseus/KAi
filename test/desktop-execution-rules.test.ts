@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -5,6 +7,8 @@ import {
   applyExecutionRulesToRequest,
   buildExecutionRulesBriefing,
   DesktopExecutionRules,
+  INJECTED_RULES_PATH,
+  injectRulesIntoProjects,
   RULES_MARKER,
   shouldCarryRules,
 } from '../apps/desktop/src/main/execution-rules';
@@ -50,6 +54,57 @@ describe('desktop authoritative execution rules', () => {
     }, briefing);
     expect(request.prompt).toBe(prompt);
     expect(request.conversationId).toBe('conv-rules');
+  });
+});
+
+/**
+ * The fail-safe copy that sits in the project folder, for the runs the briefing does not reach.
+ *
+ * Worth pinning because nothing else notices it: a file written under the wrong name, or one that stops carrying the
+ * marker, would leave every project quietly unprotected and the button would still report success.
+ */
+describe('injecting the standing rules into projects', () => {
+  it('writes the rules into each project under the name the context builder reads', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-rules-inject-'));
+    const project = path.join(root, 'alpha');
+    await fs.mkdir(project, { recursive: true });
+
+    const [result] = await injectRulesIntoProjects('# Cognitive1\n\n## Rules\n\n1. **No secrets** - Never commit keys.\n', 'C:/rules/Instruct.md', [
+      { name: 'alpha', path: project },
+    ]);
+
+    expect(result?.status).toBe('written');
+    const written = await fs.readFile(path.join(project, INJECTED_RULES_PATH), 'utf8');
+    expect(INJECTED_RULES_PATH).toBe('.kai/instructions.md');
+    expect(written).toContain(RULES_MARKER);
+    expect(written).toContain('Never commit keys.');
+    expect(written).toContain('C:/rules/Instruct.md');
+
+    // Second press is a no-op rather than a rewrite, so pressing it does not churn every open repository.
+    const [again] = await injectRulesIntoProjects('# Cognitive1\n\n## Rules\n\n1. **No secrets** - Never commit keys.\n', 'C:/rules/Instruct.md', [
+      { name: 'alpha', path: project },
+    ]);
+    expect(again?.status).toBe('unchanged');
+  });
+
+  it('reports a project it cannot write instead of failing the whole press', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-rules-inject-'));
+    const good = path.join(root, 'good');
+    await fs.mkdir(good, { recursive: true });
+
+    const results = await injectRulesIntoProjects('# Cognitive1\n\n## Rules\n\n1. **No secrets** - Never commit keys.\n', 'C:/rules/Instruct.md', [
+      { name: 'gone', path: path.join(root, 'does-not-exist') },
+      { name: 'good', path: good },
+    ]);
+
+    const gone = results.find((result) => result.name === 'gone');
+    const written = results.find((result) => result.name === 'good');
+    // A project that has been moved or deleted since KAI last listed it is reported rather than recreated: writing
+    // into it would leave a resurrected folder holding nothing but this one file.
+    expect(gone?.status).toBe('failed');
+    expect(gone?.message).toBe('The project folder is no longer there.');
+    await expect(fs.stat(path.join(root, 'does-not-exist'))).rejects.toThrow();
+    expect(written?.status).toBe('written');
   });
 });
 
