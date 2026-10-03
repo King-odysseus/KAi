@@ -352,6 +352,10 @@ async function verifyStudioArtifacts(page) {
   await page.locator('.flow-detail').getByText('Step 2 of 3').waitFor();
   await page.getByRole('button', { name: 'Next step' }).click();
   await page.locator('.flow-detail').getByText('Step 3 of 3').waitFor();
+  // Stepping on must leave exactly one card ringed. The library marks the box that was clicked selected, and that is
+  // the same class the stylesheet rings, so the clicked box and the current step both looked chosen.
+  const ringed = await page.evaluate(() => [...document.querySelectorAll('.flow-diagram .react-flow__node.selected')].map((node) => node.textContent ?? ''));
+  if (ringed.length !== 1 || !ringed[0]?.includes('Owner marks a customer as arrived')) throw new Error(`Expected only the current step to be ringed, got ${JSON.stringify(ringed)}.`);
   await page.screenshot({ path: path.join(outputDirectory, 'artifact-flows-1440x920.png') });
   // A long journey with questions: decisions branch, the connectors are labelled, no box covers another, and a
   // step that the box has to clip is shown whole in the detail strip.

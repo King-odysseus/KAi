@@ -12504,23 +12504,122 @@ button.tool-call-head:hover strong { color: var(--mint); }
   --xy-background-pattern-color: color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+/* A flow card: a header naming the kind of step and its number, over the step's words. The card is one fixed height,
+   so the text scrolls inside the body when a step says more than fits rather than being cut off at an ellipsis. */
 .flow-diagram .react-flow__node.flow-node {
-  width: 190px;
-  padding: 8px 10px;
+  display: flex;
+  width: 210px;
+  flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 9px;
   color: var(--text);
   background: var(--bg-panel);
   font-size: 11.5px;
-  line-height: 1.4;
+  line-height: 15px;
   text-align: left;
-  overflow-wrap: anywhere;
+  /* Not hidden: a connection handle sits half outside the left and right edges, and clipping would eat it. */
+  overflow: visible;
 }
 
-.flow-node.flow-title { width: 150px !important; border-color: var(--mint) !important; color: var(--mint) !important; font-weight: 600; background: var(--mint-soft) !important; }
+/* Height matches FLOW_HEADER_HEIGHT in flow-layout.ts, which reserves the room for it. */
+.flow-node-head {
+  display: flex;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 8px 8px 0 0;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-panel) 60%, var(--bg-inset));
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.flow-node-kind {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-node-step {
+  flex: 0 0 auto;
+  min-width: 15px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.flow-node-body {
+  /* The component sets the height to a whole number of lines, so this must not stretch or shrink it. The room above
+     and below is margin, not padding: a scroll container clips at its padding box, and padding would show the top of
+     the next line under the last one. */
+  flex: 0 0 auto;
+  margin: 5px 0 6px;
+  padding: 0 9px;
+  border-radius: 0 0 8px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+
+.flow-node-body::-webkit-scrollbar { width: 7px; }
+
+.flow-node-body::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+}
+
+/* The kind's colour tints its header, so a card says what it is in words as well as in its border. */
+.flow-node.screen .flow-node-head { color: var(--lavender); }
+.flow-node.api .flow-node-head { color: var(--amber); }
+.flow-node.decision .flow-node-head { color: var(--text); }
+.flow-node.outcome .flow-node-head { color: var(--red); }
+
+.flow-diagram .react-flow__node.flow-node .react-flow__handle {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.flow-node.screen .react-flow__handle { border-color: var(--lavender); }
+.flow-node.api .react-flow__handle { border-color: var(--amber); }
+.flow-node.flow-title .react-flow__handle { border-color: var(--mint); }
+
+.flow-node.flow-title {
+  width: 170px !important;
+  justify-content: center;
+  padding: 10px;
+  border-color: var(--mint) !important;
+  color: var(--mint) !important;
+  background: var(--mint-soft) !important;
+  font-weight: 600;
+  text-align: center;
+}
+
+.flow-node-title {
+  overflow-wrap: anywhere;
+}
 .flow-node.screen { border-color: var(--lavender) !important; }
-.flow-node.api { border-color: var(--amber) !important; font-family: "Cascadia Code", Consolas, monospace; font-size: 10.5px !important; }
+.flow-node.api { border-color: var(--amber) !important; }
 .flow-node.decision { border-style: dashed !important; border-color: var(--text-muted) !important; }
+
+/* An endpoint's own words are a route or a method and a path, so they read better in the monospace font. */
+.flow-node.api .flow-node-body {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10.5px;
+}
 
 .flow-legend {
   position: absolute;
@@ -13193,15 +13292,6 @@ button.tool-call-head:hover strong { color: var(--mint); }
   margin-left: 6px;
   color: var(--text-muted);
   font-style: normal;
-}
-
-/* Flow boxes show at most four lines; the detail strip under the diagram shows all of a step. */
-.flow-diagram .react-flow__node.flow-node {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-  overflow: hidden;
 }
 
 .flow-node.outcome { border-style: dotted !important; border-color: var(--red) !important; color: var(--text-muted) !important; }
