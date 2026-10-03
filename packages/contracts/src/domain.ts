@@ -47,6 +47,7 @@ export const cognitive1OverwatchSettingsSchema = z
     credentialId: z.string().min(1).default('cognitive1.overwatch'),
     model: z.string().min(1).default('deepseek-v4-pro'),
     autoRejectThreshold: z.number().min(0).max(1).default(0.85),
+    autoApprove: z.boolean().default(false),
   })
   .strict();
 
@@ -79,6 +80,7 @@ export const cognitive1ServiceSettingsSchema = z
       credentialId: 'cognitive1.overwatch',
       model: 'deepseek-v4-pro',
       autoRejectThreshold: 0.85,
+      autoApprove: false,
     }),
   })
   .strict();
@@ -520,6 +522,7 @@ export function createDefaultSettings(): AppSettings {
         credentialId: 'cognitive1.overwatch',
         model: 'deepseek-v4-pro',
         autoRejectThreshold: 0.85,
+        autoApprove: false,
       },
     },
     proxy: {

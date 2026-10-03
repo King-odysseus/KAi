@@ -91,6 +91,8 @@ let shutdownPromise: Promise<void> | null = null;
 let desktopShell: DesktopShell | null = null;
 /** Levels KAI's brain with the mirror brain in the background; null until the app is built. */
 let mirrorLoop: BrainMirrorLoop | null = null;
+let overwatchApprovalTimer: NodeJS.Timeout | null = null;
+let overwatchApprovalBusy = false;
 let quitting = false;
 const desktopWindows = new DesktopWindowRegistry();
 const forceClosing = new Set<number>();
@@ -208,6 +210,7 @@ app.on('before-quit', (event) => {
     .then(() => activeContext?.autopilot.dispose())
     .then(() => activeContext?.auto.dispose())
     .then(() => mirrorLoop?.stop())
+    .then(() => { if (overwatchApprovalTimer) clearInterval(overwatchApprovalTimer); overwatchApprovalTimer = null; })
     .then(() => activeContext?.scheduler.stop())
     .then(() => activeContext?.terminal.stopAll())
     .then(() => activeContext?.preview.stopAll())
@@ -955,6 +958,25 @@ async function startApplication(): Promise<void> {
   };
   setTimeout(checkForUpdates, 30_000).unref();
   setInterval(checkForUpdates, 6 * 60 * 60_000).unref();
+  const approveWithOverwatch = async (): Promise<void> => {
+    if (overwatchApprovalBusy || quitting) return;
+    overwatchApprovalBusy = true;
+    try {
+      const current = await settings.load();
+      if (!current.cognitive1.enabled || !current.cognitive1.overwatch.enabled || !current.cognitive1.overwatch.autoApprove) return;
+      const service = (await serviceController!.status()).find((entry) => entry.kind === 'cognitive1');
+      if (service?.status !== 'ready') return;
+      const result = await cognitive1.operation({ operation: 'brain-drafts', payload: {} });
+      const drafts = Array.isArray(result) ? result : result && typeof result === 'object' && 'drafts' in result ? result.drafts : null;
+      if (!Array.isArray(drafts) || drafts.length === 0) return;
+      await cognitive1.operation({ operation: 'overwatch-resolve', payload: {} });
+      logger.info('internal', `Overwatch automatically reviewed ${drafts.length} draft(s)`);
+    } catch (error) {
+      logger.warn('internal', 'Automatic Overwatch approval could not run', messageOf(error));
+    } finally { overwatchApprovalBusy = false; }
+  };
+  overwatchApprovalTimer = setInterval(() => void approveWithOverwatch(), 15 * 60_000);
+  overwatchApprovalTimer.unref();
   void serviceController
     .startConfigured()
     .then(() => syncCognitive1McpFromService(serviceController!, logger))

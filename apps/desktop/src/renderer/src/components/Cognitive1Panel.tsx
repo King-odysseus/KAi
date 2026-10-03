@@ -23,7 +23,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import {
   cognitive1McpTools,
   cognitive1Operations,
@@ -32,6 +32,8 @@ import {
   type Cognitive1Operation,
   type ProjectRecord,
   type ServiceState,
+  type AppSettings,
+  type SettingsUpdate,
 } from '@kai/contracts';
 import { confirmDialog, messageDialog } from './AppDialog';
 import { unwrap } from '../types';
@@ -55,27 +57,23 @@ import {
 } from './cognitive1-drafts';
 
 import { Select } from './ui/Select';
-type Cognitive1Tab = 'review' | 'overwatch' | 'memory' | 'work' | 'recovery' | 'skills' | 'advanced';
+type Cognitive1Tab = 'overview' | 'review' | 'memory' | 'work' | 'toolbox';
 
 const tabs: Array<{ id: Cognitive1Tab; label: string; help: string }> = [
-  { id: 'review', label: 'Review', help: 'Notes that agents filed while working, waiting for your yes or no. Approve the ones worth remembering and reject the rest.' },
-  { id: 'overwatch', label: 'Overwatch', help: 'The AI reviewer itself: whether it is set up, what it has found lately, and buttons to run it by hand.' },
-  { id: 'memory', label: 'Memory', help: 'Search and add to what C1 remembers: bugs, decisions, gotchas and patterns from past sessions.' },
-  { id: 'work', label: 'Work', help: 'Tasks, handoffs and reviews between agents, plus recent regressions and Git status for the project.' },
-  { id: 'recovery', label: 'Recovery', help: 'Pick up where an interrupted session stopped, using the last saved recap.' },
-  { id: 'skills', label: 'Skills', help: 'Reusable instructions stored in C1 that any connected agent can load.' },
-  { id: 'advanced', label: 'Advanced', help: 'Raw service status and direct calls to the C1 API. Most people never need this.' },
+  { id: 'overview', label: 'Overview', help: 'See whether C1 is working, what Overwatch has learned, and run its intelligence cycle.' },
+  { id: 'review', label: 'Approvals', help: 'Only the decisions that need you: approve useful lessons, reject noise, or correct Overwatch.' },
+  { id: 'memory', label: 'Knowledge', help: 'See and search everything your agents have learned about your projects and working style.' },
+  { id: 'work', label: 'Agent work', help: 'Tasks, handoffs, reviews, regressions, and project Git status.' },
+  { id: 'toolbox', label: 'Toolbox', help: 'Recovery, reusable skills, service diagnostics, and advanced controls.' },
 ];
 
 /** What each tab needs before it can draw itself. Review is first because its queue is what usually needs a person. */
 const tabLoads: Record<Cognitive1Tab, Cognitive1Operation[]> = {
+  overview: ['brain-drafts', 'urgent-list', 'overwatch-status', 'overwatch-insights', 'metrics'],
   review: ['brain-drafts', 'urgent-list', 'overwatch-status', 'overwatch-insights'],
-  overwatch: ['overwatch-status', 'overwatch-insights', 'metrics'],
   memory: [],
   work: ['status', 'handoffs', 'tasks', 'reviews', 'regressions', 'git-status', 'integration-status'],
-  recovery: ['recover', 'recap-check', 'status'],
-  skills: ['skills'],
-  advanced: ['status'],
+  toolbox: ['recover', 'recap-check', 'status', 'skills'],
 };
 
 /** The queue headline shown on the tab strip, so a backlog is visible from any tab. */
@@ -91,17 +89,22 @@ type Invoke = (operation: Cognitive1Operation, payload?: Record<string, unknown>
 export function Cognitive1Panel({
   service,
   projects,
+  settings,
+  onSaveSettings,
 }: {
   service: ServiceState;
   projects: ProjectRecord[];
+  settings: AppSettings;
+  onSaveSettings: (update: SettingsUpdate) => Promise<boolean>;
 }): ReactNode {
-  const [tab, setTab] = useState<Cognitive1Tab>('review');
+  const [tab, setTab] = useState<Cognitive1Tab>('overview');
   const [data, setData] = useState<Partial<Record<Cognitive1Operation, unknown>>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Why the queue headline could not be read, when it could not. Kept apart from `error`, which is about an action. */
   const [headlineError, setHeadlineError] = useState<string | null>(null);
+  const [savingAuto, setSavingAuto] = useState(false);
   const ready = service.status === 'ready';
 
   useEffect(() => {
@@ -187,15 +190,31 @@ export function Cognitive1Panel({
 
   const disabled = !ready || Boolean(busy);
 
+  async function setAutoApprove(enabled: boolean): Promise<void> {
+    if (enabled) {
+      const confirmed = await confirmDialog({
+        title: 'Let Overwatch approve future lessons automatically?',
+        detail: 'While KAI is running, Overwatch will check for new drafts every 15 minutes. It files drafts it judges keep, deletes high-confidence noise, and leaves uncertain drafts for you. These changes cannot be undone from this screen and may make model calls.',
+        confirmLabel: 'Turn on automatic approval',
+      });
+      if (!confirmed) return;
+    }
+    setSavingAuto(true);
+    try {
+      const saved = await onSaveSettings({ cognitive1: { ...settings.cognitive1, overwatch: { ...settings.cognitive1.overwatch, autoApprove: enabled } } });
+      if (saved) setNotice(enabled ? 'Automatic approval is on. Overwatch checks every 15 minutes while KAI runs.' : 'Automatic approval is off. Drafts will wait for your approval.');
+    } finally { setSavingAuto(false); }
+  }
+
   return (
     <section className="cognitive1-panel">
       <div className="cognitive1-control-heading">
         <div>
-          <span className="eyebrow">Cognitive1 control centre</span>
-          <h2>Review, Overwatch, and memory</h2>
+          <span className="eyebrow">C1 · your agents' shared intelligence</span>
+          <h2>What your AI has learned</h2>
           <p>
-            C1 is the shared memory your AI agents write to. While they work they file <b>drafts</b> (candidate notes).
-            <b> Overwatch</b> is an AI reviewer that reads each draft and labels it keep, noise or borderline, so you only approve what is worth remembering.
+            C1 remembers useful lessons from every agent. <b>Overwatch</b> checks those lessons for quality,
+            connects related knowledge, and learns from every time you correct it.
             {headlineError
               ? ` The brain could not be reached (${headlineError}) — this is not an empty queue.`
               : headline.total > 0
@@ -205,7 +224,7 @@ export function Cognitive1Panel({
         </div>
         <button type="button" className="secondary-button" disabled={disabled} onClick={() => void refreshCore()}>
           <RefreshCw size={14} className={busy?.startsWith('Loading') ? 'spin' : undefined} />
-          <span>Refresh all</span>
+          <span>Refresh</span>
         </button>
       </div>
 
@@ -219,7 +238,7 @@ export function Cognitive1Panel({
             onClick={() => setTab(item.id)}
           >
             {item.label}
-            {item.id === 'review' && headline.total > 0 && <span className="cognitive1-tab-count">{headline.total}</span>}
+            {item.id === 'review' && headline.needsHuman > 0 && <span className="cognitive1-tab-count">{headline.needsHuman}</span>}
           </button>
         ))}
       </nav>
@@ -230,13 +249,11 @@ export function Cognitive1Panel({
       {error && <div className="proxy-error" role="alert"><AlertTriangle size={15} /><span>{error}</span><button type="button" className="icon-button compact" aria-label="Dismiss C1 error" onClick={() => setError(null)}><X size={14} /></button></div>}
       {busy && <div className="proxy-action-state"><RefreshCw size={14} className="spin" /><span>{busy}</span></div>}
 
+      {tab === 'overview' && <OverwatchPanel data={data} projects={projects} disabled={disabled || savingAuto} onRun={run} autoApprove={settings.cognitive1.overwatch.autoApprove} onAutoApprove={setAutoApprove} />}
       {tab === 'review' && <ReviewPanel data={data} projects={projects} disabled={disabled} onInvoke={invoke} onReload={reload} onNotice={setNotice} />}
-      {tab === 'overwatch' && <OverwatchPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
       {tab === 'memory' && <MemoryPanel data={data} projects={projects} disabled={disabled} onRun={run} onNotice={setNotice} service={service} />}
       {tab === 'work' && <WorkPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
-      {tab === 'recovery' && <RecoveryPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
-      {tab === 'skills' && <SkillsPanel data={data} projects={projects} disabled={disabled} onRun={run} onInvoke={invoke} />}
-      {tab === 'advanced' && <AdvancedPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
+      {tab === 'toolbox' && <div className="cognitive1-toolbox"><RecoveryPanel data={data} projects={projects} disabled={disabled} onRun={run} /><SkillsPanel data={data} projects={projects} disabled={disabled} onRun={run} onInvoke={invoke} /><AdvancedPanel data={data} projects={projects} disabled={disabled} onRun={run} /></div>}
     </section>
   );
 }
@@ -583,10 +600,14 @@ function UrgentNoteForm({ projects, disabled, onSave, onClearAll }: { projects: 
  * The Overwatch engine on its own screen: what it is doing, what it has found, and the one place that says honestly
  * which of its judgements are automatic and which always come back to a person.
  */
-function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
+function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: PanelProps & { autoApprove: boolean; onAutoApprove: (enabled: boolean) => Promise<void> }): ReactNode {
   const overwatch = recordOf(data['overwatch-status']);
   const insights = arrayOf(recordOf(data['overwatch-insights']).insights);
   const metrics = recordOf(data.metrics);
+  const queueCounts = draftCounts(draftRows(data['brain-drafts']));
+  const learned = Number(overwatch.precedents ?? 0);
+  const knowledgeTotal = Number(metrics.totalBugs ?? 0) + Number(metrics.totalDecisions ?? 0) + Number(metrics.totalGotchas ?? 0) + Number(metrics.totalPatterns ?? 0);
+  const automationScore = overwatch.ready === true ? (queueCounts.total === 0 ? 100 : Math.round(((queueCounts.keep + queueCounts.noise) / queueCounts.total) * 100)) : 0;
   const duplicates = arrayOf(recordOf(data['overwatch-semantic-dupes']).duplicates);
   const bugRefs = arrayOf(recordOf(data['overwatch-cross-ref-bugs']).bugRefs);
   // A full cycle returns the audit alongside its classifications, so either action can be the one that produced it.
@@ -607,6 +628,39 @@ function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
 
   return (
     <div className="cognitive1-page">
+      <section className="cognitive1-command-card">
+        <div className="cognitive1-command-copy">
+          <span className={`cognitive1-live-dot ${overwatch.ready === true ? 'good' : 'warn'}`} />
+          <div>
+            <span className="eyebrow">Intelligence status</span>
+            <h3>{state.title}</h3>
+            <p>{state.detail}</p>
+          </div>
+        </div>
+        <div className="cognitive1-gauges" aria-label="C1 intelligence gauges">
+          <IntelligenceGauge label="Reviewed" value={automationScore} detail={`${queueCounts.needsHuman} need you`} />
+          <IntelligenceGauge label="Knowledge" value={Math.min(100, knowledgeTotal)} detail={`${knowledgeTotal} lessons`} />
+          <IntelligenceGauge label="Adaptation" value={Math.min(100, learned * 10)} detail={`${learned} corrections learned`} />
+        </div>
+        <label className="toggle-row cognitive1-auto-toggle">
+          <span><strong>Auto approve useful lessons</strong><small>{autoApprove ? 'On: Overwatch checks every 15 minutes while KAI runs. Uncertain drafts still wait for you.' : 'Off: Overwatch suggests; you decide in Approvals.'}</small></span>
+          <input type="checkbox" checked={autoApprove} disabled={disabled || (!autoApprove && overwatch.ready !== true)} onChange={(event) => void onAutoApprove(event.target.checked)} />
+        </label>
+      </section>
+
+      <section className="cognitive1-card cognitive1-learning-loop">
+        <SectionHeading eyebrow="How it works" title="C1's learning loop" icon={<Brain size={16} />} />
+        <div className="cognitive1-flow">
+          <div><span>1</span><strong>Agents notice</strong><small>Useful bugs, decisions, gotchas and patterns become draft lessons.</small></div>
+          <i>→</i>
+          <div><span>2</span><strong>Overwatch judges</strong><small>It removes noise, finds duplicates and spots missing knowledge.</small></div>
+          <i>→</i>
+          <div><span>3</span><strong>You teach</strong><small>Approve, reject, or correct uncertain calls in Approvals.</small></div>
+          <i>→</i>
+          <div><span>4</span><strong>Agents improve</strong><small>Approved knowledge and your corrections guide their next task.</small></div>
+        </div>
+      </section>
+
       <div className="cognitive1-metric-strip">
         <Metric label="Sessions" value={numberText(metrics.totalSessions)} />
         <Metric label="Bugs" value={numberText(metrics.totalBugs)} />
@@ -636,15 +690,15 @@ function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
         </section>
 
         <section className="cognitive1-card">
-          <SectionHeading eyebrow="Judgement" title="Run a cycle" icon={<Play size={16} />} />
-          <p className="cognitive1-copy">Each of these makes real model calls and can take a while. Findings appear below and stay until the panel reloads.</p>
+          <SectionHeading eyebrow="Recommended action" title="Improve the brain now" icon={<Play size={16} />} />
+          <p className="cognitive1-copy"><b>Run intelligence cycle</b> reviews new drafts and audits existing memory in one pass. It finds quality problems but does not approve keep decisions for you.</p>
           <div className="cognitive1-actions">
-            <button type="button" className="primary-button" disabled={disabled} onClick={() => void onRun('overwatch-run', {}, 'Overwatch full cycle completed.')}><Play size={13} /><span>Classify drafts and audit</span></button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-audit', {}, 'Audit completed.')}>Audit the brain</button>
+            <button type="button" className="primary-button" disabled={disabled} onClick={() => void onRun('overwatch-run', {}, 'Overwatch full cycle completed.')}><Play size={13} /><span>Run intelligence cycle</span></button>
+            <button type="button" className="secondary-button" disabled={disabled} title="Checks saved knowledge for duplicates, gaps and patterns. It does not approve or delete drafts." onClick={() => void onRun('overwatch-audit', {}, 'Audit completed.')}>Check memory quality</button>
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-semantic-dupes', {}, 'Duplicate scan completed.')}>Find duplicates</button>
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-cross-ref-bugs', {}, 'Bug cross-reference completed.')}>Cross-reference bugs</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Distill kernels</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Push kernels to memory</button>
+            <button type="button" className="secondary-button" disabled={disabled} title="Turns a project's scattered lessons into a short guide agents can load quickly." onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Create project guides</button>
+            <button type="button" className="secondary-button" disabled={disabled} title="Makes the new project guides available to connected agents." onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Send guides to agents</button>
             <button type="button" className="secondary-button" disabled={disabled} title="Compare every note and link the ones about the same thing, which is what fills the knowledge map" onClick={() => void onRun('overwatch-link', {}, 'Related notes linked. See the result on the Memory tab.')}>Link related notes</button>
             <button
               type="button"
@@ -665,18 +719,18 @@ function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
       </div>
 
       <section className="cognitive1-card">
-        <SectionHeading eyebrow="Hands off" title="Let Overwatch clear the queue" icon={<Archive size={16} />} />
+        <SectionHeading eyebrow="Memory approval" title="Who decides what gets saved?" icon={<Archive size={16} />} />
         <p className="cognitive1-copy">
-          One pass that applies its own verdicts: every draft it judges <b>keep</b> is filed into the brain,
+          For a one-time pass, Overwatch files every draft it judges <b>keep</b> into the brain,
           <b> noise</b> at or above the auto-reject threshold is deleted, and uncertain noise and anything
-          <b> borderline</b> is annotated and left for you. It cannot be previewed first and it cannot be undone, so
-          the marked review is the safer route when you want a say.
+          <b> borderline</b> is annotated and left for you. The Approvals tab lets you preview and choose each draft.
+          A one-time automatic pass cannot be undone from this screen.
         </p>
         <div className="cognitive1-actions">
           <button
             type="button"
             className="secondary-button danger-button"
-            disabled={disabled}
+            disabled={disabled || overwatch.ready !== true}
             onClick={() => void confirmDialog({
               title: 'Let Overwatch resolve the whole queue?',
               detail: 'It will file everything it judges keep without asking you, delete noise at or above the auto-reject threshold, and leave uncertain noise and borderline drafts annotated for you. This runs model calls and cannot be undone.',
@@ -686,7 +740,7 @@ function OverwatchPanel({ data, disabled, onRun }: PanelProps): ReactNode {
               if (!confirmed) return;
               void onRun('overwatch-resolve', {}, 'Overwatch resolved the draft queue.');
             })}
-          >Resolve the whole queue…</button>
+          >Approve Overwatch's choices now…</button>
         </div>
         {Object.keys(resolved).length > 0 && (
           <p className="cognitive1-copy">Last resolve: {String(resolved.approved ?? 0)} filed, {String(resolved.rejected ?? 0)} deleted, {String(resolved.skipped ?? 0)} left.</p>
@@ -1154,6 +1208,18 @@ interface PanelProps {
 
 function SectionHeading({ eyebrow, title, icon }: { eyebrow: string; title: string; icon: ReactNode }): ReactNode {
   return <div className="cognitive1-card-heading"><div><span className="eyebrow">{eyebrow}</span><h3>{title}</h3></div>{icon}</div>;
+}
+
+function IntelligenceGauge({ label, value, detail }: { label: string; value: number; detail: string }): ReactNode {
+  const safeValue = Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+  return (
+    <div className="cognitive1-gauge">
+      <div className="cognitive1-gauge-ring" style={{ '--gauge-value': `${safeValue * 3.6}deg` } as CSSProperties}>
+        <span>{safeValue}%</span>
+      </div>
+      <div><strong>{label}</strong><small>{detail}</small></div>
+    </div>
+  );
 }
 
 function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }): ReactNode {

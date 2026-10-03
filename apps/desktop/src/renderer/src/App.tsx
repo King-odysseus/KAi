@@ -1753,7 +1753,7 @@ export function App(): ReactNode {
             onCopyToken={() => void copyServiceToken('cognitive1')}
             onRotateToken={() => void rotateServiceToken('cognitive1')}
           >
-            <Cognitive1Panel service={serviceFor(bootstrap, 'cognitive1')} projects={bootstrap.projects} />
+            <Cognitive1Panel service={serviceFor(bootstrap, 'cognitive1')} projects={bootstrap.projects} settings={bootstrap.settings} onSaveSettings={saveSettings} />
           </ServiceView>
         );
       case 'rules':

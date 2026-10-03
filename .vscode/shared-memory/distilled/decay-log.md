@@ -1,2 +1,5 @@
 [2026-10-01] Superseded: session-outcome-1783094184739 (confidence: low, last_verified: 2026-07-03, age: 90d)
 [2026-10-01] Superseded: session-outcome-1783088372978 (confidence: low, last_verified: 2026-07-03, age: 90d)
+[2026-10-03] Superseded: session-outcome-1783255891452 (confidence: low, last_verified: 2026-07-05, age: 90d)
+[2026-10-03] Superseded: session-outcome-1783248675939 (confidence: low, last_verified: 2026-07-05, age: 90d)
+[2026-10-03] Superseded: session-outcome-1783241534504 (confidence: low, last_verified: 2026-07-05, age: 90d)

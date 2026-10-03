@@ -29,6 +29,7 @@ describe('desktop contracts', () => {
       credentialId: 'cognitive1.overwatch',
       model: 'deepseek-v4-pro',
       autoRejectThreshold: 0.85,
+      autoApprove: false,
     });
   });
 
