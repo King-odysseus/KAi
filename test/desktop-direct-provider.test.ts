@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, type AgentRunRequest, type AppSettings } from '../packages/contracts/src';
 import {
   DesktopDirectProviderRuntime,
+  appendUserInput,
   outputBudgetRejected,
   type DirectApiApprovalRequest,
 } from '../apps/desktop/src/main/direct-provider-runtime';
@@ -21,6 +22,14 @@ afterEach(async () => {
 });
 
 describe('desktop direct provider runtime', () => {
+  it('preserves pending Responses tool results when adding an in-run message', () => {
+    const toolResult = { type: 'function_call_output', call_id: 'call-1', output: 'test passed' };
+    expect(appendUserInput([toolResult], 'also check lint')).toEqual([
+      toolResult,
+      { role: 'user', content: 'also check lint' },
+    ]);
+  });
+
   it('reports missing model and credential setup without making a request', async () => {
     const settings = createDefaultSettings();
     settings.directApi.model = '';

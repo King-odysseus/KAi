@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearInterjections, hasInterjections, interject, takeInterjection } from '../apps/desktop/src/main/interjections';
+import { clearInterjections, hasInterjections, interject, setInterjectionActive, takeDeliveredInterjections, takeInterjection } from '../apps/desktop/src/main/interjections';
 
 const A = 'conv-a';
 const B = 'conv-b';
@@ -13,6 +13,10 @@ describe('messages waiting for a run in progress', () => {
   beforeEach(() => {
     clearInterjections(A);
     clearInterjections(B);
+    takeDeliveredInterjections(A);
+    takeDeliveredInterjections(B);
+    setInterjectionActive(A, true);
+    setInterjectionActive(B, true);
   });
 
   it('hands a message over once, then nothing', () => {
@@ -46,5 +50,20 @@ describe('messages waiting for a run in progress', () => {
     interject(A, 'too late');
     clearInterjections(A);
     expect(takeInterjection(A)).toBeNull();
+  });
+
+  it('confirms only when the active model takes the message', async () => {
+    const delivered = interject(A, 'please adjust');
+    expect(takeInterjection(A)).toBe('please adjust');
+    await expect(delivered).resolves.toBe(true);
+    expect(takeDeliveredInterjections(A)).toEqual(['please adjust']);
+    expect(takeDeliveredInterjections(A)).toEqual([]);
+  });
+
+  it('reports an undelivered message when a run ends first', async () => {
+    const delivered = interject(A, 'please adjust');
+    clearInterjections(A);
+    await expect(delivered).resolves.toBe(false);
+    await expect(interject(A, 'too late')).resolves.toBe(false);
   });
 });

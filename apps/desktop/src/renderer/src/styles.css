@@ -7556,6 +7556,7 @@ code {
 }
 .queue-label { display: inline-flex; flex: 0 0 auto; color: var(--text-dim); }
 .queue-row > .truncate { flex: 1 1 auto; min-width: 0; }
+.queue-status { flex: 0 0 auto; color: var(--text-dim); font-size: 10px; }
 .queue-row button {
   display: inline-grid;
   width: 21px;
@@ -13570,4 +13571,3 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .equalizer-severity.medium { border-color: var(--amber); color: var(--amber); }
 
 .equalizer-severity.low { color: var(--text-dim); }
-

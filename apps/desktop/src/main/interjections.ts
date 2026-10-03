@@ -13,15 +13,30 @@
  * something that will not happen.
  */
 
-const waiting = new Map<string, string[]>();
+interface WaitingMessage { text: string; resolve: (delivered: boolean) => void }
+const waiting = new Map<string, WaitingMessage[]>();
+const active = new Set<string>();
+const delivered = new Map<string, string[]>();
+
+export function setInterjectionActive(conversationId: string, enabled: boolean): void {
+  if (enabled) active.add(conversationId);
+  else active.delete(conversationId);
+}
+
+export function canInterject(conversationId: string): boolean {
+  return active.has(conversationId);
+}
 
 /** Puts a message in line for the conversation's next turn. */
-export function interject(conversationId: string, text: string): void {
+export function interject(conversationId: string, text: string): Promise<boolean> {
   const trimmed = text.trim();
-  if (!trimmed) return;
-  const queue = waiting.get(conversationId);
-  if (queue) queue.push(trimmed);
-  else waiting.set(conversationId, [trimmed]);
+  if (!trimmed || !active.has(conversationId)) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const queue = waiting.get(conversationId);
+    const item = { text: trimmed, resolve };
+    if (queue) queue.push(item);
+    else waiting.set(conversationId, [item]);
+  });
 }
 
 /** Takes the oldest waiting message, or null when there is none. Called by the run between turns. */
@@ -30,12 +45,22 @@ export function takeInterjection(conversationId: string): string | null {
   if (!queue || queue.length === 0) return null;
   const next = queue.shift() ?? null;
   if (queue.length === 0) waiting.delete(conversationId);
-  return next;
+  if (next) delivered.set(conversationId, [...(delivered.get(conversationId) ?? []), next.text]);
+  next?.resolve(true);
+  return next?.text ?? null;
+}
+
+export function takeDeliveredInterjections(conversationId: string): string[] {
+  const messages = delivered.get(conversationId) ?? [];
+  delivered.delete(conversationId);
+  return messages;
 }
 
 /** Drops anything still waiting, so a message for a finished run is never handed to the next one. */
 export function clearInterjections(conversationId: string): void {
+  for (const item of waiting.get(conversationId) ?? []) item.resolve(false);
   waiting.delete(conversationId);
+  active.delete(conversationId);
 }
 
 export function hasInterjections(conversationId: string): boolean {

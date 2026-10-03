@@ -1,5 +1,5 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   AgentCapability,
   AgentTeam,
@@ -10,6 +10,7 @@ import type {
   CompareRun,
   ConfigBackup,
   ConversationRecord,
+  ContextChip,
   ContextPreview,
   CredentialStatus,
   DirectApiCapability,
@@ -21,9 +22,10 @@ import type {
   SettingsUpdate,
   SetupCheck,
   SetupStatus,
+  SkillSummary,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, estimateConversationTokens, THEME_MODES } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES } from '@kai/contracts';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -61,6 +63,7 @@ import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from '
 import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
 import { matchingShortcutAction, shortcutLabel, shortcutsWithDefaults } from './shortcuts';
+import { loadComposerQueue, queuedPromptWasAccepted, saveComposerQueue, QUEUE_KEY, type QueuedPrompt } from './components/composer-queue';
 
 const emptyCredentials: CredentialStatus = { available: false, ids: [] };
 
@@ -88,6 +91,50 @@ interface ComposerSelection {
 }
 
 const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
+const COMPOSER_DRAFTS_KEY = 'kai.composerDrafts.v1';
+const COMPOSER_CONTEXTS_KEY = 'kai.composerContexts.v1';
+
+interface ComposerContextDraft {
+  selectedFiles: string[];
+  contextChips: ContextChip[];
+  selectedSkills: SkillSummary[];
+}
+
+const emptyComposerContext: ComposerContextDraft = { selectedFiles: [], contextChips: [], selectedSkills: [] };
+
+function loadComposerContexts(): Record<string, ComposerContextDraft> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_CONTEXTS_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).flatMap(([key, value]) => {
+      if (!value || typeof value !== 'object') return [];
+      const draft = value as Partial<ComposerContextDraft>;
+      return [[key, {
+        selectedFiles: Array.isArray(draft.selectedFiles) ? draft.selectedFiles.filter((file): file is string => typeof file === 'string') : [],
+        contextChips: Array.isArray(draft.contextChips) ? draft.contextChips.flatMap((chip) => {
+          const parsed = contextChipSchema.safeParse(chip);
+          return parsed.success ? [parsed.data] : [];
+        }) : [],
+        selectedSkills: Array.isArray(draft.selectedSkills) ? draft.selectedSkills.flatMap((skill) => {
+          const parsed = skillSummarySchema.safeParse(skill);
+          return parsed.success ? [parsed.data] : [];
+        }) : [],
+      }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+function loadComposerDrafts(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_DRAFTS_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch {
+    return {};
+  }
+}
 
 function isSupportedCodexCliModel(model: string): boolean {
   return model === '' || CLI_MODEL_SUGGESTIONS.codex.includes(model);
@@ -214,8 +261,12 @@ export function App(): ReactNode {
   const [autoWaitingConversationIds, setAutoWaitingConversationIds] = useState<string[]>([]);
   const [failedConversationIds, setFailedConversationIds] = useState<string[]>([]);
   const [streamingTextByConversation, setStreamingTextByConversation] = useState<Record<string, string>>({});
-  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>(loadComposerDrafts);
+  const [composerContexts, setComposerContexts] = useState<Record<string, ComposerContextDraft>>(loadComposerContexts);
   const [composerSelections, setComposerSelections] = useState<Record<string, ComposerSelection>>(loadComposerSelections);
+  const [queuedPromptsByConversation, setQueuedPromptsByConversation] = useState<Record<string, QueuedPrompt[]>>(loadComposerQueue);
+  const dispatchingQueuedConversations = useRef(new Set<string>());
+  const localRunsInFlight = useRef(new Set<string>());
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [proxyContinuationAgent, setProxyContinuationAgent] = useState<AgentId | null>(null);
@@ -245,6 +296,8 @@ export function App(): ReactNode {
   const streamingText = activeConversationId ? streamingTextByConversation[activeConversationId] ?? '' : '';
   const openConversations = openConversationIds.map((id) => conversations.find((conversation) => conversation.id === id)).filter((conversation): conversation is ConversationRecord => Boolean(conversation));
   const activeDraftKey = activeConversationId ?? '__new__';
+  const activeContextKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
+  const activeComposerContext = composerContexts[activeContextKey] ?? emptyComposerContext;
   const activeComposerSelection = composerSelections[activeDraftKey];
   const savedActiveModel = activeComposerSelection?.model ?? modelChoices[`${executionMode}:${selectedAgent}`] ?? '';
   const selectedWorkspaceModel = executionMode === 'cli' && selectedAgent === 'codex' && !isSupportedCodexCliModel(savedActiveModel)
@@ -253,6 +306,34 @@ export function App(): ReactNode {
   const updateComposerDraft = useCallback((value: string) => {
     setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
   }, [activeDraftKey]);
+  const setComposerContextField = <K extends keyof ComposerContextDraft>(key: K, update: SetStateAction<ComposerContextDraft[K]>): void => {
+    setComposerContexts((current) => {
+      const draft = current[activeContextKey] ?? emptyComposerContext;
+      const value = typeof update === 'function'
+        ? (update as (previous: ComposerContextDraft[K]) => ComposerContextDraft[K])(draft[key]) : update;
+      return { ...current, [activeContextKey]: { ...draft, [key]: value } };
+    });
+  };
+  const queuePrompt = (item: QueuedPrompt, first = false): void => {
+    setQueuedPromptsByConversation((current) => {
+      const existing = current[item.conversationId] ?? [];
+      return { ...current, [item.conversationId]: first ? [item, ...existing] : [...existing, item] };
+    });
+  };
+  const updateQueuedPrompt = (conversationId: string, id: string, update: 'remove' | 'retry' | 'promote'): void => {
+    setQueuedPromptsByConversation((current) => {
+      const existing = current[conversationId] ?? [];
+      const item = existing.find((entry) => entry.id === id);
+      if (!item) return current;
+      const remaining = existing.filter((entry) => entry.id !== id);
+      return {
+        ...current,
+        [conversationId]: update === 'remove' ? remaining
+          : update === 'promote' ? [{ ...item, status: 'queued' }, ...remaining]
+            : existing.map((entry) => entry.id === id ? { ...entry, status: 'queued', error: undefined } : entry),
+      };
+    });
+  };
   const updateComposerSelection = useCallback((patch: Partial<ComposerSelection>) => {
     setComposerSelections((current) => {
       const fallback: ComposerSelection = {
@@ -285,6 +366,27 @@ export function App(): ReactNode {
       // Per-tab composer preferences are a convenience only.
     }
   }, [composerSelections]);
+
+  useEffect(() => {
+    if (!saveComposerQueue(queuedPromptsByConversation)) {
+      setError('KAI could not save the message queue on this device. Keep the app open and retry delivery before closing it.');
+    }
+  }, [queuedPromptsByConversation]);
+  useEffect(() => {
+    try { window.localStorage.setItem(COMPOSER_DRAFTS_KEY, JSON.stringify(composerDrafts)); } catch { /* Drafts remain available until the app closes. */ }
+  }, [composerDrafts]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COMPOSER_CONTEXTS_KEY, JSON.stringify(composerContexts, (key, value) => key === 'dataUrl' ? undefined : value));
+    } catch { /* The selected context remains available until the app closes. */ }
+  }, [composerContexts]);
+  useEffect(() => {
+    const refresh = (event: StorageEvent): void => {
+      if (event.key === QUEUE_KEY) setQueuedPromptsByConversation(loadComposerQueue());
+    };
+    window.addEventListener('storage', refresh);
+    return () => window.removeEventListener('storage', refresh);
+  }, []);
 
   useEffect(() => {
     const selection = composerSelections[activeDraftKey];
@@ -937,7 +1039,7 @@ export function App(): ReactNode {
   async function runConversation(
     conversation: ConversationRecord,
     prompt: string,
-    options: WorkspaceSendOptions & { agent?: AgentId; execution?: ExecutionMode; route?: RouteMode; autonomy?: AutonomyMode } = {},
+    options: WorkspaceSendOptions & { agent?: AgentId; execution?: ExecutionMode; route?: RouteMode; autonomy?: AutonomyMode; model?: string; clientMessageId?: string } = {},
   ): Promise<void> {
     if (!bootstrap) return;
     const runAgentId = options.agent ?? selectedAgent;
@@ -998,16 +1100,18 @@ export function App(): ReactNode {
     setRunningConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
     setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
     setFailedConversationIds((current) => current.filter((id) => id !== conversation.id));
+    localRunsInFlight.current.add(conversation.id);
     try {
       const result = unwrap(await window.kaiDesktop.runAgent({
           conversationId: conversation.id,
           prompt,
+          ...(options.clientMessageId ? { clientMessageId: options.clientMessageId } : {}),
           agent: runAgentId,
           execution: runExecution,
           route: runRoute,
           autonomy: runAutonomy,
           ...(() => {
-            const model = composerSelections[conversation.id]?.model ?? modelChoices[`${runExecution}:${runAgentId}`] ?? '';
+            const model = options.model ?? composerSelections[conversation.id]?.model ?? modelChoices[`${runExecution}:${runAgentId}`] ?? '';
             return runExecution === 'cli' && runAgentId === 'codex' && !isSupportedCodexCliModel(model)
               ? {}
               : model ? { model } : {};
@@ -1040,12 +1144,55 @@ export function App(): ReactNode {
       setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
       if (conversation.id === activeConversationId) setError(messageOf(caught));
     } finally {
+      localRunsInFlight.current.delete(conversation.id);
       setRunningConversationIds((current) => current.filter((id) => id !== conversation.id));
       setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
       setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversation.id]; return next; });
       setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     }
   }
+
+  // The app owns delivery, so queued turns keep moving when the Workspace view is closed or another chat is open.
+  useEffect(() => {
+    if (!bootstrap || busy) return;
+    for (const [conversationId, items] of Object.entries(queuedPromptsByConversation)) {
+      const next = items[0];
+      if (!next || next.status !== 'queued' || runningConversationIds.includes(conversationId)
+        || localRunsInFlight.current.has(conversationId)
+        || dispatchingQueuedConversations.current.has(conversationId)) continue;
+      dispatchingQueuedConversations.current.add(conversationId);
+      setQueuedPromptsByConversation((current) => ({
+        ...current,
+        [conversationId]: (current[conversationId] ?? []).map((item) => item.id === next.id
+          ? { ...item, status: 'sending' } : item),
+      }));
+      void (async () => {
+        try {
+          const latest = await window.kaiDesktop.getConversation(conversationId).then(unwrap);
+          if (!latest) throw new Error('The conversation no longer exists.');
+          if (!queuedPromptWasAccepted(latest, next.id)) {
+            await runConversation(latest, next.text, { ...next.options, clientMessageId: next.id });
+          }
+          const updated = await window.kaiDesktop.getConversation(conversationId).then(unwrap);
+          if (!updated || !queuedPromptWasAccepted(updated, next.id)) {
+            throw new Error('KAI did not accept this message. Check the agent connection and retry.');
+          }
+          setQueuedPromptsByConversation((current) => ({
+            ...current,
+            [conversationId]: (current[conversationId] ?? []).filter((item) => item.id !== next.id),
+          }));
+        } catch (caught) {
+          setQueuedPromptsByConversation((current) => ({
+            ...current,
+            [conversationId]: (current[conversationId] ?? []).map((item) => item.id === next.id
+              ? { ...item, status: 'blocked', error: messageOf(caught) } : item),
+          }));
+        } finally {
+          dispatchingQueuedConversations.current.delete(conversationId);
+        }
+      })();
+    }
+  }, [bootstrap, busy, conversations, queuedPromptsByConversation, runningConversationIds]);
 
   async function cancelConversation(): Promise<void> {
     if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
@@ -1060,9 +1207,8 @@ export function App(): ReactNode {
     if (cancelled) {
       setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== activeConversationId));
       setAgentNotice('Stopping the current agent run.');
-      // The run's own `finally` clears this, but only once the promise it is awaiting settles. Clearing it here makes
-      // Stop take effect on screen at once instead of leaving the activity strip spinning under "Reviewing results".
-      setRunningConversationIds((current) => current.filter((id) => id !== activeConversationId));
+      // Keep the run marked active until its result settles. A queued follow-up must not begin beside a process
+      // that has only been asked to stop and is still cleaning up.
     }
   }
 
@@ -1254,6 +1400,11 @@ export function App(): ReactNode {
   async function deleteConversation(id: string): Promise<void> {
     const removed = await perform(() => window.kaiDesktop.deleteConversation(id).then(unwrap), 'Deleting conversation');
     if (removed === null) return;
+    setQueuedPromptsByConversation((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     setConversations((current) => {
       const next = current.filter((conversation) => conversation.id !== id);
       if (activeConversationId === id) setActiveConversationId(next[0]?.id ?? null);
@@ -1709,6 +1860,14 @@ export function App(): ReactNode {
             busy={Boolean(busy)}
             composerDraft={composerDrafts[activeDraftKey] ?? ''}
             onComposerDraftChange={updateComposerDraft}
+            selectedFiles={activeComposerContext.selectedFiles}
+            setSelectedFiles={(update) => setComposerContextField('selectedFiles', update)}
+            contextChips={activeComposerContext.contextChips}
+            setContextChips={(update) => setComposerContextField('contextChips', update)}
+            selectedSkills={activeComposerContext.selectedSkills}
+            setSelectedSkills={(update) => setComposerContextField('selectedSkills', update)}
+            onInterjectionDelivered={(conversationId, text) => setComposerDrafts((current) => current[conversationId]?.trim() === text
+              ? { ...current, [conversationId]: '' } : current)}
             commandRequest={workspaceCommand}
             onCommandHandled={() => setWorkspaceCommand(null)}
             agentCapabilities={agentCapabilities}
@@ -1770,24 +1929,9 @@ export function App(): ReactNode {
             onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
             onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
             onSend={(prompt, options) => void sendPrompt(prompt, options)}
-            onSendQueued={async (conversationId, queuedId, prompt, options) => {
-              const conversation = conversations.find((item) => item.id === conversationId);
-              if (!conversation) return false;
-              const previousTurnIds = new Set(conversation.turns.map((turn) => turn.id));
-              await runConversation(conversation, prompt, options);
-              const updated = await window.kaiDesktop.getConversation(conversationId).then(unwrap).catch(() => null);
-              const delivered = Boolean(updated?.turns.some((turn) => turn.role === 'user' && turn.text === prompt && !previousTurnIds.has(turn.id)));
-              if (delivered) {
-                try {
-                  const key = 'kai.composer.queuedPrompts';
-                  const saved = JSON.parse(window.localStorage.getItem(key) ?? '{}') as Record<string, Array<{ id: string }>>;
-                  saved[conversationId] = (saved[conversationId] ?? []).filter((item) => item.id !== queuedId);
-                  window.localStorage.setItem(key, JSON.stringify(saved));
-                  window.dispatchEvent(new Event('kai:queue-updated'));
-                } catch { /* The mounted composer also clears its in-memory queue. */ }
-              }
-              return delivered;
-            }}
+            queuedPrompts={activeConversationId ? queuedPromptsByConversation[activeConversationId] ?? [] : []}
+            onQueuePrompt={queuePrompt}
+            onUpdateQueuedPrompt={(id, update) => { if (activeConversationId) updateQueuedPrompt(activeConversationId, id, update); }}
             onHandoff={(agent, prompt) => void handoffConversation(agent, prompt)}
             onCompare={compareConversation}
             onPickCompare={pickCompareWinner}

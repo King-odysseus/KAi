@@ -52,7 +52,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
-import { Fragment, memo, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useRef, useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   AgentCapability,
@@ -93,6 +93,7 @@ import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { AgentActivityStrip, deriveAgentActivity } from './AgentActivity';
+import type { QueuedPrompt } from './composer-queue';
 
 import { Select } from './ui/Select';
 export interface WorkspaceSendOptions {
@@ -119,6 +120,13 @@ interface WorkspaceViewProps {
   busy: boolean;
   composerDraft: string;
   onComposerDraftChange: (draft: string) => void;
+  selectedFiles: string[];
+  setSelectedFiles: Dispatch<SetStateAction<string[]>>;
+  contextChips: ContextChip[];
+  setContextChips: Dispatch<SetStateAction<ContextChip[]>>;
+  selectedSkills: SkillSummary[];
+  setSelectedSkills: Dispatch<SetStateAction<SkillSummary[]>>;
+  onInterjectionDelivered: (conversationId: string, text: string) => void;
   commandRequest: WorkspaceCommandRequest | null;
   /** Called once a command has been acted on, so coming back to this screen later does not replay it. */
   onCommandHandled: () => void;
@@ -146,7 +154,9 @@ interface WorkspaceViewProps {
   onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
   onBranchTurn: (turnId: string) => void;
   onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
-  onSendQueued: (conversationId: string, queuedId: string, prompt: string, options?: WorkspaceSendOptions) => Promise<boolean>;
+  queuedPrompts: QueuedPrompt[];
+  onQueuePrompt: (prompt: QueuedPrompt, first?: boolean) => void;
+  onUpdateQueuedPrompt: (id: string, update: 'remove' | 'retry' | 'promote') => void;
   onHandoff: (agent: AgentId, prompt: string) => void;
   onCompare: (prompt: string, targetAgent: AgentId) => Promise<CompareRun>;
   onPickCompare: (id: string, side: 'left' | 'right') => Promise<void>;
@@ -172,28 +182,6 @@ interface WorkspaceViewProps {
   onOpenWorkflows: () => void;
   onCompactConversation: () => void;
   onContinueInNewTab: () => void;
-}
-
-interface QueuedPrompt {
-  id: string;
-  text: string;
-  options: WorkspaceSendOptions;
-}
-
-const QUEUE_KEY = 'kai.composer.queuedPrompts';
-const dispatchingQueues = new Set<string>();
-
-function loadQueuedPrompts(): Record<string, QueuedPrompt[]> {
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(QUEUE_KEY) ?? '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).map(([id, items]) => [id,
-      Array.isArray(items) ? items.filter((item): item is QueuedPrompt =>
-        Boolean(item && typeof item.id === 'string' && typeof item.text === 'string' && item.options && typeof item.options === 'object')) : [],
-    ]));
-  } catch {
-    return {};
-  }
 }
 
 type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
@@ -304,6 +292,13 @@ export function WorkspaceView({
   busy,
   composerDraft,
   onComposerDraftChange,
+  selectedFiles,
+  setSelectedFiles,
+  contextChips,
+  setContextChips,
+  selectedSkills,
+  setSelectedSkills,
+  onInterjectionDelivered,
   commandRequest,
   onCommandHandled,
   running,
@@ -330,7 +325,9 @@ export function WorkspaceView({
   onCreateConversation,
   onBranchTurn,
   onSend,
-  onSendQueued,
+  queuedPrompts,
+  onQueuePrompt,
+  onUpdateQueuedPrompt,
   onHandoff,
   onCompare,
   onPickCompare,
@@ -358,35 +355,15 @@ export function WorkspaceView({
   onContinueInNewTab,
 }: WorkspaceViewProps): ReactNode {
   const [prompt, setPrompt] = useState('');
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [contextChips, setContextChips] = useState<ContextChip[]>([]);
   const [contextPickerOpen, setContextPickerOpen] = useState(false);
   const [fileQuery, setFileQuery] = useState('');
   const [fileResults, setFileResults] = useState<string[]>([]);
   const [contextBusy, setContextBusy] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
-  const [selectedSkills, setSelectedSkills] = useState<SkillSummary[]>([]);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const [goalEditor, setGoalEditor] = useState<GoalInput | null>(null);
-  const [queues, setQueues] = useState<Record<string, QueuedPrompt[]>>(loadQueuedPrompts);
   const queueConversationId = activeConversation?.id ?? null;
-  const queuedPrompts = queueConversationId ? queues[queueConversationId] ?? [] : [];
-  const failedQueuedIdRef = useRef<string | null>(null);
-  const setQueuedPrompts = (update: (current: QueuedPrompt[]) => QueuedPrompt[]): void => {
-    if (!queueConversationId) return;
-    setQueues((current) => ({ ...current, [queueConversationId]: update(current[queueConversationId] ?? []) }));
-  };
-
-  useEffect(() => {
-    try { window.localStorage.setItem(QUEUE_KEY, JSON.stringify(queues)); } catch { /* Keep the in-memory queue. */ }
-  }, [queues]);
-
-  useEffect(() => {
-    const refresh = (): void => setQueues(loadQueuedPrompts());
-    window.addEventListener('kai:queue-updated', refresh);
-    return () => window.removeEventListener('kai:queue-updated', refresh);
-  }, []);
   const [statusWord, setStatusWord] = useState<(typeof STATUS_WORDS)[number]>('Thinking');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [compareMode, setCompareMode] = useState(false);
@@ -413,9 +390,9 @@ export function WorkspaceView({
   /** Set while Auto is being asked to start, so the composer's send cannot be pressed twice into it. */
   const [startingAuto, setStartingAuto] = useState(false);
   const [refiningPrompt, setRefiningPrompt] = useState(false);
+  const [interjecting, setInterjecting] = useState(false);
   const [promptGuideReadiness, setPromptGuideReadiness] = useState<PromptGuideReadiness | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const steerPendingRef = useRef(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   // Follow new output only while the reader is at the bottom; scrolling up releases it until they send again.
@@ -479,8 +456,6 @@ export function WorkspaceView({
   }, [onComposerDraftChange, prompt]);
 
   useEffect(() => {
-    setSelectedFiles([]);
-    setSelectedSkills([]);
     setCompareResult(null);
     if (!activeProject) {
       setSkills([]);
@@ -619,31 +594,6 @@ export function WorkspaceView({
   }, [running]);
 
   useEffect(() => {
-    const next = queuedPrompts[0];
-    if (running || busy || !next || !activeProject || !ready || !queueConversationId
-      || dispatchingQueues.has(queueConversationId) || failedQueuedIdRef.current === next.id) return;
-    dispatchingQueues.add(queueConversationId);
-    void onSendQueued(queueConversationId, next.id, next.text, next.options).then((accepted) => {
-      if (accepted) {
-        setQueues((current) => ({ ...current, [queueConversationId]: (current[queueConversationId] ?? []).filter((item) => item.id !== next.id) }));
-        if (steerPendingRef.current) {
-          steerPendingRef.current = false;
-          setWorkbenchNotice('Steered instruction started.');
-        }
-      } else {
-        failedQueuedIdRef.current = next.id;
-        setWorkbenchNotice('Queued instruction could not be delivered. It is still in the queue; edit or retry it.');
-      }
-    }).catch(() => {
-      failedQueuedIdRef.current = next.id;
-      setWorkbenchNotice('Queued instruction could not be delivered. It is still in the queue; edit or retry it.');
-    }).finally(() => {
-      dispatchingQueues.delete(queueConversationId);
-      setQueues((current) => ({ ...current }));
-    });
-  }, [activeProject, busy, onSendQueued, queueConversationId, queuedPrompts, ready, running]);
-
-  useEffect(() => {
     if (wasRunningRef.current && !running) setPendingUser(null);
     wasRunningRef.current = running;
   }, [running]);
@@ -676,7 +626,11 @@ export function WorkspaceView({
   const queueOrSend = (text: string, options = sendOptions): void => {
     if (!text || !activeProject || !ready) return;
     if (running) {
-      setQueuedPrompts((current) => [...current, { id: crypto.randomUUID(), text, options: options ?? {} }]);
+      if (queueConversationId) onQueuePrompt({
+        id: crypto.randomUUID(), conversationId: queueConversationId, text,
+        options: { ...(options ?? {}), agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy, ...(selectedModel ? { model: selectedModel } : {}) },
+        status: 'queued',
+      });
       return;
     }
     stickToBottomRef.current = true;
@@ -781,14 +735,17 @@ export function WorkspaceView({
 
   const steerNow = (): void => {
     const text = prompt.trim();
-    if (!text || !activeProject || busy || refiningPrompt || !ready) return;
-    setQueuedPrompts((current) => [{ id: crypto.randomUUID(), text, options: optionsForPrompt(text) ?? {} }, ...current]);
+    if (!text || !activeProject || busy || refiningPrompt || !ready || !queueConversationId) return;
+    onQueuePrompt({
+      id: crypto.randomUUID(), conversationId: queueConversationId, text,
+      options: { ...(optionsForPrompt(text) ?? {}), agent: selectedAgent, execution: executionMode, route: selectedRoute, autonomy: selectedAutonomy, ...(selectedModel ? { model: selectedModel } : {}) },
+      status: 'queued',
+    }, true);
     setPrompt('');
     clearComposerContext();
     setSelectedSkills([]);
     if (running) {
-      steerPendingRef.current = true;
-      setWorkbenchNotice('Steering: stopping the current run, then starting this instruction.');
+      setWorkbenchNotice('Stopping this run, then starting the new instruction.');
       onCancel();
     }
   };
@@ -803,17 +760,22 @@ export function WorkspaceView({
   const interjectNow = (): void => {
     const text = prompt.trim();
     const conversationId = activeConversation?.id;
-    if (!text || !conversationId || !running) return;
-    setPrompt('');
-    clearComposerContext();
-    setSelectedSkills([]);
+    if (!text || !conversationId || !running || interjecting) return;
+    setInterjecting(true);
+    setWorkbenchNotice('Waiting for the active model to take this message.');
     void window.kaiDesktop.interjectAgent({ conversationId, text }).then(unwrap)
-      .then(() => setWorkbenchNotice('Sent to the run in progress, which will answer at its next step.'))
+      .then(({ queued }) => {
+        if (queued) {
+          setPrompt((current) => current.trim() === text ? '' : current);
+          onInterjectionDelivered(conversationId, text);
+          setWorkbenchNotice('Your message was added to the active run.');
+        } else {
+          setWorkbenchNotice('This run ended or does not support in-run messages. Your text is still in the composer; queue it for the next turn.');
+        }
+      })
       .catch((caught) => {
-        // Put the words back rather than losing them to a failed send.
-        setPrompt(text);
         setWorkbenchNotice(caught instanceof Error ? caught.message : 'The message could not be sent to the run.');
-      });
+      }).finally(() => setInterjecting(false));
   };
 
   const steerQueuedPrompt = (index: number): void => {
@@ -821,10 +783,9 @@ export function WorkspaceView({
     if (!item || busy || !activeProject || !ready) return;
     // Promote the selected instruction, then stop the active run. The normal
     // queue effect starts it as soon as cancellation has settled.
-    setQueuedPrompts((current) => [item, ...current.filter((_, itemIndex) => itemIndex !== index)]);
+    onUpdateQueuedPrompt(item.id, 'promote');
     if (running) {
-      steerPendingRef.current = true;
-      setWorkbenchNotice('Steering: stopping the current run, then starting this instruction.');
+      setWorkbenchNotice('Stopping this run, then starting the queued instruction.');
       onCancel();
     }
   };
@@ -1390,10 +1351,17 @@ export function WorkspaceView({
       <div ref={canvasRef} className="conversation-canvas" onScroll={onCanvasScroll}>
         {activeConversation?.turns.length || streamingText || pendingUser ? (
           <>
-            {activeConversation?.turns.map((turn) => (
+            {activeConversation?.turns.map((turn, index) => (
               <Fragment key={turn.id}>
                 {(inlineEventsByTurn.get(turn.id) ?? []).map((event) => renderInlineEvent(event, false))}
-                <MessageTurn turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} />
+                <MessageTurn
+                  turn={turn}
+                  brainReady={brainReady}
+                  onSaveToBrain={setBrainDraft}
+                  onBranch={onBranchTurn}
+                  awaitingAnswer={Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1}
+                  onAnswer={queueOrSend}
+                />
               </Fragment>
             ))}
             {pendingUser && (activeConversation?.turns.length ?? 0) <= pendingUser.baseCount && (
@@ -1537,12 +1505,13 @@ export function WorkspaceView({
         {queuedPrompts.length > 0 && (
           <div className="queue-list">
             {queuedPrompts.map((item, index) => (
-              <div className="queue-row" key={`${item.text}:${index}`}>
-                <span className="queue-label" title="Queued instruction"><GitFork size={12} /></span><span className="truncate">{item.text}</span>
-                {failedQueuedIdRef.current === item.id && <button type="button" aria-label="Retry queued prompt" title="Retry queued prompt" onClick={() => { failedQueuedIdRef.current = null; setQueues((current) => ({ ...current })); }}><RefreshCw size={12} /></button>}
-                <button type="button" className="queue-steer-button" aria-label="Interrupt and steer with queued prompt" title="Stop the current run and start this instruction next" onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Interrupt & steer</span></button>
-                <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" onClick={() => { setPrompt(item.text); setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index)); promptRef.current?.focus(); }}><Pencil size={12} /></button>
-                <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" onClick={() => setQueuedPrompts((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={12} /></button>
+              <div className="queue-row" key={item.id}>
+                <span className="queue-label" title={item.status === 'sending' ? 'Sending instruction' : item.status === 'blocked' ? 'Delivery failed' : 'Queued instruction'}><GitFork size={12} /></span><span className="truncate">{item.text}</span>
+                <span className="queue-status">{item.status === 'sending' ? 'Sending' : item.status === 'blocked' ? 'Needs retry' : 'Waiting'}</span>
+                {item.status === 'blocked' && <button type="button" aria-label="Retry queued prompt" title={item.error ?? 'Retry queued prompt'} onClick={() => onUpdateQueuedPrompt(item.id, 'retry')}><RefreshCw size={12} /></button>}
+                <button type="button" className="queue-steer-button" aria-label="Stop and restart with queued prompt" title="Stop the current run and start this instruction next" disabled={item.status === 'sending'} onClick={() => steerQueuedPrompt(index)}><ArrowRight size={12} /><span>Stop &amp; restart</span></button>
+                <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></button>
+                <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" disabled={item.status === 'sending'} onClick={() => onUpdateQueuedPrompt(item.id, 'remove')}><Trash2 size={12} /></button>
               </div>
             ))}
           </div>
@@ -1667,7 +1636,7 @@ export function WorkspaceView({
                 event.preventDefault();
                 // Alt is the one that keeps the run; Ctrl stops it and starts over, which is the destructive one and so
                 // the one that asks for the deliberate modifier.
-                if (event.altKey && running) interjectNow();
+                if (event.altKey && running && apiRun) interjectNow();
                 else if (event.ctrlKey || event.metaKey) steerNow();
                 else send();
               }
@@ -1712,6 +1681,8 @@ export function WorkspaceView({
               <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               {(running || paused || awaitingApproval) ? (
                 <>
+                  {running && <button type="button" className="send-button" disabled={!prompt.trim() || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></button>}
+                  {running && apiRun && <button type="button" className="send-button" disabled={!prompt.trim() || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></button>}
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
                   <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
                 </>
@@ -1731,7 +1702,7 @@ export function WorkspaceView({
         )}
         <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
         {profile.explainAccess && <p className="access-hint" role="note"><ShieldCheck size={12} /><span><strong>{ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.label}:</strong> {ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.description}</span></p>}
-        <div className="composer-footer"><span>Enter to queue · Alt+Enter to send into the running turn · Ctrl+Enter to interrupt &amp; steer · Shift+Tab to change autonomy</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
+        <div className="composer-footer"><span>{running ? `Enter to queue${apiRun ? ' · Alt+Enter to steer' : ''} · Ctrl+Enter to stop & restart` : 'Enter to send · Shift+Enter for a new line'} · Shift+Tab to change access</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
       </div>
     </div>
   );
@@ -1742,7 +1713,15 @@ export function WorkspaceView({
 // keyboard. Their props are already stable: the turn and event objects are replaced only when the run changes.
 const RunEventCard = memo(RunEventCardBase);
 
-const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch }: { turn: ConversationTurn; brainReady: boolean; onSaveToBrain: (text: string) => void; onBranch: (turnId: string) => void }): ReactNode {
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, awaitingAnswer, onAnswer }: {
+  turn: ConversationTurn;
+  brainReady: boolean;
+  onSaveToBrain: (text: string) => void;
+  onBranch: (turnId: string) => void;
+  /** Set only for the conversation's latest turn, while nothing is running, so answering it is unambiguous. */
+  awaitingAnswer: boolean;
+  onAnswer: (text: string) => void;
+}): ReactNode {
   return (
     <article className={`message ${turn.role}`}>
       <div className="message-role">
@@ -1763,9 +1742,38 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
         </div>
       ) : null}
       <CopyMessageButton text={turn.text} />
+      {awaitingAnswer && <AnswerBox onAnswer={onAnswer} />}
     </article>
   );
 });
+
+/**
+ * The run that produced the turn above it has already ended — a CLI process exits once it has had its say, and
+ * an API run stops rather than guess at an answer — so this cannot talk back into that run. What it can do is make
+ * the question impossible to miss and turn a reply into a one-click resume instead of the person having to notice
+ * the question themselves and retype it into the composer below.
+ */
+function AnswerBox({ onAnswer }: { onAnswer: (text: string) => void }): ReactNode {
+  const [text, setText] = useState('');
+  const submit = (): void => {
+    const value = text.trim();
+    if (!value) return;
+    setText('');
+    onAnswer(value);
+  };
+  return (
+    <div className="answer-box" role="group" aria-label="Answer KAI's question">
+      <input
+        type="text"
+        value={text}
+        placeholder="Type your answer…"
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Enter') submit(); }}
+      />
+      <button type="button" className="primary-button" disabled={!text.trim()} onClick={submit}>Answer</button>
+    </div>
+  );
+}
 
 function CopyMessageButton({ text }: { text: string }): ReactNode {
   const [copied, setCopied] = useState(false);

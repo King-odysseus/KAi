@@ -98,6 +98,13 @@ const CONTINUATION_TEXT_LIMIT = 200;
  * The user sees what was finished and what is left, which is what they would ask for anyway.
  */
 const WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
+
+/** Keep pending tool outputs when a user adds guidance between Responses API rounds. */
+export function appendUserInput(input: unknown, message: string): unknown {
+  if (Array.isArray(input)) return [...input, { role: 'user', content: message }];
+  if (typeof input === 'string') return `${input}\n\nUser update: ${message}`;
+  return [{ role: 'user', content: message }];
+}
 const MAX_APPROVAL_DETAIL = 4_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
@@ -814,11 +821,11 @@ export class DesktopDirectProviderRuntime {
         // again from the same prompt.
         const interjected = takeInterjection(request.conversationId);
         if (interjected) {
-        providerInput = interjected;
+          providerInput = appendUserInput(providerInput, interjected);
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
-          providerInput = WRAP_UP_MESSAGE;
+          providerInput = appendUserInput(providerInput, WRAP_UP_MESSAGE);
           emit(lifecycleEvent(request, 'starting', `${capability.displayName} reached a run limit; asking it to sum up what it has done.`));
         }
         const pendingToolCalls = new Map<string, PendingToolCall>();

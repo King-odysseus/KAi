@@ -79,7 +79,7 @@ import { buildTurnDigest } from './turn-digest';
 import { workingMethodBriefing } from './working-method';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
 import { buildHistoryNote } from './run-history';
-import { clearInterjections, interject } from './interjections';
+import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections } from './interjections';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
@@ -687,8 +687,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   // Saying something to a run already going, rather than waiting for it to end or cancelling it. It reaches the
   // agent at its next turn, so it answers or takes the correction and carries on.
   handle(context, 'agents:interject', async ({ conversationId, text }) => {
-    interject(conversationId, text);
-    return { queued: true };
+    if (!canInterject(conversationId)) return { queued: false };
+    return { queued: await interject(conversationId, text) };
   });
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
   handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
@@ -1293,6 +1293,7 @@ export async function runConversationAgent(
     role: 'user',
     text: request.prompt,
     createdAt: now,
+    ...(request.clientMessageId ? { clientMessageId: request.clientMessageId } : {}),
     ...(checkpoint ? { checkpoint } : {}),
     ...(request.contextChips?.some((chip) => chip.type === 'image' && chip.dataUrl)
       ? {
@@ -1494,7 +1495,15 @@ export async function runConversationAgent(
   // that takes it up fetches a record that already holds the request.
   announceRunState(context, conversation.id, 'started');
   context.notifications.runStarted(conversation.id);
+  const recordDeliveredInterjections = (): number => {
+    const messages = takeDeliveredInterjections(conversation.id);
+    for (const text of messages) conversation.turns.push({
+      id: `turn_${crypto.randomUUID()}`, role: 'user', text, createdAt: new Date().toISOString(),
+    });
+    return messages.length;
+  };
   try {
+    if (executionMode === 'api') setInterjectionActive(conversation.id, true);
     execution = executionMode === 'api'
       ? await context.directApi.run(
           executionRequest,
@@ -1530,6 +1539,10 @@ export async function runConversationAgent(
     // A run that threw never reaches the save at the end, so it is announced here instead: a window left believing
     // the conversation is still running would show a spinner and a Stop button for work that is already over.
     announceRunState(context, conversation.id, 'finished');
+    if (recordDeliveredInterjections() > 0) {
+      conversation.updatedAt = new Date().toISOString();
+      await context.conversations.save(conversation);
+    }
     throw error;
   } finally {
     context.notifications.runEnded(conversation.id);
@@ -1541,6 +1554,7 @@ export async function runConversationAgent(
     // Released on every exit path: completion, failure, cancellation and thrown errors.
     if (claimedProject) await releaseAgentClaim(context, request.agent);
   }
+  recordDeliveredInterjections();
   if (executionMode === 'api' && execution.status === 'failed') {
     const ended = await finishMemorySession(
       context,

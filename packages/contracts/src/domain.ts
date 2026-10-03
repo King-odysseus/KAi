@@ -393,6 +393,7 @@ export const conversationTurnSchema = z
     role: z.enum(['user', 'assistant']),
     text: z.string(),
     createdAt: timestampSchema,
+    clientMessageId: z.string().min(1).max(128).optional(),
     checkpoint: checkpointRecordSchema.nullable().optional(),
     fileChanges: z.array(turnFileChangeSchema).optional(),
     /**
