@@ -361,6 +361,17 @@ describe('design build', () => {
     expect(order).toEqual(['ensure', `run:Draw the pricing screen:${root}:step-1`]);
   });
 
+  it('passes the turn\'s own cost back out, when the run reported one', async () => {
+    const { studio: app } = studio({}, {
+      ensureOpenPencilRunning: async () => {},
+      runDesignAgent: async () => ({ status: 'completed', output: 'done', costUsd: 0.014 }),
+    });
+
+    const result = await app.buildDesignStep('p1', 'Draw the pricing screen', 'step-1');
+
+    expect(result).toEqual({ status: 'completed', output: 'done', costUsd: 0.014 });
+  });
+
   it('carries live events from the turn back out to the caller', async () => {
     const event = { schemaVersion: 1 as const, id: 'e1', taskId: 'step-1', timestamp: '2026-10-04T00:00:00.000Z', type: 'tool.call' as const, name: 'render', status: 'started' as const };
     const seen: unknown[] = [];

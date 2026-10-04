@@ -76,20 +76,46 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     };
   }
 
+  /**
+   * A view of this runtime scoped to one server's tools — only that server's tools are offered, and calling one of
+   * them is always allowed, regardless of the run's own autonomy. Built for the open-pencil design-build loop: it
+   * needs open-pencil's own tools to actually run (autonomy 'plan' denies every non-read-only MCP tool, open-
+   * pencil's render/set_fill/create_page included — see DesktopStudio.buildDesignStep), without also unlocking
+   * every other MCP server the user has enabled, or needing a weaker autonomy that would also unlock the project's
+   * own file and shell tools. Execution still runs through this same runtime, so reconnects and credentials are
+   * shared with every other caller.
+   */
+  scopedToServer(serverId: string): ExternalToolPort {
+    return {
+      definitions: async () => {
+        const connection = await this.ensureConnected();
+        return [...connection.tools.values()]
+          .filter((tool) => tool.serverId === serverId)
+          .map((tool) => ({
+            type: 'function',
+            name: tool.providerName,
+            description: `MCP server ${tool.serverName}: ${tool.description}`,
+            parameters: mcpInputSchema(tool.inputSchema),
+          }));
+      },
+      policy: (name) => (this.connection?.tools.get(name)?.serverId === serverId ? { decision: 'allow' } : undefined),
+      execute: (name, input, signal) => this.execute(name, input, signal),
+    };
+  }
+
   async execute(name: string, input: unknown, signal?: AbortSignal): Promise<ProjectToolExecution | undefined> {
     const connection = await this.ensureConnected();
     const tool = connection.tools.get(name);
     if (!tool) return undefined;
-    const owner = connection.clients.get(tool.serverId);
-    if (!owner) return { ok: false, output: { error: `MCP server ${tool.serverName} is not connected.` } };
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       return { ok: false, output: { error: 'MCP tool arguments must be a JSON object.' } };
     }
     try {
-      const result = await owner.callTool({
+      const result = await this.callWithReconnect(tool.serverId, (client) => client.callTool({
         name: tool.toolName,
         arguments: input as Record<string, unknown>,
-      }, undefined, { signal });
+      }, undefined, { signal }));
+      if (result === undefined) return { ok: false, output: { error: `MCP server ${tool.serverName} is not connected.` } };
       return {
         ok: result.isError !== true,
         output: normalizeToolResult(result),
@@ -104,11 +130,34 @@ export class DesktopMcpRuntime implements ExternalToolPort {
    * what a screenshot tool returns and what `normalizeToolResult` would otherwise flatten to `[image content]`.
    */
   async callServerTool(serverId: string, toolName: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown[] | null> {
+    const result = await this.callWithReconnect(serverId, (client) => client.callTool({ name: toolName, arguments: input }, undefined, { signal }));
+    if (result === undefined) return null;
+    return Array.isArray(result.content) ? result.content : [];
+  }
+
+  /**
+   * Runs a call against one server's client, and — the point of this — tries exactly once more against a fresh
+   * connection if the first attempt throws. A server that was restarted since KAI last connected (open-pencil
+   * reissuing its token, or dropping it entirely when auth is turned off) fails its first call on the now-dead
+   * client; `invalidate` plus a fresh `ensureConnected` is the same recovery a person would do by hand, just
+   * automatic. Returns undefined, rather than retrying forever, when the server is not configured at all.
+   */
+  private async callWithReconnect<T>(
+    serverId: string,
+    run: (client: Client) => Promise<T>,
+  ): Promise<T | undefined> {
     const connection = await this.ensureConnected();
     const client = connection.clients.get(serverId);
-    if (!client) return null;
-    const result = await client.callTool({ name: toolName, arguments: input }, undefined, { signal });
-    return Array.isArray(result.content) ? result.content : [];
+    if (!client) return undefined;
+    try {
+      return await run(client);
+    } catch (error) {
+      this.invalidate();
+      const reconnected = await this.ensureConnected();
+      const retried = reconnected.clients.get(serverId);
+      if (!retried) throw error;
+      return run(retried);
+    }
   }
 
   async dispose(): Promise<void> {

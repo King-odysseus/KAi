@@ -484,6 +484,7 @@ export const studioDesignBuildStepResultSchema = z
     status: z.enum(['completed', 'failed']),
     output: z.string(),
     error: z.string().optional(),
+    costUsd: z.number().nonnegative().optional(),
   })
   .strict();
 export type StudioDesignBuildStepResult = z.infer<typeof studioDesignBuildStepResultSchema>;

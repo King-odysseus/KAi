@@ -45,6 +45,22 @@ describe('open-pencil launcher', () => {
     expect(await readOpenPencilDiscovery(localAppData)).toBeNull();
   });
 
+  it('reads a null token as a real connection when the editor is running with auth off, not as missing', async () => {
+    const dir = path.join(localAppData, 'OpenPencilMod');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'mcp.json'), JSON.stringify({ pid: 1, httpPort: 7600, authRequired: false, authToken: null, version: '0.15.0' }));
+
+    expect(await readOpenPencilDiscovery(localAppData)).toEqual({ endpoint: 'http://127.0.0.1:7600/mcp', token: null });
+  });
+
+  it('refuses a file that claims auth is required but holds no usable token', async () => {
+    const dir = path.join(localAppData, 'OpenPencilMod');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'mcp.json'), JSON.stringify({ pid: 1, httpPort: 7600, authRequired: true, authToken: null, version: '0.15.0' }));
+
+    expect(await readOpenPencilDiscovery(localAppData)).toBeNull();
+  });
+
   it('returns the live connection straight away when the editor is already running', async () => {
     await writeDiscovery(localAppData, 'OpenPencilMod', 7600, 'mod-token');
 

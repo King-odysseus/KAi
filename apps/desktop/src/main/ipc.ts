@@ -187,6 +187,11 @@ export interface IpcContext {
   executionRules: DesktopExecutionRules;
   directApi: DesktopDirectProviderRuntime;
   mcp: DesktopMcpRuntime;
+  /** Launches open-pencil if it is not running, and re-syncs KAI's own connection to whatever it reports (its
+   * token when auth is on, no header at all when it is off). Called before any user-initiated open-pencil action
+   * — Pull the design, Check connection, a design-build step — so each one works from the editor's live state
+   * rather than whatever was last saved, and starts the editor rather than just reporting it is not there. */
+  ensureOpenPencil: () => Promise<void>;
   workflowTemplates: WorkflowTemplateStore;
   backups: DesktopConfigBackupStore;
   learningProgress: LearningProgressStore;
@@ -3649,11 +3654,17 @@ async function saveOpenPencil(context: IpcContext, input: OpenPencilSaveInput): 
   return openPencilStatus(context);
 }
 
-/** One cheap read, so a wrong address, a missing token or a stopped editor is reported in words before a pull. */
+/** One cheap read, so a wrong address, a missing token or a stopped editor is reported in words before a pull.
+ * Launches the editor and re-syncs the connection first, so this reports the live state rather than whatever was
+ * last saved — a person who has never configured open-pencil at all still gets a real answer, not "turn it on". */
 async function testOpenPencil(context: IpcContext): Promise<OpenPencilTestResult> {
+  try {
+    await context.ensureOpenPencil();
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
   const status = await openPencilStatus(context);
   if (!status.enabled) return { ok: false, message: 'Turn the connection on and save it first.' };
-  if (!status.tokenStored) return { ok: false, message: 'Save the token first. It must equal the OPENPENCIL_MCP_AUTH_TOKEN the editor was started with.' };
   try {
     const blocks = await context.mcp.callServerTool(OPENPENCIL_MCP_SERVER_ID, 'list_pages', {});
     if (blocks === null) return { ok: false, message: `KAI could not connect to ${status.endpoint}. Check that the editor is running and the token matches.` };

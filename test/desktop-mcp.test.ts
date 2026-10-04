@@ -100,6 +100,72 @@ describe('desktop MCP runtime', () => {
       await server.close();
     }
   });
+
+  it('scopes to one server: offers only its tools, and allows them outright regardless of autonomy', async () => {
+    // Two servers sharing the same fixture, standing in for open-pencil plus some other MCP server the user has
+    // also enabled — scopedToServer must offer only the one it names, not both.
+    const fixture = path.resolve('test/fixtures/mcp-echo-server.mjs');
+    const settings = createDefaultSettings();
+    settings.mcpServers = [
+      { id: 'open-pencil', name: 'Open Pencil', enabled: true, transport: 'stdio', command: process.execPath, args: [fixture], cwd: null, envCredentialIds: { KAI_TEST_MCP_SECRET: 'mcp.test' } },
+      { id: 'other', name: 'Other MCP', enabled: true, transport: 'stdio', command: process.execPath, args: [fixture], cwd: null, envCredentialIds: { KAI_TEST_MCP_SECRET: 'mcp.test' } },
+    ];
+    const runtime = new DesktopMcpRuntime(settingsPort(settings), credentialPort('mcp.test', 'vault-secret'), new RedactedLogger());
+    runtimes.push(runtime);
+    const scoped = runtime.scopedToServer('open-pencil');
+
+    const scopedDefinitions = await scoped.definitions();
+    const allDefinitions = await runtime.definitions();
+    expect(scopedDefinitions.length).toBeGreaterThan(0);
+    expect(scopedDefinitions.length).toBeLessThan(allDefinitions.length);
+
+    const secretName = String((scopedDefinitions.find((definition) =>
+      definition && typeof definition === 'object' && 'name' in definition && String(definition.name).includes('show_secret')) as { name: string }).name);
+    // The raw runtime denies a non-read-only MCP tool under 'plan'; the scoped view allows it regardless.
+    expect(runtime.policy(secretName, 'plan')).toMatchObject({ decision: 'deny' });
+    expect(scoped.policy?.(secretName, 'plan')).toEqual({ decision: 'allow' });
+    await expect(scoped.execute?.(secretName, {})).resolves.toMatchObject({ ok: true, output: { text: 'secret:vault-secret' } });
+
+    // A tool belonging to the other server is simply not this view's to answer for.
+    const otherOnlyName = allDefinitions
+      .map((definition) => (definition && typeof definition === 'object' && 'name' in definition ? String(definition.name) : ''))
+      .find((name) => !scopedDefinitions.some((scopedDefinition) => scopedDefinition && typeof scopedDefinition === 'object' && 'name' in scopedDefinition && scopedDefinition.name === name));
+    expect(scoped.policy?.(otherOnlyName!, 'full')).toBeUndefined();
+  });
+
+  it('reconnects and retries once when a call fails against an already-connected server, instead of leaving a dead connection in place', async () => {
+    // Stands in for the server having restarted under an already-open connection (open-pencil reissuing its token,
+    // or dropping it when auth is turned off): the first call throws against the now-dead client, and the retry
+    // connects again — by which point the vault holds whatever the server now actually wants — the same recovery a
+    // person would do by hand, done automatically.
+    const server = await startHttpMcpServer('Bearer vault-token');
+    try {
+      const settings = createDefaultSettings();
+      settings.mcpServers = [{
+        id: 'remote',
+        name: 'Remote MCP',
+        enabled: true,
+        transport: 'http',
+        url: server.url,
+        headerCredentialIds: { Authorization: 'mcp.remote' },
+      }];
+      const runtime = new DesktopMcpRuntime(settingsPort(settings), credentialPort('mcp.remote', 'Bearer vault-token'), new RedactedLogger());
+      runtimes.push(runtime);
+      const [echo] = await runtime.definitions();
+      const name = String((echo as { name: string }).name);
+      // A real connection exists now. Kill the transport underneath it without telling the runtime, the way a
+      // restarted server would: the next call on it throws, which is exactly what callWithReconnect is for.
+      const connection = (runtime as unknown as { connection?: { clients: Map<string, { close(): Promise<void> }> } }).connection;
+      await connection?.clients.get('remote')?.close();
+
+      await expect(runtime.execute(name, { text: 'hello again' })).resolves.toMatchObject({
+        ok: true,
+        output: { text: 'echo:hello again' },
+      });
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 function settingsPort(settings: AppSettings): { load(): Promise<AppSettings> } {

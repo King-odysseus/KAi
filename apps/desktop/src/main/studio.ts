@@ -105,7 +105,7 @@ export interface StudioPorts {
     projectRoot: string,
     conversationId: string,
     onEvent?: (event: PersistedEvent) => void,
-  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }>;
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }>;
   /** Writes the status file and the root agent instructions. Optional so tests can leave it out. */
   handoff?: { write(projectId: string, board: StudioBoard, catalog: StudioArtifacts): Promise<void> };
   now(): string;
@@ -422,7 +422,7 @@ export class DesktopStudio {
     prompt: string,
     stepId: string,
     onEvent?: (event: PersistedEvent) => void,
-  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> {
     if (!this.ports.ensureOpenPencilRunning || !this.ports.runDesignAgent) {
       throw new Error('The design-build loop is not available in this build.');
     }

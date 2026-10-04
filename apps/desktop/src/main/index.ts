@@ -448,9 +448,9 @@ async function startApplication(): Promise<void> {
     return linkedProject.path;
   };
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
-  const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, {
-    waitIfPaused: (conversationId, signal) => runControl.waitIfPaused(conversationId, signal),
-    resolveProxyRoute: async (request) => {
+  const directApiOptions = {
+    waitIfPaused: (conversationId: string, signal: AbortSignal) => runControl.waitIfPaused(conversationId, signal),
+    resolveProxyRoute: async (request: AgentRunRequest) => {
       const controller = serviceController;
       if (!controller) throw new Error('The managed service controller is unavailable.');
       const access = await controller.loopbackAccess('universalProxy');
@@ -459,7 +459,18 @@ async function startApplication(): Promise<void> {
         apiKey: access.token,
       };
     },
-  });
+  };
+  const directApi = new DesktopDirectProviderRuntime(settings, credentials, mcpRuntime, directApiOptions);
+  // A separate instance, not the shared one above: its external tools are open-pencil's alone (scopedToServer),
+  // so a design-build run can allow them outright without the weaker 'plan' autonomy that would deny them, and
+  // without the stronger 'full' that would also unlock the project's own file and shell tools or every other MCP
+  // server the user has enabled. See runDesignAgent below.
+  const designBuildDirectApi = new DesktopDirectProviderRuntime(
+    settings,
+    credentials,
+    mcpRuntime.scopedToServer(OPENPENCIL_MCP_SERVER_ID),
+    directApiOptions,
+  );
 
   const notifications = new NotificationCenter({
     getSettings: async () => (await settings.load()).notifications,
@@ -514,6 +525,35 @@ async function startApplication(): Promise<void> {
       },
     };
   };
+  // Open-pencil's token is reissued on every start of the editor (when it has one at all — auth can be turned off
+  // in the editor, in which case the discovery file carries no token to go stale), so the live file is re-read and
+  // KAI's own connection re-synced before every user-initiated open-pencil action, launching the editor first when
+  // it is not already running. A mismatch here is exactly the "open-pencil could not be found" failure a stale
+  // token produces.
+  const ensureOpenPencilReady = async (): Promise<void> => {
+    const live = await ensureOpenPencilRunning();
+    const noAuth = live.token === null;
+    const wantedAuth = noAuth ? undefined : `Bearer ${live.token}`;
+    const [stored, current] = await Promise.all([
+      noAuth ? Promise.resolve(undefined) : credentials.get(OPENPENCIL_CREDENTIAL_ID).catch(() => undefined),
+      settings.load(),
+    ]);
+    const found = current.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID);
+    const server = found?.transport === 'http' ? found : undefined;
+    const headersMatch = noAuth ? Object.keys(server?.headerCredentialIds ?? { x: '' }).length === 0 : stored === wantedAuth;
+    const upToDate = headersMatch && server?.enabled && server.url === live.endpoint;
+    if (upToDate) return;
+    if (wantedAuth) await credentials.set(OPENPENCIL_CREDENTIAL_ID, wantedAuth);
+    await settings.update((value) => withOpenPencilMcpSetting(value, { endpoint: live.endpoint, enabled: true, noAuth }).settings);
+    mcpRuntime?.invalidate();
+  };
+  // Pull the design and Check connection go through this instead of the plain port above, so they also launch the
+  // editor and re-sync first. The Equalizer keeps the plain one: its designConnected() is a background status
+  // check, not a person asking KAI to reach open-pencil right now, so it must not launch an app or wait on one.
+  const openPencilPortsEnsuring = async (): Promise<DesignPorts | null> => {
+    await ensureOpenPencilReady();
+    return openPencilPorts();
+  };
   // The Equalizer is built once the preview runtime exists; until then a call to it says so.
   let equalizerService: EqualizerService | null = null;
   const equalizer: EqualizerService = {
@@ -553,6 +593,7 @@ async function startApplication(): Promise<void> {
     executionRules,
     directApi,
     mcp: mcpRuntime,
+    ensureOpenPencil: ensureOpenPencilReady,
     workflowTemplates,
     backups,
     learningProgress,
@@ -773,45 +814,33 @@ async function startApplication(): Promise<void> {
     },
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   }, () => new Date().toISOString()));
-  // Open-pencil's token is reissued on every start of the editor, so it is re-read and re-saved before every
-  // design-build step rather than trusted from whatever is already in Settings. A mismatch here is exactly the
-  // "open-pencil could not be found" failure a stale token produces.
-  const ensureOpenPencilReady = async (): Promise<void> => {
-    const live = await ensureOpenPencilRunning();
-    const wantedAuth = `Bearer ${live.token}`;
-    const [stored, current] = await Promise.all([
-      credentials.get(OPENPENCIL_CREDENTIAL_ID).catch(() => undefined),
-      settings.load(),
-    ]);
-    const server = current.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID);
-    const upToDate = stored === wantedAuth && server?.enabled && server.transport === 'http' && server.url === live.endpoint;
-    if (upToDate) return;
-    await credentials.set(OPENPENCIL_CREDENTIAL_ID, wantedAuth);
-    await settings.update((value) => withOpenPencilMcpSetting(value, { endpoint: live.endpoint, enabled: true }).settings);
-    mcpRuntime?.invalidate();
-  };
-  // Autonomy has to be 'full': DesktopMcpRuntime.policy() (mcp-runtime.ts) denies every non-read-only MCP tool
-  // under 'plan', open-pencil's render/set_fill/create_page included, so a weaker level makes every real call the
-  // model attempts fail silently - no technical error, just a refused tool call the model then talks past, which
-  // is how a step reported "completed" while open-pencil's document stayed empty. The project's own file/shell
-  // tools come along unrestricted too (DesktopProjectToolRuntime has no separate policy for this run), which is an
-  // accepted trade for now: the prompt only ever asks for open-pencil work, never for file or shell changes.
+  // Autonomy is 'plan': it keeps the project's own file and shell tools read-only, same as any other read-mostly
+  // run. That used to also deny open-pencil's own write tools (DesktopMcpRuntime.policy() denies every non-read-
+  // only MCP tool under 'plan') — fixed by running this through designBuildDirectApi instead of the shared
+  // instance: its external tools are open-pencil's alone, scoped and always allowed regardless of autonomy (see
+  // mcpRuntime.scopedToServer above), so open-pencil can draw while the project's own files stay untouched.
   const runDesignAgent = async (
     prompt: string,
     projectRoot: string,
     conversationId: string,
     onEvent?: (event: PersistedEvent) => void,
-  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> => {
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> => {
     const request: AgentRunRequest = {
       conversationId,
       prompt,
       agent: 'codex',
       execution: 'api',
       route: 'direct',
-      autonomy: 'full',
+      autonomy: 'plan',
     };
-    const result = await directApi.run(request, projectRoot, undefined, onEvent);
-    return { status: result.status, output: result.output, ...(result.error ? { error: result.error } : {}) };
+    const result = await designBuildDirectApi.run(request, projectRoot, undefined, onEvent);
+    const costUsd = result.events.reduce((total, event) => (event.type === 'cost.update' && event.amountUsd ? total + event.amountUsd : total), 0);
+    return {
+      status: result.status,
+      output: result.output,
+      ...(result.error ? { error: result.error } : {}),
+      ...(costUsd > 0 ? { costUsd } : {}),
+    };
   };
   studio = new DesktopStudio({
     settings: () => settings.load(),
@@ -821,7 +850,7 @@ async function startApplication(): Promise<void> {
     artifacts: studioArtifacts,
     board: studioBoard,
     uiCheck,
-    openPencil: openPencilPorts,
+    openPencil: openPencilPortsEnsuring,
     ensureOpenPencilRunning: ensureOpenPencilReady,
     runDesignAgent,
     handoff: {

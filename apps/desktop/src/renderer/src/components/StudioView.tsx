@@ -115,6 +115,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // `stepId` is minted before the step starts and carried in the request, so this can filter to just this step.
   const [buildEvents, setBuildEvents] = useState<PersistedEvent[]>([]);
   const buildStepId = useRef<string | null>(null);
+  // Running spend for the build in progress, since a 30-screen run is 30-odd agent turns with no other visibility
+  // into cost — unlike the composer, which tracks this per run already. The ref is the source of truth read inside
+  // the loop itself (a long-running async function closes over the state value from whenever it started, not a
+  // later update), and the state is only for display.
+  const [buildCostUsd, setBuildCostUsd] = useState(0);
+  const buildCostRef = useRef(0);
+  // The step a build stopped on, so the button can say "Retry X" instead of just "Build the design" again —
+  // cleared the moment a new build starts, since that attempt speaks for itself from then on.
+  const [lastFailedStep, setLastFailedStep] = useState<string | null>(null);
   const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
   const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
   const projectTitle = state?.goal.trim() || state?.idea.trim() || viewedProject?.title || 'New project';
@@ -406,6 +415,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     [designPages, design],
   );
   const visibleRows = useMemo(() => filterScreens(designRows, screenQuery), [designRows, screenQuery]);
+  // What the build button says when it is not already running: plain the first time, naming the step to retry
+  // when the last attempt stopped on one, or how much is left when some screens are already drawn and nothing
+  // failed — so clicking it again reads as "carry on from here", not "start over".
+  const buildButtonLabel = lastFailedStep
+    ? `Retry "${lastFailedStep}"`
+    : foundationDone && designRows.some((row) => row.drawn) && designRows.some((row) => row.inPages && !row.drawn)
+      ? `Resume (${designRows.filter((row) => row.inPages && !row.drawn).length} left)`
+      : 'Build the design';
 
   // Whether the foundation step was run is the user's own note: open-pencil has no single thing to look for.
   useEffect(() => {
@@ -946,12 +963,27 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /** One step of the build loop: mints the id its live events will be tagged with, so the subscription above can
    * already be filtering for it before the call that produces them is even sent. */
-  async function runBuildStep(name: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+  async function runBuildStep(name: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> {
     setBuildingStep(name);
     setBuildEvents([]);
     const stepId = `design_${crypto.randomUUID()}`;
     buildStepId.current = stepId;
-    return unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId!, prompt, stepId));
+    const result = unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId!, prompt, stepId));
+    if (result.costUsd) {
+      buildCostRef.current += result.costUsd;
+      setBuildCostUsd(buildCostRef.current);
+    }
+    return result;
+  }
+
+  /** A whole turn can fail for reasons that are gone a moment later — a provider hiccup, open-pencil briefly
+   * unreachable between the per-step connection sync and the model's first call. One retry absorbs those without
+   * making every transient blip stop the run and need a person to notice and click Build again. */
+  async function runBuildStepWithRetry(name: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+    const first = await runBuildStep(name, prompt);
+    if (first.status !== 'failed') return first;
+    setNotice(`"${name}" failed, retrying once: ${first.error || 'the step failed.'}`);
+    return runBuildStep(name, prompt);
   }
 
   /**
@@ -966,15 +998,19 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBusy('design-build');
     setError(null);
     setNotice(null);
+    setLastFailedStep(null);
+    setBuildCostUsd(0);
+    buildCostRef.current = 0;
     try {
       if (!foundationDone) {
-        const result = await runBuildStep('Foundation', promptFor('Foundation'));
-        if (result.status === 'failed') throw new Error(`Foundation: ${result.error || 'the step failed.'}`);
+        const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation'));
+        if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
         // "Completed" only means the turn ended without a technical error — it says nothing about whether open-
         // pencil actually has anything now. Pull before trusting it, the same way a screen's own row only ticks
         // off once the design read back confirms it, not because the turn claimed to be done.
         const pulled = await refreshDesign();
         if (pulled.tokenCount === 0 && pulled.design.components.length === 0) {
+          setLastFailedStep('Foundation');
           throw new Error('Foundation: the turn finished, but open-pencil still has no variables or components. Open the editor and check it is the document you expect, then try again.');
         }
         toggleFoundation(true);
@@ -987,11 +1023,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           setNotice('Stopped. Already-drawn screens are kept; press Build the design again to carry on from here.');
           return;
         }
-        const result = await runBuildStep(row.name, promptFor(row.name));
-        if (result.status === 'failed') throw new Error(`${row.name}: ${result.error || 'the step failed.'}`);
+        const result = await runBuildStepWithRetry(row.name, promptFor(row.name));
+        if (result.status === 'failed') { setLastFailedStep(row.name); throw new Error(`${row.name}: ${result.error || 'the step failed.'}`); }
         await refreshDesign();
       }
-      setNotice(`Design build finished: ${toDraw.length} screen${toDraw.length === 1 ? '' : 's'} drawn.`);
+      setNotice(`Design build finished: ${toDraw.length} screen${toDraw.length === 1 ? '' : 's'} drawn${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -1611,7 +1647,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     </button>
                   ) : (
                     <button type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || designRows.length === 0}>
-                      <Wand2 size={14} /> Build the design
+                      <Wand2 size={14} /> {buildButtonLabel}
                     </button>
                   )}
                   <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
@@ -1623,6 +1659,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     </button>
                   )}
                   <span className="studio-model">{designRows.filter((row) => row.drawn).length} of {designRows.length} screens drawn</span>
+                  {buildCostUsd > 0 && <span className="studio-model">~${buildCostUsd.toFixed(2)} spent this build</span>}
                 </div>
                 {busy === 'design-build' && (() => {
                   const activity = deriveAgentActivity(buildEvents, true, false, false);

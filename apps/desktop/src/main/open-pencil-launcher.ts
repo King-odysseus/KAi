@@ -8,12 +8,13 @@ import * as path from 'node:path';
  * file it writes itself once its MCP server is listening.
  */
 
-/** The editor's own "I am listening" file: written fresh on every start, token included. Checked before launching
- * anything, and re-read every time a build step runs, because the token is reissued on every start and a cached
- * one goes stale the moment the editor restarts. */
+/** The editor's own "I am listening" file: written fresh on every start, token included when auth is on. Checked
+ * before launching anything, and re-read every time a build step runs, because the token is reissued on every
+ * start (when there is one) and a cached one goes stale the moment the editor restarts. */
 interface OpenPencilDiscovery {
   httpPort: number;
-  authToken: string;
+  authRequired: boolean;
+  authToken: string | null;
 }
 
 /** Checked in order: the modded build first (what this machine runs), then the unmodified baseline. */
@@ -27,8 +28,12 @@ async function readDiscovery(file: string): Promise<OpenPencilDiscovery | null> 
   try {
     const raw = await fs.readFile(file, 'utf8');
     const value = JSON.parse(raw) as Partial<OpenPencilDiscovery>;
-    if (typeof value.httpPort !== 'number' || typeof value.authToken !== 'string' || !value.authToken) return null;
-    return { httpPort: value.httpPort, authToken: value.authToken };
+    if (typeof value.httpPort !== 'number') return null;
+    const authRequired = value.authRequired === true;
+    // A file claiming auth is required but holding no usable token is not a running server worth connecting to;
+    // one claiming auth is off is valid even with authToken: null, which is exactly what it sends in that case.
+    if (authRequired && (typeof value.authToken !== 'string' || !value.authToken)) return null;
+    return { httpPort: value.httpPort, authRequired, authToken: authRequired ? (value.authToken as string) : null };
   } catch {
     return null;
   }
@@ -36,7 +41,9 @@ async function readDiscovery(file: string): Promise<OpenPencilDiscovery | null> 
 
 export interface OpenPencilConnection {
   endpoint: string;
-  token: string;
+  /** Null when the editor is running with auth off — callers should send no Authorization header at all, not a
+   * header holding the literal word "null". */
+  token: string | null;
 }
 
 /** Open-pencil's live discovery file, read fresh. Null when it is not running (no file) or starting (file not

@@ -104,7 +104,7 @@ export function withInstalledFeature(
  */
 export function withOpenPencilMcpSetting(
   settings: AppSettings,
-  options: { endpoint?: string; credentialId?: string; enabled?: boolean } = {},
+  options: { endpoint?: string; credentialId?: string; enabled?: boolean; noAuth?: boolean } = {},
 ): { settings: AppSettings; changed: boolean } {
   const desired: McpServerSettings = {
     id: OPENPENCIL_MCP_SERVER_ID,
@@ -112,8 +112,9 @@ export function withOpenPencilMcpSetting(
     enabled: options.enabled ?? true,
     transport: 'http',
     url: options.endpoint ?? OPENPENCIL_ENDPOINT,
-    // The vault holds the whole header value ("Bearer <token>"), which is what the runtime sends as-is.
-    headerCredentialIds: { Authorization: options.credentialId ?? OPENPENCIL_CREDENTIAL_ID },
+    // The vault holds the whole header value ("Bearer <token>"), which is what the runtime sends as-is. Left
+    // empty when the editor is running with auth off (no token to hold), so no Authorization header is sent.
+    headerCredentialIds: options.noAuth ? {} : { Authorization: options.credentialId ?? OPENPENCIL_CREDENTIAL_ID },
   };
   const index = settings.mcpServers.findIndex((server) => server.id === OPENPENCIL_MCP_SERVER_ID);
   if (index < 0) return { settings: { ...settings, mcpServers: [...settings.mcpServers, desired] }, changed: true };
