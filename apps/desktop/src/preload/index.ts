@@ -139,6 +139,7 @@ const bridge: KaiDesktopBridge = {
   },
   studioDesign: (projectId) => ipcRenderer.invoke('studio:design-read', { projectId }),
   pullStudioDesign: (projectId) => ipcRenderer.invoke('studio:design-pull', { projectId }),
+  buildStudioDesignStep: (projectId, prompt) => ipcRenderer.invoke('studio:design-build-step', { projectId, prompt }),
   onStudioBoardChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { projectId: string; board: import('@kai/contracts').StudioBoard }): void => listener(payload);
     ipcRenderer.on('studio:board-changed', handler);

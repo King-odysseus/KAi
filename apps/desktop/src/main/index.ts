@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type ConversationRecord, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
@@ -14,6 +14,7 @@ import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
+import { ensureOpenPencilRunning } from './open-pencil-launcher';
 import { DesktopChangeReviewer } from './change-review';
 import { configureCopyCheckpoints } from './copy-checkpoints';
 import { readPlan, writePlan } from './plan-store';
@@ -772,6 +773,37 @@ async function startApplication(): Promise<void> {
     },
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   }, () => new Date().toISOString()));
+  // Open-pencil's token is reissued on every start of the editor, so it is re-read and re-saved before every
+  // design-build step rather than trusted from whatever is already in Settings. A mismatch here is exactly the
+  // "open-pencil could not be found" failure a stale token produces.
+  const ensureOpenPencilReady = async (): Promise<void> => {
+    const live = await ensureOpenPencilRunning();
+    const wantedAuth = `Bearer ${live.token}`;
+    const [stored, current] = await Promise.all([
+      credentials.get(OPENPENCIL_CREDENTIAL_ID).catch(() => undefined),
+      settings.load(),
+    ]);
+    const server = current.mcpServers.find((candidate) => candidate.id === OPENPENCIL_MCP_SERVER_ID);
+    const upToDate = stored === wantedAuth && server?.enabled && server.transport === 'http' && server.url === live.endpoint;
+    if (upToDate) return;
+    await credentials.set(OPENPENCIL_CREDENTIAL_ID, wantedAuth);
+    await settings.update((value) => withOpenPencilMcpSetting(value, { endpoint: live.endpoint, enabled: true }).settings);
+    mcpRuntime?.invalidate();
+  };
+  // Autonomy is pinned to 'plan' so the project's own file/shell tools stay read-only for this run; the point is
+  // open-pencil's tools, offered the same way they already are to every Direct API run through the MCP runtime.
+  const runDesignAgent = async (prompt: string, projectRoot: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> => {
+    const request: AgentRunRequest = {
+      conversationId: `design_${crypto.randomUUID()}`,
+      prompt,
+      agent: 'codex',
+      execution: 'api',
+      route: 'direct',
+      autonomy: 'plan',
+    };
+    const result = await directApi.run(request, projectRoot);
+    return { status: result.status, output: result.output, ...(result.error ? { error: result.error } : {}) };
+  };
   studio = new DesktopStudio({
     settings: () => settings.load(),
     projectRoot: studioProjectRoot,
@@ -781,6 +813,8 @@ async function startApplication(): Promise<void> {
     board: studioBoard,
     uiCheck,
     openPencil: openPencilPorts,
+    ensureOpenPencilRunning: ensureOpenPencilReady,
+    runDesignAgent,
     handoff: {
       write: async (projectId, board, catalog) => {
         await writeHandoffFiles(await studioProjectRoot(projectId), board, catalog, new Date().toISOString());

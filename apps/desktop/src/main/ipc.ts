@@ -541,6 +541,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, projectId, pulled.board);
     return pulled;
   });
+  handle(context, 'studio:design-build-step', async ({ projectId, prompt }) => context.studio.buildDesignStep(projectId, prompt));
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, request.ownerWindowId));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });

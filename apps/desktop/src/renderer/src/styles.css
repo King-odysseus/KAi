@@ -12575,9 +12575,16 @@ button.tool-call-head:hover strong { color: var(--mint); }
 
 .flow-node-body::-webkit-scrollbar { width: 7px; }
 
+.flow-node-body::-webkit-scrollbar-track { background: transparent; }
+
+/* Faint at rest so it reads as a hint rather than a highlighted bar; only the hover state earns full contrast. */
 .flow-node-body::-webkit-scrollbar-thumb {
   border-radius: 4px;
-  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+.flow-node-body:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 40%, transparent);
 }
 
 /* The kind's colour tints its header, so a card says what it is in words as well as in its border. */

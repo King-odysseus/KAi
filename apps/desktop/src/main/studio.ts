@@ -88,6 +88,16 @@ export interface StudioPorts {
    * of failing: everything except the tokens and the design's own cards works without it.
    */
   openPencil?(): Promise<DesignPorts | null>;
+  /**
+   * Gets open-pencil running and KAI's connection to it fresh, launching the editor when it is not already open.
+   * Optional so tests that only read the design (never build it) can leave it out.
+   */
+  ensureOpenPencilRunning?(): Promise<void>;
+  /**
+   * Runs one design-build prompt as a real agent turn with open-pencil's tools available, through whichever
+   * provider the user has configured. Optional for the same reason as `ensureOpenPencilRunning`.
+   */
+  runDesignAgent?(prompt: string, projectRoot: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }>;
   /** Writes the status file and the root agent instructions. Optional so tests can leave it out. */
   handoff?: { write(projectId: string, board: StudioBoard, catalog: StudioArtifacts): Promise<void> };
   now(): string;
@@ -391,6 +401,21 @@ export class DesktopStudio {
     });
     const board = await this.ports.board.applyDesign(projectId, read.components, changed);
     return { design, board, changed, tokensChanged, tokenCount: read.tokenCount };
+  }
+
+  /**
+   * Runs one design-build prompt as a real agent turn against open-pencil's tools, instead of a person pasting it
+   * into the composer by hand. Launches the editor first if it is not already running. The caller is expected to
+   * pull the design afterward to see what actually got drawn — this only reports whether the turn itself finished,
+   * the same way a composer run does.
+   */
+  async buildDesignStep(projectId: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+    if (!this.ports.ensureOpenPencilRunning || !this.ports.runDesignAgent) {
+      throw new Error('The design-build loop is not available in this build.');
+    }
+    await this.ports.ensureOpenPencilRunning();
+    const root = await this.ports.projectRoot(projectId);
+    return this.ports.runDesignAgent(prompt, root);
   }
 }
 

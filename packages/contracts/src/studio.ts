@@ -468,6 +468,23 @@ export const studioDesignPullSchema = z
   .strict();
 export type StudioDesignPull = z.infer<typeof studioDesignPullSchema>;
 
+/** One prompt handed to a design-build step: the foundation, or one screen. */
+export const studioDesignBuildStepInputSchema = z
+  .object({ projectId: z.string().min(1), prompt: z.string().trim().min(1).max(20_000) })
+  .strict();
+export type StudioDesignBuildStepInput = z.infer<typeof studioDesignBuildStepInputSchema>;
+
+/** What one design-build step answers with: whether the model's turn against open-pencil's tools finished. The
+ * screen itself is not re-read here — the caller pulls the design afterward to see what actually landed. */
+export const studioDesignBuildStepResultSchema = z
+  .object({
+    status: z.enum(['completed', 'failed']),
+    output: z.string(),
+    error: z.string().optional(),
+  })
+  .strict();
+export type StudioDesignBuildStepResult = z.infer<typeof studioDesignBuildStepResultSchema>;
+
 /** A stable, readable card id from the draft's key, so a regenerated board keeps the same ids and their work. */
 export function cardIdFromKey(key: string): string {
   const slug = key.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);

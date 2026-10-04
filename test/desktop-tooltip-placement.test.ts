@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { placeTooltip } from '../apps/desktop/src/renderer/src/components/TooltipLayer';
+import { forDisplay, placeTooltip } from '../apps/desktop/src/renderer/src/components/TooltipLayer';
 
 /**
  * Where a tooltip lands. The layer itself needs a browser, but the arithmetic that decides the side and the clamping is
@@ -61,5 +61,20 @@ describe('tooltip placement', () => {
     const placed = placeTooltip(target(10, 400), { width: 200, height: 400 });
     expect(Number.isFinite(placed.left)).toBe(true);
     expect(placed.left).toBeGreaterThan(0);
+  });
+});
+
+describe('tooltip text length', () => {
+  it('leaves a short title alone', () => {
+    expect(forDisplay('Delete my-project')).toBe('Delete my-project');
+  });
+
+  it('cuts a title built from free-form content instead of letting it wrap into a wall of text', () => {
+    // A project's full written brief can stand in for a title with no length limit of its own — the case that
+    // turned a hover hint into a panel tall enough to cover the whole screen.
+    const brief = 'SharpSite is a template-based website builder for Nigerian small businesses. '.repeat(10);
+    const result = forDisplay(brief);
+    expect(result.length).toBeLessThan(brief.length);
+    expect(result.endsWith('…')).toBe(true);
   });
 });

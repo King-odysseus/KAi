@@ -85,6 +85,16 @@ function worthShowing(text: string): boolean {
   return text.trim().length > 0;
 }
 
+/** A tooltip is a short hint, not a document. Past this many characters it is cut with an ellipsis rather than
+ * left to wrap into a tower of text tall enough to cover whatever the pointer is on its way to next — a title
+ * built from free-form content (a project's full brief, standing in for a short name) could otherwise run to
+ * several hundred characters. */
+const MAX_TIP_CHARS = 220;
+
+export function forDisplay(text: string): string {
+  return text.length > MAX_TIP_CHARS ? `${text.slice(0, MAX_TIP_CHARS).trimEnd()}…` : text;
+}
+
 function isExcluded(element: Element): boolean {
   return Boolean(element.closest('[data-no-tip], .monaco-editor, .app-tooltip'));
 }
@@ -120,7 +130,7 @@ export function TooltipLayer(): ReactNode {
 
       const rect = element.getBoundingClientRect();
       const { side, left, top } = placeTooltip(rect, { width: window.innerWidth, height: window.innerHeight });
-      setShown({ text: title, side, left, top });
+      setShown({ text: forDisplay(title), side, left, top });
     };
 
     const fromEvent = (event: Event): Element | null => {

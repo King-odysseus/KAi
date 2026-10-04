@@ -343,3 +343,38 @@ describe('pulling the design from open-pencil', () => {
     await expect(app.pullDesign('p1')).rejects.toThrow('open-pencil is not connected');
   });
 });
+
+describe('design build', () => {
+  it('gets open-pencil ready before running the step, against the project its root resolves to', async () => {
+    const order: string[] = [];
+    const { studio: app } = studio({}, {
+      ensureOpenPencilRunning: async () => { order.push('ensure'); },
+      runDesignAgent: async (prompt, projectRoot) => {
+        order.push(`run:${prompt}:${projectRoot}`);
+        return { status: 'completed', output: 'done' };
+      },
+    });
+
+    const result = await app.buildDesignStep('p1', 'Draw the pricing screen');
+
+    expect(result).toEqual({ status: 'completed', output: 'done' });
+    expect(order).toEqual(['ensure', `run:Draw the pricing screen:${root}`]);
+  });
+
+  it('passes a failed turn straight back, with its error', async () => {
+    const { studio: app } = studio({}, {
+      ensureOpenPencilRunning: async () => {},
+      runDesignAgent: async () => ({ status: 'failed', output: '', error: 'open-pencil refused the call' }),
+    });
+
+    const result = await app.buildDesignStep('p1', 'Draw the pricing screen');
+
+    expect(result).toEqual({ status: 'failed', output: '', error: 'open-pencil refused the call' });
+  });
+
+  it('says the build loop is not available rather than failing obscurely, when the ports are not wired', async () => {
+    const { studio: app } = studio({});
+
+    await expect(app.buildDesignStep('p1', 'Draw the pricing screen')).rejects.toThrow('not available in this build');
+  });
+});

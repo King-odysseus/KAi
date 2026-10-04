@@ -50,6 +50,8 @@ import {
   studioBoardClaimInputSchema,
   studioBoardMoveInputSchema,
   studioBoardWorkInputSchema,
+  studioDesignBuildStepInputSchema,
+  studioDesignBuildStepResultSchema,
   studioDesignPullSchema,
   studioDesignSchema,
   studioProjectInputSchema,
@@ -72,6 +74,8 @@ import {
   type StudioBoardMoveInput,
   type StudioBoardWorkInput,
   type StudioDesign,
+  type StudioDesignBuildStepInput,
+  type StudioDesignBuildStepResult,
   type StudioDesignPull,
   type StudioProjectInput,
   type StudioUiCheckResult,
@@ -495,6 +499,7 @@ export const ipcChannels = [
   'auto:resume',
   'studio:design-pull',
   'studio:design-read',
+  'studio:design-build-step',
   'team:start',
   'team:record',
   'team:clear-record',
@@ -798,6 +803,7 @@ export const ipcInputSchemas = {
   'auto:resume': autoConversationInputSchema,
   'studio:design-pull': studioProjectInputSchema,
   'studio:design-read': studioProjectInputSchema,
+  'studio:design-build-step': studioDesignBuildStepInputSchema,
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
@@ -1037,6 +1043,7 @@ export const studioBoardCardResponseSchema = boardCardSchema.nullable();
 export const studioUiCheckResponseSchema = studioUiCheckResultSchema;
 export const studioDesignResponseSchema = studioDesignSchema;
 export const studioDesignPullResponseSchema = studioDesignPullSchema;
+export const studioDesignBuildStepResponseSchema = studioDesignBuildStepResultSchema;
 /** The cards one "work the board" run touched, in the order they ran. */
 export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
 export const autopilotResponseSchema = autopilotStatusResponseSchema;
@@ -1291,6 +1298,12 @@ export interface KaiDesktopBridge {
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
   /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */
   pullStudioDesign(projectId: string): Promise<IpcResponse<StudioDesignPull>>;
+  /**
+   * Runs one design-build prompt (the foundation, or one screen) as a real agent turn against open-pencil's own
+   * tools, launching the editor first if it is not already running. The caller pulls the design afterward to see
+   * what the turn actually drew — this only reports whether the turn itself finished.
+   */
+  buildStudioDesignStep(projectId: string, prompt: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
   /** Redraws the board when a card moves, whichever window or agent moved it. */
   onStudioBoardChanged(listener: (payload: { projectId: string; board: StudioBoard }) => void): () => void;
   /** Starts the approved plan as a workflow, one part at a time. */

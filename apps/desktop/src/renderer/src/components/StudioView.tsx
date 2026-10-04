@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Trash2, Users, Wand2 } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Square, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { AutopilotPanel } from './AutopilotPanel';
@@ -100,11 +100,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [design, setDesign] = useState<StudioDesign | null>(null);
+  // What the design-build loop is on right now, shown beside the button; the ref is read inside the loop itself,
+  // since reading state there would only ever see the value the loop closed over, not a later click of Stop.
+  const [buildingStep, setBuildingStep] = useState<string | null>(null);
+  const buildCancelled = useRef(false);
   const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
   const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
   const projectTitle = state?.goal.trim() || state?.idea.trim() || viewedProject?.title || 'New project';
@@ -896,16 +900,23 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /** The read itself, shared by the manual "Pull the design" button and each step of the build loop below — the
+   * loop needs it without the button's own busy/notice handling, since it has its own for the whole run. */
+  async function refreshDesign(): Promise<{ changed: string[]; tokensChanged: boolean; tokenCount: number }> {
+    const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!));
+    setDesign(pulled.design);
+    setBoard(pulled.board);
+    setArtifacts(unwrap(await window.kaiDesktop.studioArtifacts(projectId!)));
+    return pulled;
+  }
+
   /** Reads the design from open-pencil: the tokens go to `.kai/spec`, and a changed node restales its card. */
   async function pullDesign(): Promise<void> {
     if (!projectId) return;
     setBusy('design');
     setError(null);
     try {
-      const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId));
-      setDesign(pulled.design);
-      setBoard(pulled.board);
-      setArtifacts(unwrap(await window.kaiDesktop.studioArtifacts(projectId)));
+      const pulled = await refreshDesign();
       setNotice(
         pulled.changed.length > 0
           ? `Pulled the design: ${pulled.changed.length} node${pulled.changed.length === 1 ? '' : 's'} changed, so the cards drawn from them are stale.`
@@ -918,6 +929,50 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * Runs the whole screen list end to end: the foundation first, then each undrawn screen in its own agent turn
+   * against open-pencil's tools, pulling the design after each one so its row ticks off before the next starts.
+   * Stops on the first failed step rather than piling errors on top of each other — the step that failed, and
+   * everything after it, are left exactly as "Copy prompt" would leave them, for a hand-run retry.
+   */
+  async function buildDesign(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    buildCancelled.current = false;
+    setBusy('design-build');
+    setError(null);
+    setNotice(null);
+    try {
+      if (!foundationDone) {
+        setBuildingStep('Foundation');
+        const result = unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId, promptFor('Foundation')));
+        if (result.status === 'failed') throw new Error(`Foundation: ${result.error || 'the step failed.'}`);
+        toggleFoundation(true);
+      }
+      await refreshDesign();
+      const toDraw = designRows.filter((row) => row.inPages && !row.drawn);
+      for (const row of toDraw) {
+        if (buildCancelled.current) {
+          setNotice('Stopped. Already-drawn screens are kept; press Build the design again to carry on from here.');
+          return;
+        }
+        setBuildingStep(row.name);
+        const result = unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId, promptFor(row.name)));
+        if (result.status === 'failed') throw new Error(`${row.name}: ${result.error || 'the step failed.'}`);
+        await refreshDesign();
+      }
+      setNotice(`Design build finished: ${toDraw.length} screen${toDraw.length === 1 ? '' : 's'} drawn.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBuildingStep(null);
+      setBusy(null);
+    }
+  }
+
+  function stopBuildingDesign(): void {
+    buildCancelled.current = true;
   }
 
   async function move(cardId: string, status: BoardStatus): Promise<void> {
@@ -1520,6 +1575,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   Small steps, one prompt each, because one long prompt is what can stall the editor. Run the foundation first, then one screen at a time, letting each finish. Press Pull the design afterwards and the screens it finds tick themselves off.
                 </p>
                 <div className="page-actions">
+                  {busy === 'design-build' ? (
+                    <button type="button" className="secondary-button" onClick={stopBuildingDesign}>
+                      <Square size={14} /> Stop
+                    </button>
+                  ) : (
+                    <button type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || designRows.length === 0}>
+                      <Wand2 size={14} /> Build the design
+                    </button>
+                  )}
                   <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
                   </button>
@@ -1530,6 +1594,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   )}
                   <span className="studio-model">{designRows.filter((row) => row.drawn).length} of {designRows.length} screens drawn</span>
                 </div>
+                {busy === 'design-build' && (
+                  <p className="studio-note"><Loader2 className="spin" size={13} /> Building {buildingStep ? `"${buildingStep}"` : '…'} — open-pencil is launched automatically if it is not already running.</p>
+                )}
                 <ul className="studio-steps">
                   <li className={foundationDone ? 'done' : undefined}>
                     <label className="studio-step-check">
