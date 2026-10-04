@@ -1054,6 +1054,22 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     await context.createWindow(projectId ?? null);
     return true;
   });
+  handle(context, 'window:title-bar-overlay', async ({ color, symbolColor }, request) => {
+    // The controls are drawn by the window manager, so the theme has to be pushed to it. Every window KAI has open
+    // gets the same colours: they are separate BrowserWindows, each with its own overlay, so recolouring only the one
+    // that asked would leave the others in whatever palette they were created with.
+    const windows = context.windows.live();
+    const targets = windows.length > 0 ? windows : (request.session ? [request.session] : []);
+    for (const session of targets) {
+      try {
+        session.window.setTitleBarOverlay({ color, symbolColor, height: 42 });
+      } catch (error) {
+        // An older Electron, or a platform without the overlay. The window still works; it just keeps its colours.
+        context.logger.warn('internal', 'Could not recolour the window controls', messageOf(error));
+      }
+    }
+    return true;
+  });
   handle(context, 'remote:status', async () => context.remote.status());
   handle(context, 'remote:windows', async () => context.remote.windows());
   handle(context, 'remote:devices', async () => context.remote.devices());

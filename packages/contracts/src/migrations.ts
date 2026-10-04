@@ -11,6 +11,7 @@ import {
   type AppSettings,
   type ConversationRecord,
 } from './domain';
+import { THEME_MODES, themeModeSchema } from './primitives';
 
 const legacySettingsSchema = z
   .object({
@@ -65,7 +66,9 @@ export function migrateSettings(input: unknown): AppSettings {
     defaultAgent: migrateAgent(legacy.defaultAgent),
     defaultRoute: legacy.defaultRoute === 'proxy' ? 'proxy' : 'direct',
     defaultAutonomy: migrateAutonomy(legacy.defaultAutonomy),
-    theme: legacy.theme === 'light' || legacy.theme === 'navy' || legacy.theme === 'purple' ? legacy.theme : 'dark',
+    // Any theme this build knows, not the three it knew when this was written: the list is checked rather than
+    // spelled out here, so adding a theme cannot leave a settings file from it silently reset to dark.
+    theme: THEME_MODES.some((item) => item.id === legacy.theme) ? legacy.theme as z.infer<typeof themeModeSchema> : 'dark',
     activeProjectId: legacy.activeProjectId ?? null,
     projectOrder: legacy.projectOrder ?? [],
     directApi: directApi.success ? directApi.data : defaults.directApi,

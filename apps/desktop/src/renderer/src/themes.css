@@ -56,3 +56,144 @@
   --amber: #f2bd68;
   --red: #f27d87;
 }
+
+/* Forest: a dark theme on deep green neutrals, with a leaf-green accent. */
+:root[data-theme="forest"] {
+  color-scheme: dark;
+  color: #e8f3ea;
+  background: #0b1712;
+  --bg-deep: #0b1712;
+  --bg-shell: #0e1d17;
+  --bg-panel: #11241c;
+  --bg-raised: #162c22;
+  --bg-inset: #091410;
+  --bg-input: #12261d;
+  --bg-subtle: #0f211a;
+  --bg-hover: #1d3b2c;
+  --border: #2c5340;
+  --border-soft: #1c3a2c;
+  --text: #e8f3ea;
+  --text-muted: #96b7a3;
+  --text-dim: #74937f;
+  --mint: #58d68d;
+  --mint-strong: #34b56a;
+  --mint-soft: rgba(88, 214, 141, 0.14);
+  --lavender: #8fd6c4;
+  --lavender-soft: rgba(143, 214, 196, 0.15);
+  --amber: #e8bd63;
+  --red: #ef7f85;
+}
+
+/*
+ * The light themes. Each sets only its palette; the light-mode overrides that go with them — which components need
+ * their own background, which need a border drawn, and so on — are written once in styles.css against
+ * `[data-theme-family="light"]`, so adding a light theme is this block and nothing else.
+ */
+
+/* Light: the original, on cool neutrals with a teal accent. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  color: #17283c;
+  background: #edf3f8;
+  --bg-deep: #edf3f8;
+  --bg-shell: #f8fafc;
+  --bg-panel: #ffffff;
+  --bg-raised: #f0f5fa;
+  --bg-hover: #e5edf5;
+  --bg-inset: #f4f7fb;
+  --bg-input: #ffffff;
+  --bg-subtle: #f7fafc;
+  --border: #c7d5e3;
+  --border-soft: #dce6ef;
+  --text: #17283c;
+  --text-muted: #52657a;
+  --text-dim: #73869a;
+  --mint: #45cfaa;
+  --mint-strong: #118563;
+  --mint-soft: rgba(17, 133, 99, 0.1);
+  --lavender: #6f54d9;
+  --lavender-soft: rgba(111, 84, 217, 0.1);
+  --amber: #a96800;
+  --red: #bd3f4d;
+}
+
+/* Sky: light with a blue accent, on the coolest of the light neutrals. */
+:root[data-theme="sky"] {
+  color-scheme: light;
+  color: #14273d;
+  background: #eaf1fa;
+  --bg-deep: #eaf1fa;
+  --bg-shell: #f6f9fd;
+  --bg-panel: #ffffff;
+  --bg-raised: #eef4fb;
+  --bg-hover: #dfeaf7;
+  --bg-inset: #f1f6fc;
+  --bg-input: #ffffff;
+  --bg-subtle: #f5f9fd;
+  --border: #bfd2e8;
+  --border-soft: #d8e4f2;
+  --text: #14273d;
+  --text-muted: #4a6178;
+  --text-dim: #6c8399;
+  --mint: #3d8ee0;
+  --mint-strong: #1f6cbd;
+  --mint-soft: rgba(31, 108, 189, 0.1);
+  --lavender: #6a5bd6;
+  --lavender-soft: rgba(106, 91, 214, 0.1);
+  --amber: #a2660b;
+  --red: #c0392f;
+}
+
+/* Meadow: light with a green accent, on slightly warm neutrals. */
+:root[data-theme="meadow"] {
+  color-scheme: light;
+  color: #1b2a1e;
+  background: #eff5ec;
+  --bg-deep: #eff5ec;
+  --bg-shell: #f8fbf6;
+  --bg-panel: #ffffff;
+  --bg-raised: #f2f8ee;
+  --bg-hover: #e4efe0;
+  --bg-inset: #f4f9f1;
+  --bg-input: #ffffff;
+  --bg-subtle: #f7fbf4;
+  --border: #c6dabd;
+  --border-soft: #dcead6;
+  --text: #1b2a1e;
+  --text-muted: #4f6653;
+  --text-dim: #748b78;
+  --mint: #2fae6a;
+  --mint-strong: #1c8a4f;
+  --mint-soft: rgba(28, 138, 79, 0.11);
+  --lavender: #4f7fd0;
+  --lavender-soft: rgba(79, 127, 208, 0.1);
+  --amber: #96690d;
+  --red: #bf4444;
+}
+
+/* Sand: light with a warm amber accent, on cream neutrals. */
+:root[data-theme="sand"] {
+  color-scheme: light;
+  color: #2e2618;
+  background: #f7f1e6;
+  --bg-deep: #f7f1e6;
+  --bg-shell: #fdfaf4;
+  --bg-panel: #ffffff;
+  --bg-raised: #faf4e9;
+  --bg-hover: #f1e7d5;
+  --bg-inset: #fbf6ec;
+  --bg-input: #ffffff;
+  --bg-subtle: #fcf8f0;
+  --border: #ddcdb0;
+  --border-soft: #ecdfc9;
+  --text: #2e2618;
+  --text-muted: #6b5c43;
+  --text-dim: #8d7c60;
+  --mint: #c07a13;
+  --mint-strong: #9a5f07;
+  --mint-soft: rgba(154, 95, 7, 0.11);
+  --lavender: #7c5cc4;
+  --lavender-soft: rgba(124, 92, 196, 0.11);
+  --amber: #96690d;
+  --red: #b8443c;
+}

@@ -619,6 +619,7 @@ export const ipcChannels = [
   'diagnostics:recent-logs',
   'window:state',
   'window:new',
+  'window:title-bar-overlay',
   'remote:status',
   'remote:windows',
   'remote:devices',
@@ -930,6 +931,16 @@ export const ipcInputSchemas = {
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
   'window:state': emptyInputSchema,
   'window:new': z.object({ projectId: z.string().min(1).optional() }).strict(),
+
+  // The window's title-bar controls are drawn by the operating system, not by the page, so they cannot be styled by
+  // CSS: their colours are set on the window itself and have to be pushed here whenever the theme changes. Hex only,
+  // because that is what the overlay accepts.
+  'window:title-bar-overlay': z
+    .object({
+      color: z.string().regex(/^#[0-9a-f]{6}$/i),
+      symbolColor: z.string().regex(/^#[0-9a-f]{6}$/i),
+    })
+    .strict(),
   'remote:status': emptyInputSchema,
   'remote:windows': emptyInputSchema,
   'remote:devices': emptyInputSchema,
@@ -1466,6 +1477,8 @@ export interface KaiDesktopBridge {
   windowState(): Promise<IpcResponse<{ maximized: boolean }>>;
   /** Opens a new window, optionally already pointed at a project and its composer. */
   newWindow(projectId?: string): Promise<IpcResponse<boolean>>;
+  /** Recolours the operating system's window controls to match the theme. Hex, because that is what the overlay takes. */
+  setTitleBarOverlay(color: string, symbolColor: string): Promise<IpcResponse<boolean>>;
   /** How KAI Remote is doing: whether it is listening, on what, and how many phones are attached. */
   remoteStatus(): Promise<IpcResponse<RemoteAccessStatus>>;
   /** The desktop windows a phone can target, so its UI can offer a choice. */

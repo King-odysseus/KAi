@@ -3,15 +3,38 @@ import { z } from 'zod';
 export const schemaVersionSchema = z.literal(1);
 export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini', 'kimi']);
 export const executionModeSchema = z.enum(['cli', 'api']);
-export const themeModeSchema = z.enum(['dark', 'navy', 'purple', 'light']);
+export const themeModeSchema = z.enum([
+  'dark', 'navy', 'purple', 'forest',
+  'light', 'sky', 'meadow', 'sand',
+]);
 
-/** Themes in the order the title-bar button cycles through them. */
-export const THEME_MODES: ReadonlyArray<{ id: z.infer<typeof themeModeSchema>; label: string }> = [
-  { id: 'dark', label: 'Dark' },
-  { id: 'navy', label: 'Navy' },
-  { id: 'purple', label: 'Purple' },
-  { id: 'light', label: 'Light' },
+/** Which half of the palette a theme draws from, for the things that are not CSS: Monaco, and the light overrides. */
+export type ThemeFamily = 'dark' | 'light';
+
+/**
+ * Every theme, in the order the title-bar button cycles through them and the order the picker lists them: the dark
+ * ones first, then the light ones.
+ *
+ * `family` is what the rest of the app reads instead of naming a theme. The light-mode rules in `styles.css` are
+ * written once against `[data-theme-family="light"]` rather than repeated per theme, so a new light theme is a block
+ * of colour tokens and nothing else — and the code editor picks its palette by family without a list that has to be
+ * kept in step with this one.
+ */
+export const THEME_MODES: ReadonlyArray<{ id: z.infer<typeof themeModeSchema>; label: string; family: ThemeFamily }> = [
+  { id: 'dark', label: 'Dark', family: 'dark' },
+  { id: 'navy', label: 'Navy — blue', family: 'dark' },
+  { id: 'purple', label: 'Purple — violet', family: 'dark' },
+  { id: 'forest', label: 'Forest — green', family: 'dark' },
+  { id: 'light', label: 'Light — teal', family: 'light' },
+  { id: 'sky', label: 'Sky — blue', family: 'light' },
+  { id: 'meadow', label: 'Meadow — green', family: 'light' },
+  { id: 'sand', label: 'Sand — warm', family: 'light' },
 ];
+
+/** The family of a theme, defaulting to dark for a value this build does not know. */
+export function themeFamily(theme: string | null | undefined): ThemeFamily {
+  return THEME_MODES.find((item) => item.id === theme)?.family ?? 'dark';
+}
 export const providerIdSchema = z.enum([
   'openai',
   'anthropic',

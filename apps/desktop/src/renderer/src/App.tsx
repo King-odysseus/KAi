@@ -25,7 +25,7 @@ import type {
   SkillSummary,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES } from '@kai/contracts';
+import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -620,7 +620,28 @@ export function App(): ReactNode {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = bootstrap?.settings.theme ?? 'dark';
+    const theme = bootstrap?.settings.theme ?? 'dark';
+    document.documentElement.dataset.theme = theme;
+    // Which half of the palette this is, for the rules that are written once per family rather than once per theme:
+    // the light-mode overrides in styles.css, and the code editor's own colours.
+    document.documentElement.dataset.themeFamily = themeFamily(theme);
+
+    /*
+     * The window's minimise/maximise/close buttons are drawn by the operating system, not by the page, so no
+     * stylesheet can reach them — they were given one dark palette when the window was created and kept it through
+     * every theme, which on a light theme left a dark block where the rest of the title bar was cream.
+     *
+     * Their colours are read back out of the theme rather than listed again here, so they cannot drift from it. Read
+     * after the attribute above, in a frame, because the computed style is what carries the new theme's values.
+     */
+    const frame = window.requestAnimationFrame(() => {
+      const styles = getComputedStyle(document.documentElement);
+      const background = toHex(styles.getPropertyValue('--bg-shell'));
+      const symbols = toHex(styles.getPropertyValue('--text'));
+      if (!background || !symbols) return;
+      void window.kaiDesktop.setTitleBarOverlay(background, symbols).catch(() => undefined);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [bootstrap?.settings.theme]);
 
   const servicesStarting = Boolean(
@@ -2340,4 +2361,21 @@ function preferredConversationId(
 
 function serviceNeedsPolling(status: string): boolean {
   return status === 'starting' || status === 'stopped';
+}
+
+/**
+ * A theme token as the `#rrggbb` the window overlay needs.
+ *
+ * The overlay takes hex and nothing else, while a computed custom property comes back as whatever the stylesheet
+ * wrote — `#0b1712` here, but `rgb(232, 243, 234)` in the themes that use the other notation. Verified as hex by the
+ * IPC schema, so anything it cannot convert is dropped rather than sent to be rejected.
+ */
+function toHex(value: string): string | null {
+  const text = value.trim();
+  if (/^#[0-9a-f]{6}$/i.test(text)) return text;
+  const parts = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(text);
+  if (!parts) return null;
+  return `#${[parts[1], parts[2], parts[3]]
+    .map((part) => Math.min(255, Number(part)).toString(16).padStart(2, '0'))
+    .join('')}`;
 }

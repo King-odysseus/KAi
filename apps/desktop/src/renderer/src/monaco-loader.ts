@@ -1,4 +1,5 @@
 import type * as Monaco from 'monaco-editor';
+import { themeFamily } from '@kai/contracts';
 
 let loading: Promise<typeof Monaco> | null = null;
 
@@ -167,6 +168,63 @@ export function loadMonaco(): Promise<typeof Monaco> {
       rules: [],
       colors: { 'editor.background': '#ffffff' },
     });
+    /*
+     * The themes added after these four.
+     *
+     * Each keeps the base syntax colours and changes what the eye reads first: the paper, the ink, and the comment
+     * colour, which is the theme's own accent. Writing a full token palette per theme would be guessing at taste
+     * eight times over; this is the part that has to be right — a light theme whose editor was still dark was the
+     * actual failure mode, and it is what `base` decides.
+     */
+    monaco.editor.defineTheme('kai-forest', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [{ token: 'comment', foreground: '58d68d', fontStyle: 'italic' }],
+      colors: {
+        'editor.background': '#091410',
+        'editorGutter.background': '#091410',
+        'editor.foreground': '#e8f3ea',
+        'editor.lineHighlightBackground': '#11241c',
+        'editorLineNumber.foreground': '#74937f',
+        'editorCursor.foreground': '#58d68d',
+      },
+    });
+    monaco.editor.defineTheme('kai-sky', {
+      base: 'vs',
+      inherit: true,
+      rules: [{ token: 'comment', foreground: '4a6178', fontStyle: 'italic' }],
+      colors: {
+        'editor.background': '#ffffff',
+        'editor.foreground': '#14273d',
+        'editor.lineHighlightBackground': '#eef4fb',
+        'editorLineNumber.foreground': '#6c8399',
+        'editorCursor.foreground': '#1f6cbd',
+      },
+    });
+    monaco.editor.defineTheme('kai-meadow', {
+      base: 'vs',
+      inherit: true,
+      rules: [{ token: 'comment', foreground: '4f6653', fontStyle: 'italic' }],
+      colors: {
+        'editor.background': '#ffffff',
+        'editor.foreground': '#1b2a1e',
+        'editor.lineHighlightBackground': '#f2f8ee',
+        'editorLineNumber.foreground': '#748b78',
+        'editorCursor.foreground': '#1c8a4f',
+      },
+    });
+    monaco.editor.defineTheme('kai-sand', {
+      base: 'vs',
+      inherit: true,
+      rules: [{ token: 'comment', foreground: '6b5c43', fontStyle: 'italic' }],
+      colors: {
+        'editor.background': '#ffffff',
+        'editor.foreground': '#2e2618',
+        'editor.lineHighlightBackground': '#faf4e9',
+        'editorLineNumber.foreground': '#8d7c60',
+        'editorCursor.foreground': '#9a5f07',
+      },
+    });
     // The app has no project-wide TypeScript context, so semantic errors would only be noise.
     const { javascriptDefaults, typescriptDefaults } = await import('monaco-editor/languages/features/typescript/register');
     typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
@@ -176,7 +234,15 @@ export function loadMonaco(): Promise<typeof Monaco> {
   return loading;
 }
 
-export function monacoThemeName(): 'kai-dark' | 'kai-navy' | 'kai-purple' | 'kai-light' {
-  const theme = document.documentElement.dataset.theme;
-  return theme === 'light' ? 'kai-light' : theme === 'navy' ? 'kai-navy' : theme === 'purple' ? 'kai-purple' : 'kai-dark';
+/** The editor theme for one of the app's themes. A theme with no editor palette of its own gets its family's. */
+export function monacoThemeName(theme = document.documentElement.dataset.theme ?? 'dark'): string {
+  if (THEME_IDS_WITH_MONACO.has(theme)) return `kai-${theme}`;
+  return themeFamily(theme) === 'light' ? 'kai-light' : 'kai-dark';
 }
+
+/**
+ * The themes that define their own editor colours. A theme added without one falls back to its family's palette
+ * rather than to nothing: `kai-dark` for a dark theme, `kai-light` for a light one, which is the half that must not
+ * be wrong — a light app with a dark editor was the failure that started this list.
+ */
+const THEME_IDS_WITH_MONACO = new Set(['dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
