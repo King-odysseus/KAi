@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { Markdown } from './Markdown';
 import {
   cognitive1McpTools,
   cognitive1Operations,
@@ -621,6 +622,11 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
   const knowledgeGaps = stringsOf(audit.knowledgeGaps);
   const crossPatterns = stringsOf(audit.crossProjectPatterns);
   const kernels = stringsOf(distill.written);
+  /** Whether anything was distilled or pushed, which is what decides if this card has a second column at all. */
+  const hasDistillation = kernels.length > 0
+    || arrayOf(distill.skipped).length > 0
+    || arrayOf(pushed.pushed).length > 0
+    || arrayOf(pushed.failed).length > 0;
 
   const state = overwatch.enabled !== true
     ? { tone: 'warn', title: 'Overwatch is not configured', detail: 'C1 can still store memory, but nothing judges the drafts it collects. Set a provider, a model and an API key under Settings, C1 Brain, AI Overwatch.' }
@@ -822,22 +828,66 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
       {(Object.keys(audit).length > 0 || Object.keys(distill).length > 0 || Object.keys(pushed).length > 0) && (
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Findings" title="Audit and distillation" icon={<Activity size={16} />} />
-          <div className="cognitive1-grid two">
+          {/*
+            What these two lists are, because the labels alone do not say and the entries are a model's sentences.
+
+            A gap is a lesson the brain holds once, inside one entry about something else, that would be worth an entry
+            of its own — the same mistake is likely to be made again by someone who never reads that entry. A
+            cross-project pattern is the same lesson found in two projects: it is the evidence that a gap is real
+            rather than a guess. Neither changes anything; they are candidates for you to agree with.
+          */}
+          <p className="cognitive1-copy">
+            A model read the whole brain and named two kinds of thing. A <b>gap</b> is a lesson that appears inside one
+            entry about something else, so only someone who happened to read that entry would find it. A
+            <b> cross-project</b> row is the same lesson turning up in two projects, which is the evidence a gap is
+            real rather than a guess. Nothing is written or changed by either: they are suggestions for entries you
+            might add.
+          </p>
+          <div className={hasDistillation ? 'cognitive1-grid two' : undefined}>
             <div className="cognitive1-list compact">
               {Object.keys(audit).length > 0 && (
                 <>
-                  <div className="cognitive1-note"><strong>{numberText(audit.duplicatesFound)} duplicate(s)</strong><span>{knowledgeGaps.length} knowledge gap(s), {crossPatterns.length} cross-project pattern(s)</span></div>
-                  {knowledgeGaps.slice(0, 6).map((gap, index) => <div className="cognitive1-note" key={`gap-${index}`}><strong>Gap</strong><span>{String(gap)}</span></div>)}
-                  {crossPatterns.slice(0, 6).map((pattern, index) => <div className="cognitive1-note" key={`pattern-${index}`}><strong>Cross-project</strong><span>{String(pattern)}</span></div>)}
+                  <div className="cognitive1-note">
+                    <strong>What the audit found</strong>
+                    <span>{countPhrase(knowledgeGaps.length, 'gap')}, {countPhrase(crossPatterns.length, 'cross-project pattern')} and {countPhrase(Number(audit.duplicatesFound) || 0, 'duplicate pair')}.</span>
+                  </div>
+                  {knowledgeGaps.length > 0 && (
+                    <Findings
+                      items={knowledgeGaps}
+                      empty={null}
+                      render={(item, index) => (
+                        <div className="cognitive1-note" key={`gap-${index}`}>
+                          <strong>Gap</strong>
+                          <Markdown text={String(item)} />
+                        </div>
+                      )}
+                    />
+                  )}
+                  {crossPatterns.length > 0 && (
+                    <Findings
+                      items={crossPatterns}
+                      empty={null}
+                      render={(item, index) => (
+                        <div className="cognitive1-note" key={`pattern-${index}`}>
+                          <strong>Cross-project</strong>
+                          <Markdown text={String(item)} />
+                        </div>
+                      )}
+                    />
+                  )}
                 </>
               )}
             </div>
-            <div className="cognitive1-list compact">
-              {kernels.length > 0 && <div className="cognitive1-note"><strong>Kernels distilled</strong><span>{kernels.join(', ')}</span></div>}
-              {arrayOf(distill.skipped).map((item, index) => <div className="cognitive1-note" key={`skip-${index}`}><strong>Skipped {String(item.project ?? '')}</strong><span>{String(item.reason ?? 'no reason given')}</span></div>)}
-              {arrayOf(pushed.pushed).length > 0 && <div className="cognitive1-note"><strong>Pushed to memory</strong><span>{arrayOf(pushed.pushed).map((item) => String(item.project ?? '')).join(', ')}</span></div>}
-              {arrayOf(pushed.failed).map((item, index) => <div className="cognitive1-note" key={`fail-${index}`}><strong>Push failed {String(item.project ?? '')}</strong><span>{String(item.error ?? '')}</span></div>)}
-            </div>
+            {/* Rendered only when there is something in it: an empty second column was half the card's width of
+                nothing, which is what made this section look like it had failed to load. */}
+            {hasDistillation && (
+              <div className="cognitive1-list compact">
+                {kernels.length > 0 && <div className="cognitive1-note"><strong>Kernels distilled</strong><span>{kernels.join(', ')}</span></div>}
+                {arrayOf(distill.skipped).map((item, index) => <div className="cognitive1-note" key={`skip-${index}`}><strong>Skipped {String(item.project ?? '')}</strong><span>{String(item.reason ?? 'no reason given')}</span></div>)}
+                {arrayOf(pushed.pushed).length > 0 && <div className="cognitive1-note"><strong>Pushed to memory</strong><span>{arrayOf(pushed.pushed).map((item) => String(item.project ?? '')).join(', ')}</span></div>}
+                {arrayOf(pushed.failed).map((item, index) => <div className="cognitive1-note" key={`fail-${index}`}><strong>Push failed {String(item.project ?? '')}</strong><span>{String(item.error ?? '')}</span></div>)}
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -1299,6 +1349,12 @@ function LearningNote({ precedents }: { precedents: unknown }): ReactNode {
 
 function Metric({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' }): ReactNode {
   return <div className={`cognitive1-metric ${tone ?? ''}`}><small>{label}</small><strong>{value}</strong></div>;
+}
+
+/** "3 gaps", "1 gap", "none" — a count that reads as a sentence rather than as "0 knowledge gap(s)". */
+function countPhrase(count: number, noun: string): string {
+  if (count === 0) return `no ${noun}s`;
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 function EmptyText({ children }: { children: ReactNode }): ReactNode {
