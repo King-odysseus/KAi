@@ -19,7 +19,7 @@ import {
   type StudioReadiness,
   type UiCheckResult,
 } from '@kai/contracts';
-import { loadProjectContext, parseJsonResponse } from './learning-tutor';
+import { loadProjectContext, parseJsonResponse, ReplyShapeError } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
 import type { StudioArtifacts as ArtifactStore } from './artifacts';
 import type { StudioBoardStore } from './board';
@@ -232,6 +232,10 @@ export class DesktopStudio {
       parseBoardDraft,
       { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
     ).catch((error: unknown) => {
+      // Only a reply that could not be read falls back to the stories. A request that never got an answer — signed
+      // out, no network, a provider refusing — is reported instead: covering it with a heading-derived board hid the
+      // real problem behind a worse result, and the person was left with a thin board and no idea why.
+      if (!(error instanceof ReplyShapeError)) throw error;
       const fallback = boardDraftFromStories(stories);
       if (fallback.cards.length === 0) throw error;
       return fallback;
@@ -389,7 +393,7 @@ export class DesktopStudio {
    * components and pages get their cards, and every card holding a node that changed goes stale. Tokens are pulled
    * from the editor rather than written by a model — the design is the source of truth, so a model never invents one.
    */
-  async pullDesign(projectId: string): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number }> {
+  async pullDesign(projectId: string): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean }> {
     const ports = await this.ports.openPencil?.();
     if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then pull the design again.');
     const previous = await this.ports.board.design(projectId);
@@ -399,10 +403,37 @@ export class DesktopStudio {
     } catch (error) {
       throw new Error(designErrorMessage(error));
     }
+    // The editor holds whatever document it was last opened on, and KAI reads that one. Opening a different
+    // project's file and pulling used to fold its pages and tokens into this project: its pages marked this
+    // project's screens drawn, and its tokens replaced this project's. Nothing recorded which document a pull came
+    // from, so nothing could tell.
+    //
+    // A page's node id is stable within its document, so two documents sharing no page id are two documents. Adding
+    // or removing a page keeps the rest, which is why this asks for any overlap rather than an exact set — a rename
+    // or an edit inside the document must not read as a different one.
+    const previousPages = new Set(previous.components.filter((component) => component.screen).map((component) => component.id));
+    const currentPages = read.components.filter((component) => component.screen).map((component) => component.id);
+    if (previousPages.size > 0 && currentPages.length > 0 && !currentPages.some((id) => previousPages.has(id))) {
+      return {
+        design: previous,
+        board: await this.ports.board.read(projectId),
+        changed: [],
+        tokensChanged: false,
+        tokenCount: read.tokenCount,
+        tokensPreserved: false,
+        differentDocument: true,
+      };
+    }
     const changed = changedNodes(previous.hashes, read.hashes);
     const tokens = `${JSON.stringify(read.tokens, null, 2)}\n`;
     // Only a real change writes: pulling the same design twice must not bump the artifact's version.
-    const tokensChanged = tokens !== (await this.ports.artifacts.readText(projectId, 'tokens'));
+    const hadTokens = await this.ports.artifacts.readText(projectId, 'tokens');
+    // A pull that read nothing must not empty a token file the project already has. That is what an editor open on
+    // the wrong document, or on a blank one, looks like — and it used to write `{}` over the tokens the foundation
+    // prompt reads. Worse, the artifact then counted as written by open-pencil, so "generate all" skipped it and the
+    // real tokens were never written back.
+    const wouldWipe = read.tokenCount === 0 && Boolean(hadTokens?.trim()) && hadTokens?.trim() !== '{}';
+    const tokensChanged = !wouldWipe && tokens !== hadTokens;
     if (tokensChanged) await this.ports.artifacts.write(projectId, 'tokens', tokens, 'open-pencil');
     const design = await this.ports.board.saveDesign(projectId, {
       schemaVersion: 1,
@@ -413,7 +444,7 @@ export class DesktopStudio {
       components: read.components.map((component) => designComponentSchema.parse(component)),
     });
     const board = await this.ports.board.applyDesign(projectId, read.components, changed);
-    return { design, board, changed, tokensChanged, tokenCount: read.tokenCount };
+    return { design, board, changed, tokensChanged, tokenCount: read.tokenCount, tokensPreserved: wouldWipe, differentDocument: false };
   }
 
   /**

@@ -16,6 +16,7 @@ import {
   interviewGivenAnswers,
   interviewOpenOptions,
   interviewOpenQuestions,
+  projectTitleFrom,
   STUDIO_EXTRA_QUESTIONS,
   STUDIO_MAX_EXTENSIONS,
   STUDIO_MAX_QUESTIONS,
@@ -127,7 +128,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [lastFailedStep, setLastFailedStep] = useState<string | null>(null);
   const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
   const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
-  const projectTitle = state?.goal.trim() || state?.idea.trim() || viewedProject?.title || 'New project';
+  // A name, not the paragraph: the goal is a full statement of what "done" looks like, and using it whole is what
+  // filled the header and every design prompt with the entire brief.
+  const projectTitle = projectTitleFrom(state?.goal, state?.idea, viewedProject?.title) || 'New project';
   const activeProjects = projects.filter((project) => !project.archivedAt);
   const archivedProjects = projects.filter((project) => Boolean(project.archivedAt));
   const visibleProjects = showArchived ? archivedProjects : activeProjects;
@@ -336,9 +339,25 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   async function viewArtifact(kind: ArtifactKind): Promise<void> {
     if (!projectId) return;
     if (viewing === kind) {
+      // Closing the one being edited would take the edit with it.
+      if (editText !== null && !(await confirmDialog({
+        title: 'Discard your changes?',
+        detail: `You have unsaved changes to ${viewing}. Closing it now loses them.`,
+        confirmLabel: 'Discard',
+        destructive: true,
+      }))) return;
       setViewing(null);
+      setEditText(null);
       return;
     }
+    // Opening another artifact used to overwrite the edit in the one being edited, without a word. The edit is not
+    // recoverable once the viewer has moved on, so it is asked about rather than dropped.
+    if (editText !== null && viewing && !(await confirmDialog({
+      title: 'Discard your changes?',
+      detail: `You have unsaved changes to ${viewing}. Opening ${kind} now loses them.`,
+      confirmLabel: 'Discard',
+      destructive: true,
+    }))) return;
     setViewing(kind);
     setViewText(null);
     setEditText(null);
@@ -874,6 +893,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setError(null);
     try {
       setArtifacts(unwrap(await window.kaiDesktop.generateStudioArtifact({ projectId, kind })));
+      // The open artifact was just rewritten, so the text the viewer holds is the version before it. Left alone, an
+      // Edit then Save would write that older text back over the new file — the reader's own edit looking like the
+      // thing that reverted their document. Re-read it, and drop any edit in flight, which is now the older text.
+      if (viewing === kind) {
+        setEditText(null);
+        setViewText((await window.kaiDesktop.studioArtifactText({ projectId, kind }).then(unwrap)) ?? '');
+      }
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -935,7 +961,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /** The read itself, shared by the manual "Pull the design" button and each step of the build loop below — the
    * loop needs it without the button's own busy/notice handling, since it has its own for the whole run. */
-  async function refreshDesign(): Promise<{ design: StudioDesign; changed: string[]; tokensChanged: boolean; tokenCount: number }> {
+  async function refreshDesign(): Promise<{ design: StudioDesign; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean }> {
     const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!));
     setDesign(pulled.design);
     setBoard(pulled.board);
@@ -951,11 +977,18 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     try {
       const pulled = await refreshDesign();
       setNotice(
-        pulled.changed.length > 0
-          ? `Pulled the design: ${pulled.changed.length} node${pulled.changed.length === 1 ? '' : 's'} changed, so the cards drawn from them are stale.`
-          : pulled.tokensChanged
-            ? `Pulled the design: ${pulled.tokenCount} token${pulled.tokenCount === 1 ? '' : 's'} written and no node had moved.`
-            : 'The design has not changed since the last pull.',
+        // Said first of all: the editor is on another project's file, so none of this belongs to this project.
+        pulled.differentDocument
+          ? 'The editor is open on a different document, so nothing was pulled into this project. Its pages share no id with the ones this project was drawn from. Open the document this project belongs to, then pull again.'
+          // Said next, because it means the pull read the wrong document: the editor is open on something that has
+          // no variables, or on a blank page. The token file was left as it was rather than emptied.
+          : pulled.tokensPreserved
+          ? 'The pull found no design variables, and this project already has tokens, so they were left alone. Check that the editor is open on the right document.'
+          : pulled.changed.length > 0
+            ? `Pulled the design: ${pulled.changed.length} node${pulled.changed.length === 1 ? '' : 's'} changed, so the cards drawn from them are stale.`
+            : pulled.tokensChanged
+              ? `Pulled the design: ${pulled.tokenCount} token${pulled.tokenCount === 1 ? '' : 's'} written and no node had moved.`
+              : 'The design has not changed since the last pull.',
       );
     } catch (caught) {
       setError(messageOf(caught));

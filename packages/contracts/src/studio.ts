@@ -464,6 +464,18 @@ export const studioDesignPullSchema = z
     tokensChanged: z.boolean(),
     /** How many design tokens the pull read. The style guide itself is written by a model, from these. */
     tokenCount: z.number(),
+    /**
+     * The pull read no tokens while the project already had some, so the token file was left alone.
+     *
+     * This is what an editor open on the wrong document looks like, and it is said out loud rather than passed over:
+     * the alternative is an empty token file, or a silent nothing where the person expected a change.
+     */
+    tokensPreserved: z.boolean(),
+    /**
+     * The editor is open on a different document from the one this project's design came from, so nothing was
+     * folded in. Its pages share no node id with this project's, which is what two documents look like.
+     */
+    differentDocument: z.boolean(),
   })
   .strict();
 export type StudioDesignPull = z.infer<typeof studioDesignPullSchema>;

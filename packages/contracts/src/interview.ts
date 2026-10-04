@@ -194,11 +194,38 @@ export const studioProjectFolderResultSchema = z
   .strict();
 export type StudioProjectFolderResult = z.infer<typeof studioProjectFolderResultSchema>;
 
+/**
+ * A short name for a project, out of the goal or the idea.
+ *
+ * Both are paragraphs — the goal is a full statement of what "done" looks like, and either can run to 4,000
+ * characters. Everywhere a project needs a *name* took the goal whole, so a project was called by its entire brief:
+ * it filled the project list and the Studio header, became the `#` heading of the brief, and was repeated into every
+ * design prompt, which then said "The project: <the whole paragraph>" underneath the goal it had already been given.
+ */
+export function projectTitleFrom(...sources: Array<string | null | undefined>): string {
+  const source = sources.find((candidate) => candidate?.trim());
+  if (!source) return '';
+  const text = source.trim().replace(/\s+/g, ' ');
+  // The first sentence, when there is one: it is nearly always the name and the rest is elaboration.
+  const sentence = /^(.*?[.!?])(?:\s|$)/.exec(text)?.[1] ?? text;
+  if (sentence.length <= PROJECT_TITLE_MAX) return sentence;
+  const clipped = sentence.slice(0, PROJECT_TITLE_MAX);
+  const lastSpace = clipped.lastIndexOf(' ');
+  return `${(lastSpace > PROJECT_TITLE_MAX / 2 ? clipped.slice(0, lastSpace) : clipped).replace(/[.,;:\s]+$/, '')}…`;
+}
+
+/**
+ * Long enough for a real one-sentence name — "SharpSite, a locked-template website builder for Nigerian small
+ * businesses." is 71 — and short enough to sit in a list, a header and a heading without crowding any of them.
+ */
+export const PROJECT_TITLE_MAX = 80;
+
 /** A project that exists because it was discussed in Studio, even before it is tied to a code folder. */
 export const studioProjectSummarySchema = z
   .object({
     id: z.string().min(1),
-    title: z.string().trim().min(1).max(4_000),
+    // A name, not the brief: `projectTitleFrom` is what produces it.
+    title: z.string().trim().min(1).max(200),
     idea: z.string().trim().min(1).max(4_000),
     linkedProjectId: z.string().min(1).nullable(),
     status: interviewStatusSchema,

@@ -916,23 +916,38 @@ export function parseTeachingDraftContent(content: string): TeachingDraft {
   return parseStructuredResponse(teachingDraftSchema, content, 'teaching draft');
 }
 
+/**
+ * The model answered, and the answer was not usable.
+ *
+ * Worth its own type because the two failures want opposite responses. A request that never got an answer — signed
+ * out, no network, a provider refusing — has to be reported: falling back would hide it behind a worse result and
+ * the person would never learn their key had expired. A reply that arrived and could not be read is exactly what a
+ * fallback is for.
+ */
+export class ReplyShapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReplyShapeError';
+  }
+}
+
 function parseStructuredResponse<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ path: Array<string | number>; message: string }> } } }, content: string, label: string): T {
   const parsed = schema.safeParse(parseJsonResponse(content, label));
   if (parsed.success) return parsed.data;
   const issues = parsed.error.issues.slice(0, 8)
     .map((issue) => `${issue.path.join('.') || label}: ${issue.message}`)
     .join('; ');
-  throw new Error(`The provider ${label} JSON did not match the required format: ${issues || 'unknown schema error'}.`);
+  throw new ReplyShapeError(`The provider ${label} JSON did not match the required format: ${issues || 'unknown schema error'}.`);
 }
 
 export function parseJsonResponse(content: string, label: string): unknown {
   const trimmed = content.trim();
-  if (!trimmed) throw new Error(`The provider returned an empty ${label} response.`);
-  if (trimmed.length > MAX_TUTOR_RESPONSE_CHARS) throw new Error(`The provider ${label} response was too large.`);
+  if (!trimmed) throw new ReplyShapeError(`The provider returned an empty ${label} response.`);
+  if (trimmed.length > MAX_TUTOR_RESPONSE_CHARS) throw new ReplyShapeError(`The provider ${label} response was too large.`);
   const unfenced = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const start = unfenced.indexOf('{');
   const end = unfenced.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error(`The provider did not return a JSON ${label} response.`);
+  if (start < 0 || end <= start) throw new ReplyShapeError(`The provider did not return a JSON ${label} response.`);
   const candidate = unfenced.slice(start, end + 1);
   try {
     return JSON.parse(candidate);
@@ -943,7 +958,7 @@ export function parseJsonResponse(content: string, label: string): unknown {
       // into a second provider request.
       return JSON.parse(jsonrepair(candidate));
     } catch {
-      throw new Error(`The provider returned malformed ${label} JSON: ${error instanceof Error ? error.message : String(error)}`);
+      throw new ReplyShapeError(`The provider returned malformed ${label} JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

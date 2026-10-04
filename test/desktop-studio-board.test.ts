@@ -13,7 +13,7 @@ import {
   type StudioArtifacts,
 } from '../packages/contracts/src';
 import { StudioArtifacts, applyWrite, ensureBrief, markUserEdited } from '../apps/desktop/src/main/artifacts';
-import { StudioBoardStore, applyStaleness, doneBlockedBy, promoteReady, type BoardPorts } from '../apps/desktop/src/main/board';
+import { StudioBoardStore, applyStaleness, doneBlockedBy, mergeDesign, promoteReady, type BoardPorts } from '../apps/desktop/src/main/board';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { hashFile } from '../apps/desktop/src/main/verification';
 
@@ -118,6 +118,23 @@ describe('artifacts', () => {
 });
 
 describe('board rules', () => {
+  it('gives a screen one card, however the two sides spell its name', () => {
+    // The board already has a page card from the stories; the design's page is the same screen under a slightly
+    // different name. Comparing the raw text gave the board two cards for one screen, each workable, each looking
+    // like real work to do.
+    const existing = card({ id: 'sign-up', title: 'Sign-up', kind: 'page' });
+    const merged = mergeDesign([existing], [{ id: 'p1', name: 'Sign up', page: 'Sign up', screen: true }], NOW);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ id: 'sign-up', designRef: 'p1' });
+  });
+
+  it('still gives a screen its own card when the board has nothing for it', () => {
+    const merged = mergeDesign([card({ id: 'other', title: 'Dashboard' })], [{ id: 'p1', name: '/pricing — Pricing page /pricing', page: '', screen: true }], NOW);
+
+    expect(merged.map((item) => item.title)).toEqual(['Dashboard', '/pricing — Pricing page /pricing']);
+  });
+
   it('refuses done for each unmet rule, and names it', () => {
     const backend = card();
     expect(doneBlockedBy(backend, { run: null, recordedNow: null, drifted: false })).toMatch(/no record of a passing check/);

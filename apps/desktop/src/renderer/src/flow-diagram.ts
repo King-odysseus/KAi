@@ -58,8 +58,8 @@ export function parseFlows(markdown: string): FlowJourney[] {
   return journeys.filter((journey) => journey.steps.length > 0).slice(0, 12);
 }
 
-export { parsePages, type PageEntry } from '@kai/contracts';
-import { type PageEntry } from '@kai/contracts';
+export { parsePages, screenTitleKey, type PageEntry } from '@kai/contracts';
+import { screenTitleKey, type PageEntry } from '@kai/contracts';
 
 /** One row of the drawing checklist: a screen from the pages list, from open-pencil, or from both. */
 export interface ScreenRow {
@@ -68,30 +68,6 @@ export interface ScreenRow {
   details: string;
   inPages: boolean;
   drawn: boolean;
-}
-
-/**
- * The part of a screen's name that identifies it, for matching a row in the checklist against a page the editor holds.
- *
- * Exact text is too strict to be useful. A section heading in pages.md carries things that are not the screen's name —
- * `## /pricing — Pricing page /pricing` names the route twice and the screen once — and a model told to "create one
- * page named as above" reasonably names it "Pricing page". Comparing the raw strings meant the row stayed "to draw"
- * forever and the screen was redrawn on every attempt.
- *
- * So a leading route and a trailing route are dropped, a `—`-separated prefix and any parenthesised aside with them,
- * and what is left is compared with punctuation and spacing flattened.
- */
-export function screenTitleKey(name: string): string {
-  let title = name.trim();
-  // `## / — Marketing home (sharpsite.ng)`: a route, a dash, then the name the model will actually use.
-  const dashed = /^.*?[—–]\s*(.+)$/.exec(title);
-  if (dashed) title = dashed[1]!;
-  return title
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/(?:^|\s)\/[A-Za-z0-9\-_/:{}.]*/g, ' ')
-    .replace(/[^A-Za-z0-9]+/g, ' ')
-    .trim()
-    .toLowerCase();
 }
 
 /**

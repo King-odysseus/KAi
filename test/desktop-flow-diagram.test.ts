@@ -55,6 +55,27 @@ describe('pages and the drawing prompts', () => {
     expect(pages.map((page) => page.route)).toEqual(['/dashboard', '/settings', '/items/:id']);
   });
 
+  it('reads ## as a screen and ### as a sub-heading of one, not as a screen of its own', () => {
+    // The pages brief asks for one `## Page name` per screen, with everything else underneath. Reading `###` as a
+    // screen turned "States" and "Components" into screens the checklist then asked to draw.
+    const markdown = [
+      '# Pages',
+      '',
+      '## Sign-in',
+      '### States',
+      'Empty, error.',
+      '### Components',
+      'Email field, submit button.',
+      '',
+      '## Dashboard',
+    ].join('\n');
+
+    expect(parsePages(markdown).map((page) => page.name)).toEqual(['Sign-in', 'Dashboard']);
+    // The sub-sections still belong to their screen: they are its details.
+    expect(parsePages(markdown)[0]?.details).toContain('Empty, error.');
+    expect(parsePages(markdown)[0]?.details).toContain('Email field, submit button.');
+  });
+
   it('merges the screens from the pages list with those only in open-pencil, and marks what is drawn', () => {
     const rows = screenRows(parsePages(PAGES), ['dashboard', 'Admin console']);
     expect(rows.map((row) => [row.name, row.inPages, row.drawn])).toEqual([

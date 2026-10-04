@@ -1,4 +1,5 @@
 import {
+  projectTitleFrom,
   STUDIO_EXTRA_QUESTIONS,
   STUDIO_MAX_ASSUMPTION_CHARS,
   STUDIO_MAX_ASSUMPTIONS,
@@ -295,7 +296,7 @@ export class DesktopInterview {
 function summaryOf(state: InterviewState): StudioProjectSummary {
   return {
     id: state.projectId,
-    title: state.goal.trim() || state.idea.trim(),
+    title: projectTitleFrom(state.goal, state.idea) || state.idea.trim().slice(0, 64),
     idea: state.idea,
     linkedProjectId: state.linkedProjectId,
     status: state.status,
@@ -414,7 +415,7 @@ export function briefMarkdown(state: InterviewState, writtenAt: string): string 
   }
   const unanswered = state.rounds.flatMap((round) => round.questions).filter((question) => !decided.some((item) => item.question === question) && !open.includes(question));
   const sections = [
-    `# ${state.goal || 'Project brief'}`,
+    `# ${projectTitleFrom(state.goal, state.idea) || 'Project brief'}`,
     `_Written by the KAI Project Studio on ${writtenAt}._`,
     '## The idea',
     state.idea,

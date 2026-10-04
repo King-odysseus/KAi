@@ -18,6 +18,7 @@ import { StudioBoardStore } from '../apps/desktop/src/main/board';
 import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseArrangePlan, parseArtifact, parseBoardDraft, type StudioPorts } from '../apps/desktop/src/main/studio';
 import { DesktopUiCheck } from '../apps/desktop/src/main/ui-check';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
+import { ReplyShapeError } from '../apps/desktop/src/main/learning-tutor';
 import { hashFile } from '../apps/desktop/src/main/verification';
 
 const NOW = '2026-09-28T12:00:00.000Z';
@@ -202,13 +203,30 @@ describe('studio generation', () => {
     expect(catalog.artifacts.map((item) => item.kind)).toEqual(['brief', 'prd', 'stack', 'style-guide', 'tokens', 'decisions', 'conventions', 'risks', 'glossary', 'setup']);
   });
 
-  it('builds the board from the stories when the model will not return the card JSON', async () => {
-    const { studio: app } = studio({});
+  it('builds the board from the stories when the model answers with something unreadable', async () => {
+    // A reply that arrived and could not be read is exactly what the stories fallback is for.
+    const { studio: app } = studio({}, {
+      requester: {
+        structuredRequest: () => Promise.reject(new ReplyShapeError('The provider did not return a JSON board response.')),
+      },
+    });
     await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
     await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'stories.md'), '# Stories\n\n## 1. Sign in\n- Employees sign in with a company email\n- A wrong password shows an error\n\n## 2. Export a document\n- The chat output downloads as a .docx file\n');
     const board = await app.plan('p1');
     expect(board.cards.map((card) => card.title)).toEqual(['1. Sign in', '2. Export a document']);
     expect(board.cards[0]?.acceptance).toEqual(['Employees sign in with a company email', 'A wrong password shows an error']);
+  });
+
+  it('reports a board request that never got an answer, instead of dressing it up as a thin board', async () => {
+    // Signed out, no network, a provider refusing: these used to fall back to the stories too, so the person got a
+    // poorer board and no idea that their key had expired.
+    const { studio: app } = studio({}, {
+      requester: { structuredRequest: () => Promise.reject(new Error('The provider is not signed in.')) },
+    });
+    await fs.promises.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.kai', 'spec', 'stories.md'), '# Stories\n\n## 1. Sign in\n- Employees sign in with a company email\n');
+
+    await expect(app.plan('p1')).rejects.toThrow('The provider is not signed in.');
   });
 
   it('names what the model actually sent when a board reply is not JSON', () => {
@@ -304,6 +322,82 @@ describe('pulling the design from open-pencil', () => {
     expect(pulled.design.endpoint).toBe('http://127.0.0.1:7600/mcp');
     // `get_page_tree` only answers for the current page, so the second page is selected before it is read.
     expect([...new Set(editor.calls)].sort()).toEqual(['design_to_tokens', 'get_components', 'get_page_tree', 'list_pages', 'switch_page']);
+  });
+
+  it('leaves the project tokens alone when the editor has none, and says the pull was empty', async () => {
+    // What an editor open on a blank document, or the wrong one, looks like. This used to write `{}` over the tokens
+    // the foundation prompt reads — and the artifact then counted as written by open-pencil, so regenerating all
+    // never wrote the real ones back either.
+    const full = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => full.ports });
+    await app.pullDesign('p1');
+    const goodTokens = await app.artifactText('p1', 'tokens');
+
+    const empty = openPencil({
+      ...DESIGN,
+      design_to_tokens: JSON.stringify({ output: '/* No matching variables found */', tokenCount: 0, modeCount: 0 }),
+    });
+    const { studio: blank } = studio({}, { openPencil: async () => empty.ports });
+    // The same project on disk, so the token file it already holds is the one at stake.
+    const pulled = await blank.pullDesign('p1');
+
+    expect(pulled.tokenCount).toBe(0);
+    expect(pulled.tokensPreserved).toBe(true);
+    // The tokens from the first pull are still there, untouched — which is the whole point.
+    expect(await blank.artifactText('p1', 'tokens')).toBe(goodTokens);
+  });
+
+  it('does replace the tokens when the editor genuinely has none and the project had none either', async () => {
+    // The guard is "do not empty a file that has something in it", not "never write an empty read".
+    const empty = openPencil({
+      ...DESIGN,
+      design_to_tokens: JSON.stringify({ output: '/* No matching variables found */', tokenCount: 0, modeCount: 0 }),
+    });
+    const { studio: app } = studio({}, { openPencil: async () => empty.ports });
+
+    const pulled = await app.pullDesign('p1');
+
+    expect(pulled.tokensPreserved).toBe(false);
+    expect(JSON.parse(await app.artifactText('p1', 'tokens') ?? 'null')).toEqual({});
+  });
+
+  it('refuses a pull from a different document, rather than folding another project\'s pages in', async () => {
+    const first = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => first.ports });
+    const adopted = await app.pullDesign('p1');
+    expect(adopted.differentDocument).toBe(false);
+    expect(adopted.board.cards.map((card) => card.id)).toEqual(['c1', 'p1', 'p2']);
+
+    // Same editor, a different file open: no page id in common with the ones this project was drawn from.
+    // Note the same page *name* in both — "Sign in" — under a different id. A name-based check would have called
+    // this the same document and folded a stranger's page in as this project's own.
+    const other = openPencil({
+      ...DESIGN,
+      list_pages: '{"current":"Landing","pages":[{"id":"z9","name":"Landing"},{"id":"z8","name":"Sign in"}]}',
+    });
+    const { studio: again } = studio({}, { openPencil: async () => other.ports });
+    const pulled = await again.pullDesign('p1');
+
+    expect(pulled.differentDocument).toBe(true);
+    expect(pulled.changed).toEqual([]);
+    // The board is the one the first pull built, not the other document's.
+    expect(pulled.board.cards.map((card) => card.id)).toEqual(['c1', 'p1', 'p2']);
+    // And nothing was written: the tokens are still this project's.
+    expect(await again.artifactText('p1', 'tokens')).toContain('--color-ink');
+  });
+
+  it('treats a page added inside the same document as the same document', async () => {
+    // An exact set comparison would read any edit as a different document and lock the project out of its own design.
+    const editor = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.pullDesign('p1');
+
+    editor.ports.call = (async (tool: string) => {
+      if (tool === 'list_pages') return [{ type: 'text', text: '{"current":"Sign in","pages":[{"id":"p1","name":"Sign in"},{"id":"p2","name":"Sign up"},{"id":"p3","name":"Forgot password"}]}' }];
+      return { type: 'text', text: DESIGN[tool as keyof typeof DESIGN] ?? '{}' } as never;
+    }) as typeof editor.ports.call;
+
+    expect((await app.pullDesign('p1')).differentDocument).toBe(false);
   });
 
   it('does not move the token artifact when the design has not changed', async () => {

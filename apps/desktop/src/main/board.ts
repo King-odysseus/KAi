@@ -8,6 +8,7 @@ import {
   defaultNeeds,
   isUiCard,
   readyCards,
+  screenTitleKey,
   studioBoardSchema,
   studioDesignSchema,
   type ArtifactEntry,
@@ -121,7 +122,12 @@ export function applyDesignStaleness(cards: readonly BoardCard[], changed: reado
 
 /**
  * The design's own cards. A component or page the board does not have yet becomes a card carrying its node id; one
- * the board already has (matched by `designRef`, or by name) has the node id attached rather than a second card.
+ * the board already has has the node id attached rather than a second card.
+ *
+ * Matched by `designRef` first, then by name. The name comparison is the loose one — the same one the design
+ * checklist uses — because the names are written in two different places: a page card from the stories might be
+ * "Sign up" and the open-pencil page "Sign-up", and comparing the raw text gave the board two cards for one screen,
+ * each of them workable, each of them looking like real work.
  */
 export function mergeDesign(
   cards: readonly BoardCard[],
@@ -130,12 +136,17 @@ export function mergeDesign(
   idFor: (nodeId: string) => string = designCardId,
 ): BoardCard[] {
   const byNode = new Map(cards.filter((card) => card.designRef).map((card) => [card.designRef as string, card]));
-  const byName = new Map(cards.map((card) => [card.title.trim().toLowerCase(), card]));
+  const byName = new Map<string, BoardCard>();
+  for (const card of cards) {
+    const key = screenTitleKey(card.title);
+    // First one wins: an older card keeps the name, and a card whose title is all punctuation gets no key at all.
+    if (key && !byName.has(key)) byName.set(key, card);
+  }
   const taken = new Set(cards.map((card) => card.id));
   const added: BoardCard[] = [];
   const merged = [...cards];
   for (const component of components) {
-    const existing = byNode.get(component.id) ?? byName.get(component.name.trim().toLowerCase());
+    const existing = byNode.get(component.id) ?? byName.get(screenTitleKey(component.name));
     if (existing) {
       const index = merged.findIndex((card) => card.id === existing.id);
       merged[index] = { ...existing, designRef: component.id, updatedAt: at };

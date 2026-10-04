@@ -14,7 +14,7 @@ import {
   type PromptRefineResult,
   type TeamWorkerRoleId,
 } from '@kai/contracts';
-import { loadProjectContext, parseJsonResponse, type ProviderConnection } from './learning-tutor';
+import { loadProjectContext, parseJsonResponse, ReplyShapeError, type ProviderConnection } from './learning-tutor';
 
 /** Enough of the tutor to borrow its provider plumbing, so the guide adds no second HTTP client. */
 export interface StructuredRequester {
@@ -182,7 +182,7 @@ export function parsePromptRefinementContent(content: string): PromptRefineResul
   const parsed = promptRefineResultSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
   const issue = parsed.error.issues[0];
-  throw new Error(`The prompt refinement reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
+  throw new ReplyShapeError(`The prompt refinement reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
 }
 
 export function buildPromptGuidePrompt(input: PromptGuideInput, team: Pick<AgentTeam, 'custom'>, context: string | null): { system: string; user: string } {
@@ -227,5 +227,5 @@ export function parsePromptGuideContent(content: string, team: Pick<AgentTeam, '
   });
   if (parsed.success) return parsed.data;
   const issue = parsed.error.issues[0];
-  throw new Error(`The Prompt Guide reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
+  throw new ReplyShapeError(`The Prompt Guide reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
 }

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewOpenQuestions, interviewStateSchema, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -70,6 +70,44 @@ function memoryStore(seed: InterviewState | null = null): InterviewPorts['store'
   };
   return holder;
 }
+
+/**
+ * A project's name, out of its goal.
+ *
+ * The goal is a full statement of what "done" looks like and can run to 4,000 characters. Using it whole made a
+ * project's name its entire brief: it filled the project list and the Studio header, became the brief's own `#`
+ * heading, and was repeated into every design prompt under the heading it had already been given.
+ */
+describe('naming a project', () => {
+  it('takes the first sentence, when the goal has one', () => {
+    expect(projectTitleFrom('SharpSite, a locked-template website builder for Nigerian small businesses. Starting with ten fashion designers.'))
+      .toBe('SharpSite, a locked-template website builder for Nigerian small businesses.');
+  });
+
+  it('cuts a long first sentence at a word boundary rather than mid-word', () => {
+    const sentence = 'A very long single sentence with no full stop anywhere in it at all, running on and on well past any sensible length for a name';
+    const title = projectTitleFrom(sentence);
+
+    expect(title.length).toBeLessThanOrEqual(81);
+    expect(title.endsWith('…')).toBe(true);
+    // The kept text is a prefix of the sentence and the cut falls on a space, so no word is cut through.
+    const kept = title.slice(0, -1);
+    expect(kept).toBe(kept.trimEnd());
+    expect(sentence.startsWith(kept)).toBe(true);
+    expect(sentence[kept.length]).toBe(' ');
+    expect(kept).toContain('A very long single sentence');
+  });
+
+  it('falls back through the sources it is given, and returns nothing when none has text', () => {
+    expect(projectTitleFrom('', '   ', 'The idea.')).toBe('The idea.');
+    expect(projectTitleFrom(undefined, null)).toBe('');
+    expect(projectTitleFrom('', '')).toBe('');
+  });
+
+  it('leaves an ordinary short name exactly as it was', () => {
+    expect(projectTitleFrom('SharpSite')).toBe('SharpSite');
+  });
+});
 
 describe('Project Studio interview', () => {
   it('accepts a detailed requirements answer of up to 4,000 characters', () => {

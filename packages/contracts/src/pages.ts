@@ -14,7 +14,41 @@ function plain(value: string): string {
   return value.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-/** The screens named in the pages artifact, with the first route each section mentions. */
+/**
+ * The part of a screen's name that identifies it, for matching a page in the artifact against a page in the editor.
+ *
+ * Exact text is too strict to be useful. A section heading carries things that are not the screen's name —
+ * `## /pricing — Pricing page /pricing` names the route twice and the screen once — and a model told to "create one
+ * page named as above" reasonably names it "Pricing page". Comparing the raw strings left the row "to draw" forever
+ * and gave the board a second card for a screen it already had.
+ *
+ * So a leading route and a trailing route are dropped, a `—`-separated prefix and any parenthesised aside with them,
+ * and what is left is compared with punctuation and spacing flattened.
+ *
+ * It lives here, beside the parser, because both sides need it: the Studio's checklist in the renderer, and the board
+ * merge in the main process. Two copies would be two answers to "is this the same screen".
+ */
+export function screenTitleKey(name: string): string {
+  let title = name.trim();
+  // `## / — Marketing home (sharpsite.ng)`: a route, a dash, then the name the model will actually use.
+  const dashed = /^.*?[—–]\s*(.+)$/.exec(title);
+  if (dashed) title = dashed[1]!;
+  return title
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/(?:^|\s)\/[A-Za-z0-9\-_/:{}.]*/g, ' ')
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * The screens named in the pages artifact, with the first route each section mentions.
+ *
+ * Only `##` starts a screen. `###` is a sub-heading inside one — the pages brief asks for `## Page name` per screen
+ * and everything else under it — so reading a `###` as a screen turned "### States" and "### Components" into
+ * screens of their own. They then appeared in the drawing checklist as screens to draw, and two sections could
+ * reduce to the same name and produce duplicate entries.
+ */
 export function parsePages(markdown: string): PageEntry[] {
   const pages: PageEntry[] = [];
   let current: { name: string; text: string[] } | null = null;
@@ -26,7 +60,7 @@ export function parsePages(markdown: string): PageEntry[] {
     pages.push({ name: current.name, route, details: body });
   };
   for (const line of markdown.split(/\r?\n/)) {
-    const heading = /^#{2,3}\s+(.+?)\s*#*\s*$/.exec(line);
+    const heading = /^##(?!#)\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading) {
       flush();
       current = { name: plain(heading[1]!).slice(0, 80), text: [] };
