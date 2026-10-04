@@ -52,6 +52,7 @@ import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
 import { DesktopAutoSession } from './auto-session';
 import { AutoWindowStore } from './auto-session-store';
+import { AutopilotRunStore } from './autopilot-store';
 import { BrainMirrorLoop } from './brain-mirror';
 import { DesktopPromptGuide } from './prompt-guide';
 import { DesktopInterview } from './interview';
@@ -810,6 +811,8 @@ async function startApplication(): Promise<void> {
     hashFile: (projectPath, relativePath) => hashFile(projectPath, relativePath),
     run: async (projectId, runId) => (await ipcContext!.verification.list(projectId)).find((run) => run.id === runId) ?? null,
     now: () => new Date().toISOString(),
+    // Every board write tells the windows, wherever it came from. See `BoardPorts.changed`.
+    changed: (projectId, board) => { ipcContext?.windows.broadcast('studio:board-changed', { projectId, board }); },
   });
   // The visual check drives the Playwright MCP KAI already installs for its agents; screenshots land with the card.
   const uiCheck = new DesktopUiCheck(playwrightUiCheckPorts({
@@ -923,6 +926,13 @@ async function startApplication(): Promise<void> {
     screens: (projectId) => new DesktopEqualizer(equalizerPortsFor(projectId)).screens(projectId),
     run: (input) => new DesktopEqualizer(equalizerPortsFor(input.projectId)).run(input),
   };
+  const openConversationInWindow = (ownerWindowId: number, conversation: ConversationRecord, openTab: boolean): void => {
+    desktopWindows.send(ownerWindowId, 'app:open-conversation', {
+      conversationId: conversation.id,
+      ...(conversation.projectId ? { projectId: conversation.projectId } : {}),
+      ...(openTab ? { openTab: true } : {}),
+    });
+  };
   autopilot = new DesktopAutopilot({
     settings: () => settings.load(),
     board: (projectId) => studio.board(projectId),
@@ -940,9 +950,18 @@ async function startApplication(): Promise<void> {
       return { passed: result.passed, summary: failureSummary(result) };
     },
     // An agent can only work inside a project the app knows, and a Studio plan is not one until it is registered.
-    createConversation: async (projectId, title) => createBlankConversation((await ensureStudioDesktopProject(ipcContext!, projectId)).id, title),
+    createConversation: async (projectId, title, card) => {
+      const conversation = await createBlankConversation((await ensureStudioDesktopProject(ipcContext!, projectId)).id, title);
+      // Marked as Autopilot's own. It is the only thing that tells this conversation apart from one Auto is carrying:
+      // the two loops look identical on screen, and the composer has to know which run panel speaks for this tab.
+      const owned: ConversationRecord = { ...conversation, origin: { kind: 'autopilot', studioProjectId: projectId, cardId: card.id, cardTitle: card.title } };
+      await conversations.save(owned);
+      return owned;
+    },
     preflight: async (projectId) => { await ensureStudioDesktopProject(ipcContext!, projectId); },
-    openConversation: (ownerWindowId, conversation) => desktopWindows.send(ownerWindowId, 'app:open-conversation', { conversationId: conversation.id, ...(conversation.projectId ? { projectId: conversation.projectId } : {}) }),
+    // Its own tab, the way Auto opens one: a run that took over the tab someone was reading in is a run they cannot
+    // see the rest of the app around.
+    openConversation: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true),
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
     runCheck: async (projectId, command, signal) => {
@@ -955,6 +974,7 @@ async function startApplication(): Promise<void> {
     changedFilesFor: async (projectId) => (await gitOverview(await studioProjectRoot(projectId))).changes.map((change) => change.path),
     setPacer: (pacer) => directApi.setPacer(pacer),
     announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'autopilot:changed', status),
+    journal: new AutopilotRunStore(path.join(paths.root, 'autopilot')),
     now: () => Date.now(),
   });
   ipcContext.autopilot = autopilot;
@@ -962,13 +982,6 @@ async function startApplication(): Promise<void> {
     const project = (await projects.list()).find((candidate) => candidate.id === projectId);
     if (!project) throw new Error('Project not found.');
     return project.path;
-  };
-  const openConversationInWindow = (ownerWindowId: number, conversation: ConversationRecord, openTab: boolean): void => {
-    desktopWindows.send(ownerWindowId, 'app:open-conversation', {
-      conversationId: conversation.id,
-      ...(conversation.projectId ? { projectId: conversation.projectId } : {}),
-      ...(openTab ? { openTab: true } : {}),
-    });
   };
   auto = new DesktopAutoSession({
     getConversation: (conversationId) => conversations.get(conversationId),

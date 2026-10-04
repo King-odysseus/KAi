@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type AutopilotStatus, type BoardCard, type BoardStatus, type StudioBoard } from '@kai/contracts';
-import { DesktopAutopilot, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
+import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type StudioBoard } from '@kai/contracts';
+import { DesktopAutopilot, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
 
 const NOW = '2026-10-01T00:00:00.000Z';
 
@@ -17,6 +17,8 @@ interface Harness {
   board: StudioBoard;
   prompts: string[];
   ports: AutopilotPorts;
+  /** What the run has left on disk. Empty whenever no card is in its hands. */
+  kept: Map<string, AutopilotRunRecord>;
 }
 
 function harness(options: {
@@ -35,6 +37,19 @@ function harness(options: {
   };
   promote();
   const find = (id: string): BoardCard => board.cards.find((item) => item.id === id)!;
+  // The run's journal, in memory. The real one is a directory of small files; these tests only care that a record is
+  // there for exactly as long as a card is in the run's hands.
+  const kept = new Map<string, AutopilotRunRecord>();
+  const journal: AutopilotJournal = {
+    begin: async (record) => { kept.set(record.studioProjectId, { ...record, schemaVersion: 1 }); },
+    touch: async (studioProjectId, lastMessage) => {
+      const current = kept.get(studioProjectId);
+      if (current) kept.set(studioProjectId, { ...current, lastMessage });
+    },
+    end: async (studioProjectId) => { kept.delete(studioProjectId); },
+    read: async (studioProjectId) => kept.get(studioProjectId) ?? null,
+    list: async () => [...kept.values()],
+  };
   const ports: AutopilotPorts = {
     settings: async () => ({ defaultAgent: 'claude', defaultRoute: 'direct', defaultAutonomy: 'edit' }) as never,
     board: async () => structuredClone(board),
@@ -64,9 +79,10 @@ function harness(options: {
     announce: () => undefined,
     preflight: async () => undefined,
     openConversation: () => undefined,
+    journal,
     now: () => Date.now(),
   };
-  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports };
+  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept };
 }
 
 const start = (h: Harness, overrides: Record<string, unknown> = {}) =>
@@ -234,6 +250,65 @@ describe('desktop autopilot', () => {
     await start(h);
     await settled(h);
     expect(opened).toHaveLength(1);
+  });
+
+  it('leaves a record naming the card for exactly as long as it holds one', async () => {
+    let release: () => void = () => undefined;
+    const thinking = new Promise<void>((resolve) => { release = resolve; });
+    const h = harness({ cards: [card('a')] });
+    h.ports.runAgent = async () => { await thinking; return { conversation: {} as never, status: 'completed', output: 'ok' }; };
+    await start(h);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // The card is claimed and the agent is mid-turn: this is the state a close would otherwise leave unexplained.
+    const held = await h.ports.journal!.read('p1');
+    expect(held?.cardId).toBe('a');
+    expect(held?.cardTitle).toBe('Card a');
+
+    release();
+    await settled(h);
+    expect(await h.ports.journal!.read('p1')).toBeNull();
+  });
+
+  it('reports a card still held by a run that is no longer going, and puts it back on request', async () => {
+    const h = harness({ cards: [card('a')] });
+    // What a close leaves behind: the record on disk, and the board still holding the card under Autopilot's name.
+    await h.ports.journal!.begin({
+      studioProjectId: 'p1', cardId: 'a', cardTitle: 'Card a', startedAt: NOW, updatedAt: NOW,
+      lastMessage: 'Working on "Card a".', start: autopilotStartInputSchema.parse({ projectId: 'p1', execution: 'api' }),
+    });
+    h.board.cards[0]!.status = 'inProgress';
+    h.board.cards[0]!.claimedBy = 'Autopilot';
+
+    const listed = await h.autopilot.interrupted();
+    expect(listed.map((record) => record.cardTitle)).toEqual(['Card a']);
+
+    expect(await h.autopilot.releaseInterrupted('p1')).toBe(true);
+    expect(h.board.cards[0]?.status).toBe('ready');
+    expect(h.board.cards[0]?.claimedBy).toBeNull();
+    // And the report goes with it: there is nothing left for the next launch to explain.
+    expect(await h.autopilot.interrupted()).toEqual([]);
+  });
+
+  it('carries on with a recorded run from the card it was holding, not from the top of the board', async () => {
+    const h = harness({ cards: [card('a'), card('b')] });
+    await h.ports.journal!.begin({
+      studioProjectId: 'p1', cardId: 'a', cardTitle: 'Card a', startedAt: NOW, updatedAt: NOW,
+      lastMessage: 'Working on "Card a".',
+      // The settings the run was given travel with it, limits included: carrying on is not a fresh run.
+      start: autopilotStartInputSchema.parse({ projectId: 'p1', execution: 'api', maxCards: 1, checkCommand: 'npm run verify' }),
+    });
+    h.board.cards[0]!.status = 'inProgress';
+    h.board.cards[0]!.claimedBy = 'Autopilot';
+
+    await h.autopilot.resumeInterrupted('p1', 1);
+    const final = await settled(h);
+
+    expect(h.board.cards[0]?.status).toBe('done');
+    expect(h.autopilot.status('p1')?.phase).toBe('finished');
+    // The recorded limit came with it, so the resumed run stopped at one card rather than working the whole board.
+    expect(h.board.cards[1]?.status).toBe('ready');
+    expect(final.cardsWorked).toBe(1);
   });
 
   it('puts back only the cards Autopilot gave up on', async () => {

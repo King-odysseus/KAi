@@ -182,6 +182,35 @@ describe('desktop contracts', () => {
     });
   });
 
+  it('reads a stored conversation that predates the Autopilot origin, and one that has it', () => {
+    const now = new Date().toISOString();
+    const stored = {
+      schemaVersion: 1,
+      id: 'conv-old',
+      projectId: 'project-1',
+      title: 'Ordinary chat',
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+      unread: false,
+      activeAgent: 'codex',
+      route: 'direct',
+      autonomy: 'ask',
+      turns: [],
+      events: [],
+    };
+    // The field is optional and the schema is strict: a record written before it existed has to still load, since
+    // these are files on the user's disk rather than anything KAI rebuilds.
+    expect(conversationRecordV1Schema.parse(stored).origin).toBeUndefined();
+
+    // And a conversation Autopilot opened carries the plan it belongs to, which is what the composer reads to find
+    // the right status: Autopilot is keyed by the Studio plan's id, not the desktop project it is registered as.
+    expect(conversationRecordV1Schema.parse({
+      ...stored,
+      origin: { kind: 'autopilot', studioProjectId: 'studio_1', cardId: 'pricing', cardTitle: 'Pricing page' },
+    }).origin).toEqual({ kind: 'autopilot', studioProjectId: 'studio_1', cardId: 'pricing', cardTitle: 'Pricing page' });
+  });
+
   it('validates and normalizes brain IPC requests', () => {
     expect(parseIpcInput('brain:search', { query: ' isolated ', type: 'patterns' })).toMatchObject({
       query: 'isolated',

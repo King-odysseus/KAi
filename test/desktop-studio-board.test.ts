@@ -18,10 +18,14 @@ import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { hashFile } from '../apps/desktop/src/main/verification';
 
 const NOW = '2026-09-28T12:00:00.000Z';
+
+/** What the board store has announced, in order. Module scope: both describes build stores from the port below. */
+const changed: Array<{ projectId: string; revision: number }> = [];
 const LATER = '2026-09-28T13:00:00.000Z';
 let root = '';
 
 beforeEach(() => {
+  changed.length = 0;
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-studio-'));
 });
 afterEach(() => {
@@ -118,6 +122,7 @@ describe('artifacts', () => {
 });
 
 describe('board rules', () => {
+
   it('gives a screen one card, however the two sides spell its name', () => {
     // The board already has a page card from the stories; the design's page is the same screen under a slightly
     // different name. Comparing the raw text gave the board two cards for one screen, each workable, each looking
@@ -191,8 +196,27 @@ describe('board store', () => {
       hashFile: (projectPath, relativePath) => hashFile(projectPath, relativePath),
       run: async (_projectId, runId) => runs.get(runId) ?? null,
       now: () => NOW,
+      changed: (projectId, board) => changed.push({ projectId, revision: board.revision }),
     };
   }
+
+  /**
+   * Every write tells the windows, wherever it came from.
+   *
+   * The announcing used to live in the IPC handlers, which only run when a person presses something — so a board
+   * Autopilot was working on in the main process sat still on screen while the file on disk moved on.
+   */
+  it('announces every write, not only the ones a window asked for', async () => {
+    const p = ports();
+    const store = new StudioBoardStore(p);
+    await store.replace('p1', [card({ id: 'a' })], []);
+    await store.claim('p1', 'a', 'autopilot');
+    await store.move('p1', 'a', 'blocked', 'testing');
+
+    expect(changed.map((entry) => entry.projectId)).toEqual(['p1', 'p1', 'p1']);
+    // And once per write, with the revision that write produced.
+    expect(changed.map((entry) => entry.revision)).toEqual([1, 2, 3]);
+  });
 
   it('refuses to close a card whose check has drifted, then allows it once the tree matches again', async () => {
     const p = ports();

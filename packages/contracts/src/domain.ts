@@ -429,6 +429,24 @@ export const conversationCompactionSchema = z
   })
   .strict();
 
+/**
+ * Who opened a conversation, when it was not the person.
+ *
+ * Autopilot works a board card in a conversation of its own, and the app has to be able to tell that one from an
+ * ordinary chat: the composer labels it, and the run panel that speaks for it is Autopilot's rather than Auto's —
+ * the two are separate systems that otherwise look identical. Old records simply have no origin. `studioProjectId`
+ * is the Studio plan's own id, which is what Autopilot's status is keyed by; the window only ever sees the desktop
+ * project the plan was registered as, so it could not be worked out from the rest of the record.
+ */
+export const conversationOriginSchema = z
+  .object({
+    kind: z.literal('autopilot'),
+    studioProjectId: z.string().min(1),
+    cardId: z.string().min(1),
+    cardTitle: z.string(),
+  })
+  .strict();
+
 export const conversationRecordV1Schema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -446,6 +464,7 @@ export const conversationRecordV1Schema = z
     agentSessionId: z.string().min(1).optional(),
     goal: workbenchGoalSchema.nullable().optional(),
     workflow: workflowSchema.nullable().optional(),
+    origin: conversationOriginSchema.optional(),
     compaction: conversationCompactionSchema.optional(),
     turns: z.array(conversationTurnSchema),
     events: z.array(persistedEventV1Schema),
@@ -462,6 +481,7 @@ export type McpHttpServerSettings = z.infer<typeof mcpHttpServerSettingsSchema>;
 export type ProjectPreferences = z.infer<typeof projectPreferencesV1Schema>;
 export type ConversationTurn = z.infer<typeof conversationTurnSchema>;
 export type ConversationCompaction = z.infer<typeof conversationCompactionSchema>;
+export type ConversationOrigin = z.infer<typeof conversationOriginSchema>;
 export type ConversationRecord = z.infer<typeof conversationRecordV1Schema>;
 
 export function createDefaultSettings(): AppSettings {

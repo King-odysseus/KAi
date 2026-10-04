@@ -25,10 +25,14 @@ import {
 } from './interview';
 import { brainMirrorInputSchema, brainMirrorOutcomeSchema, type BrainMirrorInput, type BrainMirrorOutcome } from './brain-mirror';
 import {
+  autopilotInterruptedInputSchema,
   autopilotProjectInputSchema,
+  autopilotRunRecordSchema,
   autopilotStartInputSchema,
   autopilotStatusResponseSchema,
+  type AutopilotInterruptedInput,
   type AutopilotProjectInput,
+  type AutopilotRunRecord,
   type AutopilotStartInput,
   type AutopilotStatus,
 } from './autopilot';
@@ -493,6 +497,9 @@ export const ipcChannels = [
   'autopilot:stop',
   'autopilot:status',
   'autopilot:requeue',
+  'autopilot:interrupted',
+  'autopilot:interrupted-resume',
+  'autopilot:interrupted-release',
   'auto:start',
   'auto:stop',
   'auto:status',
@@ -799,6 +806,9 @@ export const ipcInputSchemas = {
   'autopilot:stop': autopilotProjectInputSchema,
   'autopilot:status': autopilotProjectInputSchema,
   'autopilot:requeue': autopilotProjectInputSchema,
+  'autopilot:interrupted': emptyInputSchema,
+  'autopilot:interrupted-resume': autopilotInterruptedInputSchema,
+  'autopilot:interrupted-release': autopilotInterruptedInputSchema,
   'auto:start': autoStartInputSchema,
   'auto:stop': autoConversationInputSchema,
   'auto:status': autoConversationInputSchema,
@@ -1061,6 +1071,7 @@ export const studioDesignBuildStepResponseSchema = studioDesignBuildStepResultSc
 /** The cards one "work the board" run touched, in the order they ran. */
 export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
 export const autopilotResponseSchema = autopilotStatusResponseSchema;
+export const autopilotInterruptedResponseSchema = z.array(autopilotRunRecordSchema);
 export const brainMirrorResponseSchema = brainMirrorOutcomeSchema;
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
@@ -1295,6 +1306,15 @@ export interface KaiDesktopBridge {
   autopilotStatus(request: AutopilotProjectInput): Promise<IpcResponse<AutopilotStatus | null>>;
   /** Puts the cards a stopped or failed Autopilot run left blocked back in the queue. */
   requeueAutopilot(request: AutopilotProjectInput): Promise<IpcResponse<{ requeued: number }>>;
+  /**
+   * Runs KAI was closed in the middle of, newest first. An Autopilot run writes one small file while it is going,
+   * so anything still there at startup is a run that never got to finish — and the board still holds its card.
+   */
+  autopilotInterrupted(): Promise<IpcResponse<AutopilotRunRecord[]>>;
+  /** Starts a recorded run again. The loop takes back the card it was still holding rather than starting a new one. */
+  resumeInterruptedAutopilot(request: AutopilotInterruptedInput): Promise<IpcResponse<AutopilotStatus>>;
+  /** Puts the card an interrupted run was holding back in the queue, for someone who would rather start clean. */
+  releaseInterruptedAutopilot(request: AutopilotInterruptedInput): Promise<IpcResponse<{ released: boolean }>>;
   onAutopilotChanged(listener: (status: AutopilotStatus) => void): () => void;
   /**
    * Starts Auto mode on one composer task. It carries the task across turns until the check command passes, cooling

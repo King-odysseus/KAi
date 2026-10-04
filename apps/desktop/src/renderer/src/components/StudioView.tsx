@@ -1828,7 +1828,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </button>
             </div>
             {projectId && board && board.cards.length > 0 && (
-              <AutopilotPanel projectId={projectId} blockedCount={board.cards.filter((card) => card.status === 'blocked').length} hasWork={board.cards.some((card) => card.status === 'ready' || card.status === 'inProgress')} disabled={busy !== null} />
+              <AutopilotPanel
+                projectId={projectId}
+                ready={board.cards.filter((card) => card.status === 'ready').length}
+                inProgress={board.cards.filter((card) => card.status === 'inProgress').length}
+                waiting={board.cards.filter((card) => card.status === 'backlog').length}
+                blocked={board.cards.filter((card) => card.status === 'blocked').length}
+                disabled={busy !== null}
+              />
             )}
             {board && board.cards.length > 0 ? (
               <div className="studio-board">

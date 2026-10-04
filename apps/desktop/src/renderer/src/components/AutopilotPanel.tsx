@@ -1,20 +1,21 @@
 import { ChevronDown, ChevronUp, Loader2, Moon, Plane, Square } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import type { AutopilotStatus } from '@kai/contracts';
+import type { AutopilotRunRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { useRunPanelCollapsed } from './run-panel-collapse';
+import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
 
 interface Props {
   projectId: string;
-  /** True when the board has a card to start from. */
-  hasWork: boolean;
-  /** Cards currently blocked, so a way to put them back can be offered. */
-  blockedCount: number;
+  /** The board's own figures, so a run that cannot start says why instead of only disabling the button. */
+  ready: number;
+  inProgress: number;
+  /** Cards in the backlog: work that exists but is waiting on something else to be done first. */
+  waiting: number;
+  blocked: number;
   /** Another action on the screen is running, so starting is held back. */
   disabled: boolean;
 }
-
-const ACTIVE = new Set<AutopilotStatus['phase']>(['working', 'checking', 'cooling']);
 
 function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -28,10 +29,11 @@ function remaining(iso: string, now: number): string {
 }
 
 /** Autopilot: hand the board to the agents and let it run, resting when the provider says it has had enough. */
-export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: Props): ReactNode {
-  const [status, setStatus] = useState<AutopilotStatus | null>(null);
+export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked, disabled }: Props): ReactNode {
+  const status = useAutopilotStatus(projectId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [execution, setExecution] = useState<'api' | 'cli'>('api');
   const [checkCommand, setCheckCommand] = useState('');
@@ -40,32 +42,38 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
   const [attemptsPerCard, setAttemptsPerCard] = useState(3);
   const [minGapSeconds, setMinGapSeconds] = useState(0);
   const [collapsed, toggleCollapsed] = useRunPanelCollapsed('autopilot');
+  const [interrupted, setInterrupted] = useState<AutopilotRunRecord | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setStatus(null);
-    void window.kaiDesktop.autopilotStatus({ projectId }).then((result) => {
-      if (!cancelled) setStatus(unwrap(result));
-    }).catch(() => undefined);
-    const off = window.kaiDesktop.onAutopilotChanged((next) => {
-      if (next.projectId === projectId) setStatus(next);
-    });
-    return () => { cancelled = true; off(); };
-  }, [projectId]);
-
-  const running = Boolean(status && ACTIVE.has(status.phase));
+  const running = Boolean(status && AUTOPILOT_ACTIVE.has(status.phase));
   const cooling = status?.phase === 'cooling' && Boolean(status.resumeAt);
+  const hasWork = ready > 0 || inProgress > 0;
+
   useEffect(() => {
     if (!cooling) return undefined;
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [cooling]);
 
+  /**
+   * A run KAI was closed in the middle of: its status died with the process, so nothing else on this screen knows the
+   * board is still holding one of its cards. Only asked for while nothing is running, since a live run is the answer.
+   */
+  useEffect(() => {
+    setInterrupted(null);
+    if (running) return undefined;
+    let cancelled = false;
+    void window.kaiDesktop.autopilotInterrupted().then(unwrap)
+      .then((runs) => { if (!cancelled) setInterrupted(runs.find((record) => record.studioProjectId === projectId) ?? null); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [projectId, running]);
+
   async function start(): Promise<void> {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      setStatus(unwrap(await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: 100, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds })));
+      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: 100, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds }).then(unwrap);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -76,9 +84,10 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
   async function requeue(): Promise<void> {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const { requeued } = unwrap(await window.kaiDesktop.requeueAutopilot({ projectId }));
-      setError(requeued === 0 ? 'No cards Autopilot gave up on were found.' : null);
+      setNotice(requeued === 0 ? 'No cards Autopilot gave up on were found.' : null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -88,8 +97,40 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
 
   async function stop(): Promise<void> {
     setBusy(true);
+    setError(null);
     try {
-      setStatus(unwrap(await window.kaiDesktop.stopAutopilot({ projectId })));
+      await window.kaiDesktop.stopAutopilot({ projectId }).then(unwrap);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Starts the recorded run again from the settings it was given; the loop takes back the card it still holds. */
+  async function carryOn(): Promise<void> {
+    if (!interrupted) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setInterrupted(null);
+      await window.kaiDesktop.resumeInterruptedAutopilot({ studioProjectId: interrupted.studioProjectId }).then(unwrap);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Hands that card back to the board instead, for someone who would rather start the card clean. */
+  async function putBack(): Promise<void> {
+    if (!interrupted) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await window.kaiDesktop.releaseInterruptedAutopilot({ studioProjectId: interrupted.studioProjectId }).then(unwrap);
+      setInterrupted(null);
+      setNotice(`"${interrupted.cardTitle}" is back in the queue.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -98,6 +139,13 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
   }
 
   const progress = status && status.cardsTotal > 0 ? Math.round((status.cardsDone / status.cardsTotal) * 100) : 0;
+
+  // Why Start is not available, in words. This used to live only in the button's tooltip, so a board with nothing
+  // ready to work looked like a button that simply did not do anything.
+  const blockedReason = blocked > 0
+    ? `No card is ready: ${blocked} card${blocked === 1 ? ' is' : 's are'} blocked, and the other ${waiting} wait on ${blocked === 1 ? 'it' : 'them'}. Put the blocked ones back in the queue, then start.`
+    : 'No card is ready yet: every card is waiting on another card that is not done.';
+  const summary = status ? status.message : hasWork ? 'Ready when you are.' : 'Nothing is ready to start.';
 
   return (
     <section className={`autopilot-panel${collapsed ? ' collapsed' : ''}`} aria-label="Autopilot">
@@ -109,7 +157,7 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
               {busy ? <Loader2 className="spin" size={14} /> : <Square size={14} />} Stop
             </button>
           ) : (
-            <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedCount > 0 ? 'Every card on the board is blocked. Put them back in the queue below, then start.' : 'Build the board first'}>
+            <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedReason}>
               {busy ? <Loader2 className="spin" size={14} /> : <Plane size={14} />} {status?.phase === 'finished' || status?.phase === 'stopped' || status?.phase === 'failed' ? 'Run again' : 'Start Autopilot'}
             </button>
           )}
@@ -125,12 +173,23 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
           </button>
         </div>
       </div>
-      {collapsed && <p className="studio-note run-panel-summary">{status ? status.message : 'Ready when you are.'}</p>}
+      {collapsed && <p className="studio-note run-panel-summary">{summary}</p>}
       {!collapsed && <>
       <p className="studio-note">
         Works the whole board on its own: one agent per card, a check after each, a retry with the failure when it fails, and a rest when the provider rate-limits.
         A card is only closed when its check passes; a card that never passes is parked as blocked and the rest carry on.
       </p>
+
+      {interrupted && !running && (
+        <p className="studio-note run-interrupted" role="status">
+          The board still has &ldquo;{interrupted.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.{' '}
+          <button type="button" className="link-button" disabled={busy} onClick={() => void carryOn()}>Carry on where it stopped</button>
+          {' or '}
+          <button type="button" className="link-button" disabled={busy} onClick={() => void putBack()}>put the card back in the queue</button>.
+        </p>
+      )}
+
+      {!running && !hasWork && <p className="studio-note run-stalled">{blockedReason}</p>}
 
       {!running && (
         <details className="autopilot-settings">
@@ -169,10 +228,11 @@ export function AutopilotPanel({ projectId, hasWork, blockedCount, disabled }: P
       )}
 
       {error && <p className="studio-error" role="alert">{error}</p>}
+      {notice && <p className="studio-note" role="status">{notice}</p>}
 
-      {!running && blockedCount > 0 && (
+      {!running && blocked > 0 && (
         <p className="studio-note">
-          {blockedCount} card{blockedCount === 1 ? ' is' : 's are'} blocked.{' '}
+          {blocked} card{blocked === 1 ? ' is' : 's are'} blocked.{' '}
           <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy}>Put the ones Autopilot gave up on back in the queue</button>
         </p>
       )}

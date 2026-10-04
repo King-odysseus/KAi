@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { agentIdSchema } from './primitives';
+import { agentIdSchema, timestampSchema } from './primitives';
 
 /**
  * Autopilot works a Project Studio board from the first ready card to the last, on its own: one agent per card, a
@@ -76,3 +76,33 @@ export const autopilotStatusSchema = z
 export type AutopilotStatus = z.infer<typeof autopilotStatusSchema>;
 
 export const autopilotStatusResponseSchema = autopilotStatusSchema.nullable();
+
+/**
+ * One run, written to disk for the whole time it is going and removed when it settles — so a file still there at
+ * startup is a run the app was closed in the middle of.
+ *
+ * The status above lives in memory and dies with the process, which left the person nothing to go on and the board
+ * holding a card claimed by an Autopilot that no longer existed. This is the small amount of state needed to say
+ * which card was in flight and to start it again: the loop already prefers the card it still holds, and the figures
+ * either side of this file are read back off the board.
+ */
+export const autopilotRunRecordSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    /** The Studio plan's own id, which is what Autopilot statuses are keyed by. */
+    studioProjectId: z.string().min(1),
+    cardId: z.string().min(1),
+    cardTitle: z.string(),
+    startedAt: timestampSchema,
+    updatedAt: timestampSchema,
+    /** The last thing the run said, so the report of an interrupted run is about the card it was on. */
+    lastMessage: z.string().max(600),
+    /** Everything needed to start the same run again unchanged, including the limits it was given. */
+    start: autopilotStartInputSchema,
+  })
+  .strict();
+export type AutopilotRunRecord = z.infer<typeof autopilotRunRecordSchema>;
+
+export const autopilotInterruptedInputSchema = z.object({ studioProjectId: z.string().min(1) }).strict();
+export type AutopilotInterruptedInput = z.infer<typeof autopilotInterruptedInputSchema>;
+

@@ -1,5 +1,6 @@
 import { ImageCard, ImageChip } from './ImageAttachment';
-import { AutoModePanel } from './AutoPanel';
+import { AutoSettings } from './AutoSettings';
+import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerRunLine';
 import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
 import { PlanStrip } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
@@ -58,6 +59,7 @@ import type {
   AgentCapability,
   AgentId,
   AppSettings,
+  AutopilotRunRecord,
   AutonomyMode,
   ChangeReviewResult,
   CheckpointReview,
@@ -397,6 +399,9 @@ export function WorkspaceView({
   const [brainDraft, setBrainDraft] = useState<string | null>(null);
   const [fileChecks, setFileChecks] = useState<Record<string, FileVerificationState>>({});
   const [rawEventsOpen, setRawEventsOpen] = useState(false);
+  /** The run's log and settings, opened from the composer's run line rather than standing above the message box. */
+  const [runDetailsOpen, setRunDetailsOpen] = useState(false);
+  const [stoppingRun, setStoppingRun] = useState(false);
   const [showRunDetails, setShowRunDetails] = useState(false);
   const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
   /** Set while Auto is being asked to start, so the composer's send cannot be pressed twice into it. */
@@ -1265,6 +1270,53 @@ export function WorkspaceView({
     return summary;
   }, { tools: 0, edits: 0, usage: 0 });
   const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval);
+  // Autopilot runs a Studio plan, so it is reached through the plan this conversation was opened for — the studio id,
+  // not the desktop project the plan happens to be registered as. Auto, by contrast, is about this conversation.
+  const autopilotOrigin = activeConversation?.origin?.kind === 'autopilot' ? activeConversation.origin : null;
+  const composerRun = useComposerRun(autopilotOrigin?.studioProjectId ?? null, activeConversation?.id ?? null);
+
+  // A run KAI was closed in the middle of. Its status died with the process, so the board is still holding the card
+  // under Autopilot's name and nothing else on this screen knows it. Asked for only for a conversation that came from
+  // a plan, since that is the only conversation it could belong to.
+  const [interruptedAutopilot, setInterruptedAutopilot] = useState<AutopilotRunRecord | null>(null);
+  const interruptedProjectId = autopilotOrigin?.studioProjectId ?? null;
+  useEffect(() => {
+    setInterruptedAutopilot(null);
+    if (!interruptedProjectId) return undefined;
+    let cancelled = false;
+    void window.kaiDesktop.autopilotInterrupted().then(unwrap)
+      .then((runs) => { if (!cancelled) setInterruptedAutopilot(runs.find((record) => record.studioProjectId === interruptedProjectId) ?? null); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [interruptedProjectId]);
+
+  /** Starts the recorded run again from the settings it was given; the loop takes back the card it still holds. */
+  async function carryOnAutopilot(): Promise<void> {
+    if (!interruptedAutopilot) return;
+    setStoppingRun(true);
+    try {
+      setInterruptedAutopilot(null);
+      await window.kaiDesktop.resumeInterruptedAutopilot({ studioProjectId: interruptedAutopilot.studioProjectId }).then(unwrap);
+    } catch (caught) {
+      setWorkbenchNotice(`Autopilot could not carry on: ${messageOf(caught)}`);
+    } finally {
+      setStoppingRun(false);
+    }
+  }
+
+  /** Hands the card back to the board instead, for someone who would rather start it clean. */
+  async function releaseAutopilotCard(): Promise<void> {
+    if (!interruptedAutopilot) return;
+    setStoppingRun(true);
+    try {
+      await window.kaiDesktop.releaseInterruptedAutopilot({ studioProjectId: interruptedAutopilot.studioProjectId }).then(unwrap);
+      setInterruptedAutopilot(null);
+    } catch (caught) {
+      setWorkbenchNotice(`The card could not be put back: ${messageOf(caught)}`);
+    } finally {
+      setStoppingRun(false);
+    }
+  }
   const liveTokenEstimate = (activeConversation ? estimateConversationTokens(activeConversation) : 0) + Math.ceil(streamingText.length / 4);
   const refineBlocked = busy || running || paused || awaitingApproval || refiningPrompt;
   const refineTitle = !prompt.trim()
@@ -1274,6 +1326,25 @@ export function WorkspaceView({
       : refineTarget
         ? `Refine prompt with ${refineTarget}`
         : refineReason ?? 'Set up Prompt Guide or Direct API in Settings';
+
+  /**
+   * Stops the board's loop for the plan this conversation came from.
+   *
+   * The card it is holding is left where it is on purpose: Autopilot takes its own card back when it starts again, so
+   * stopping here costs the run nothing. Auto is stopped by the composer's own button, which already ends both the
+   * session and the turn in flight — see `cancelConversation` in `App`.
+   */
+  async function stopAutopilot(): Promise<void> {
+    if (!autopilotOrigin) return;
+    setStoppingRun(true);
+    try {
+      await window.kaiDesktop.stopAutopilot({ projectId: autopilotOrigin.studioProjectId });
+    } catch (caught) {
+      setWorkbenchNotice(`Autopilot could not be stopped: ${messageOf(caught)}`);
+    } finally {
+      setStoppingRun(false);
+    }
+  }
 
   return (
     <div className="workspace-view">
@@ -1291,6 +1362,19 @@ export function WorkspaceView({
           <div className="workbench-notice recovery-banner" role="status">
             <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
             <button type="button" className="secondary-button" onClick={onOpenRecovery}>Review</button>
+          </div>
+        )}
+
+        {/* Said here because this is the conversation that card was being worked in. A run that closed mid-card, or
+            one stopped by hand, leaves the board holding the card with nothing running for it — and this is the only
+            screen that can offer to carry on from where it stopped rather than starting the card over. */}
+        {interruptedAutopilot && (
+          <div className="workbench-notice recovery-banner" role="status">
+            <span>
+              The board still has &ldquo;{interruptedAutopilot.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.
+            </span>
+            <button type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void carryOnAutopilot()}>Carry on</button>
+            <button type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void releaseAutopilotCard()}>Put the card back</button>
           </div>
         )}
 
@@ -1343,6 +1427,18 @@ export function WorkspaceView({
             </div>
           </div>
         </div>
+      )}
+
+      {runDetailsOpen && composerRun && (
+        <ComposerRunDetails
+          title={composerRun.line.who === 'autopilot' ? 'Autopilot' : 'Auto'}
+          run={composerRun}
+          onClose={() => setRunDetailsOpen(false)}
+        >
+          {composerRun.line.who === 'auto' && (
+            <AutoSettings projectId={activeProject?.id ?? null} execution={executionMode} running={composerRun.line.canStop} />
+          )}
+        </ComposerRunDetails>
       )}
 
       {rawEventsOpen && (
@@ -1658,17 +1754,18 @@ export function WorkspaceView({
           }}
         />
         {activeProject && <PlanStrip projectId={activeProject.id} refreshKey={activeConversation?.updatedAt} />}
-        {taskIntent === 'auto' && activeProject && (
-          <AutoModePanel
-            projectId={activeProject.id}
-            conversationId={activeConversation?.id ?? null}
-            execution={executionMode}
+        {composerRun && (
+          <ComposerRunLine
+            state={composerRun.line}
+            busy={stoppingRun || busy !== null}
+            onStop={() => void (composerRun.line.who === 'autopilot' ? stopAutopilot() : onCancel())}
+            onOpenDetails={() => setRunDetailsOpen(true)}
           />
         )}
         {taskIntent === 'equalizer' && activeProject && (
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}
-        <div className="composer-box">
+        <div className={`composer-box${composerRun ? ` run-${composerRun.line.state}` : ''}`}>
           <textarea
             ref={promptRef}
             value={prompt}

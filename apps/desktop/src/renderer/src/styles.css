@@ -13494,6 +13494,91 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .autopilot-log .log-rest {
   color: #7aa2f7;
 }
+.autopilot-status.phase-live .autopilot-bar span {
+  background: #d9534f;
+}
+.autopilot-status.phase-waiting .autopilot-bar span {
+  background: #d9a441;
+}
+.run-interrupted {
+  border-left: 2px solid #d9a441;
+  padding-left: 8px;
+}
+.run-stalled {
+  color: #d9a441;
+}
+
+/*
+ * A run owning the composer.
+ *
+ * One line of text and one colour on the input box, the way a mode is shown on the box itself: enough to see at a
+ * glance, without a panel above the message box, which is what the Auto and Autopilot panels used to be and what
+ * made them unreadable. Red while it is going, amber when it is waiting on a rate limit or on a person, and a muted
+ * red once it has failed — so red is always worth stopping to look at.
+ */
+.composer-run-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  font-size: 12px;
+}
+.composer-run-line .composer-run-mark {
+  display: flex;
+  align-items: center;
+}
+.composer-run-line .composer-run-text {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-run-line .composer-run-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.composer-run-line .composer-run-meta {
+  opacity: 0.6;
+  white-space: nowrap;
+}
+.composer-run-line.run-live {
+  border-color: rgba(217, 83, 79, 0.6);
+  color: #e4837f;
+}
+.composer-run-line.run-waiting {
+  border-color: rgba(217, 164, 65, 0.6);
+  color: #d9a441;
+}
+.composer-run-line.run-failed {
+  border-color: rgba(217, 83, 79, 0.35);
+  color: #a8736f;
+}
+/* Two classes, so these hold even while the box has focus and would otherwise take the mint focus border. */
+.composer-box.run-live {
+  border-color: #d9534f;
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.12);
+}
+.composer-box.run-waiting {
+  border-color: #d9a441;
+  box-shadow: 0 0 0 2px rgba(217, 164, 65, 0.12);
+}
+.composer-box.run-failed {
+  border-color: rgba(217, 83, 79, 0.55);
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.07);
+}
 
 
 

@@ -548,6 +548,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'autopilot:stop', async ({ projectId }) => context.autopilot.stop(projectId));
   handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));
   handle(context, 'autopilot:requeue', async ({ projectId }) => ({ requeued: await context.autopilot.requeueBlocked(projectId) }));
+  handle(context, 'autopilot:interrupted', async () => context.autopilot.interrupted());
+  handle(context, 'autopilot:interrupted-resume', async ({ studioProjectId }, request) => context.autopilot.resumeInterrupted(studioProjectId, request.ownerWindowId));
+  handle(context, 'autopilot:interrupted-release', async ({ studioProjectId }) => ({ released: await context.autopilot.releaseInterrupted(studioProjectId) }));
   handle(context, 'auto:start', async (input, request) => context.auto.start(input, request.ownerWindowId));
   handle(context, 'auto:stop', async ({ conversationId }) => context.auto.stop(conversationId));
   handle(context, 'auto:status', async ({ conversationId }) => context.auto.status(conversationId));

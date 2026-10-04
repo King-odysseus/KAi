@@ -1075,6 +1075,45 @@ html[data-theme="purple"]:root .autopilot-log .log-warn {
 html[data-theme="purple"]:root .autopilot-log .log-rest {
   color: #9792df;
 }
+html[data-theme="purple"]:root .autopilot-status.phase-live .autopilot-bar span {
+  background: #d9534f;
+}
+html[data-theme="purple"]:root .autopilot-status.phase-waiting .autopilot-bar span {
+  background: #d99541;
+}
+html[data-theme="purple"]:root .run-interrupted {
+  border-left: 2px solid #d99541;
+}
+html[data-theme="purple"]:root .run-stalled {
+  color: #d99541;
+}
+html[data-theme="purple"]:root .composer-run-line {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+}
+html[data-theme="purple"]:root .composer-run-line.run-live {
+  border-color: rgba(217, 83, 79, 0.6);
+  color: #e4837f;
+}
+html[data-theme="purple"]:root .composer-run-line.run-waiting {
+  border-color: rgba(217, 149, 65, 0.6);
+  color: #d99541;
+}
+html[data-theme="purple"]:root .composer-run-line.run-failed {
+  border-color: rgba(217, 83, 79, 0.35);
+  color: #a8736f;
+}
+html[data-theme="purple"]:root .composer-box.run-live {
+  border-color: #d9534f;
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.12);
+}
+html[data-theme="purple"]:root .composer-box.run-waiting {
+  border-color: #d99541;
+  box-shadow: 0 0 0 2px rgba(217, 149, 65, 0.12);
+}
+html[data-theme="purple"]:root .composer-box.run-failed {
+  border-color: rgba(217, 83, 79, 0.55);
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.07);
+}
 html[data-theme="purple"]:root .hunk-line.removed {
   background: rgba(242, 125, 135, 0.1);
 }
@@ -2304,6 +2343,45 @@ html[data-theme="navy"]:root .autopilot-log .log-warn {
 }
 html[data-theme="navy"]:root .autopilot-log .log-rest {
   color: #729aff;
+}
+html[data-theme="navy"]:root .autopilot-status.phase-live .autopilot-bar span {
+  background: #d9534f;
+}
+html[data-theme="navy"]:root .autopilot-status.phase-waiting .autopilot-bar span {
+  background: #d9a441;
+}
+html[data-theme="navy"]:root .run-interrupted {
+  border-left: 2px solid #d9a441;
+}
+html[data-theme="navy"]:root .run-stalled {
+  color: #d9a441;
+}
+html[data-theme="navy"]:root .composer-run-line {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+}
+html[data-theme="navy"]:root .composer-run-line.run-live {
+  border-color: rgba(217, 83, 79, 0.6);
+  color: #e4837f;
+}
+html[data-theme="navy"]:root .composer-run-line.run-waiting {
+  border-color: rgba(217, 164, 65, 0.6);
+  color: #d9a441;
+}
+html[data-theme="navy"]:root .composer-run-line.run-failed {
+  border-color: rgba(217, 83, 79, 0.35);
+  color: #a8736f;
+}
+html[data-theme="navy"]:root .composer-box.run-live {
+  border-color: #d9534f;
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.12);
+}
+html[data-theme="navy"]:root .composer-box.run-waiting {
+  border-color: #d9a441;
+  box-shadow: 0 0 0 2px rgba(217, 164, 65, 0.12);
+}
+html[data-theme="navy"]:root .composer-box.run-failed {
+  border-color: rgba(217, 83, 79, 0.55);
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.07);
 }
 html[data-theme="navy"]:root .hunk-line.removed {
   background: rgba(242, 125, 135, 0.1);

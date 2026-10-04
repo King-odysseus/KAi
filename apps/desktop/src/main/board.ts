@@ -45,6 +45,16 @@ export interface BoardPorts {
   hashFile(projectPath: string, relativePath: string): Promise<string | null>;
   run(projectId: string, runId: string): Promise<VerificationRun | null>;
   now(): string;
+  /**
+   * Told after every write, so the windows showing this board can redraw.
+   *
+   * Optional, so a store built for a test does not need one. It is called from `save`, the single place the board
+   * reaches disk, because the writes that matter most are the ones nobody asked for: Autopilot claiming a card and
+   * moving it as it works happens in the main process with no renderer IPC involved, and the announcing was done by
+   * the IPC handlers instead — so it only ever happened when a person pressed something. A board Autopilot was
+   * working on therefore sat still on screen, In Progress at zero, while the file on disk had moved on.
+   */
+  changed?(projectId: string, board: StudioBoard): void;
 }
 
 export interface DoneEvidence {
@@ -325,6 +335,7 @@ export class StudioBoardStore {
     const parsed = studioBoardSchema.parse({ ...board, revision: board.revision + 1 });
     const root = await this.ports.projectRoot(projectId);
     await this.ports.spec.write(root, STUDIO_BOARD_PATH, `${JSON.stringify(parsed, null, 2)}\n`);
+    this.ports.changed?.(projectId, parsed);
     return parsed;
   }
 }

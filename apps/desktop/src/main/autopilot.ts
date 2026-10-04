@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ArtifactKind,
   AutopilotLogEntry,
+  AutopilotRunRecord,
   AutopilotStartInput,
   AutopilotStatus,
   BoardCard,
@@ -35,6 +36,21 @@ export interface AutopilotCheckResult {
   runId: string | null;
 }
 
+/**
+ * Where a run is remembered while it holds a card, so the next launch can say what happened to it.
+ *
+ * Deliberately not the status: that lives in memory and dies with the process. A record exists exactly while a card
+ * is in the run's hands, and it is not cleared when the app is closing — which is the case the person actually hits.
+ */
+export interface AutopilotJournal {
+  begin(record: Omit<AutopilotRunRecord, 'schemaVersion'>): Promise<void>;
+  touch(studioProjectId: string, lastMessage: string): Promise<void>;
+  end(studioProjectId: string): Promise<void>;
+  read(studioProjectId: string): Promise<AutopilotRunRecord | null>;
+  /** Everything still on disk, newest first — which at startup is every run that was interrupted. */
+  list(): Promise<AutopilotRunRecord[]>;
+}
+
 export interface AutopilotPorts {
   settings(): Promise<AppSettings>;
   board(projectId: string): Promise<StudioBoard>;
@@ -46,7 +62,8 @@ export interface AutopilotPorts {
   moveCard(projectId: string, cardId: string, status: BoardStatus, note: string, by: 'agent' | 'check'): Promise<BoardCard>;
   /** The visual check for a component or page card; it files its own result on the card. */
   checkUi(projectId: string, card: BoardCard): Promise<{ passed: boolean; summary: string }>;
-  createConversation(projectId: string, title: string): Promise<ConversationRecord>;
+  /** Opens the conversation one card is worked in. `card` is passed so it can be marked as Autopilot's own. */
+  createConversation(projectId: string, title: string, card: Pick<BoardCard, 'id' | 'title'>): Promise<ConversationRecord>;
   runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;
   cancelAgent(conversationId: string): boolean;
   runCheck(projectId: string, command: string, signal: AbortSignal): Promise<AutopilotCheckResult>;
@@ -62,6 +79,8 @@ export interface AutopilotPorts {
   preflight(projectId: string): Promise<void>;
   /** Takes the window to the conversation the agent is working in, so the person can watch. */
   openConversation(ownerWindowId: number, conversation: ConversationRecord): void;
+  /** Remembers a run for the whole time it holds a card. Optional, so a test needs no disk. */
+  journal?: AutopilotJournal;
   now(): number;
 }
 
@@ -144,6 +163,44 @@ export class DesktopAutopilot {
     await Promise.all([...this.runs.keys()].map((projectId) => this.stop(projectId)));
   }
 
+  /** The runs KAI was closed in the middle of, newest first. Nothing is running for any of them. */
+  async interrupted(): Promise<AutopilotRunRecord[]> {
+    return (await this.ports.journal?.list().catch(() => [])) ?? [];
+  }
+
+  /**
+   * Carries on with a run that was interrupted.
+   *
+   * This is the ordinary start, from the settings the run was given: the board still holds its card under the
+   * Autopilot's name, and the loop prefers a card it is already holding over a fresh one — so the place is kept
+   * without any of it being re-derivable here.
+   */
+  async resumeInterrupted(studioProjectId: string, ownerWindowId: number): Promise<AutopilotStatus> {
+    const record = await this.ports.journal?.read(studioProjectId);
+    if (!record) throw new Error('That interrupted run is no longer on disk.');
+    return this.start(record.start, ownerWindowId);
+  }
+
+  /**
+   * Puts the card an interrupted run was holding back in the queue, for someone who would rather start it clean.
+   * Nothing is running, so the board's own move rule is the only thing that can refuse.
+   */
+  async releaseInterrupted(studioProjectId: string): Promise<boolean> {
+    const record = await this.ports.journal?.read(studioProjectId);
+    if (!record) return false;
+    const board = await this.ports.board(studioProjectId);
+    const card = board.cards.find((item) => item.id === record.cardId);
+    // The record is cleared in the same breath as the card leaving the run's hands, but a close can land between the
+    // two. A card the run actually finished is done, and moving it back would be undoing real work to tidy up a file.
+    if (!card || card.status !== 'inProgress') {
+      await this.forget(studioProjectId);
+      return false;
+    }
+    const restored = await this.putBack(studioProjectId, [record.cardId], 'Put back in the queue after an Autopilot run stopped holding it.');
+    await this.forget(studioProjectId);
+    return restored > 0;
+  }
+
   private async drive(input: AutopilotStartInput, settings: AppSettings, label: string, active: ActiveRun): Promise<void> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
@@ -190,6 +247,18 @@ export class DesktopAutopilot {
     state.cardId = card.id;
     state.cardTitle = card.title;
     await this.ports.claimCard(projectId, card.id, label);
+    // Written before the log line, not after: the line's own `touch` would have nothing to attach itself to, and the
+    // report of an interrupted run would name the previous card's work for as long as this one took to say anything.
+    // From here until the card leaves the board, a close leaves a card in this run's hands — and this is what says so.
+    await this.keep((journal) => journal.begin({
+      studioProjectId: projectId,
+      cardId: card.id,
+      cardTitle: card.title,
+      startedAt: new Date(this.ports.now()).toISOString(),
+      updatedAt: new Date(this.ports.now()).toISOString(),
+      lastMessage: `Working on "${card.title}".`,
+      start: input,
+    }));
     this.record(projectId, owner, 'card', `Working on "${card.title}".`);
 
     let failure = '';
@@ -198,7 +267,7 @@ export class DesktopAutopilot {
       this.phase(projectId, owner, 'working', `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
       const artifacts = await this.ports.artifactsFor(projectId).catch(() => ({}));
       const base = boardCardPrompt(card, artifacts);
-      const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120));
+      const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
       active.conversationId = conversation.id;
       state.conversationId = conversation.id;
       this.ports.announce(owner, state);
@@ -223,6 +292,7 @@ export class DesktopAutopilot {
       }
       if (!command) {
         await this.ports.moveCard(projectId, card.id, 'review', 'Autopilot finished the work but has no check command, so a person has to close it.', 'agent');
+        await this.forget(projectId);
         this.record(projectId, owner, 'warn', `"${card.title}" is in review: there is no check command.`);
         state.restStreak = 0;
         return;
@@ -263,12 +333,14 @@ export class DesktopAutopilot {
       }
       state.cardsDone += 1;
       state.restStreak = 0;
+      await this.forget(projectId);
       this.record(projectId, owner, 'card', `"${card.title}" is done.`);
       this.counts(projectId, await this.ports.board(projectId));
       return;
     }
 
     await this.ports.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${input.attemptsPerCard} attempts. ${failure}`.slice(0, 3_900), 'agent');
+    await this.forget(projectId);
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
     const lastTwo = active.blocked.slice(-2);
@@ -463,7 +535,25 @@ export class DesktopAutopilot {
   private record(projectId: string, owner: number, kind: AutopilotLogEntry['kind'], text: string): void {
     const state = this.state(projectId);
     state.log = [...state.log, { at: new Date(this.ports.now()).toISOString(), kind, text: text.slice(0, 500) }].slice(-LOG_LIMIT);
+    // Best effort and not awaited: this is the line an interrupted run is reported with, so an older one costs
+    // nothing but a slightly stale sentence, and waiting on a disk write here would stall the run itself.
+    void this.keep((journal) => journal.touch(projectId, text));
     this.publish(projectId, owner);
+  }
+
+  /**
+   * Writes to the run's journal, best effort. A board that cannot reach its own disk should still be workable, and
+   * every caller here is recording something for after the app is gone rather than deciding anything now.
+   */
+  private async keep(action: (journal: AutopilotJournal) => Promise<void>): Promise<void> {
+    const journal = this.ports.journal;
+    if (!journal) return;
+    await action(journal).catch(() => undefined);
+  }
+
+  /** The card is no longer in this run's hands, so there is nothing left for the next launch to explain. */
+  private async forget(projectId: string): Promise<void> {
+    await this.keep((journal) => journal.end(projectId));
   }
 
   private publish(projectId: string, owner: number): void {
