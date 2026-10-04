@@ -207,7 +207,7 @@ export class StudioBoardStore {
         ? { ...card, status: existing.status, check: existing.check, runs: existing.runs, claimedBy: existing.claimedBy, notes: existing.notes }
         : card;
     });
-    return this.save(projectId, { schemaVersion: 1, cards: promoteReady(applyStaleness(merged, artifacts)) });
+    return this.save(projectId, { schemaVersion: 1, revision: current.revision, cards: promoteReady(applyStaleness(merged, artifacts)) });
   }
 
   /** Moves a card to a new status, enforcing the dependency and done rules. */
@@ -275,7 +275,7 @@ export class StudioBoardStore {
     const board = await this.read(projectId);
     const at = this.ports.now();
     const withDesign = mergeDesign(applyDesignStaleness(board.cards, changedNodes), components, at);
-    return this.save(projectId, { schemaVersion: 1, cards: promoteReady(withDesign) });
+    return this.save(projectId, { schemaVersion: 1, revision: board.revision, cards: promoteReady(withDesign) });
   }
 
   /** What KAI last read from open-pencil, or an empty record on a project that has never pulled one. */
@@ -319,7 +319,10 @@ export class StudioBoardStore {
   }
 
   private async save(projectId: string, board: StudioBoard): Promise<StudioBoard> {
-    const parsed = studioBoardSchema.parse(board);
+    // Every write bumps the revision, which is what the board's stale-write check compares: a writer that read
+    // revision N and finds the file at another one is writing over something it never saw. Done here because every
+    // write goes through here, so no caller can forget it.
+    const parsed = studioBoardSchema.parse({ ...board, revision: board.revision + 1 });
     const root = await this.ports.projectRoot(projectId);
     await this.ports.spec.write(root, STUDIO_BOARD_PATH, `${JSON.stringify(parsed, null, 2)}\n`);
     return parsed;
