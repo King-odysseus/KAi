@@ -600,9 +600,11 @@ async function verifyTasksAndSettings(page) {
 }
 
 async function verifyThemes(page) {
-  // The title-bar button cycles in this order. Synchronize on state rather than
-  // assuming a click landed before the previous settings write completed.
-  const order = ['navy', 'purple', 'light', 'dark'];
+  // The title-bar button cycles in this order, and it is every theme: the layout rule these checks exist for — a
+  // control whose text wraps — is exactly what a new palette is most likely to break, so a theme left out of this
+  // list is a theme nobody looks at. Synchronize on state rather than assuming a click landed before the previous
+  // settings write completed.
+  const order = ['navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand', 'dark'];
   for (const theme of order) {
     await setTheme(page, theme);
     for (const [button, heading] of [['Control: Usage', 'Usage'], ['Learn: Learn & Code', null], ['Work: Workspace', null], ['Control: Settings', 'Settings']]) {
@@ -618,7 +620,10 @@ async function verifyThemes(page) {
 
 async function setTheme(page, target) {
   const themeButton = page.locator('button[aria-label^="Theme:"]');
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  // More attempts than there are themes, because reaching one can mean clicking past all of them: the order above
+  // starts at navy and the app opens on whatever was last chosen, so a short cap fails on which theme the run before
+  // happened to leave behind rather than on anything about the theme being asked for.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     const current = await page.evaluate(() => document.documentElement.dataset.theme ?? '');
     if (current === target) return;
     await themeButton.click();
