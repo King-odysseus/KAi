@@ -262,13 +262,19 @@ export type BoardCard = z.infer<typeof boardCardSchema>;
 export const studioBoardSchema = z
   .object({
     schemaVersion: z.literal(1),
+    /**
+     * Bumped on every write, and the basis of the board's stale-write check: a writer that read revision N and finds
+     * the file at a different revision is writing over something it never saw. Boards written before revisioning
+     * existed default to 0 rather than failing to load.
+     */
+    revision: z.number().int().nonnegative().default(0),
     cards: z.array(boardCardSchema),
   })
   .strict();
 export type StudioBoard = z.infer<typeof studioBoardSchema>;
 
 export function createStudioBoard(): StudioBoard {
-  return { schemaVersion: 1, cards: [] };
+  return { schemaVersion: 1, revision: 0, cards: [] };
 }
 
 /** The cards an agent could pick up right now: `ready`, unclaimed, and every dependency already `done`. */
