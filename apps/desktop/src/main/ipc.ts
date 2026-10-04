@@ -75,6 +75,7 @@ import { cliProxyEnvironment, type AgentExecutionResult, type DesktopAgentRuntim
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
+import { MemoryBudget } from './memory-budget';
 import { buildTurnDigest } from './turn-digest';
 import { workingMethodBriefing } from './working-method';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
@@ -1376,9 +1377,14 @@ export async function runConversationAgent(
     checkpoint: checkpoint ?? null,
   }).catch((error) => context.logger.warn('internal', 'Could not write recovery checkpoint', messageOf(error)));
 
+  // One deadline for all of the pre-run memory work, so a hung brain costs a few seconds rather than a couple of
+  // minutes before the agent is even asked to start. See `MemoryBudget`.
+  const memoryBudget = new MemoryBudget();
   const memoryEvents: PersistedEvent[] = [];
   if (executionMode === 'api') {
-    const projectName = await memoryProjectName(context, project.path, project.name);
+    // The brain's own spelling of the project, when it answers in time; the local name either way. Nothing after this
+    // depends on which it was.
+    const projectName = (await memoryBudget.run(memoryProjectName(context, project.path, project.name))) ?? project.name;
     await prepareMemorySession(
       context,
       conversation,
@@ -1388,6 +1394,7 @@ export async function runConversationAgent(
       previousAgent,
       previousExecution,
       memoryEvents,
+      memoryBudget,
     );
   }
   // The memory session is the slowest part of setup when the brain is unwell, so Stop is answered here too.
@@ -1456,6 +1463,10 @@ export async function runConversationAgent(
         false,
         // The direct API agent has no way to look around by itself, so it is given an outline of the project.
         true,
+        memoryBudget,
+        // What was recalled, said on the run. The event type has existed all along and was never emitted, so a run
+        // gave no sign of whether it had memory behind it — including when it had none because the brain was slow.
+        (summary) => memoryEvents.push(memoryEvent(conversation.id, request.agent, 'recall', summary)),
       )).text
     : (await buildConversationContext(
         context,
@@ -1951,8 +1962,10 @@ async function prepareMemorySession(
   previousAgent: AgentId | null,
   previousExecution: NonNullable<ConversationRecord['execution']>,
   events: PersistedEvent[],
+  budget?: MemoryBudget,
 ): Promise<void> {
   if (!(await cognitive1Ready(context))) return;
+  const limited = async <T>(work: Promise<T>): Promise<T | null> => (budget ? budget.run(work) : work);
 
   const active = context.memorySessions.get(conversation.id);
   if (
@@ -1962,7 +1975,7 @@ async function prepareMemorySession(
     active?.agent !== request.agent
   ) {
     try {
-      await context.cognitive1.recordHandoff({
+      const recorded = await limited(context.cognitive1.recordHandoff({
         fromAgent: previousAgent,
         toAgent: request.agent,
         project: projectName,
@@ -1970,13 +1983,15 @@ async function prepareMemorySession(
         next: recallQuery(request.prompt),
         files: changedFilePaths(conversation).join(', '),
         notes: `Continue the conversation with ${request.agent}.`,
-      });
-      events.push(memoryEvent(
-        conversation.id,
-        request.agent,
-        'handoff',
-        `Recorded a C1 handoff from ${previousAgent} to ${request.agent}.`,
-      ));
+      }));
+      if (recorded) {
+        events.push(memoryEvent(
+          conversation.id,
+          request.agent,
+          'handoff',
+          `Recorded a C1 handoff from ${previousAgent} to ${request.agent}.`,
+        ));
+      }
     } catch (error) {
       context.logger.error('service_error', 'C1 handoff recording failed', undefined, error);
     }
@@ -1984,11 +1999,17 @@ async function prepareMemorySession(
 
   if (active?.agent === request.agent && active.projectPath === projectPath) return;
   try {
-    const session = await context.cognitive1.startSession({
+    const session = await limited(context.cognitive1.startSession({
       agent: request.agent,
       projectPath,
       task: recallQuery(request.prompt),
-    });
+    }));
+    // No session was opened, so none is recorded: a memory session KAI believes is open but the brain never started
+    // would be ended later against nothing.
+    if (!session) {
+      context.logger.warn('internal', 'C1 session start did not finish in time; the run continues without one');
+      return;
+    }
     context.memorySessions.set(conversation.id, {
       agent: request.agent,
       conversationId: conversation.id,
@@ -2020,8 +2041,16 @@ async function buildConversationContext(
   compaction?: ConversationRecord['compaction'],
   omitStatic = false,
   includeRepoMap = false,
+  budget?: MemoryBudget,
+  /** Told what recall did, so the run can say it. Optional: the context preview has nobody to tell. */
+  onRecall?: (summary: string) => void,
 ) {
-  const recall = await recallScopedMemories(context, projectPath, projectName, prompt);
+  const recall = await recallScopedMemories(context, projectPath, projectName, prompt, budget);
+  onRecall?.(recall.skipped
+    ? SKIPPED_MEMORY_NOTE
+    : recall.memories.length === 0
+      ? 'The brain had no memories to hand for this run.'
+      : `Used ${recall.memories.length} recalled ${recall.memories.length === 1 ? 'memory' : 'memories'} for this run.`);
   const filesInPlay = [...new Set([...changedFilePaths(conversation), ...selectedPaths])];
   // What KAI's own runs already did here, chosen by the files this one is about. Read from the scores every scored
   // run writes, so it works with the brain stopped and never leaves the machine.
@@ -2600,7 +2629,10 @@ export async function continueWhilePlanOpen(
  */
 export function looksUnreachable(error: unknown): boolean {
   const text = messageOf(error).toLowerCase();
-  return ['econnrefused', 'econnreset', 'etimedout', 'ehostunreach', 'fetch failed', 'socket hang up', 'unable to connect']
+  // Including the client's own wording for a hang. It was missing, so the one failure this check exists for — the
+  // daemon alive enough to accept a connection and too stuck to answer — was the one it did not recognise, and the
+  // restart-and-retry never fired for it.
+  return ['econnrefused', 'econnreset', 'etimedout', 'ehostunreach', 'fetch failed', 'socket hang up', 'unable to connect', 'did not respond', 'timed out']
     .some((needle) => text.includes(needle));
 }
 
@@ -2609,21 +2641,34 @@ async function recallScopedMemories(
   projectPath: string,
   fallbackProjectName: string,
   prompt: string,
-): Promise<{ memories: BrainEntry[]; note: string | null }> {
-  if (!(await cognitive1Ready(context))) return { memories: [], note: null };
+  budget?: MemoryBudget,
+): Promise<{ memories: BrainEntry[]; note: string | null; skipped: boolean }> {
+  if (!(await cognitive1Ready(context))) return { memories: [], note: null, skipped: false };
+  const limited = async <T>(work: Promise<T>): Promise<T | null> => (budget ? budget.run(work) : work);
   try {
-    const resolution = await resolveProjectMemoryName(context, projectPath, fallbackProjectName);
+    const resolution = await limited(resolveProjectMemoryName(context, projectPath, fallbackProjectName));
+    // Out of time before the first read even started. The run goes ahead without memory rather than waiting longer,
+    // and the daemon is asked to come back rather than being left in whatever state made it stop answering.
+    if (!resolution) {
+      requestBrainRestart(context, 'a memory read ran past its budget');
+      return { memories: [], note: SKIPPED_MEMORY_NOTE, skipped: true };
+    }
     const query = recallQuery(prompt);
-    const memories = await context.cognitive1.search({ query, project: resolution.name, maxResults: RECALL_LIMIT });
+    const found = await limited(context.cognitive1.search({ query, project: resolution.name, maxResults: RECALL_LIMIT }));
+    if (!found) {
+      requestBrainRestart(context, 'a recall ran past its budget');
+      return { memories: [], note: SKIPPED_MEMORY_NOTE, skipped: true };
+    }
+    const memories = [...found];
 
     // Every project's lessons, not only this one's. Most of what a codebase will bite you with has already bitten
     // someone: a stale closure, a date derived from toISOString, a credential keyed by the wrong thing. So the recall
     // is topped up across the whole brain rather than left at whatever this project happens to hold — a project with
     // nothing filed still gets grounding, and a project with a little still benefits from the rest.
     const seen = new Set(memories.map((entry) => `${entry.type}|${entry.title}`));
-    const elsewhere = await context.cognitive1
-      .search({ query, global: true, maxResults: RECALL_LIMIT * 2 })
-      .catch(() => [] as BrainEntry[]);
+    const elsewhere = await limited(
+      context.cognitive1.search({ query, global: true, maxResults: RECALL_LIMIT * 2 }).catch(() => [] as BrainEntry[]),
+    ) ?? [];
     let borrowed = 0;
     for (const entry of elsewhere) {
       if (memories.length >= RECALL_LIMIT) break;
@@ -2647,18 +2692,48 @@ async function recallScopedMemories(
     }
 
     const note = brainProjectNote(resolution, memories.length - borrowed);
-    if (borrowed === 0 || memories.length === 0) return { memories, note };
+    if (borrowed === 0 || memories.length === 0) return { memories, note, skipped: false };
     // Said plainly, because grounding a project in another project's answers is only honest when the reader can see
     // that is what happened — and can weigh it accordingly.
     const from = memories[memories.length - 1]?.project;
     return {
       memories,
       note: `${note ? `${note} ` : ''}${borrowed} of them come from other projects${from ? `, such as "${from}"` : ''}.`,
+      skipped: false,
     };
   } catch (error) {
     context.logger.error('service_error', 'C1 scoped recall failed', undefined, error);
-    return { memories: [], note: 'Memory recall failed, so this run has no recalled memories.' };
+    // A failure that reads as unreachable is the same hang arriving as an error instead of a deadline, and deserves
+    // the same answer.
+    if (looksUnreachable(error)) requestBrainRestart(context, 'a memory read failed');
+    return { memories: [], note: 'Memory recall failed, so this run has no recalled memories.', skipped: false };
   }
+}
+
+/** Said on the run itself, so a run with no memory is not mistaken for a brain that had nothing to say. */
+const SKIPPED_MEMORY_NOTE = 'The brain did not answer in time, so this run started without any recalled memories.';
+
+/** When KAI last asked for the brain to be restarted because it stopped answering. */
+let lastBrainRestartRequest = 0;
+const BRAIN_RESTART_COOLDOWN_MS = 5 * 60_000;
+
+/**
+ * Brings the daemon back in the background after it stops answering.
+ *
+ * The restart policy only hears about a process that exited. A daemon that is alive and not answering is invisible
+ * to it, and every read fails quietly — which is why a hung brain used to stall run after run rather than being
+ * noticed and fixed. The run does not wait for this: it is already carrying on without memory.
+ *
+ * Rate-limited, because one hung brain would otherwise be restarted by every run that starts while it is stuck.
+ */
+function requestBrainRestart(context: IpcContext, reason: string): void {
+  const now = Date.now();
+  if (now - lastBrainRestartRequest < BRAIN_RESTART_COOLDOWN_MS) return;
+  lastBrainRestartRequest = now;
+  context.logger.warn('service_error', `Cognitive1 did not answer in time (${reason}); restarting it in the background.`);
+  void context.services.restart('cognitive1').catch((error: unknown) => {
+    context.logger.error('service_error', 'Cognitive1 could not be restarted', messageOf(error));
+  });
 }
 
 /**
