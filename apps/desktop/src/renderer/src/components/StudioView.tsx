@@ -1,6 +1,7 @@
 import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Square, Trash2, Users, Wand2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
+import { deriveAgentActivity } from './AgentActivity';
 import { AutopilotPanel } from './AutopilotPanel';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
@@ -22,6 +23,7 @@ import {
   type BoardCard,
   type BoardStatus,
   type InterviewState,
+  type PersistedEvent,
   type ProjectRecord,
   type StudioArtifacts,
   type StudioStyleReferences,
@@ -109,6 +111,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // since reading state there would only ever see the value the loop closed over, not a later click of Stop.
   const [buildingStep, setBuildingStep] = useState<string | null>(null);
   const buildCancelled = useRef(false);
+  // The current step's own tool calls, arriving live on the same channel a composer run's events already use —
+  // `stepId` is minted before the step starts and carried in the request, so this can filter to just this step.
+  const [buildEvents, setBuildEvents] = useState<PersistedEvent[]>([]);
+  const buildStepId = useRef<string | null>(null);
   const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
   const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
   const projectTitle = state?.goal.trim() || state?.idea.trim() || viewedProject?.title || 'New project';
@@ -384,6 +390,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [boardFull]);
+
+  // Live tool calls for whichever design-build step is running, so "Building X" says what it is actually doing
+  // instead of sitting on a bare spinner for however long open-pencil takes to answer.
+  useEffect(() => window.kaiDesktop.onAgentEvent(({ conversationId, event }) => {
+    if (conversationId !== buildStepId.current) return;
+    setBuildEvents((current) => [...current, event]);
+  }), []);
 
   const flowJourneys = useMemo(() => (viewing === 'flows' && viewText ? parseFlows(viewText) : []), [viewing, viewText]);
   const designPages = useMemo(() => (pagesText ? parsePages(pagesText) : []), [pagesText]);
@@ -902,7 +915,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /** The read itself, shared by the manual "Pull the design" button and each step of the build loop below — the
    * loop needs it without the button's own busy/notice handling, since it has its own for the whole run. */
-  async function refreshDesign(): Promise<{ changed: string[]; tokensChanged: boolean; tokenCount: number }> {
+  async function refreshDesign(): Promise<{ design: StudioDesign; changed: string[]; tokensChanged: boolean; tokenCount: number }> {
     const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!));
     setDesign(pulled.design);
     setBoard(pulled.board);
@@ -931,6 +944,16 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /** One step of the build loop: mints the id its live events will be tagged with, so the subscription above can
+   * already be filtering for it before the call that produces them is even sent. */
+  async function runBuildStep(name: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+    setBuildingStep(name);
+    setBuildEvents([]);
+    const stepId = `design_${crypto.randomUUID()}`;
+    buildStepId.current = stepId;
+    return unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId!, prompt, stepId));
+  }
+
   /**
    * Runs the whole screen list end to end: the foundation first, then each undrawn screen in its own agent turn
    * against open-pencil's tools, pulling the design after each one so its row ticks off before the next starts.
@@ -945,20 +968,26 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setNotice(null);
     try {
       if (!foundationDone) {
-        setBuildingStep('Foundation');
-        const result = unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId, promptFor('Foundation')));
+        const result = await runBuildStep('Foundation', promptFor('Foundation'));
         if (result.status === 'failed') throw new Error(`Foundation: ${result.error || 'the step failed.'}`);
+        // "Completed" only means the turn ended without a technical error — it says nothing about whether open-
+        // pencil actually has anything now. Pull before trusting it, the same way a screen's own row only ticks
+        // off once the design read back confirms it, not because the turn claimed to be done.
+        const pulled = await refreshDesign();
+        if (pulled.tokenCount === 0 && pulled.design.components.length === 0) {
+          throw new Error('Foundation: the turn finished, but open-pencil still has no variables or components. Open the editor and check it is the document you expect, then try again.');
+        }
         toggleFoundation(true);
+      } else {
+        await refreshDesign();
       }
-      await refreshDesign();
       const toDraw = designRows.filter((row) => row.inPages && !row.drawn);
       for (const row of toDraw) {
         if (buildCancelled.current) {
           setNotice('Stopped. Already-drawn screens are kept; press Build the design again to carry on from here.');
           return;
         }
-        setBuildingStep(row.name);
-        const result = unwrap(await window.kaiDesktop.buildStudioDesignStep(projectId, promptFor(row.name)));
+        const result = await runBuildStep(row.name, promptFor(row.name));
         if (result.status === 'failed') throw new Error(`${row.name}: ${result.error || 'the step failed.'}`);
         await refreshDesign();
       }
@@ -966,6 +995,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
+      buildStepId.current = null;
       setBuildingStep(null);
       setBusy(null);
     }
@@ -1594,9 +1624,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   )}
                   <span className="studio-model">{designRows.filter((row) => row.drawn).length} of {designRows.length} screens drawn</span>
                 </div>
-                {busy === 'design-build' && (
-                  <p className="studio-note"><Loader2 className="spin" size={13} /> Building {buildingStep ? `"${buildingStep}"` : '…'} — open-pencil is launched automatically if it is not already running.</p>
-                )}
+                {busy === 'design-build' && (() => {
+                  const activity = deriveAgentActivity(buildEvents, true, false, false);
+                  return (
+                    <p className="studio-note">
+                      <Loader2 className="spin" size={13} /> Building {buildingStep ? `"${buildingStep}"` : '…'}
+                      {buildEvents.length > 0 ? `: ${activity.label.toLowerCase()} — ${activity.detail}` : ' — connecting to open-pencil (launched automatically if it is not already running)…'}
+                    </p>
+                  );
+                })()}
                 <ul className="studio-steps">
                   <li className={foundationDone ? 'done' : undefined}>
                     <label className="studio-step-check">

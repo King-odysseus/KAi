@@ -1301,9 +1301,11 @@ export interface KaiDesktopBridge {
   /**
    * Runs one design-build prompt (the foundation, or one screen) as a real agent turn against open-pencil's own
    * tools, launching the editor first if it is not already running. The caller pulls the design afterward to see
-   * what the turn actually drew — this only reports whether the turn itself finished.
+   * what the turn actually drew — this only reports whether the turn itself finished. `stepId` is minted by the
+   * caller before this is sent, so `onAgentEvent` can be subscribed to it in time to show the turn's tool calls
+   * live, on the same channel a composer run's own events already arrive on.
    */
-  buildStudioDesignStep(projectId: string, prompt: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
+  buildStudioDesignStep(projectId: string, prompt: string, stepId: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
   /** Redraws the board when a card moves, whichever window or agent moved it. */
   onStudioBoardChanged(listener: (payload: { projectId: string; board: StudioBoard }) => void): () => void;
   /** Starts the approved plan as a workflow, one part at a time. */

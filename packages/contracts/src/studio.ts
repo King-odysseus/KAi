@@ -468,9 +468,12 @@ export const studioDesignPullSchema = z
   .strict();
 export type StudioDesignPull = z.infer<typeof studioDesignPullSchema>;
 
-/** One prompt handed to a design-build step: the foundation, or one screen. */
+/** One prompt handed to a design-build step: the foundation, or one screen.
+ * `stepId` is minted by the caller, before the step starts, so it can subscribe to that step's live tool-call
+ * events (on the existing `agents:event` channel) ahead of making the call — the response alone would arrive too
+ * late to show anything while the step is still running. */
 export const studioDesignBuildStepInputSchema = z
-  .object({ projectId: z.string().min(1), prompt: z.string().trim().min(1).max(20_000) })
+  .object({ projectId: z.string().min(1), prompt: z.string().trim().min(1).max(20_000), stepId: z.string().min(1).max(128) })
   .strict();
 export type StudioDesignBuildStepInput = z.infer<typeof studioDesignBuildStepInputSchema>;
 

@@ -541,7 +541,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, projectId, pulled.board);
     return pulled;
   });
-  handle(context, 'studio:design-build-step', async ({ projectId, prompt }) => context.studio.buildDesignStep(projectId, prompt));
+  handle(context, 'studio:design-build-step', async ({ projectId, prompt, stepId }, request) =>
+    context.studio.buildDesignStep(projectId, prompt, stepId, (event) => {
+      const payload = { conversationId: stepId, event } satisfies AgentRunEvent;
+      if (context.windows.send(request.ownerWindowId, 'agents:event', payload)) return;
+      context.windows.broadcast('agents:event', payload);
+    }));
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, request.ownerWindowId));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });

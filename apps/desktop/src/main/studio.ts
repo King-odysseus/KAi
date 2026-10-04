@@ -12,6 +12,7 @@ import {
   type BoardStatus,
   type CardCheck,
   type CardRun,
+  type PersistedEvent,
   type StudioArtifacts,
   type StudioBoard,
   type StudioDesign,
@@ -95,9 +96,16 @@ export interface StudioPorts {
   ensureOpenPencilRunning?(): Promise<void>;
   /**
    * Runs one design-build prompt as a real agent turn with open-pencil's tools available, through whichever
-   * provider the user has configured. Optional for the same reason as `ensureOpenPencilRunning`.
+   * provider the user has configured. `onEvent` carries the turn's own tool calls live, the same events a
+   * composer run reports, keyed by `conversationId` so the caller can tell one step's events from another's.
+   * Optional for the same reason as `ensureOpenPencilRunning`.
    */
-  runDesignAgent?(prompt: string, projectRoot: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }>;
+  runDesignAgent?(
+    prompt: string,
+    projectRoot: string,
+    conversationId: string,
+    onEvent?: (event: PersistedEvent) => void,
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }>;
   /** Writes the status file and the root agent instructions. Optional so tests can leave it out. */
   handoff?: { write(projectId: string, board: StudioBoard, catalog: StudioArtifacts): Promise<void> };
   now(): string;
@@ -409,13 +417,18 @@ export class DesktopStudio {
    * pull the design afterward to see what actually got drawn — this only reports whether the turn itself finished,
    * the same way a composer run does.
    */
-  async buildDesignStep(projectId: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+  async buildDesignStep(
+    projectId: string,
+    prompt: string,
+    stepId: string,
+    onEvent?: (event: PersistedEvent) => void,
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
     if (!this.ports.ensureOpenPencilRunning || !this.ports.runDesignAgent) {
       throw new Error('The design-build loop is not available in this build.');
     }
     await this.ports.ensureOpenPencilRunning();
     const root = await this.ports.projectRoot(projectId);
-    return this.ports.runDesignAgent(prompt, root);
+    return this.ports.runDesignAgent(prompt, root, stepId, onEvent);
   }
 }
 

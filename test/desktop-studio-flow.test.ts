@@ -345,20 +345,36 @@ describe('pulling the design from open-pencil', () => {
 });
 
 describe('design build', () => {
-  it('gets open-pencil ready before running the step, against the project its root resolves to', async () => {
+  it('gets open-pencil ready before running the step, against the project its root resolves to, with its own step id', async () => {
     const order: string[] = [];
     const { studio: app } = studio({}, {
       ensureOpenPencilRunning: async () => { order.push('ensure'); },
-      runDesignAgent: async (prompt, projectRoot) => {
-        order.push(`run:${prompt}:${projectRoot}`);
+      runDesignAgent: async (prompt, projectRoot, conversationId) => {
+        order.push(`run:${prompt}:${projectRoot}:${conversationId}`);
         return { status: 'completed', output: 'done' };
       },
     });
 
-    const result = await app.buildDesignStep('p1', 'Draw the pricing screen');
+    const result = await app.buildDesignStep('p1', 'Draw the pricing screen', 'step-1');
 
     expect(result).toEqual({ status: 'completed', output: 'done' });
-    expect(order).toEqual(['ensure', `run:Draw the pricing screen:${root}`]);
+    expect(order).toEqual(['ensure', `run:Draw the pricing screen:${root}:step-1`]);
+  });
+
+  it('carries live events from the turn back out to the caller', async () => {
+    const event = { schemaVersion: 1 as const, id: 'e1', taskId: 'step-1', timestamp: '2026-10-04T00:00:00.000Z', type: 'tool.call' as const, name: 'render', status: 'started' as const };
+    const seen: unknown[] = [];
+    const { studio: app } = studio({}, {
+      ensureOpenPencilRunning: async () => {},
+      runDesignAgent: async (_prompt, _root, _conversationId, onEvent) => {
+        onEvent?.(event);
+        return { status: 'completed', output: 'done' };
+      },
+    });
+
+    await app.buildDesignStep('p1', 'Draw the pricing screen', 'step-1', (seenEvent) => seen.push(seenEvent));
+
+    expect(seen).toEqual([event]);
   });
 
   it('passes a failed turn straight back, with its error', async () => {
@@ -367,7 +383,7 @@ describe('design build', () => {
       runDesignAgent: async () => ({ status: 'failed', output: '', error: 'open-pencil refused the call' }),
     });
 
-    const result = await app.buildDesignStep('p1', 'Draw the pricing screen');
+    const result = await app.buildDesignStep('p1', 'Draw the pricing screen', 'step-1');
 
     expect(result).toEqual({ status: 'failed', output: '', error: 'open-pencil refused the call' });
   });
@@ -375,6 +391,6 @@ describe('design build', () => {
   it('says the build loop is not available rather than failing obscurely, when the ports are not wired', async () => {
     const { studio: app } = studio({});
 
-    await expect(app.buildDesignStep('p1', 'Draw the pricing screen')).rejects.toThrow('not available in this build');
+    await expect(app.buildDesignStep('p1', 'Draw the pricing screen', 'step-1')).rejects.toThrow('not available in this build');
   });
 });

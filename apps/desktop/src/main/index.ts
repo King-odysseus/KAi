@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
@@ -790,18 +790,27 @@ async function startApplication(): Promise<void> {
     await settings.update((value) => withOpenPencilMcpSetting(value, { endpoint: live.endpoint, enabled: true }).settings);
     mcpRuntime?.invalidate();
   };
-  // Autonomy is pinned to 'plan' so the project's own file/shell tools stay read-only for this run; the point is
-  // open-pencil's tools, offered the same way they already are to every Direct API run through the MCP runtime.
-  const runDesignAgent = async (prompt: string, projectRoot: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> => {
+  // Autonomy has to be 'full': DesktopMcpRuntime.policy() (mcp-runtime.ts) denies every non-read-only MCP tool
+  // under 'plan', open-pencil's render/set_fill/create_page included, so a weaker level makes every real call the
+  // model attempts fail silently - no technical error, just a refused tool call the model then talks past, which
+  // is how a step reported "completed" while open-pencil's document stayed empty. The project's own file/shell
+  // tools come along unrestricted too (DesktopProjectToolRuntime has no separate policy for this run), which is an
+  // accepted trade for now: the prompt only ever asks for open-pencil work, never for file or shell changes.
+  const runDesignAgent = async (
+    prompt: string,
+    projectRoot: string,
+    conversationId: string,
+    onEvent?: (event: PersistedEvent) => void,
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> => {
     const request: AgentRunRequest = {
-      conversationId: `design_${crypto.randomUUID()}`,
+      conversationId,
       prompt,
       agent: 'codex',
       execution: 'api',
       route: 'direct',
-      autonomy: 'plan',
+      autonomy: 'full',
     };
-    const result = await directApi.run(request, projectRoot);
+    const result = await directApi.run(request, projectRoot, undefined, onEvent);
     return { status: result.status, output: result.output, ...(result.error ? { error: result.error } : {}) };
   };
   studio = new DesktopStudio({
