@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appSettingsV1Schema, CLI_MODEL_SUGGESTIONS, cliModelNameSchema, createDefaultSettings, themeModeSchema, THEME_MODES } from '../packages/contracts/src';
+import { appSettingsV1Schema, CLI_MODEL_SUGGESTIONS, cliModelNameSchema, createDefaultSettings, migrateSettings, themeModeSchema, THEME_MODES } from '../packages/contracts/src';
 import { buildAgentArgs } from '../apps/desktop/src/main/agent-runtime';
 import { mergeSettingsUpdate } from '../apps/desktop/src/main/service-controller';
 
@@ -76,12 +76,25 @@ describe('CLI model setting', () => {
 });
 
 describe('themes', () => {
-  it('offers dark, navy, purple and light, and keeps the cycle order stable', () => {
-    expect(themeModeSchema.options).toEqual(['dark', 'navy', 'purple', 'light']);
-    expect(THEME_MODES.map((theme) => theme.id)).toEqual(['dark', 'navy', 'purple', 'light']);
+  it('offers the dark themes and then the light ones, and keeps the cycle order stable', () => {
+    // The order is what the title-bar button cycles through and what the picker lists, so it is pinned rather than
+    // derived: dark themes first, light ones after, each group in the order they were added.
+    expect(themeModeSchema.options).toEqual(['dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
+    expect(THEME_MODES.map((theme) => theme.id)).toEqual(['dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
+    // Every group of dark themes comes before every light one, which is what makes the picker readable.
+    const families = THEME_MODES.map((theme) => theme.family);
+    expect(families.indexOf('light')).toBe(families.lastIndexOf('dark') + 1);
     for (const theme of themeModeSchema.options) {
       expect(appSettingsV1Schema.parse({ ...createDefaultSettings(), theme }).theme).toBe(theme);
     }
     expect(() => appSettingsV1Schema.parse({ ...createDefaultSettings(), theme: 'neon' })).toThrow();
+  });
+
+  it('keeps a theme this build knows through the legacy settings migration', () => {
+    // The migration used to name the three themes that existed when it was written, so a settings file saved under a
+    // later theme came back as dark — a silent reset with no way to tell it had happened.
+    const migrated = migrateSettings({ theme: 'sky' });
+    expect(migrated.theme).toBe('sky');
+    expect(migrateSettings({ theme: 'neon' }).theme).toBe('dark');
   });
 });
