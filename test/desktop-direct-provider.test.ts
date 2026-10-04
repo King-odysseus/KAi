@@ -1176,6 +1176,70 @@ data: {"type":"message_stop"}
       expect.objectContaining({ type: 'tool.call', name: 'explore', status: 'completed', callId: 'toolu_explore' }),
     ]));
   });
+
+  it('fails a run whose every action was refused by the access level, rather than calling its prose a success', async () => {
+    // Under Plan access the model cannot edit anything, so this is what a run that was asked to make a change looks
+    // like: it tries, is refused, and then writes about it. Prose used to be enough for `completed`, which meant a
+    // run that changed nothing was recorded as a finished one.
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { messages: Array<{ role: string }> };
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const hasResult = JSON.stringify(body.messages).includes('tool_result');
+        if (hasResult) {
+          response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I could not make that change."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+          return;
+        }
+        response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_write', name: 'write_file', input: { path: 'src/blocked.ts', content: 'export const blocked = true;\n' } } })}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run({ ...runRequest(), autonomy: 'plan' }, process.cwd());
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('every action it tried was refused');
+    expect(result.error).toContain('Plan');
+  });
+
+  it('still counts a run as completed when one action got through, even if another was refused', async () => {
+    // The rule is "nothing got through", not "something was refused". A run that read a file and then had an edit
+    // refused did real work, and its answer is the answer.
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(raw) as { messages: Array<{ role: string }> };
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const hasResult = JSON.stringify(body.messages).includes('tool_result');
+        if (hasResult) {
+          response.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I read the file; the edit needs more access."}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+          return;
+        }
+        const read = { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_read', name: 'read_file', input: { path: 'package.json' } } };
+        const write = { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_write', name: 'write_file', input: { path: 'src/blocked.ts', content: 'x' } } };
+        response.end(`event: content_block_start\ndata: ${JSON.stringify(read)}\n\nevent: content_block_start\ndata: ${JSON.stringify(write)}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(
+      settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')),
+      credentialPort('provider.anthropic', 'anthropic-secret'),
+    );
+
+    const result = await runtime.run({ ...runRequest(), autonomy: 'plan' }, process.cwd());
+
+    expect(result.status).toBe('completed');
+    expect(result.error).toBeUndefined();
+  });
 });
 
 function runRequest(): AgentRunRequest {

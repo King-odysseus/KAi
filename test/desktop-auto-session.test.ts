@@ -339,15 +339,14 @@ describe('desktop auto session', () => {
   });
 
   it('stops when the person stops the run, instead of counting it as a failure and parking', async () => {
-    // The reply carries the lifecycle the runtime now writes for a cancelled run. Before, this was read as a plain
+    // The reply carries the flag the runtime now sets on a run the person stopped. Before, this was read as a plain
     // failure, so it fed the repeat detector and parked the session on a human — which is why Auto had to be reset by
     // hand every time somebody stopped a run.
     const cancelledRun = () => ({
       status: 'failed' as const,
       output: '',
-      conversation: {
-        events: [{ type: 'agent.lifecycle', status: 'cancelled', detail: 'DeepSeek API stopped before it finished.' }],
-      } as never,
+      cancelled: true,
+      conversation: { events: [{ type: 'agent.lifecycle', status: 'cancelled', detail: 'DeepSeek API stopped before it finished.' }] } as never,
     });
     const h = harness({ check: () => false, changedFiles: () => [], agent: () => cancelledRun() });
     await start(h);
@@ -357,6 +356,29 @@ describe('desktop auto session', () => {
     expect(final.message).toContain('The run was stopped');
     // And it did not sit waiting to be resumed.
     expect(final.waitReason).toBeNull();
+  });
+
+  it('treats a real failure as a failure even when the conversation holds an old cancelled run', async () => {
+    // Reading the flag off the run's own result rather than scanning the transcript: an old cancelled event used to
+    // make every later genuine failure read as "the run was stopped", which returned early and skipped the
+    // rate-limit rest and the provider switch that should have followed it.
+    const failingRun = () => ({
+      status: 'failed' as const,
+      output: '',
+      error: 'The provider refused the request.',
+      conversation: {
+        events: [
+          { type: 'agent.lifecycle', status: 'cancelled', detail: 'an older run the person stopped' },
+          { type: 'error', message: 'The provider refused the request.' },
+        ],
+      } as never,
+    });
+    const h = harness({ check: () => false, changedFiles: () => [], agent: () => failingRun() });
+    await start(h);
+    const final = await settled(h);
+
+    expect(final.phase).not.toBe('stopped');
+    expect(final.message).toContain('The provider refused the request');
   });
 
   it('parks on a turn cap rather than ending the run, and carries on when resumed', async () => {

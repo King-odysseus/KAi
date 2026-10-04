@@ -85,6 +85,12 @@ export const agentRunResultSchema = z
     status: z.enum(['completed', 'failed']),
     output: z.string(),
     error: z.string().optional(),
+    /**
+     * The person stopped this run rather than it breaking. `status` is still `failed` — a stopped run did not
+     * complete — but there is no `error` and no red box, so anything deciding what a run means reads this rather
+     * than matching the word "cancel" inside the error text.
+     */
+    cancelled: z.boolean().optional(),
     // The CLI reported that it is signed out; the UI offers Sign in.
     signInRequired: z.boolean().optional(),
     costUsd: z.number().nonnegative().optional(),

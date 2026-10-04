@@ -1,5 +1,7 @@
 export interface RunControlPort {
-  pause(conversationId: string): boolean;
+  /** Whether the run was actually suspended. The API path only pauses between provider rounds, so a false here
+   * means "asked, but nothing was held" rather than an error. */
+  pause(conversationId: string): Promise<boolean>;
   resume(conversationId: string): boolean;
   isPaused(conversationId: string): boolean;
   waitIfPaused(conversationId: string, signal: AbortSignal): Promise<void>;
@@ -21,10 +23,21 @@ export class DesktopRunControl implements RunControlPort {
     this.resumeRun = options.resumeRun;
   }
 
-  pause(conversationId: string): boolean {
+  /**
+   * Marks the run paused and asks the runtime to suspend it. Awaited, and its answer is the whole answer: a CLI run
+   * with no child process yet cannot be suspended, and an API run can only pause between provider rounds, so saying
+   * "paused, it will continue from the same point" without checking was a promise the app could not keep.
+   */
+  async pause(conversationId: string): Promise<boolean> {
     this.paused.add(conversationId);
-    void this.suspendRun?.(conversationId);
-    return true;
+    if (!this.suspendRun) return true;
+    try {
+      await this.suspendRun(conversationId);
+      return true;
+    } catch {
+      this.paused.delete(conversationId);
+      return false;
+    }
   }
 
   resume(conversationId: string): boolean {

@@ -4,6 +4,7 @@ import { directProviderPreset, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, 
 import type {
   AppSettings,
   AgentRunRequest,
+  AutonomyMode,
   DirectApiCapability,
   PermissionKey,
   PersistedEvent,
@@ -34,7 +35,7 @@ import {
 } from './project-tools';
 import { estimateCostUsd } from './usage-budget';
 import { RateLimitError, RequestPacer } from './rate-limit';
-import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING } from './run-guard';
+import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, type RunGuard } from './run-guard';
 
 function costFields(
   provider: string,
@@ -974,13 +975,14 @@ export class DesktopDirectProviderRuntime {
     }
 
     const output = outputParts.join('').trim();
-    const failed = !aborted && (errors.length > 0 || !output);
-    // Stopping a run is not a failure. The person stopped it, or steered it, and the next instruction is already on
-    // its way — so it is reported as cancelled, not as an error. Reporting it as an error is what put a red
-    // "run cancelled" box in the transcript for something the reader had just deliberately done.
-    const error = failed
-      ? errors.at(-1) || `${capability.displayName} returned no output.`
-      : undefined;
+    const { failed, error } = runFailure({
+      aborted,
+      errors,
+      output,
+      guard: toolRuntime.guard,
+      displayName: capability.displayName,
+      autonomy: request.autonomy,
+    });
 
     if (output) events.push(textEvent(request, output));
     if (inputTokens !== undefined || outputTokens !== undefined) {
@@ -1020,6 +1022,7 @@ export class DesktopDirectProviderRuntime {
 
     return {
       status: failed || aborted ? 'failed' : 'completed',
+      ...(aborted ? { cancelled: true } : {}),
       output,
       outputAgent: request.agent,
       events,
@@ -1268,13 +1271,14 @@ export class DesktopDirectProviderRuntime {
     if (!aborted && !outputParts.join('').trim() && reasoningOnly) errors.push(`${capability.displayName}${REASONING_ONLY}`);
 
     const output = outputParts.join('').trim();
-    const failed = !aborted && (errors.length > 0 || !output);
-    // Stopping a run is not a failure. The person stopped it, or steered it, and the next instruction is already on
-    // its way — so it is reported as cancelled, not as an error. Reporting it as an error is what put a red
-    // "run cancelled" box in the transcript for something the reader had just deliberately done.
-    const error = failed
-      ? errors.at(-1) || `${capability.displayName} returned no output.`
-      : undefined;
+    const { failed, error } = runFailure({
+      aborted,
+      errors,
+      output,
+      guard: toolRuntime.guard,
+      displayName: capability.displayName,
+      autonomy: request.autonomy,
+    });
 
     if (output) events.push(textEvent(request, output));
     if (inputTokens !== undefined || outputTokens !== undefined) {
@@ -1311,6 +1315,7 @@ export class DesktopDirectProviderRuntime {
 
     return {
       status: failed || aborted ? 'failed' : 'completed',
+      ...(aborted ? { cancelled: true } : {}),
       output,
       outputAgent: request.agent,
       events,
@@ -1570,6 +1575,7 @@ export class DesktopDirectProviderRuntime {
       inputTokens,
       outputTokens,
       aborted,
+      guard: toolRuntime.guard,
     });
   }
 
@@ -1774,6 +1780,7 @@ export class DesktopDirectProviderRuntime {
       inputTokens,
       outputTokens,
       aborted,
+      guard: toolRuntime.guard,
     });
   }
 
@@ -2116,6 +2123,45 @@ const REPEAT_QUESTION = (message: string) => ({
   runQuestion: CONTINUE_OR_FINISH,
 });
 
+/**
+ * Whether a run failed, and what to say about it.
+ *
+ * Stopping a run is not a failure — the person did it, and the next instruction is usually already on its way — so an
+ * aborted run never fails here.
+ *
+ * The case that used to be missed: a run whose every tool call was refused by the access level. It answered with prose
+ * about what it could not do, and prose counted as output, so the run was scored `completed`. Under Plan access that
+ * meant a request to change files could end as a finished run having changed nothing, and Auto could treat it as one.
+ */
+function runFailure(input: {
+  aborted: boolean;
+  errors: readonly string[];
+  output: string;
+  guard: RunGuard;
+  displayName: string;
+  autonomy: AutonomyMode;
+}): { failed: boolean; error?: string } {
+  if (input.aborted) return { failed: false };
+  if (input.errors.length > 0 || !input.output) {
+    return { failed: true, error: input.errors.at(-1) || `${input.displayName} returned no output.` };
+  }
+  if (input.guard.walledOffByPolicy) {
+    return {
+      failed: true,
+      error: `${input.displayName} could not do anything: every action it tried was refused by this run's access level (${autonomyLabel(input.autonomy)}). Choose a higher access level for the run, or ask for something it is allowed to do.`,
+    };
+  }
+  return { failed: false };
+}
+
+function autonomyLabel(autonomy: AutonomyMode): string {
+  if (autonomy === 'plan') return 'Plan, which allows no changes';
+  if (autonomy === 'ask') return 'Ask, which asks before each change';
+  if (autonomy === 'autoEdit') return 'Auto-edit, which allows file edits but not commands';
+  if (autonomy === 'full') return 'Full access';
+  return 'Custom permissions';
+}
+
 function finishProviderRun(input: {
   request: AgentRunRequest;
   capability: DirectApiCapability;
@@ -2126,16 +2172,18 @@ function finishProviderRun(input: {
   inputTokens?: number;
   outputTokens?: number;
   aborted: boolean;
+  guard: RunGuard;
 }): AgentExecutionResult {
-  const { request, capability, events, emit, outputParts, errors, inputTokens, outputTokens, aborted } = input;
+  const { request, capability, events, emit, outputParts, errors, inputTokens, outputTokens, aborted, guard } = input;
   const output = outputParts.join('').trim();
-  const failed = !aborted && (errors.length > 0 || !output);
-  // Stopping a run is not a failure. The person stopped it, or steered it, and the next instruction is already on its
-  // way — so it is reported as cancelled, not as an error. Reporting it as an error put a red "run cancelled" box in
-  // the transcript for something the reader had just deliberately done.
-  const error = failed
-    ? errors.at(-1) || `${capability.displayName} returned no output.`
-    : undefined;
+  const { failed, error } = runFailure({
+    aborted,
+    errors,
+    output,
+    guard,
+    displayName: capability.displayName,
+    autonomy: request.autonomy,
+  });
 
   if (output) events.push(textEvent(request, output));
   if (inputTokens !== undefined || outputTokens !== undefined) {
@@ -2172,6 +2220,7 @@ function finishProviderRun(input: {
 
   return {
     status: failed || aborted ? 'failed' : 'completed',
+    ...(aborted ? { cancelled: true } : {}),
     output,
     outputAgent: request.agent,
     events,
@@ -2416,6 +2465,7 @@ async function executeToolCalls(
       argumentsValue = parseToolArguments(call.argumentsText);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      toolRuntime.guard.noteToolOutcome(false);
       emit(toolCallEvent(request, name, 'failed', undefined, { error: message }, callId));
       results.push(formatOutput(callId, { error: message }));
       continue;
@@ -2460,6 +2510,9 @@ async function executeToolCalls(
       });
       const answer = approvals?.requestChoice ? await approvals.requestChoice(approvalRequest) : null;
       const output = answer ? { answer } : { error: 'Nobody answered the question; no approval channel was available for this run.' };
+      // Asking a question is not a change, so whether it was answered says nothing about whether the run was walled
+      // off. It is not counted as a policy blockage — an unanswered question is its own outcome.
+      toolRuntime.guard.noteToolOutcome(Boolean(answer));
       emit(toolCallEvent(request, name, answer ? 'completed' : 'failed', argumentsValue, output, callId));
       results.push(formatOutput(callId, output));
       continue;
@@ -2490,6 +2543,7 @@ async function executeToolCalls(
       } catch (error) {
         output = { error: error instanceof Error ? error.message : String(error) };
       }
+      toolRuntime.guard.noteToolOutcome(!('error' in output));
       emit(toolCallEvent(request, name, 'error' in output ? 'failed' : 'completed', argumentsValue, output, callId));
       results.push(formatOutput(callId, output));
       continue;
@@ -2512,6 +2566,9 @@ async function executeToolCalls(
       };
     }
     if (policy.decision === 'deny') {
+      // The access level refused this, which is the one refusal that means "the run could not work", as opposed to
+      // "the person said no" or "the call failed". See RunGuard.walledOffByPolicy.
+      toolRuntime.guard.noteToolOutcome(false, true);
       emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }, callId));
       results.push(formatOutput(callId, { error: policy.reason }));
       continue;
@@ -2540,6 +2597,9 @@ async function executeToolCalls(
       const approved = approvals ? await approvals.request(approvalRequest) : false;
       if (!approved) {
         const reason = 'The user denied this project change.';
+        // A no from the person is an answer, not a wall: counted as an attempt that did not succeed, but never as a
+        // policy blockage, so a run that asked and was told no is not then called a failure.
+        toolRuntime.guard.noteToolOutcome(false);
         emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
         results.push(formatOutput(callId, { error: reason }));
         continue;
@@ -2549,6 +2609,7 @@ async function executeToolCalls(
     const execution: ProjectToolExecution = (
       (await externalTools?.execute(name, argumentsValue, signal)) ?? await toolRuntime.execute(name, argumentsValue, signal)
     );
+    toolRuntime.guard.noteToolOutcome(execution.ok);
     const repeat = toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
     if (repeat === 'stop') {
       // Stuck, not broken: ask rather than throw the run away. Continue sets the count aside, so it takes five more

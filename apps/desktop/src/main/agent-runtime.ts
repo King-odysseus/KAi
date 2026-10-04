@@ -97,6 +97,13 @@ export interface AgentExecutionResult {
   events: PersistedEvent[];
   sessionId?: string;
   error?: string;
+  /**
+   * The run was stopped rather than broken. It carries `status: 'failed'` so nothing has to change the shape it
+   * expects, but it is not a failure: there is no `error`, no red box in the transcript, and a lifecycle event
+   * saying `cancelled`. Callers that care about the difference read this flag instead of matching the word
+   * "cancel" in the error text, which is what they used to do and is why a stop could be counted as a crash.
+   */
+  cancelled?: boolean;
   /** The run failed because the CLI is signed out; the caller should offer Sign in. */
   signInRequired?: boolean;
 }
@@ -572,13 +579,14 @@ export class DesktopAgentRuntime {
     }
 
     const output = outputParts.join('').trim();
-    const aborted = controller.signal.aborted;
-    const failed = !aborted && (exitCode !== 0 || (!output && errors.length > 0));
-    const rawError = aborted
-      ? `${definition.displayName} run cancelled.`
-      : failed
-        ? errors.at(-1) || `${definition.displayName} exited with code ${exitCode ?? 'unknown'}${exitSignal ? ` (${exitSignal})` : ''}.`
-        : undefined;
+    // A stop is the person's own doing, not a failure of the run, so it is reported the way the Direct API path has
+    // always reported one: its own lifecycle word, and no error. It used to arrive as a failure carrying the text
+    // "run cancelled", which every caller then had to recognise by matching that word.
+    const cancelled = controller.signal.aborted;
+    const failed = !cancelled && (exitCode !== 0 || (!output && errors.length > 0));
+    const rawError = failed
+      ? errors.at(-1) || `${definition.displayName} exited with code ${exitCode ?? 'unknown'}${exitSignal ? ` (${exitSignal})` : ''}.`
+      : undefined;
     // The CLI rejects a model it does not recognize the same way whether the name is wrong or just newer than the
     // installed CLI build. Since KAI's model list is not the source of truth for what an account can reach, treat
     // this as "update the CLI" rather than "pick a different model".
@@ -588,7 +596,7 @@ export class DesktopAgentRuntime {
 
     if (modelKey && failed && isUnknownModelError(rawError ?? '')) {
       this.rejectedModels.set(modelKey, `Update ${definition.displayName} or select another model.`);
-    } else if (modelKey && !failed && !aborted) {
+    } else if (modelKey && !failed && !cancelled) {
       this.rejectedModels.delete(modelKey);
     }
 
@@ -619,13 +627,16 @@ export class DesktopAgentRuntime {
     events.push(
       lifecycleEvent(
         request,
-        failed || aborted ? 'failed' : 'completed',
-        failed || aborted ? error || `${definition.displayName} failed.` : `${definition.displayName} completed.`,
+        cancelled ? 'cancelled' : failed ? 'failed' : 'completed',
+        cancelled
+          ? `${definition.displayName} stopped before it finished.`
+          : failed ? error || `${definition.displayName} failed.` : `${definition.displayName} completed.`,
       ),
     );
 
     return {
-      status: failed || aborted ? 'failed' : 'completed',
+      status: failed || cancelled ? 'failed' : 'completed',
+      ...(cancelled ? { cancelled: true } : {}),
       output,
       outputAgent: request.agent,
       events,
@@ -679,10 +690,11 @@ export class DesktopAgentRuntime {
   async pause(conversationId: string): Promise<boolean> {
     const active = this.activeRuns.get(conversationId);
     if (!active || active.paused) return false;
+    // No process to hold yet: the run is still starting up, so there is nothing to suspend and saying otherwise
+    // would promise a pause that never happened.
+    if (!active.child?.pid) return false;
     active.paused = true;
-    if (active.child?.pid) {
-      await (this.options.suspendProcess ?? suspendProcessTree)(active.child.pid);
-    }
+    await (this.options.suspendProcess ?? suspendProcessTree)(active.child.pid);
     return true;
   }
 
@@ -1358,7 +1370,7 @@ function isProcessResult(value: ProcessChunk | ProcessResult): value is ProcessR
 
 function lifecycleEvent(
   request: Pick<AgentRunRequest, 'agent' | 'conversationId'>,
-  status: 'starting' | 'completed' | 'failed',
+  status: 'starting' | 'completed' | 'failed' | 'cancelled',
   detail: string,
 ): PersistedEvent {
   return {

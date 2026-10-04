@@ -32,6 +32,9 @@ export class RunGuard {
   private lastKey = '';
   private streak = 0;
   private wrapUp = false;
+  private attempted = 0;
+  private succeeded = 0;
+  private blockedByPolicy = 0;
 
   constructor(private maxCostUsd: number = DEFAULT_MAX_RUN_COST_USD) {}
 
@@ -69,6 +72,29 @@ export class RunGuard {
 
   get repeatCount(): number {
     return this.streak;
+  }
+
+  /**
+   * Note how a tool call ended, so the run can tell "the model did nothing" from "the model was not allowed to do
+   * anything". `blockedByPolicy` is the access level refusing the call — not the person declining an approval, which
+   * is an answer rather than a wall, and not a call that simply failed on its own.
+   */
+  noteToolOutcome(ok: boolean, blockedByPolicy = false): void {
+    this.attempted += 1;
+    if (ok) this.succeeded += 1;
+    if (blockedByPolicy) this.blockedByPolicy += 1;
+  }
+
+  /**
+   * Whether the run was walled off rather than merely unproductive: it tried to do something, every attempt was
+   * refused by the access level, and nothing got through.
+   *
+   * This is what makes such a run a failure instead of a success. It used to be scored `completed` whenever the model
+   * said something — so a run under Plan access that tried to edit files, had every edit refused, and then wrote "I
+   * could not make the change" was recorded as a completed run, and Auto could finish on it.
+   */
+  get walledOffByPolicy(): boolean {
+    return this.attempted > 0 && this.succeeded === 0 && this.blockedByPolicy > 0;
   }
 
   /** The count is set aside once the person has been asked, so it takes five more before they are asked again. */

@@ -457,10 +457,11 @@ export class DesktopAutoSession {
       // A run the person cancelled is not a failure. Counting it as one fed the repeat detector, and the repeat
       // detector parks the session on a human — so stopping a run made Auto stop and wait to be resumed, which is the
       // behaviour that had to be reset by hand every time.
-      const cancelled = (result?.conversation?.events ?? []).some(
-        (event) => (event as { type?: string; status?: string }).type === 'agent.lifecycle'
-          && (event as { status?: string }).status === 'cancelled',
-      );
+      //
+      // Read from this run's own result, not from the conversation's events. Scanning the transcript meant any
+      // cancelled run anywhere in the conversation's past made every later genuine failure read as "the run was
+      // stopped", which returned early and skipped the rate-limit rest and the provider switch with it.
+      const cancelled = result?.cancelled === true;
 
       const failed = thrown !== null || result?.status === 'failed' || Boolean(result?.error);
       if (!failed) return { kind: 'ok', output: result?.output ?? '' };
