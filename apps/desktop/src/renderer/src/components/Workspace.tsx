@@ -670,6 +670,10 @@ export function WorkspaceView({
     else onCreateConversation(text, options);
   };
 
+  // Declared after the handler it wraps: a `const` arrow is not hoisted, so reading it above its own definition
+  // would throw on the first render.
+  const queueOrSendStable = useLatestHandler(queueOrSend);
+
   const optionsForPrompt = (text: string): WorkspaceSendOptions | undefined => {
     const namedSkills = skills
       .filter((skill) => new RegExp(`\\$${escapeRegExp(skill.name)}(?![A-Za-z0-9_-])`, 'i').test(text))
@@ -865,6 +869,8 @@ export function WorkspaceView({
   }
 
   /** Puts a question about something KAI just showed into the composer, read-only, ready to send. */
+  const askKaiStable = useLatestHandler(askKai);
+
   function askKai(text: string): void {
     rememberIntent('learn');
     setPrompt(text);
@@ -1251,7 +1257,7 @@ export function WorkspaceView({
     if (!next) trailingInlineEvents.push(event);
     else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
   }
-  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
+  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
@@ -1414,7 +1420,7 @@ export function WorkspaceView({
                   onSaveToBrain={setBrainDraft}
                   onBranch={onBranchTurn}
                   awaitingAnswer={Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1}
-                  onAnswer={queueOrSend}
+                  onAnswer={queueOrSendStable}
                 />
               </Fragment>
             ))}
@@ -1445,7 +1451,7 @@ export function WorkspaceView({
                 </button>
                 {showRunDetails && (
                   <div className="run-details-list">
-                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={false} onAskKai={askKai} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={false} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
                   </div>
                 )}
               </section>
@@ -1776,6 +1782,22 @@ export function WorkspaceView({
       </div>
     </div>
   );
+}
+
+/**
+ * A stable identity for a handler that closes over state which changes.
+ *
+ * The two components that repeat per message are memoised so a keystroke does not redraw the whole transcript, and
+ * that only works if the handlers they are given do not change. A plain function declared in the component body is a
+ * new function on every render, so the memo compared unequal and redrew anyway — every character, the entire
+ * transcript, which is what the memo was for.
+ *
+ * The callback forwards to the latest closure, so nothing goes stale: the identity is fixed, the behaviour is not.
+ */
+function useLatestHandler<A extends unknown[], R>(handler: (...args: A) => R): (...args: A) => R {
+  const latest = useRef(handler);
+  latest.current = handler;
+  return useCallback((...args: A) => latest.current(...args), []);
 }
 
 // The composer's prompt lives in Workspace state, so every keystroke re-renders it. Without memoising the two

@@ -25,6 +25,7 @@ const WAIT_LABELS: Record<AutoWaitReason, string> = {
   'cost-cap': 'Waiting: spend limit reached',
   'time-cap': 'Waiting: time limit reached',
   'turn-cap': 'Waiting: turn limit reached',
+  'split-limit': 'Waiting: this task needs breaking up',
 };
 
 function clock(iso: string): string {

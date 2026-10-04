@@ -9,7 +9,7 @@ import {
   type Plan,
   type PlanItem,
 } from '@kai/contracts';
-import { DesktopAutoSession, parseAutoSplitDirective, type AutoSessionPorts, type AutoWindowPort } from '../apps/desktop/src/main/auto-session';
+import { DesktopAutoSession, MAX_SPLIT_DEPTH, parseAutoSplitDirective, type AutoSessionPorts, type AutoWindowPort } from '../apps/desktop/src/main/auto-session';
 
 const CONVERSATION = 'conv-1';
 
@@ -438,6 +438,24 @@ describe('desktop auto session', () => {
     expect(seeded?.title).toBe('Finish the parser');
     expect(seeded?.turns[0]?.text).toContain('The lexer is done; write the parser and its tests.');
     expect(final.log.some((entry) => entry.kind === 'split')).toBe(true);
+    await h.session.dispose();
+  });
+
+  it('says it cannot split again, rather than claiming a hand-off it did not make', async () => {
+    // Started already at the split limit, so this conversation is the one that cannot hand the work on. Auto used to
+    // report "Handed the rest to a new tab" either way — dropping the remaining work while telling the person it was
+    // being handled.
+    const h = harness({
+      agent: () => ({ output: `Still too big.\n${AUTO_SPLIT_SENTINEL} {"title":"Another piece","briefing":"Carry on."}` }),
+      check: () => false,
+    });
+    await start(h, { splitDepth: MAX_SPLIT_DEPTH });
+    const final = await settled(h);
+
+    expect(final.phase).toBe('waiting-for-you');
+    expect(final.waitReason).toBe('split-limit');
+    expect(h.openedTabs).toHaveLength(0);
+    expect(final.log.some((entry) => entry.kind === 'split')).toBe(false);
     await h.session.dispose();
   });
 

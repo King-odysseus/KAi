@@ -16,6 +16,18 @@ import type {
 /** How long to keep reading a finished process's output before giving up on pipes a background process still holds. */
 const OUTPUT_DRAIN_GRACE_MS = 1_000;
 
+/** How much of a tool result to keep. Enough for a command's error or an edit's refusal, not a whole file dump. */
+const MAX_TOOL_RESULT_CHARS = 4_000;
+
+/**
+ * How long a CLI may go without saying anything before the run says so.
+ *
+ * Generous on purpose. A model thinking about a large context emits nothing for a long time, and a build the agent
+ * started can print nothing for minutes, so this is set where neither is plausible rather than where it would be
+ * useful — and it warns rather than stops, so a false alarm costs a line of text and nothing else.
+ */
+const SILENCE_WARNING_MS = 10 * 60_000;
+
 const AGENTS: Record<
   AgentId,
   {
@@ -526,9 +538,39 @@ export class DesktopAgentRuntime {
     let stderrCarry = '';
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | null = null;
-    // Only the Task tool (claude's own sub-agent) is tracked by id, so a result line can mark it done — that is
-    // what lets a run report how many sub-agents it has going at once, instead of just the one CLI process.
-    const pendingAgentCalls = new Map<string, string>();
+    // Every tool a claude run starts, by the id its result will answer with. Closing them is what lets the
+    // transcript show a failed command or a refused edit — and the count of open Task calls is what lets a run
+    // report how many sub-agents it has going at once.
+    const pendingToolCalls = new Map<string, string>();
+    // A CLI that has gone quiet. See `SILENCE_WARNING_MS`.
+    let lastOutputAt = Date.now();
+    let warnedAboutSilence = false;
+
+    /*
+     * A CLI that has stopped saying anything.
+     *
+     * There was no such watch, and a run whose process was alive but stuck showed the composer's rotating status
+     * words for as long as it was left — indistinguishable from an agent thinking hard, with nothing to act on.
+     *
+     * What this does is say so, not kill it. KAI cannot tell "slow" from "stuck" from outside: a long model call emits
+     * nothing, and so does a wedged process. Ending a run on a timer would throw away the work of an agent that was
+     * merely thinking, and the checkpoint only reaches so far. Saying so, on the other hand, cannot be wrong — and
+     * Stop, which now actually stops, is one click away.
+     */
+    const silenceWatch = setInterval(() => {
+      if (warnedAboutSilence || Date.now() - lastOutputAt < SILENCE_WARNING_MS) return;
+      warnedAboutSilence = true;
+      emit({
+        schemaVersion: 1,
+        id: eventId(),
+        taskId: request.conversationId,
+        timestamp: nowIso(),
+        agent: request.agent,
+        type: 'notice',
+        message: `${definition.displayName} has produced no output for ${Math.round(SILENCE_WARNING_MS / 60_000)} minutes. It may be thinking, or it may be stuck — press Stop to end the run.`,
+      });
+    }, 30_000);
+    silenceWatch.unref?.();
 
     try {
       for await (const chunk of streamProcess(
@@ -548,6 +590,8 @@ export class DesktopAgentRuntime {
           continue;
         }
 
+        lastOutputAt = Date.now();
+        warnedAboutSilence = false;
         if (chunk.stream === 'stdout') {
           const buffered = stdoutCarry + chunk.text;
           const lines = buffered.split(/\r?\n/);
@@ -574,6 +618,7 @@ export class DesktopAgentRuntime {
       errors.push(error instanceof Error ? error.message : String(error));
       exitCode = 1;
     } finally {
+      clearInterval(silenceWatch);
       this.activeRuns.delete(request.conversationId);
       active.child = null;
     }
@@ -662,21 +707,27 @@ export class DesktopAgentRuntime {
         onEvent?.(streamTextEvent(request, parsed.resultText));
       }
       for (const tool of parsed.tools ?? []) {
-        if (tool.name.toLowerCase() === 'task' && tool.callId) pendingAgentCalls.set(tool.callId, tool.name);
+        if (tool.callId) pendingToolCalls.set(tool.callId, tool.name);
       }
-      const resolvedAgentCalls: ParsedToolCall[] = [];
+      const resolved: ParsedToolCall[] = [];
       for (const result of parsed.toolResults ?? []) {
-        const name = pendingAgentCalls.get(result.callId);
+        const name = pendingToolCalls.get(result.callId);
         if (!name) continue;
-        pendingAgentCalls.delete(result.callId);
-        resolvedAgentCalls.push({ name, status: result.status, callId: result.callId });
+        pendingToolCalls.delete(result.callId);
+        resolved.push({
+          name,
+          status: result.status,
+          callId: result.callId,
+          // Shaped like every other tool call's output so the command card can render it. Deliberately without an
+          // exit code: claude reports a failure as text, and inventing a code would let a text-only result be
+          // recorded as a check the agent ran.
+          ...(result.output === undefined ? {} : { output: { output: result.output } }),
+        });
       }
       // What the CLI was doing, which is what makes an unattended run legible — and what lets a check the agent ran
       // itself be recorded. Text is left on the path above so nothing is emitted twice.
-      const withResolvedAgents = resolvedAgentCalls.length > 0
-        ? { ...parsed, tools: [...(parsed.tools ?? []), ...resolvedAgentCalls] }
-        : parsed;
-      for (const event of lineEvents(request, withResolvedAgents)) emit(event);
+      const withResolved = resolved.length > 0 ? { ...parsed, tools: [...(parsed.tools ?? []), ...resolved] } : parsed;
+      for (const event of lineEvents(request, withResolved)) emit(event);
     }
   }
 
@@ -1036,19 +1087,39 @@ function toolCallsFromClaudeMessage(message: unknown): ParsedToolCall[] | undefi
 }
 
 /**
- * The `tool_result` blocks a claude `user` message carries back, keyed by the `tool_use_id` they answer. Only the
- * Task tool (claude's own sub-agent) is tracked end to end today — that is the "N agents" count — so its name is
- * remembered in the run loop and matched back to these ids; other tools stay "started" for the run's duration.
+ * The `tool_result` blocks a claude `user` message carries back, keyed by the `tool_use_id` they answer.
+ *
+ * Every tool's result is read, not only the Task tool's. It used to be that only Task was matched back, so a Bash
+ * command that failed, or an edit the person refused, stayed "started" in the transcript for the whole run — a
+ * command card that never finished, and no sign of the error or the refusal that stopped it. The text is carried too,
+ * because for a failed command the message *is* the failure.
  */
-function toolResultsFromClaudeMessage(message: unknown): Array<{ callId: string; status: 'completed' | 'failed' }> | undefined {
+function toolResultsFromClaudeMessage(message: unknown): Array<{ callId: string; status: 'completed' | 'failed'; output?: string }> | undefined {
   const content = asRecord(message)?.content;
   if (!Array.isArray(content)) return undefined;
   const results = content.flatMap((block) => {
     const record = asRecord(block);
     if (record?.type !== 'tool_result' || typeof record.tool_use_id !== 'string') return [];
-    return [{ callId: record.tool_use_id, status: record.is_error ? ('failed' as const) : ('completed' as const) }];
+    const text = textFromToolResult(record.content);
+    return [{
+      callId: record.tool_use_id,
+      status: record.is_error ? ('failed' as const) : ('completed' as const),
+      ...(text === undefined ? {} : { output: text }),
+    }];
   });
   return results.length > 0 ? results : undefined;
+}
+
+/** A tool result's content: a bare string, or a list of blocks. Bounded, because this goes into a saved event. */
+function textFromToolResult(content: unknown): string | undefined {
+  const parts = typeof content === 'string'
+    ? [content]
+    : Array.isArray(content)
+      ? content.map((block) => asRecord(block)?.text).filter((part): part is string => typeof part === 'string')
+      : [];
+  const text = parts.join('\n').trim();
+  if (!text) return undefined;
+  return text.length > MAX_TOOL_RESULT_CHARS ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n[truncated]` : text;
 }
 
 function textFromCandidates(candidates: unknown): string | undefined {

@@ -120,13 +120,17 @@ describe('the events a CLI line reports', () => {
       },
     });
     const parsed = parseAgentLine(line, 'claude');
-    expect(parsed.toolResults).toEqual([{ callId: 'toolu_1', status: 'completed' }]);
+    // The text comes with it: for a failed command, or an edit the person refused, the message *is* the failure —
+    // and without it the transcript showed a command card that never finished and no reason why.
+    expect(parsed.toolResults).toEqual([{ callId: 'toolu_1', status: 'completed', output: 'Found it.' }]);
 
     const failedLine = JSON.stringify({
       type: 'user',
-      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_2', is_error: true }] },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_2', is_error: true, content: 'The user does not want to proceed.' }] },
     });
-    expect(parseAgentLine(failedLine, 'claude').toolResults).toEqual([{ callId: 'toolu_2', status: 'failed' }]);
+    expect(parseAgentLine(failedLine, 'claude').toolResults).toEqual([
+      { callId: 'toolu_2', status: 'failed', output: 'The user does not want to proceed.' },
+    ]);
   });
 
   it('takes claude at its word about what the run cost', () => {

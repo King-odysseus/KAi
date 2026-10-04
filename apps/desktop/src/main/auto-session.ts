@@ -41,7 +41,7 @@ import { diagnoseRun, diagnosisLine } from './run-doctor';
 const LOG_LIMIT = 60;
 const TAIL_CHARS = 2_500;
 /** How many times one task may hand its remainder to a fresh tab before Auto refuses to split again. */
-const MAX_SPLIT_DEPTH = 3;
+export const MAX_SPLIT_DEPTH = 3;
 /** Resting time allowed after a burst limit before Auto gives up on the provider entirely. */
 const MAX_REST_WITHOUT_PROGRESS_MS = 9 * 3_600_000;
 
@@ -352,8 +352,17 @@ export class DesktopAutoSession {
         // with the one account of the work that matters.
         const split = parseAutoSplitDirective(turn.output);
         if (split) {
-          await this.split(input, conversationId, active, split);
-          return this.settle(conversationId, owner, 'finished', `Handed the rest to a new tab: "${split.title}".`);
+          // Whether the hand-off actually happened. It used to be reported as done either way, so at the split limit
+          // Auto said "Handed the rest to a new tab" while dropping the rest of the work on the floor — the one
+          // message a person would read as "this is being handled".
+          const handed = await this.split(input, conversationId, active, split);
+          if (handed) return this.settle(conversationId, owner, 'finished', `Handed the rest to a new tab: "${split.title}".`);
+          await this.pauseForHuman(
+            conversationId,
+            active,
+            'split-limit',
+            `The task is still too big to finish, and Auto cannot hand it on again — it has already been split ${MAX_SPLIT_DEPTH} times. Split it yourself, or ask for a smaller piece.`,
+          );
         }
 
         // What is left, in the agent's own words. The plan is the finish signal; no plan at all is not a finished
@@ -602,12 +611,17 @@ export class DesktopAutoSession {
     return active.repeatCount < input.maxRepeatedFailures;
   }
 
-  /** Hands the rest of an oversized task to a fresh tab, which picks it up with its own Auto session. */
-  private async split(input: AutoStartInput, conversationId: string, active: ActiveAutoRun, directive: AutoSplitDirective): Promise<void> {
+  /**
+   * Hands the rest of an oversized task to a fresh tab, which picks it up with its own Auto session.
+   *
+   * Answers whether the hand-off happened. At the limit it does not, and the caller has to say something true about
+   * that rather than the hand-off message it used to give regardless.
+   */
+  private async split(input: AutoStartInput, conversationId: string, active: ActiveAutoRun, directive: AutoSplitDirective): Promise<boolean> {
     const owner = active.ownerWindowId;
     if (input.splitDepth >= MAX_SPLIT_DEPTH) {
       this.record(conversationId, owner, 'warn', `Auto would hand this on again, but the task has already been split ${MAX_SPLIT_DEPTH} times.`);
-      return;
+      return false;
     }
     this.phase(conversationId, owner, 'splitting', `Handing the rest to a new tab: "${directive.title}".`);
     const source = await this.ports.getConversation(conversationId).catch(() => null);
@@ -640,6 +654,7 @@ export class DesktopAutoSession {
       owner,
       { opened: true },
     ).catch(() => undefined);
+    return true;
   }
 
   private async rest(conversationId: string, active: ActiveAutoRun, ms: number, reason: string): Promise<void> {

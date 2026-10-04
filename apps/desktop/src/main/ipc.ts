@@ -1643,13 +1643,18 @@ export async function runConversationAgent(
   if (executionMode === 'api' && execution.status === 'failed') {
     // The session still has to be closed either way; only what the brain is told differs, because a run the person
     // stopped is not a run that broke.
+    // Told to the brain as a courtesy, like the lesson filed below: a brain that is slow or down must not cost the
+    // run its saved turn, which is what an unguarded throw here would do.
     const ended = await finishMemorySession(
       context,
       conversation.id,
       execution.cancelled
         ? 'Session ended because the run was stopped.'
         : `Session ended after agent failure: ${execution.error || 'unknown error'}`,
-    );
+    ).catch((error: unknown) => {
+      context.logger.warn('internal', 'Could not close the C1 memory session', messageOf(error));
+      return null;
+    });
     if (ended) execution.events.push(ended);
   }
   execution.events.unshift(rulesNotice, ...memoryEvents);
@@ -1681,6 +1686,9 @@ export async function runConversationAgent(
     });
   }
   // The brain hears what the run did, not just that a session came and went; Overwatch then judges the draft.
+  //
+  // Guarded, and it matters that it is: this runs before the turn is saved, so a brain that refused the write used to
+  // take the whole turn with it — no reply kept, and no announcement that the run had ended.
   const lessonEvent = await fileRunLesson(context, {
     conversationId: conversation.id,
     agent: request.agent,
@@ -1693,6 +1701,9 @@ export async function runConversationAgent(
     files: (userTurn.fileChanges ?? []).map((change) => change.path),
     checks: agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)
       .map((check) => ({ command: check.command, passed: check.exitCode === null ? null : check.exitCode === 0 })),
+  }).catch((error: unknown) => {
+    context.logger.warn('internal', 'Could not file the run lesson with C1', messageOf(error));
+    return null;
   });
   if (lessonEvent) execution.events.push(lessonEvent);
   // The model's own account when it gave one. When it did not, the run used to end in silence — commands in the
@@ -1735,10 +1746,18 @@ export async function runConversationAgent(
   });
   conversation.events.push(...execution.events);
   conversation.agentSessionId = execution.sessionId;
-  await context.conversations.save(conversation);
-  // Only now, once the turn it produced is on disk: a window that did not run this pulls the record when it hears
-  // the run is over, and pulling it before the save would show a reply that stops at the user's own message.
-  announceRunState(context, conversation.id, 'finished');
+  try {
+    await context.conversations.save(conversation);
+  } finally {
+    // Announced once the turn it produced is on disk — a window that did not run this pulls the record when it hears
+    // the run is over, and pulling it before the save would show a reply that stops at the user's own message.
+    //
+    // In a `finally` because the save can fail: a full disk, a locked file, a record written by something else. Left
+    // unguarded, that skipped the announcement entirely and the window kept its spinner and Stop button for work that
+    // was already over — nothing on screen saying the run had ended, and no way to ask it to. A record that did not
+    // save is bad; a run nobody can tell has finished is worse, and it is the one the person cannot work around.
+    announceRunState(context, conversation.id, 'finished');
+  }
 
   // Keep a local, redacted record of observable work only (never hidden reasoning). Content capture is separately
   // controlled by the user's privacy setting; metadata-only records still support reliability/evaluation metrics.

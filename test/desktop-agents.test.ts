@@ -319,6 +319,27 @@ describe('desktop agent runtime', () => {
     expect(result.events.map((event) => event.type)).toEqual(['agent.lifecycle', 'text.delta', 'agent.lifecycle']);
   });
 
+  it('closes a claude tool call when its result arrives, failures included', async () => {
+    // Only the Task tool used to be matched back to its result, so a Bash command that failed — or an edit the
+    // person refused — stayed "started" in the transcript for the rest of the run: a command card that never
+    // finished, and no sign of the error or the refusal that stopped it.
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, {
+      lines: [
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_bash', name: 'Bash', input: { command: 'npm test' } }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_bash', is_error: true, content: '3 tests failed' }] } },
+      ],
+    });
+    const runtime = new DesktopAgentRuntime({ claude: command });
+
+    const result = await runtime.run({ ...runRequest(), agent: 'claude' }, root);
+
+    const toolEvents = result.events.filter((event) => event.type === 'tool.call') as Array<{ name: string; status: string; output?: { output?: string } }>;
+    expect(toolEvents.map((event) => [event.name, event.status])).toEqual([['Bash', 'started'], ['Bash', 'failed']]);
+    // The message that says why comes with it.
+    expect(toolEvents[1]?.output?.output).toBe('3 tests failed');
+  });
+
   it('surfaces a CLI failure instead of returning a silent empty response', async () => {
     const root = await temporaryDirectory();
     const command = await fakeAgent(root, { fail: true });

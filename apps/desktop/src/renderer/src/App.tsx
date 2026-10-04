@@ -765,6 +765,15 @@ export function App(): ReactNode {
   openProjectRef.current = openProject;
   const activeProjectIdRef = useRef<string | null>(null);
   activeProjectIdRef.current = bootstrap?.activeProjectId ?? null;
+  /*
+   * Which conversation is on screen *now*, for a run that has been going for a while.
+   *
+   * `runConversation` closes over the value from when it was sent, so a long run was comparing against a tab the
+   * person had since left: start a run in one tab, switch to another, and the first tab's failure put its error
+   * banner over the second one — an error about work that is not on screen, with nothing saying so.
+   */
+  const activeConversationIdRef = useRef<string | null>(null);
+  activeConversationIdRef.current = activeConversationId;
   useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId, projectId, openTab }) => {
     void (async () => {
       // A conversation belongs to a project; switch to it first or the composer would show the wrong one.
@@ -1140,12 +1149,12 @@ export function App(): ReactNode {
           setAgentNotice(`${capability.displayName}'s usage limit on your subscription was reached. Continue this run through your paid Universal Proxy route instead?`);
         } else {
           setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
-          if (conversation.id === activeConversationId) setError(result.error);
+          if (conversation.id === activeConversationIdRef.current) setError(result.error);
         }
       }
     } catch (caught) {
       setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
-      if (conversation.id === activeConversationId) setError(messageOf(caught));
+      if (conversation.id === activeConversationIdRef.current) setError(messageOf(caught));
     } finally {
       localRunsInFlight.current.delete(conversation.id);
       setRunningConversationIds((current) => current.filter((id) => id !== conversation.id));

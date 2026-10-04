@@ -55,6 +55,8 @@ export const AUTO_WAIT_REASONS = [
   'cost-cap',
   'time-cap',
   'turn-cap',
+  /** The task is too big to finish here and Auto may not hand it on again; a person has to break it up. */
+  'split-limit',
 ] as const;
 export type AutoWaitReason = (typeof AUTO_WAIT_REASONS)[number];
 
