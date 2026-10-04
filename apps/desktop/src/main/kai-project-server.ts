@@ -71,6 +71,41 @@ export async function runKaiProjectServer(root: string): Promise<void> {
   }
 
   await server.connect(new StdioServerTransport());
+  // Wired after the transport, so both are listening before anything can close the pipe under us.
+  endWhenParentGoes(server);
+}
+
+/**
+ * Ends this process when the agent that launched it goes away.
+ *
+ * An MCP server is stdio, and it lives exactly as long as the pipe does: when the agent exits — finished, crashed, or
+ * killed — stdin reaches EOF and there is nobody left to answer. The SDK's stdio transport registers `data` and
+ * `error` and never `end`, so nothing fires on EOF and the reader that is still attached keeps the event loop alive.
+ * The process then outlives the agent for good, one per finished session, each holding a project open. Nothing in KAI
+ * collects them either: they are launched by the agent rather than by KAI, so they are outside KAI's process tree and
+ * the quit-time `taskkill /T` walks straight past them.
+ */
+export function endWhenParentGoes(
+  server: Pick<McpServer, 'close'>,
+  input: NodeJS.ReadableStream = process.stdin,
+  exit: (code: number) => void = (code) => process.exit(code),
+): void {
+  let leaving = false;
+  const leave = (): void => {
+    if (leaving) return;
+    leaving = true;
+    // Closed first so a tool call in flight is not cut off mid-write; the exit is a formality after that, since
+    // whoever would have read the answer has gone.
+    void server.close().catch(() => undefined).finally(() => exit(0));
+  };
+  // A stream only reports its end once it is being read, so this does not depend on the transport having already put
+  // stdin into flowing mode — the one thing here that must not rely on somebody else's internals.
+  input.resume();
+  input.on('end', leave);
+  // Some pipes report the closure this way instead, and a signal means the same thing: nobody is waiting.
+  input.on('close', leave);
+  process.on('SIGTERM', leave);
+  process.on('SIGINT', leave);
 }
 
 async function main(): Promise<void> {
