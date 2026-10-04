@@ -21,6 +21,8 @@ export const toolCallEventSchema = eventBaseSchema.extend({
   status: z.enum(['started', 'updated', 'completed', 'failed']),
   input: z.unknown().optional(),
   output: z.unknown().optional(),
+  /** The CLI's own id for this call (e.g. a `tool_use` block's id), so a later completion can be matched to it. */
+  callId: z.string().optional(),
 });
 
 export const approvalRequestEventSchema = eventBaseSchema.extend({

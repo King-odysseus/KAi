@@ -96,6 +96,39 @@ describe('the events a CLI line reports', () => {
     ]);
   });
 
+  it('carries a claude tool call\'s id, so its result can be matched back to it', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Task', input: { description: 'Find the bug' } }],
+      },
+    });
+    const parsed = parseAgentLine(line, 'claude');
+    expect(parsed.tools).toEqual([
+      expect.objectContaining({ name: 'Task', status: 'started', callId: 'toolu_1' }),
+    ]);
+    expect(lineEvents({ agent: 'claude', conversationId: 'conv-1' }, parsed)).toEqual([
+      expect.objectContaining({ type: 'tool.call', name: 'Task', status: 'started', callId: 'toolu_1' }),
+    ]);
+  });
+
+  it('reads a claude tool result back to the call it answers', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Found it.' }],
+      },
+    });
+    const parsed = parseAgentLine(line, 'claude');
+    expect(parsed.toolResults).toEqual([{ callId: 'toolu_1', status: 'completed' }]);
+
+    const failedLine = JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_2', is_error: true }] },
+    });
+    expect(parseAgentLine(failedLine, 'claude').toolResults).toEqual([{ callId: 'toolu_2', status: 'failed' }]);
+  });
+
   it('takes claude at its word about what the run cost', () => {
     // Taken from a real `claude -p --output-format stream-json --verbose` result line.
     const line = JSON.stringify({

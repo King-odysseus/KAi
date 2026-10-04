@@ -2416,12 +2416,12 @@ async function executeToolCalls(
       argumentsValue = parseToolArguments(call.argumentsText);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      emit(toolCallEvent(request, name, 'failed', undefined, { error: message }));
+      emit(toolCallEvent(request, name, 'failed', undefined, { error: message }, callId));
       results.push(formatOutput(callId, { error: message }));
       continue;
     }
 
-    emit(toolCallEvent(request, name, 'started', argumentsValue));
+    emit(toolCallEvent(request, name, 'started', argumentsValue, undefined, callId));
 
     // Handled here rather than through the normal policy/execute path: `ask_user` needs the approval port to put
     // a question (not a permission) to a person, and `explore` needs a nested provider loop, neither of which
@@ -2430,7 +2430,7 @@ async function executeToolCalls(
       const parsed = askUserInputSchema.safeParse(argumentsValue);
       if (!parsed.success) {
         const message = describeArgumentError(name, argumentsValue, parsed.error);
-        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: message }));
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: message }, callId));
         results.push(formatOutput(callId, { error: message }));
         continue;
       }
@@ -2460,7 +2460,7 @@ async function executeToolCalls(
       });
       const answer = approvals?.requestChoice ? await approvals.requestChoice(approvalRequest) : null;
       const output = answer ? { answer } : { error: 'Nobody answered the question; no approval channel was available for this run.' };
-      emit(toolCallEvent(request, name, answer ? 'completed' : 'failed', argumentsValue, output));
+      emit(toolCallEvent(request, name, answer ? 'completed' : 'failed', argumentsValue, output, callId));
       results.push(formatOutput(callId, output));
       continue;
     }
@@ -2468,7 +2468,7 @@ async function executeToolCalls(
       const parsed = exploreInputSchema.safeParse(argumentsValue);
       if (!parsed.success) {
         const message = describeArgumentError(name, argumentsValue, parsed.error);
-        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: message }));
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: message }, callId));
         results.push(formatOutput(callId, { error: message }));
         continue;
       }
@@ -2490,7 +2490,7 @@ async function executeToolCalls(
       } catch (error) {
         output = { error: error instanceof Error ? error.message : String(error) };
       }
-      emit(toolCallEvent(request, name, 'error' in output ? 'failed' : 'completed', argumentsValue, output));
+      emit(toolCallEvent(request, name, 'error' in output ? 'failed' : 'completed', argumentsValue, output, callId));
       results.push(formatOutput(callId, output));
       continue;
     }
@@ -2512,7 +2512,7 @@ async function executeToolCalls(
       };
     }
     if (policy.decision === 'deny') {
-      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }));
+      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }, callId));
       results.push(formatOutput(callId, { error: policy.reason }));
       continue;
     }
@@ -2540,7 +2540,7 @@ async function executeToolCalls(
       const approved = approvals ? await approvals.request(approvalRequest) : false;
       if (!approved) {
         const reason = 'The user denied this project change.';
-        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }));
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
         results.push(formatOutput(callId, { error: reason }));
         continue;
       }
@@ -2562,7 +2562,7 @@ async function executeToolCalls(
     if (repeat === 'warn') {
       execution.output = { ...(asRecord(execution.output) ?? { result: execution.output }), kaiNotice: REPEAT_WARNING };
     }
-    emit(toolCallEvent(request, name, execution.ok ? 'completed' : 'failed', argumentsValue, execution.output));
+    emit(toolCallEvent(request, name, execution.ok ? 'completed' : 'failed', argumentsValue, execution.output, callId));
     if (execution.changedFile) {
       if (execution.changedFile.action === 'created') {
         emit({
@@ -2974,6 +2974,9 @@ function toolCallEvent(
   status: 'started' | 'updated' | 'completed' | 'failed',
   input?: unknown,
   output?: unknown,
+  /** The call's own id, so its completion can be matched back to its start — what lets `explore` (a nested
+   * read-only agent run) be counted as a sub-agent rather than an ordinary tool call. */
+  callId?: string,
 ): PersistedEvent {
   return {
     schemaVersion: 1,
@@ -2986,6 +2989,7 @@ function toolCallEvent(
     status,
     ...(input === undefined ? {} : { input }),
     ...(output === undefined ? {} : { output }),
+    ...(callId === undefined ? {} : { callId }),
   };
 }
 

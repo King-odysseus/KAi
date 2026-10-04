@@ -1170,6 +1170,11 @@ data: {"type":"message_stop"}
     expect(JSON.stringify(requests[1]!.messages)).toContain('How does login work?');
     // Its answer, not its (nonexistent, in this test) intermediate reads, is what reaches the main run.
     expect(JSON.stringify(requests[2]!.messages)).toContain('Login uses JWT in auth.ts.');
+    // Carries the call's own id, so the composer can count it as a sub-agent rather than an ordinary tool call.
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'tool.call', name: 'explore', status: 'started', callId: 'toolu_explore' }),
+      expect.objectContaining({ type: 'tool.call', name: 'explore', status: 'completed', callId: 'toolu_explore' }),
+    ]));
   });
 });
 

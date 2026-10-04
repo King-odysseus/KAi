@@ -117,6 +117,8 @@ export interface ParsedToolCall {
   status: 'started' | 'completed' | 'failed';
   input?: unknown;
   output?: unknown;
+  /** The CLI's own id for this call, so a later result line can be matched back to it (e.g. a spawned subagent). */
+  callId?: string;
 }
 
 /** A file the CLI reported changing, which is how KAI sees the work without reading the whole tree. */
@@ -131,6 +133,8 @@ interface ParsedAgentLine {
   sessionId?: string;
   error?: string;
   tools?: ParsedToolCall[];
+  /** Results for tool calls started earlier in the run, matched back to them by `callId`. */
+  toolResults?: Array<{ callId: string; status: 'completed' | 'failed' }>;
   changes?: ParsedFileChange[];
   /** What the CLI said the run cost, when it says so at all — claude reports the figure, codex only tokens. */
   cost?: { amountUsd?: number; inputTokens?: number; outputTokens?: number };
@@ -515,6 +519,9 @@ export class DesktopAgentRuntime {
     let stderrCarry = '';
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | null = null;
+    // Only the Task tool (claude's own sub-agent) is tracked by id, so a result line can mark it done — that is
+    // what lets a run report how many sub-agents it has going at once, instead of just the one CLI process.
+    const pendingAgentCalls = new Map<string, string>();
 
     try {
       for await (const chunk of streamProcess(
@@ -643,9 +650,22 @@ export class DesktopAgentRuntime {
         hasOutputText = true;
         onEvent?.(streamTextEvent(request, parsed.resultText));
       }
+      for (const tool of parsed.tools ?? []) {
+        if (tool.name.toLowerCase() === 'task' && tool.callId) pendingAgentCalls.set(tool.callId, tool.name);
+      }
+      const resolvedAgentCalls: ParsedToolCall[] = [];
+      for (const result of parsed.toolResults ?? []) {
+        const name = pendingAgentCalls.get(result.callId);
+        if (!name) continue;
+        pendingAgentCalls.delete(result.callId);
+        resolvedAgentCalls.push({ name, status: result.status, callId: result.callId });
+      }
       // What the CLI was doing, which is what makes an unattended run legible — and what lets a check the agent ran
       // itself be recorded. Text is left on the path above so nothing is emitted twice.
-      for (const event of lineEvents(request, parsed)) emit(event);
+      const withResolvedAgents = resolvedAgentCalls.length > 0
+        ? { ...parsed, tools: [...(parsed.tools ?? []), ...resolvedAgentCalls] }
+        : parsed;
+      for (const event of lineEvents(request, withResolvedAgents)) emit(event);
     }
   }
 
@@ -942,6 +962,11 @@ export function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
     if (value.type === 'assistant' || value.type === 'message') {
       return { sessionId, text: textFromClaudeMessage(value.message), tools: toolCallsFromClaudeMessage(value.message) };
     }
+    // Carries the Task tool's result (and every other tool's), so a spawned sub-agent can be marked done rather
+    // than showing as running for the rest of the turn.
+    if (value.type === 'user') {
+      return { sessionId, toolResults: toolResultsFromClaudeMessage(value.message) };
+    }
     return { sessionId, error: errorText(value) };
   }
 
@@ -992,9 +1017,26 @@ function toolCallsFromClaudeMessage(message: unknown): ParsedToolCall[] | undefi
       name: record.name,
       status: 'started' as const,
       ...(record.input === undefined ? {} : { input: record.input }),
+      ...(typeof record.id === 'string' ? { callId: record.id } : {}),
     }];
   });
   return calls.length > 0 ? calls : undefined;
+}
+
+/**
+ * The `tool_result` blocks a claude `user` message carries back, keyed by the `tool_use_id` they answer. Only the
+ * Task tool (claude's own sub-agent) is tracked end to end today — that is the "N agents" count — so its name is
+ * remembered in the run loop and matched back to these ids; other tools stay "started" for the run's duration.
+ */
+function toolResultsFromClaudeMessage(message: unknown): Array<{ callId: string; status: 'completed' | 'failed' }> | undefined {
+  const content = asRecord(message)?.content;
+  if (!Array.isArray(content)) return undefined;
+  const results = content.flatMap((block) => {
+    const record = asRecord(block);
+    if (record?.type !== 'tool_result' || typeof record.tool_use_id !== 'string') return [];
+    return [{ callId: record.tool_use_id, status: record.is_error ? ('failed' as const) : ('completed' as const) }];
+  });
+  return results.length > 0 ? results : undefined;
 }
 
 function textFromCandidates(candidates: unknown): string | undefined {
@@ -1367,6 +1409,7 @@ export function lineEvents(
       status: tool.status,
       ...(tool.input === undefined ? {} : { input: tool.input }),
       ...(tool.output === undefined ? {} : { output: tool.output }),
+      ...(tool.callId === undefined ? {} : { callId: tool.callId }),
     });
   }
   for (const change of parsed.changes ?? []) {

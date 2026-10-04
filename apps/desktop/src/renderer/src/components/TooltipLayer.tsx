@@ -38,8 +38,8 @@ const EDGE = 8;
 /** How near the window edge a control must be, and how small, to be treated as a rail item and answered sideways. */
 const RAIL_ZONE = 96;
 const RAIL_WIDTH = 140;
-/** Half a panel's width, used to keep a centred panel clear of the window edges. */
-const HALF_PANEL = 120;
+/** Half a panel's width, used to keep a centred panel clear of the window edges. Matches the widest a panel can grow to below. */
+const HALF_PANEL = 140;
 
 /**
  * Places the panel against a target rectangle, kept inside the window.
@@ -78,7 +78,6 @@ interface Shown {
   side: TipSide;
   left: number;
   top: number;
-  width: number;
 }
 
 /** Titles that say nothing worth a panel: empty, or a single word the control already shows. */
@@ -121,7 +120,7 @@ export function TooltipLayer(): ReactNode {
 
       const rect = element.getBoundingClientRect();
       const { side, left, top } = placeTooltip(rect, { width: window.innerWidth, height: window.innerHeight });
-      setShown({ text: title, side, left, top, width: rect.width });
+      setShown({ text: title, side, left, top });
     };
 
     const fromEvent = (event: Event): Element | null => {
@@ -210,7 +209,10 @@ export function TooltipLayer(): ReactNode {
       style={{
         left: shown.left + (nudge?.dx ?? 0),
         top: shown.top + (nudge?.dy ?? 0),
-        maxWidth: Math.min(320, Math.max(180, shown.width * 4)),
+        // Sized off the tooltip's own text, not the hovered control's width: a small icon button with a long title
+        // (the project card's archive/delete row is the case that prompted this) was being capped to a narrow panel
+        // sized for the button rather than the words in it, wrapping into a tall sliver that could run off-screen.
+        maxWidth: Math.min(280, Math.max(140, shown.text.length * 6)),
       }}
     >
       {shown.text}

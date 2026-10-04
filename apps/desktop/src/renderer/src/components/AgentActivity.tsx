@@ -99,9 +99,35 @@ export function AgentActivityStrip({ events, running, paused, awaitingApproval, 
         <span>{activity.detail}</span>
         {activity.lastAction && <small className="agent-activity-last" title={activity.lastAction}>Last: {activity.lastAction}</small>}
       </div>
-      {(running || paused || awaitingApproval) && <div className="agent-activity-metrics" aria-label="Run progress"><span>{elapsedSeconds}s</span>{tokenEstimate > 0 && <span>~{formatTokens(tokenEstimate)} tokens</span>}</div>}
+      {(running || paused || awaitingApproval) && (() => {
+        const agents = activeAgentCount(events);
+        return (
+          <div className="agent-activity-metrics" aria-label="Run progress">
+            <span>{elapsedSeconds}s</span>
+            {tokenEstimate > 0 && <span>~{formatTokens(tokenEstimate)} tokens</span>}
+            {agents > 0 && <span>{agents} agent{agents === 1 ? '' : 's'}</span>}
+          </div>
+        );
+      })()}
     </section>
   );
+}
+
+/**
+ * Which `tool.call` names are actually a nested agent run, not an ordinary tool: claude's own `Task` tool when the
+ * composer runs through the CLI, and `explore` (a nested read-only helper loop) when it runs through the Direct API.
+ */
+const SUB_AGENT_TOOL_NAMES = new Set(['task', 'explore']);
+
+/** How many sub-agents this run currently has going — started calls whose matching result has not arrived yet. */
+export function activeAgentCount(events: readonly PersistedEvent[]): number {
+  const started = new Set<string>();
+  for (const event of events) {
+    if (event.type !== 'tool.call' || !SUB_AGENT_TOOL_NAMES.has(event.name.toLowerCase()) || !event.callId) continue;
+    if (event.status === 'started') started.add(event.callId);
+    else started.delete(event.callId);
+  }
+  return started.size;
 }
 
 function formatTokens(value: number): string {
