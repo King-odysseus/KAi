@@ -167,7 +167,9 @@ export function Cognitive1Panel({
   ): Promise<unknown> {
     const result = await invoke(operation, payload);
     if (result === null) return null;
-    setNotice(message ?? `${operationLabel(operation)} completed.`);
+    // What it produced, not just that it finished. "Cross-reference bugs completed." says nothing about whether it
+    // matched forty bugs or none, which is the only thing the person wanted to know.
+    setNotice(message ?? `${operationLabel(operation)}: ${describeOutcome(result)}`);
     if (refresh) await refreshCore();
     return result;
   }
@@ -715,6 +717,24 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
               })}
             >Delete keyword noise…</button>
           </div>
+          {/*
+            What each button does, written out rather than left in a `title`.
+
+            Every one of these ran something and then said only "… completed." at the top of the panel, so the only
+            way to know what a button had done was to hover it for a tooltip and then read a banner several cards
+            away. The list says what the action changes — and, for the ones that change nothing, that they change
+            nothing, which is the part that decides whether it is safe to press.
+          */}
+          <dl className="cognitive1-action-notes">
+            <div><dt>Run intelligence cycle</dt><dd>Reviews new drafts and audits saved memory in one pass. Findings appear below; keep decisions still wait for you.</dd></div>
+            <div><dt>Check memory quality</dt><dd>Reports duplicates, gaps and cross-project patterns. Changes nothing.</dd></div>
+            <div><dt>Find duplicates</dt><dd>Lists pairs of notes that look like the same lesson, in the card on the left. Changes nothing.</dd></div>
+            <div><dt>Cross-reference bugs</dt><dd>Matches bug notes to the commits that fixed them, in the card on the right. Changes nothing.</dd></div>
+            <div><dt>Create project guides</dt><dd>Writes a short guide per project from its saved lessons, so an agent can load what matters without reading everything.</dd></div>
+            <div><dt>Send guides to agents</dt><dd>Makes those guides available to connected agents. Nothing reaches an agent until this is pressed.</dd></div>
+            <div><dt>Link related notes</dt><dd>Links notes about the same thing, which is what draws the lines on the Memory tab.</dd></div>
+            <div><dt>Delete keyword noise…</dt><dd>Deletes saved drafts whose titles match C1's noise words, immediately and without asking a model. The only action here that removes anything — it asks first.</dd></div>
+          </dl>
         </section>
       </div>
 
@@ -750,29 +770,51 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
       <div className="cognitive1-grid two">
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Findings" title={`Duplicate candidates (${duplicates.length})`} icon={<Archive size={16} />} />
+          <p className="cognitive1-copy">
+            Two saved notes that look like the same lesson, and how alike they read — <b>% alike</b> is a similarity
+            score, not a confidence. Nothing has been merged or deleted: this is a list to look down, and the useful
+            signal is a high score against two notes whose titles say the same thing in different words.
+          </p>
           <div className="cognitive1-list compact">
-            {duplicates.map((pair, index) => (
-              <div className="cognitive1-note" key={`dupe-${index}`}>
-                <strong>{Math.round(Number(pair.score ?? 0) * 100)}% alike</strong>
-                <span>{String(pair.entryA ?? '')}</span>
-                <span>{String(pair.entryB ?? '')}</span>
-              </div>
-            ))}
-            {duplicates.length === 0 && <EmptyText>No duplicate scan has run yet, or no candidates were found.</EmptyText>}
+            <Findings
+              items={duplicates}
+              empty={<EmptyText>No duplicate scan has run yet, or no candidates were found.</EmptyText>}
+              render={(item, index) => {
+                const pair = recordOf(item);
+                return (
+                  <div className="cognitive1-note" key={`dupe-${index}`}>
+                    <strong>{Math.round(Number(pair.score ?? 0) * 100)}% alike</strong>
+                    <span>{String(pair.entryA ?? '')}</span>
+                    <span>{String(pair.entryB ?? '')}</span>
+                  </div>
+                );
+              }}
+            />
           </div>
         </section>
 
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Findings" title={`Bug cross-references (${bugRefs.length})`} icon={<GitBranch size={16} />} />
+          <p className="cognitive1-copy">
+            A bug note matched to the commit that appears to have fixed it, so a bug that keeps coming back can be
+            traced to the change behind it. <b>% confident</b> is the matcher's own score. An empty list here usually
+            means the bug notes name no commit, not that the work is missing.
+          </p>
           <div className="cognitive1-list compact">
-            {bugRefs.map((ref, index) => (
-              <div className="cognitive1-note" key={`bugref-${index}`}>
-                <strong>{Math.round(Number(ref.confidence ?? 0) * 100)}% confident</strong>
-                <span>{String(ref.bug ?? '')}</span>
-                <span>commit {String(ref.commit ?? '')}</span>
-              </div>
-            ))}
-            {bugRefs.length === 0 && <EmptyText>No bug cross-reference has run yet, or nothing was matched.</EmptyText>}
+            <Findings
+              items={bugRefs}
+              empty={<EmptyText>No bug cross-reference has run yet, or nothing was matched.</EmptyText>}
+              render={(item, index) => {
+                const ref = recordOf(item);
+                return (
+                  <div className="cognitive1-note" key={`bugref-${index}`}>
+                    <strong>{Math.round(Number(ref.confidence ?? 0) * 100)}% confident</strong>
+                    <span>{String(ref.bug ?? '')}</span>
+                    <span>commit {String(ref.commit ?? '')}</span>
+                  </div>
+                );
+              }}
+            />
           </div>
         </section>
       </div>
@@ -1261,6 +1303,69 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: '
 
 function EmptyText({ children }: { children: ReactNode }): ReactNode {
   return <div className="cognitive1-empty">{children}</div>;
+}
+
+/**
+ * The numbers an action produced, out of whatever shape it answered with.
+ *
+ * Every Overwatch action answers with a different object — a count here, a list there, an audit nested under
+ * `audit` — so this looks for the counts by name and reports the ones it finds, and says "completed" only when
+ * there is genuinely nothing to report. Deliberately quiet about shapes it does not recognise rather than
+ * inventing a number.
+ */
+function describeOutcome(result: unknown): string {
+  const value = recordOf(result);
+  const parts: string[] = [];
+  const count = (label: string, raw: unknown): void => {
+    if (typeof raw === 'number') parts.push(`${raw} ${label}${raw === 1 ? '' : 's'}`);
+    else if (Array.isArray(raw)) parts.push(`${raw.length} ${label}${raw.length === 1 ? '' : 's'}`);
+  };
+  count('duplicate candidate', value.duplicates);
+  count('bug match', value.bugRefs);
+  count('note linked', value.linked ?? value.links);
+  count('entry filed', value.filed ?? value.kept);
+  count('entry deleted', value.deleted);
+  count('guide written', value.written ?? value.kernels);
+  count('guide sent', value.pushed);
+  count('draft classified', value.classified ?? value.updated);
+  const audit = recordOf(value.audit);
+  count('knowledge gap', audit.knowledgeGaps);
+  // An action that found nothing is a real answer, and a different one from an action that did not finish.
+  if (parts.length === 0) return Object.keys(value).length === 0 ? 'completed, nothing to report.' : 'completed.';
+  return `completed: ${parts.join(', ')}.`;
+}
+
+/**
+ * How many findings one card shows before offering the rest.
+ *
+ * A duplicate scan over a real brain returns dozens, and the card rendered every one of them — a wall of pairs long
+ * enough that the card's own explanation was above it, the card below it was off the bottom of the screen, and the
+ * count in the heading was the only thing saying how many there were.
+ */
+const FINDINGS_PAGE = 10;
+
+/** A findings list that shows the first page and offers the remainder, rather than emptying the screen. */
+function Findings({ items, empty, render }: {
+  items: readonly unknown[];
+  /** Shown in place of the list. Says why it is empty, which for these lists is two different things. */
+  empty: ReactNode;
+  render: (item: unknown, index: number) => ReactNode;
+}): ReactNode {
+  const [page, setPage] = useState(1);
+  if (items.length === 0) return <>{empty}</>;
+  const shown = page * FINDINGS_PAGE;
+  const visible = items.slice(0, shown);
+  const remaining = items.length - visible.length;
+  return (
+    <>
+      {visible.map((item, index) => render(item, index))}
+      {remaining > 0 && (
+        <button type="button" className="secondary-button cognitive1-more" onClick={() => setPage((current) => current + 1)}>
+          <span>Show {Math.min(remaining, FINDINGS_PAGE)} more ({remaining} left)</span>
+        </button>
+      )}
+    </>
+  );
 }
 
 function JsonRow({ row }: { row: Record<string, unknown> }): ReactNode {
