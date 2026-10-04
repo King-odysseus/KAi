@@ -100,7 +100,8 @@ export const costUpdateEventSchema = eventBaseSchema.extend({
   outputTokens: z.number().int().nonnegative().optional(),
   sessionId: z.string().optional(),
   estimateProvenance: z.enum(['measured', 'estimated', 'unknown']).optional(),
-  // Set only for paid API runs; subscription CLI events never carry a provider.
+  // Set for runs that cost money: a paid API run, or a CLI run through the Universal Proxy, which reaches a provider
+  // the account pays for. A subscription CLI run carries none, which is what keeps it out of the usage budget.
   provider: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
 });

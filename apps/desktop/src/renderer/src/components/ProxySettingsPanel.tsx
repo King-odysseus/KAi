@@ -319,12 +319,14 @@ export function ProvidersTab(props: ConfigTabProps & {
           </div>
         </div>
         <Toggle id="uap-enabled" label="Proxy enabled" checked={draft.enabled} onChange={(enabled) => patch({ enabled })} />
-        <Toggle id="uap-autofallback" label="Auto Fallback watches Claude Code limits and routes through proxy" checked={draft.autoFallbackEnabled} onChange={(autoFallbackEnabled) => patch({ autoFallbackEnabled })} />
-        <div className="row">
-          <div className="u-field w90">
-            <NumberField label="Fallback hours" value={draft.autoFallbackHours} min={1} max={24} onChange={(autoFallbackHours) => patch({ autoFallbackHours })} />
-          </div>
-        </div>
+        {/*
+          The Auto Fallback toggle and its hours field used to sit here, and neither was read by anything: turning it
+          on changed nothing, and the hours were never consulted. The behaviour they describe does exist, but as a
+          deliberate hand-off rather than an automatic one — when a subscription limit is reached the composer offers
+          to continue through the proxy and shows the provider and budget before the first request. A control that
+          promises a switch the app does not have is worse than no control, so it is gone rather than made automatic:
+          skipping the card would skip the part that tells you what you are about to spend.
+        */}
       </div>
 
       <div className="section">

@@ -1518,6 +1518,20 @@ export function lineEvents(
       agent: request.agent,
       type: 'cost.update',
       ...parsed.cost,
+      /*
+       * A run through the Universal Proxy is paid, so it is counted.
+       *
+       * The usage budget counts only cost events that name a provider, because subscription CLI usage costs nothing
+       * per token and must not be spent against a limit. That rule was also hiding every proxied run that reported a
+       * figure — the proxy routes to a provider the account pays for, so a spend limit sat there not counting the
+       * spending it was set to watch.
+       *
+       * `estimated` rather than `measured`, and that is the honest part: the figure is the CLI's own, priced at the
+       * CLI's rates, which are not necessarily the rates of whatever the proxy routed to. Codex, Qwen and Kimi report
+       * no figure at all through the proxy, so they are still uncounted — that needs the proxy's own cost records,
+       * which live in the proxy's project.
+       */
+      ...(request.route === 'proxy' ? { provider: 'universal-proxy', estimateProvenance: 'estimated' as const } : {}),
     });
   }
   return built;

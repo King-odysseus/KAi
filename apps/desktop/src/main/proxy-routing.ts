@@ -296,7 +296,9 @@ function syncRouteOwnership(
   if (agent === 'claude') {
     proxy.routeClaudeCode = action === 'route';
     proxy.routeClaudeCodeUntil = action === 'route' ? routeUntil : 0;
-    if (action === 'direct') proxy.autoFallbackEnabled = false;
+    // `autoFallbackEnabled` used to be cleared here. Nothing reads it — the control it belonged to was removed from
+    // the proxy settings, and the behaviour it named is the composer's hand-off card, which is offered from the run
+    // that hit the limit rather than from a switch. The field stays in the schema so stored settings still parse.
   } else if (agent === 'codex') {
     proxy.routeCodex = action === 'route';
   }

@@ -85,6 +85,10 @@ export async function resetClaudeCodeConfig(
   try {
     const credentials = await readObject(credentialsPath);
     if (credentials) {
+      // Kept before it is blanked. Signing in again is the point of a reset, so this is not undoing anything the
+      // person asked for — it is the difference between a reset and losing an account they may have to be walked
+      // through recovering, and it costs one file.
+      await fs.copyFile(credentialsPath, `${credentialsPath}.before-reset`).catch(() => undefined);
       await writeJson(credentialsPath, {});
       credentialsCleared = true;
     }
@@ -107,16 +111,27 @@ export async function resetClaudeCodeConfig(
     if (!isMissing(error)) warnings.push(`Claude session environment could not be cleared: ${messageOf(error)}`);
   }
 
-  const mcpConfigPath = path.join(claudeDirectory, '.claude.json');
-  try {
-    const mcpConfig = await readObject(mcpConfigPath);
-    if (mcpConfig && 'hasCompletedOnboarding' in mcpConfig) {
-      delete mcpConfig.hasCompletedOnboarding;
-      await writeJson(mcpConfigPath, mcpConfig);
-      onboardingReset = true;
+  /*
+   * Both places the flag can be.
+   *
+   * Nothing outside this app decides which one an installed version writes, and they differ: `~/.claude.json` is
+   * where the current builds keep this, and `~/.claude/.claude.json` is where older ones did. Reading only the
+   * second meant a reset that reported success while changing nothing on a machine whose Claude wrote the first —
+   * and the flag's absence is exactly what the person is trying to achieve. Checked in both, so whichever holds it
+   * is the one cleared, and neither is written unless it has something to clear.
+   */
+  const onboardingPaths = [path.join(homeDirectory, '.claude.json'), path.join(claudeDirectory, '.claude.json')];
+  for (const configPath of onboardingPaths) {
+    try {
+      const config = await readObject(configPath);
+      if (config && 'hasCompletedOnboarding' in config) {
+        delete config.hasCompletedOnboarding;
+        await writeJson(configPath, config);
+        onboardingReset = true;
+      }
+    } catch (error) {
+      warnings.push(`Claude onboarding state could not be reset: ${messageOf(error)}`);
     }
-  } catch (error) {
-    warnings.push(`Claude onboarding state could not be reset: ${messageOf(error)}`);
   }
 
   return {

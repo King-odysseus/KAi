@@ -150,6 +150,32 @@ describe('the events a CLI line reports', () => {
     ]);
   });
 
+  it('counts a proxied run as paid, since the proxy reaches a provider the account pays for', () => {
+    // The usage budget counts only events that name a provider, so subscription CLI usage cannot be spent against a
+    // limit. That rule was also hiding every proxied run that reported a figure: a spend limit sat there not counting
+    // the spending it was set to watch. Estimated, not measured — the figure is the CLI's own, priced at the CLI's
+    // rates rather than at whatever the proxy routed to.
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      result: 'OK',
+      session_id: '4f228d8f',
+      total_cost_usd: 0.02,
+      usage: { input_tokens: 100, output_tokens: 2 },
+    });
+    const parsed = parseAgentLine(line, 'claude');
+
+    const proxied = lineEvents({ agent: 'claude', conversationId: 'conv-1', route: 'proxy' }, parsed);
+    expect(proxied).toEqual([
+      expect.objectContaining({ type: 'cost.update', amountUsd: 0.02, provider: 'universal-proxy', estimateProvenance: 'estimated' }),
+    ]);
+
+    // A direct subscription run is not paid per token, and still carries no provider.
+    const direct = lineEvents({ agent: 'claude', conversationId: 'conv-1', route: 'direct' }, parsed);
+    expect(direct).toEqual([expect.objectContaining({ type: 'cost.update', amountUsd: 0.02 })]);
+    expect((direct[0] as { provider?: string }).provider).toBeUndefined();
+  });
+
   it('says nothing about cost for a CLI that reports none', () => {
     const codexResult = parseAgentLine('{"type":"thread.started","thread_id":"01a090b5"}', 'codex');
     expect(lineEvents(codex, codexResult)).toEqual([]);
