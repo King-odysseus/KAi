@@ -86,6 +86,8 @@ if (process.env.KAI_DESKTOP_USER_DATA) {
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let ipcContext: IpcContext | null = null;
 let serviceController: DesktopServiceController | null = null;
+/** Held here as well as in `startApplication`, because the quit handler runs after that scope has gone. */
+let proxyRoutingRef: DesktopProxyRouting | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
 let remoteGateway: RemoteGateway | null = null;
 let shutdownPromise: Promise<void> | null = null;
@@ -93,6 +95,7 @@ let desktopShell: DesktopShell | null = null;
 /** Levels KAI's brain with the mirror brain in the background; null until the app is built. */
 let mirrorLoop: BrainMirrorLoop | null = null;
 let overwatchApprovalTimer: NodeJS.Timeout | null = null;
+let routeHousekeepingTimer: NodeJS.Timeout | null = null;
 let overwatchApprovalBusy = false;
 let quitting = false;
 const desktopWindows = new DesktopWindowRegistry();
@@ -212,6 +215,12 @@ app.on('before-quit', (event) => {
     .then(() => activeContext?.auto.dispose())
     .then(() => mirrorLoop?.stop())
     .then(() => { if (overwatchApprovalTimer) clearInterval(overwatchApprovalTimer); overwatchApprovalTimer = null; })
+    .then(() => { if (routeHousekeepingTimer) clearInterval(routeHousekeepingTimer); routeHousekeepingTimer = null; })
+    // Before the services are disposed, which is what stops the proxy: a CLI whose config still points at KAI's proxy
+    // would otherwise be left talking to a port with nothing listening, and only a person reopening KAI would fix it.
+    .then(() => proxyRoutingRef?.revertOwnedRoutes('KAI is quitting').catch((error: unknown) => {
+      ipcContext?.logger.warn('internal', 'Could not revert the agent proxy routes on quit', messageOf(error));
+    }))
     .then(() => activeContext?.scheduler.stop())
     .then(() => activeContext?.terminal.stopAll())
     .then(() => activeContext?.preview.stopAll())
@@ -338,6 +347,14 @@ async function startApplication(): Promise<void> {
       const moved = await proxyRouting.followPort(port);
       for (const file of moved) logger.info('internal', `Agent proxy route moved to port ${port}`, file);
     },
+    // A route outlives the proxy unless something puts it back, and then a CLI started afterwards talks to a port
+    // with nothing behind it. Both the explicit stop and the whole-controller dispose land here.
+    onServiceStopped: (kind) => {
+      if (kind !== 'universalProxy') return;
+      void proxyRouting.revertOwnedRoutes('the proxy stopped').then((reverted) => {
+        for (const agent of reverted) logger.info('internal', `Put ${agent} back to its own provider after the proxy stopped`);
+      }).catch((error) => logger.warn('internal', 'Could not revert the agent proxy routes', messageOf(error)));
+    },
   });
   const cognitive1 = new Cognitive1Client({
     access: serviceController,
@@ -369,7 +386,9 @@ async function startApplication(): Promise<void> {
     loopbackAccess: () => serviceController!.loopbackAccess('universalProxy'),
     loadSettings: () => settings.load(),
     saveSettings: (next) => settings.save(next),
+    onProblem: (message) => logger.warn('internal', message),
   });
+  proxyRoutingRef = proxyRouting;
   const agents = new DesktopAgentRuntime(undefined, undefined, {
     resolveProxyEnvironment: async (agent, _request, model) => {
       const controller = serviceController;
@@ -1050,6 +1069,17 @@ async function startApplication(): Promise<void> {
   };
   overwatchApprovalTimer = setInterval(() => void approveWithOverwatch(), 15 * 60_000);
   overwatchApprovalTimer.unref();
+  // A route whose window has closed is put back, and a route a crashed session left behind is repaired once at
+  // startup. Both are silent on the happy path and report through the log when they are not.
+  routeHousekeepingTimer = setInterval(() => {
+    void proxyRouting.revertExpiredRoutes().then((reverted) => {
+      for (const agent of reverted) logger.info('internal', `Put ${agent} back to its own provider: its timed route ran out`);
+    }).catch((error) => logger.warn('internal', 'Could not revert a timed proxy route', messageOf(error)));
+  }, 60_000);
+  routeHousekeepingTimer.unref();
+  void proxyRouting.repairRoutesAtStartup().then((repaired) => {
+    for (const agent of repaired) logger.info('internal', `Repaired the ${agent} route left over from a previous session`);
+  }).catch((error) => logger.warn('internal', 'Could not repair leftover proxy routes', messageOf(error)));
   void serviceController
     .startConfigured()
     .then(() => syncCognitive1McpFromService(serviceController!, logger))

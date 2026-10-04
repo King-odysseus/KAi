@@ -102,6 +102,11 @@ export interface ServiceControllerOptions {
   isPortFree?: (port: number) => Promise<boolean>;
   /** Runs after Universal Proxy starts on `port`, including after a restart or a move off a busy port. */
   onProxyStarted?: (port: number) => Promise<void>;
+  /**
+   * Runs after a service has stopped, for anything that has to be undone before its port goes dark. What needs this:
+   * an agent config KAI pointed at the proxy has to be put back, or the CLI is left talking to nothing.
+   */
+  onServiceStopped?: (kind: ServiceKind) => void;
 }
 
 export interface ServiceLoopbackAccess {
@@ -259,6 +264,7 @@ export class DesktopServiceController {
       await this.closeGateway(kind);
     }
     await this.persistEnabled(kind, false);
+    this.options.onServiceStopped?.(kind);
     return this.status();
   }
 
@@ -304,6 +310,8 @@ export class DesktopServiceController {
   async dispose(): Promise<void> {
     this.disposed = true;
     for (const kind of [...this.restartTimers.keys()]) this.clearRestartState(kind);
+    // Before the services go down, not after: this is the last moment a caller can put back what pointed at them.
+    this.options.onServiceStopped?.('universalProxy');
     try {
       await Promise.race([
         this.manager.stopAll(),

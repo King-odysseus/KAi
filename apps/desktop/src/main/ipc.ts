@@ -71,7 +71,7 @@ import {
 } from '@kai/contracts';
 import type { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import type { CredentialVault } from './credential-vault';
-import type { AgentExecutionResult, DesktopAgentRuntime } from './agent-runtime';
+import { cliProxyEnvironment, type AgentExecutionResult, type DesktopAgentRuntime } from './agent-runtime';
 import { brainProjectNote, resolveBrainProject, type BrainProjectResolution, type KnownBrainProject } from './brain-project';
 import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
@@ -3555,11 +3555,28 @@ async function importProxyConfig(context: IpcContext): Promise<ProxyConfigTransf
   return { canceled: false, path: filePath, imported: true };
 }
 
+/**
+ * Puts the environment an outside terminal needs on the clipboard.
+ *
+ * This is how a CLI the user starts themselves is pointed at KAI's proxy. It used to copy a base URL and nothing else,
+ * which cannot work: the proxy's port is behind a gateway that checks the loopback token, and the token is issued fresh
+ * every time KAI starts. A CLI configured with the URL alone got 401 on every request while the route card, which
+ * probed with KAI's own token, said it was fine.
+ *
+ * What goes on the clipboard is the same environment KAI gives its own CLI runs (`cliProxyEnvironment`), so the two
+ * cannot drift again, and the token is read live rather than from anything stored.
+ *
+ * Only the description comes back, never the block: the token would otherwise land in the renderer for no reason, and
+ * the clipboard is already where the user is going to get it from.
+ */
 async function copyProxyEnv(context: IpcContext, agent: ProxyAgentId): Promise<ProxyEnvCopyResult> {
   const settings = await context.settings.load();
-  const value = proxyEnvironmentVariable(settings, agent);
-  clipboard.writeText(value);
-  return { copied: true, value };
+  if (!settings.proxy.enabled) throw new Error('Turn the Universal Proxy on first.');
+  const access = await context.services.loopbackAccess('universalProxy');
+  const environment = cliProxyEnvironment(agent, access, undefined);
+  const block = Object.entries(environment).map(([name, value]) => `${name}=${value}`).join('\n');
+  clipboard.writeText(block);
+  return { copied: true, value: `the ${agent} environment for your terminal (${Object.keys(environment).join(', ')})` };
 }
 
 async function launchProxyAgent(
@@ -3612,16 +3629,6 @@ function launchTerminal(command: string, environment: NodeJS.ProcessEnv, cwd?: s
   terminal.unref();
 }
 
-function proxyEnvironmentVariable(settings: AppSettings, agent: ProxyAgentId): string {
-  const name = agent === 'claude'
-    ? 'ANTHROPIC_BASE_URL'
-    : agent === 'codex'
-      ? 'OPENAI_BASE_URL'
-      : agent === 'qwen'
-        ? 'QWEN_BASE_URL'
-        : 'KIMI_BASE_URL';
-  return `${name}=${proxyAgentBaseUrl(settings, agent)}`;
-}
 
 async function startProxyLiveTail(context: IpcContext): Promise<boolean> {
   stopProxyLiveTail(context);

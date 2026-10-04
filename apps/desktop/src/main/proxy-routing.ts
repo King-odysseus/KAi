@@ -45,6 +45,8 @@ export interface DesktopProxyRoutingOptions {
   loopbackAccess(): Promise<{ endpoint: string; token: string }>;
   loadSettings(): Promise<AppSettings>;
   saveSettings(settings: AppSettings): Promise<void>;
+  /** Told about a revert that could not be done, so it reaches the log rather than being swallowed. */
+  onProblem?(message: string): void;
 }
 
 export class DesktopProxyRouting {
@@ -114,6 +116,74 @@ export class DesktopProxyRouting {
     }
     await this.options.saveSettings({ ...settings, proxy: { ...settings.proxy, routedPort: port } });
     return changed;
+  }
+
+  /**
+   * Puts every agent KAI itself routed back to its own provider.
+   *
+   * Nothing did this. A route written into `~/.codex/config.toml` or `~/.claude/settings.json` outlives the proxy it
+   * points at, so a CLI started afterwards was left talking to `127.0.0.1:8083` with nothing listening — until the
+   * person happened to open KAI again and press Direct. Called when the proxy stops and when KAI quits, and by the
+   * timed-route check below.
+   *
+   * Only the agents KAI routed, and only while KAI's own record still says it routed them: an agent the user pointed
+   * at their standalone proxy on 8082 was never KAI's to move back.
+   */
+  async revertOwnedRoutes(reason: string): Promise<string[]> {
+    const settings = await this.options.loadSettings();
+    const owned: ProxyAgentId[] = [];
+    if (settings.proxy.routeClaudeCode) owned.push('claude');
+    if (settings.proxy.routeCodex) owned.push('codex');
+    const reverted: string[] = [];
+    for (const agent of owned) {
+      try {
+        const result = await this.action(agent, 'direct');
+        if (result.success) reverted.push(agent);
+        // A refusal is not a throw, so an unchecked one would leave the CLI stranded with nothing said about it —
+        // which is the whole failure being fixed here, arrived at from the other side.
+        else this.options.onProblem?.(`Could not put ${agent} back to its own provider (${reason}): ${result.error || 'the proxy refused the change.'}`);
+      } catch (error) {
+        // A revert that cannot run must not stop the others, or a quit. It is reported, not thrown: the alternative
+        // is a shutdown that hangs on a config file.
+        this.options.onProblem?.(`Could not put ${agent} back to its own provider (${reason}): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return reverted;
+  }
+
+  /**
+   * Undoes a route a session that ended badly left behind.
+   *
+   * A crash skips the quit path, so the next launch is the first chance to notice. Anything still pointing at a port
+   * KAI routed on, while KAI's own record says it should not be, is put back.
+   */
+  async repairRoutesAtStartup(): Promise<string[]> {
+    const settings = await this.options.loadSettings();
+    const reverted: string[] = [];
+    for (const agent of ['claude', 'codex'] as const) {
+      const wanted = agent === 'claude' ? settings.proxy.routeClaudeCode : settings.proxy.routeCodex;
+      if (wanted) continue;
+      try {
+        const routes = await this.routes();
+        const current = routes.find((route) => route.agentId === agent);
+        // Only a config KAI itself moved is put back — `localEndpoint` on KAI's own port is the mark of that.
+        if (current?.route !== 'proxy' || !current.localEndpoint?.includes(`:${settings.proxy.port}/`)) continue;
+        const result = await this.action(agent, 'direct');
+        if (result.success) reverted.push(agent);
+        else this.options.onProblem?.(`Could not repair the ${agent} route at startup: ${result.error || 'the proxy refused the change.'}`);
+      } catch (error) {
+        this.options.onProblem?.(`Could not repair the ${agent} route at startup: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return reverted;
+  }
+
+  /** Puts back any route whose window has closed. See `syncRouteOwnership` for what writes the deadline. */
+  async revertExpiredRoutes(now = Date.now()): Promise<string[]> {
+    const settings = await this.options.loadSettings();
+    const until = settings.proxy.routeClaudeCodeUntil;
+    if (!settings.proxy.routeClaudeCode || !until || until > now) return [];
+    return this.revertOwnedRoutes('its time ran out');
   }
 
   private loadModules(): Promise<EngineModules> {

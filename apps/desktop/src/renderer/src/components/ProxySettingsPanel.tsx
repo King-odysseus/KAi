@@ -241,8 +241,17 @@ function RouteDetails({ route, onCopyEnv }: { route: ProxyAgentRoute | undefined
       {route.restartRequired && <p className="hint">⚠ Restart the agent to apply its updated route.</p>}
       {route.warnings.map((warning) => <p className="hint" key={warning}>⚠ {warning}</p>)}
       <div className="button-row" style={{ marginTop: 10 }}>
-        <button type="button" className="btn sec small" onClick={onCopyEnv}>Copy environment</button>
+        <button type="button" className="btn sec small" onClick={onCopyEnv} title="Copies the environment variables, including the key the proxy is checking right now. Paste them into a terminal before starting the agent.">
+          Copy terminal setup
+        </button>
       </div>
+      {/* The other way to use the proxy: this is the one that works for a terminal you open yourself, because the
+          key is issued fresh every time KAI starts and only the environment carries it. */}
+      <p className="hint">
+        Paste what that copies into your terminal before starting {route.agentId === 'claude' ? 'Claude Code' : route.agentId === 'codex' ? 'Codex' : route.agentId}.
+        The proxy checks a key that changes each time KAI starts, so the variables are the part that matters — a config
+        file pointing at the address alone will be refused.
+      </p>
     </>
   );
 }
