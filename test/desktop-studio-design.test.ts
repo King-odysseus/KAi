@@ -63,6 +63,12 @@ describe('reading open-pencil replies', () => {
     expect(() => tokensFromReply([{ type: 'text', text: JSON.stringify({ output: 'not a document' }) }])).toThrow('were not a JSON document');
   });
 
+  it('reads a document with no variables defined as zero tokens, not a broken reply', () => {
+    // The real reply from a document with no variables yet: a CSS comment instead of JSON, even with format: 'json'.
+    const reply = [{ type: 'text', text: JSON.stringify({ output: '/* No matching variables found */', tokenCount: 0, modeCount: 0 }) }];
+    expect(tokensFromReply(reply)).toEqual({});
+  });
+
   it('reads components and pages from the shapes the editor may answer with', () => {
     const components = componentsFrom(
       [{ type: 'text', text: '{"components":[{"id":"c1","name":"Button","page":"Main"}]}' }],

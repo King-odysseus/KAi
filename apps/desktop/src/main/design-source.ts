@@ -147,6 +147,10 @@ export function tokensFromReply(reply: unknown): Record<string, unknown> {
   if (typeof output === 'string') {
     const parsed = parseMaybeJson(output);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    // A document with no variables defined yet answers a CSS comment ("/* No matching variables found */")
+    // instead of JSON, even with format: 'json'. That is an empty design, not a broken reply, so it is read as
+    // zero tokens rather than refused — the editor already said so itself by reporting a token count of 0.
+    if (record.tokenCount === 0) return {};
     throw new Error('open-pencil returned tokens that were not a JSON document.');
   }
   // Tolerated so a future version that returns the map directly still works.
