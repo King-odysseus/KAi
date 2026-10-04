@@ -60,6 +60,7 @@ import { InterviewStore } from './interview-store';
 import { StudioArtifacts } from './artifacts';
 import { StudioBoardStore } from './board';
 import { DesktopStudio } from './studio';
+import { DesktopGuideService } from './studio-guide-service';
 import { writeHandoffFiles } from './handoff-files';
 import { StudioStyleReferenceStore } from './style-references';
 import { DesktopEqualizer, type EqualizerService } from './equalizer';
@@ -92,6 +93,12 @@ let proxyRoutingRef: DesktopProxyRouting | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
 let remoteGateway: RemoteGateway | null = null;
 let shutdownPromise: Promise<void> | null = null;
+/**
+ * The two bounds on quitting, held where both the shutdown chain and the cancel path can reach them. A quit the
+ * person cancels must take its deadlines with it: a timer left armed would force-kill a running app later.
+ */
+let quitDeadline: NodeJS.Timeout | null = null;
+let forceExit: NodeJS.Timeout | null = null;
 let desktopShell: DesktopShell | null = null;
 /** Levels KAI's brain with the mirror brain in the background; null until the app is built. */
 let mirrorLoop: BrainMirrorLoop | null = null;
@@ -177,6 +184,12 @@ app.on('window-all-closed', () => {
 });
 
 /**
+ * How long the unsaved-changes prompt may hold up a quit before KAI leaves anyway. Long enough for someone to
+ * read the dialog and choose, since the alternative is an app that cannot be closed at all.
+ */
+const QUIT_CONFIRMATION_MS = 120_000;
+
+/**
  * The backstop for a quit that never reaches the handler below: the default one taken when the app is asked to
  * quit before its context exists, or on a second attempt while the first is still running. Those paths left KAI
  * without ending what it had started, which is the one thing the tree kill is for. `app.exit` does not emit this,
@@ -191,15 +204,31 @@ app.on('before-quit', (event) => {
   const activeContext = ipcContext;
   if (!activeContext || shutdownPromise) return;
   event.preventDefault();
+  // Armed before the unsaved-changes prompt rather than after it, because that prompt is answered by a person and
+  // can wait forever on an answer that never comes, which left quitting with no bound at all. The window is
+  // generous because it is measured against someone reading a dialog, not against the shutdown that follows.
+  quitDeadline = setTimeout(() => {
+    if (!quitting) return;
+    ipcContext?.logger.warn('internal', 'Quit was never confirmed; exiting anyway');
+    endOwnProcessTree();
+    app.exit(0);
+  }, QUIT_CONFIRMATION_MS);
+  quitDeadline.unref();
   shutdownPromise = (async () => {
     for (const session of desktopWindows.live()) {
       if (await confirmEditorNavigation(activeContext, session, 'quit KAI')) continue;
       quitting = false;
       throw new Error('QUIT_CANCELLED');
     }
-    // The user has agreed to quit. If a service refuses to stop, leave anyway rather than linger as background
-    // processes after the window is gone.
-    const forceExit = setTimeout(() => {
+    // The person has agreed to quit, so the confirmation's own window is done and the bound belongs to the
+    // shutdown from here: if a service refuses to stop, leave anyway rather than linger as background processes
+    // after the window is gone.
+    if (quitDeadline) clearTimeout(quitDeadline);
+    quitDeadline = null;
+    forceExit = setTimeout(() => {
+      // Checked for the same reason as the confirmation's own timer: leaving is only ever right while a quit is
+      // actually happening.
+      if (!quitting) return;
       ipcContext?.logger.warn('internal', 'Shutdown took too long; exiting anyway');
       // Exiting is not enough on its own: on Windows a child outlives its parent, so leaving without this strands
       // the services, the agents, the terminals and every dev server KAI started — the very thing this path was
@@ -240,6 +269,12 @@ app.on('before-quit', (event) => {
     })
     .finally(() => {
       if (!quitting) {
+        // The person refused the prompt, so nothing is quitting: drop the bounds with the quit. Leaving either
+        // armed would end the process tree under a KAI that is still running.
+        if (quitDeadline) clearTimeout(quitDeadline);
+        if (forceExit) clearTimeout(forceExit);
+        quitDeadline = null;
+        forceExit = null;
         shutdownPromise = null;
         return;
       }
@@ -531,6 +566,7 @@ async function startApplication(): Promise<void> {
   let promptGuide!: DesktopPromptGuide;
   let interview!: DesktopInterview;
   let studio!: DesktopStudio;
+  let guide!: DesktopGuideService;
   let scheduler!: DesktopScheduler;
   let evals!: DesktopEvals;
   let changeReviewer!: DesktopChangeReviewer;
@@ -640,6 +676,7 @@ async function startApplication(): Promise<void> {
     promptGuide,
     interview,
     studio,
+    guide,
     styleReferences,
     equalizer,
     runControl,
@@ -890,6 +927,19 @@ async function startApplication(): Promise<void> {
     now: () => new Date().toISOString(),
   });
   ipcContext.studio = studio;
+  // The Senior Dev reads the same four records the Studio screen does, and borrows the same provider plumbing the
+  // interview and the composer use — it adds no second HTTP client and no third answer to "which provider".
+  guide = new DesktopGuideService({
+    settings: () => settings.load(),
+    requester: learningTutor,
+    spec: specStore,
+    projectRoot: studioProjectRoot,
+    interview: (projectId) => interview.read({ projectId }),
+    artifacts: (projectId) => studio.artifacts(projectId),
+    board: (projectId) => studio.board(projectId),
+    design: (projectId) => studio.design(projectId),
+    now: () => new Date().toISOString(),
+  });
   const equalizerPortsFor = createEqualizerPorts({
     mcp: {
       callServerTool: (serverId, toolName, input) => {

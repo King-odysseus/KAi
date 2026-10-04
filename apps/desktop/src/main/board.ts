@@ -8,6 +8,7 @@ import {
   defaultNeeds,
   isUiCard,
   readyCards,
+  routeFromScreenName,
   screenTitleKey,
   studioBoardSchema,
   studioDesignSchema,
@@ -159,7 +160,10 @@ export function mergeDesign(
     const existing = byNode.get(component.id) ?? byName.get(screenTitleKey(component.name));
     if (existing) {
       const index = merged.findIndex((card) => card.id === existing.id);
-      merged[index] = { ...existing, designRef: component.id, updatedAt: at };
+      // A route the page's name already carries is filled in when the card has none — the backfill for cards written
+      // before this existed. A route already on the card is the person's, and the design does not overwrite it.
+      const route = existing.route || (component.screen ? routeFromScreenName(component.name) : '');
+      merged[index] = { ...existing, designRef: component.id, route, updatedAt: at };
       continue;
     }
     let id = idFor(component.id);
@@ -173,6 +177,7 @@ export function mergeDesign(
       story: `Built from the open-pencil ${component.screen ? 'page' : 'component'} "${component.name}".`,
       acceptance: ['It matches the design node it was drawn from.', 'The design only changes when the node in open-pencil changes.'],
       designRef: component.id,
+      route: component.screen ? routeFromScreenName(component.name) : '',
       needsArtifacts: defaultNeeds(component.screen ? 'page' : 'component'),
       status: 'backlog',
       createdAt: at,
@@ -237,8 +242,19 @@ export class StudioBoardStore {
     }
     next = boardCardSchema.parse(next);
     const moved = board.cards.map((item) => (item.id === cardId ? next : item));
-    // A card that is done frees the cards that were waiting on it; without this a board with dependencies stalls.
-    await this.save(projectId, { ...board, cards: status === 'done' ? promoteReady(moved) : moved });
+    // A card that is done frees the cards that were waiting on it. Run on every move rather than only on `done`,
+    // because this invariant is what makes "ready" mean "workable": a card whose dependencies are all done and which
+    // is left in the backlog is work nobody can pick up. Only two things used to promote — this and `replace` — so a
+    // card put back in the queue after a block could sit there for good, while Autopilot found nothing ready and the
+    // board looked stuck for no stated reason.
+    //
+    // A card a person moves stays where they put it. Promoting it too would snap a ready card dragged to the backlog
+    // straight back to Ready, and a deliberate move is the one thing on this board worth honouring. An agent's move
+    // is not a preference, so it does not get that exemption — which is what puts a card an agent parked in the
+    // backlog back in the queue when its dependencies turn out to be done after all.
+    const promoted = promoteReady(moved);
+    const cards = by === 'user' ? promoted.map((item) => (item.id === cardId ? next : item)) : promoted;
+    await this.save(projectId, { ...board, cards });
     return next;
   }
 
@@ -267,6 +283,22 @@ export class StudioBoardStore {
     const board = await this.read(projectId);
     const card = this.require(board, cardId);
     const next: BoardCard = { ...card, check, updatedAt: this.ports.now() };
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    return next;
+  }
+
+  /**
+   * Sets the route a component or page card is checked at.
+   *
+   * The card's own field, so it does not go through `move` and cannot change a status. Without a way to set it, a UI
+   * card whose route the design did not carry had no route at all, and the board will not close a UI card without a
+   * passing screen check — so the card was unclosable, and the cards depending on it were stuck behind it for good.
+   */
+  async setRoute(projectId: string, cardId: string, route: string): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    if (!isUiCard(card)) throw new Error(`${card.title} is not a component or page, so it has no screen to route to.`);
+    const next = boardCardSchema.parse({ ...card, route: route.trim().slice(0, 300), updatedAt: this.ports.now() });
     await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
     return next;
   }

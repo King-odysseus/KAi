@@ -439,6 +439,12 @@ export const studioBoardClaimInputSchema = z
   .strict();
 export type StudioBoardClaimInput = z.infer<typeof studioBoardClaimInputSchema>;
 
+/** The route a component or page card is checked at. A blank route clears it and parks the card again. */
+export const studioBoardRouteInputSchema = z
+  .object({ projectId: z.string().min(1), cardId: z.string().min(1).max(120), route: z.string().max(300) })
+  .strict();
+export type StudioBoardRouteInput = z.infer<typeof studioBoardRouteInputSchema>;
+
 /** How many cards one "work the board" click runs, and with which agent and model. */
 export const studioBoardWorkInputSchema = z
   .object({

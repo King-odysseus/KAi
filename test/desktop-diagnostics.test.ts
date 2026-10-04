@@ -37,6 +37,7 @@ function report(overrides: Partial<Parameters<typeof buildDiagnosticsReport>[0]>
     services,
     agents: [{ id: 'codex', available: true, version: 'codex-cli 0.153.4' }, { id: 'gemini', available: false, detail: 'Not installed.' }],
     logs: logs(),
+    pendingCalls: [],
     ...overrides,
   });
 }
@@ -86,5 +87,17 @@ describe('diagnostics report', () => {
 
   it('says so when nothing has gone wrong', () => {
     expect(report({ logs: [] })).toContain('- none recorded');
+  });
+
+  it('names the calls that have not answered, which no log line can', () => {
+    // Nothing is logged while a call is merely outstanding, so this section is the only place a hung handler is
+    // visible at all — the reason an hour was once spent reading a healthy log for a call that never came back.
+    const text = report({ pendingCalls: [{ channel: 'auto:start', count: 1, seconds: 3_592 }] });
+    expect(text).toContain('## Calls with no answer yet');
+    expect(text).toContain('- auto:start: 1 outstanding, waiting 3592s');
+  });
+
+  it('says so when every call has answered', () => {
+    expect(report()).toContain('## Calls with no answer yet\n- none');
   });
 });

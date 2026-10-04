@@ -112,6 +112,27 @@ class SystemicFailure extends Error {}
 const BLOCKED_BEFORE_GIVING_UP = 3;
 
 /**
+ * A card a machine parked, whatever parked it.
+ *
+ * This used to be a prefix match on the note, which only ever caught Autopilot's own wording. Three other things park
+ * cards: the board's single-card run writes "The run failed: …", an agent working through the kai-project tools writes
+ * its own summary, and the team runner writes "The run failed" too. The button then reported that it had found nothing
+ * to put back while the blocked cards sat there gating every card behind them. `movedBy` is the fact that separates a
+ * machine from a person — a card someone moved is theirs to keep blocked — and the note is read only for the cards
+ * written before `movedBy` existed.
+ */
+function machineBlocked(card: BoardCard): boolean {
+  if (card.status !== 'blocked') return false;
+  if (card.movedBy) return card.movedBy !== 'user';
+  return card.notes.startsWith('Autopilot gave up') || card.notes.startsWith('The run failed');
+}
+
+/** A component or page with nowhere to point can never pass its screen check, and the board never closes it. */
+export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
+  return isUiCard(card) && card.route.trim() === '';
+}
+
+/**
  * Works a Project Studio board to the end without anyone watching. It is deliberately a thin loop over what already
  * exists: the board decides what is ready and what counts as done, the agent runtime does the work, and the only new
  * judgement here is when to rest. A card is only closed through the board's own rule, so Autopilot can fail a card
@@ -244,6 +265,15 @@ export class DesktopAutopilot {
     const owner = active.ownerWindowId;
     const signal = active.controller.signal;
     const state = this.state(projectId);
+    // A screen card with no route cannot pass its screen check however many times it is run, and the board will not
+    // close a screen card without one. Parking it says so once, in the card's own words, instead of spending three
+    // paid agent turns proving it again — which is what happened on 2026-10-04, when four such cards were worked
+    // three times each and then gated thirty-seven others behind them.
+    if (unclosableUiCard(card)) {
+      await this.ports.moveCard(projectId, card.id, 'blocked', 'No route: this card is a screen, and the board will not close a screen card without a passing screen check, which needs a route to open. Set the route on the card, then put it back in the queue.', 'agent');
+      this.record(projectId, owner, 'warn', `"${card.title}" is blocked: it is a screen card with no route, so its check can never pass.`);
+      return;
+    }
     state.cardId = card.id;
     state.cardTitle = card.title;
     await this.ports.claimCard(projectId, card.id, label);
@@ -413,14 +443,14 @@ export class DesktopAutopilot {
   }
 
   /**
-   * Puts the cards an earlier run parked as blocked back in the queue: ready when everything they wait on is done,
-   * backlog otherwise. Only cards Autopilot itself gave up on are touched; a card a person blocked stays blocked.
+   * Puts the cards a machine parked as blocked back in the queue: ready when everything they wait on is done,
+   * backlog otherwise. Every machine that parks a card is covered; a card a person blocked stays blocked.
    */
   async requeueBlocked(projectId: string): Promise<number> {
     if (this.runs.has(projectId)) throw new Error('Autopilot is running. Stop it before putting cards back.');
     const board = await this.ports.board(projectId);
-    const mine = board.cards.filter((card) => card.status === 'blocked' && card.notes.startsWith('Autopilot gave up'));
-    return this.putBack(projectId, mine.map((card) => card.id), 'Put back in the queue after Autopilot gave up on it.');
+    const mine = board.cards.filter(machineBlocked);
+    return this.putBack(projectId, mine.map((card) => card.id), 'Put back in the queue after an agent stopped on it.');
   }
 
   private async putBack(projectId: string, ids: readonly string[], note: string): Promise<number> {

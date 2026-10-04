@@ -17,6 +17,22 @@ interface Props {
   disabled: boolean;
 }
 
+/**
+ * The settings a run starts with when nobody has changed them.
+ *
+ * Shared with the Senior Dev, whose "Start Autopilot" button starts the same run this panel's own button does —
+ * otherwise the guide would carry a second set of defaults, and the two would drift apart with nobody to notice.
+ */
+export const DEFAULT_AUTOPILOT_START = {
+  execution: 'api' as const,
+  checkCommand: '',
+  maxCards: 100,
+  maxHours: 12,
+  maxCostUsd: 0,
+  attemptsPerCard: 3,
+  minGapSeconds: 0,
+};
+
 function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -35,12 +51,12 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [execution, setExecution] = useState<'api' | 'cli'>('api');
-  const [checkCommand, setCheckCommand] = useState('');
-  const [maxHours, setMaxHours] = useState(12);
-  const [maxCostUsd, setMaxCostUsd] = useState(0);
-  const [attemptsPerCard, setAttemptsPerCard] = useState(3);
-  const [minGapSeconds, setMinGapSeconds] = useState(0);
+  const [execution, setExecution] = useState<'api' | 'cli'>(DEFAULT_AUTOPILOT_START.execution);
+  const [checkCommand, setCheckCommand] = useState(DEFAULT_AUTOPILOT_START.checkCommand);
+  const [maxHours, setMaxHours] = useState(DEFAULT_AUTOPILOT_START.maxHours);
+  const [maxCostUsd, setMaxCostUsd] = useState(DEFAULT_AUTOPILOT_START.maxCostUsd);
+  const [attemptsPerCard, setAttemptsPerCard] = useState(DEFAULT_AUTOPILOT_START.attemptsPerCard);
+  const [minGapSeconds, setMinGapSeconds] = useState(DEFAULT_AUTOPILOT_START.minGapSeconds);
   const [collapsed, toggleCollapsed] = useRunPanelCollapsed('autopilot');
   const [interrupted, setInterrupted] = useState<AutopilotRunRecord | null>(null);
 
@@ -73,7 +89,7 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
     setError(null);
     setNotice(null);
     try {
-      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: 100, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds }).then(unwrap);
+      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: DEFAULT_AUTOPILOT_START.maxCards, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds }).then(unwrap);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -87,7 +103,9 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
     setNotice(null);
     try {
       const { requeued } = unwrap(await window.kaiDesktop.requeueAutopilot({ projectId }));
-      setNotice(requeued === 0 ? 'No cards Autopilot gave up on were found.' : null);
+      setNotice(requeued === 0
+        ? 'No cards parked by an agent were found. A card is only left alone here if you moved it to Blocked yourself.'
+        : `${requeued} card${requeued === 1 ? '' : 's'} back in the queue.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -141,11 +159,15 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
   const progress = status && status.cardsTotal > 0 ? Math.round((status.cardsDone / status.cardsTotal) * 100) : 0;
 
   // Why Start is not available, in words. This used to live only in the button's tooltip, so a board with nothing
-  // ready to work looked like a button that simply did not do anything.
+  // ready to work looked like a button that simply did not do anything — and the line that replaced it, "Nothing is
+  // ready to start.", said the same nothing in a different place.
   const blockedReason = blocked > 0
-    ? `No card is ready: ${blocked} card${blocked === 1 ? ' is' : 's are'} blocked, and the other ${waiting} wait on ${blocked === 1 ? 'it' : 'them'}. Put the blocked ones back in the queue, then start.`
+    ? `No card is ready: ${blocked} card${blocked === 1 ? ' is' : 's are'} blocked, and the other ${waiting} wait ${blocked === 1 ? 'on it' : 'on them'}. Put the blocked ones back in the queue, then start.`
     : 'No card is ready yet: every card is waiting on another card that is not done.';
-  const summary = status ? status.message : hasWork ? 'Ready when you are.' : 'Nothing is ready to start.';
+  // A stalled board is the one case where the screen has something to say and nothing else to show, so the reason
+  // goes in the line itself rather than behind a hover. Behind it: the run's own last message, or an honest wait.
+  const stalled = !running && !hasWork;
+  const summary = stalled ? blockedReason : status ? status.message : 'Ready when you are.';
 
   return (
     <section className={`autopilot-panel${collapsed ? ' collapsed' : ''}`} aria-label="Autopilot">
@@ -173,7 +195,20 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
           </button>
         </div>
       </div>
-      {collapsed && <p className="studio-note run-panel-summary">{summary}</p>}
+      {/* On a collapsed panel this line is the whole screen, so the way out of a stall lives in it. It used to be
+          inside the expanded half only — which is the half a person with nothing to start never opens. */}
+      {collapsed && (
+        <p className="studio-note run-panel-summary">
+          {summary}{' '}
+          {stalled && blocked > 0 && (
+            <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy}>Put them back in the queue</button>
+          )}
+        </p>
+      )}
+      {/* Outside the collapsed half on purpose: a refused start, and the answer to the button just pressed, are the
+          two things a person needs whether or not the panel is open. */}
+      {error && <p className="studio-error" role="alert">{error}</p>}
+      {notice && <p className="studio-note" role="status">{notice}</p>}
       {!collapsed && <>
       <p className="studio-note">
         Works the whole board on its own: one agent per card, a check after each, a retry with the failure when it fails, and a rest when the provider rate-limits.
@@ -227,13 +262,10 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
         </details>
       )}
 
-      {error && <p className="studio-error" role="alert">{error}</p>}
-      {notice && <p className="studio-note" role="status">{notice}</p>}
-
       {!running && blocked > 0 && (
         <p className="studio-note">
-          {blocked} card{blocked === 1 ? ' is' : 's are'} blocked.{' '}
-          <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy}>Put the ones Autopilot gave up on back in the queue</button>
+          {blocked} card{blocked === 1 ? ' is' : 's are'} blocked, and each one's reason is on the card.{' '}
+          <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy} title="Every card an agent or a check parked. A card you blocked yourself is left where it is.">Put the ones an agent stopped on back in the queue</button>
         </p>
       )}
 

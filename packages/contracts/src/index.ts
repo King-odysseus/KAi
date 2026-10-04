@@ -44,3 +44,4 @@ export * from './usage';
 export * from './workbench';
 export * from './equalizer';
 export * from './pages';
+export * from './studio-guide';

@@ -42,14 +42,14 @@ describe('recovery store', () => {
   it('writes a record when a run starts, refreshes it per event, and removes it when the run ends', async () => {
     const store = new RecoveryStore(await temporaryDirectory());
     await begin(store);
-    expect(await store.list()).toHaveLength(1);
+    expect((await store.list()).records).toHaveLength(1);
 
     await store.touch('conv_1', 'Tool read_file completed', new Date('2026-09-23T10:01:00.000Z'));
-    const [record] = await store.list();
+    const [record] = (await store.list()).records;
     expect(record).toMatchObject({ eventCount: 1, lastActivity: 'Tool read_file completed', updatedAt: '2026-09-23T10:01:00.000Z' });
 
     await store.end('conv_1');
-    expect(await store.list()).toEqual([]);
+    expect(await store.list()).toEqual({ records: [], unreadable: [] });
     await expect(store.end('conv_1')).resolves.toBeUndefined();
   });
 
@@ -58,18 +58,64 @@ describe('recovery store', () => {
     await begin(new RecoveryStore(directory));
     // The first process never called end(), as if it was killed.
     const afterRestart = await new RecoveryStore(directory).list();
-    expect(afterRestart.map((record) => record.conversationId)).toEqual(['conv_1']);
+    expect(afterRestart.records.map((record) => record.conversationId)).toEqual(['conv_1']);
   });
 
-  it('skips corrupt files instead of failing startup, and ignores touches for unknown runs', async () => {
+  it('keeps a record readable when writes for one run overlap', async () => {
+    const directory = await temporaryDirectory();
+    const store = new RecoveryStore(directory);
+    await begin(store);
+    // Not an edge case: `touch` runs on every event and its caller deliberately does not await it, so a run with
+    // events arriving quickly always has writes overlapping on its own record. Through a single shared temporary
+    // file they used to interleave inside it and leave a spliced record that could never be read again.
+    await Promise.all(Array.from({ length: 40 }, (_, index) => (
+      store.touch('conv_1', `event ${index}`, new Date(Date.parse(start) + index * 1_000))
+    )));
+    const { records, unreadable } = await store.list();
+    expect(unreadable).toEqual([]);
+    expect(records).toHaveLength(1);
+    // Every touch counted: the read-modify-write happens inside the queue, so none overwrote another's tally.
+    expect(records[0]?.eventCount).toBe(40);
+  });
+
+  it('cannot have a finished run put back by a write already in flight', async () => {
+    const directory = await temporaryDirectory();
+    const store = new RecoveryStore(directory);
+    await begin(store);
+    const touching = store.touch('conv_1', 'last event');
+    const ending = store.end('conv_1');
+    await Promise.all([touching, ending]);
+    expect((await store.list()).records).toEqual([]);
+  });
+
+  it('reports a file it cannot read instead of counting it out', async () => {
     const directory = await temporaryDirectory();
     const store = new RecoveryStore(directory);
     await begin(store);
     await fs.writeFile(path.join(directory, 'broken.json'), '{not json', 'utf8');
     await fs.writeFile(path.join(directory, 'wrong.json'), JSON.stringify({ schemaVersion: 1 }), 'utf8');
-    expect((await store.list()).map((record) => record.conversationId)).toEqual(['conv_1']);
+    // Both are interrupted runs as far as the person is concerned, and silently dropping them is what let the
+    // banner report two runs when eight were on disk.
+    const listing = await store.list();
+    expect(listing.records.map((record) => record.conversationId)).toEqual(['conv_1']);
+    expect(listing.unreadable).toEqual(['broken', 'wrong']);
     await expect(store.touch('missing', 'x')).resolves.toBeUndefined();
-    expect(await new RecoveryStore(path.join(directory, 'nope')).list()).toEqual([]);
+    expect(await new RecoveryStore(path.join(directory, 'nope')).list()).toEqual({ records: [], unreadable: [] });
+  });
+
+  it('tells a damaged record apart from one that is gone', async () => {
+    const directory = await temporaryDirectory();
+    const store = new RecoveryStore(directory);
+    await expect(store.readOutcome('nothing')).resolves.toEqual({ kind: 'missing' });
+
+    await begin(store);
+    expect((await store.readOutcome('conv_1')).kind).toBe('record');
+
+    await fs.writeFile(path.join(directory, 'conv_1.json'), '{"schemaVersion":1', 'utf8');
+    // Null and "unreadable" are not the same answer: one is a run that is over, the other is a file sitting right
+    // there that KAI must not claim is "no longer available".
+    await expect(store.readOutcome('conv_1')).resolves.toEqual({ kind: 'unreadable' });
+    await expect(store.read('conv_1')).resolves.toBeNull();
   });
 
   it('refuses conversation ids that are not plain file names', async () => {
@@ -85,7 +131,7 @@ describe('recovery store', () => {
       prompt: 'x'.repeat(10_000), goal: null, startedAt: start, updatedAt: start, eventCount: 0, checkpoint: null,
     });
     await store.touch('c', 'y'.repeat(1_000));
-    const [record] = await store.list();
+    const [record] = (await store.list()).records;
     expect(record?.prompt).toHaveLength(4_000);
     expect(record?.lastActivity).toHaveLength(300);
   });

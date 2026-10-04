@@ -136,6 +136,7 @@ import { composeRunLesson, type RunLessonInput } from './run-learning';
 import type { DesktopPromptGuide } from './prompt-guide';
 import type { DesktopInterview } from './interview';
 import type { DesktopStudio } from './studio';
+import type { DesktopGuideService } from './studio-guide-service';
 import type { StudioStyleReferenceStore } from './style-references';
 import type { EqualizerService } from './equalizer';
 import { resolveInside } from './project-files';
@@ -220,6 +221,8 @@ export interface IpcContext {
   promptGuide: DesktopPromptGuide;
   interview: DesktopInterview;
   studio: DesktopStudio;
+  /** The Senior Dev: reads the project to say which step it is on, and explains it in plain words when asked. */
+  guide: DesktopGuideService;
   styleReferences: StudioStyleReferenceStore;
   equalizer: EqualizerService;
   teamRecord: TeamRecordStore;
@@ -279,6 +282,40 @@ export interface ActiveCompareRun {
   patchRight: string;
 }
 
+/**
+ * The IPC calls running right now, by channel, with when each was first entered.
+ *
+ * A handler that never returns is the worst failure this app has: the window waits on it forever, the control
+ * that started it stays disabled, and nothing anywhere says which call it was. It is also invisible in the log,
+ * because nothing is logged while a call is merely outstanding — an hour was once spent reading a perfectly
+ * healthy log looking for a call that had simply never answered. Every handler is timed here so the answer is
+ * always on hand, and the diagnostics report prints it.
+ *
+ * A count rather than a single start time, because a channel can legitimately be in flight more than once.
+ */
+const inFlightIpc = new Map<string, { count: number; startedAt: number }>();
+
+/** The calls that have not returned yet, longest-waiting first. */
+export function inFlightIpcCalls(now: number = Date.now()): Array<{ channel: string; count: number; seconds: number }> {
+  return [...inFlightIpc.entries()]
+    .map(([channel, entry]) => ({ channel, count: entry.count, seconds: Math.round((now - entry.startedAt) / 1_000) }))
+    .sort((left, right) => right.seconds - left.seconds);
+}
+
+function trackIpcCall<T>(channel: string, work: () => Promise<T>): Promise<T> {
+  const entry = inFlightIpc.get(channel);
+  // A second call on the same channel does not restart the clock: what is worth knowing is how long the oldest
+  // unanswered one has been waiting.
+  if (entry) entry.count += 1;
+  else inFlightIpc.set(channel, { count: 1, startedAt: Date.now() });
+  return work().finally(() => {
+    const current = inFlightIpc.get(channel);
+    if (!current) return;
+    current.count -= 1;
+    if (current.count <= 0) inFlightIpc.delete(channel);
+  });
+}
+
 export function registerIpc(context: IpcContext): IpcRegistry {
   const handlers = new Map<IpcChannel, IpcChannelHandler>();
 
@@ -293,9 +330,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       request: IpcRequestContext,
     ) => Promise<unknown>,
   ): void => {
-    handlers.set(channel, (rawInput, request) =>
-      handler(parseIpcInput(channel, rawInput), request),
-    );
+    handlers.set(channel, (rawInput, request) => {
+      // Validated before it is tracked: input that cannot be parsed never reached a handler body, so timing it
+      // as an outstanding call would be reporting a call that does not exist.
+      const input = parseIpcInput(channel, rawInput);
+      return trackIpcCall(channel, () => handler(input, request));
+    });
   };
 
   handle(context, 'app:get-bootstrap', async (_input, request) => createBootstrap(context, request.session));
@@ -523,6 +563,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));
     return card;
   });
+  handle(context, 'studio:board-route', async (input) => {
+    const card = await context.studio.setCardRoute(input.projectId, input.cardId, input.route);
+    announceBoard(context, input.projectId, await context.studio.board(input.projectId));
+    return card;
+  });
   handle(context, 'studio:board-claim', async (input) => {
     const card = await context.studio.claim(input.projectId, input.cardId, input.agent);
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));
@@ -544,6 +589,10 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, projectId, await context.studio.board(projectId));
     return worked;
   });
+  // Reading the guide never calls a provider, so the board's strip can ask on every redraw. Explaining spends, and
+  // only when the stored explanation no longer fits — see `DesktopGuideService`.
+  handle(context, 'studio:guide-read', async ({ projectId }) => context.guide.read(projectId));
+  handle(context, 'studio:guide-explain', async ({ projectId }) => context.guide.explain(projectId));
   handle(context, 'autopilot:start', async (input, request) => context.autopilot.start(input, request.ownerWindowId));
   handle(context, 'autopilot:stop', async ({ projectId }) => context.autopilot.stop(projectId));
   handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));
@@ -1018,8 +1067,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'recovery:list', async () => context.recovery.list());
   handle(context, 'recovery:recap', async ({ conversationId }) => interruptedRunRecap(context, conversationId));
   handle(context, 'recovery:resume', async ({ conversationId }) => {
-    const record = await context.recovery.read(conversationId);
-    if (!record) throw new NotFoundError('That interrupted run is no longer available.');
+    const record = await requireRecoveryRecord(context, conversationId);
     // Resuming is always a user action; the record is cleared here and a fresh one is written when the run starts.
     await context.recovery.end(conversationId);
     await releaseAgentClaim(context, record.agent);
@@ -1030,6 +1078,37 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     await context.recovery.end(conversationId);
     if (record) await releaseAgentClaim(context, record.agent);
     return true;
+  });
+  handle(context, 'runs:stop-all', async () => {
+    // Two sources, because neither is complete alone: the notification centre only learns of a run once it is past
+    // setup, while a run still hung in setup exists only here. A run missing from this set would carry on working
+    // while its recovery record was cleared underneath it, which is worse than not clearing anything.
+    const live = new Set([...context.notifications.activeRunIds(), ...automationRuns.keys()]);
+    let stoppedRuns = 0;
+    for (const conversationId of live) {
+      if (cancelConversationRun(context, conversationId)) stoppedRuns += 1;
+    }
+    // Both are already stop-everything, stopping one session at a time, and neither is terminal: calling them
+    // mid-session leaves KAI able to start a fresh run straight afterwards.
+    await context.auto.dispose().catch(() => undefined);
+    await context.autopilot.dispose().catch(() => undefined);
+    // Records left by runs that died with the process. Each also holds a claim on the agent, so clearing the file
+    // without releasing the claim would leave the project claimed by an agent that is not running.
+    const { records, unreadable } = await context.recovery.list();
+    let clearedRuns = 0;
+    for (const record of records) {
+      await context.recovery.end(record.conversationId).catch(() => undefined);
+      await releaseAgentClaim(context, record.agent);
+      clearedRuns += 1;
+    }
+    // Records nobody can read. The run they describe is over either way, and there is nothing in them to resume
+    // — and no agent name to release a claim with, which is the one thing this cannot do for them. Removed so
+    // they stop being counted as runs still waiting on a person, which is what the banner was reporting.
+    for (const conversationId of unreadable) {
+      await context.recovery.end(conversationId).catch(() => undefined);
+      clearedRuns += 1;
+    }
+    return { stoppedRuns, clearedRuns };
   });
   handle(context, 'diagnostics:report', async ({ copy }) => {
     const [settings, services, agents] = await Promise.all([context.settings.load(), context.services.status(), context.agents.capabilities().catch(() => [])]);
@@ -1044,6 +1123,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       services,
       agents: agents.map((agent) => ({ id: agent.id, available: agent.available, version: agent.version, detail: agent.unavailableReason })),
       logs: context.logger.recent(200),
+      // This call is itself outstanding while the report is built, and naming it would only be confusing.
+      pendingCalls: inFlightIpcCalls().filter((call) => call.channel !== 'diagnostics:report'),
     });
     if (copy) clipboard.writeText(text);
     return { text };
@@ -1991,9 +2072,22 @@ async function globalSearch(context: IpcContext, query: string) {
   return { query, brainSearched, hits };
 }
 
+/**
+ * The record for an interrupted run, or the reason there is none. A record that exists but cannot be parsed is
+ * told apart from one that is gone, because "no longer available" is the wrong thing to say about a file that is
+ * sitting right there — and it is the answer a person would try again and again.
+ */
+async function requireRecoveryRecord(context: IpcContext, conversationId: string) {
+  const outcome = await context.recovery.readOutcome(conversationId);
+  if (outcome.kind === 'unreadable') {
+    throw new Error('This run\'s record is damaged and cannot be read, so there is nothing to resume. Discard it, or use Stop everything on the Operations screen.');
+  }
+  if (outcome.kind === 'missing') throw new NotFoundError('That interrupted run is no longer available.');
+  return outcome.record;
+}
+
 async function interruptedRunRecap(context: IpcContext, conversationId: string) {
-  const record = await context.recovery.read(conversationId);
-  if (!record) throw new NotFoundError('That interrupted run is no longer available.');
+  const record = await requireRecoveryRecord(context, conversationId);
   const project = record.projectId ? (await context.projects.list()).find((item) => item.id === record.projectId) : undefined;
   const changedFiles = record.checkpoint && project
     ? (await diffFromCheckpoint(project.path, record.checkpoint).catch(() => [])).map((file) => file.path)

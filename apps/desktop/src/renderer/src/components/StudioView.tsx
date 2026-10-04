@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { deriveAgentActivity } from './AgentActivity';
 import { foundationLanded, remainingScreens, screenLanded } from '../design-build';
-import { AutopilotPanel } from './AutopilotPanel';
+import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
+import { GuidePanel, GuideStrip } from './GuidePanel';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
 import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, type DesignContext } from '../flow-diagram';
@@ -24,6 +25,7 @@ import {
   type ArtifactKind,
   type BoardCard,
   type BoardStatus,
+  type GuideAction,
   type InterviewState,
   type PersistedEvent,
   type ProjectRecord,
@@ -31,6 +33,7 @@ import {
   type StudioStyleReferences,
   type StudioBoard,
   type StudioDesign,
+  type StudioGuideView,
   type StudioProjectSummary,
   type StudioReadiness,
   type TeamPlanDraft,
@@ -100,11 +103,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [boardFull, setBoardFull] = useState(false);
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
-  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design'>('interview');
+  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'guide'>('interview');
+  // Where the project is, from the rules — free to read, so it is refreshed whenever the board changes. The
+  // explanation inside it is the paid part, and arrives only when the Guide tab asks for it.
+  const [guide, setGuide] = useState<StudioGuideView | null>(null);
+  const [explaining, setExplaining] = useState(false);
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | 'guide' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -202,6 +209,37 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       if (payload.projectId === projectId) setBoard(payload.board);
     });
   }, [projectId]);
+
+  /**
+   * Where the project is, re-read whenever anything it reads has moved.
+   *
+   * `read` never calls a provider — it is the rules reading the board, the artifacts and the interview — so this can
+   * refresh on every change without spending anything. That is also what records a milestone the moment it is
+   * crossed, rather than only when someone happens to open the Guide tab.
+   */
+  useEffect(() => {
+    if (!projectId) { setGuide(null); return undefined; }
+    let cancelled = false;
+    void window.kaiDesktop.readStudioGuide(projectId).then(unwrap)
+      .then((next) => { if (!cancelled) setGuide(next); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [projectId, board, artifacts, state, design]);
+
+  /**
+   * Writes the walkthrough, once per situation. The key is what stops a failed call from retrying forever: an
+   * attempt is remembered per (project, step, whether it needs you), so a provider that is down leaves the button in
+   * the reader's hands rather than looping, and a step the project moves on to is explained on its own.
+   */
+  const autoExplained = useRef<string | null>(null);
+  useEffect(() => {
+    if (tab !== 'guide' || !projectId || !guide || guide.narrative || explaining) return;
+    const current = guide.steps.find((step) => step.id === guide.currentStepId);
+    const key = `${projectId}|${guide.currentStepId}|${current?.state}|${guide.history.length}`;
+    if (autoExplained.current === key) return;
+    autoExplained.current = key;
+    void explainGuide();
+  }, [tab, projectId, guide, explaining]);
 
   function openProjectStudio(nextProjectId: string): void {
     if (!nextProjectId || nextProjectId === projectId || busy !== null) return;
@@ -1124,6 +1162,84 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /**
+   * The walkthrough. The only call the guide makes, and the service only passes it on when the stored explanation is
+   * for a different situation — so reading the same screen twice costs once.
+   */
+  async function explainGuide(): Promise<void> {
+    if (!projectId) return;
+    setExplaining(true);
+    setError(null);
+    try {
+      setGuide(unwrap(await window.kaiDesktop.explainStudioGuide(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setExplaining(false);
+    }
+  }
+
+  /**
+   * Presses the button the guide is offering.
+   *
+   * Every one of these is an operation the board already has, called the same way the button on the screen calls it —
+   * the guide adds no path to the board that a person could not take by hand. A step with no action is the reader's
+   * own to do, which is why two of these only change tabs.
+   */
+  async function runGuideAction(action: GuideAction): Promise<void> {
+    if (!projectId) return;
+    if (action === 'open-board') { setTab('board'); return; }
+    if (action === 'open-design') { setTab('design'); return; }
+    setError(null);
+    setNotice(null);
+    // `busy` is claimed by whichever operation runs, not here first: `buildDesign` refuses to start while another
+    // action holds it, and it only passes today because the closure it reads is a render behind. Claiming it here
+    // would make the guide's own button the thing that stops the guide's own button.
+    try {
+      // `writeArtifacts` reports what it could not write instead of throwing, so its answer has to be read here —
+      // a button that says nothing after failing is the same as a button that did nothing.
+      if (action === 'write-artifacts') {
+        setBusy('generate');
+        const problems = await writeArtifacts(projectId, true);
+        if (problems.length > 0) setError(problems.join(' '));
+      } else if (action === 'build-board') await plan();
+      else if (action === 'pull-design') await pullDesign();
+      else if (action === 'draw-screens') await buildDesign();
+      else if (action === 'requeue-blocked') {
+        setBusy('guide');
+        const { requeued } = unwrap(await window.kaiDesktop.requeueAutopilot({ projectId }));
+        setNotice(requeued === 0
+          ? 'No cards parked by an agent were found.'
+          : `${requeued} card${requeued === 1 ? '' : 's'} back in the queue. Start Autopilot when you are ready.`);
+      } else if (action === 'run-autopilot') {
+        // The same settings the Autopilot panel's own Start button uses, said out loud, since the panel is not on
+        // screen to show them.
+        setBusy('guide');
+        await window.kaiDesktop.startAutopilot({ projectId, ...DEFAULT_AUTOPILOT_START }).then(unwrap);
+        setNotice('Autopilot started with the panel’s default settings. Open the Board tab to watch it or stop it.');
+      }
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Sets the route a screen card is checked at. Without one the card can never pass, so it can never be done. */
+  async function setRoute(cardId: string, route: string): Promise<void> {
+    if (!projectId) return;
+    setBusy('card');
+    setError(null);
+    try {
+      const updated = unwrap(await window.kaiDesktop.setStudioCardRoute({ projectId, cardId, route }));
+      setBoard((current) => (current ? { ...current, cards: current.cards.map((card) => (card.id === updated.id ? updated : card)) } : current));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** Runs the screenshots-and-DOM check on a UI card. The board it returns already reflects the result. */
   async function checkUi(cardId: string): Promise<void> {
     if (!projectId) return;
@@ -1403,6 +1519,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             ['artifacts', `Artifacts${artifacts ? ` (${artifacts.artifacts.length})` : ''}`],
             ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
             ['design', 'Design'],
+            ['guide', 'Senior dev'],
           ] as const).map(([id, label]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</button>
           ))}
@@ -1805,6 +1922,16 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             </>
           )}
 
+          {tab === 'guide' && (
+            <GuidePanel
+              view={guide}
+              explaining={explaining}
+              busy={busy !== null}
+              onExplain={() => void explainGuide()}
+              onAction={(action) => void runGuideAction(action)}
+            />
+          )}
+
           {tab === 'board' && (
           <article className={`studio-card${boardFull ? ' studio-fullscreen' : ''}`}>
             <h2><LayoutGrid size={16} /> Board
@@ -1827,6 +1954,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 {busy === 'arrange' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Arrange with AI
               </button>
             </div>
+            {projectId && board && board.cards.length > 0 && (
+              <GuideStrip
+                view={guide}
+                busy={busy !== null}
+                onAction={(action) => void runGuideAction(action)}
+                onOpen={() => setTab('guide')}
+              />
+            )}
             {projectId && board && board.cards.length > 0 && (
               <AutopilotPanel
                 projectId={projectId}
@@ -1856,7 +1991,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                       }}
                     >
                       <h3>{BOARD_STATUS_LABEL[status]} <span className="studio-count">{cards.length}</span></h3>
-                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} />)}
+                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} />)}
                       {cards.length === 0 && <p className="studio-note">Empty</p>}
                     </div>
                   );
@@ -1921,7 +2056,51 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   );
 }
 
-function BoardCardView({ card, busy, onMove, onCheckUi }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void> }): ReactNode {
+/**
+ * A card's own note — where a blocked card's reason lives.
+ *
+ * A long one scrolls inside the tile rather than being cut. The note is the card's only account of why it is where it
+ * is, and an ellipsis in the middle of a failure report is worse than a shorter card. The cap is in whole line-heights
+ * with the breathing room in margin, because a scroll container clips at its padding box and lets the next line show
+ * through under the last one.
+ */
+function CardNote({ note, blocked }: { note: string; blocked: boolean }): ReactNode {
+  return (
+    <div className={`studio-note studio-why${blocked ? ' blocked' : ''}`}>
+      <span className="studio-why-icon" aria-hidden="true">{blocked ? <AlertTriangle size={12} /> : <FileText size={12} />}</span>
+      <div className="studio-why-text">{note.trim()}</div>
+    </div>
+  );
+}
+
+/**
+ * The route a screen card is checked at.
+ *
+ * It is here because nothing else could set it: the board will not close a component or page card without a passing
+ * screen check, the check needs a route to open, and a page pulled from the design carries one only when its name
+ * does. A card with no route was therefore unclosable and everything waiting on it was stuck behind it.
+ */
+function CardRoute({ cardId, title, route, busy, onSetRoute }: { cardId: string; title: string; route: string; busy: boolean; onSetRoute: (id: string, route: string) => Promise<void> }): ReactNode {
+  const [value, setValue] = useState(route);
+  useEffect(() => setValue(route), [route]);
+  const changed = value.trim() !== route;
+  return (
+    <div className="studio-route">
+      <input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Enter' && changed) void onSetRoute(cardId, value); }}
+        placeholder="/pricing"
+        aria-label={`Route for ${title}`}
+        disabled={busy}
+      />
+      {changed && <button type="button" className="secondary-button" onClick={() => void onSetRoute(cardId, value)} disabled={busy}>Save route</button>}
+    </div>
+  );
+}
+
+function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void> }): ReactNode {
+  const ui = card.kind === 'component' || card.kind === 'page';
   return (
     <div
       className={`studio-tile${card.stale ? ' stale' : ''}${busy ? '' : ' draggable'}`}
@@ -1933,6 +2112,9 @@ function BoardCardView({ card, busy, onMove, onCheckUi }: { card: BoardCard; bus
         <span className="studio-kind">{card.kind}</span>
       </div>
       {card.stale && <p className="studio-note"><AlertTriangle size={12} /> {card.staleReason ?? 'Something this card reads changed.'}</p>}
+      {/* The reason a card is where it is. It was always on the card and never on the screen, so a board full of
+          blocked cards read as a board with no reason — while the reason sat in this field. */}
+      {card.notes.trim() && <CardNote note={card.notes} blocked={card.status === 'blocked'} />}
       {card.claimedBy && <p className="studio-note"><Loader2 size={12} /> Held by {card.claimedBy}</p>}
       {card.movedBy && card.movedAt && (
         <p className="studio-note studio-moved">
@@ -1941,11 +2123,17 @@ function BoardCardView({ card, busy, onMove, onCheckUi }: { card: BoardCard; bus
         </p>
       )}
       {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots</p>}
-      {(card.kind === 'component' || card.kind === 'page') && (
+      {ui && !card.route && (
+        <p className="studio-note studio-why blocked">
+          <AlertTriangle size={12} /> No route, so this screen cannot be checked and the board will not close it. Set one below.
+        </p>
+      )}
+      {ui && (
         <button type="button" className="secondary-button" onClick={() => void onCheckUi(card.id)} disabled={busy || !card.route}>
           <Eye size={13} /> {card.route ? 'Check the screen' : 'No route set'}
         </button>
       )}
+      {ui && <CardRoute cardId={card.id} title={card.title} route={card.route} busy={busy} onSetRoute={onSetRoute} />}
       <select
         className="studio-move"
         value={card.status}

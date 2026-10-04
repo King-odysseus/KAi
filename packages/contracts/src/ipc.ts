@@ -53,6 +53,7 @@ import {
   studioBoardCardInputSchema,
   studioBoardClaimInputSchema,
   studioBoardMoveInputSchema,
+  studioBoardRouteInputSchema,
   studioBoardWorkInputSchema,
   studioDesignBuildCancelInputSchema,
   studioDesignBuildStepInputSchema,
@@ -77,6 +78,7 @@ import {
   type StudioBoardCardInput,
   type StudioBoardClaimInput,
   type StudioBoardMoveInput,
+  type StudioBoardRouteInput,
   type StudioBoardWorkInput,
   type StudioDesign,
   type StudioDesignBuildStepInput,
@@ -86,6 +88,7 @@ import {
   type StudioUiCheckResult,
   type BoardCard,
 } from './studio';
+import type { StudioGuideView } from './studio-guide';
 import {
   remoteAccessStatusSchema,
   remoteAccessSettingsSchema,
@@ -352,7 +355,7 @@ import {
   type TeamPlanInput,
   type TeamStartInput,
 } from './team';
-import { recoveryRecapSchema, recoveryRecordSchema, recoveryResumeSchema, type RecoveryRecap, type RecoveryRecord, type RecoveryResume } from './recovery';
+import { recoveryListingSchema, recoveryRecapSchema, recoveryRecordSchema, recoveryResumeSchema, stopAllRunsResultSchema, type RecoveryListing, type RecoveryRecap, type RecoveryRecord, type RecoveryResume, type StopAllRunsResult } from './recovery';
 import { notificationSettingsSchema, viewReportSchema, type OpenConversationEvent } from './notifications';
 import { usageBudgetSchema, usageSummarySchema, type UsageSummary } from './usage';
 import {
@@ -489,9 +492,12 @@ export const ipcChannels = [
   'studio:board-arrange',
   'studio:board-next',
   'studio:board-move',
+  'studio:board-route',
   'studio:board-claim',
   'studio:board-check-ui',
   'studio:board-team-plan',
+  'studio:guide-read',
+  'studio:guide-explain',
   'studio:board-work',
   'autopilot:start',
   'autopilot:stop',
@@ -621,6 +627,9 @@ export const ipcChannels = [
   'recovery:recap',
   'recovery:resume',
   'recovery:discard',
+  // The escape hatch for a run the renderer can no longer control: stops every live run and clears the records
+  // that dead runs left behind. Deliberately desktop-only, so it is absent from the remote gateway's allowlist.
+  'runs:stop-all',
   'diagnostics:report',
   'diagnostics:data-locations',
   'diagnostics:recent-logs',
@@ -798,9 +807,12 @@ export const ipcInputSchemas = {
   'studio:board-arrange': studioProjectInputSchema,
   'studio:board-next': studioProjectInputSchema,
   'studio:board-move': studioBoardMoveInputSchema,
+  'studio:board-route': studioBoardRouteInputSchema,
   'studio:board-claim': studioBoardClaimInputSchema,
   'studio:board-check-ui': studioBoardCardInputSchema,
   'studio:board-team-plan': studioProjectInputSchema,
+  'studio:guide-read': studioProjectInputSchema,
+  'studio:guide-explain': studioProjectInputSchema,
   'studio:board-work': studioBoardWorkInputSchema,
   'autopilot:start': autopilotStartInputSchema,
   'autopilot:stop': autopilotProjectInputSchema,
@@ -936,6 +948,7 @@ export const ipcInputSchemas = {
   'recovery:recap': z.object({ conversationId: z.string().min(1) }).strict(),
   'recovery:resume': z.object({ conversationId: z.string().min(1) }).strict(),
   'recovery:discard': z.object({ conversationId: z.string().min(1) }).strict(),
+  'runs:stop-all': emptyInputSchema,
   'diagnostics:report': z.object({ copy: z.boolean() }).strict(),
   'diagnostics:data-locations': emptyInputSchema,
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
@@ -1053,9 +1066,10 @@ export const gitCreateRepositoryResponseSchema = gitCreateRepositoryResultSchema
 export const gitGithubStatusResponseSchema = gitGithubStateSchema;
 export const verificationOverviewResponseSchema = verificationOverviewSchema;
 export const verificationRunResponseSchema = verificationRunSchema;
-export const recoveryListResponseSchema = z.array(recoveryRecordSchema);
+export const recoveryListResponseSchema = recoveryListingSchema;
 export const recoveryRecapResponseSchema = recoveryRecapSchema;
 export const recoveryResumeResponseSchema = recoveryResumeSchema;
+export const stopAllRunsResponseSchema = stopAllRunsResultSchema;
 export const studioArtifactsResponseSchema = studioArtifactsSchema;
 export const studioProjectSummariesResponseSchema = z.array(studioProjectSummarySchema);
 export const studioProjectFolderResponseSchema = studioProjectFolderResultSchema;
@@ -1292,12 +1306,22 @@ export interface KaiDesktopBridge {
   nextStudioCard(projectId: string): Promise<IpcResponse<BoardCard | null>>;
   /** Moves a card; `done` is refused unless the check still covers the working tree. */
   moveStudioCard(input: StudioBoardMoveInput): Promise<IpcResponse<BoardCard>>;
+  /** Sets the route a component or page card is checked at. Without one it can never pass, so it can never be done. */
+  setStudioCardRoute(input: StudioBoardRouteInput): Promise<IpcResponse<BoardCard>>;
   /** Reserves a card for one agent, so two agents never take the same one. */
   claimStudioCard(input: StudioBoardClaimInput): Promise<IpcResponse<BoardCard>>;
   /** Runs the visual check on a component or page card: screenshots, tokens, states, keyboard, flow. */
   checkStudioCardUi(projectId: string, cardId: string): Promise<IpcResponse<StudioUiCheckResult>>;
   /** A team plan with one part per `ready` card, for the user to review before anything runs. */
   planStudioTeam(projectId: string): Promise<IpcResponse<TeamPlanDraft>>;
+  /**
+   * Where the project is, from the rules alone. Free, so the board's strip can ask on every redraw.
+   */
+  readStudioGuide(projectId: string): Promise<IpcResponse<StudioGuideView>>;
+  /**
+   * The same, with the explanation. Spends only when the stored one no longer fits what is on screen.
+   */
+  explainStudioGuide(projectId: string): Promise<IpcResponse<StudioGuideView>>;
   /** Runs ready cards, one agent per card. A card ends in review or blocked, never done. */
   workStudioBoard(request: StudioBoardWorkInput): Promise<IpcResponse<BoardCard[]>>;
   /** Starts Autopilot on a project's board. It keeps going, resting when a provider rate-limits, until the board is done or it is stopped. */
@@ -1486,10 +1510,16 @@ export interface KaiDesktopBridge {
   gitPullRequest(projectId: string, title: string, body: string): Promise<IpcResponse<{ url: string }>>;
   verificationOverview(projectId: string): Promise<IpcResponse<VerificationOverview>>;
   runVerification(projectId: string, command: string): Promise<IpcResponse<VerificationRun>>;
-  listInterruptedRuns(): Promise<IpcResponse<RecoveryRecord[]>>;
+  /** Every run left over from a close, including the ones whose record is too damaged to offer anything from. */
+  listInterruptedRuns(): Promise<IpcResponse<RecoveryListing>>;
   interruptedRunRecap(conversationId: string): Promise<IpcResponse<RecoveryRecap>>;
   resumeInterruptedRun(conversationId: string): Promise<IpcResponse<RecoveryResume>>;
   discardInterruptedRun(conversationId: string): Promise<IpcResponse<boolean>>;
+  /**
+   * Stops every live run and clears the leftover records of runs that already died. For a renderer that has lost
+   * control of a run, this is the way out; it reports what it actually stopped rather than assuming success.
+   */
+  stopAllRuns(): Promise<IpcResponse<StopAllRunsResult>>;
   onOpenConversation(listener: (event: OpenConversationEvent) => void): () => void;
   diagnosticsReport(copy: boolean): Promise<IpcResponse<{ text: string }>>;
   dataLocations(): Promise<IpcResponse<DataLocation[]>>;

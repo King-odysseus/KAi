@@ -140,6 +140,37 @@ describe('board rules', () => {
     expect(merged.map((item) => item.title)).toEqual(['Dashboard', '/pricing — Pricing page /pricing']);
   });
 
+  it('gives a page from the design the route its name carries', () => {
+    // A page card with no route can never pass its screen check, and the board will not close a screen card without
+    // one — so a page pulled from the design used to be unclosable, and everything waiting on it waited for good.
+    const merged = mergeDesign([card({ id: 'other', title: 'Dashboard' })], [
+      { id: 'p1', name: '/ — Marketing home (sharpsite.ng)', page: '', screen: true },
+      { id: 'p2', name: '/pricing — Pricing page', page: '', screen: true },
+      { id: 'p3', name: 'Page 1', page: '', screen: true },
+      { id: 'p4', name: 'Empty sections collapse', page: '', screen: false },
+    ], NOW);
+    const route = (nodeId: string): string | undefined => merged.find((item) => item.designRef === nodeId)?.route;
+
+    expect(route('p1')).toBe('/');
+    expect(route('p2')).toBe('/pricing');
+    // Nothing in the name to take, so it is left blank for a person to fill in rather than guessed at.
+    expect(route('p3')).toBe('');
+    // A component is not a page: it carries no route of its own.
+    expect(route('p4')).toBe('');
+  });
+
+  it('fills a page card\'s missing route, and leaves the one a person set alone', () => {
+    const empty = card({ id: 'home', title: 'Marketing home', kind: 'page', designRef: 'p1' });
+    const set = card({ id: 'pricing', title: 'Pricing', kind: 'page', designRef: 'p2', route: '/prices' });
+    const merged = mergeDesign([empty, set], [
+      { id: 'p1', name: '/ — Marketing home', page: '', screen: true },
+      { id: 'p2', name: '/pricing — Pricing page', page: '', screen: true },
+    ], NOW);
+
+    expect(merged.find((item) => item.id === 'home')?.route).toBe('/');
+    expect(merged.find((item) => item.id === 'pricing')?.route).toBe('/prices');
+  });
+
   it('refuses done for each unmet rule, and names it', () => {
     const backend = card();
     expect(doneBlockedBy(backend, { run: null, recordedNow: null, drifted: false })).toMatch(/no record of a passing check/);
@@ -244,6 +275,38 @@ describe('board store', () => {
     expect(claimed.status).toBe('inProgress');
     expect(claimed.claimedBy).toBe('claude');
     await expect(store.claim('p1', 'a', 'codex')).rejects.toThrow(/already held by claude/);
+  });
+
+  it('promotes a card whose dependencies are done however it reached the backlog', async () => {
+    const store = new StudioBoardStore(ports());
+    await store.replace('p1', [card({ id: 'a', status: 'done' }), card({ id: 'b', status: 'backlog', dependsOn: ['a'] })], []);
+    // Park it the way "put it back in the queue" does when the card cannot be ready yet.
+    await store.move('p1', 'b', 'backlog', 'Put back in the queue after an agent stopped on it.');
+
+    // Its dependency is done, so it is workable. Only `done` moves used to promote, so a card left here stayed here
+    // while Autopilot found nothing ready and the board looked stuck with no stated reason.
+    expect((await store.read('p1')).cards.find((item) => item.id === 'b')?.status).toBe('ready');
+  });
+
+  it('leaves a card a person parked in the backlog where they put it', async () => {
+    const store = new StudioBoardStore(ports());
+    await store.replace('p1', [card({ id: 'a', status: 'done' }), card({ id: 'b', dependsOn: ['a'] })], []);
+    // `replace` promotes `b` to ready; a person drags it back to the backlog on purpose.
+    const parked = await store.move('p1', 'b', 'backlog', 'Not yet.', 'user');
+
+    expect(parked.status).toBe('backlog');
+    expect((await store.read('p1')).cards.find((item) => item.id === 'b')?.status).toBe('backlog');
+  });
+
+  it('sets the route a screen card is checked at, and refuses one on a card with no screen', async () => {
+    const store = new StudioBoardStore(ports());
+    await store.replace('p1', [card({ id: 'a', kind: 'page', status: 'ready' }), card({ id: 'b', status: 'ready' })], []);
+
+    const routed = await store.setRoute('p1', 'a', '  /pricing  ');
+    expect(routed.route).toBe('/pricing');
+    // The route is a card field, not a move: the status and the board's rules are untouched.
+    expect(routed.status).toBe('ready');
+    await expect(store.setRoute('p1', 'b', '/x')).rejects.toThrow(/not a component or page/);
   });
 
   it('refuses ready while a dependency is not done, and keeps work when the board is regenerated', async () => {

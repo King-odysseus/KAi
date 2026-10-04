@@ -14,11 +14,13 @@ const TABS: Array<{ id: OperationsTab; label: string }> = [
   { id: 'diagnostics', label: 'Diagnostics' },
 ];
 
-export function OperationsView({ initialTab, activeProject, onResume, onRecoveryChanged }: {
+export function OperationsView({ initialTab, activeProject, onResume, onRecoveryChanged, onStopEverything }: {
   initialTab?: OperationsTab;
   activeProject: ProjectRecord | null;
   onResume: (resume: RecoveryResume) => Promise<void>;
   onRecoveryChanged: () => void;
+  /** Ends every run and clears what a run that never returned left behind. Never disabled, by design. */
+  onStopEverything: () => void;
 }): ReactNode {
   const [tab, setTab] = useState<OperationsTab>(initialTab ?? 'recovery');
   useEffect(() => {
@@ -30,6 +32,11 @@ export function OperationsView({ initialTab, activeProject, onResume, onRecovery
         <div>
           <h1>Operations</h1>
           <p>Recovery, coordination and health for the work KAI is running</p>
+        </div>
+        {/* In the header rather than on a tab, so the way out of a stuck run is reachable from every section. It is
+            deliberately never disabled: whatever is wrong, this is the control that should still work. */}
+        <div className="page-actions">
+          <button type="button" className="secondary-button" onClick={onStopEverything} title="End every run and clear what an interrupted run left behind">Stop everything</button>
         </div>
       </header>
       <div className="ops-tabs" role="tablist" aria-label="Operations sections">

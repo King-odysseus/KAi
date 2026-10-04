@@ -2,6 +2,7 @@ import { ImageCard, ImageChip } from './ImageAttachment';
 import { AutoSettings } from './AutoSettings';
 import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerRunLine';
 import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
+import { settleWithin } from '../async-deadline';
 import { PlanStrip } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
@@ -88,7 +89,7 @@ import type {
 import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
-import { ToolCallCard } from './ToolCallCard';
+import { ToolCallCard, toolCallStatus } from './ToolCallCard';
 import { isPreviewableTool } from '../tool-call-preview';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
@@ -180,6 +181,8 @@ interface WorkspaceViewProps {
   onCancel: () => void;
   onPause: () => void;
   onResume: () => void;
+  /** Stops every run and clears the state a run that never returned left behind. Never disabled by it. */
+  onStopEverything: () => void;
   onSignIn: (agent: AgentId) => void;
   onInstall: (agent: AgentId) => void;
   onRefreshAgents: () => void;
@@ -213,6 +216,15 @@ const INTENT_KEY = 'kai.composer.intent';
 export function savedTaskIntent(stored: string | null): TaskIntent {
   return TASK_INTENTS.some((intent) => intent.id === stored) ? stored as TaskIntent : 'ask';
 }
+
+/**
+ * How long each composer action may hold its own button before the UI stops waiting on it. Generous, because the
+ * cost of being wrong is asymmetric: a slow call that finishes just after its deadline releases a button the
+ * person is already free to press again, while waiting forever leaves them with no button at all.
+ */
+const START_WAIT_MS = 30_000;
+const REFINE_WAIT_MS = 60_000;
+const STOP_WAIT_MS = 30_000;
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'General', description: 'Ask a question or describe a task in your own words', placeholder: 'Ask KAI about this project or describe a task', starter: '' },
@@ -353,6 +365,7 @@ export function WorkspaceView({
   onCancel,
   onPause,
   onResume,
+  onStopEverything,
   onSignIn,
   onInstall,
   onRefreshAgents,
@@ -404,6 +417,12 @@ export function WorkspaceView({
   const [stoppingRun, setStoppingRun] = useState(false);
   const [showRunDetails, setShowRunDetails] = useState(false);
   const [workbenchNotice, setWorkbenchNotice] = useState<string | null>(null);
+  /**
+   * Set when something the composer is waiting on has run past its deadline, so the person is told rather than left
+   * watching a spinner. Carries the way out with it, because a control held open by a call that never returned
+   * cannot be released from inside the composer.
+   */
+  const [stuckNotice, setStuckNotice] = useState<string | null>(null);
   /** Set while Auto is being asked to start, so the composer's send cannot be pressed twice into it. */
   const [startingAuto, setStartingAuto] = useState(false);
   const [refiningPrompt, setRefiningPrompt] = useState(false);
@@ -759,7 +778,10 @@ export function WorkspaceView({
         ...(options?.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
         ...(options?.contextChips?.length ? { contextChips: options.contextChips } : {}),
       });
-      await window.kaiDesktop.startAuto(request).then(unwrap);
+      const started = await settleWithin(() => window.kaiDesktop.startAuto(request).then(unwrap), START_WAIT_MS);
+      // Unlike the flags below, this call is not side-effect free: it starts a real Auto session. So the deadline
+      // clears the button but says what happened, rather than quietly re-enabling send onto a second session.
+      if (!started.settled) setStuckNotice('Auto did not start in time, so the button was released. If a run did start, Stop everything ends it.');
     } catch (caught) {
       setWorkbenchNotice(messageOf(caught));
     } finally {
@@ -854,7 +876,16 @@ export function WorkspaceView({
     setRefiningPrompt(true);
     setWorkbenchNotice(null);
     try {
-      const result = unwrap(await window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || taskIntent === 'auto' ? 'build' : taskIntent }));
+      const refined = await settleWithin(
+        () => window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || taskIntent === 'auto' ? 'build' : taskIntent }).then(unwrap),
+        REFINE_WAIT_MS,
+      );
+      // Nothing was changed in the project, so releasing the button is all this needs to do.
+      if (!refined.settled) {
+        setWorkbenchNotice('Refining the prompt did not answer in time. Your text is unchanged.');
+        return;
+      }
+      const result = refined.value;
       setPrompt(result.prompt);
       window.setTimeout(() => {
         promptRef.current?.focus();
@@ -1262,7 +1293,13 @@ export function WorkspaceView({
     if (!next) trailingInlineEvents.push(event);
     else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
   }
-  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
+  /**
+   * Whether anything is still going on this conversation. Paused and awaiting-approval count: a run parked on a
+   * person still has a call in flight, so its cards must not read as interrupted. This is the same union the
+   * composer's Stop button uses.
+   */
+  const runActive = running || paused || awaitingApproval;
+  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} runActive={runActive} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
@@ -1296,7 +1333,11 @@ export function WorkspaceView({
     setStoppingRun(true);
     try {
       setInterruptedAutopilot(null);
-      await window.kaiDesktop.resumeInterruptedAutopilot({ studioProjectId: interruptedAutopilot.studioProjectId }).then(unwrap);
+      const resumed = await settleWithin(
+        () => window.kaiDesktop.resumeInterruptedAutopilot({ studioProjectId: interruptedAutopilot.studioProjectId }).then(unwrap),
+        STOP_WAIT_MS,
+      );
+      if (!resumed.settled) setStuckNotice('Autopilot did not answer in time. Stop everything ends anything it started.');
     } catch (caught) {
       setWorkbenchNotice(`Autopilot could not carry on: ${messageOf(caught)}`);
     } finally {
@@ -1309,8 +1350,12 @@ export function WorkspaceView({
     if (!interruptedAutopilot) return;
     setStoppingRun(true);
     try {
-      await window.kaiDesktop.releaseInterruptedAutopilot({ studioProjectId: interruptedAutopilot.studioProjectId }).then(unwrap);
-      setInterruptedAutopilot(null);
+      const released = await settleWithin(
+        () => window.kaiDesktop.releaseInterruptedAutopilot({ studioProjectId: interruptedAutopilot.studioProjectId }).then(unwrap),
+        STOP_WAIT_MS,
+      );
+      if (!released.settled) setStuckNotice('The board did not answer in time. Stop everything ends anything it started.');
+      else setInterruptedAutopilot(null);
     } catch (caught) {
       setWorkbenchNotice(`The card could not be put back: ${messageOf(caught)}`);
     } finally {
@@ -1338,7 +1383,8 @@ export function WorkspaceView({
     if (!autopilotOrigin) return;
     setStoppingRun(true);
     try {
-      await window.kaiDesktop.stopAutopilot({ projectId: autopilotOrigin.studioProjectId });
+      const stopped = await settleWithin(() => window.kaiDesktop.stopAutopilot({ projectId: autopilotOrigin.studioProjectId }), STOP_WAIT_MS);
+      if (!stopped.settled) setStuckNotice('Autopilot did not answer in time, so it may still be running. Stop everything ends it.');
     } catch (caught) {
       setWorkbenchNotice(`Autopilot could not be stopped: ${messageOf(caught)}`);
     } finally {
@@ -1362,6 +1408,17 @@ export function WorkspaceView({
           <div className="workbench-notice recovery-banner" role="status">
             <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
             <button type="button" className="secondary-button" onClick={onOpenRecovery}>Review</button>
+          </div>
+        )}
+
+        {/* Something the composer was waiting on has passed its deadline. Rendering it here rather than in the
+            composer is the point: the control that is stuck is inside the composer, so the way out has to be
+            somewhere the stuck call cannot disable. */}
+        {stuckNotice && (
+          <div className="workbench-notice workbench-error" role="alert">
+            <span>{stuckNotice}</span>
+            <button type="button" className="secondary-button" onClick={onStopEverything}>Stop everything</button>
+            <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setStuckNotice(null)}><X size={13} /></button>
           </div>
         )}
 
@@ -1547,7 +1604,7 @@ export function WorkspaceView({
                 </button>
                 {showRunDetails && (
                   <div className="run-details-list">
-                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={false} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={false} runActive={runActive} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
                   </div>
                 )}
               </section>
@@ -1754,10 +1811,12 @@ export function WorkspaceView({
           }}
         />
         {activeProject && <PlanStrip projectId={activeProject.id} refreshKey={activeConversation?.updatedAt} />}
+        {/* `busy` here is the boolean prop. It used to be compared to null, which is always true, so the Stop
+            button on this line was disabled on every run: the one control that ends a run was unreachable. */}
         {composerRun && (
           <ComposerRunLine
             state={composerRun.line}
-            busy={stoppingRun || busy !== null}
+            busy={stoppingRun || busy}
             onStop={() => void (composerRun.line.who === 'autopilot' ? stopAutopilot() : onCancel())}
             onOpenDetails={() => setRunDetailsOpen(true)}
           />
@@ -2040,7 +2099,7 @@ function MessageContent({ text, markdown = false }: { text: string; markdown?: b
   );
 }
 
-function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; defaultExpanded: boolean; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
+function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, runActive, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; defaultExpanded: boolean; /** Whether the run this event belongs to is still going, which is the only way to tell a live tool call from one nothing is running. */ runActive: boolean; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);
   const [explanation, setExplanation] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; result?: ChangeReviewResult; error?: string }>({ state: 'idle' });
   if (event.type === 'approval.request' && event.options) {
@@ -2070,10 +2129,10 @@ function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, onAsk
   if (event.type === 'text.delta') return null;
   if (event.type === 'tool.call') {
     // An edit or a command carries the change itself, so it is worth the space in the transcript.
-    if (isPreviewableTool(event.name)) return <ToolCallCard event={event} defaultExpanded={defaultExpanded} />;
+    if (isPreviewableTool(event.name)) return <ToolCallCard event={event} defaultExpanded={defaultExpanded} runActive={runActive} />;
     return (
       <div className={`run-event tool ${event.status}`}>
-        <span>Tool</span><strong>{event.name}</strong><small>{event.status}</small>
+        <span>Tool</span><strong>{event.name}</strong><small>{toolCallStatus(event.status, runActive).word}</small>
       </div>
     );
   }

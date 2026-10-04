@@ -11751,6 +11751,251 @@ button.tool-call-head:hover strong { color: var(--mint); }
   font-size: 11px;
 }
 
+/* The card's own note, which is where a blocked card's reason lives. A long note scrolls inside the tile rather than
+   being cut, so the cap is in whole line-heights and the breathing room is margin: a scrollport clips at its padding
+   box and would let the next line show through under the last one. */
+.studio-why {
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.studio-why-icon {
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-dim);
+}
+
+.studio-why.blocked .studio-why-icon {
+  color: var(--red);
+}
+
+.studio-why-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: calc(1.45em * 6);
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.studio-why.blocked .studio-why-text {
+  color: var(--text);
+}
+
+/* The route a component or page card is checked at. Nothing else in the app could set it, and without one the card
+   can never pass its screen check, so it can never be closed. */
+.studio-route {
+  display: flex;
+  gap: 5px;
+}
+
+.studio-route input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+}
+
+.studio-route button {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+/* The Senior Dev. The steps are scans rather than prose, so the list is tight and the current one is the only one
+   that carries its explanation — eight explanations at once is a wall to read past. */
+.guide-now {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-left: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.guide-now h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.guide-explanation {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.guide-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-step {
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.guide-step.current,
+.guide-step.blocked {
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
+}
+
+.guide-step.todo,
+.guide-step.done {
+  opacity: 0.72;
+}
+
+.guide-step-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.guide-step-head strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.guide-mark {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.guide-step.done .guide-mark {
+  color: var(--mint);
+}
+
+.guide-step.blocked .guide-mark {
+  color: var(--red);
+}
+
+.guide-step.current .guide-mark {
+  color: var(--amber);
+}
+
+.guide-here {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.guide-step.blocked .guide-here {
+  color: var(--red);
+}
+
+.guide-step.current .guide-here,
+.guide-step.blocked .guide-here {
+  opacity: 1;
+}
+
+.guide-why {
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.guide-step .secondary-button {
+  margin-top: 7px;
+}
+
+.guide-history {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.guide-done {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-done li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.guide-done li time {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The board's one-line answer to "what now", above the cards because that is the question a board of fifty is worst
+   at answering. Red for needs-you, amber for you-are-here, matching the run line's own vocabulary. */
+.guide-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-left: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.guide-strip.blocked {
+  border-left-color: var(--red);
+}
+
+.guide-strip.current {
+  border-left-color: var(--amber);
+}
+
+.guide-strip strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.guide-strip-where {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.guide-strip-detail {
+  flex: 1 1 200px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.guide-strip-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 @media (max-width: 1100px) {
   .studio-project-bar {
     grid-template-columns: minmax(0, 1fr) auto;

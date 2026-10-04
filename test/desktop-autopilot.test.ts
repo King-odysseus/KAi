@@ -57,7 +57,7 @@ function harness(options: {
     claimCard: async (_p, id, agent) => { const item = find(id); item.status = 'inProgress'; item.claimedBy = agent; return item; },
     recordCardRun: async (_p, id, run) => { find(id).runs.push(run); return find(id); },
     setCheck: async (_p, id, check) => { find(id).check = check; return find(id); },
-    moveCard: async (_p, id, status, note) => { const item = find(id); item.status = status; item.notes = note; item.claimedBy = null; promote(); return item; },
+    moveCard: async (_p, id, status, note, by = 'agent') => { const item = find(id); item.status = status; item.notes = note; item.movedBy = by; item.claimedBy = null; promote(); return item; },
     checkUi: async () => ({ passed: true, summary: '' }),
     createConversation: async () => ({ id: `conversation-${prompts.length}` }) as never,
     runAgent: async (request) => {
@@ -311,12 +311,49 @@ describe('desktop autopilot', () => {
     expect(final.cardsWorked).toBe(1);
   });
 
-  it('puts back only the cards Autopilot gave up on', async () => {
+  it('puts back every card a machine parked, and leaves a person’s block alone', async () => {
     const h = harness({ cards: [card('a'), card('b')], check: () => false });
     await start(h, { attemptsPerCard: 1 });
     await settled(h);
+    // A person's block. `movedBy` is the fact that tells the two apart; the note is what they happened to type.
+    h.board.cards[1]!.movedBy = 'user';
     h.board.cards[1]!.notes = 'Blocked by a person';
     expect(await h.autopilot.requeueBlocked('p1')).toBe(1);
     expect(h.board.cards.map((item) => item.status)).toEqual(['ready', 'blocked']);
+  });
+
+  it('puts back a card another writer parked, not only Autopilot’s own wording', async () => {
+    // The board's single-card run and an agent working through the kai-project tools both write their own note, and
+    // neither starts with "Autopilot gave up". Matching on the text left these cards blocking everything behind them.
+    const h = harness({ cards: [card('a', [], 'blocked')] });
+    h.board.cards[0]!.movedBy = 'agent';
+    h.board.cards[0]!.notes = 'The run failed: the agent exited with code 1';
+    expect(await h.autopilot.requeueBlocked('p1')).toBe(1);
+    expect(h.board.cards[0]!.status).toBe('ready');
+    expect(h.board.cards[0]!.notes).toContain('Put back in the queue');
+  });
+
+  it('parks a screen card with no route instead of spending three agent turns on it', async () => {
+    // The board will not close a component or page card without a passing screen check, and the check needs a route.
+    // Such a card cannot pass however many times it is run, so running it is a paid turn for a guaranteed block.
+    const h = harness({ cards: [card('a', [], 'ready')] });
+    h.board.cards[0]!.kind = 'page';
+    h.board.cards[0]!.route = '';
+    await start(h);
+    await settled(h);
+    expect(h.prompts).toEqual([]);
+    expect(h.board.cards[0]!.status).toBe('blocked');
+    expect(h.board.cards[0]!.notes).toContain('No route');
+  });
+
+  it('still works a screen card that has a route', async () => {
+    const h = harness({ cards: [card('a', [], 'ready')] });
+    h.board.cards[0]!.kind = 'page';
+    h.board.cards[0]!.route = '/pricing';
+    await start(h);
+    await settled(h);
+    expect(h.prompts).toHaveLength(1);
+    // `checkUi` is stubbed to pass, and the card is closed through the board's own rule as usual.
+    expect(h.board.cards[0]!.status).toBe('done');
   });
 });

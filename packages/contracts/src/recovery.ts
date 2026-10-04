@@ -42,9 +42,37 @@ export const recoveryResumeSchema = z
   })
   .strict();
 
+/**
+ * What a "stop everything" pass achieved. Both counts are reported rather than a bare success, because the two
+ * halves answer different questions: how many live runs were asked to stop, and how many records left behind by
+ * runs that already died were cleared.
+ */
+export const stopAllRunsResultSchema = z
+  .object({
+    stoppedRuns: z.number().int().nonnegative(),
+    clearedRuns: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * What is on disk for recovery: the runs that can still be acted on, and the ones whose record cannot be read.
+ *
+ * The second list is carried rather than dropped because an unreadable record is still an interrupted run. A
+ * count that quietly leaves it out tells the person fewer runs are stranded than really are, which is exactly
+ * the wrong thing for the one screen they open when something has gone wrong.
+ */
+export const recoveryListingSchema = z
+  .object({
+    records: z.array(recoveryRecordSchema),
+    unreadable: z.array(z.string().min(1)),
+  })
+  .strict();
+
 export type RecoveryRecord = z.infer<typeof recoveryRecordSchema>;
 export type RecoveryRecap = z.infer<typeof recoveryRecapSchema>;
 export type RecoveryResume = z.infer<typeof recoveryResumeSchema>;
+export type RecoveryListing = z.infer<typeof recoveryListingSchema>;
+export type StopAllRunsResult = z.infer<typeof stopAllRunsResultSchema>;
 
 /** Rough token estimate (4 characters per token) for the part of a conversation still sent to the model. */
 export function estimateConversationTokens(conversation: {

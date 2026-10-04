@@ -309,6 +309,16 @@ export class DesktopStudio {
   }
 
   /**
+   * Sets the route a component or page card is checked at.
+   *
+   * A card field, not a status, so it goes through neither `move` nor the handoff refresh — but it still goes through
+   * the board's own writer, because that is what re-reads the board before writing it.
+   */
+  async setCardRoute(projectId: string, cardId: string, route: string): Promise<BoardCard> {
+    return this.ports.board.setRoute(projectId, cardId, route);
+  }
+
+  /**
    * Runs the visual check on one UI card and files the result. A pass records the check and leaves the card in
    * `review` for a person to look at; a failure records the checks and hands the card back with what to repair.
    * Either way it never marks the card `done` — that stays with `move`.

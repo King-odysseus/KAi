@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import {
   recoveryRecordSchema,
@@ -16,67 +17,164 @@ function fileFor(directory: string, conversationId: string): string {
   return path.join(directory, `${conversationId}.json`);
 }
 
+/** What a read found: a usable record, nothing at all, or something that is no longer a record. */
+export type RecoveryRead =
+  | { kind: 'record'; record: RecoveryRecord }
+  | { kind: 'missing' }
+  | { kind: 'unreadable' };
+
+/** Everything on disk: the runs that can still be acted on, and the ones whose record cannot be read. */
+export interface RecoveryListing {
+  records: RecoveryRecord[];
+  /** Ids of records that exist but cannot be parsed, so nothing about those runs can be offered. */
+  unreadable: string[];
+}
+
 /**
  * One small file per active run. The file is written when a run starts, refreshed at every
  * event, and removed when the run ends, so any file present at startup is an interrupted run.
+ *
+ * Writes go through the same discipline as the shared `AtomicJsonStore`: one at a time per file, through a
+ * uniquely named temporary, with the rename retried. That store learned this the hard way — see its comment
+ * about two saves being left to the rename to sort out — but the lesson was not carried here, and the records
+ * this class produced were the proof. `touch` runs on every event and is deliberately not awaited by its
+ * caller, so concurrent writes to one record are the normal case, not an edge one. With a single shared
+ * `${target}.tmp` they interleaved inside that one file and left a record that was a splice of two others:
+ * on this machine six of eight were unreadable, so the runs they described could never be found again.
  */
 export class RecoveryStore {
+  /** The write in progress per file, and everything queued behind it. */
+  private readonly writeQueues = new Map<string, Promise<void>>();
+
   constructor(private readonly directory: string) {}
 
   async begin(record: Omit<RecoveryRecord, 'schemaVersion' | 'prompt' | 'lastActivity'> & { prompt: string }): Promise<void> {
-    await this.write({
+    const validated = recoveryRecordSchema.parse({
       ...record,
       schemaVersion: 1,
       prompt: record.prompt.slice(0, MAX_PROMPT_CHARS),
       lastActivity: 'Run started',
     });
+    await this.enqueue(validated.conversationId, () => this.writeNow(validated));
   }
 
   async touch(conversationId: string, lastActivity: string, now: Date = new Date()): Promise<void> {
-    const current = await this.read(conversationId);
-    if (!current) return;
-    await this.write({
-      ...current,
-      updatedAt: now.toISOString(),
-      eventCount: current.eventCount + 1,
-      lastActivity: lastActivity.slice(0, MAX_ACTIVITY_CHARS),
+    // The read is inside the queue with the write. Reading outside it meant two overlapping touches both saw the
+    // same record and the later write discarded the earlier one, so the count and the last activity a recap shows
+    // drifted behind the run they described.
+    await this.enqueue(conversationId, async () => {
+      const current = await this.read(conversationId);
+      if (!current) return;
+      await this.writeNow({
+        ...current,
+        updatedAt: now.toISOString(),
+        eventCount: current.eventCount + 1,
+        lastActivity: lastActivity.slice(0, MAX_ACTIVITY_CHARS),
+      });
     });
   }
 
   async end(conversationId: string): Promise<void> {
-    await fs.rm(fileFor(this.directory, conversationId), { force: true });
+    const target = fileFor(this.directory, conversationId);
+    // Queued behind whatever is already writing this record. Without that, a `touch` already in flight lands
+    // after the removal and the file is back — a run that has finished, still reported as one that was
+    // interrupted, and no way for a person to tell it apart from a real one.
+    await this.enqueue(conversationId, () => fs.rm(target, { force: true }));
   }
 
+  /** The record, or null when there is none or it cannot be read. Use `readOutcome` when the two differ. */
   async read(conversationId: string): Promise<RecoveryRecord | null> {
+    const outcome = await this.readOutcome(conversationId);
+    return outcome.kind === 'record' ? outcome.record : null;
+  }
+
+  async readOutcome(conversationId: string): Promise<RecoveryRead> {
+    let raw: string;
     try {
-      return recoveryRecordSchema.parse(JSON.parse(await fs.readFile(fileFor(this.directory, conversationId), 'utf8')));
+      raw = await fs.readFile(fileFor(this.directory, conversationId), 'utf8');
     } catch {
-      return null;
+      return { kind: 'missing' };
+    }
+    try {
+      const parsed = recoveryRecordSchema.safeParse(JSON.parse(raw));
+      return parsed.success ? { kind: 'record', record: parsed.data } : { kind: 'unreadable' };
+    } catch {
+      return { kind: 'unreadable' };
     }
   }
 
-  /** Newest first. Unreadable or corrupt files are skipped, never fatal at startup. */
-  async list(): Promise<RecoveryRecord[]> {
+  /**
+   * Newest first. A file that cannot be read is reported rather than skipped: it is a run that was interrupted,
+   * and a count that quietly leaves it out tells the person fewer runs are stranded than really are.
+   */
+  async list(): Promise<RecoveryListing> {
     let names: string[];
     try {
       names = await fs.readdir(this.directory);
     } catch {
-      return [];
+      return { records: [], unreadable: [] };
     }
-    const records = await Promise.all(
-      names.filter((name) => name.endsWith('.json')).map((name) => this.read(path.basename(name, '.json'))),
-    );
-    return records
-      .filter((record): record is RecoveryRecord => record !== null)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const ids = names.filter((name) => name.endsWith('.json')).map((name) => path.basename(name, '.json'));
+    const outcomes = await Promise.all(ids.map(async (id) => [id, await this.readOutcome(id)] as const));
+    return {
+      records: outcomes
+        .flatMap(([, outcome]) => (outcome.kind === 'record' ? [outcome.record] : []))
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      unreadable: outcomes.filter(([, outcome]) => outcome.kind === 'unreadable').map(([id]) => id).sort(),
+    };
   }
 
-  private async write(record: RecoveryRecord): Promise<void> {
-    await fs.mkdir(this.directory, { recursive: true });
+  /** The write itself. Callers go through `enqueue`; this must never enqueue again or it would wait on itself. */
+  private async writeNow(record: RecoveryRecord): Promise<void> {
     const target = fileFor(this.directory, record.conversationId);
-    const temporary = `${target}.tmp`;
+    await fs.mkdir(this.directory, { recursive: true });
+    // Named for this write alone. A shared `${target}.tmp` is what let two writers interleave inside it.
+    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
     await fs.writeFile(temporary, JSON.stringify(recoveryRecordSchema.parse(record)), 'utf8');
-    await fs.rename(temporary, target);
+    try {
+      await renameOnto(temporary, target);
+    } catch (error) {
+      // A rename that failed leaves the temporary behind looking exactly like the record it never became.
+      await fs.rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Runs `work` after whatever is already queued for the same record, and forgets the queue once it drains. */
+  private async enqueue<R>(conversationId: string, work: () => Promise<R>): Promise<R> {
+    const previous = this.writeQueues.get(conversationId) ?? Promise.resolve();
+    // Chained with both handlers so one write failing does not cancel the writes queued behind it.
+    const settled = previous.then(work, work);
+    const tail = settled.then(() => undefined, () => undefined);
+    this.writeQueues.set(conversationId, tail);
+    try {
+      return await settled;
+    } finally {
+      // Only the last waiter clears the entry, so a write still queued is not orphaned.
+      if (this.writeQueues.get(conversationId) === tail) this.writeQueues.delete(conversationId);
+    }
+  }
+}
+
+/**
+ * Renames onto the target, retrying the refusals that only mean "not this instant". Kept alongside the same
+ * helper in the shared `AtomicJsonStore` rather than imported from it: that one takes a file-system port and
+ * this class talks to `node:fs` directly, and a shared two-line retry is not worth a port between the layers.
+ */
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY']);
+const RENAME_ATTEMPTS = 6;
+const RENAME_BACKOFF_MS = 20;
+
+async function renameOnto(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (attempt >= RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * RENAME_BACKOFF_MS));
+    }
   }
 }
 

@@ -148,6 +148,9 @@ describe('remote allowlist', () => {
     expect(remoteScopeFor('files:write')).toBeNull();
     expect(remoteScopeFor('projects:choose')).toBeNull();
     expect(remoteScopeFor('workflows:start')).toBeNull();
+    // Ends every run on the machine and clears what dead ones left behind. Pinned by name because it is the most
+    // powerful write there is, and a phone holding a token should not be able to reach it.
+    expect(remoteScopeFor('runs:stop-all')).toBeNull();
   });
 
   it('lists only channels that exist, so a typo cannot silently deny a route', () => {

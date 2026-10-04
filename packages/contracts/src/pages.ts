@@ -42,6 +42,23 @@ export function screenTitleKey(name: string): string {
 }
 
 /**
+ * The route a screen's name carries, when it carries one.
+ *
+ * open-pencil pages are named the way the pages brief writes them — `/ — Marketing home (sharpsite.ng)`,
+ * `/pricing — Pricing page` — so a name that starts with a slash has its route as the first word. A card built from
+ * such a page needs it: the board will not close a component or page card without a passing screen check, and the
+ * screen check needs a route to open. Pages pulled before this existed had no route at all, so every page card the
+ * design created was unclosable, and everything waiting on those cards waited forever. A name with no slash in front
+ * (`Page 1`) has no route to give, so it yields nothing and a person fills it in on the card.
+ */
+export function routeFromScreenName(name: string): string {
+  const first = name.trim().split(/\s+/)[0] ?? '';
+  if (!first.startsWith('/')) return '';
+  const route = first.replace(/[.,;:]+$/, '').replace(/\/+$/, '');
+  return (route || '/').slice(0, 300);
+}
+
+/**
  * The screens named in the pages artifact, with the first route each section mentions.
  *
  * Only `##` starts a screen. `###` is a sub-heading inside one — the pages brief asks for `## Page name` per screen

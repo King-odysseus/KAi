@@ -1,25 +1,41 @@
-import { Check, ChevronDown, FileDiff, FilePlus, Loader2, MoveRight, Search, Terminal, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, FileDiff, FilePlus, Loader2, Minus, MoveRight, Search, Terminal, Trash2, X } from 'lucide-react';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { describeToolCall, renderToolCallPreview, type ToolCallPreview } from '../tool-call-preview';
 
 type ToolCallEvent = Extract<PersistedEvent, { type: 'tool.call' }>;
 
+export type ToolCallMark = 'check' | 'x' | 'spin' | 'dash';
+
+/**
+ * How a tool call should read, given whether the run it belongs to is still going.
+ *
+ * A call is stored as `started` and only flips to a finished status when its result arrives. A run that died with
+ * the process never delivers one, so the stored status alone would render those calls as in flight forever. The
+ * second argument is what tells a genuinely running call apart from one nobody is running any more.
+ */
+export function toolCallStatus(status: ToolCallEvent['status'], runActive: boolean): { mark: ToolCallMark; word: string } {
+  if (status === 'completed') return { mark: 'check', word: 'Done' };
+  if (status === 'failed') return { mark: 'x', word: 'Failed' };
+  return runActive ? { mark: 'spin', word: 'Running' } : { mark: 'dash', word: 'Interrupted' };
+}
+
 /**
  * One edit or command, in the conversation where it happened: the header names the file or the
  * command, and the body shows the lines that changed. While the run is live the body is open;
  * once the turn ends the card is a single line that opens when the user asks for it.
  */
-export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded }: { event: ToolCallEvent; defaultExpanded: boolean }): ReactNode {
+export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded, runActive }: { event: ToolCallEvent; defaultExpanded: boolean; runActive: boolean }): ReactNode {
   // A user who opens or closes a card outranks the default, so the body does not move under them
   // when the run ends.
   const [override, setOverride] = useState<boolean | null>(null);
+  const status = toolCallStatus(event.status, runActive);
   const preview = useMemo(() => describeToolCall(event.name, event.input, event.output), [event]);
   const view = useMemo(() => (preview ? renderToolCallPreview(preview) : null), [preview]);
   // Arguments that the tool schema rejects leave nothing to show, but hiding the call would be
   // worse than a plain line.
   if (!preview || !view) {
-    return <div className={`run-event tool ${event.status}`}><span>Tool</span><strong>{event.name}</strong><small>{event.status}</small></div>;
+    return <div className={`run-event tool ${event.status}`}><span>Tool</span><strong>{event.name}</strong><small>{status.word}</small></div>;
   }
 
   const failed = event.status === 'failed';
@@ -35,7 +51,7 @@ export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded 
       <strong className="truncate" title={view.target}>{view.target}</strong>
       {view.added > 0 && <span className="diff-add">+{view.added}</span>}
       {view.removed > 0 && <span className="diff-remove">-{view.removed}</span>}
-      <span className="tool-call-status" title={statusWord(event.status)}>{statusMark(event.status)}</span>
+      <span className="tool-call-status" title={status.word}>{statusMark(status.mark)}</span>
     </>
   );
 
@@ -75,16 +91,11 @@ function iconFor(preview: ToolCallPreview): ReactNode {
   return <Terminal size={12} />;
 }
 
-function statusMark(status: ToolCallEvent['status']): ReactNode {
-  if (status === 'completed') return <Check size={12} />;
-  if (status === 'failed') return <X size={12} />;
+function statusMark(mark: ToolCallMark): ReactNode {
+  if (mark === 'check') return <Check size={12} />;
+  if (mark === 'x') return <X size={12} />;
+  if (mark === 'dash') return <Minus size={12} />;
   return <Loader2 className="spin" size={12} />;
-}
-
-function statusWord(status: ToolCallEvent['status']): string {
-  if (status === 'completed') return 'Done';
-  if (status === 'failed') return 'Failed';
-  return 'Running';
 }
 
 function prefixFor(kind: 'context' | 'removed' | 'added' | 'gap'): string {

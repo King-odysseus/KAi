@@ -29,6 +29,13 @@ export interface ReportAgent {
   detail?: string | null;
 }
 
+/** One IPC call that has not returned yet, so a window somewhere is waiting on it. */
+export interface ReportPendingCall {
+  channel: string;
+  count: number;
+  seconds: number;
+}
+
 export interface ReportInput {
   generatedAt: Date;
   appName: string;
@@ -40,6 +47,8 @@ export interface ReportInput {
   services: readonly ServiceState[];
   agents: readonly ReportAgent[];
   logs: readonly LogEntry[];
+  /** Calls still outstanding, longest first. The one place a hung handler is visible at all. */
+  pendingCalls: readonly ReportPendingCall[];
 }
 
 /**
@@ -72,6 +81,13 @@ export function buildDiagnosticsReport(input: ReportInput): string {
     `- MCP servers: ${settings.mcpServers.length} configured, ${settings.mcpServers.filter((server) => server.enabled).length} enabled`,
     `- Budget: mode ${settings.usageBudget.mode}, daily ${settings.usageBudget.dailyUsd}, monthly ${settings.usageBudget.monthlyUsd}, per conversation ${settings.usageBudget.perConversationUsd}`,
     `- Tray ${settings.notifications.trayEnabled ? 'on' : 'off'}`,
+    '',
+    // Printed before the problems, because a call that never answered is a problem no log line records: nothing
+    // is written while a call is merely outstanding, so this section is the only place it shows up.
+    '## Calls with no answer yet',
+    ...(input.pendingCalls.length
+      ? input.pendingCalls.map((call) => `- ${call.channel}: ${call.count} outstanding, waiting ${call.seconds}s`)
+      : ['- none']),
     '',
     '## Recent problems',
   ];

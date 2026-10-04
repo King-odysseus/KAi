@@ -43,6 +43,7 @@ import { RightPane } from './components/RightPane';
 import { UrgentBanner } from './components/CoordinationPanel';
 import { UpdateBanner } from './components/UpdatesPanel';
 import { OperationsView, type OperationsTab } from './components/OperationsView';
+import { settleWithin } from './async-deadline';
 import { UsageView } from './components/UsageView';
 import {
   WorkspaceView,
@@ -93,6 +94,8 @@ interface ComposerSelection {
 const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
 const COMPOSER_DRAFTS_KEY = 'kai.composerDrafts.v1';
 const COMPOSER_CONTEXTS_KEY = 'kai.composerContexts.v1';
+/** How long startup may wait on its own calls before saying so, generous because it starts services as well. */
+const STARTUP_TIMEOUT_MS = 60_000;
 
 interface ComposerContextDraft {
   selectedFiles: string[];
@@ -250,7 +253,13 @@ export function App(): ReactNode {
     }
   });
   const [resizing, setResizing] = useState<'sidebar' | 'context' | 'preview' | null>(null);
-  const [busy, setBusy] = useState('Starting KAI');
+  /**
+   * The status sentence shown while something is in flight, paired with the token of the call that set it. The
+   * token is what makes clearing safe: every caller clears in a `finally`, so without it a slow caller finishing
+   * late wipes a message a newer caller has already put up.
+   */
+  const [busy, setBusy] = useState<{ token: number; message: string } | null>({ token: 0, message: 'Starting KAI' });
+  const busyToken = useRef(0);
   const [runningConversationIds, setRunningConversationIds] = useState<string[]>([]);
   const [pausedConversationIds, setPausedConversationIds] = useState<string[]>([]);
   /**
@@ -267,6 +276,14 @@ export function App(): ReactNode {
   const [queuedPromptsByConversation, setQueuedPromptsByConversation] = useState<Record<string, QueuedPrompt[]>>(loadComposerQueue);
   const dispatchingQueuedConversations = useRef(new Set<string>());
   const localRunsInFlight = useRef(new Set<string>());
+  /**
+   * Which run currently owns each conversation's client-side state.
+   *
+   * A run that was stopped from outside — by Stop everything — may still be waiting on a call that eventually
+   * returns. Its `finally` would then clear the state of whatever run replaced it, so only the run whose
+   * generation is still the current one is allowed to clean up.
+   */
+  const runGeneration = useRef(new Map<string, number>());
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [proxyContinuationAgent, setProxyContinuationAgent] = useState<AgentId | null>(null);
@@ -516,8 +533,34 @@ export function App(): ReactNode {
     };
   }, [activeProject?.id]);
 
+  /** Claims a conversation for a new run and returns that run's generation. */
+  function beginRunGeneration(conversationId: string): number {
+    const next = (runGeneration.current.get(conversationId) ?? 0) + 1;
+    runGeneration.current.set(conversationId, next);
+    return next;
+  }
+
+  /** Ends whoever currently holds the conversation, so their cleanup can no longer touch it. */
+  function retireRunGeneration(conversationId: string): void {
+    runGeneration.current.set(conversationId, (runGeneration.current.get(conversationId) ?? 0) + 1);
+  }
+
+  /** Puts the status sentence up and returns the token that owns it. */
+  function beginBusy(message: string): number {
+    busyToken.current += 1;
+    setBusy({ token: busyToken.current, message });
+    return busyToken.current;
+  }
+
+  /** Clears the status only if this token still owns it. */
+  function clearBusy(token: number): void {
+    setBusy((current) => (current?.token === token ? null : current));
+  }
+
   async function perform<T>(task: () => Promise<T>, message?: string): Promise<T | null> {
-    if (message) setBusy(message);
+    // No message means this call is not the one the status sentence is about, so it neither claims the slot nor
+    // clears it on the way out. It used to clear it, which took down whatever a slower caller had put up.
+    const token = message ? beginBusy(message) : null;
     try {
       const result = await task();
       setError(null);
@@ -526,7 +569,7 @@ export function App(): ReactNode {
       setError(messageOf(caught));
       return null;
     } finally {
-      setBusy('');
+      if (token !== null) clearBusy(token);
     }
   }
 
@@ -544,7 +587,10 @@ export function App(): ReactNode {
 
   async function refreshInterrupted(): Promise<void> {
     try {
-      setInterruptedRuns(unwrap(await window.kaiDesktop.listInterruptedRuns()).length);
+      const listing = unwrap(await window.kaiDesktop.listInterruptedRuns());
+      // Damaged records count too: each one is still a run that was interrupted, and leaving them out is how the
+      // banner came to say two when eight were on disk.
+      setInterruptedRuns(listing.records.length + listing.unreadable.length);
     } catch {
       setInterruptedRuns(0);
     }
@@ -565,8 +611,26 @@ export function App(): ReactNode {
   }
 
   async function loadApplication(): Promise<void> {
-    setBusy('Starting KAI');
+    const token = beginBusy('Starting KAI');
     try {
+      const started = await settleWithin(
+        () => Promise.all([
+          window.kaiDesktop.bootstrap().then(unwrap),
+          window.kaiDesktop.listConversations().then(unwrap),
+          window.kaiDesktop.credentialStatus().then(unwrap),
+          window.kaiDesktop.recentLogs(50).then(unwrap),
+          window.kaiDesktop.agentCapabilities().then(unwrap),
+          window.kaiDesktop.directApiCapability().then(unwrap),
+          window.kaiDesktop.setupStatus().then(unwrap),
+        ]),
+        STARTUP_TIMEOUT_MS,
+      );
+      // Bounded rather than open-ended: a startup call that never returns used to leave the boot screen saying
+      // "Starting KAI" forever, with the message itself the only thing on screen and no way past it.
+      if (!started.settled) {
+        setError('KAI did not finish starting. Retry, or use Stop everything on the Operations screen.');
+        return;
+      }
       const [
         nextBootstrap,
         nextConversations,
@@ -575,15 +639,7 @@ export function App(): ReactNode {
         nextAgentCapabilities,
         nextDirectApiCapability,
         nextSetupStatus,
-      ] = await Promise.all([
-        window.kaiDesktop.bootstrap().then(unwrap),
-        window.kaiDesktop.listConversations().then(unwrap),
-        window.kaiDesktop.credentialStatus().then(unwrap),
-        window.kaiDesktop.recentLogs(50).then(unwrap),
-        window.kaiDesktop.agentCapabilities().then(unwrap),
-        window.kaiDesktop.directApiCapability().then(unwrap),
-        window.kaiDesktop.setupStatus().then(unwrap),
-      ]);
+      ] = started.value;
       const startConversationId = preferredConversationId(nextBootstrap, nextConversations);
       const startChoice = startupAgentChoice(
         nextConversations.find((conversation) => conversation.id === startConversationId),
@@ -609,7 +665,7 @@ export function App(): ReactNode {
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
-      setBusy('');
+      clearBusy(token);
     }
   }
 
@@ -1128,6 +1184,7 @@ export function App(): ReactNode {
       setAgentNotice(null);
     }
     setProxyContinuationAgent(null);
+    const generation = beginRunGeneration(conversation.id);
     setStreamingTextByConversation((current) => ({ ...current, [conversation.id]: '' }));
     setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
     setRunningConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
@@ -1177,11 +1234,15 @@ export function App(): ReactNode {
       setFailedConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
       if (conversation.id === activeConversationIdRef.current) setError(messageOf(caught));
     } finally {
-      localRunsInFlight.current.delete(conversation.id);
-      setRunningConversationIds((current) => current.filter((id) => id !== conversation.id));
-      setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
-      setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversation.id]; return next; });
-      setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
+      // Only if this run still owns the conversation. A run stopped from outside may return long after the one
+      // that replaced it has started, and clearing here would take down state that is no longer this run's.
+      if (runGeneration.current.get(conversation.id) === generation) {
+        localRunsInFlight.current.delete(conversation.id);
+        setRunningConversationIds((current) => current.filter((id) => id !== conversation.id));
+        setPausedConversationIds((current) => current.filter((id) => id !== conversation.id));
+        setStreamingTextByConversation((current) => { const next = { ...current }; delete next[conversation.id]; return next; });
+        setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversation.id));
+      }
     }
   }
 
@@ -1242,6 +1303,55 @@ export function App(): ReactNode {
       setAgentNotice('Stopping the current agent run.');
       // Keep the run marked active until its result settles. A queued follow-up must not begin beside a process
       // that has only been asked to stop and is still cleaning up.
+    }
+  }
+
+  /**
+   * The way out of a run the renderer can no longer control.
+   *
+   * Every flag on this screen is cleared by the run's own `finally`, so a call that never returned leaves the
+   * composer disabled for good with nothing on screen that ends it. This stops every run in the main process and
+   * then drops the state those `finally` blocks would have cleared, so the app is usable again either way.
+   */
+  async function stopEverything(): Promise<void> {
+    try {
+      const result = await window.kaiDesktop.stopAllRuns().then(unwrap);
+      // Retire each conversation first, so a run still waiting on a call that eventually returns cannot clear the
+      // state of whatever the person starts next.
+      for (const conversationId of runningConversationIdsRef.current) retireRunGeneration(conversationId);
+      setRunningConversationIds([]);
+      setPausedConversationIds([]);
+      setAutoWaitingConversationIds([]);
+      setFailedConversationIds([]);
+      setPendingApprovals([]);
+      setStreamingTextByConversation({});
+      // Moved past the calls still in flight, so the tokens they hold no longer own the status sentence and the
+      // `finally` they are waiting in cannot clear whatever the next action puts up.
+      busyToken.current += 1;
+      setBusy(null);
+      // Only a run's own `finally` clears these, and they are what the queue dispatcher checks before starting
+      // work: left set, they would stop that conversation from ever running again.
+      localRunsInFlight.current.clear();
+      dispatchingQueuedConversations.current.clear();
+      // Every waiting instruction is held, not just the one caught mid-send. Clearing the flags above re-arms the
+      // queue dispatcher, so leaving rows `queued` would start the next task the instant the person asked for
+      // everything to stop. `blocked` rows are skipped by the dispatcher and keep their text for a retry.
+      const held = (items: QueuedPrompt[]): QueuedPrompt[] => items.map((item) => (
+        item.status === 'blocked' ? item : { ...item, status: 'blocked' as const, error: 'Stopped. Retry when you are ready.' }
+      ));
+      const heldCount = Object.values(queuedPromptsByConversation)
+        .reduce((total, items) => total + items.filter((item) => item.status !== 'blocked').length, 0);
+      setQueuedPromptsByConversation((current) => Object.fromEntries(
+        Object.entries(current).map(([conversationId, items]) => [conversationId, held(items)]),
+      ));
+      void refreshInterrupted();
+      setAgentNotice(result.stoppedRuns === 0 && result.clearedRuns === 0
+        ? 'Nothing was running.'
+        : `Stopped ${result.stoppedRuns} run${result.stoppedRuns === 1 ? '' : 's'}`
+          + `${result.clearedRuns > 0 ? `, cleared ${result.clearedRuns} left over from an earlier session` : ''}`
+          + `${heldCount > 0 ? `, and held ${heldCount} waiting instruction${heldCount === 1 ? '' : 's'}` : ''}.`);
+    } catch (caught) {
+      setError(messageOf(caught));
     }
   }
 
@@ -1863,7 +1973,7 @@ export function App(): ReactNode {
       case 'code':
         return null;
       case 'operations':
-        return <OperationsView initialTab={operationsTab} activeProject={activeProject} onResume={resumeInterruptedRun} onRecoveryChanged={() => void refreshInterrupted()} />;
+        return <OperationsView initialTab={operationsTab} activeProject={activeProject} onResume={resumeInterruptedRun} onRecoveryChanged={() => void refreshInterrupted()} onStopEverything={() => void stopEverything()} />;
       case 'settings':
         return (
           <SettingsView
@@ -1987,6 +2097,7 @@ export function App(): ReactNode {
             onCancel={() => void cancelConversation()}
             onPause={() => void pauseConversation()}
             onResume={() => void resumeConversation()}
+            onStopEverything={() => void stopEverything()}
             onSignIn={(agent) => void signInAgent(agent)}
             onInstall={(agent) => void installAgent(agent)}
             onRefreshAgents={() => void refreshAgentCapabilities()}
@@ -2018,7 +2129,7 @@ export function App(): ReactNode {
       <div className="boot-screen">
         <div className="boot-mark">K</div>
         <h1>KAI</h1>
-        <p>{error ?? busy ?? 'Preparing workspace'}</p>
+        <p>{error ?? busy?.message ?? 'Preparing workspace'}</p>
         {error && (
           <button type="button" className="primary-button" onClick={() => void loadApplication()}>
             <RefreshCw size={15} />
@@ -2244,7 +2355,7 @@ export function App(): ReactNode {
       {busy && (
         <div className="busy-indicator" role="status">
           <span />
-          {busy}
+          {busy.message}
         </div>
       )}
       {pendingApproval && (

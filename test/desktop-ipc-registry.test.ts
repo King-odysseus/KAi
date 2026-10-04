@@ -46,6 +46,12 @@ describe('registerIpc handler registry', () => {
     expect([...wired.keys()].sort()).toEqual([...ipcChannels].sort());
   });
 
+  it('registers the escape hatch for a run the renderer has lost control of', () => {
+    // Named explicitly, because the two equality checks above would also pass if this channel were dropped from
+    // both the contract and the registry at once, which is the one way it could go missing unnoticed.
+    expect([...registry.channels()]).toContain('runs:stop-all');
+  });
+
   it('validates input on the ipcMain path, before any handler body runs', async () => {
     const result = await invokeFromRenderer('agents:run', { not: 'a valid run request' });
     expect(result.ok).toBe(false);
