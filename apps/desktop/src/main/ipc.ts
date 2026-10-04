@@ -93,7 +93,7 @@ import type { UniversalProxyClient } from './proxy-client';
 import type { DesktopProxyRouting } from './proxy-routing';
 import { proxyAgentBaseUrl } from './proxy-routing';
 import { ensureClaudeSettingsFile, resetClaudeCodeConfig } from './claude-maintenance';
-import { mergeSettingsUpdate, type DesktopServiceController } from './service-controller';
+import { brainPathInsideRepository, mergeSettingsUpdate, type DesktopServiceController } from './service-controller';
 import type { ProjectPreferenceStore } from './project-preference-store';
 import type { ProjectStore } from './project-store';
 import { buildSkillPrompt, discoverDesktopSkills, skillSummaries } from './skills';
@@ -333,6 +333,18 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'providers:list-models', async (request) => listProviderModels(request, context.credentials));
   handle(context, 'settings:update', async (update) => {
     const snapshot: { previous: AppSettings | null } = { previous: null };
+    // Before anything is written: a brain path inside a repository is the one setting here that can reach outside
+    // KAI and change somebody else's history. See `brainPathInsideRepository`.
+    if (update.cognitive1?.dataPath) {
+      const repository = await brainPathInsideRepository(update.cognitive1.dataPath);
+      if (repository) {
+        throw new Error(
+          `That brain path is inside the git repository at ${repository}. The engine pulls, commits and pushes its `
+          + 'brain folder on a timer, so it would do all three to that repository — your branch, your remote. Choose '
+          + 'a folder outside any repository, such as one under your user data folder.',
+        );
+      }
+    }
     const merged = await context.settings.update((settings) => {
       snapshot.previous = settings;
       return mergeSettingsUpdate(settings, update);

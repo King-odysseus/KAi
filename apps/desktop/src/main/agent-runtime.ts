@@ -153,7 +153,7 @@ interface ParsedAgentLine {
   error?: string;
   tools?: ParsedToolCall[];
   /** Results for tool calls started earlier in the run, matched back to them by `callId`. */
-  toolResults?: Array<{ callId: string; status: 'completed' | 'failed' }>;
+  toolResults?: Array<{ callId: string; status: 'completed' | 'failed'; output?: string }>;
   changes?: ParsedFileChange[];
   /** What the CLI said the run cost, when it says so at all — claude reports the figure, codex only tokens. */
   cost?: { amountUsd?: number; inputTokens?: number; outputTokens?: number };
@@ -1476,7 +1476,9 @@ function streamTextEvent(request: Pick<AgentRunRequest, 'agent' | 'conversationI
  * `output` decides whether the verification record and the command card can read it at all.
  */
 export function lineEvents(
-  request: Pick<AgentRunRequest, 'agent' | 'conversationId'>,
+  // `route` is optional: a caller that does not know the route still gets its tool calls and changes mapped, and
+  // only the cost event's provider attribution depends on it.
+  request: Pick<AgentRunRequest, 'agent' | 'conversationId'> & { route?: AgentRunRequest['route'] },
   parsed: ParsedAgentLine,
 ): PersistedEvent[] {
   const built: PersistedEvent[] = [];

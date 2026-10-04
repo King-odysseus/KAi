@@ -569,6 +569,27 @@ export class DesktopServiceController {
   }
 }
 
+/**
+ * Whether a brain path sits inside a git working tree, and if so, where that tree's root is.
+ *
+ * It matters because of what the engine does with its brain folder: it pulls with rebase and autostash on a timer, and
+ * commits and pushes what it has written. Pointed at a folder inside somebody's repository, it does all of that to
+ * *their* repository — their branch, their origin. The default path is KAI's own engines folder, so this only ever
+ * fires on a path someone chose by hand, and the answer is worth refusing over.
+ *
+ * Walks up rather than shelling out to `git`: one stat per parent, it works with no git installed, and a `.git` file
+ * (a worktree or submodule pointer) counts as much as a directory.
+ */
+export async function brainPathInsideRepository(target: string): Promise<string | null> {
+  let current = path.resolve(target);
+  for (;;) {
+    if (await fs.stat(path.join(current, '.git')).then(() => true, () => false)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdate): AppSettings {
   return {
     ...settings,
