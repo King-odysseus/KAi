@@ -11,6 +11,7 @@
 
 export type BlockedNeed =
   | 'your-approval'
+  | 'a-design'
   | 'a-value'
   | 'a-fix'
   | 'a-provider'
@@ -37,6 +38,13 @@ const PATTERNS: ReadonlyArray<{ need: BlockedNeed; match: RegExp; ask: string }>
     need: 'a-provider',
     match: /\b(rate limit|quota|429|credit|billing|api key|credential|unauthori[sz]ed|sign.?in)\b/i,
     ask: 'The provider refused the request. Check the API key, the credit, or the rate limit for the model this card uses.',
+  },
+  {
+    // Before `a-value` on purpose: a missing `tokens` artifact reads as "token", and telling someone to go supply a
+    // secret when the real gap is a design document sends them to the wrong screen entirely.
+    need: 'a-design',
+    match: /\b(design|tokens|style[-\s]?guide|open[-\s]?pencil|figma|wireframe|mockup|palette)\b/i,
+    ask: 'This is waiting on the design. Share reference images, or draw the screens in open-pencil, then pull the design and put this card back in the queue. It is not a reason for the build to stop.',
   },
   {
     need: 'a-value',
@@ -71,9 +79,25 @@ export function explainBlocked(reason: string): BlockedExplanation {
   };
 }
 
+/**
+ * A card a machine parked, whatever parked it.
+ *
+ * This used to be a prefix match on the note, which only ever caught Autopilot's own wording. Three other things park
+ * cards: the board's single-card run writes "The run failed: …", an agent working through the kai-project tools writes
+ * its own summary, and the team runner writes "The run failed" too. `movedBy` is the fact that separates a machine
+ * from a person — a card someone moved is theirs to keep blocked — and the note is read only for the cards written
+ * before `movedBy` existed.
+ *
+ * It lives here rather than in the board because the board is not the only thing that has to tell a machine's card
+ * from a person's: the "needs you" rules do too, and two copies of this rule drift the moment one of them is fixed.
+ */
+export function machineBlocked(card: { status: string; notes: string; movedBy?: string | null }): boolean {
+  if (card.status !== 'blocked') return false;
+  if (card.movedBy) return card.movedBy !== 'user';
+  return card.notes.startsWith('Autopilot gave up') || card.notes.startsWith('The run failed');
+}
+
 /** The cards that need the person, with what each is waiting for. Cards blocked by hand are left out: those are theirs already. */
-export function needsAttention<T extends { status: string; notes: string }>(cards: readonly T[]): Array<T & BlockedExplanation> {
-  return cards
-    .filter((card) => card.status === 'blocked' && card.notes.startsWith('Autopilot gave up'))
-    .map((card) => ({ ...card, ...explainBlocked(card.notes) }));
+export function needsAttention<T extends { status: string; notes: string; movedBy?: string | null }>(cards: readonly T[]): Array<T & BlockedExplanation> {
+  return cards.filter(machineBlocked).map((card) => ({ ...card, ...explainBlocked(card.notes) }));
 }

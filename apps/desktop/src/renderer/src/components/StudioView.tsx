@@ -5,6 +5,8 @@ import { deriveAgentActivity } from './AgentActivity';
 import { foundationLanded, remainingScreens, screenLanded } from '../design-build';
 import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
 import { GuidePanel, GuideStrip } from './GuidePanel';
+import { NeedsYouBanner } from './NeedsYouBanner';
+import { useAutopilotStatus } from './use-autopilot-status';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
 import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, type DesignContext } from '../flow-diagram';
@@ -134,6 +136,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // cleared the moment a new build starts, since that attempt speaks for itself from then on.
   const [lastFailedStep, setLastFailedStep] = useState<string | null>(null);
   const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
+  // The live run, for the banner above the board. The Autopilot panel subscribes to the same status for its own
+  // detail; the banner needs it here because "is anything waiting on me right now" is a question about the run, not
+  // about the board, and the board's own strip cannot answer it.
+  const autopilot = useAutopilotStatus(projectId);
   const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
   // A name, not the paragraph: the goal is a full statement of what "done" looks like, and using it whole is what
   // filled the header and every design prompt with the entire brief.
@@ -222,7 +228,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     let cancelled = false;
     void window.kaiDesktop.readStudioGuide(projectId).then(unwrap)
       .then((next) => { if (!cancelled) setGuide(next); })
-      .catch(() => undefined);
+      // Said out loud rather than swallowed: a read that fails leaves the tab on its loading line forever, which
+      // reads as "still working" and hides the cause. The guide is auxiliary, so this is a notice, not a block.
+      .catch((caught) => { if (!cancelled) setError(messageOf(caught)); });
     return () => { cancelled = true; };
   }, [projectId, board, artifacts, state, design]);
 
@@ -639,8 +647,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   async function reloadReadiness(): Promise<void> {
     setBusy('load');
     setError(null);
+    setNotice(null);
     try {
-      setReadiness(unwrap(await window.kaiDesktop.studioReadiness()));
+      const next = unwrap(await window.kaiDesktop.studioReadiness());
+      setReadiness(next);
+      // Said out loud, whichever way it went. The line beside the button only changes when the answer itself changes,
+      // so a check that came back the same used to look like a check that did nothing.
+      setNotice(next.ready
+        ? `Connected: ${next.displayName} · ${next.model}.`
+        : `Not ready: ${next.reason ?? 'the Studio needs configuring before it can run.'}`);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -1954,6 +1969,17 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 {busy === 'arrange' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Arrange with AI
               </button>
             </div>
+            {projectId && board && board.cards.length > 0 && (
+              <NeedsYouBanner
+                board={board}
+                artifacts={artifacts}
+                design={design}
+                guide={guide}
+                run={autopilot}
+                busy={busy !== null}
+                onAction={(action) => void runGuideAction(action)}
+              />
+            )}
             {projectId && board && board.cards.length > 0 && (
               <GuideStrip
                 view={guide}

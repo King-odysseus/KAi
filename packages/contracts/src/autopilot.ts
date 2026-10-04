@@ -3,8 +3,9 @@ import { agentIdSchema, timestampSchema } from './primitives';
 
 /**
  * Autopilot works a Project Studio board from the first ready card to the last, on its own: one agent per card, a
- * check after each, a retry with the failure when the check fails, and a rest when a provider says it has had enough.
- * These are the settings it starts from and the status it reports; the loop itself lives in the main process.
+ * check after each, a retry with the failure when the check fails, a rest when a provider says it has had enough, and
+ * a dev proof at the end that the app actually runs. These are the settings it starts from and the status it reports;
+ * the loop itself lives in the main process.
  */
 
 export const AUTOPILOT_PHASES = ['idle', 'working', 'checking', 'cooling', 'finished', 'stopped', 'failed'] as const;
@@ -45,12 +46,47 @@ export const autopilotLogEntrySchema = z
   .strict();
 export type AutopilotLogEntry = z.infer<typeof autopilotLogEntrySchema>;
 
+/** One route the run's dev proof loaded, and what the page showed. */
+export const devRouteResultSchema = z
+  .object({
+    route: z.string().max(300),
+    ok: z.boolean(),
+    /** Empty when `ok`; otherwise one line saying what the page did wrong. */
+    problem: z.string().max(600),
+  })
+  .strict();
+export type DevRouteResult = z.infer<typeof devRouteResultSchema>;
+
+/**
+ * The run's proof that the app actually runs, taken on the local dev server once the board is finished.
+ *
+ * Every other check answers "does the code hold up". This answers the question the person asks when they walk away
+ * and come back — is there an app on dev I can open — and it is the only place in Autopilot that claims as much. A
+ * failure here is not a failed run: the cards really are done, and this is what the result turned out to be.
+ */
+export const devCheckResultSchema = z
+  .object({
+    passed: z.boolean(),
+    /** One line naming the outcome, for the run log and the panel. */
+    summary: z.string().max(600),
+    /** Where the app is serving, so the person can open it; null when it never started. */
+    url: z.string().max(500).nullable(),
+    routes: z.array(devRouteResultSchema).max(100),
+  })
+  .strict();
+export type DevCheckResult = z.infer<typeof devCheckResultSchema>;
+
 export const autopilotStatusSchema = z
   .object({
     projectId: z.string().min(1),
     phase: z.enum(AUTOPILOT_PHASES),
     /** One plain sentence on what it is doing or why it stopped. */
     message: z.string().max(600),
+    /**
+     * The last dev proof this run took, or null while it has not reached one. Kept on the status rather than in the
+     * log so the screen can name the URL, and so a person who comes back to a finished run has something to open.
+     */
+    devCheck: devCheckResultSchema.nullable().default(null),
     cardId: z.string().nullable(),
     cardTitle: z.string().nullable(),
     /** The conversation the agent is working in right now, so the composer can show it. */

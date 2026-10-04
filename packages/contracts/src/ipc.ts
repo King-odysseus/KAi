@@ -89,6 +89,7 @@ import {
   type BoardCard,
 } from './studio';
 import type { StudioGuideView } from './studio-guide';
+import type { CodeGuideView } from './code-guide';
 import {
   remoteAccessStatusSchema,
   remoteAccessSettingsSchema,
@@ -440,6 +441,8 @@ export const ipcChannels = [
   'learning:reset-teaching-entry',
   'learning:generate-teaching-draft',
   'code:format',
+  'code:guide-read',
+  'code:guide-explain',
   'git:file-info',
   'checkpoints:reject-hunks',
   'context:git-diff',
@@ -750,6 +753,8 @@ export const ipcInputSchemas = {
   'learning:reset-teaching-entry': teachingLibraryEntryInputSchema,
   'learning:generate-teaching-draft': teachingDraftGenerateInputSchema,
   'code:format': codeFormatInputSchema,
+  'code:guide-read': studioProjectInputSchema,
+  'code:guide-explain': studioProjectInputSchema,
   'git:file-info': z.object({ projectId: z.string().min(1), path: z.string().min(1).max(1_000) }).strict(),
   'checkpoints:reject-hunks': rejectHunksInputSchema,
   'context:git-diff': z.object({ projectId: z.string().min(1) }).strict(),
@@ -1221,6 +1226,15 @@ export interface KaiDesktopBridge {
   resetTeachingEntry(input: TeachingLibraryEntryInput): Promise<IpcResponse<TeachingLibrary>>;
   generateTeachingDraft(input: TeachingDraftGenerateInput): Promise<IpcResponse<TeachingDraft>>;
   formatCode(input: CodeFormatInput): Promise<IpcResponse<CodeFormatResult>>;
+  /**
+   * Where this code project is, from the rules alone — the repository, the files, what has been studied, the board.
+   * Free, so the strip above the editor can ask whenever anything it reads moves.
+   */
+  readCodeGuide(projectId: string): Promise<IpcResponse<CodeGuideView>>;
+  /**
+   * The same, with the walkthrough. Spends only when the stored one no longer fits what is on screen.
+   */
+  explainCodeGuide(projectId: string): Promise<IpcResponse<CodeGuideView>>;
   gitFileInfo(projectId: string, path: string): Promise<IpcResponse<GitFileInfo>>;
   rejectCheckpointHunks(conversationId: string, turnId: string, filePath: string, hunkIds: number[]): Promise<IpcResponse<CheckpointRestoreResult>>;
   gitDiffStat(projectId: string): Promise<IpcResponse<GitDiffStatResult>>;

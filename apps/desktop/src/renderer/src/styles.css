@@ -11834,6 +11834,52 @@ button.tool-call-head:hover strong { color: var(--mint); }
   white-space: pre-wrap;
 }
 
+/* The project's own shape, above the steps. A list rather than prose: the whole point is the counts, and a sentence
+   per directory would bury them. The name is never truncated — a directory cut to ".kai/spec/desi…" is worse than one
+   that wrapped. */
+.guide-project {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.guide-project h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.guide-areas {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-areas li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.guide-areas code {
+  color: var(--text);
+  word-break: break-word;
+}
+
+.guide-areas span {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .guide-steps {
   display: flex;
   flex-direction: column;
@@ -11944,6 +11990,74 @@ button.tool-call-head:hover strong { color: var(--mint); }
   margin-left: auto;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* The one thing that needs you, above the board.
+   Louder than the guide strip below it on purpose: the strip answers "where am I", this answers "can I leave it
+   alone" — and the answer to that has to be readable at a glance from across the room. Same three tones as the run
+   line, so red still means a person is needed, amber still means waiting, and green still means done. */
+.needs-you {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.needs-you.tone-needs-you {
+  border-left-color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, var(--bg-panel));
+}
+
+.needs-you.tone-waiting {
+  border-left-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 7%, var(--bg-panel));
+}
+
+.needs-you.tone-done {
+  border-left-color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 7%, var(--bg-panel));
+}
+
+.needs-you-icon {
+  flex-shrink: 0;
+  display: flex;
+  padding-top: 1px;
+  color: var(--text-muted);
+}
+
+.needs-you.tone-needs-you .needs-you-icon {
+  color: var(--red);
+}
+
+.needs-you.tone-waiting .needs-you-icon {
+  color: var(--amber);
+}
+
+.needs-you.tone-done .needs-you-icon {
+  color: var(--mint);
+}
+
+.needs-you-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.needs-you-body strong {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.needs-you-detail {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 /* The board's one-line answer to "what now", above the cards because that is the question a board of fifty is worst
@@ -13751,6 +13865,17 @@ button.tool-call-head:hover strong { color: var(--mint); }
 }
 .run-stalled {
   color: #d9a441;
+}
+
+/* The dev proof at the end of a run. Green when the app came up, red when it did not — the one line that says
+   whether there is something to open, which is what the person walked away for. */
+.run-dev {
+  border-left: 2px solid var(--mint);
+  padding-left: 8px;
+}
+
+.run-dev.failed {
+  border-left-color: var(--red);
 }
 
 /*

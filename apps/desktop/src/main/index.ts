@@ -61,6 +61,7 @@ import { StudioArtifacts } from './artifacts';
 import { StudioBoardStore } from './board';
 import { DesktopStudio } from './studio';
 import { DesktopGuideService } from './studio-guide-service';
+import { DesktopCodeGuideService } from './code-guide-service';
 import { writeHandoffFiles } from './handoff-files';
 import { StudioStyleReferenceStore } from './style-references';
 import { DesktopEqualizer, type EqualizerService } from './equalizer';
@@ -68,7 +69,8 @@ import type { DesignPorts } from './design-source';
 import { createEqualizerPorts } from './equalizer-ports';
 import { SPEC_ROOT, SpecStore } from './spec-store';
 import { DesktopUiCheck, failureSummary, playwrightUiCheckPorts } from './ui-check';
-import { resolveInside } from './project-files';
+import { DesktopDevCheck, playwrightDevCheckPorts } from './dev-check';
+import { listProjectFiles, resolveInside } from './project-files';
 import { completeTeam } from './team-assign';
 import { TeamRecordStore } from './team-record-store';
 import { activeParallelDirectories, createParallelSession } from './parallel-session';
@@ -567,6 +569,7 @@ async function startApplication(): Promise<void> {
   let interview!: DesktopInterview;
   let studio!: DesktopStudio;
   let guide!: DesktopGuideService;
+  let codeGuide!: DesktopCodeGuideService;
   let scheduler!: DesktopScheduler;
   let evals!: DesktopEvals;
   let changeReviewer!: DesktopChangeReviewer;
@@ -677,6 +680,7 @@ async function startApplication(): Promise<void> {
     interview,
     studio,
     guide,
+    codeGuide,
     styleReferences,
     equalizer,
     runControl,
@@ -851,18 +855,26 @@ async function startApplication(): Promise<void> {
     // Every board write tells the windows, wherever it came from. See `BoardPorts.changed`.
     changed: (projectId, board) => { ipcContext?.windows.broadcast('studio:board-changed', { projectId, board }); },
   });
-  // The visual check drives the Playwright MCP KAI already installs for its agents; screenshots land with the card.
-  const uiCheck = new DesktopUiCheck(playwrightUiCheckPorts({
+  // The browser and dev server both checks drive, built once. The screen check and the dev proof differ in what they
+  // judge, not in how they open a page, so they share this rather than each carrying their own copy of it.
+  const checkRuntime = {
     mcp: {
-      callServerTool: (serverId, toolName, input) => {
+      callServerTool: (serverId: string, toolName: string, input: Record<string, unknown>): Promise<unknown[] | null> => {
         if (!mcpRuntime) return Promise.reject(new Error('The MCP runtime is not running.'));
         return mcpRuntime.callServerTool(serverId, toolName, input);
       },
     },
     preview: {
-      start: (projectId, projectPath, command) => preview.start(projectId, projectPath, command),
-      status: (projectId, projectPath) => preview.status(projectId, projectPath),
+      start: (projectId: string, projectPath: string, command?: string) => preview.start(projectId, projectPath, command),
+      status: (projectId: string, projectPath: string) => preview.status(projectId, projectPath),
     },
+    sleep: (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  };
+  const checkNow = (): string => new Date().toISOString();
+  const devCheck = new DesktopDevCheck(playwrightDevCheckPorts(checkRuntime));
+  // The visual check drives the Playwright MCP KAI already installs for its agents; screenshots land with the card.
+  const uiCheck = new DesktopUiCheck(playwrightUiCheckPorts({
+    ...checkRuntime,
     readFile: async (projectPath, relativePath) => {
       const target = await resolveInside(projectPath, path.join(SPEC_ROOT, relativePath));
       try {
@@ -877,8 +889,7 @@ async function startApplication(): Promise<void> {
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, Buffer.from(base64, 'base64'));
     },
-    sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
-  }, () => new Date().toISOString()));
+  }, checkNow));
   // Autonomy is 'plan': it keeps the project's own file and shell tools read-only, same as any other read-mostly
   // run. That used to also deny open-pencil's own write tools (DesktopMcpRuntime.policy() denies every non-read-
   // only MCP tool under 'plan') — fixed by running this through designBuildDirectApi instead of the shared
@@ -940,6 +951,24 @@ async function startApplication(): Promise<void> {
     design: (projectId) => studio.design(projectId),
     now: () => new Date().toISOString(),
   });
+  // Without this the handlers below reach `context.guide` on an object it was never put on, and every read of the
+  // Senior dev fails with a TypeError the screen cannot show. Constructing the service is not the same as wiring it.
+  ipcContext.guide = guide;
+  // The same guide for a folder of source code. It borrows the provider plumbing and the spec store above, and reads
+  // four things the Code screen already has: the repository, the file list, what has been studied, and the board.
+  codeGuide = new DesktopCodeGuideService({
+    settings: () => settings.load(),
+    requester: learningTutor,
+    spec: specStore,
+    projectRoot: studioProjectRoot,
+    git: (projectId) => studioProjectRoot(projectId).then((root) => gitOverview(root)),
+    files: (projectId) => studioProjectRoot(projectId).then((root) => listProjectFiles(root)).then((tree) => tree.files),
+    learn: (projectId) => learningProgress.get(projectId),
+    board: (projectId) => studioBoard.read(projectId),
+    now: () => new Date().toISOString(),
+  });
+  // Identical trap to `guide` above, and worth the same comment: the literal captured this as undefined.
+  ipcContext.codeGuide = codeGuide;
   const equalizerPortsFor = createEqualizerPorts({
     mcp: {
       callServerTool: (serverId, toolName, input) => {
@@ -1021,6 +1050,9 @@ async function startApplication(): Promise<void> {
       return { passed: check.exitCode === 0, exitCode: check.exitCode, output: check.output, runId: run?.id ?? null };
     },
     suggestCheck: async (projectId) => suggestTestCommand(await studioProjectRoot(projectId)),
+    // The run's own proof that the app runs, taken on the local dev server once the board is finished. It is the one
+    // claim Autopilot makes about the project running, and the only environment it can put the project in is dev.
+    checkDev: async (projectId, routes, signal) => devCheck.run(projectId, await studioProjectRoot(projectId), routes, signal),
     changedFilesFor: async (projectId) => (await gitOverview(await studioProjectRoot(projectId))).changes.map((change) => change.path),
     setPacer: (pacer) => directApi.setPacer(pacer),
     announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'autopilot:changed', status),

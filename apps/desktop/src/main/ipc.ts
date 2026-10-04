@@ -137,6 +137,7 @@ import type { DesktopPromptGuide } from './prompt-guide';
 import type { DesktopInterview } from './interview';
 import type { DesktopStudio } from './studio';
 import type { DesktopGuideService } from './studio-guide-service';
+import type { DesktopCodeGuideService } from './code-guide-service';
 import type { StudioStyleReferenceStore } from './style-references';
 import type { EqualizerService } from './equalizer';
 import { resolveInside } from './project-files';
@@ -223,6 +224,8 @@ export interface IpcContext {
   studio: DesktopStudio;
   /** The Senior Dev: reads the project to say which step it is on, and explains it in plain words when asked. */
   guide: DesktopGuideService;
+  /** The same guide for a code project: the repository, the files, what has been studied and the board. */
+  codeGuide: DesktopCodeGuideService;
   styleReferences: StudioStyleReferenceStore;
   equalizer: EqualizerService;
   teamRecord: TeamRecordStore;
@@ -593,6 +596,10 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   // only when the stored explanation no longer fits — see `DesktopGuideService`.
   handle(context, 'studio:guide-read', async ({ projectId }) => context.guide.read(projectId));
   handle(context, 'studio:guide-explain', async ({ projectId }) => context.guide.explain(projectId));
+  // The code flavour of the same thing: its steps come from the repository and the files rather than from a plan, so
+  // a project that has never been near the Studio still has somewhere to be told it is.
+  handle(context, 'code:guide-read', async ({ projectId }) => context.codeGuide.read(projectId));
+  handle(context, 'code:guide-explain', async ({ projectId }) => context.codeGuide.explain(projectId));
   handle(context, 'autopilot:start', async (input, request) => context.autopilot.start(input, request.ownerWindowId));
   handle(context, 'autopilot:stop', async ({ projectId }) => context.autopilot.stop(projectId));
   handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));

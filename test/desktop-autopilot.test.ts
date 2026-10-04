@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type StudioBoard } from '@kai/contracts';
+import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type ArtifactKind, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type DevCheckResult, type StudioBoard } from '@kai/contracts';
 import { DesktopAutopilot, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
 
 const NOW = '2026-10-01T00:00:00.000Z';
@@ -19,15 +19,22 @@ interface Harness {
   ports: AutopilotPorts;
   /** What the run has left on disk. Empty whenever no card is in its hands. */
   kept: Map<string, AutopilotRunRecord>;
+  /** Every dev proof the run asked for, in order, with the routes it was given. */
+  devChecks: Array<{ routes: readonly string[] }>;
 }
 
 function harness(options: {
   cards: BoardCard[];
   agent?: (call: number, request: AgentRunRequest) => Partial<AgentRunResult> | Error;
   check?: (call: number) => boolean;
+  /** The artifact kinds the project has actually written. Empty stands for a project with no design yet. */
+  artifacts?: Partial<Record<ArtifactKind, string>>;
+  /** The dev proof's answer. Defaults to "it came up", so the ordinary tests are not about this. */
+  devCheck?: (routes: readonly string[]) => DevCheckResult;
 }): Harness {
   const board: StudioBoard = { schemaVersion: 1, cards: options.cards };
   const prompts: string[] = [];
+  const devChecks: Array<{ routes: readonly string[] }> = [];
   let agentCalls = 0;
   let checkCalls = 0;
   const promote = (): void => {
@@ -53,7 +60,7 @@ function harness(options: {
   const ports: AutopilotPorts = {
     settings: async () => ({ defaultAgent: 'claude', defaultRoute: 'direct', defaultAutonomy: 'edit' }) as never,
     board: async () => structuredClone(board),
-    artifactsFor: async () => ({}),
+    artifactsFor: async () => options.artifacts ?? {},
     claimCard: async (_p, id, agent) => { const item = find(id); item.status = 'inProgress'; item.claimedBy = agent; return item; },
     recordCardRun: async (_p, id, run) => { find(id).runs.push(run); return find(id); },
     setCheck: async (_p, id, check) => { find(id).check = check; return find(id); },
@@ -74,6 +81,15 @@ function harness(options: {
       return { passed, exitCode: passed ? 0 : 1, output: passed ? '' : 'FAIL: expected 1 to be 2', runId: passed ? `run-${checkCalls}` : null };
     },
     suggestCheck: async () => 'npm test',
+    checkDev: async (_projectId, routes) => {
+      devChecks.push({ routes });
+      return options.devCheck?.(routes) ?? {
+        passed: true,
+        summary: `The app runs on dev at http://localhost:5173${routes.length > 0 ? ` (${routes.length} page${routes.length === 1 ? '' : 's'} loaded)` : ''}.`,
+        url: 'http://localhost:5173',
+        routes: routes.map((route) => ({ route, ok: true, problem: '' })),
+      };
+    },
     changedFilesFor: async () => ['src/a.ts'],
     setPacer: () => undefined,
     announce: () => undefined,
@@ -82,7 +98,7 @@ function harness(options: {
     journal,
     now: () => Date.now(),
   };
-  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept };
+  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept, devChecks };
 }
 
 const start = (h: Harness, overrides: Record<string, unknown> = {}) =>
@@ -355,5 +371,77 @@ describe('desktop autopilot', () => {
     expect(h.prompts).toHaveLength(1);
     // `checkUi` is stubbed to pass, and the card is closed through the board's own rule as usual.
     expect(h.board.cards[0]!.status).toBe('done');
+  });
+
+  it('proves the app runs on dev once the board is finished, and names where it is', async () => {
+    const h = harness({ cards: [card('a'), card('b')] });
+    h.board.cards[0]!.kind = 'page';
+    h.board.cards[0]!.route = '/pricing';
+    await start(h);
+    const final = await settled(h);
+
+    expect(h.devChecks).toHaveLength(1);
+    // The home page and every screen card's route, without repeats.
+    expect(h.devChecks[0]!.routes).toEqual(['/', '/pricing']);
+    expect(final.devCheck?.passed).toBe(true);
+    expect(final.devCheck?.url).toBe('http://localhost:5173');
+    expect(final.message).toContain('http://localhost:5173');
+  });
+
+  it('reports a dev check that failed without calling the finished run a failure', async () => {
+    const h = harness({
+      cards: [card('a')],
+      devCheck: (routes) => ({
+        passed: false,
+        summary: `The app does not run cleanly on dev: ${routes[0]} — The page loaded but rendered nothing.`,
+        url: 'http://localhost:5173',
+        routes: routes.map((route) => ({ route, ok: false, problem: 'The page loaded but rendered nothing.' })),
+      }),
+    });
+    await start(h);
+    const final = await settled(h);
+
+    // The cards really are done: a project that will not open is what the result turned out to be, not a fault in
+    // the loop, so the run is still `finished` and the reason is on the status for the screen to name.
+    expect(final.phase).toBe('finished');
+    expect(h.board.cards[0]!.status).toBe('done');
+    expect(final.devCheck?.passed).toBe(false);
+    expect(final.message).toContain('does not run cleanly on dev');
+    expect(final.log.some((entry) => entry.kind === 'warn' && entry.text.includes('does not run cleanly'))).toBe(true);
+  });
+
+  it('does not claim the app runs when the board never got finished', async () => {
+    const h = harness({ cards: [card('a')], check: () => false });
+    await start(h, { attemptsPerCard: 1 });
+    const final = await settled(h);
+    expect(final.devCheck).toBeNull();
+    expect(h.devChecks).toEqual([]);
+  });
+
+  it('builds a card whose design artifact was never written instead of parking it', async () => {
+    // The whole reason a missing design used to stop the board: the brief said to ask for the artifact rather than
+    // invent it, the agent obeyed, and the card was parked. It now says to build to a provisional look instead.
+    const h = harness({ cards: [card('a', [], 'ready')], artifacts: {} });
+    h.board.cards[0]!.kind = 'page';
+    h.board.cards[0]!.route = '/pricing';
+    h.board.cards[0]!.needsArtifacts = ['tokens'];
+    await start(h);
+    const final = await settled(h);
+
+    expect(h.prompts).toHaveLength(1);
+    expect(h.prompts[0]).toContain('NOT WRITTEN YET, AND THIS DOES NOT STOP YOU');
+    expect(h.prompts[0]).toContain('provisional');
+    expect(h.prompts[0]).not.toContain('ask for it rather than inventing it');
+    expect(h.board.cards[0]!.status).toBe('done');
+    // The run says so out loud, once, rather than leaving it to be worked out from a board of blocked cards.
+    expect(final.log.some((entry) => entry.text.includes('provisional look'))).toBe(true);
+  });
+
+  it('says it is working on this machine only, before it touches a card', async () => {
+    const h = harness({ cards: [card('a')] });
+    await start(h);
+    const final = await settled(h);
+    const opening = final.log.slice(0, 2).map((entry) => entry.text).join(' ');
+    expect(opening).toContain('never commits and never deploys');
   });
 });

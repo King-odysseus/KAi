@@ -185,6 +185,68 @@ export class PreviewRuntime {
   }
 }
 
+/**
+ * How long a dev server is given to print its URL before the caller is told it will not open.
+ *
+ * Exported because three callers start a project the same way — the screen check, the Equalizer and the run's dev
+ * proof — and a fourth set of constants is how the three drift apart.
+ */
+export const PREVIEW_TIMEOUT_MS = 60_000;
+export const PREVIEW_POLL_MS = 500;
+
+/**
+ * The little of the preview runtime this needs, so a test can hand over a fake rather than a real process.
+ *
+ * `start` and `status` are all `PreviewRuntime` is asked for here; the Equalizer and the screen check each hold a
+ * three-method view of it, and both of those satisfy this shape as they are.
+ */
+export interface PreviewStarter {
+  start(projectId: string, projectPath: string, command?: string): Promise<PreviewState>;
+  status(projectId: string, projectPath: string): Promise<PreviewState>;
+}
+
+interface WaitForPreviewUrlOptions {
+  /** The command to start the project with, when the caller knows better than what the files say. */
+  command?: string;
+  /** Injected so a test does not spend the real polling interval watching a fake server not answer. */
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  pollMs?: number;
+  /** Stops the wait early when the run holding it is stopped, rather than leaving it polling for a minute. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Starts the project and waits for the local URL it prints. Throws with the server's own reason when it fails, and
+ * with a plain sentence when it simply never says anything.
+ *
+ * This is the one place "start the dev server and find out where it is" lives. It was written out in full in the
+ * screen check and again in the Equalizer, which is the kind of duplication that only shows up when one of them is
+ * fixed and the other is not.
+ */
+export async function waitForPreviewUrl(
+  preview: PreviewStarter,
+  projectId: string,
+  projectPath: string,
+  options: WaitForPreviewUrlOptions = {},
+): Promise<string> {
+  const { command, sleep = defaultSleep, timeoutMs = PREVIEW_TIMEOUT_MS, pollMs = PREVIEW_POLL_MS, signal } = options;
+  await preview.start(projectId, projectPath, command);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (signal?.aborted) throw new Error('The wait for the dev server was stopped.');
+    const state = await preview.status(projectId, projectPath);
+    if (state.url) return state.url;
+    if (state.status === 'failed') throw new Error(state.message ?? 'The dev server failed to start.');
+    if (Date.now() >= deadline) throw new Error('The dev server did not print a local URL in time.');
+    await sleep(pollMs);
+  }
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Every way this project says to start it, best first. */
 export async function detectPreviewCandidates(projectPath: string): Promise<PreviewCandidate[]> {
   const [manifest, managePy, dependencies, pythonFiles] = await Promise.all([

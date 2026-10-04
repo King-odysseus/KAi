@@ -13,6 +13,7 @@ import {
   type UiCheckTheme,
   type UiCheckViewport,
 } from '@kai/contracts';
+import { waitForPreviewUrl } from './preview-runtime';
 
 /**
  * The visual check. A component or page card is not finished because the code compiled: it is finished when a
@@ -200,10 +201,6 @@ export interface UiCheckRuntime {
   sleep(ms: number): Promise<void>;
 }
 
-/** How long the dev server is given to print its URL before the card is failed as unopenable. */
-const PREVIEW_TIMEOUT_MS = 60_000;
-const PREVIEW_POLL_MS = 500;
-
 /** The image block's base64 payload, however the MCP server wrapped it. */
 function imageData(blocks: unknown[] | null): string | null {
   for (const block of blocks ?? []) {
@@ -224,15 +221,7 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
 
   return {
     async previewUrl(projectId, projectPath) {
-      await runtime.preview.start(projectId, projectPath);
-      const deadline = Date.now() + PREVIEW_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        const state = await runtime.preview.status(projectId, projectPath);
-        if (state.url) return state.url;
-        if (state.status === 'failed') throw new Error(state.message ?? 'The dev server failed to start.');
-        await runtime.sleep(PREVIEW_POLL_MS);
-      }
-      throw new Error('The dev server did not print a local URL in time.');
+      return waitForPreviewUrl(runtime.preview, projectId, projectPath, { sleep: runtime.sleep });
     },
 
     async capture({ url, viewport, theme, card }) {

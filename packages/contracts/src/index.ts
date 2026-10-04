@@ -45,3 +45,5 @@ export * from './workbench';
 export * from './equalizer';
 export * from './pages';
 export * from './studio-guide';
+export * from './code-guide';
+export * from './attention';

@@ -55,7 +55,9 @@ describe('board briefs', () => {
     expect(text).toContain('BRIEF');
     expect(text).toContain('# Brief');
     expect(text).toContain('PRD');
-    expect(text).toContain('not written yet');
+    // The sentence is shouted on purpose: a missing document used to read as "ask for it rather than inventing it",
+    // which agents obeyed by stopping, and a card that stops on a missing design is a card that never gets built.
+    expect(text).toContain('NOT WRITTEN YET');
   });
 
   it('carries the story, the acceptance criteria, the design node and the last screenshots', () => {

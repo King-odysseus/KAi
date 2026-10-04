@@ -3,12 +3,12 @@ import {
   studioGuideSchema,
   studioGuideStepSchema,
   type BoardCard,
-  type GuideStepId,
   type StudioGuide,
   type StudioGuideNarrative,
   type StudioGuideStep,
   type StudioGuideView,
 } from '@kai/contracts';
+import * as core from './guide-core';
 
 /**
  * The Senior Dev: what to do next, decided by rules.
@@ -248,46 +248,32 @@ export function guideStateKey(steps: readonly StudioGuideStep[], facts: GuideFac
 /**
  * Folds the steps into what the guide remembers, and says whether the explanation needs rewriting.
  *
- * Milestones are appended the first time a step is seen as done, so the history is "when this was first finished"
- * rather than "the last time anything moved" — which is what makes it readable a week later.
+ * The remembering itself is shared with the Code guide — see `guide-core`, which is where the two rules that are
+ * easy to get wrong (record a milestone once, keep an explanation only while it fits) actually live. These three
+ * keep their names and signatures so the screen and the tests read the same as before.
  */
 export function recordProgress(
   guide: StudioGuide,
   steps: readonly StudioGuideStep[],
   at: string,
 ): { guide: StudioGuide; changed: boolean } {
-  const seen = new Set(guide.history.map((entry) => entry.stepId));
-  const added = steps
-    .filter((step) => step.state === 'done' && !seen.has(step.id))
-    .map((step) => ({ at, stepId: step.id, title: step.title }));
-  if (added.length === 0) return { guide, changed: false };
-  return {
-    guide: studioGuideSchema.parse({ ...guide, history: [...guide.history, ...added].slice(-200) }),
-    changed: true,
-  };
+  return core.recordProgress(guide, steps, at, (next) => studioGuideSchema.parse(next));
 }
 
 /**
  * Assembles the view the screen renders, offering the cached narrative only while it still fits the situation.
  *
  * The stored text is returned as it was written. The key decides one thing only: whether this is still the right
- * explanation for what is on screen.
+ * explanation for what is on screen — and what makes this guide's situations is `guideStateKey` below, not the
+ * shared code, which knows nothing about boards or artifacts.
  */
 export function guideView(guide: StudioGuide, steps: readonly StudioGuideStep[], facts: GuideFacts): StudioGuideView {
-  const current = steps.find((step) => step.state === 'current' || step.state === 'blocked') ?? steps[steps.length - 1]!;
-  const fits = guide.narrative !== null && guide.narrativeFor === guideStateKey(steps, facts);
-  return {
-    steps: [...steps],
-    history: [...guide.history],
-    currentStepId: current.id as GuideStepId,
-    narrative: fits ? guide.narrative : null,
-    narrativeAt: fits ? guide.narrativeAt : null,
-  };
+  return core.guideView(guide, steps, guideStateKey(steps, facts));
 }
 
 /** Files an explanation against the situation it was written for, so the next look can tell whether it still fits. */
 export function keepNarrative(guide: StudioGuide, narrative: StudioGuideNarrative, key: string, at: string): StudioGuide {
-  return studioGuideSchema.parse({ ...guide, narrative, narrativeFor: key, narrativeAt: at });
+  return core.keepNarrative(guide, narrative, key, at, (next) => studioGuideSchema.parse(next));
 }
 
 export function emptyGuide(): StudioGuide {

@@ -213,6 +213,8 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
       <p className="studio-note">
         Works the whole board on its own: one agent per card, a check after each, a retry with the failure when it fails, and a rest when the provider rate-limits.
         A card is only closed when its check passes; a card that never passes is parked as blocked and the rest carry on.
+        When the board is finished it starts the app on dev and loads its pages, so the run ends with something you can open.
+        It works on this machine only: it never commits and never deploys.
       </p>
 
       {interrupted && !running && (
@@ -284,6 +286,15 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
             {status.restsTotal > 0 ? ` · ${status.restsTotal} rest${status.restsTotal === 1 ? '' : 's'}` : ''}
             {status.costUsd > 0 ? ` · about $${status.costUsd.toFixed(2)}` : ''}
           </p>
+          {/* The dev proof, once the run has been far enough to take one. The URL is the point of it: a finished run
+              that cannot be opened still has not given anyone what they walked away for. */}
+          {status.devCheck && (
+            <p className={`studio-note run-dev${status.devCheck.passed ? '' : ' failed'}`}>
+              {status.devCheck.passed && status.devCheck.url
+                ? <>Running on dev at <code>{status.devCheck.url}</code> — open it to look.</>
+                : status.devCheck.summary}
+            </p>
+          )}
           {status.log.length > 0 && (
             <ol className="autopilot-log" aria-label="Autopilot log">
               {[...status.log].reverse().slice(0, 12).map((entry, index) => (

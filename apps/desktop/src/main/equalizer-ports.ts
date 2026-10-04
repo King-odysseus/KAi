@@ -1,6 +1,7 @@
 import { PLAYWRIGHT_MCP_SERVER_ID, STUDIO_DESIGN_PATH, type PreviewState } from '@kai/contracts';
 import { nodesFromReply, pagesFromReply, unwrapReply, type DesignPorts } from './design-source';
 import { PAGE_FACTS_SCRIPT, parsePageFacts, type CapturedPage, type EqualizerPorts } from './equalizer';
+import { waitForPreviewUrl } from './preview-runtime';
 
 /**
  * Wires the Equalizer to the real things: the Playwright MCP KAI already installs for its agents (which opens the
@@ -22,8 +23,6 @@ export interface EqualizerRuntime {
   sleep(ms: number): Promise<void>;
 }
 
-const PREVIEW_TIMEOUT_MS = 60_000;
-const PREVIEW_POLL_MS = 500;
 /** A moment for fonts and late content after the page loads, so the picture is of the finished page. */
 const SETTLE_MS = 900;
 const BROWSER_HEIGHT = 900;
@@ -102,15 +101,7 @@ export function createEqualizerPorts(
     writeSpec: (root, relativePath, content) => runtime.writeSpec(root, relativePath, content),
 
     async devUrl(id, root) {
-      await runtime.preview.start(id, root);
-      const deadline = Date.now() + PREVIEW_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        const state = await runtime.preview.status(id, root);
-        if (state.url) return state.url;
-        if (state.status === 'failed') throw new Error(state.message ?? 'The dev server failed to start.');
-        await runtime.sleep(PREVIEW_POLL_MS);
-      }
-      throw new Error('The dev server did not print a local URL in time.');
+      return waitForPreviewUrl(runtime.preview, id, root, { sleep: runtime.sleep });
     },
 
     async openPage(url, width): Promise<CapturedPage> {

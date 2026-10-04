@@ -1,4 +1,4 @@
-import { isUiCard, readyCards } from '@kai/contracts';
+import { isUiCard, machineBlocked, readyCards } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -13,6 +13,7 @@ import type {
   CardCheck,
   CardRun,
   ConversationRecord,
+  DevCheckResult,
   StudioBoard,
 } from '@kai/contracts';
 import { boardCardPrompt } from './board-brief';
@@ -68,6 +69,14 @@ export interface AutopilotPorts {
   cancelAgent(conversationId: string): boolean;
   runCheck(projectId: string, command: string, signal: AbortSignal): Promise<AutopilotCheckResult>;
   suggestCheck(projectId: string): Promise<string | null>;
+  /**
+   * Starts the project on its dev server and loads the given routes, once the board is finished.
+   *
+   * Every other check answers "does the code hold up". This answers the one the person asks when they come back — is
+   * there an app on dev I can open — and it is the only claim in this loop about the project actually running. It
+   * never touches anything but the local server: there is no commit and no deploy anywhere in Autopilot.
+   */
+  checkDev(projectId: string, routes: readonly string[], signal: AbortSignal): Promise<DevCheckResult>;
   changedFilesFor(projectId: string): Promise<string[]>;
   /** Turns request pacing on for the Direct API runtime while a job runs, and off again after. */
   setPacer(pacer: RequestPacer | undefined): void;
@@ -111,22 +120,6 @@ class SystemicFailure extends Error {}
  */
 const BLOCKED_BEFORE_GIVING_UP = 3;
 
-/**
- * A card a machine parked, whatever parked it.
- *
- * This used to be a prefix match on the note, which only ever caught Autopilot's own wording. Three other things park
- * cards: the board's single-card run writes "The run failed: …", an agent working through the kai-project tools writes
- * its own summary, and the team runner writes "The run failed" too. The button then reported that it had found nothing
- * to put back while the blocked cards sat there gating every card behind them. `movedBy` is the fact that separates a
- * machine from a person — a card someone moved is theirs to keep blocked — and the note is read only for the cards
- * written before `movedBy` existed.
- */
-function machineBlocked(card: BoardCard): boolean {
-  if (card.status !== 'blocked') return false;
-  if (card.movedBy) return card.movedBy !== 'user';
-  return card.notes.startsWith('Autopilot gave up') || card.notes.startsWith('The run failed');
-}
-
 /** A component or page with nowhere to point can never pass its screen check, and the board never closes it. */
 export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
   return isUiCard(card) && card.route.trim() === '';
@@ -164,6 +157,9 @@ export class DesktopAutopilot {
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
     this.record(input.projectId, ownerWindowId, 'info', 'Autopilot started.');
+    // Said before any work, because it is the thing people assume wrongly: nothing here reaches a server anyone else
+    // can see. The run only ever touches this machine, and the only environment it can leave the project in is dev.
+    this.record(input.projectId, ownerWindowId, 'info', 'Working on this machine only: Autopilot never commits and never deploys.');
     active.done = this.drive(input, settings, label, active).finally(() => {
       this.runs.delete(input.projectId);
       this.ports.setPacer(undefined);
@@ -231,6 +227,7 @@ export class DesktopAutopilot {
     if (input.execution === 'api') this.ports.setPacer(new RequestPacer({ maxConcurrent: 2, minGapMs: input.minGapSeconds * 1_000 }));
     const command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
     if (!command) this.record(projectId, owner, 'warn', 'No check command is set and none was detected, so cards cannot be closed. They will stop in review.');
+    await this.noteProvisionalDesign(projectId, owner);
     try {
       for (;;) {
         const state = this.state(projectId);
@@ -241,7 +238,12 @@ export class DesktopAutopilot {
         const board = await this.ports.board(projectId);
         this.counts(projectId, board);
         const card = board.cards.find((item) => item.status === 'inProgress' && item.claimedBy === label) ?? readyCards(board)[0];
-        if (!card) return this.settle(projectId, owner, 'finished', this.boardSummary(board));
+        if (!card) {
+          await this.proveDev(projectId, owner, board, active);
+          const summary = this.boardSummary(board);
+          const dev = this.state(projectId).devCheck;
+          return this.settle(projectId, owner, 'finished', dev ? `${summary} ${dev.summary}` : summary);
+        }
 
         state.cardsWorked += 1;
         await this.workCard(input, settings, label, card, command, active);
@@ -257,6 +259,57 @@ export class DesktopAutopilot {
       this.record(projectId, owner, 'warn', message);
       return this.settle(projectId, owner, 'failed', message);
     }
+  }
+
+  /**
+   * Says out loud that the design is behind, once, before any card is touched.
+   *
+   * This is the case that used to go wrong silently. A UI card needs `tokens`, the tokens had never been written, and
+   * the brief told the agent to ask for them rather than invent them — so the agent stopped, the check never passed,
+   * and the card was parked. The brief no longer says that, and this is the other half: the run says a provisional
+   * look is being used, so nobody has to work it out from a board full of blocked cards.
+   */
+  private async noteProvisionalDesign(projectId: string, owner: number): Promise<void> {
+    const [board, written] = await Promise.all([
+      this.ports.board(projectId).catch(() => null),
+      this.ports.artifactsFor(projectId).catch(() => ({} as Partial<Record<ArtifactKind, string>>)),
+    ]);
+    if (!board) return;
+    const have = new Set(Object.keys(written));
+    const needed = board.cards.flatMap((card) => card.needsArtifacts).filter((kind) => kind === 'tokens' || kind === 'style-guide');
+    const missing = [...new Set(needed.filter((kind) => !have.has(kind)))];
+    if (missing.length === 0) return;
+    this.record(
+      projectId,
+      owner,
+      'info',
+      `The ${missing.join(' and the ')} ${missing.length === 1 ? 'is' : 'are'} not written yet, so the screens are built to a provisional look taken from the brief. Nothing stops for this. Share reference images or draw the screens in open-pencil, then pull the design to restyle them.`,
+    );
+  }
+
+  /**
+   * The dev proof, taken once the board is finished: start the app and load its pages.
+   *
+   * Only when every card is done, because a half-built project is not expected to run and failing it would read as a
+   * fault in the loop rather than an honest description of a job half done. The result is kept on the status rather
+   * than left in the log so the screen can name the URL, and the server is deliberately left up: someone coming back
+   * to a finished run should find an app they can open, not a report that one existed.
+   */
+  private async proveDev(projectId: string, owner: number, board: StudioBoard, active: ActiveRun): Promise<void> {
+    if (board.cards.length === 0 || !board.cards.every((card) => card.status === 'done')) return;
+    const routes = [...new Set(['/', ...board.cards.filter(isUiCard).map((card) => card.route.trim()).filter(Boolean)])];
+    this.phase(projectId, owner, 'checking', 'Every card is done. Starting the app on dev to check it runs.');
+    const result = await this.ports.checkDev(projectId, routes, active.controller.signal).catch((error: unknown): DevCheckResult => ({
+      passed: false,
+      summary: `The dev check could not run: ${error instanceof Error ? error.message : String(error)}`,
+      url: null,
+      routes: [],
+    }));
+    // A run stopped mid-proof has no answer to give, and recording an aborted check as a failure would blame the
+    // project for the person's own Stop.
+    if (active.controller.signal.aborted) return;
+    this.state(projectId).devCheck = result;
+    this.record(projectId, owner, result.passed ? 'check' : 'warn', result.summary);
   }
 
   /** One card, from claim to done or blocked. Rests happen inside; they never use up one of the card's attempts. */
@@ -511,6 +564,7 @@ export class DesktopAutopilot {
       projectId,
       phase: 'working',
       message: 'Starting.',
+      devCheck: null,
       cardId: null,
       cardTitle: null,
       conversationId: null,

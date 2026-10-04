@@ -16,6 +16,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import type * as Monaco from 'monaco-editor';
 import type {
   CodeFormatResult,
+  CodeGuideAction,
+  CodeGuideView,
   GitFileInfo,
   GitChange,
   EditorWindowSnapshot,
@@ -45,6 +47,7 @@ import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { LearningPanel, type LearningSelectionPreview, type TutorConversationTurn } from './LearningPanel';
 import { GuidedReviewPanel } from './GuidedReviewPanel';
+import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 
 interface TreeNode {
@@ -247,7 +250,10 @@ export function CodeView({
       return true;
     }
   });
-  const [sidePanel, setSidePanel] = useState<'learn' | 'review'>(() => window.localStorage.getItem('kai.codeSidePanel') === 'review' ? 'review' : 'learn');
+  const [sidePanel, setSidePanel] = useState<'learn' | 'review' | 'guide'>(() => {
+    const saved = window.localStorage.getItem('kai.codeSidePanel');
+    return saved === 'review' || saved === 'guide' ? saved : 'learn';
+  });
   const [learningScope, setLearningScope] = useState<LearningTutorScope>(() => {
     try {
       const saved = window.localStorage.getItem('kai.learningTutorScope');
@@ -356,6 +362,96 @@ export function CodeView({
       // The badges are a convenience; a failed status check leaves the last known state.
     }
   }, []);
+  // Where the whole project is, from the rules — free to read, so it is refreshed whenever anything it reads moves.
+  // The explanation inside it is the paid part, and arrives only when the Guide panel asks for it.
+  const [codeGuide, setCodeGuide] = useState<CodeGuideView | null>(null);
+  const [guideExplaining, setGuideExplaining] = useState(false);
+  const [guideError, setGuideError] = useState<string | null>(null);
+  const [guideBusy, setGuideBusy] = useState(false);
+
+  /** Opens one of the side panels, remembering the choice the way the tab buttons already do. */
+  function openSidePanel(panel: 'learn' | 'review' | 'guide'): void {
+    setSidePanel(panel);
+    window.localStorage.setItem('kai.codeSidePanel', panel);
+  }
+
+  /**
+   * The rules reading the project: the repository, the files, what has been studied, the board. No provider is
+   * called, so this is free to re-run — which is what keeps the strip above the editor live without a timer of its
+   * own (the git poll that refreshes `reviewChanges` already drives it).
+   *
+   * A failure is said out loud rather than swallowed. The service behind this degrades every source to empty, so a
+   * rejection here means the call itself is broken — and a broken call that leaves the panel on "Reading where this
+   * project is…" forever reads as "still working", which hides the cause.
+   */
+  useEffect(() => {
+    if (!projectId) { setCodeGuide(null); return undefined; }
+    let cancelled = false;
+    void window.kaiDesktop.readCodeGuide(projectId).then(unwrap)
+      .then((next) => {
+        if (cancelled) return;
+        setCodeGuide(next);
+        setGuideError(null);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setGuideError(caught instanceof Error ? caught.message : 'The guide could not read this project.');
+      });
+    return () => { cancelled = true; };
+  }, [projectId, reviewChanges, progress, files]);
+
+  /**
+   * Writes the walkthrough, once per situation. The key is what stops a failed call from retrying forever: an
+   * attempt is remembered per (project, step), so a provider that is down leaves the button in the reader's hands
+   * rather than looping, and a project that moves on to another step is explained on its own.
+   */
+  const autoExplainedGuide = useRef<string | null>(null);
+  useEffect(() => {
+    if (sidePanel !== 'guide' || !projectId || !codeGuide || codeGuide.narrative || guideExplaining) return;
+    const key = `${projectId}|${codeGuide.currentStepId}|${codeGuide.history.length}`;
+    if (autoExplainedGuide.current === key) return;
+    autoExplainedGuide.current = key;
+    void explainCodeGuide();
+  }, [sidePanel, projectId, codeGuide, guideExplaining]);
+
+  /** The walkthrough. The service only passes the call on when the stored explanation no longer fits the project. */
+  async function explainCodeGuide(): Promise<void> {
+    if (!projectId) return;
+    setGuideExplaining(true);
+    setGuideError(null);
+    try {
+      setCodeGuide(unwrap(await window.kaiDesktop.explainCodeGuide(projectId)));
+    } catch (caught) {
+      setGuideError(caught instanceof Error ? caught.message : 'The guide could not write a walkthrough.');
+    } finally {
+      setGuideExplaining(false);
+    }
+  }
+
+  /**
+   * Presses the one button the guide offers.
+   *
+   * The guide coaches the parts a person has to do themselves — commit, study, write a test — so those steps name
+   * where they happen rather than offering to do them. What is left is navigation, and starting version control on
+   * a folder that has none, which is the one act with nowhere else to point at yet.
+   */
+  async function runCodeGuideAction(action: CodeGuideAction): Promise<void> {
+    if (!projectId) return;
+    if (action === 'open-learn') { setTutorOpen(true); openSidePanel('learn'); return; }
+    if (action === 'open-review') { setTutorOpen(true); openSidePanel('review'); return; }
+    if (action === 'init-git') {
+      setGuideBusy(true);
+      setGuideError(null);
+      try {
+        unwrap(await window.kaiDesktop.gitInit(projectId));
+        // Re-read straight away so the strip moves on by itself rather than at the next poll.
+        await refreshGitChanges();
+      } catch (caught) {
+        setGuideError(caught instanceof Error ? caught.message : 'Version control could not be started.');
+      } finally {
+        setGuideBusy(false);
+      }
+    }
+  }
   // How many changed files each folder holds, so a collapsed folder still shows something changed inside it.
   const changedInFolder = useMemo(() => {
     const counts = new Map<string, number>();
@@ -566,6 +662,11 @@ export function CodeView({
     setAppliedSuggestionNeedsExplanation(false);
     setHintLevel(0);
     setGitInfo(null);
+    // The guide is about one project: a newly opened one starts from nothing rather than from the last one's answer,
+    // and the remember-once guard is cleared with it so the new project gets its own walkthrough.
+    setCodeGuide(null);
+    setGuideError(null);
+    autoExplainedGuide.current = null;
     activeLearningRequestId.current = null;
     learningBusyRef.current = false;
     clearAutoSaveTimer();
@@ -1512,6 +1613,15 @@ export function CodeView({
           </button>
           <button type="button" className="secondary-button" disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></button>
         </div>
+        {/* Above the editor rather than only behind a panel tab: what to do next is worth seeing while typing, and a
+            guide you have to go and open is one you will not read. It is not tied to the tutor being open, for the
+            same reason — the moment it is most useful is the moment the panel is closed. */}
+        <CodeGuideStrip
+          view={codeGuide}
+          busy={guideBusy}
+          onAction={(action) => void runCodeGuideAction(action)}
+          onOpen={() => openSidePanel('guide')}
+        />
         {diskChanged && (
           <div className="workbench-notice usage-banner warning" role="alert">
             <span>{diskChanged} changed on disk after you opened it{dirty[diskChanged] ? ' and you have unsaved edits' : ''}.</span>
@@ -1546,10 +1656,18 @@ export function CodeView({
           {/* One grid cell holds the tabs and whichever panel is showing; separate children would each take a cell. */}
           <div className="code-side-panel">
           <div className="code-side-panel-tabs" role="tablist" aria-label="Code assistance">
-            <button type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => { setSidePanel('learn'); window.localStorage.setItem('kai.codeSidePanel', 'learn'); }}>Learn</button>
-            <button type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => { setSidePanel('review'); window.localStorage.setItem('kai.codeSidePanel', 'review'); }}>Review</button>
+            <button type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => openSidePanel('learn')}>Learn</button>
+            <button type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => openSidePanel('review')}>Review</button>
+            <button type="button" role="tab" aria-selected={sidePanel === 'guide'} className={sidePanel === 'guide' ? 'active' : ''} onClick={() => openSidePanel('guide')}>Senior dev</button>
           </div>
-          {sidePanel === 'review' ? <GuidedReviewPanel
+          {sidePanel === 'guide' ? <CodeGuidePanel
+            view={codeGuide}
+            explaining={guideExplaining}
+            busy={guideBusy}
+            error={guideError}
+            onExplain={() => void explainCodeGuide()}
+            onAction={(action) => void runCodeGuideAction(action)}
+          /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}
             changes={reviewChanges}
             activePath={activePath}
