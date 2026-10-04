@@ -28,6 +28,34 @@ describe('graph layout', () => {
     expect(docs.y).toBeGreaterThan(api.y);
   });
 
+  it('lays a realistic board out in columns, without overlapping the cards', () => {
+    // What the hand-rolled layout could not do: forty independent cards became one tall ladder with the edges to the
+    // few dependent cards crossing the whole picture. Dagre keeps the columns and picks the order inside them.
+    const realistic = [
+      ...Array.from({ length: 40 }, (_, index) => ({ id: `backlog-${index}`, dependsOn: [] as string[] })),
+      { id: 'api', dependsOn: ['backlog-0'] },
+      { id: 'page', dependsOn: ['api', 'backlog-1'] },
+      { id: 'deploy', dependsOn: ['page'] },
+    ];
+    const positions = layoutCards(realistic);
+    expect(positions).toHaveLength(realistic.length);
+
+    const byId = new Map(positions.map((position) => [position.id, position]));
+    // Depth still reads left to right: nothing that waits on something sits to its left.
+    expect(byId.get('page')!.x).toBeGreaterThan(byId.get('api')!.x);
+    expect(byId.get('deploy')!.x).toBeGreaterThan(byId.get('page')!.x);
+    expect(byId.get('api')!.x).toBeGreaterThan(byId.get('backlog-0')!.x);
+
+    // And no two cards are drawn on top of each other, which is what the 220x72 boxes are for.
+    for (const left of positions) {
+      for (const right of positions) {
+        if (left.id === right.id) continue;
+        const apart = Math.abs(left.x - right.x) >= 220 || Math.abs(left.y - right.y) >= 72;
+        expect(apart, `${left.id} overlaps ${right.id}`).toBe(true);
+      }
+    }
+  });
+
   it('survives a dependency cycle instead of looping', () => {
     const looped = [
       { id: 'a', dependsOn: ['b'] },
