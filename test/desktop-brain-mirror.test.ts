@@ -50,6 +50,20 @@ describe('parseLearnedMarkdown', () => {
     expect(parseLearnedMarkdown('decisions', '# Decisions\n\nNothing yet.\n')).toEqual([]);
     expect(parseLearnedMarkdown('decisions', '')).toEqual([]);
   });
+
+  it('reads the project the entry was filed under out of its body', () => {
+    const withProject = parseLearnedMarkdown('bugs', [
+      '# Bugs',
+      '## [2026-09-22] Cache keys ignored the project id -- claude-code',
+      'Project: SharpSite',
+      '**Bug:** Two projects shared one cache entry.',
+      '',
+    ].join('\n'));
+
+    expect(withProject[0]?.project).toBe('SharpSite');
+    // An entry with no project line stays without one, rather than being given a name it never had.
+    expect(parseLearnedMarkdown('bugs', file)[0]?.project).toBeUndefined();
+  });
 });
 
 describe('postEntries', () => {
@@ -129,6 +143,53 @@ describe('syncBrainToMirror', () => {
     expect(outcome).toEqual({ read: 2, posted: 1, rejected: 0, failed: 0, skipped: 1 });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ type: 'bugs', title: 'Retry dropped the Retry-After header' });
+  });
+
+  it('sends each entry under its own project, not one project for the whole sync', async () => {
+    // Without this every mirrored entry landed in the other brain as `global`, dated the day it was copied — so the
+    // project it belonged to was gone, and it picked up a recency boost that crowded out real recall.
+    await fs.writeFile(path.join(brain, 'learned', 'bugs.md'), [
+      '# Bugs',
+      '## [2026-09-22] One -- claude-code',
+      'Project: SharpSite',
+      '**Bug:** a',
+      '## [2026-09-23] Two -- claude-code',
+      'Project: Other Project',
+      '**Bug:** b',
+      '',
+    ].join('\n'));
+    const sent: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (url: URL | string, init?: RequestInit) => {
+      if (String(url).includes('/api/brain/export')) return { ok: true, json: async () => ({ entries: [] }) } as unknown as Response;
+      sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return { ok: true, json: async () => ({ ok: true }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await syncBrainToMirror({ sourceBrain: brain, endpoint: 'http://127.0.0.1:9876', fetchImpl, project: 'Fallback' });
+
+    expect(sent.map((entry) => entry.project)).toEqual(['SharpSite', 'Other Project']);
+  });
+
+  it('reports an entry the mirror refused, with the reason it gave', async () => {
+    const refused: Array<[string, string]> = [];
+    const fetchImpl = vi.fn(async (url: URL | string, init?: RequestInit) => {
+      if (String(url).includes('/api/brain/export')) return { ok: true, json: async () => ({ entries: [] }) } as unknown as Response;
+      const body = JSON.parse(String(init?.body ?? '{}')) as { title?: string };
+      if (body.title === 'Retry dropped the Retry-After header') {
+        return { ok: true, json: async () => ({ rejected: true, reason: 'too similar to an existing entry' }) } as unknown as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const outcome = await syncBrainToMirror({
+      sourceBrain: brain,
+      endpoint: 'http://127.0.0.1:9876',
+      fetchImpl,
+      onRejected: (entry, reason) => refused.push([entry.title, reason]),
+    });
+
+    expect(outcome.rejected).toBe(1);
+    expect(refused).toEqual([['Retry dropped the Retry-After header', 'too similar to an existing entry']]);
   });
 
   it('sends everything when the mirror cannot say what it holds, since it turns duplicates away itself', async () => {

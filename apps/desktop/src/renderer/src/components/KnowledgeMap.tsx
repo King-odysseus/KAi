@@ -79,6 +79,8 @@ function withAlpha(colour: string, alpha: number): string {
 export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNotice: (message: string) => void }): ReactNode {
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [scope, setScope] = useState('');
+  /** The chosen project's own graph, when the brain could give one. See `load`. */
+  const [scoped, setScoped] = useState<{ project: string; graph: KnowledgeGraph } | null>(null);
   const [busy, setBusy] = useState<'loading' | 'linking' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -100,22 +102,52 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
   const redrawRef = useRef<() => void>(() => undefined);
   const dragRef = useRef<{ moved: boolean; startX: number; startY: number; lastX: number; lastY: number; lastTime: number } | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
+  /**
+   * The map's data, and the one thing that made its numbers wrong.
+   *
+   * The graph is fetched as a sample of the most recent entries across every project, and the project filter then
+   * narrowed that sample — so a project with few notes compared to the whole brain was simply not in it, and the
+   * count beside the name was how many of its notes made the sample rather than how many it has. Asking for the
+   * project's own graph is what makes the numbers its own; the sample stays as the list of projects to choose from.
+   */
+  const load = useCallback(async (project?: string): Promise<KnowledgeGraph | null> => {
     setBusy('loading');
     try {
-      const result = await window.kaiDesktop.cognitive1Operation({ operation: 'graph', payload: { limit: String(NODE_LIMIT) } }).then(unwrap);
-      setGraph(parseKnowledgeGraph(result));
+      const payload = project ? { limit: String(NODE_LIMIT), project } : { limit: String(NODE_LIMIT) };
+      const loaded = parseKnowledgeGraph(await window.kaiDesktop.cognitive1Operation({ operation: 'graph', payload }).then(unwrap));
       setError(null);
+      return loaded;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The knowledge map could not be loaded.');
+      return null;
     } finally {
       setBusy(null);
     }
   }, []);
 
   useEffect(() => {
-    if (!disabled) void load();
+    if (disabled) return;
+    void load().then((loaded) => {
+      if (loaded) setGraph(loaded);
+      // A scope picked before a reload may no longer exist; leave the selection alone rather than clearing the view.
+      setScoped(null);
+    });
   }, [disabled, load]);
+
+  // What is on screen for the chosen project: its own graph when the brain could give one, and the narrowed sample
+  // when it could not, so a scope that the brain does not recognise still shows something rather than nothing.
+  useEffect(() => {
+    if (!scope) {
+      setScoped(null);
+      return;
+    }
+    let current = true;
+    void load(scope).then((loaded) => {
+      if (!current) return;
+      setScoped(loaded && loaded.nodes.length > 0 ? { project: scope, graph: loaded } : null);
+    });
+    return () => { current = false; };
+  }, [scope, load]);
 
   async function connect(): Promise<void> {
     setBusy('linking');
@@ -125,7 +157,10 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
       onNotice(applied > 0
         ? `Connected ${applied} pair${applied === 1 ? '' : 's'} of related notes.`
         : 'No new connections found. Everything that belongs together is already linked.');
-      await load();
+      const reloaded = await load();
+      if (reloaded) setGraph(reloaded);
+      // The links changed, so the scoped graph the map is showing is now out of date. The scope effect refetches it.
+      setScoped(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Linking related notes failed.');
       setBusy(null);
@@ -141,11 +176,12 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
   const visible = useMemo<KnowledgeGraph | null>(() => {
     if (!graph) return null;
     if (!scope) return graph;
+    if (scoped?.project === scope) return scoped.graph;
     const nodes = graph.nodes.filter((node) => node.project === scope);
     const ids = new Set(nodes.map((node) => node.id));
     const edges = graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
     return { nodes, edges, totalNodes: nodes.length, totalEdges: edges.length };
-  }, [graph, scope]);
+  }, [graph, scope, scoped]);
 
   // Choosing a note, from a click or from the list below, turns the orb until that note faces the viewer.
   useEffect(() => {

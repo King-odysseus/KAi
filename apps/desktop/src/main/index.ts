@@ -375,7 +375,13 @@ async function startApplication(): Promise<void> {
       return outcome;
     },
     onError: (error) => logger.warn('internal', 'The brain mirror sync failed', error instanceof Error ? error.message : String(error)),
-    onSync: (outcome) => logger.info('internal', `Brain mirror: filed ${outcome.posted} entr${outcome.posted === 1 ? 'y' : 'ies'} in the second brain`),
+    onSync: (outcome) => logger.info(
+      'internal',
+      // What was skipped and what was refused are said too: "filed 8 entries" read as a clean sync even when the run
+      // had also been turned away for eight others.
+      `Brain mirror: filed ${outcome.posted} entr${outcome.posted === 1 ? 'y' : 'ies'} in the second brain`
+      + (outcome.failed > 0 ? `, ${outcome.failed} failed` : ''),
+    ),
   });
   // The mirror is quiet by design, so its failures go to the log rather than to the screen.
   cognitive1.onMirrorError = (error) =>

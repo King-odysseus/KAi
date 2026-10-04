@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { looksUnreachable } from '../apps/desktop/src/main/ipc';
+import { looksUnreachable, recallQuery } from '../apps/desktop/src/main/ipc';
 import { MemoryBudget } from '../apps/desktop/src/main/memory-budget';
 
 /**
@@ -91,5 +91,37 @@ describe('the memory budget', () => {
     // them, and a spent budget waits for nothing at all.
     const never = new Promise<string>(() => {});
     expect(await budget.run(never)).toBeNull();
+  });
+});
+
+/**
+ * What the run asks the brain for.
+ *
+ * The engine scores a substring hit per word, so the raw request was close to noise: "the", "a" and "and" match
+ * almost every entry ever filed, and what came back was mostly the most recent entries from anywhere. The words that
+ * carry meaning are what is left once the common ones go.
+ */
+describe('the recall query', () => {
+  it('keeps the words that say what the task is about', () => {
+    // "please", "the", "in", "so" and "it" go; "fix", "retry", "proxy" and the header's name stay.
+    expect(recallQuery('Please fix the retry logic in the proxy so it keeps the Retry-After header'))
+      .toBe('fix retry logic proxy keeps Retry-After header');
+  });
+
+  it('drops words that would match almost anything', () => {
+    // Every word here was noise, so it asks with the request itself rather than with nothing at all.
+    expect(recallQuery('the and for with that this from it is of to in')).toBe('the and for with that this from it is of to in');
+  });
+
+  it('keeps short terms this codebase is about, which a length rule alone would have thrown away', () => {
+    expect(recallQuery('the id of the db row in ui')).toBe('id db row ui');
+  });
+
+  it('keeps the first mention of a word and drops the rest', () => {
+    expect(recallQuery('cache cache keys ignore project project id')).toBe('cache keys ignore project id');
+  });
+
+  it('strips punctuation around words without losing hyphenated terms', () => {
+    expect(recallQuery('"Cache keys", (project-id) ignored!')).toBe('Cache keys project-id ignored');
   });
 });

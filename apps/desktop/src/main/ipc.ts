@@ -1889,8 +1889,14 @@ async function fileRunLesson(
         project: await memoryProjectName(context, run.projectPath, run.projectName),
         agent: run.agent,
       },
-    })) as { ok?: boolean } | null;
-    if (result?.ok === false) return null;
+    })) as { ok?: boolean; reason?: string } | null;
+    if (result?.ok === false) {
+      // The brain judged the draft unworthy and said why. Dropping that left the run looking as though it had been
+      // filed, or as though the brain had been asked and had nothing to say — and "why did that run not go into the
+      // brain?" had no answer anywhere.
+      context.logger.info('internal', `C1 did not take this run's lesson: ${result.reason || 'its quality gate turned it away'}`);
+      return null;
+    }
     return memoryEvent(run.conversationId, run.agent, 'learn', 'Filed what this run did as a draft in C1 for review.');
   } catch (error) {
     context.logger.warn('internal', 'Could not file the run in C1', messageOf(error));
@@ -1999,7 +2005,7 @@ async function prepareMemorySession(
         toAgent: request.agent,
         project: projectName,
         status: `Agent switch in "${conversation.title}"`,
-        next: recallQuery(request.prompt),
+        next: taskSummary(request.prompt),
         files: changedFilePaths(conversation).join(', '),
         notes: `Continue the conversation with ${request.agent}.`,
       }));
@@ -2021,7 +2027,7 @@ async function prepareMemorySession(
     const session = await limited(context.cognitive1.startSession({
       agent: request.agent,
       projectPath,
-      task: recallQuery(request.prompt),
+      task: taskSummary(request.prompt),
     }));
     // No session was opened, so none is recorded: a memory session KAI believes is open but the brain never started
     // would be ended later against nothing.
@@ -2043,6 +2049,25 @@ async function prepareMemorySession(
         ? `Started C1 session in ${session.project || projectName}.`
         : `Continued C1 session in ${session.project || projectName}.`,
     ));
+    /*
+     * The two things the brain says back that KAI was throwing away.
+     *
+     * `briefing` is what the brain knows about this project that the run ought to see, and `conflicts` is another
+     * agent holding the same work right now. Both were parsed into the client's own type and then read by nothing,
+     * so a run could start on a file another agent had claimed with no sign of it anywhere.
+     */
+    if (session.briefing?.trim()) {
+      events.push(memoryEvent(conversation.id, request.agent, 'session_start', session.briefing.trim().slice(0, 1_500)));
+    }
+    for (const conflict of session.conflicts.slice(0, 5)) {
+      context.logger.warn('internal', `${conflict.agent} is already working on ${conflict.what}`);
+      events.push(memoryEvent(
+        conversation.id,
+        request.agent,
+        'session_start',
+        `${conflict.agent} is already working on ${conflict.what}.`,
+      ));
+    }
   } catch (error) {
     context.logger.error('service_error', 'C1 session start failed', undefined, error);
   }
@@ -2868,9 +2893,52 @@ async function memoryProjectName(context: IpcContext, projectPath: string, fallb
   return (await resolveProjectMemoryName(context, projectPath, fallback)).name;
 }
 
-function recallQuery(prompt: string): string {
+/**
+ * What to ask the brain for, given the request.
+ *
+ * The brain's own search scores a substring hit per word, so the raw prompt was close to noise: "the", "a" and "and"
+ * match nearly every entry ever filed, and the entries that scored highest were simply the recent ones. What recall
+ * pulled in was therefore mostly unrelated, which is what "8 of 8 from other projects" looked like from the outside.
+ *
+ * The words that carry meaning are the ones left after the common ones go, and the prompt's own instruction words
+ * ("please", "fix", "add") are dropped with them — they name what to do, not what it is about. KAI can only fix its
+ * side of this: the ranking is the engine's, and it lives in the sibling repository.
+ */
+/** The request's own words, for a session label or a handoff note — places that read as prose, not as a search. */
+function taskSummary(prompt: string): string {
   return prompt.trim().replace(/\s+/g, ' ').slice(0, 500);
 }
+
+export function recallQuery(prompt: string): string {
+  const words = prompt
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    // Two letters and up, not three: `id`, `db`, `ui` and `os` are words this codebase is about. The noise at that
+    // length is handled by the stop list instead, which is where it belongs.
+    .filter((word) => word.length >= 2 && !RECALL_STOP_WORDS.has(word.toLowerCase()));
+  // Order kept, duplicates dropped: the first mention of a term is the one doing the work. A short prompt that is
+  // all stop words keeps its own text rather than asking the brain for nothing.
+  const distinctive = [...new Set(words)].slice(0, 40).join(' ');
+  return (distinctive || prompt.trim().replace(/\s+/g, ' ')).slice(0, 500);
+}
+
+/**
+ * Words that tell the brain nothing about what a task is about.
+ *
+ * Deliberately a short list of unambiguous ones rather than a full stop-word list: dropping a word that mattered is
+ * worse than keeping one that did not, and the shared vocabulary here is code, not prose.
+ */
+const RECALL_STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'not', 'but', 'you', 'your', 'are', 'was', 'were',
+  'has', 'have', 'had', 'can', 'could', 'should', 'would', 'will', 'its', 'it', 'they', 'them', 'then', 'than',
+  'when', 'where', 'which', 'while', 'what', 'how', 'why', 'all', 'any', 'each', 'some', 'more', 'most', 'only',
+  'also', 'just', 'like', 'make', 'made', 'need', 'want', 'please', 'let', 'get', 'got', 'use', 'using', 'one',
+  // Short words that are almost always grammar rather than subject matter. Kept here rather than excluded by length,
+  // so that `id`, `db`, `ui` and `os` survive.
+  'is', 'to', 'in', 'of', 'on', 'or', 'as', 'at', 'be', 'do', 'if', 'we', 'by', 'an', 'so', 'no', 'up', 'my', 'me',
+  'am', 'he', 'she', 'his', 'her', 'our', 'out', 'off', 'too', 'very', 'now', 'new', 'old',
+]);
 
 function memoryEvent(
   conversationId: string,
@@ -2948,6 +3016,11 @@ export async function mirrorBrainNow(context: IpcContext, dryRun: boolean): Prom
     endpoint: mirror.endpoint,
     ...(mirror.token ? { token: mirror.token } : {}),
     dryRun,
+    // A refused entry is not a failure, so it stays out of the outcome — but silence about it means the same entry
+    // comes back on every reconcile forever and nobody can see which one or why. The log is where it goes.
+    onRejected: (entry, reason) => {
+      context.logger.warn('internal', `The brain mirror refused "${entry.title}" (${entry.type}): ${reason}`);
+    },
   });
 }
 

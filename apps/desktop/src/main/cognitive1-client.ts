@@ -375,7 +375,7 @@ export class Cognitive1Client {
     try {
       const mirror = await this.options.mirror?.();
       if (!mirror?.endpoint) return;
-      await fetch(new URL(route.path, mirror.endpoint), {
+      const response = await fetch(new URL(route.path, mirror.endpoint), {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -385,6 +385,12 @@ export class Cognitive1Client {
         body: JSON.stringify(route.body ?? {}),
         signal: AbortSignal.timeout(MIRROR_TIMEOUT_MS),
       });
+      // A status is not an error to `fetch`, so an expired token answered 401 and this counted as filed — the lesson
+      // was in neither brain and nothing anywhere said so.
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        this.onMirrorError?.(new Error(`The mirror answered ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`));
+      }
     } catch (error) {
       this.onMirrorError?.(error);
     }

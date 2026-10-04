@@ -26,6 +26,8 @@ export interface BrainEntry {
   date: string;
   /** Everything under the heading, verbatim. */
   body: string;
+  /** The entry's own project, when the body names one. An entry with none is filed without a project. */
+  project?: string;
 }
 
 const HEADING = /^## \[(\d{4}-\d{2}-\d{2})\]\s*(.+)$/;
@@ -50,6 +52,10 @@ export function parseLearnedMarkdown(type: BrainType, markdown: string): BrainEn
     if (!title) continue;
     const body = lines.slice(1).join('\n').trim();
     const tagLine = lines.find((line) => line.trim().toLowerCase().startsWith('#tags:'));
+    // The project the entry was filed under, which the daemon writes into the body. Reading it here is what keeps
+    // a mirrored entry in its own project instead of landing in the other brain as `global`, dated today — where it
+    // also picked up the recency boost and started crowding out real recall.
+    const projectLine = lines.find((line) => /^project:/i.test(line.trim()));
     entries.push({
       type,
       title,
@@ -57,6 +63,7 @@ export function parseLearnedMarkdown(type: BrainType, markdown: string): BrainEn
       tags: tagLine ? tagLine.split(':').slice(1).join(':').trim() : '',
       date: heading[1] ?? '',
       body,
+      ...(projectLine ? { project: projectLine.split(':').slice(1).join(':').trim() } : {}),
     });
   }
   return entries;
@@ -136,6 +143,14 @@ export interface MirrorBrainOptions {
   fetchImpl?: typeof fetch;
   project?: string;
   onProgress?: (done: number, total: number) => void;
+  /**
+   * Told about an entry the mirror turned away, with whatever reason it gave.
+   *
+   * A rejection is not a failure and does not stop the sync, so it used to be counted and otherwise dropped — the
+   * entry simply came back in the next reconcile, every fifteen minutes, forever, with nothing anywhere saying which
+   * entry or why. That is a loop nobody can see or fix.
+   */
+  onRejected?: (entry: BrainEntry, reason: string) => void;
 }
 
 /**
@@ -175,15 +190,22 @@ export async function syncBrainToMirror(options: MirrorBrainOptions): Promise<Mi
           note: entry.body.slice(0, 8_000),
           tags: entry.tags,
           agent: entry.agent,
-          ...(options.project ? { project: options.project } : {}),
+          // The entry's own project first. `options.project` is the fallback for an entry whose body names none,
+          // and that was the only thing ever sent — so every mirrored entry lost the project it was filed under.
+          ...(entry.project ?? options.project ? { project: entry.project ?? options.project } : {}),
         }),
         signal: AbortSignal.timeout(20_000),
       });
       done += 1;
       options.onProgress?.(done, missing.length);
-      if (!response.ok) return false;
-      const payload = (await response.json().catch(() => null)) as { rejected?: boolean; duplicate?: boolean } | null;
-      return payload?.rejected !== true && payload?.duplicate !== true;
+      if (!response.ok) {
+        options.onRejected?.(entry, `the mirror answered ${response.status}`);
+        return false;
+      }
+      const payload = (await response.json().catch(() => null)) as { rejected?: boolean; duplicate?: boolean; reason?: string } | null;
+      const accepted = payload?.rejected !== true && payload?.duplicate !== true;
+      if (!accepted) options.onRejected?.(entry, payload?.reason || (payload?.duplicate === true ? 'already there' : 'the mirror refused it'));
+      return accepted;
     },
   });
   return { ...outcome, read: entries.length, skipped: entries.length - missing.length };
