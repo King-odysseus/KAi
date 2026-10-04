@@ -1304,6 +1304,15 @@ export function WorkspaceView({
             <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></button>
           </div>
         )}
+
+        {/* What the app is saying about the run that is going right now — "the run is paused", "this run cannot be
+            paused from here". It was only ever rendered inside the setup banner, which is shown when no agent is
+            ready, so every one of these was written and never seen. */}
+        {notice && running && (
+          <div className="workbench-notice" role="status">
+            <span>{notice}</span>
+          </div>
+        )}
       </div>
 
       {skillsOpen && (

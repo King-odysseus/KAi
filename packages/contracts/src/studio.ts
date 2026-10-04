@@ -477,6 +477,12 @@ export const studioDesignBuildStepInputSchema = z
   .strict();
 export type StudioDesignBuildStepInput = z.infer<typeof studioDesignBuildStepInputSchema>;
 
+/** Stops one design-build step's turn. `stepId` is the id that step was started with. */
+export const studioDesignBuildCancelInputSchema = z
+  .object({ projectId: z.string().min(1), stepId: z.string().min(1).max(128) })
+  .strict();
+export type StudioDesignBuildCancelInput = z.infer<typeof studioDesignBuildCancelInputSchema>;
+
 /** What one design-build step answers with: whether the model's turn against open-pencil's tools finished. The
  * screen itself is not re-read here — the caller pulls the design afterward to see what actually landed. */
 export const studioDesignBuildStepResultSchema = z

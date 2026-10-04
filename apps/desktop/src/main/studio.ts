@@ -106,6 +106,11 @@ export interface StudioPorts {
     conversationId: string,
     onEvent?: (event: PersistedEvent) => void,
   ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }>;
+  /**
+   * Stops the turn a design-build step started. Answers whether one was running. Optional for the same reason as
+   * the two above.
+   */
+  cancelDesignAgent?(conversationId: string): boolean;
   /** Writes the status file and the root agent instructions. Optional so tests can leave it out. */
   handoff?: { write(projectId: string, board: StudioBoard, catalog: StudioArtifacts): Promise<void> };
   now(): string;
@@ -429,6 +434,11 @@ export class DesktopStudio {
     await this.ports.ensureOpenPencilRunning();
     const root = await this.ports.projectRoot(projectId);
     return this.ports.runDesignAgent(prompt, root, stepId, onEvent);
+  }
+
+  /** Stops the turn one design-build step is running. Answers false when it had already finished. */
+  cancelDesignStep(stepId: string): boolean {
+    return this.ports.cancelDesignAgent?.(stepId) ?? false;
   }
 }
 

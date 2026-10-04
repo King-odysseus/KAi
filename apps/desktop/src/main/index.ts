@@ -853,6 +853,7 @@ async function startApplication(): Promise<void> {
     openPencil: openPencilPortsEnsuring,
     ensureOpenPencilRunning: ensureOpenPencilReady,
     runDesignAgent,
+    cancelDesignAgent: (conversationId) => designBuildDirectApi.cancel(conversationId),
     handoff: {
       write: async (projectId, board, catalog) => {
         await writeHandoffFiles(await studioProjectRoot(projectId), board, catalog, new Date().toISOString());

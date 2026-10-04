@@ -50,6 +50,7 @@ import {
   studioBoardClaimInputSchema,
   studioBoardMoveInputSchema,
   studioBoardWorkInputSchema,
+  studioDesignBuildCancelInputSchema,
   studioDesignBuildStepInputSchema,
   studioDesignBuildStepResultSchema,
   studioDesignPullSchema,
@@ -500,6 +501,7 @@ export const ipcChannels = [
   'studio:design-pull',
   'studio:design-read',
   'studio:design-build-step',
+  'studio:design-build-cancel',
   'team:start',
   'team:record',
   'team:clear-record',
@@ -804,6 +806,7 @@ export const ipcInputSchemas = {
   'studio:design-pull': studioProjectInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'studio:design-build-step': studioDesignBuildStepInputSchema,
+  'studio:design-build-cancel': studioDesignBuildCancelInputSchema,
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
@@ -1306,6 +1309,8 @@ export interface KaiDesktopBridge {
    * live, on the same channel a composer run's own events already arrive on.
    */
   buildStudioDesignStep(projectId: string, prompt: string, stepId: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
+  /** Stops the turn one design-build step started. Answers whether a turn was actually running to stop. */
+  cancelStudioDesignStep(projectId: string, stepId: string): Promise<IpcResponse<boolean>>;
   /** Redraws the board when a card moves, whichever window or agent moved it. */
   onStudioBoardChanged(listener: (payload: { projectId: string; board: StudioBoard }) => void): () => void;
   /** Starts the approved plan as a workflow, one part at a time. */

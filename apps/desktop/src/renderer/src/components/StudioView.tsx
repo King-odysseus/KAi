@@ -2,6 +2,7 @@ import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, F
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { deriveAgentActivity } from './AgentActivity';
+import { foundationLanded, remainingScreens, screenLanded } from '../design-build';
 import { AutopilotPanel } from './AutopilotPanel';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
@@ -424,7 +425,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       ? `Resume (${designRows.filter((row) => row.inPages && !row.drawn).length} left)`
       : 'Build the design';
 
-  // Whether the foundation step was run is the user's own note: open-pencil has no single thing to look for.
+  // Remembered per project so a returning build does not redo the foundation. It is a note about the project rather
+  // than a fact about the document — the build loop verifies the foundation against open-pencil itself each time it
+  // runs, and this only decides whether to run that step at all.
   useEffect(() => {
     try {
       setFoundationDone(Boolean(projectId && window.localStorage.getItem(`kai.studio.foundation.${projectId}`)));
@@ -988,9 +991,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /**
    * Runs the whole screen list end to end: the foundation first, then each undrawn screen in its own agent turn
-   * against open-pencil's tools, pulling the design after each one so its row ticks off before the next starts.
-   * Stops on the first failed step rather than piling errors on top of each other — the step that failed, and
-   * everything after it, are left exactly as "Copy prompt" would leave them, for a hand-run retry.
+   * against open-pencil's tools.
+   *
+   * Every step is judged by reading the design back, never by what the turn said about itself. A turn that reports
+   * "completed" has only reported that it ended without a technical error — and a turn whose every call was refused
+   * reports exactly that. So after each step the design is pulled, the step is checked against what the pull shows,
+   * and the list of screens still to draw is read from that pull rather than from the list as it looked when the
+   * button was pressed. Stops on the first step that did not land, rather than piling more work onto a failure.
    */
   async function buildDesign(): Promise<void> {
     if (!projectId || busy !== null) return;
@@ -1001,33 +1008,39 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setLastFailedStep(null);
     setBuildCostUsd(0);
     buildCostRef.current = 0;
+    let drawn = 0;
     try {
+      let pulled = await refreshDesign();
       if (!foundationDone) {
         const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation'));
         if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
-        // "Completed" only means the turn ended without a technical error — it says nothing about whether open-
-        // pencil actually has anything now. Pull before trusting it, the same way a screen's own row only ticks
-        // off once the design read back confirms it, not because the turn claimed to be done.
-        const pulled = await refreshDesign();
-        if (pulled.tokenCount === 0 && pulled.design.components.length === 0) {
+        pulled = await refreshDesign();
+        if (!foundationLanded(pulled)) {
           setLastFailedStep('Foundation');
-          throw new Error('Foundation: the turn finished, but open-pencil still has no variables or components. Open the editor and check it is the document you expect, then try again.');
+          throw new Error(`Foundation: the turn finished, but open-pencil has no variables and no components of its own. ${describeTurn(result)}`);
         }
         toggleFoundation(true);
-      } else {
-        await refreshDesign();
       }
-      const toDraw = designRows.filter((row) => row.inPages && !row.drawn);
-      for (const row of toDraw) {
+      // Recomputed from the pull each time round, so a screen drawn by an earlier step — or by hand, while this was
+      // running — is never asked for twice.
+      for (;;) {
+        const remaining = remainingScreens(pagesText, pulled);
+        if (remaining.length === 0) break;
         if (buildCancelled.current) {
-          setNotice('Stopped. Already-drawn screens are kept; press Build the design again to carry on from here.');
+          setNotice(`Stopped with ${remaining.length} screen${remaining.length === 1 ? '' : 's'} still to draw. Everything already drawn is kept; press Resume to carry on from here.`);
           return;
         }
+        const row = remaining[0]!;
         const result = await runBuildStepWithRetry(row.name, promptFor(row.name));
         if (result.status === 'failed') { setLastFailedStep(row.name); throw new Error(`${row.name}: ${result.error || 'the step failed.'}`); }
-        await refreshDesign();
+        pulled = await refreshDesign();
+        if (!screenLanded(row.name, pulled)) {
+          setLastFailedStep(row.name);
+          throw new Error(`"${row.name}": the turn finished, but open-pencil has no screen for it. ${describeTurn(result)}`);
+        }
+        drawn += 1;
       }
-      setNotice(`Design build finished: ${toDraw.length} screen${toDraw.length === 1 ? '' : 's'} drawn${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
+      setNotice(`Design build finished: ${drawn} screen${drawn === 1 ? '' : 's'} drawn and confirmed in open-pencil${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -1037,9 +1050,32 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /**
+   * What to add when a step finished but left nothing behind. The turn's own words are the most likely place the
+   * reason is — a model that could not work usually says so — and without them the reader has a bare "it did not
+   * work" and nowhere to look.
+   */
+  function describeTurn(result: { output: string }): string {
+    const said = result.output.trim().replace(/\s+/g, ' ');
+    return said ? `The turn said: "${said.slice(0, 400)}"` : 'The turn said nothing.';
+  }
+
   function stopBuildingDesign(): void {
     buildCancelled.current = true;
+    // And the turn in flight, which would otherwise finish drawing a screen nobody is waiting for. Best effort: a
+    // step that has already answered cannot be called back.
+    const stepId = buildStepId.current;
+    if (stepId) void window.kaiDesktop.cancelStudioDesignStep(projectId!, stepId).catch(() => undefined);
   }
+
+  // Leaving the Studio screen while a build is running used to orphan it: the component unmounts, so the loop keeps
+  // making paid turns with no Stop button anywhere on screen, and coming back shows an idle tab that can start a
+  // second build into the same document.
+  useEffect(() => () => {
+    if (!buildStepId.current) return;
+    buildCancelled.current = true;
+    void window.kaiDesktop.cancelStudioDesignStep(projectId ?? '', buildStepId.current).catch(() => undefined);
+  }, [projectId]);
 
   async function move(cardId: string, status: BoardStatus): Promise<void> {
     if (!projectId) return;
@@ -1613,7 +1649,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           <article className="studio-card">
             <h2><Palette size={16} /> Design</h2>
             <p className="studio-note">
-              open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. The editor has to be running with the same token KAI holds under Settings, Design tools.
+              open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. Pull the design also launches the editor for you and reconnects KAI to whatever it reports, so there is nothing to start by hand.
             </p>
             <div className="page-actions">
               <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
@@ -1638,7 +1674,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               <article className="studio-card">
                 <h2><LayoutGrid size={16} /> Draw in open-pencil</h2>
                 <p className="studio-note">
-                  Small steps, one prompt each, because one long prompt is what can stall the editor. Run the foundation first, then one screen at a time, letting each finish. Press Pull the design afterwards and the screens it finds tick themselves off.
+                  Build the design runs the whole list for you: the foundation first, then one screen at a time, checking after each step that open-pencil really holds the screen before moving on. Stop any time — the screens already drawn are kept and Resume carries on from the first one still missing. Copy prompt is still here for running a single step yourself.
                 </p>
                 <div className="page-actions">
                   {busy === 'design-build' ? (
@@ -1985,7 +2021,7 @@ function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy }: {
 function PromptPanel({ text, copied, onCopy, onClose }: { text: string; copied: boolean; onCopy: () => void; onClose: () => void }): ReactNode {
   return (
     <div className="studio-step-prompt">
-      <p className="studio-note">{copied ? 'Copied to the clipboard.' : 'This is the prompt.'} Paste it into the Workspace composer for a KAI agent that has open-pencil connected, and let it finish before the next one.</p>
+      <p className="studio-note">{copied ? 'Copied to the clipboard.' : 'This is the prompt.'} Paste it into the Workspace composer for a KAI agent that has open-pencil connected, and let it finish before the next one. Build the design does this for you.</p>
       <textarea readOnly value={text} rows={Math.min(14, text.split('\n').length + 1)} aria-label="The prompt" onFocus={(event) => event.currentTarget.select()} />
       <span className="studio-step-buttons">
         <button type="button" className="secondary-button" onClick={onCopy}><Send size={13} /> Copy again</button>

@@ -1655,7 +1655,14 @@ export function App(): ReactNode {
     // one in flight sits paused. A call with nothing to do refuses without an error, so neither has to know which
     // kind of run this is.
     await window.kaiDesktop.pauseAuto({ conversationId: activeConversationId }).catch(() => undefined);
-    await window.kaiDesktop.pauseAgent(activeConversationId).catch(() => undefined);
+    // What the runtime answered, not what was hoped for: a run with no process to hold yet cannot be suspended, and
+    // an API run only pauses between provider rounds. Claiming "paused" regardless is how the button came to promise
+    // something the app did not do.
+    const paused = await window.kaiDesktop.pauseAgent(activeConversationId).then(unwrap).catch(() => false);
+    if (!paused) {
+      setAgentNotice('This run cannot be paused from here — use Stop to end it.');
+      return;
+    }
     setPausedConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
     setAgentNotice('The run is paused. It will continue from the same point.');
   }

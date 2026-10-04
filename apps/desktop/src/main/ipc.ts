@@ -546,6 +546,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, projectId, pulled.board);
     return pulled;
   });
+  handle(context, 'studio:design-build-cancel', async ({ stepId }) => context.studio.cancelDesignStep(stepId));
   handle(context, 'studio:design-build-step', async ({ projectId, prompt, stepId }, request) =>
     context.studio.buildDesignStep(projectId, prompt, stepId, (event) => {
       const payload = { conversationId: stepId, event } satisfies AgentRunEvent;
@@ -1123,8 +1124,8 @@ export async function runInteractiveAgent(
   const startedAt = Date.now();
   const firstTurnIndex = conversation.turns.length;
   const automation = (await context.preferences.get(project.id))?.automation;
-  const stop = new AbortController();
-  automationRuns.set(request.conversationId, stop);
+  // The same signal every level of this run shares, so one Stop reaches the automation, the setup and the agent.
+  const stop = runStopFor(request.conversationId);
   const ports: AutomationPorts = {
     cancelled: () => stop.signal.aborted,
     runOnce: (turn) => runConversationAgent(context, turn, ownerWindowId),
@@ -1162,7 +1163,7 @@ export async function runInteractiveAgent(
   } finally {
     automationRuns.delete(request.conversationId);
   }
-  const cancelled = stop.signal.aborted || (outcome.result.status === 'failed' && /cancel/i.test(outcome.result.error ?? ''));
+  const cancelled = stop.signal.aborted || outcome.result.cancelled === true;
   if (!cancelled) {
     await context.runScores.add({
       at: new Date().toISOString(),
@@ -1249,6 +1250,30 @@ export async function runConversationAgent(
   const conversation = await context.conversations.get(request.conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
 
+  // Stop has to reach a run before the agent starts, so the signal is taken here, at the top, and every slow step
+  // below checks it. `ownsStop` is what keeps this run from clearing a controller that an enclosing automation
+  // created and still needs.
+  const ownedStop = !automationRuns.has(request.conversationId);
+  const stop = runStopFor(request.conversationId);
+  const stopped = (): boolean => stop.signal.aborted;
+  /**
+   * Ends this run as stopped. Before the agent starts, the request has already been written to the conversation —
+   * so a stop there takes it back out again rather than leaving a message with no reply under it.
+   */
+  const stoppedResult = async (): Promise<AgentRunResult> => {
+    if (writtenTurnId) {
+      const index = conversation.turns.findIndex((turn) => turn.id === writtenTurnId);
+      if (index >= 0) {
+        conversation.turns.splice(index, 1);
+        await context.conversations.save(conversation);
+      }
+    }
+    announceRunState(context, conversation.id, 'finished');
+    if (ownedStop) automationRuns.delete(request.conversationId);
+    return { conversation, status: 'failed', output: '', cancelled: true };
+  };
+  let writtenTurnId = '';
+
   const settings = await context.settings.load();
   const projectId = conversation.projectId ?? settings.activeProjectId;
   const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
@@ -1264,6 +1289,7 @@ export async function runConversationAgent(
       `KAI could not load the bundled Cognitive1 standing instructions: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  if (stopped()) return stoppedResult();
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
   const executionMode = request.execution ?? 'cli';
@@ -1328,10 +1354,12 @@ export async function runConversationAgent(
       : {}),
   };
   conversation.turns.push(userTurn);
+  writtenTurnId = userTurn.id;
 
   const resumeSessionId = canResume && !conversation.compaction ? conversation.agentSessionId : undefined;
   if (!resumeSessionId && conversation.compaction) delete conversation.agentSessionId;
   await context.conversations.save(conversation);
+  if (stopped()) return stoppedResult();
   await context.recovery.begin({
     conversationId: conversation.id,
     projectId: project.id,
@@ -1362,6 +1390,8 @@ export async function runConversationAgent(
       memoryEvents,
     );
   }
+  // The memory session is the slowest part of setup when the brain is unwell, so Stop is answered here too.
+  if (stopped()) return stoppedResult();
 
   const emit = (event: AgentRunEvent['event']): void => {
     const activity = describeEvent(event);
@@ -1530,6 +1560,9 @@ export async function runConversationAgent(
       payload: { agent: request.agent, project: claimedProject, what: conversation.title, files: selectedPaths.join(',') },
     }).catch(() => undefined);
   }
+  // Last gate before anything is claimed, announced or launched: a Stop that arrived while the project outline was
+  // being built has to be honoured here, or the run starts anyway and the stop is lost.
+  if (stopped()) return stoppedResult();
   // Announced once the turn is on disk and everything that could still refuse the run is behind us, so a window
   // that takes it up fetches a record that already holds the request.
   announceRunState(context, conversation.id, 'started');
@@ -1592,13 +1625,19 @@ export async function runConversationAgent(
     await context.recovery.end(conversation.id).catch(() => undefined);
     // Released on every exit path: completion, failure, cancellation and thrown errors.
     if (claimedProject) await releaseAgentClaim(context, request.agent);
+    // Only when this level created it. An enclosing automation's controller outlives any one of its turns.
+    if (ownedStop) automationRuns.delete(request.conversationId);
   }
   recordDeliveredInterjections();
   if (executionMode === 'api' && execution.status === 'failed') {
+    // The session still has to be closed either way; only what the brain is told differs, because a run the person
+    // stopped is not a run that broke.
     const ended = await finishMemorySession(
       context,
       conversation.id,
-      `Session ended after agent failure: ${execution.error || 'unknown error'}`,
+      execution.cancelled
+        ? 'Session ended because the run was stopped.'
+        : `Session ended after agent failure: ${execution.error || 'unknown error'}`,
     );
     if (ended) execution.events.push(ended);
   }
@@ -1705,9 +1744,11 @@ export async function runConversationAgent(
       removals: change.removed,
     }));
     if (contentDiff && changes.length) changes[0] = { ...changes[0]!, patch: contentDiff };
-    const outcome = execution.status === 'completed'
-      ? verification.length > 0 && verification.every((check) => check.passed === true) ? 'verified' : 'unverified'
-      : /cancel/i.test(execution.error ?? '') ? 'cancelled' : 'failed';
+    const outcome = execution.cancelled
+      ? 'cancelled'
+      : execution.status === 'completed'
+        ? verification.length > 0 && verification.every((check) => check.passed === true) ? 'verified' : 'unverified'
+        : 'failed';
     const experience = makeAgentExperience({
       schemaVersion: 1,
       id: `exp_${crypto.randomUUID()}`,
@@ -1729,7 +1770,7 @@ export async function runConversationAgent(
     });
   }
 
-  const cancelled = execution.status === 'failed' && /cancel/i.test(execution.error ?? '');
+  const cancelled = execution.cancelled === true;
   void context.notifications.notifyRunFinished(
     conversation.id,
     conversation.title,
@@ -1748,7 +1789,9 @@ export async function runConversationAgent(
     void context.notifications.notifyBudget(conversation.id, usage.limits);
   }
 
-  if (execution.error) {
+  if (cancelled) {
+    context.logger.info('internal', `Agent ${request.agent} (${executionMode}) stopped`, conversation.title);
+  } else if (execution.error) {
     context.logger.error('agent_crash', `Agent ${request.agent} (${executionMode}) failed`, execution.error);
   } else {
     context.logger.info('internal', `Agent ${request.agent} (${executionMode}) completed`, conversation.title);
@@ -1759,6 +1802,7 @@ export async function runConversationAgent(
     status: execution.status,
     output: execution.output,
     error: execution.error,
+    ...(cancelled ? { cancelled: true } : {}),
     ...('signInRequired' in execution && execution.signInRequired ? { signInRequired: true } : {}),
     ...costResult(execution.events),
   };
@@ -2816,12 +2860,28 @@ export async function mirrorBrainNow(context: IpcContext, dryRun: boolean): Prom
 /** Stops on Stop: the checks and hooks a run's automation is executing, not only the agent. */
 const automationRuns = new Map<string, AbortController>();
 
+/**
+ * The stop signal for one conversation's run, whichever level asks for it first.
+ *
+ * A run spends real time before the agent starts — a checkpoint, a memory session, the project outline — and Stop
+ * used to be unable to reach any of it: the only controller in the map belonged to a run's automation, and the
+ * runtime's own controller did not exist until the agent was already launching. So Stop during setup returned true
+ * and the run carried on to completion. The setup now holds this signal and checks it, and Stop aborts the same one.
+ */
+function runStopFor(conversationId: string): AbortController {
+  const existing = automationRuns.get(conversationId);
+  if (existing && !existing.signal.aborted) return existing;
+  const created = new AbortController();
+  automationRuns.set(conversationId, created);
+  return created;
+}
+
 function cancelAgent(context: IpcContext, conversationId: string): boolean {
   resolvePendingApprovals(context, conversationId, false);
   context.runControl.forget(conversationId);
-  const automation = automationRuns.get(conversationId);
-  automation?.abort();
-  return context.agents.cancel(conversationId) || context.directApi.cancel(conversationId) || Boolean(automation);
+  const stop = automationRuns.get(conversationId);
+  stop?.abort();
+  return context.agents.cancel(conversationId) || context.directApi.cancel(conversationId) || Boolean(stop);
 }
 
 async function sharedBrainPath(context: IpcContext): Promise<string> {
