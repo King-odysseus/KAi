@@ -500,6 +500,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     () => designRows.filter((row) => row.inPages && !row.drawn && !skipped.has(screenTitleKey(row.name))),
     [designRows, skipped],
   );
+  // A style reference exists once a model has described the images (or the look was given in words). It is the file
+  // that steers the drawing, so it outlives the images it was described from.
+  const hasStyleReference = Boolean(styleRefs?.notes?.trim());
   // What the build button says when it is not already running: plain the first time, naming the step to retry
   // when the last attempt stopped on one, or how much is left when some screens are already drawn and nothing
   // failed — so clicking it again reads as "carry on from here", not "start over".
@@ -573,22 +576,28 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
-  function designContext(): DesignContext {
+  /** `source` is the artifact list a prompt should be built from. It is passed explicitly by a build, which has just
+   * re-read it, so a prompt is never built from the catalog as it looked before this run started. */
+  function designContext(source?: StudioArtifacts | null): DesignContext {
+    const list = source ?? artifacts;
     return {
       projectName: projectTitle,
       goal: state?.goal || state?.idea || '',
-      hasTokens: Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'tokens')),
-      hasStyleGuide: Boolean(artifacts?.artifacts.some((entry) => entry.kind === 'style-guide')),
+      hasTokens: Boolean(list?.artifacts.some((entry) => entry.kind === 'tokens')),
+      hasStyleGuide: Boolean(list?.artifacts.some((entry) => entry.kind === 'style-guide')),
+      // Gated on the description file, not the images: a reference described once still steers the drawing after the
+      // image files are gone, and it was the images that were required here before.
+      hasStyleReference: Boolean(styleRefs?.notes?.trim()),
       references: styleRefs?.images.map((image) => image.name) ?? [],
     };
   }
 
   /** The prompt for one drawing step, by its key: "Foundation", or a screen's name. `mode` says what to do about the
    * page the screen is drawn on — draw it fresh, refill it, or clear it first (see `DesignPromptMode`). */
-  function promptFor(key: string, mode: DesignPromptMode = 'draw'): string {
-    if (key === 'Foundation') return buildFoundationPrompt(designContext());
+  function promptFor(key: string, mode: DesignPromptMode = 'draw', source?: StudioArtifacts | null): string {
+    if (key === 'Foundation') return buildFoundationPrompt(designContext(source));
     const row = designRows.find((item) => item.name === key);
-    return row ? buildPagePrompt(row, designContext(), mode) : '';
+    return row ? buildPagePrompt(row, designContext(source), mode) : '';
   }
 
   /**
@@ -1080,12 +1089,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /** The read itself, shared by the manual "Pull the design" button and each step of the build loop below — the
    * loop needs it without the button's own busy/notice handling, since it has its own for the whole run. */
-  async function refreshDesign(): Promise<{ design: StudioDesign; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean }> {
+  async function refreshDesign(): Promise<{ design: StudioDesign; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean; artifacts: StudioArtifacts }> {
     const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!));
     setDesign(pulled.design);
     setBoard(pulled.board);
-    setArtifacts(unwrap(await window.kaiDesktop.studioArtifacts(projectId!)));
-    return pulled;
+    const artifacts = unwrap(await window.kaiDesktop.studioArtifacts(projectId!));
+    setArtifacts(artifacts);
+    // Returned as well as set: a build that just regenerated an artifact must build its next prompt from the new one,
+    // and reading it back out of state would give it the catalog as it looked before the regeneration.
+    return { ...pulled, artifacts };
   }
 
   /** Reads the design from open-pencil: the tokens go to `.kai/spec`, and a changed node restales its card. */
@@ -1175,7 +1187,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     try {
       let pulled = await refreshDesign();
       if (!foundationDone || (action?.kind === 'redraw' && action.target === 'all')) {
-        const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation'));
+        const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation', 'draw', pulled.artifacts));
         if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign();
         if (!foundationLanded(pulled)) {
@@ -1192,7 +1204,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             setNotice(`Stopped with ${queue.length - drawn} screen${queue.length - drawn === 1 ? '' : 's'} still to redraw.`);
             return;
           }
-          const result = await runBuildStepWithRetry(target.name, promptFor(target.name, mode));
+          const result = await runBuildStepWithRetry(target.name, promptFor(target.name, mode, pulled.artifacts));
           if (result.status === 'failed') { setLastFailedStep(target.name); throw new Error(`${target.name}: ${result.error || 'the step failed.'}`); }
           pulled = await refreshDesign();
           if (!screenLanded(target.name, pulled)) {
@@ -1215,7 +1227,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           return;
         }
         const row = remaining[0]!;
-        const result = await runBuildStepWithRetry(row.name, promptFor(row.name));
+        const result = await runBuildStepWithRetry(row.name, promptFor(row.name, 'draw', pulled.artifacts));
         if (result.status === 'failed') { setLastFailedStep(row.name); throw new Error(`${row.name}: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign();
         if (!screenLanded(row.name, pulled)) {
@@ -1267,6 +1279,38 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     });
     if (!confirmed) return;
     await buildDesign({ kind: 'clean', target: name });
+  }
+
+  /**
+   * Puts the design back in step with the style reference, in the one click the reference cannot do for itself.
+   *
+   * A reference added after the artifacts were written steers nothing until those artifacts are written again, and
+   * the screens are drawn again to follow them — neither happens on its own. This does them in order: the style guide
+   * and the tokens are regenerated from the reference, then the foundation and every screen are drawn again. With no
+   * reference at all it skips the regeneration and just draws, and the prompts then take the look from the document.
+   */
+  async function applyStyleReference(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    const hasReference = Boolean(styleRefs?.notes?.trim());
+    const drawnCount = designRows.filter((row) => row.inPages && row.drawn).length;
+    const confirmed = await confirmDialog({
+      title: hasReference ? 'Apply the style reference to the design?' : 'Draw the screens from open-pencil?',
+      detail: hasReference
+        ? `The style guide and the tokens are written again from your reference, then the foundation and every screen are drawn again in open-pencil so they follow it. ${drawnCount} screen${drawnCount === 1 ? '' : 's'} now drawn will be replaced. Each step is its own paid model call. Nothing in .kai/spec is thrown away — the old copies stay in the spec history.`
+        : 'There is no style reference yet, so there is nothing to write the style guide and tokens from. The foundation and every screen are drawn again from the look already in the open-pencil document — its variables, shared styles and components — and the agent\'s own judgment where nothing exists yet. Each step is its own paid model call.',
+      confirmLabel: hasReference ? 'Apply and redraw' : 'Redraw the design',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      if (hasReference) {
+        await generateOne('style-guide');
+        await generateOne('tokens');
+      }
+      await buildDesign({ kind: 'redraw', target: 'all' });
+    } finally {
+      clearStyleChanged();
+    }
   }
 
   /**
@@ -2073,7 +2117,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
               <article className="studio-card">
                 <h2><Palette size={16} /> Style reference</h2>
-                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor). They are used two ways: (1) a model that can read images describes them, and the style guide and tokens are written from that description, so regenerate those and redraw the screens after describing; (2) the agent that draws is pointed at the images to match them. open-pencil itself never reads them.</p>
+                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor), then describe them. The description is written to <code>.kai/spec/design/style-reference.md</code> and steers the drawing — and the style guide and tokens are written from it, but only when they are regenerated. So after adding or changing a reference, use Apply below: it writes the style guide and the tokens from the reference, then draws every screen again to follow them. open-pencil itself never reads the images.</p>
                 <div className="page-actions">
                   <label className="secondary-button studio-file-button">
                     <Plus size={14} /> Add images
@@ -2098,10 +2142,19 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 )}
                 {styleChanged && designRows.some((row) => row.drawn) && (
                   <div className="studio-note">
-                    <AlertTriangle size={13} /> The look changed after these screens were drawn. Regenerate the style guide and the tokens in Artifacts, then redraw so the screens follow it too.{' '}
-                    <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready}>
-                      <RotateCcw size={13} /> Redraw the screens
+                    <AlertTriangle size={13} /> The look changed after these screens were drawn — apply it below so the style guide, the tokens and the screens all follow it.
+                  </div>
+                )}
+                {designRows.some((row) => row.inPages && row.drawn) && (
+                  <div className="page-actions">
+                    <button type="button" className="secondary-button" onClick={() => void applyStyleReference()} disabled={busy !== null || !readiness?.ready}>
+                      <Wand2 size={14} /> {hasStyleReference ? 'Apply the style reference' : 'Draw from open-pencil'}
                     </button>
+                    <span className="studio-model">
+                      {hasStyleReference
+                        ? 'Writes the style guide and tokens from your reference, then draws every screen again.'
+                        : 'No reference yet — draws every screen from the look already in the open-pencil document.'}
+                    </span>
                   </div>
                 )}
                 {styleRefs?.notes && <div className="studio-viewer-body"><Markdown text={styleRefs.notes} /></div>}

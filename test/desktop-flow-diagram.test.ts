@@ -18,7 +18,7 @@ const FLOWS = `# Flows
 - Employee presses Download .docx
 `;
 
-const CONTEXT = { projectName: 'ZuriAI', goal: 'An internal AI chat workspace.', hasTokens: true, hasStyleGuide: true, references: ['mood.png'] };
+const CONTEXT = { projectName: 'ZuriAI', goal: 'An internal AI chat workspace.', hasTokens: true, hasStyleGuide: true, hasStyleReference: true, references: ['mood.png'] };
 
 describe('flow diagram parsing', () => {
   it('reads one journey per heading, with one step per top-level list item', () => {
@@ -116,9 +116,32 @@ describe('pages and the drawing prompts', () => {
   });
 
   it('does not mention files that are not there', () => {
-    const prompt = buildFoundationPrompt({ projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, references: [] });
+    const prompt = buildFoundationPrompt({ projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, hasStyleReference: false, references: [] });
     expect(prompt).not.toContain('tokens.json');
-    expect(prompt).not.toContain('references');
+    expect(prompt).not.toContain('design/references/');
+  });
+
+  it('reads the reference description even when the image files are gone', () => {
+    // The state a removed-image project lands in: the notes file steers the drawing, but the line naming it used to
+    // be gated on images existing, so a description with no images was never shown to the drawing agent at all.
+    const prompt = buildPagePrompt(
+      { name: 'Sign-in', route: '/sign-in', details: '', inPages: true, drawn: false },
+      { projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, hasStyleReference: true, references: [] },
+    );
+    expect(prompt).toContain('design/style-reference.md');
+    expect(prompt).not.toContain('design/references/');
+  });
+
+  it('tells the agent to take the look from the document when there is none to follow', () => {
+    const prompt = buildFoundationPrompt({ projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, hasStyleReference: false, references: [] });
+    expect(prompt).toContain('list_shared_styles');
+    expect(prompt).toContain('get_selection');
+    expect(prompt).toMatch(/use your own judgment/i);
+  });
+
+  it('says nothing about a missing look when one exists', () => {
+    const prompt = buildFoundationPrompt(CONTEXT);
+    expect(prompt).not.toContain('list_shared_styles');
   });
 });
 

@@ -116,7 +116,7 @@ describe('what a redraw asks for', () => {
 });
 
 describe('the drawing prompt', () => {
-  const context: DesignContext = { projectName: 'Sharp Site', goal: 'a marketing site', hasTokens: false, hasStyleGuide: false, references: [] };
+  const context: DesignContext = { projectName: 'Sharp Site', goal: 'a marketing site', hasTokens: false, hasStyleGuide: false, hasStyleReference: false, references: [] };
   const row = (over: Partial<ScreenRow>): ScreenRow => ({ name: 'Sign-in', route: '/sign-in', details: '', inPages: true, drawn: false, ...over });
 
   it('tells a first draw to reuse an existing page rather than make a duplicate', () => {

@@ -100,6 +100,10 @@ export interface DesignContext {
   goal: string;
   hasTokens: boolean;
   hasStyleGuide: boolean;
+  /** Whether design/style-reference.md exists — a description of the reference images, or of a look given in words.
+   * It steers the drawing whether or not the image files are still on disk, so it is read on its own, not only
+   * alongside `references`. */
+  hasStyleReference: boolean;
   references: readonly string[];
 }
 
@@ -111,13 +115,35 @@ const CAREFULLY = [
 ];
 
 function readFirst(context: DesignContext): string[] {
+  const images = context.references.length > 0 ? `design/references/ (${context.references.join(', ')})` : '';
+  const reference = images && context.hasStyleReference
+    ? `- ${images} for the visual style to match, and design/style-reference.md`
+    : images
+      ? `- ${images} for the visual style to match`
+      : context.hasStyleReference
+        ? '- design/style-reference.md for the visual style to match'
+        : '';
   return [
     'Read these first (they are in the project, under .kai/spec):',
     context.hasStyleGuide ? '- design/style-guide.md for the look and feel' : '',
     context.hasTokens ? '- design/tokens.json for the colours, type, spacing and radius' : '',
     '- pages.md for every screen, and flows.md for how people move between them',
-    context.references.length > 0 ? `- design/references/ (${context.references.join(', ')}) for the visual style to match, and design/style-reference.md if it exists` : '',
+    reference,
   ].filter(Boolean);
+}
+
+/**
+ * Said only when the project has no look to follow at all — no reference description, no style guide, no tokens and
+ * no images. Rather than draw from nothing, the agent takes the look from the document itself and says what it chose,
+ * which is the whole of the "use your own judgment" case: an empty answer here is a screen drawn from the model's
+ * defaults with nothing to hold it to.
+ */
+function noLookFallback(context: DesignContext): string {
+  if (context.hasStyleReference || context.hasStyleGuide || context.hasTokens || context.references.length > 0) return '';
+  return [
+    'This project has no style reference, no style guide and no tokens yet.',
+    'Take the look from the open-pencil document as it stands rather than inventing one: call list_variables, list_shared_styles and get_components — and get_selection if something is selected — and follow what is already there. Where nothing exists yet, use your own judgment, keep it plain and consistent, and say at the end which choices you made.',
+  ].join(' ');
 }
 
 /** Step 1: the variables and shared components only. No screens, so the first prompt stays small. */
@@ -129,6 +155,7 @@ export function buildFoundationPrompt(context: DesignContext): string {
     '',
     ...readFirst(context),
     '',
+    noLookFallback(context),
     'Then, in open-pencil:',
     context.hasTokens
       ? '1. Create the design variables from tokens.json (light and dark values where it gives both): colours, spacing and radius.'
@@ -139,7 +166,7 @@ export function buildFoundationPrompt(context: DesignContext): string {
     '',
     ...CAREFULLY,
     'When you are done, list the variables and components you created. The screens come next, one prompt each.',
-  ].join('\n');
+  ].filter((line, index, all) => line !== '' || all[index - 1] !== '').join('\n');
 }
 
 /**
@@ -172,6 +199,7 @@ export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignCont
     '',
     ...readFirst(context),
     '',
+    noLookFallback(context),
     details ? `What pages.md says about this screen:\n${details}\n` : '',
     'Then, in open-pencil:',
     SCREEN_PAGE_STEP[mode],
