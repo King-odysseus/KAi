@@ -15,7 +15,7 @@ import { screenRows, screenTitleKey, type ScreenRow } from './flow-diagram';
  */
 
 /** The pages open-pencil holds, by the name each page carries. */
-function drawnPageNames(pull: Pick<StudioDesignPull, 'design'>): string[] {
+export function drawnPageNames(pull: Pick<StudioDesignPull, 'design'>): string[] {
   return (pull.design as StudioDesign).components.filter((component) => component.screen).map((component) => component.name);
 }
 
@@ -38,6 +38,19 @@ export function rowsFromPull(pagesText: string | null, pull: Pick<StudioDesignPu
 /** The screens still to draw, read from this pull rather than from whatever the list looked like at the start. */
 export function remainingScreens(pagesText: string | null, pull: Pick<StudioDesignPull, 'design'>): ScreenRow[] {
   return rowsFromPull(pagesText, pull).filter((row) => row.inPages && !row.drawn);
+}
+
+/**
+ * The screens a redraw asks for: every screen the pages list names, or just one of them — taken from the request
+ * rather than from the pull, because the whole point of a redraw is a screen that is already drawn and so would
+ * never appear in `remainingScreens`. A page that exists only in open-pencil is left out, the same as anywhere else,
+ * so a redraw can never touch work nobody planned.
+ */
+export function screensToRedraw(pagesText: string | null, pull: Pick<StudioDesignPull, 'design'>, only?: string): ScreenRow[] {
+  const inPages = rowsFromPull(pagesText, pull).filter((row) => row.inPages);
+  if (only === undefined) return inPages;
+  const wanted = screenTitleKey(only);
+  return inPages.filter((row) => screenTitleKey(row.name) === wanted);
 }
 
 /** Whether the page for one screen exists now. Compared the same way the checklist compares it, so the tick and the

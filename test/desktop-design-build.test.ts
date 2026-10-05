@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { foundationLanded, remainingScreens, rowsFromPull, screenLanded } from '../apps/desktop/src/renderer/src/design-build';
-import { screenTitleKey } from '../apps/desktop/src/renderer/src/flow-diagram';
+import { drawnPageNames, foundationLanded, remainingScreens, rowsFromPull, screenLanded, screensToRedraw } from '../apps/desktop/src/renderer/src/design-build';
+import { buildPagePrompt, screenTitleKey, type DesignContext, type ScreenRow } from '../apps/desktop/src/renderer/src/flow-diagram';
 
 /**
  * What the design build loop decides between steps.
@@ -90,5 +90,58 @@ describe('the name two sides are compared by', () => {
 
   it('leaves a plain heading alone, so two genuinely different screens stay different', () => {
     expect(screenTitleKey('Dashboard')).not.toBe(screenTitleKey('Dashboard admin'));
+  });
+});
+
+describe('what a redraw asks for', () => {
+  it('names every screen in the pages list, drawn or not — the drawn ones are the point', () => {
+    expect(screensToRedraw(PAGES, pull({ pages: ['Marketing home', 'Pricing page'] })).map((row) => row.name))
+      .toEqual(['/ — Marketing home (sharpsite.ng)', '/pricing — Pricing page /pricing']);
+  });
+
+  it('asks for one screen by a name the pull might spell differently', () => {
+    expect(screensToRedraw(PAGES, pull({ pages: ['Pricing page'] }), '/pricing — Pricing page /pricing').map((row) => row.name))
+      .toEqual(['/pricing — Pricing page /pricing']);
+    expect(screensToRedraw(PAGES, pull({ pages: ['Sign-in'] }), 'Sign-in')).toEqual([]);
+  });
+
+  it('leaves out a page that only exists in open-pencil, so a redraw cannot delete work nobody planned', () => {
+    const rows = screensToRedraw(PAGES, pull({ pages: ['A page nobody planned'] }));
+    expect(rows.map((row) => row.name)).not.toContain('A page nobody planned');
+  });
+
+  it('reports the pages open-pencil holds, for a failure that shows the name that did not match', () => {
+    expect(drawnPageNames(pull({ pages: ['Sign-in', 'Dashboard'] }))).toEqual(['Sign-in', 'Dashboard']);
+  });
+});
+
+describe('the drawing prompt', () => {
+  const context: DesignContext = { projectName: 'Sharp Site', goal: 'a marketing site', hasTokens: false, hasStyleGuide: false, references: [] };
+  const row = (over: Partial<ScreenRow>): ScreenRow => ({ name: 'Sign-in', route: '/sign-in', details: '', inPages: true, drawn: false, ...over });
+
+  it('tells a first draw to reuse an existing page rather than make a duplicate', () => {
+    // The reported failure: a turn that found the page already there, decided there was nothing to do, and ended —
+    // while Studio, which matches by name, saw no page for the screen and stopped the build.
+    const first = buildPagePrompt(row({}), context);
+    expect(first).toContain('Create one page named exactly as above');
+    expect(first).toMatch(/do not add a second page/i);
+    expect(first).toContain('Studio matches by name');
+    expect(first).toContain('rename_node');
+  });
+
+  it('tells a redraw to keep one page and refill it, never to create a second', () => {
+    const redraw = buildPagePrompt(row({ name: '/terms — Terms and privacy', route: '/terms', drawn: true }), context, 'redraw');
+    expect(redraw).toContain('already exists');
+    expect(redraw).not.toContain('Create one page named exactly as above');
+    expect(redraw).toContain('delete_node');
+  });
+
+  it('tells a clean to delete what stands for the screen, and only that screen', () => {
+    // The escape hatch: a page Studio can never match — a duplicate, a half-drawn leftover, a wrong name — has to be
+    // removable, or the screen is stuck undrawn forever.
+    const clean = buildPagePrompt(row({ name: '/terms — Terms and privacy', route: '/terms' }), context, 'clean');
+    expect(clean).toContain('delete_node');
+    expect(clean).toMatch(/delete nothing that belongs to another screen/i);
+    expect(clean).toMatch(/create one page named exactly as above/i);
   });
 });

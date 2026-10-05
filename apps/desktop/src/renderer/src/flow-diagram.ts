@@ -142,11 +142,31 @@ export function buildFoundationPrompt(context: DesignContext): string {
   ].join('\n');
 }
 
-/** Step 2..n: one screen. It names exactly what to draw and forbids touching anything else. */
-export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignContext): string {
+/**
+ * How one screen is asked for. `draw` is the first time; `redraw` refills a page that already exists, after the look
+ * changed; `clean` clears whatever is broken or duplicated about the screen first, then draws it fresh.
+ *
+ * Studio matches screens to pages by name, so a turn that finds a page already there and decides there is nothing to
+ * do reports it finished while Studio sees no page to match — which stops the whole build. Every mode therefore says
+ * what to do with a page that already exists, and names the tools that make it true: `rename_node` to make a page's
+ * name identify the screen, `delete_node` to clear a duplicate or a leftover that is in the way.
+ */
+export type DesignPromptMode = 'draw' | 'redraw' | 'clean';
+
+/** Step 1 of a drawing prompt, by mode. What to do about the page a screen is drawn on. */
+const SCREEN_PAGE_STEP: Record<DesignPromptMode, string> = {
+  draw: '1. Create one page named exactly as above and mark it as a screen, so Studio can match it to its card. If a page for this screen already exists, keep that page — rename it with rename_node if its name does not identify the screen, since Studio matches by name — and make sure it is marked as a screen. Do not add a second page for it.',
+  redraw: '1. The page for this screen already exists. Studio matches screens to pages by name — ignoring the route and any "— …" suffix — so keep exactly one page whose name identifies this screen and make sure it is marked as a screen. If another page or node also stands for this screen (a duplicate, or a leftover), delete the extras with delete_node. Replace the kept page\'s contents with this design.',
+  clean: '1. This screen\'s pages may be broken or duplicated. Clean them up in open-pencil first: list the pages, find every page or node that stands for this screen (matching by name, ignoring the route and any "— …" suffix), and delete the ones that are not the single page you are about to draw — use delete_node for each. Delete nothing that belongs to another screen. Then create one page named exactly as above, mark it as a screen, and draw the screen below on it.',
+};
+
+/**
+ * Step 2..n: one screen. It names exactly what to draw and forbids touching anything else.
+ */
+export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignContext, mode: DesignPromptMode = 'draw'): string {
   const details = page.details.trim().slice(0, 1_800);
   return [
-    `Use the open-pencil tools to draw one screen for "${context.projectName}": ${page.name}${page.route ? ` (${page.route})` : ''}.`,
+    `Use the open-pencil tools to ${mode === 'draw' ? 'draw' : 'draw again'} one screen for "${context.projectName}": ${page.name}${page.route ? ` (${page.route})` : ''}.`,
     '',
     `The project: ${context.goal}`,
     '',
@@ -154,7 +174,7 @@ export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignCont
     '',
     details ? `What pages.md says about this screen:\n${details}\n` : '',
     'Then, in open-pencil:',
-    '1. Create one page named exactly as above and mark it as a screen, so Studio can match it to its card.',
+    SCREEN_PAGE_STEP[mode],
     '2. Build it from the variables, text styles and components that already exist. Do not type raw colours, sizes or radii, and do not make new shared components unless nothing fits; if you must, name them clearly.',
     '3. Draw the states it lists (empty, loading, error and so on) next to the main view, and a phone-width version when pages.md or the flows call for one.',
     '4. Do not change any other page or any shared component.',

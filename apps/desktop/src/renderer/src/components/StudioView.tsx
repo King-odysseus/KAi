@@ -2,14 +2,14 @@ import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, F
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { deriveAgentActivity } from './AgentActivity';
-import { foundationLanded, remainingScreens, screenLanded } from '../design-build';
+import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, screensToRedraw } from '../design-build';
 import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
 import { GuidePanel, GuideStrip } from './GuidePanel';
 import { NeedsYouBanner } from './NeedsYouBanner';
 import { useAutopilotStatus } from './use-autopilot-status';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
-import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, type DesignContext } from '../flow-diagram';
+import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, screenTitleKey, type DesignContext, type DesignPromptMode } from '../flow-diagram';
 import { Markdown } from './Markdown';
 import {
   ARTIFACT_KINDS,
@@ -57,6 +57,14 @@ const BOARD_STATUS_LABEL: Record<BoardStatus, string> = {
 };
 
 /**
+ * What a design build was asked to do, beyond its plain form. Plain, it fills in only the screens that are missing.
+ * `redraw` draws screens again that are already there — all of them, or one — for a look that changed. `clean` clears
+ * whatever is broken or duplicated about one screen first (a page with the wrong name, a duplicate, a half-drawn
+ * leftover) and then draws it fresh, which is the way past a page Studio can never match.
+ */
+type DesignBuildAction = { kind: 'redraw'; target: 'all' | string } | { kind: 'clean'; target: string };
+
+/**
  * The Project Studio. The first part of it is the interview: one paragraph in, a short set of skippable questions,
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
@@ -100,6 +108,12 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // What KAI says back after the user attaches style images in the interview.
   const [attachNote, setAttachNote] = useState<string | null>(null);
   const [foundationDone, setFoundationDone] = useState(false);
+  // Screens the user chose to leave alone: they are kept out of the build's remaining list, so one screen that will
+  // not land cannot hold the rest of the design hostage. Remembered per project, like the foundation note.
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  // Whether the look changed after screens were drawn — an image was added, removed or described — so the drawn
+  // screens no longer follow it. Cleared by a full redraw. Remembered per project, like the foundation note.
+  const [styleChanged, setStyleChanged] = useState(false);
   const [progress, setProgress] = useState<ArtifactProgress | null>(null);
   // The board can fill the whole window, so a long board can be read and worked without the page around it.
   const [boardFull, setBoardFull] = useState(false);
@@ -481,13 +495,18 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     [designPages, design],
   );
   const visibleRows = useMemo(() => filterScreens(designRows, screenQuery), [designRows, screenQuery]);
+  // The screens the build still has to draw: in the pages list, not drawn yet, and not skipped by the user.
+  const toDraw = useMemo(
+    () => designRows.filter((row) => row.inPages && !row.drawn && !skipped.has(screenTitleKey(row.name))),
+    [designRows, skipped],
+  );
   // What the build button says when it is not already running: plain the first time, naming the step to retry
   // when the last attempt stopped on one, or how much is left when some screens are already drawn and nothing
   // failed — so clicking it again reads as "carry on from here", not "start over".
   const buildButtonLabel = lastFailedStep
     ? `Retry "${lastFailedStep}"`
-    : foundationDone && designRows.some((row) => row.drawn) && designRows.some((row) => row.inPages && !row.drawn)
-      ? `Resume (${designRows.filter((row) => row.inPages && !row.drawn).length} left)`
+    : foundationDone && designRows.some((row) => row.drawn) && toDraw.length > 0
+      ? `Resume (${toDraw.length} left)`
       : 'Build the design';
 
   // Remembered per project so a returning build does not redo the foundation. It is a note about the project rather
@@ -496,8 +515,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   useEffect(() => {
     try {
       setFoundationDone(Boolean(projectId && window.localStorage.getItem(`kai.studio.foundation.${projectId}`)));
+      setStyleChanged(Boolean(projectId && window.localStorage.getItem(`kai.studio.styleChanged.${projectId}`)));
+      const saved = projectId ? window.localStorage.getItem(`kai.studio.skipped.${projectId}`) : null;
+      setSkipped(new Set(saved ? (JSON.parse(saved) as string[]) : []));
     } catch {
       setFoundationDone(false);
+      setStyleChanged(false);
+      setSkipped(new Set());
     }
   }, [projectId]);
 
@@ -512,6 +536,43 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  function saveSkipped(next: Set<string>): void {
+    setSkipped(next);
+    try {
+      if (projectId) window.localStorage.setItem(`kai.studio.skipped.${projectId}`, JSON.stringify([...next]));
+    } catch {
+      // Remembering the skips is optional.
+    }
+  }
+
+  /** Leaves a screen out of the build, or puts it back. A screen that will not land is not worth stopping the whole
+   * design for: skip it, finish the rest, and draw it later once it is worth another look. */
+  function toggleSkip(name: string): void {
+    const key = screenTitleKey(name);
+    const next = new Set(skipped);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    saveSkipped(next);
+  }
+
+  function markStyleChanged(): void {
+    setStyleChanged(true);
+    try {
+      if (projectId) window.localStorage.setItem(`kai.studio.styleChanged.${projectId}`, '1');
+    } catch {
+      // Remembering this is optional.
+    }
+  }
+
+  function clearStyleChanged(): void {
+    setStyleChanged(false);
+    try {
+      if (projectId) window.localStorage.removeItem(`kai.studio.styleChanged.${projectId}`);
+    } catch {
+      // Remembering this is optional.
+    }
+  }
+
   function designContext(): DesignContext {
     return {
       projectName: projectTitle,
@@ -522,11 +583,12 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     };
   }
 
-  /** The prompt for one drawing step, by its key: "Foundation", or a screen's name. */
-  function promptFor(key: string): string {
+  /** The prompt for one drawing step, by its key: "Foundation", or a screen's name. `mode` says what to do about the
+   * page the screen is drawn on — draw it fresh, refill it, or clear it first (see `DesignPromptMode`). */
+  function promptFor(key: string, mode: DesignPromptMode = 'draw'): string {
     if (key === 'Foundation') return buildFoundationPrompt(designContext());
     const row = designRows.find((item) => item.name === key);
-    return row ? buildPagePrompt(row, designContext()) : '';
+    return row ? buildPagePrompt(row, designContext(), mode) : '';
   }
 
   /**
@@ -601,6 +663,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         latest = unwrap(await window.kaiDesktop.addStudioStyleReference({ projectId, name: file.name, data }));
       }
       if (latest) setStyleRefs(latest);
+      // A new image changes what the drawing agent is pointed at, so screens already drawn no longer follow it.
+      if (designRows.some((row) => row.drawn)) markStyleChanged();
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -613,6 +677,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBusy('design');
     try {
       setStyleRefs(unwrap(await window.kaiDesktop.removeStudioStyleReference({ projectId, name })));
+      if (designRows.some((row) => row.drawn)) markStyleChanged();
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -626,7 +691,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setError(null);
     try {
       setStyleRefs(unwrap(await window.kaiDesktop.describeStudioStyle(projectId)));
-      setNotice('Described. Regenerate the style guide and the tokens so they follow it.');
+      if (designRows.some((row) => row.drawn)) markStyleChanged();
+      setNotice('Described. Regenerate the style guide and the tokens in Artifacts, then redraw the screens so they follow it too.');
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -1084,8 +1150,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
    * reports exactly that. So after each step the design is pulled, the step is checked against what the pull shows,
    * and the list of screens still to draw is read from that pull rather than from the list as it looked when the
    * button was pressed. Stops on the first step that did not land, rather than piling more work onto a failure.
+   *
+   * `action` changes what the loop asks for. Plain, it fills in only what is missing. A `redraw` of `'all'` draws
+   * every screen in the pages list again and re-runs the foundation, because the variables and shared components come
+   * from the same reference the screens do — the way to apply a look that changed after the screens were drawn; a
+   * named redraw does just that one. A `clean` of one screen clears what is broken about it first. A redraw or clean
+   * asks for screens that already exist, so it takes its list from the request (see `screensToRedraw`), not from
+   * `remainingScreens`.
    */
-  async function buildDesign(): Promise<void> {
+  async function buildDesign(action?: DesignBuildAction): Promise<void> {
     if (!projectId || busy !== null) return;
     buildCancelled.current = false;
     setBusy('design-build');
@@ -1095,9 +1168,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBuildCostUsd(0);
     buildCostRef.current = 0;
     let drawn = 0;
+    const mode: DesignPromptMode = action?.kind === 'clean' ? 'clean' : 'redraw';
+    // A screen that fails verification says what open-pencil holds instead, so a name that does not match is visible
+    // rather than guessed at.
+    const namesInPencil = (pull: Parameters<typeof drawnPageNames>[0]): string => drawnPageNames(pull).join(', ') || 'no pages';
     try {
       let pulled = await refreshDesign();
-      if (!foundationDone) {
+      if (!foundationDone || (action?.kind === 'redraw' && action.target === 'all')) {
         const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation'));
         if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign();
@@ -1107,10 +1184,31 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         }
         toggleFoundation(true);
       }
+      if (action) {
+        const queue = screensToRedraw(pagesText, pulled, action.target === 'all' ? undefined : action.target);
+        if (queue.length === 0) { setNotice('There is nothing to redraw: the pages list names no screens yet.'); return; }
+        for (const target of queue) {
+          if (buildCancelled.current) {
+            setNotice(`Stopped with ${queue.length - drawn} screen${queue.length - drawn === 1 ? '' : 's'} still to redraw.`);
+            return;
+          }
+          const result = await runBuildStepWithRetry(target.name, promptFor(target.name, mode));
+          if (result.status === 'failed') { setLastFailedStep(target.name); throw new Error(`${target.name}: ${result.error || 'the step failed.'}`); }
+          pulled = await refreshDesign();
+          if (!screenLanded(target.name, pulled)) {
+            setLastFailedStep(target.name);
+            throw new Error(`"${target.name}": the ${mode === 'clean' ? 'cleanup' : 'redraw'} finished, but open-pencil has no page named like it. It has: ${namesInPencil(pulled)}. ${describeTurn(result)}`);
+          }
+          drawn += 1;
+        }
+        setNotice(`${mode === 'clean' ? 'Fixed and redrew' : 'Redrew'} ${drawn} screen${drawn === 1 ? '' : 's'} in open-pencil${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
+        clearStyleChanged();
+        return;
+      }
       // Recomputed from the pull each time round, so a screen drawn by an earlier step — or by hand, while this was
-      // running — is never asked for twice.
+      // running — is never asked for twice. A skipped screen is left out, so it never blocks the rest.
       for (;;) {
-        const remaining = remainingScreens(pagesText, pulled);
+        const remaining = remainingScreens(pagesText, pulled).filter((row) => !skipped.has(screenTitleKey(row.name)));
         if (remaining.length === 0) break;
         if (buildCancelled.current) {
           setNotice(`Stopped with ${remaining.length} screen${remaining.length === 1 ? '' : 's'} still to draw. Everything already drawn is kept; press Resume to carry on from here.`);
@@ -1122,7 +1220,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         pulled = await refreshDesign();
         if (!screenLanded(row.name, pulled)) {
           setLastFailedStep(row.name);
-          throw new Error(`"${row.name}": the turn finished, but open-pencil has no screen for it. ${describeTurn(result)}`);
+          throw new Error(`"${row.name}": the turn finished, but open-pencil has no page named like it. It has: ${namesInPencil(pulled)}. ${describeTurn(result)}`);
         }
         drawn += 1;
       }
@@ -1134,6 +1232,41 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       setBuildingStep(null);
       setBusy(null);
     }
+  }
+
+  /**
+   * Draws every screen again, the foundation included. This is the way past a look that changed after the screens
+   * were drawn — the tokens, the shared components and each screen all come from the same reference, so re-running
+   * the whole thing is what makes them agree again. It is the expensive button, so it says how much it will replace.
+   */
+  async function redrawAll(): Promise<void> {
+    if (busy !== null) return;
+    const drawnCount = designRows.filter((row) => row.inPages && row.drawn).length;
+    const confirmed = await confirmDialog({
+      title: 'Redraw every screen?',
+      detail: `The foundation and every screen in the pages list are drawn again in open-pencil, each as its own paid model call. ${drawnCount} screen${drawnCount === 1 ? '' : 's'} now drawn will be replaced. Nothing in .kai/spec changes, and Stop still works.`,
+      confirmLabel: 'Redraw all',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    await buildDesign({ kind: 'redraw', target: 'all' });
+  }
+
+  /**
+   * The way past one screen Studio can never match — a page carrying the wrong name, a duplicate, a half-drawn
+   * leftover. It authorizes the agent to delete whatever stands for this screen and then draw it again, and says so
+   * before it runs: deleting in open-pencil cannot be undone from KAI. Only this screen's pages are in scope.
+   */
+  async function fixAndRedraw(name: string): Promise<void> {
+    if (busy !== null) return;
+    const confirmed = await confirmDialog({
+      title: `Fix and redraw "${name}"?`,
+      detail: 'The agent may delete, in open-pencil, whatever is blocking this screen — a duplicate page, a leftover only half drawn, a page named so Studio cannot match it — and then draw the screen again from scratch. Deleting in open-pencil cannot be undone from KAI. Only this screen\'s pages are touched; no other screen is.',
+      confirmLabel: 'Fix and redraw',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    await buildDesign({ kind: 'clean', target: name });
   }
 
   /**
@@ -1847,19 +1980,25 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                       <Square size={14} /> Stop
                     </button>
                   ) : (
-                    <button type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || designRows.length === 0}>
+                    <button type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || toDraw.length === 0}>
                       <Wand2 size={14} /> {buildButtonLabel}
                     </button>
                   )}
                   <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
                   </button>
+                  {designRows.some((row) => row.inPages && row.drawn) && (
+                    <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready} title="Draw every screen again, foundation included — the way to apply a look you changed after drawing">
+                      <RotateCcw size={14} /> Redraw all
+                    </button>
+                  )}
                   {!pagesText && (
                     <button type="button" className="secondary-button" onClick={() => void generateOne('pages')} disabled={busy !== null || !readiness?.ready}>
                       {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Write the pages list
                     </button>
                   )}
                   <span className="studio-model">{designRows.filter((row) => row.drawn).length} of {designRows.length} screens drawn</span>
+                  {skipped.size > 0 && <span className="studio-model">{designRows.filter((row) => row.inPages && !row.drawn && skipped.has(screenTitleKey(row.name))).length} skipped</span>}
                   {buildCostUsd > 0 && <span className="studio-model">~${buildCostUsd.toFixed(2)} spent this build</span>}
                 </div>
                 {busy === 'design-build' && (() => {
@@ -1887,19 +2026,44 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 </label>
                 {designRows.length > 0 ? (
                   <ul className="studio-steps">
-                    {visibleRows.map((row) => (
-                      <li key={row.name} className={row.drawn ? 'done' : undefined}>
-                        <div className="studio-step-text">
-                          <strong>{row.name}{row.route ? <code> {row.route}</code> : null}</strong>
-                          <small>
-                            <span className={`studio-kind ${row.drawn ? 'drawn' : ''}`}>{row.drawn ? 'drawn' : 'to draw'}</span>
-                            {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
-                          </small>
-                        </div>
-                        {row.inPages && <PromptButtons id={row.name} openPrompt={openPrompt} copiedPrompt={copiedPrompt} onToggle={setOpenPrompt} onCopy={(key) => void copyDrawPrompt(key)} />}
-                        {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
-                      </li>
-                    ))}
+                    {visibleRows.map((row) => {
+                      const isSkipped = !row.drawn && skipped.has(screenTitleKey(row.name));
+                      return (
+                        <li key={row.name} className={row.drawn ? 'done' : undefined}>
+                          <div className="studio-step-text">
+                            <strong>{row.name}{row.route ? <code> {row.route}</code> : null}</strong>
+                            <small>
+                              <span className={`studio-kind ${row.drawn ? 'drawn' : ''}`}>{row.drawn ? 'drawn' : isSkipped ? 'skipped' : 'to draw'}</span>
+                              {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
+                            </small>
+                          </div>
+                          {row.inPages && (
+                            <PromptButtons
+                              id={row.name}
+                              openPrompt={openPrompt}
+                              copiedPrompt={copiedPrompt}
+                              onToggle={setOpenPrompt}
+                              onCopy={(key) => void copyDrawPrompt(key)}
+                              extra={<>
+                                {row.drawn ? (
+                                  <button type="button" className="secondary-button" onClick={() => void buildDesign({ kind: 'redraw', target: row.name })} disabled={busy !== null || !readiness?.ready} aria-label={`Redraw ${row.name}`}>
+                                    <RotateCcw size={13} /> Redraw
+                                  </button>
+                                ) : (
+                                  <button type="button" className="secondary-button" onClick={() => toggleSkip(row.name)} aria-label={`${isSkipped ? 'Draw' : 'Skip'} ${row.name}`}>
+                                    <SkipForward size={13} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
+                                  </button>
+                                )}
+                                <button type="button" className="secondary-button" onClick={() => void fixAndRedraw(row.name)} disabled={busy !== null || !readiness?.ready} aria-label={`Fix and redraw ${row.name}`} title="Delete whatever is blocking this screen in open-pencil, then draw it again">
+                                  <Trash2 size={13} /> Fix & redraw
+                                </button>
+                              </>}
+                            />
+                          )}
+                          {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
+                        </li>
+                      );
+                    })}
                     {visibleRows.length === 0 && <li className="studio-note">No screen matches "{screenQuery}".</li>}
                   </ul>
                 ) : (
@@ -1909,7 +2073,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
               <article className="studio-card">
                 <h2><Palette size={16} /> Style reference</h2>
-                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor). They are used two ways: (1) a model that can read images describes them, and the style guide and tokens are written from that description, so regenerate those after describing; (2) the agent that draws is pointed at the images to match them. open-pencil itself never reads them.</p>
+                <p className="studio-note">Add up to four images of a look you like (a screenshot, a mood board, a competitor). They are used two ways: (1) a model that can read images describes them, and the style guide and tokens are written from that description, so regenerate those and redraw the screens after describing; (2) the agent that draws is pointed at the images to match them. open-pencil itself never reads them.</p>
                 <div className="page-actions">
                   <label className="secondary-button studio-file-button">
                     <Plus size={14} /> Add images
@@ -1931,6 +2095,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   </ul>
                 ) : (
                   <p className="studio-note">No images yet.</p>
+                )}
+                {styleChanged && designRows.some((row) => row.drawn) && (
+                  <div className="studio-note">
+                    <AlertTriangle size={13} /> The look changed after these screens were drawn. Regenerate the style guide and the tokens in Artifacts, then redraw so the screens follow it too.{' '}
+                    <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready}>
+                      <RotateCcw size={13} /> Redraw the screens
+                    </button>
+                  </div>
                 )}
                 {styleRefs?.notes && <div className="studio-viewer-body"><Markdown text={styleRefs.notes} /></div>}
               </article>
@@ -2250,13 +2422,15 @@ function GenerationProgress({ progress }: { progress: ArtifactProgress }): React
   );
 }
 
-/** View and Copy for one drawing step. Copy also opens the prompt, so what was copied is never hidden. */
-function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy }: {
+/** View and Copy for one drawing step. Copy also opens the prompt, so what was copied is never hidden.
+ * `extra` is the per-screen action that sits alongside them — Redraw once drawn, Skip while it is not. */
+function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy, extra }: {
   id: string;
   openPrompt: string | null;
   copiedPrompt: string | null;
   onToggle: (key: string | null) => void;
   onCopy: (key: string) => void;
+  extra?: ReactNode;
 }): ReactNode {
   const open = openPrompt === id;
   return (
@@ -2267,6 +2441,7 @@ function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy }: {
       <button type="button" className="secondary-button" onClick={() => onCopy(id)} aria-label={`Copy the prompt for ${id}`}>
         {copiedPrompt === id ? <Check size={13} /> : <Send size={13} />} {copiedPrompt === id ? 'Copied' : 'Copy prompt'}
       </button>
+      {extra}
     </span>
   );
 }
