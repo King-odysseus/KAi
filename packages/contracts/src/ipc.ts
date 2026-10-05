@@ -58,6 +58,8 @@ import {
   studioDesignBuildCancelInputSchema,
   studioDesignBuildStepInputSchema,
   studioDesignBuildStepResultSchema,
+  studioDesignPageDeleteInputSchema,
+  studioDesignPageRenameInputSchema,
   studioDesignPullSchema,
   studioDesignSchema,
   studioProjectInputSchema,
@@ -83,6 +85,8 @@ import {
   type StudioDesign,
   type StudioDesignBuildStepInput,
   type StudioDesignBuildStepResult,
+  type StudioDesignPageDeleteInput,
+  type StudioDesignPageRenameInput,
   type StudioDesignPull,
   type StudioProjectInput,
   type StudioUiCheckResult,
@@ -518,6 +522,8 @@ export const ipcChannels = [
   'studio:design-read',
   'studio:design-build-step',
   'studio:design-build-cancel',
+  'studio:design-page-rename',
+  'studio:design-page-delete',
   'team:start',
   'team:record',
   'team:clear-record',
@@ -835,6 +841,8 @@ export const ipcInputSchemas = {
   'studio:design-read': studioProjectInputSchema,
   'studio:design-build-step': studioDesignBuildStepInputSchema,
   'studio:design-build-cancel': studioDesignBuildCancelInputSchema,
+  'studio:design-page-rename': studioDesignPageRenameInputSchema,
+  'studio:design-page-delete': studioDesignPageDeleteInputSchema,
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
@@ -1370,6 +1378,16 @@ export interface KaiDesktopBridge {
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
   /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */
   pullStudioDesign(projectId: string): Promise<IpcResponse<StudioDesignPull>>;
+  /**
+   * Renames one screen in `pages.md` and, when it is drawn, in open-pencil too, so the checklist goes on matching it.
+   * The route is left as it was. Answers with the design as it now stands, so the caller need not pull again.
+   */
+  renameStudioDesignPage(input: StudioDesignPageRenameInput): Promise<IpcResponse<StudioDesignPull>>;
+  /**
+   * Deletes one screen's page from open-pencil. It cannot be undone from KAI; the screen stays in `pages.md` and
+   * reads as still to draw, which is how a page that errored or is named so nothing matches it is cleared.
+   */
+  deleteStudioDesignPage(input: StudioDesignPageDeleteInput): Promise<IpcResponse<StudioDesignPull>>;
   /**
    * Runs one design-build prompt (the foundation, or one screen) as a real agent turn against open-pencil's own
    * tools, launching the editor first if it is not already running. The caller pulls the design afterward to see

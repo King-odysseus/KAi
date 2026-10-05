@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { drawnPageNames, foundationLanded, remainingScreens, rowsFromPull, screenLanded, screensToRedraw } from '../apps/desktop/src/renderer/src/design-build';
+import { parsePages, renamePageHeading, renamedPageName, type StudioDesign } from '../packages/contracts/src';
+import { drawnPageNames, foundationLanded, remainingScreens, rowsFromPull, screenLanded, screenPageId, screensToRedraw } from '../apps/desktop/src/renderer/src/design-build';
 import { buildPagePrompt, screenTitleKey, type DesignContext, type ScreenRow } from '../apps/desktop/src/renderer/src/flow-diagram';
 
 /**
@@ -143,5 +144,65 @@ describe('the drawing prompt', () => {
     expect(clean).toContain('delete_node');
     expect(clean).toMatch(/delete nothing that belongs to another screen/i);
     expect(clean).toMatch(/create one page named exactly as above/i);
+  });
+});
+
+describe('renaming one screen in the pages list', () => {
+  it('replaces only the matching heading, leaving the other heading and every body alone', () => {
+    const result = renamePageHeading(PAGES, screenTitleKey('/pricing — Pricing page /pricing'), 'Prices');
+
+    expect(result.renamed).toBe(true);
+    expect(result.markdown).toContain('## Prices');
+    expect(result.markdown).not.toContain('Pricing page');
+    // The other screen is untouched, heading and body — the splice is a line edit, not a rewrite.
+    expect(result.markdown).toContain('## / — Marketing home (sharpsite.ng)');
+    expect(result.markdown).toContain('Route: `/`. The landing page.');
+  });
+
+  it('matches the heading the loose way, so a route, a dash or emphasis still finds it', () => {
+    // The heading a rename is asked for comes from the checklist row, which matched the heading by `screenTitleKey`.
+    // A strict text match here would find a heading the checklist had just shown, and refuse to rename it.
+    const withEmphasis = '## `/pricing` — **Pricing page** /pricing\nRoute: `/pricing`.';
+    expect(renamePageHeading(withEmphasis, screenTitleKey('Pricing page'), 'Prices').renamed).toBe(true);
+  });
+
+  it('leaves the text exactly as it was when no heading matches, and says so', () => {
+    const result = renamePageHeading(PAGES, screenTitleKey('Nowhere'), 'Elsewhere');
+    expect(result.renamed).toBe(false);
+    expect(result.markdown).toBe(PAGES);
+  });
+
+  it('never treats a ### as a screen, the same as the parser', () => {
+    const text = '## Settings\n### States\nEmpty, error.';
+    const result = renamePageHeading(text, screenTitleKey('States'), 'Shapes');
+    expect(result.renamed).toBe(false);
+    expect(result.markdown).toBe(text);
+  });
+
+  it('keeps the route a heading led with, does not double a route, and caps the name at 80', () => {
+    expect(renamedPageName('/pricing — Pricing page /pricing', 'Prices')).toBe('/pricing — Prices');
+    expect(renamedPageName('Pricing page', 'Prices')).toBe('Prices');
+    // A name that already leads with a route is the whole heading; it is given no second prefix.
+    expect(renamedPageName('/pricing — Pricing page', '/pricing — Prices')).toBe('/pricing — Prices');
+    expect(renamedPageName('Page', 'x'.repeat(120))).toHaveLength(80);
+  });
+
+  it('round-trips: the renamed file parses to the new name, with the route still read from the body', () => {
+    const next = renamedPageName('/pricing — Pricing page /pricing', 'Prices');
+    const result = renamePageHeading(PAGES, screenTitleKey('/pricing — Pricing page /pricing'), next);
+    const parsed = parsePages(result.markdown);
+
+    expect(parsed.map((page) => page.name)).toEqual(['/ — Marketing home (sharpsite.ng)', '/pricing — Prices']);
+    expect(parsed[1]!.route).toBe('/pricing');
+  });
+});
+
+describe('the page a checklist row stands for', () => {
+  it('resolves the open-pencil id by the loose name, and null when only the pages list has it', () => {
+    const design = pull({ pages: ['Pricing page'] }).design as unknown as StudioDesign;
+    // The row's name carries a route and a dash the page's does not; the loose key is what resolves it.
+    expect(screenPageId(design, '/pricing — Pricing page /pricing')).toBe('p0');
+    expect(screenPageId(design, 'Sign in')).toBeNull();
+    expect(screenPageId(null, 'Pricing page')).toBeNull();
   });
 });

@@ -341,6 +341,42 @@ export class StudioBoardStore {
     return parsed;
   }
 
+  /**
+   * The card drawn from a page KAI renamed takes the new name, so the board and the editor agree. Matched by
+   * `designRef`, the same key the pull merges on: `rename_node` moves a node's name but not its id, so the card is
+   * still the same card. `mergeDesign` deliberately leaves a title alone, which is right for a pull — a person's
+   * edit must survive it — but a rename KAI itself asked for has to land on the board, or the tab and the board
+   * would name the same screen two ways.
+   */
+  async retitleDesignPage(projectId: string, designRef: string, title: string): Promise<StudioBoard> {
+    const board = await this.read(projectId);
+    const at = this.ports.now();
+    const cards = board.cards.map((card) =>
+      card.designRef === designRef ? boardCardSchema.parse({ ...card, title: title.slice(0, 200), updatedAt: at }) : card,
+    );
+    return this.save(projectId, { ...board, cards });
+  }
+
+  /**
+   * The card for a page KAI deleted stops pointing at a node that is gone. Its `designRef` is cleared and the card is
+   * flagged, so the board says why rather than holding a reference nothing answers to — `changedNodes` can only see
+   * nodes that are present, so a removal reaches the board through no other path.
+   *
+   * The card is kept, not removed: the screen is still in `pages.md`, which makes it work still to be drawn, and a
+   * card carries the runs, notes and checks a later agent would otherwise lose. Redrawing the screen re-attaches the
+   * card by name, the way any new page does.
+   */
+  async detachDesignPage(projectId: string, designRef: string, reason: string): Promise<StudioBoard> {
+    const board = await this.read(projectId);
+    const at = this.ports.now();
+    const cards = board.cards.map((card) =>
+      card.designRef === designRef
+        ? boardCardSchema.parse({ ...card, designRef: null, stale: true, staleReason: reason.slice(0, 300), updatedAt: at })
+        : card,
+    );
+    return this.save(projectId, { ...board, cards });
+  }
+
   /** Gathers the evidence for a card and returns why `done` is blocked, or null when it is allowed. */
   private async explainDone(projectId: string, card: BoardCard): Promise<string | null> {
     if (!card.check) return doneBlockedBy(card, { run: null, recordedNow: null, drifted: false });

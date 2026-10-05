@@ -5,6 +5,9 @@ import {
   designComponentSchema,
   directDependencies,
   isUiCard,
+  renamePageHeading,
+  renamedPageName,
+  screenTitleKey,
   studioBoardDraftSchema,
   type AppSettings,
   type ArtifactKind,
@@ -16,6 +19,7 @@ import {
   type StudioArtifacts,
   type StudioBoard,
   type StudioDesign,
+  type StudioDesignPull,
   type StudioReadiness,
   type UiCheckResult,
 } from '@kai/contracts';
@@ -24,6 +28,7 @@ import type { StructuredRequester } from './prompt-guide';
 import type { StudioArtifacts as ArtifactStore } from './artifacts';
 import type { StudioBoardStore } from './board';
 import { changedNodes, designErrorMessage, readDesign, type DesignPorts, type DesignRead } from './design-source';
+import { deletePageNode, renamePageNode } from './design-ops';
 import { failureSummary, type DesktopUiCheck } from './ui-check';
 import { boardDraftFromStories, replySnippet } from './studio-fallbacks';
 
@@ -455,6 +460,73 @@ export class DesktopStudio {
     });
     const board = await this.ports.board.applyDesign(projectId, read.components, changed);
     return { design, board, changed, tokensChanged, tokenCount: read.tokenCount, tokensPreserved: wouldWipe, differentDocument: false };
+  }
+
+  /**
+   * Renames one screen in the two places its name lives: its `pages.md` heading and, when it is drawn, its open-pencil
+   * page. Both, or the checklist stops matching — a row reads as drawn only while its name reduces to the same key as
+   * the page's, so renaming one side alone turns a drawn screen back into "to draw" and a second, unplanned row.
+   *
+   * The route is left alone: it lives in the section body, which the splice never touches, so a rename is a rename
+   * and not a reroute. The file edit is worked out before the editor is called, so a name that matches no heading
+   * fails with nothing renamed.
+   *
+   * A screen that is only in open-pencil — a stray page the build drew under a name the pages list does not carry —
+   * has no heading to splice. It is renamed in the editor alone, which is how such a page is brought back under a
+   * planned screen's name so the row turns drawn.
+   */
+  async renameDesignPage(projectId: string, currentName: string, name: string): Promise<StudioDesignPull> {
+    const ports = await this.ports.openPencil?.();
+    if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
+    const previous = await this.ports.board.design(projectId);
+    const key = screenTitleKey(currentName);
+    const page = previous.components.find((component) => component.screen && screenTitleKey(component.name) === key);
+    // The prefix follows the name the person is editing — the heading, or the page name for a stray — so a heading
+    // that read `/sign-in — Sign in` keeps its `/sign-in —` and only the screen's name changes.
+    const nextName = renamedPageName(currentName, name);
+    const pagesText = await this.ports.artifacts.readText(projectId, 'pages');
+    const splice = pagesText === null ? null : renamePageHeading(pagesText, key, nextName);
+    if (!splice?.renamed && !page) {
+      throw new Error(`There is no screen named "${currentName}" to rename, in the pages list or in open-pencil.`);
+    }
+    if (page) {
+      try {
+        await renamePageNode(ports, page.id, nextName);
+      } catch (error) {
+        throw new Error(designErrorMessage(error));
+      }
+    }
+    if (splice?.renamed) await this.saveArtifact(projectId, 'pages', splice.markdown);
+    const pulled = await this.pullDesign(projectId);
+    // The pull re-attaches the card by the page's id, which a rename does not move, so the title is set after it —
+    // `mergeDesign` leaves an existing card's title as it found it, by design.
+    return page ? { ...pulled, board: await this.ports.board.retitleDesignPage(projectId, page.id, nextName) } : pulled;
+  }
+
+  /**
+   * Deletes one screen's page from open-pencil, with everything drawn on it. This is the direct answer to a page that
+   * errored or is named so nothing matches it — the build loop's "Fix & redraw" asks an agent to delete "whatever is
+   * in the way", a guess, where this deletes the exact node the pull identified.
+   *
+   * Only open-pencil is touched. The screen stays in `pages.md`, so it reads as still to draw: that is the recovery
+   * path, and it is why the board card is kept rather than removed, flagged with the reason instead of dropped.
+   */
+  async deleteDesignPage(projectId: string, pageId: string): Promise<StudioDesignPull> {
+    const ports = await this.ports.openPencil?.();
+    if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
+    const previous = await this.ports.board.design(projectId);
+    const page = previous.components.find((component) => component.screen && component.id === pageId);
+    if (!page) throw new Error('That screen is not part of this project\'s design. Pull the design again, then delete it.');
+    try {
+      await deletePageNode(ports, pageId);
+    } catch (error) {
+      throw new Error(designErrorMessage(error));
+    }
+    const pulled = await this.pullDesign(projectId);
+    return {
+      ...pulled,
+      board: await this.ports.board.detachDesignPage(projectId, pageId, `The open-pencil page "${page.name}" was deleted in KAI. Draw the screen again.`),
+    };
   }
 
   /**

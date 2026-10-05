@@ -619,6 +619,17 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return pulled;
   });
   handle(context, 'studio:design-build-cancel', async ({ stepId }) => context.studio.cancelDesignStep(stepId));
+  // Both write to open-pencil and to `.kai/spec`, so every window is told the board moved, not only the one that asked.
+  handle(context, 'studio:design-page-rename', async ({ projectId, currentName, name }) => {
+    const pulled = await context.studio.renameDesignPage(projectId, currentName, name);
+    announceBoard(context, projectId, pulled.board);
+    return pulled;
+  });
+  handle(context, 'studio:design-page-delete', async ({ projectId, pageId }) => {
+    const pulled = await context.studio.deleteDesignPage(projectId, pageId);
+    announceBoard(context, projectId, pulled.board);
+    return pulled;
+  });
   handle(context, 'studio:design-build-step', async ({ projectId, prompt, stepId }, request) =>
     context.studio.buildDesignStep(projectId, prompt, stepId, (event) => {
       const payload = { conversationId: stepId, event } satisfies AgentRunEvent;

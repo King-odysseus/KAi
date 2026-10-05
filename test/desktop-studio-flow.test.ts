@@ -19,6 +19,7 @@ import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseAr
 import { DesktopUiCheck } from '../apps/desktop/src/main/ui-check';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { ReplyShapeError } from '../apps/desktop/src/main/learning-tutor';
+import type { DesignPorts } from '../apps/desktop/src/main/design-source';
 import { hashFile } from '../apps/desktop/src/main/verification';
 
 const NOW = '2026-09-28T12:00:00.000Z';
@@ -435,6 +436,130 @@ describe('pulling the design from open-pencil', () => {
     const { studio: app } = studio({});
 
     await expect(app.pullDesign('p1')).rejects.toThrow('open-pencil is not connected');
+  });
+});
+
+describe('acting on one page: rename and delete', () => {
+  /** A fake editor that records the tool name AND its input, so a page op's exact call can be pinned — the read-only
+   * fake above records only names, because a read has nothing to pin. */
+  function opEditor(replies: Record<string, string>): { ports: DesignPorts; calls: { tool: string; input: Record<string, unknown> }[] } {
+    const calls: { tool: string; input: Record<string, unknown> }[] = [];
+    return {
+      calls,
+      ports: {
+        endpoint: () => 'http://127.0.0.1:7600/mcp',
+        call: async (tool: string, input: Record<string, unknown>) => {
+          calls.push({ tool, input });
+          return replies[tool] === undefined ? [] : [{ type: 'text', text: replies[tool] }];
+        },
+      },
+    };
+  }
+
+  const READ = {
+    design_to_tokens: JSON.stringify({ output: JSON.stringify({ Light: { '--color-ink': '#111111' } }), tokenCount: 1, modeCount: 1 }),
+    get_components: '{"count":0,"components":[]}',
+    list_pages: '{"current":"Sign in","pages":[{"id":"p1","name":"Sign in"},{"id":"p2","name":"Sign up"}]}',
+    get_page_tree: '{"tree":{"id":"f1","type":"FRAME","name":"Frame","children":[]}}',
+    switch_page: '{"ok":true}',
+  };
+
+  const PAGES = [
+    '# Pages',
+    '',
+    '## /sign-in — Sign in /sign-in',
+    'Route: `/sign-in`. Log in.',
+    '',
+    '## /sign-up — Sign up /sign-up',
+    'Route: `/sign-up`. Register.',
+  ].join('\n');
+
+  it('renames one screen in the pages list and in open-pencil, and retitles its card', async () => {
+    const editor = opEditor({ ...READ, rename_node: '{"id":"p1","name":"/sign-in — Log in"}' });
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.saveArtifact('p1', 'pages', PAGES);
+    await app.pullDesign('p1');
+    editor.calls.length = 0;
+
+    const pulled = await app.renameDesignPage('p1', '/sign-in — Sign in /sign-in', 'Log in');
+
+    // The one page named, by its id, with the name the heading will carry — not a screen matched and guessed at.
+    expect(editor.calls.filter((call) => call.tool === 'rename_node')).toEqual([{ tool: 'rename_node', input: { id: 'p1', name: '/sign-in — Log in' } }]);
+    // The heading takes the new name and keeps the route it led with; the body, where the route is read from, is untouched.
+    const pages = await app.artifactText('p1', 'pages');
+    expect(pages).toContain('## /sign-in — Log in');
+    expect(pages).toContain('Route: `/sign-in`. Log in.');
+    // And the board card follows, so the tab and the board do not name the same screen two ways.
+    expect(pulled.board.cards.find((card) => card.id === 'p1')?.title).toBe('/sign-in — Log in');
+  });
+
+  it('renames a screen that is only in the pages list, touching no page in the editor', async () => {
+    const editor = opEditor({ ...READ, list_pages: '{"current":"Sign in","pages":[{"id":"p1","name":"Sign in"}]}' });
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.saveArtifact('p1', 'pages', PAGES);
+    await app.pullDesign('p1');
+    editor.calls.length = 0;
+
+    await app.renameDesignPage('p1', '/sign-up — Sign up /sign-up', 'Register');
+
+    expect(editor.calls.some((call) => call.tool === 'rename_node')).toBe(false);
+    expect(await app.artifactText('p1', 'pages')).toContain('## /sign-up — Register');
+  });
+
+  it('refuses a rename no heading matches, and calls nothing', async () => {
+    const editor = opEditor(READ);
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.saveArtifact('p1', 'pages', PAGES);
+    await app.pullDesign('p1');
+    editor.calls.length = 0;
+
+    await expect(app.renameDesignPage('p1', 'Ghost screen', 'Anything')).rejects.toThrow('no screen named "Ghost screen"');
+    expect(editor.calls.some((call) => call.tool === 'rename_node')).toBe(false);
+  });
+
+  it('deletes one screen\'s page and detaches its card, keeping the screen in the pages list', async () => {
+    const editor = opEditor({ ...READ, delete_node: '{"deleted":"p1"}' });
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.saveArtifact('p1', 'pages', PAGES);
+    await app.pullDesign('p1');
+    editor.calls.length = 0;
+
+    const pulled = await app.deleteDesignPage('p1', 'p1');
+
+    expect(editor.calls.filter((call) => call.tool === 'delete_node')).toEqual([{ tool: 'delete_node', input: { id: 'p1' } }]);
+    const card = pulled.board.cards.find((item) => item.id === 'p1');
+    // The card stops pointing at a node that is gone, and says why — kept, not dropped, because the work is still to do.
+    expect(card?.designRef).toBeNull();
+    expect(card?.stale).toBe(true);
+    expect(card?.staleReason).toContain('deleted in KAI');
+    // The screen itself is untouched in the pages list, so it reads as still to draw — that is the recovery path.
+    expect(await app.artifactText('p1', 'pages')).toContain('## /sign-in — Sign in /sign-in');
+  });
+
+  it('refuses to delete a page that is not part of this project\'s design, and calls nothing', async () => {
+    const editor = opEditor(READ);
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.pullDesign('p1');
+    editor.calls.length = 0;
+
+    await expect(app.deleteDesignPage('p1', 'zzz')).rejects.toThrow('not part of this project');
+    expect(editor.calls).toHaveLength(0);
+  });
+
+  it('surfaces the editor\'s own error rather than reporting a delete that did not happen', async () => {
+    // open-pencil reports failure in the payload, not by throwing; a call that returned is not a call that worked.
+    const editor = opEditor({ ...READ, delete_node: '{"error":"the node is missing"}' });
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.pullDesign('p1');
+
+    await expect(app.deleteDesignPage('p1', 'p1')).rejects.toThrow('could not delete the page');
+  });
+
+  it('says the design layer is not set up rather than failing obscurely', async () => {
+    const { studio: app } = studio({});
+
+    await expect(app.renameDesignPage('p1', 'Sign in', 'Log in')).rejects.toThrow('open-pencil is not connected');
+    await expect(app.deleteDesignPage('p1', 'p1')).rejects.toThrow('open-pencil is not connected');
   });
 });
 

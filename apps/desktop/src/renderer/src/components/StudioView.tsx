@@ -2,7 +2,7 @@ import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, F
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { deriveAgentActivity } from './AgentActivity';
-import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, screensToRedraw } from '../design-build';
+import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, screenPageId, screensToRedraw } from '../design-build';
 import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
 import { GuidePanel, GuideStrip } from './GuidePanel';
 import { NeedsYouBanner } from './NeedsYouBanner';
@@ -41,7 +41,7 @@ import {
   type TeamPlanDraft,
 } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
-import { confirmDialog } from './AppDialog';
+import { confirmDialog, promptDialog } from './AppDialog';
 
 /**
  * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
@@ -127,7 +127,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | 'guide' | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'page-op' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | 'guide' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -1282,6 +1282,70 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   }
 
   /**
+   * Renames one screen. KAI owns the name, so it writes both places it lives — the `pages.md` heading and the
+   * open-pencil page — and the route is left as it is. Works for a page that only exists in open-pencil too, which is
+   * how a stray drawn under the wrong name is brought back under a planned screen's name.
+   */
+  async function renamePage(rowName: string): Promise<void> {
+    if (!projectId || busy !== null) return;
+    const next = await promptDialog({
+      title: `Rename "${rowName}"`,
+      label: 'Screen name',
+      initialValue: rowName,
+      confirmLabel: 'Rename',
+      validate: (value) => {
+        const trimmed = value.trim();
+        if (!trimmed) return 'A screen needs a name.';
+        if (trimmed.length > 80) return 'Keep it to 80 characters.';
+        return trimmed === rowName ? 'That is the name it already has.' : null;
+      },
+    });
+    if (next === null || next.trim() === rowName) return;
+    setBusy('page-op');
+    setError(null);
+    try {
+      const pulled = unwrap(await window.kaiDesktop.renameStudioDesignPage({ projectId, currentName: rowName, name: next.trim() }));
+      setDesign(pulled.design);
+      setBoard(pulled.board);
+      // The pages list changed, so the catalog is read again — the same effect that re-reads it after a hand edit.
+      setArtifacts(unwrap(await window.kaiDesktop.studioArtifacts(projectId)));
+      setNotice(`Renamed to "${next.trim()}" in the pages list and in open-pencil.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Deletes one screen's page in open-pencil — the direct fix for a page that errored or is named so nothing matches
+   * it. It cannot be undone from KAI, so it says so first. The screen stays in the pages list and reads as still to
+   * draw, which is the recovery path.
+   */
+  async function deletePage(rowName: string, pageId: string): Promise<void> {
+    if (!projectId || busy !== null) return;
+    const confirmed = await confirmDialog({
+      title: `Delete the drawn page "${rowName}"?`,
+      detail: 'The page is deleted in open-pencil, and that cannot be undone from KAI. The screen stays in the pages list, so it shows as still to draw and you can draw it again. Only this one page is touched; no other screen is.',
+      confirmLabel: 'Delete page',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    setBusy('page-op');
+    setError(null);
+    try {
+      const pulled = unwrap(await window.kaiDesktop.deleteStudioDesignPage({ projectId, pageId }));
+      setDesign(pulled.design);
+      setBoard(pulled.board);
+      setNotice(`Deleted the open-pencil page for "${rowName}". The screen is still in the pages list — draw it again when you are ready.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
    * Puts the design back in step with the style reference, in the one click the reference cannot do for itself.
    *
    * A reference added after the artifacts were written steers nothing until those artifacts are written again, and
@@ -2072,6 +2136,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   <ul className="studio-steps">
                     {visibleRows.map((row) => {
                       const isSkipped = !row.drawn && skipped.has(screenTitleKey(row.name));
+                      const pageId = screenPageId(design, row.name);
                       return (
                         <li key={row.name} className={row.drawn ? 'done' : undefined}>
                           <div className="studio-step-text">
@@ -2081,7 +2146,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                               {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
                             </small>
                           </div>
-                          {row.inPages && (
+                          {row.inPages ? (
                             <PromptButtons
                               id={row.name}
                               openPrompt={openPrompt}
@@ -2098,11 +2163,16 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                                     <SkipForward size={13} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
                                   </button>
                                 )}
-                                <button type="button" className="secondary-button" onClick={() => void fixAndRedraw(row.name)} disabled={busy !== null || !readiness?.ready} aria-label={`Fix and redraw ${row.name}`} title="Delete whatever is blocking this screen in open-pencil, then draw it again">
-                                  <Trash2 size={13} /> Fix & redraw
+                                <button type="button" className="secondary-button" onClick={() => void fixAndRedraw(row.name)} disabled={busy !== null || !readiness?.ready} aria-label={`Fix and redraw ${row.name}`} title="Ask an agent to clear whatever is blocking this screen in open-pencil — a duplicate, a leftover, a page named so nothing matches it — and draw it again">
+                                  <Wand2 size={13} /> Fix & redraw
                                 </button>
+                                <PageButtons name={row.name} pageId={pageId} canRename disabled={busy !== null} onRename={(name) => void renamePage(name)} onDelete={(name, id) => void deletePage(name, id)} />
                               </>}
                             />
+                          ) : (
+                            <span className="studio-step-buttons">
+                              <PageButtons name={row.name} pageId={pageId} canRename disabled={busy !== null} onRename={(name) => void renamePage(name)} onDelete={(name, id) => void deletePage(name, id)} />
+                            </span>
                           )}
                           {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
                         </li>
@@ -2496,6 +2566,37 @@ function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy, extra }
       </button>
       {extra}
     </span>
+  );
+}
+
+/**
+ * Rename and Delete for one screen: the acts the build loop cannot aim at a single page. Rename is offered wherever
+ * the name lives — the pages list, open-pencil, or both — because either side can be the wrong one. Delete is offered
+ * only when a page exists to delete, and it is the one control here that says, before it runs, that open-pencil
+ * cannot undo it from KAI.
+ */
+function PageButtons({ name, pageId, canRename, disabled, onRename, onDelete }: {
+  name: string;
+  pageId: string | null;
+  canRename: boolean;
+  disabled: boolean;
+  onRename: (name: string) => void;
+  onDelete: (name: string, pageId: string) => void;
+}): ReactNode {
+  if (!canRename && pageId === null) return null;
+  return (
+    <>
+      {canRename && (
+        <button type="button" className="secondary-button" onClick={() => onRename(name)} disabled={disabled} aria-label={`Rename ${name}`} title="Rename this screen in the pages list and, when it is drawn, in open-pencil too. The route is left as it is.">
+          <PencilLine size={13} /> Rename
+        </button>
+      )}
+      {pageId !== null && (
+        <button type="button" className="secondary-button" onClick={() => onDelete(name, pageId)} disabled={disabled} aria-label={`Delete the open-pencil page for ${name}`} title="Delete this screen's page in open-pencil. It cannot be undone from KAI.">
+          <Trash2 size={13} /> Delete page
+        </button>
+      )}
+    </>
   );
 }
 

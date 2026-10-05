@@ -86,3 +86,36 @@ export function parsePages(markdown: string): PageEntry[] {
   flush();
   return pages.filter((page) => page.name);
 }
+
+/**
+ * The heading text a rename writes: the new screen name, keeping a `/route` the heading already led with so the route
+ * the editor knows the page by is not dropped. Capped at 80, the cap `parsePages` applies, so the heading a reader
+ * sees and the page name in the editor are the same string — a mismatch would leave the row "to draw" forever.
+ */
+export function renamedPageName(currentName: string, newName: string): string {
+  const name = plain(newName);
+  // A person who types a leading `/` is giving the whole heading; do not stack a second route on it.
+  if (name.startsWith('/')) return name.slice(0, 80);
+  const route = routeFromScreenName(currentName);
+  return (route ? `${route} — ${name}` : name).slice(0, 80);
+}
+
+/**
+ * Replaces the one `##` heading whose `screenTitleKey` is `key`, leaving every line of every body — and so the route
+ * `parsePages` reads out of one — untouched. A `###` is not a screen, the same as in `parsePages`, so it is left alone.
+ *
+ * `renamed` says whether a heading was found, so a caller can tell a rename that happened from one whose name matched
+ * nothing, rather than writing the same text back and calling it a success.
+ */
+export function renamePageHeading(markdown: string, key: string, nextName: string): { markdown: string; renamed: boolean } {
+  const lines = markdown.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const heading = /^##(?!#)\s+(.+?)\s*#*\s*$/.exec(lines[index]!);
+    if (!heading) continue;
+    // The same reduction `parsePages` matches on, so the line found here is the line that produced `key`.
+    if (screenTitleKey(plain(heading[1]!).slice(0, 80)) !== key) continue;
+    lines[index] = `## ${nextName}`;
+    return { markdown: lines.join('\n'), renamed: true };
+  }
+  return { markdown, renamed: false };
+}

@@ -59,3 +59,15 @@ export function screenLanded(name: string, pull: Pick<StudioDesignPull, 'design'
   const wanted = screenTitleKey(name);
   return drawnPageNames(pull).some((drawn) => screenTitleKey(drawn) === wanted);
 }
+
+/**
+ * The open-pencil page a checklist row stands for, by id, or null when the screen exists only in `pages.md`.
+ *
+ * The row itself carries no page id — it is matched to a page by the loose name key everywhere else — so the id is
+ * resolved here, from the last pull, at the moment a person acts on a row. A page that exists only in the editor
+ * (a row with `inPages: false`) resolves too, which is what lets a stray page be renamed or deleted.
+ */
+export function screenPageId(design: StudioDesign | null, name: string): string | null {
+  const key = screenTitleKey(name);
+  return design?.components.find((component) => component.screen && screenTitleKey(component.name) === key)?.id ?? null;
+}

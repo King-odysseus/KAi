@@ -54,10 +54,12 @@ export interface DesignPorts {
 }
 
 /**
- * The tools KAI reads the design with. Named in one place, because the editor owns their exact spelling.
+ * The tools KAI reads and writes the design with. Named in one place, because the editor owns their exact spelling.
  *
  * There is no `get_style_guide`: open-pencil 0.14.0 exposes no such tool, so the style guide stays a
- * model-authored artifact derived from the tokens rather than something the editor hands over.
+ * model-authored artifact derived from the tokens rather than something the editor hands over. A page is a node in
+ * open-pencil's scene graph, so there is no `delete_page`/`rename_page` either — `delete_node` and `rename_node`
+ * are the whole-page verbs, addressed by the id `list_pages` returns.
  */
 export const DESIGN_TOOLS = {
   tokens: 'design_to_tokens',
@@ -65,6 +67,8 @@ export const DESIGN_TOOLS = {
   pages: 'list_pages',
   tree: 'get_page_tree',
   switchPage: 'switch_page',
+  deleteNode: 'delete_node',
+  renameNode: 'rename_node',
 } as const;
 
 /**
@@ -160,7 +164,7 @@ export function tokensFromReply(reply: unknown): Record<string, unknown> {
 }
 
 /** An MCP tool call reports failure in the payload rather than by throwing, so the message has to be fished out. */
-function errorIn(record: Record<string, unknown>): string | null {
+export function errorIn(record: Record<string, unknown>): string | null {
   const error = record.error;
   if (typeof error === 'string' && error.trim()) return error.trim();
   if (error && typeof error === 'object') {

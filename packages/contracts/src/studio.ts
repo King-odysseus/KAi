@@ -507,6 +507,26 @@ export const studioDesignBuildCancelInputSchema = z
   .strict();
 export type StudioDesignBuildCancelInput = z.infer<typeof studioDesignBuildCancelInputSchema>;
 
+/**
+ * Renames one screen: its `pages.md` heading and, when it is drawn, its open-pencil page too, so the checklist keeps
+ * matching it. `currentName` is the heading (or, for a page that is only in open-pencil, the page name) as it reads
+ * now — the same text both the splice and the page lookup identify it by. `name` is capped at 80, the cap
+ * `parsePages` puts on a heading.
+ */
+export const studioDesignPageRenameInputSchema = z
+  .object({ projectId: z.string().min(1), currentName: z.string().trim().min(1).max(300), name: z.string().trim().min(1).max(80) })
+  .strict();
+export type StudioDesignPageRenameInput = z.infer<typeof studioDesignPageRenameInputSchema>;
+
+/**
+ * Deletes one drawn page from open-pencil. `pageId` is the open-pencil node id, so the exact page is named rather
+ * than a screen matched by name: two screens can reduce to the same loose key, and only one page may be deleted.
+ */
+export const studioDesignPageDeleteInputSchema = z
+  .object({ projectId: z.string().min(1), pageId: z.string().min(1).max(300) })
+  .strict();
+export type StudioDesignPageDeleteInput = z.infer<typeof studioDesignPageDeleteInputSchema>;
+
 /** What one design-build step answers with: whether the model's turn against open-pencil's tools finished. The
  * screen itself is not re-read here — the caller pulls the design afterward to see what actually landed. */
 export const studioDesignBuildStepResultSchema = z
