@@ -21,6 +21,7 @@ import {
   type StudioDesign,
   type StudioDesignPull,
   type StudioReadiness,
+  type StudioRouteRepairResult,
   type UiCheckResult,
 } from '@kai/contracts';
 import { loadProjectContext, parseJsonResponse, ReplyShapeError } from './learning-tutor';
@@ -54,6 +55,21 @@ const GENERATE_CONTEXT_CHARS = 12_000;
 const STUDIO_MAX_OUTPUT_TOKENS = 24_000;
 
 const CONTENT_SCHEMA = { type: 'object', additionalProperties: false, required: ['content'], properties: { content: { type: 'string' } } } as const;
+function parseRouteSuggestions(raw: string, allowed: BoardCard[]): Array<{ cardId: string; route: string; confidence: 'medium'; reason: string }> {
+  const parsed = parseJsonResponse(raw, 'Project Studio') as { routes?: unknown };
+  if (!Array.isArray(parsed?.routes)) throw new Error('The route repair reply did not include a routes list.');
+  const byId = new Map(allowed.map((card) => [card.id, card]));
+  const seen = new Set<string>();
+  const routes: Array<{ cardId: string; route: string; confidence: 'medium'; reason: string }> = [];
+  for (const item of parsed.routes as Array<{ cardId?: unknown; route?: unknown; reason?: unknown }>) {
+    if (typeof item?.cardId !== 'string' || typeof item.route !== 'string' || !byId.has(item.cardId) || seen.has(item.cardId)) continue;
+    const route = item.route.trim();
+    if (!route.startsWith('/') || route.length > 300 || /\s/.test(route)) continue;
+    seen.add(item.cardId);
+    routes.push({ cardId: item.cardId, route, confidence: 'medium', reason: typeof item.reason === 'string' ? item.reason.slice(0, 500) : 'Suggested from project context.' });
+  }
+  return routes;
+}
 const BOARD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -110,6 +126,7 @@ export interface StudioPorts {
     projectRoot: string,
     conversationId: string,
     onEvent?: (event: PersistedEvent) => void,
+    contextChips?: import('@kai/contracts').ContextChip[],
   ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }>;
   /**
    * Stops the turn a design-build step started. Answers whether one was running. Optional for the same reason as
@@ -324,6 +341,39 @@ export class DesktopStudio {
     return this.ports.board.setRoute(projectId, cardId, route);
   }
 
+  /** Suggests missing routes by reconciling the pages artifact, pulled design metadata and implementation snapshot. */
+  async suggestRouteRepairs(projectId: string): Promise<StudioRouteRepairResult> {
+    const board = await this.ports.board.read(projectId);
+    const missing = board.cards.filter((card) => card.kind === 'page' && !card.route.trim());
+    if (missing.length === 0) return { suggestions: [], unresolved: [] };
+    const [pages, root] = await Promise.all([
+      this.ports.artifacts.readText(projectId, 'pages'), this.ports.projectRoot(projectId),
+    ]);
+    const design = await this.ports.board.design(projectId);
+    const reconciled = await this.ports.board.applyDesign(projectId, design.components, [], pages ?? '');
+    const refreshedMissing = reconciled.cards.filter((card) => card.kind === 'page' && !card.route.trim());
+    const indexed = withRoutesFromPages(refreshedMissing, pages ?? '');
+    const suggestions = indexed.filter((card) => card.route.trim()).map((card) => ({
+      cardId: card.id, route: card.route, confidence: 'high' as const,
+      reason: `Matched “${card.title}” to its route in the pages inventory.`,
+    }));
+    const remaining = refreshedMissing.filter((card) => !suggestions.some((item) => item.cardId === card.id));
+    if (remaining.length === 0) return { suggestions, unresolved: [] };
+    const settings = await this.ports.settings();
+    const context = await loadProjectContext(root, undefined, GENERATE_CONTEXT_CHARS).catch(() => null);
+    const schema = { type: 'object', additionalProperties: false, required: ['routes'], properties: { routes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['cardId', 'route', 'reason'], properties: { cardId: { type: 'string' }, route: { type: 'string' }, reason: { type: 'string' } } } } } } as const;
+    const parsed = await this.ports.requester.structuredRequest(settings.promptGuide, NAMES, {
+      system: 'Suggest routes for unresolved page cards. Use only evidence from the page inventory, pulled design page names, project brief, and source snapshot. Return only JSON. Routes must start with /, must not be guessed from unrelated evidence, and every cardId must be one of those supplied. Leave uncertain screens out.',
+      user: [
+      `UNRESOLVED CARDS:\n${remaining.map((card) => `${card.id}: ${card.title}\n${card.story}`).join('\n\n')}`,
+        `PAGES INVENTORY:\n${pages ?? '(none)'}`, `PULLED DESIGN PAGES:\n${design.components.filter((item) => item.screen).map((item) => `${item.name} (node ${item.id})`).join('\n') || '(none recorded)'}`,
+        context ? `PROJECT SOURCE SNAPSHOT:\n${context}` : '',
+      ].filter(Boolean).join('\n\n'),
+    }, 'kai_studio_route_repair', schema, (raw) => parseRouteSuggestions(raw, remaining), { maxOutputTokens: 3_000 });
+    const valid = parsed.filter((entry) => !suggestions.some((item) => item.cardId === entry.cardId));
+    return { suggestions: [...suggestions, ...valid], unresolved: remaining.filter((card) => !valid.some((entry) => entry.cardId === card.id)).map((card) => card.id) };
+  }
+
   /**
    * Runs the visual check on one UI card and files the result. A pass records the check and leaves the card in
    * `review` for a person to look at; a failure records the checks and hands the card back with what to repair.
@@ -459,7 +509,8 @@ export class DesktopStudio {
       hashes: read.hashes,
       components: read.components.map((component) => designComponentSchema.parse(component)),
     });
-    const board = await this.ports.board.applyDesign(projectId, read.components, changed);
+    const pages = await this.ports.artifacts.readText(projectId, 'pages');
+    const board = await this.ports.board.applyDesign(projectId, read.components, changed, pages ?? '');
     return { design, board, changed, tokensChanged, tokenCount: read.tokenCount, tokensPreserved: wouldWipe, differentDocument: false };
   }
 
@@ -548,6 +599,30 @@ export class DesktopStudio {
     await this.ports.ensureOpenPencilRunning();
     const root = await this.ports.projectRoot(projectId);
     return this.ports.runDesignAgent(prompt, root, stepId, onEvent);
+  }
+
+  /** Runs a conversational design correction with project, board and Open Pencil context attached. */
+  async chatDesign(projectId: string, message: string, imageDataUrl: string | undefined, stepId: string,
+    onEvent?: (event: PersistedEvent) => void): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> {
+    if (!this.ports.ensureOpenPencilRunning || !this.ports.runDesignAgent) throw new Error('The design chat is not available in this build.');
+    await this.ports.ensureOpenPencilRunning();
+    const [root, pages, board, design] = await Promise.all([
+      this.ports.projectRoot(projectId), this.ports.artifacts.readText(projectId, 'pages'),
+      this.ports.board.read(projectId), this.ports.board.design(projectId),
+    ]);
+    const context = await loadProjectContext(root, undefined, 10_000).catch(() => null);
+    const prompt = [
+      'You are the Design assistant inside this Project Studio. Treat this as a continuing conversation and act on the user’s correction. Inspect Open Pencil before claiming a page is missing. If the page already exists, identify it by name/node id and report that you found it; do not redraw or delete it unless asked. Never claim success unless the Open Pencil tools confirm the change.',
+      `USER MESSAGE:\n${message}`,
+      `PROJECT PAGE INVENTORY:\n${pages ?? '(none)'}`,
+      `BOARD SCREENS:\n${board.cards.filter((card) => card.kind === 'page').map((card) => `${card.id}: ${card.title} | route=${card.route || '(missing)'} | designRef=${card.designRef ?? '(none)'}`).join('\n') || '(none)'}`,
+      `LAST PULLED OPEN PENCIL PAGES:\n${design.components.filter((item) => item.screen).map((item) => `${item.name} | node=${item.id}`).join('\n') || '(none recorded; inspect live Open Pencil)'}`,
+      context ? `PROJECT SOURCE CONTEXT:\n${context}` : '',
+      imageDataUrl ? `SCREENSHOT ATTACHED (inspect it as visual evidence): ${imageDataUrl.slice(0, 80)}…` : '',
+      'After any Open Pencil change, report exactly what changed and remind the user to pull the design so the board and project record reconcile.',
+    ].filter(Boolean).join('\n\n');
+    const contextChips: import('@kai/contracts').ContextChip[] | undefined = imageDataUrl ? [{ type: 'image', path: 'studio-screenshot', name: 'Design screenshot', dataUrl: imageDataUrl }] : undefined;
+    return this.ports.runDesignAgent(prompt, root, stepId, onEvent, contextChips);
   }
 
   /** Stops the turn one design-build step is running. Answers false when it had already finished. */

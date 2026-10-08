@@ -58,6 +58,10 @@ import {
   studioDesignBuildCancelInputSchema,
   studioDesignBuildStepInputSchema,
   studioDesignBuildStepResultSchema,
+  studioDesignChatInputSchema,
+  studioDesignChatResultSchema,
+  studioRouteRepairInputSchema,
+  studioRouteRepairResultSchema,
   studioDesignPageDeleteInputSchema,
   studioDesignPageRenameInputSchema,
   studioDesignPullSchema,
@@ -85,6 +89,9 @@ import {
   type StudioDesign,
   type StudioDesignBuildStepInput,
   type StudioDesignBuildStepResult,
+  type StudioDesignChatInput,
+  type StudioDesignChatResult,
+  type StudioRouteRepairResult,
   type StudioDesignPageDeleteInput,
   type StudioDesignPageRenameInput,
   type StudioDesignPull,
@@ -521,6 +528,8 @@ export const ipcChannels = [
   'studio:design-pull',
   'studio:design-read',
   'studio:design-build-step',
+  'studio:design-chat',
+  'studio:board-repair-routes',
   'studio:design-build-cancel',
   'studio:design-page-rename',
   'studio:design-page-delete',
@@ -840,6 +849,8 @@ export const ipcInputSchemas = {
   'studio:design-pull': studioProjectInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'studio:design-build-step': studioDesignBuildStepInputSchema,
+  'studio:design-chat': studioDesignChatInputSchema,
+  'studio:board-repair-routes': studioRouteRepairInputSchema,
   'studio:design-build-cancel': studioDesignBuildCancelInputSchema,
   'studio:design-page-rename': studioDesignPageRenameInputSchema,
   'studio:design-page-delete': studioDesignPageDeleteInputSchema,
@@ -1093,6 +1104,8 @@ export const planResponseSchema = planSchema.nullable();
 export const studioBoardCardResponseSchema = boardCardSchema.nullable();
 export const studioUiCheckResponseSchema = studioUiCheckResultSchema;
 export const studioDesignResponseSchema = studioDesignSchema;
+export const studioDesignChatResponseSchema = studioDesignChatResultSchema;
+export const studioRouteRepairResponseSchema = studioRouteRepairResultSchema;
 export const studioDesignPullResponseSchema = studioDesignPullSchema;
 export const studioDesignBuildStepResponseSchema = studioDesignBuildStepResultSchema;
 /** The cards one "work the board" run touched, in the order they ran. */
@@ -1396,6 +1409,10 @@ export interface KaiDesktopBridge {
    * live, on the same channel a composer run's own events already arrive on.
    */
   buildStudioDesignStep(projectId: string, prompt: string, stepId: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
+  /** Sends a conversational correction to the Design agent, optionally with a screenshot. */
+  chatWithStudioDesign(input: StudioDesignChatInput): Promise<IpcResponse<StudioDesignChatResult>>;
+  /** Suggests routes using the page inventory, pulled Open Pencil pages, and project source context. Does not apply them. */
+  suggestStudioRouteRepairs(projectId: string): Promise<IpcResponse<StudioRouteRepairResult>>;
   /** Stops the turn one design-build step started. Answers whether a turn was actually running to stop. */
   cancelStudioDesignStep(projectId: string, stepId: string): Promise<IpcResponse<boolean>>;
   /** Redraws the board when a card moves, whichever window or agent moved it. */

@@ -454,6 +454,31 @@ export const studioBoardRouteInputSchema = z
   .strict();
 export type StudioBoardRouteInput = z.infer<typeof studioBoardRouteInputSchema>;
 
+/** A user's conversational correction for the Design agent, with an optional screenshot as visual context. */
+export const studioDesignChatInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    message: z.string().trim().min(1).max(20_000),
+    imageDataUrl: z.string().max(8_000_000).optional(),
+    stepId: z.string().min(1).max(128),
+  })
+  .strict();
+export type StudioDesignChatInput = z.infer<typeof studioDesignChatInputSchema>;
+
+export const studioDesignChatResultSchema = z
+  .object({ status: z.enum(['completed', 'failed']), output: z.string(), error: z.string().optional(), costUsd: z.number().nonnegative().optional() })
+  .strict();
+export type StudioDesignChatResult = z.infer<typeof studioDesignChatResultSchema>;
+
+export const studioRouteSuggestionSchema = z
+  .object({ cardId: z.string().min(1).max(120), route: z.string().min(1).max(300), confidence: z.enum(['high', 'medium']), reason: z.string().max(500) })
+  .strict();
+export type StudioRouteSuggestion = z.infer<typeof studioRouteSuggestionSchema>;
+
+export const studioRouteRepairInputSchema = z.object({ projectId: z.string().min(1) }).strict();
+export const studioRouteRepairResultSchema = z.object({ suggestions: z.array(studioRouteSuggestionSchema), unresolved: z.array(z.string()) }).strict();
+export type StudioRouteRepairResult = z.infer<typeof studioRouteRepairResultSchema>;
+
 /** How many cards one "work the board" click runs, and with which agent and model. */
 export const studioBoardWorkInputSchema = z
   .object({

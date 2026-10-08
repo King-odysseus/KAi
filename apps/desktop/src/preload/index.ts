@@ -115,6 +115,7 @@ const bridge: KaiDesktopBridge = {
   nextStudioCard: (projectId) => ipcRenderer.invoke('studio:board-next', { projectId }),
   moveStudioCard: (input) => ipcRenderer.invoke('studio:board-move', input),
   setStudioCardRoute: (input) => ipcRenderer.invoke('studio:board-route', input),
+  suggestStudioRouteRepairs: (projectId) => ipcRenderer.invoke('studio:board-repair-routes', { projectId }),
   readStudioGuide: (projectId) => ipcRenderer.invoke('studio:guide-read', { projectId }),
   explainStudioGuide: (projectId) => ipcRenderer.invoke('studio:guide-explain', { projectId }),
   readCodeGuide: (projectId) => ipcRenderer.invoke('code:guide-read', { projectId }),
@@ -150,6 +151,7 @@ const bridge: KaiDesktopBridge = {
   renameStudioDesignPage: (input) => ipcRenderer.invoke('studio:design-page-rename', input),
   deleteStudioDesignPage: (input) => ipcRenderer.invoke('studio:design-page-delete', input),
   buildStudioDesignStep: (projectId, prompt, stepId) => ipcRenderer.invoke('studio:design-build-step', { projectId, prompt, stepId }),
+  chatWithStudioDesign: (input) => ipcRenderer.invoke('studio:design-chat', input),
   cancelStudioDesignStep: (projectId, stepId) => ipcRenderer.invoke('studio:design-build-cancel', { projectId, stepId }),
   onStudioBoardChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { projectId: string; board: import('@kai/contracts').StudioBoard }): void => listener(payload);

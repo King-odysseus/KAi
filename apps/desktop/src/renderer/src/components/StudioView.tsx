@@ -123,6 +123,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'guide'>('interview');
+  const [designChatText, setDesignChatText] = useState('');
+  const [designChatImage, setDesignChatImage] = useState<{ name: string; dataUrl: string } | null>(null);
+  const [designChatMessages, setDesignChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const [routeSuggestions, setRouteSuggestions] = useState<import('@kai/contracts').StudioRouteSuggestion[] | null>(null);
+  const [routeUnresolved, setRouteUnresolved] = useState<string[]>([]);
   // Where the project is, from the rules — free to read, so it is refreshed whenever the board changes. The
   // explanation inside it is the paid part, and arrives only when the Guide tab asks for it.
   const [guide, setGuide] = useState<StudioGuideView | null>(null);
@@ -143,6 +148,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // `stepId` is minted before the step starts and carried in the request, so this can filter to just this step.
   const [buildEvents, setBuildEvents] = useState<PersistedEvent[]>([]);
   const buildStepId = useRef<string | null>(null);
+  const designChatStepId = useRef<string | null>(null);
   // Running spend for the build in progress, since a 30-screen run is 30-odd agent turns with no other visibility
   // into cost — unlike the composer, which tracks this per run already. The ref is the source of truth read inside
   // the loop itself (a long-running async function closes over the state value from whenever it started, not a
@@ -486,8 +492,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // Live tool calls for whichever design-build step is running, so "Building X" says what it is actually doing
   // instead of sitting on a bare spinner for however long open-pencil takes to answer.
   useEffect(() => window.kaiDesktop.onAgentEvent(({ conversationId, event }) => {
-    if (conversationId !== buildStepId.current) return;
-    setBuildEvents((current) => [...current, event]);
+    if (conversationId === buildStepId.current || conversationId === designChatStepId.current) setBuildEvents((current) => [...current, event]);
   }), []);
 
   const flowJourneys = useMemo(() => (viewing === 'flows' && viewText ? parseFlows(viewText) : []), [viewing, viewText]);
@@ -1501,6 +1506,74 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  /** Pulls the currently open Pencil document and reports how many project screens now match its pages. */
+  async function reconcileDesignPages(): Promise<void> {
+    if (!projectId) return;
+    setBusy('design'); setError(null);
+    try {
+      const result = await refreshDesign();
+      if (result.differentDocument) {
+        setNotice('The current Open Pencil document does not match this project’s previously pulled document. No pages were reconciled.');
+      } else {
+        const drawnCount = designRows.filter((row) => row.inPages && screenLanded(row.name, result)).length;
+        setNotice(`Reconciled the current Open Pencil document: ${drawnCount} of ${designRows.filter((row) => row.inPages).length} planned screens now match and are marked drawn.`);
+      }
+    } catch (caught) { setError(messageOf(caught)); }
+    finally { setBusy(null); }
+  }
+
+  async function suggestRoutes(): Promise<void> {
+    if (!projectId) return;
+    setBusy('card'); setError(null); setRouteSuggestions(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.suggestStudioRouteRepairs(projectId));
+      setRouteSuggestions(result.suggestions); setRouteUnresolved(result.unresolved);
+      setNotice(result.suggestions.length ? `Found ${result.suggestions.length} route suggestion${result.suggestions.length === 1 ? '' : 's'} to review.` : 'No routes could be suggested from the available evidence.');
+    } catch (caught) { setError(messageOf(caught)); }
+    finally { setBusy(null); }
+  }
+
+  async function applyRouteSuggestions(): Promise<void> {
+    if (!projectId || !routeSuggestions?.length) return;
+    setBusy('card'); setError(null);
+    try {
+      for (const suggestion of routeSuggestions) await window.kaiDesktop.setStudioCardRoute({ projectId, cardId: suggestion.cardId, route: suggestion.route }).then(unwrap);
+      setBoard(unwrap(await window.kaiDesktop.studioBoard(projectId)));
+      setRouteSuggestions(null);
+      setNotice('Routes saved. The board is ready to retry those screen checks.');
+    } catch (caught) { setError(messageOf(caught)); }
+    finally { setBusy(null); }
+  }
+
+  async function sendDesignChat(): Promise<void> {
+    if (!projectId || (!designChatText.trim() && !designChatImage)) return;
+    const message = designChatText.trim() || `Please inspect this screenshot and reconcile it with the existing project design.`;
+    const imageDataUrl = designChatImage?.dataUrl;
+    const stepId = `studio-design-chat-${crypto.randomUUID()}`;
+    designChatStepId.current = stepId;
+    setDesignChatMessages((items) => [...items, { role: 'user', text: `${message}${designChatImage ? ` [Screenshot: ${designChatImage.name}]` : ''}` }]);
+    setDesignChatText(''); setDesignChatImage(null); setBusy('design'); setError(null); setBuildEvents([]);
+    try {
+      const response = unwrap(await window.kaiDesktop.chatWithStudioDesign({ projectId, message, ...(imageDataUrl ? { imageDataUrl } : {}), stepId }));
+      const text = response.status === 'completed' ? response.output : response.error ?? response.output ?? 'The design turn failed.';
+      setDesignChatMessages((items) => [...items, { role: 'assistant', text }]);
+      if (response.status === 'completed') {
+        try {
+          const pulled = await refreshDesign();
+          setNotice(pulled.differentDocument ? 'The Open Pencil page could not be reconciled because the editor is showing another document.' : 'Design chat finished; the design and board records have been refreshed.');
+        } catch { setNotice('Design chat finished. Pull the design to update the board records.'); }
+      }
+    } catch (caught) { const text = messageOf(caught); setError(text); setDesignChatMessages((items) => [...items, { role: 'assistant', text }]); }
+    finally { designChatStepId.current = null; setBusy(null); }
+  }
+
+  async function selectDesignChatImage(file: File | undefined): Promise<void> {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setError('Attach a PNG, JPEG or WebP screenshot.'); return; }
+    const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error(`Could not read ${file.name}.`)); reader.readAsDataURL(file); });
+    setDesignChatImage({ name: file.name, dataUrl });
+  }
+
   /** Runs the screenshots-and-DOM check on a UI card. The board it returns already reflects the result. */
   async function checkUi(cardId: string): Promise<void> {
     if (!projectId) return;
@@ -2108,6 +2181,20 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 ))}
               </ul>
             )}
+            <section className="studio-design-chat" aria-label="Design assistant chat">
+              <h3>Chat with the design assistant</h3>
+              <p className="studio-note">Explain a correction or attach a screenshot. The assistant checks the project page list, board, and Open Pencil design before replying.</p>
+              <div className="studio-design-chat-thread" aria-live="polite">
+                {designChatMessages.length === 0 && <p className="studio-note">For example: “Academic sessions and terms already exists at /admin/setup/terms. Please find the existing page and sync the board.”</p>}
+                {designChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Design AI'}</strong><br />{item.text}</p>)}
+              </div>
+              {designChatImage && <p className="studio-note">Screenshot attached: {designChatImage.name} <button type="button" className="composer-text-button" onClick={() => setDesignChatImage(null)}>Remove</button></p>}
+              <textarea value={designChatText} onChange={(event) => setDesignChatText(event.target.value)} placeholder="Tell the design AI what is already there or what needs fixing…" rows={3} disabled={busy !== null} />
+              <div className="page-actions">
+                <label className="secondary-button"><ImagePlus size={14} /> Attach screenshot<input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy !== null} onChange={(event) => { void selectDesignChatImage(event.target.files?.[0]); event.target.value = ''; }} /></label>
+                <button type="button" className="primary-button" onClick={() => void sendDesignChat()} disabled={busy !== null || (!designChatText.trim() && !designChatImage)}>{busy === 'design' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Send to design AI</button>
+              </div>
+            </section>
           </article>
           )}
 
@@ -2130,6 +2217,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   )}
                   <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => void reconcileDesignPages()} disabled={busy !== null || designRows.length === 0} title="Read the current Open Pencil document and match its existing pages to the project screen list.">
+                    {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Reconcile pages
                   </button>
                   {designRows.some((row) => row.inPages) && (
                     <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready} title="Start the whole design again, foundation included — after a failed run, or to apply a look you changed after drawing">
@@ -2299,7 +2389,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               <button type="button" className="secondary-button" onClick={() => void arrange()} disabled={busy !== null || !board?.cards.length} title="Puts the cards in the order they should be built, so the product runs on your machine before anything is hosted. Status, runs and checks are kept.">
                 {busy === 'arrange' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Arrange with AI
               </button>
+              {!!board?.cards.some((card) => card.kind === 'page' && !card.route.trim()) && <button type="button" className="secondary-button" onClick={() => void suggestRoutes()} disabled={busy !== null} title="Match routes from the page inventory and pulled design, then suggest any remaining routes from project context.">{busy === 'card' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Suggest route fixes</button>}
             </div>
+            {routeSuggestions && <section className="studio-route-review" aria-label="Review suggested routes">
+              <h3>Review route suggestions</h3>
+              <p className="studio-note">Evidence from the page inventory is marked high confidence. Model suggestions need your review before they are saved.</p>
+              {routeSuggestions.map((suggestion) => { const card = board?.cards.find((item) => item.id === suggestion.cardId); return <p key={suggestion.cardId}><strong>{card?.title ?? suggestion.cardId}</strong> → <code>{suggestion.route}</code> <span className="studio-kind">{suggestion.confidence} confidence · {suggestion.reason}</span></p>; })}
+              {routeUnresolved.length > 0 && <p className="studio-note">Still unresolved: {routeUnresolved.map((id) => board?.cards.find((card) => card.id === id)?.title ?? id).join(', ')}</p>}
+              <div className="page-actions"><button type="button" className="primary-button" onClick={() => void applyRouteSuggestions()} disabled={busy !== null || routeSuggestions.length === 0}>Apply reviewed routes</button><button type="button" className="secondary-button" onClick={() => setRouteSuggestions(null)} disabled={busy !== null}>Dismiss</button></div>
+            </section>}
             {projectId && board && board.cards.length > 0 && (
               <NeedsYouBanner
                 board={board}

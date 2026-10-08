@@ -900,6 +900,7 @@ async function startApplication(): Promise<void> {
     projectRoot: string,
     conversationId: string,
     onEvent?: (event: PersistedEvent) => void,
+    contextChips?: import('@kai/contracts').ContextChip[],
   ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> => {
     const request: AgentRunRequest = {
       conversationId,
@@ -908,6 +909,7 @@ async function startApplication(): Promise<void> {
       execution: 'api',
       route: 'direct',
       autonomy: 'plan',
+      ...(contextChips ? { contextChips } : {}),
     };
     const result = await designBuildDirectApi.run(request, projectRoot, undefined, onEvent);
     const costUsd = result.events.reduce((total, event) => (event.type === 'cost.update' && event.amountUsd ? total + event.amountUsd : total), 0);

@@ -571,6 +571,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));
     return card;
   });
+  handle(context, 'studio:board-repair-routes', async ({ projectId }) => context.studio.suggestRouteRepairs(projectId));
   handle(context, 'studio:board-claim', async (input) => {
     const card = await context.studio.claim(input.projectId, input.cardId, input.agent);
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));
@@ -632,6 +633,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'studio:design-build-step', async ({ projectId, prompt, stepId }, request) =>
     context.studio.buildDesignStep(projectId, prompt, stepId, (event) => {
+      const payload = { conversationId: stepId, event } satisfies AgentRunEvent;
+      if (context.windows.send(request.ownerWindowId, 'agents:event', payload)) return;
+      context.windows.broadcast('agents:event', payload);
+    }));
+  handle(context, 'studio:design-chat', async ({ projectId, message, imageDataUrl, stepId }, request) =>
+    context.studio.chatDesign(projectId, message, imageDataUrl, stepId, (event) => {
       const payload = { conversationId: stepId, event } satisfies AgentRunEvent;
       if (context.windows.send(request.ownerWindowId, 'agents:event', payload)) return;
       context.windows.broadcast('agents:event', payload);

@@ -314,10 +314,36 @@ export class StudioBoardStore {
    * design's components and pages get their cards. Nothing here can move a card forward — staleness and new cards
    * only, so a redesign never marks work done.
    */
-  async applyDesign(projectId: string, components: readonly DesignComponent[], changedNodes: readonly string[]): Promise<StudioBoard> {
+  async applyDesign(projectId: string, components: readonly DesignComponent[], changedNodes: readonly string[], pages = ''): Promise<StudioBoard> {
     const board = await this.read(projectId);
     const at = this.ports.now();
-    const withDesign = mergeDesign(applyDesignStaleness(board.cards, changedNodes), components, at);
+    // Reconcile a page that Open Pencil confirms exists to its story card even when the AI's titles differ slightly.
+    // The page inventory provides the route, and node id provides the durable identity after a match is established.
+    let cards = applyDesignStaleness(board.cards, changedNodes);
+    const pageRoutes = routesFromPagesDocument(pages);
+    const designPages = components.filter((component) => component.screen);
+    const claimedNodes = new Set<string>();
+    const matchedInventoryPages = new Set<number>();
+    cards = cards.map((card) => {
+      if (card.kind !== 'page') return card;
+      let exact = designPages.find((component) => !claimedNodes.has(component.id) && screenTitleKey(component.name) === screenTitleKey(card.title));
+      let fromInventoryIndex = pageRoutes.findIndex((page, index) => !matchedInventoryPages.has(index) && screenTitleKey(page.name) === screenTitleKey(card.title));
+      if (!exact) {
+        const cardWords = titleWords(card.title);
+        const candidates = designPages.filter((component) => !claimedNodes.has(component.id)).map((component) => ({ component, score: titleOverlap(cardWords, titleWords(component.name)) })).filter((item) => item.score >= 0.6).sort((a, b) => b.score - a.score);
+        if (candidates.length === 1 || (candidates.length > 1 && candidates[0]!.score > candidates[1]!.score)) exact = candidates[0]!.component;
+      }
+      if (fromInventoryIndex < 0) {
+        const cardWords = titleWords(card.title);
+        const candidates = pageRoutes.map((page, index) => ({ page, index, score: titleOverlap(cardWords, titleWords(page.name)) })).filter((item) => !matchedInventoryPages.has(item.index) && item.score >= 0.6).sort((a, b) => b.score - a.score);
+        if (candidates.length === 1 || (candidates.length > 1 && candidates[0]!.score > candidates[1]!.score)) fromInventoryIndex = candidates[0]!.index;
+      }
+      const fromInventory = fromInventoryIndex >= 0 ? pageRoutes[fromInventoryIndex] : undefined;
+      if (exact) claimedNodes.add(exact.id);
+      if (fromInventoryIndex >= 0) matchedInventoryPages.add(fromInventoryIndex);
+      return exact ? { ...card, designRef: exact.id, route: card.route || fromInventory?.route || card.route } : card;
+    });
+    const withDesign = mergeDesign(cards, components, at);
     return this.save(projectId, { schemaVersion: 1, revision: board.revision, cards: promoteReady(withDesign) });
   }
 
@@ -407,6 +433,28 @@ export class StudioBoardStore {
     this.ports.changed?.(projectId, parsed);
     return parsed;
   }
+}
+
+function titleWords(value: string): Set<string> {
+  return new Set(value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((word) => word.length > 2 && !['the', 'and', 'page', 'screen', 'with', 'for'].includes(word)));
+}
+
+function titleOverlap(left: Set<string>, right: Set<string>): number {
+  if (!left.size || !right.size) return 0;
+  const shared = [...left].filter((word) => right.has(word)).length;
+  return shared / Math.min(left.size, right.size);
+}
+
+function routesFromPagesDocument(pages: string): Array<{ name: string; route: string }> {
+  const result: Array<{ name: string; route: string }> = [];
+  let name = '';
+  for (const line of pages.split(/\r?\n/)) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading) { name = heading[1] ?? ''; continue; }
+    const match = name ? /Route:?\*{0,2}:?\s*`(\/[^`\s]*)`/i.exec(line) : null;
+    if (match?.[1] && !match[1].includes('*')) { result.push({ name, route: match[1] }); name = ''; }
+  }
+  return result;
 }
 
 /** Reads the artifact kinds a card's prompt should be built from, validated so a bad board cannot smuggle one in. */

@@ -11813,6 +11813,25 @@ button.tool-call-head:hover strong { color: var(--mint); }
   font-size: 11px;
 }
 
+.studio-design-chat,
+.studio-route-review {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--bg-panel);
+}
+
+.studio-design-chat h3,
+.studio-route-review h3 { margin: 0 0 7px; font-size: 13px; }
+.studio-design-chat textarea { width: 100%; resize: vertical; margin-top: 8px; }
+.studio-design-chat-thread { max-height: 260px; overflow: auto; }
+.studio-chat-message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 7px; background: var(--bg-input); }
+.studio-chat-message.user { border-left: 2px solid var(--accent); }
+.studio-chat-message.assistant { border-left: 2px solid var(--green); }
+.studio-route-review p { margin: 8px 0; }
+.studio-route-review code { margin: 0 5px; }
+
 /* The Senior Dev. The steps are scans rather than prose, so the list is tight and the current one is the only one
    that carries its explanation — eight explanations at once is a wall to read past. */
 .guide-now {
