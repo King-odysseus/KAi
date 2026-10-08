@@ -1260,9 +1260,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     if (busy !== null) return;
     const drawnCount = designRows.filter((row) => row.inPages && row.drawn).length;
     const confirmed = await confirmDialog({
-      title: 'Redraw every screen?',
-      detail: `The foundation and every screen in the pages list are drawn again in open-pencil, each as its own paid model call. ${drawnCount} screen${drawnCount === 1 ? '' : 's'} now drawn will be replaced. Nothing in .kai/spec changes, and Stop still works.`,
-      confirmLabel: 'Redraw all',
+      title: 'Restart the whole design?',
+      detail: `The foundation and every screen in the pages list are drawn from the start in open-pencil, each as its own paid model call. ${drawnCount === 0 ? 'Nothing is drawn yet, so nothing is replaced.' : `${drawnCount} screen${drawnCount === 1 ? '' : 's'} now drawn will be replaced.`} Nothing in .kai/spec changes, and Stop still works.`,
+      confirmLabel: 'Restart all',
       destructive: true,
     });
     if (!confirmed) return;
@@ -1765,6 +1765,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
       {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /> {error}</p>}
       {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
+      {/* The Studio keeps its own project, apart from the one in the top bar, and nothing said so: a person on one
+          project saw another's brief, style guide and drawing run. Say it whenever the two names disagree. */}
+      {screen === 'project' && currentFolder && !projectTitle.toLowerCase().includes(currentFolder.name.toLowerCase()) && (
+        <p className="studio-notice warning" role="status">
+          <AlertTriangle size={14} /> This Studio project is <strong>{projectTitle.split(/[,.:—-]/)[0]?.trim()}</strong>, not the open workspace <strong>{currentFolder.name}</strong>. Everything written or drawn here is for the Studio project.
+          <button type="button" className="composer-text-button" onClick={leaveProjectStudio} disabled={busy !== null}>Choose another project</button>
+        </p>
+      )}
       {readiness && !readiness.ready && (
         <p className="studio-notice warning" role="status">
           <AlertTriangle size={14} />
@@ -2123,9 +2131,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                   <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
                   </button>
-                  {designRows.some((row) => row.inPages && row.drawn) && (
-                    <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready} title="Draw every screen again, foundation included — the way to apply a look you changed after drawing">
-                      <RotateCcw size={14} /> Redraw all
+                  {designRows.some((row) => row.inPages) && (
+                    <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready} title="Start the whole design again, foundation included — after a failed run, or to apply a look you changed after drawing">
+                      <RotateCcw size={14} /> Restart all
                     </button>
                   )}
                   {!pagesText && (
