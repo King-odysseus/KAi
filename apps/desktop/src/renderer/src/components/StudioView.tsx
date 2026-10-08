@@ -1,5 +1,5 @@
 import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Square, Trash2, Users, Wand2 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { deriveAgentActivity } from './AgentActivity';
 import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, screenPageId, screensToRedraw } from '../design-build';
@@ -107,6 +107,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [screenQuery, setScreenQuery] = useState('');
   // What KAI says back after the user attaches style images in the interview.
   const [attachNote, setAttachNote] = useState<string | null>(null);
+  // How many answered turns the thread had when each image was attached, so the image stays where it was sent
+  // instead of following the newest question. An image from an earlier visit has no entry and sits after the idea.
+  const [attachedAt, setAttachedAt] = useState<Record<string, number>>({});
   const [foundationDone, setFoundationDone] = useState(false);
   // Screens the user chose to leave alone: they are kept out of the build's remaining list, so one screen that will
   // not land cannot hold the rest of the design hostage. Remembered per project, like the foundation note.
@@ -627,6 +630,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setError(null);
     let latest: StudioStyleReferences | null = null;
     setAttachNote('Looking at your image…');
+    const turnsSoFar = (state ? state.rounds.slice(0, -1).flatMap((round) => round.answers).length : 0) + step;
     try {
       for (const file of [...files]) {
         const data = await new Promise<string>((resolve, reject) => {
@@ -636,6 +640,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           reader.readAsDataURL(file);
         });
         latest = unwrap(await window.kaiDesktop.addStudioStyleReference({ projectId, name: file.name, data }));
+        setAttachedAt((current) => ({ ...current, [file.name]: turnsSoFar }));
       }
       // The thread shows these from the same set the style guide is written from, so it has to be the live one.
       if (latest) setStyleRefs(latest);
@@ -1882,31 +1887,54 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </div>
               <div className="studio-thread" role="log" aria-live="polite">
                 <div className="studio-bubble user">{state.idea}</div>
-                {state.rounds.slice(0, -1).flatMap((round) => round.answers).map((item) => (
-                  <ThreadTurn
-                    key={item.question}
-                    question={item.question}
-                    answer={item.answer}
-                    disabled={busy !== null}
-                    onEdit={() => startCorrection(item.question, item.answer)}
-                  />
-                ))}
-                {open.slice(0, step).map((question, index) => (
-                  <ThreadTurn key={question} question={question} answer={answers[index] ?? ''} />
-                ))}
-                {open[step] !== undefined && <div className="studio-bubble ai">{open[step]}</div>}
-                {styleRefs && styleRefs.images.length > 0 && (
-                  <div className="studio-bubble user studio-attached" aria-label="Images you attached">
-                    <div className="message-attachments">
-                      {styleRefs.images.map((image) => (
-                        image.preview
-                          ? <ImageCard key={image.name} name={image.name} dataUrl={image.preview} />
-                          : <span key={image.name} className="studio-note">{image.name}</span>
+                {(() => {
+                  const answered = state.rounds.slice(0, -1).flatMap((round) => round.answers);
+                  const turns = answered.length + step;
+                  // Images sit after the turn they were attached at; an unknown one sits after the idea.
+                  const attachedAfter = (count: number) => (styleRefs?.images ?? []).filter((image) => Math.min(attachedAt[image.name] ?? 0, turns) === count);
+                  const attachments = (count: number) => {
+                    const images = attachedAfter(count);
+                    if (images.length === 0) return null;
+                    return (
+                      <div key={`attached-${count}`} className="studio-bubble user studio-attached" aria-label="Images you attached">
+                        <div className="message-attachments">
+                          {images.map((image) => (
+                            image.preview
+                              ? <ImageCard key={image.name} name={image.name} dataUrl={image.preview} />
+                              : <span key={image.name} className="studio-note">{image.name}</span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  };
+                  const turnNodes = [
+                    ...answered.map((item) => (
+                      <ThreadTurn
+                        key={item.question}
+                        question={item.question}
+                        answer={item.answer}
+                        disabled={busy !== null}
+                        onEdit={() => startCorrection(item.question, item.answer)}
+                      />
+                    )),
+                    ...open.slice(0, step).map((question, index) => (
+                      <ThreadTurn key={question} question={question} answer={answers[index] ?? ''} />
+                    )),
+                  ];
+                  return (
+                    <>
+                      {attachments(0)}
+                      {turnNodes.map((node, index) => (
+                        <Fragment key={node.key}>
+                          {node}
+                          {attachments(index + 1)}
+                        </Fragment>
                       ))}
-                    </div>
-                  </div>
-                )}
+                    </>
+                  );
+                })()}
                 {attachNote && <div className="studio-bubble ai">{attachNote}</div>}
+                {open[step] !== undefined && <div className="studio-bubble ai">{open[step]}</div>}
                 {open.length === 0 && <p className="studio-note">No questions this round.</p>}
                 {busy === 'answer' && <div className="studio-bubble ai"><Loader2 className="spin" size={13} /> Thinking about what to ask next…</div>}
                 <div ref={threadEnd} />

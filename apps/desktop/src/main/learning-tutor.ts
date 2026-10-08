@@ -628,7 +628,29 @@ export class DesktopLearningTutor {
     }
   }
 
+  /**
+   * A dropped connection ("fetch failed": reset, DNS, a provider closing an idle socket) says nothing about the
+   * request, and on patchy networks one drop used to fail a whole artifact. Retry those twice, briefly; an HTTP
+   * answer, a timeout or a bad reply is never retried here.
+   */
   private async requestStructured(
+    provider: LearningProviderConfiguration,
+    prompt: { system: string; user: string },
+    schemaName: string,
+    schema: object,
+  ): Promise<LearningProviderResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.requestStructuredOnce(provider, prompt, schemaName, schema);
+      } catch (error) {
+        const dropped = error instanceof TypeError && /fetch failed/i.test(error.message);
+        if (!dropped || attempt >= 2) throw dropped ? new Error('The connection to the model dropped (fetch failed), even after retrying. Check the network and try again.') : error;
+        await new Promise((resolve) => setTimeout(resolve, 1_500 * (attempt + 1)));
+      }
+    }
+  }
+
+  private async requestStructuredOnce(
     provider: LearningProviderConfiguration,
     prompt: { system: string; user: string },
     schemaName: string,
