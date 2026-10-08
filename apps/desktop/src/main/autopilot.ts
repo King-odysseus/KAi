@@ -1,4 +1,4 @@
-import { isUiCard, machineBlocked, readyCards } from '@kai/contracts';
+import { isUiCard, machineBlocked, needsScreenCheck, readyCards } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -120,9 +120,9 @@ class SystemicFailure extends Error {}
  */
 const BLOCKED_BEFORE_GIVING_UP = 3;
 
-/** A component or page with nowhere to point can never pass its screen check, and the board never closes it. */
+/** A page with nowhere to point can never pass its screen check, and the board never closes it. */
 export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
-  return isUiCard(card) && card.route.trim() === '';
+  return card.kind === 'page' && card.route.trim() === '';
 }
 
 /**
@@ -391,10 +391,10 @@ export class DesktopAutopilot {
       await this.ports.setCheck(projectId, card.id, {
         runId: check.runId,
         at: new Date(this.ports.now()).toISOString(),
-        visual: isUiCard(card) ? null : 'skipped',
+        visual: needsScreenCheck(card) ? null : 'skipped',
         screenshots: [],
       });
-      if (isUiCard(card)) {
+      if (needsScreenCheck(card)) {
         const visual = card.route
           ? await this.ports.checkUi(projectId, card).catch((error: unknown) => ({ passed: false, summary: error instanceof Error ? error.message : String(error) }))
           : { passed: false, summary: 'The card has no route, so there is no screen to check.' };

@@ -7,6 +7,7 @@ import {
   createStudioDesign,
   defaultNeeds,
   isUiCard,
+  needsScreenCheck,
   readyCards,
   routeFromScreenName,
   screenTitleKey,
@@ -67,11 +68,11 @@ export interface DoneEvidence {
 }
 
 /** Null when the card may be marked `done`; otherwise the one rule that blocked it, for the caller to show. */
-export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'check'>, evidence: DoneEvidence): string | null {
+export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'route' | 'check'>, evidence: DoneEvidence): string | null {
   if (!card.check) return 'The card has no record of a passing check.';
   if (!evidence.run) return 'The check the card was closed on is no longer in the verification history.';
   if (!evidence.run.passed) return `The recorded check did not pass (${evidence.run.command} exited ${evidence.run.exitCode ?? 'unknown'}).`;
-  if (isUiCard(card) && card.check.visual !== 'passed') return 'A component or page card needs a passing visual check before it can be done.';
+  if (needsScreenCheck(card) && card.check.visual !== 'passed') return 'A page, or a component with its own route, needs a passing visual check before it can be done.';
   if (evidence.drifted) return 'Files changed after the check passed, so the result does not cover the current tree.';
   if (evidence.recordedNow === null) return 'The checked files could not be read back to confirm they still match.';
   const missing = evidence.recordedNow.find((file) => file.hash === null);

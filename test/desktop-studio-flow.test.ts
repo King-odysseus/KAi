@@ -15,7 +15,7 @@ import {
 } from '../packages/contracts/src';
 import { StudioArtifacts } from '../apps/desktop/src/main/artifacts';
 import { StudioBoardStore } from '../apps/desktop/src/main/board';
-import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseArrangePlan, parseArtifact, parseBoardDraft, type StudioPorts } from '../apps/desktop/src/main/studio';
+import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseArrangePlan, parseArtifact, parseBoardDraft, routesFromPagesDocument, withRoutesFromPages, type StudioPorts } from '../apps/desktop/src/main/studio';
 import { DesktopUiCheck } from '../apps/desktop/src/main/ui-check';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { ReplyShapeError } from '../apps/desktop/src/main/learning-tutor';
@@ -622,5 +622,23 @@ describe('design build', () => {
     const { studio: app } = studio({});
 
     await expect(app.buildDesignStep('p1', 'Draw the pricing screen', 'step-1')).rejects.toThrow('not available in this build');
+  });
+});
+
+describe('routes from the pages document', () => {
+  const pages = ['## Sign-in', '- **Route:** `/sign-in` (new file)', '', '## Placeholder route', '- **Route:** `/`', '', '## Admin shell', '- **Route:** wraps every `/admin/*` route', '', '## Accounts list', '- **Route:** `/admin/accounts`', ''].join('\n');
+
+  it('reads each page route and skips a wrapper pattern', () => {
+    expect(routesFromPagesDocument(pages).map((page) => page.route)).toEqual(['/sign-in', '/', '/admin/accounts']);
+  });
+
+  it('fills a screen card that has no route from the page it names, and leaves the rest alone', () => {
+    const draft = parseBoardDraft(JSON.stringify({ cards: [
+      { key: 'a', title: 'Sign-in screen for every portal', kind: 'page', story: 's', acceptance: ['a'], route: '', dependsOnKeys: [] },
+      { key: 'b', title: 'Accounts list', kind: 'page', story: 's', acceptance: ['a'], route: '/custom', dependsOnKeys: [] },
+      { key: 'c', title: 'Schema for sessions', kind: 'backend', story: 's', acceptance: ['a'], route: '', dependsOnKeys: [] },
+    ] }));
+    const cards = withRoutesFromPages(cardsFromDraft(draft, '2026-10-08T00:00:00.000Z'), pages);
+    expect(cards.map((card) => card.route)).toEqual(['/sign-in', '/custom', '']);
   });
 });

@@ -291,6 +291,15 @@ export function isUiCard(card: Pick<BoardCard, 'kind'>): boolean {
   return card.kind === 'component' || card.kind === 'page';
 }
 
+/**
+ * Whether a card is closed on a passing screenshot. A page always is. A component is only when it owns a route: one
+ * with none lives inside a page (the board's own prompt says to leave it empty), so it is seen through that page and
+ * needs the build check alone. Asking it for a route it does not have left such cards unclosable.
+ */
+export function needsScreenCheck(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
+  return card.kind === 'page' || (card.kind === 'component' && card.route.trim() !== '');
+}
+
 /** The artifacts a card of each kind reads, so a generated card is wired into the dependency graph by default. */
 export function defaultNeeds(kind: CardKind): ArtifactKind[] {
   if (kind === 'component' || kind === 'page' || kind === 'flow') return ['tokens'];

@@ -2472,10 +2472,13 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute }: { card: Bo
         </p>
       )}
       {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots</p>}
-      {ui && !card.route && (
+      {ui && !card.route && card.kind === 'page' && (
         <p className="studio-note studio-why blocked">
           <AlertTriangle size={12} /> No route, so this screen cannot be checked and the board will not close it. Set one below.
         </p>
+      )}
+      {ui && !card.route && card.kind !== 'page' && (
+        <p className="studio-note">This sits inside a page, so it is closed on the build check. Give it a route below only if it has its own screen.</p>
       )}
       {ui && (
         <button type="button" className="secondary-button" onClick={() => void onCheckUi(card.id)} disabled={busy || !card.route}>

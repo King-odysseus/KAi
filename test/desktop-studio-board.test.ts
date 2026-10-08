@@ -191,6 +191,13 @@ describe('board rules', () => {
     expect(doneBlockedBy(passed, { run: run(), recordedNow: [], drifted: false })).toBeNull();
   });
 
+  it('closes a component with no route on the build check, since it is seen through its page', () => {
+    const skipped = { runId: 'r1', at: NOW, visual: 'skipped' as const, screenshots: [] };
+    expect(doneBlockedBy(card({ kind: 'component', route: '', check: skipped }), { run: run(), recordedNow: [], drifted: false })).toBeNull();
+    expect(doneBlockedBy(card({ kind: 'component', route: '/pricing', check: skipped }), { run: run(), recordedNow: [], drifted: false })).toMatch(/visual check/);
+    expect(doneBlockedBy(card({ kind: 'page', route: '', check: skipped }), { run: run(), recordedNow: [], drifted: false })).toMatch(/visual check/);
+  });
+
   it('stales a card whose artifact moved, and promotes a card whose dependencies are done', () => {
     const artifacts = [{ ...entry({ kind: 'tokens', path: '.kai/spec/design/tokens.json' }), stale: true }];
     const [stale] = applyStaleness([card({ needsArtifacts: ['tokens'] })], artifacts);

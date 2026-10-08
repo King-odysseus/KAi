@@ -245,7 +245,8 @@ export class DesktopStudio {
       if (fallback.cards.length === 0) throw error;
       return fallback;
     });
-    const cards = cardsFromDraft(draft, this.ports.now());
+    const pages = await this.ports.artifacts.readText(projectId, 'pages');
+    const cards = withRoutesFromPages(cardsFromDraft(draft, this.ports.now()), pages ?? '');
     const catalog = await this.ports.artifacts.read(projectId);
     const board = await this.ports.board.replace(projectId, cards, catalog.artifacts);
     await this.refreshHandoff(projectId);
@@ -713,6 +714,43 @@ export function parseArtifact(content: string, kind: ArtifactKind): string {
     throw new Error(`The Project Studio reply for ${kind} did not match the expected shape.`);
   }
   return record.content.trim().replace(/^```(?:markdown|md)?\n?/, '').replace(/\n?```$/, '').trim() + '\n';
+}
+
+/** The routes the pages document gives: a "## Name" heading, then a "Route:" line with the path in backticks. */
+export function routesFromPagesDocument(pages: string): Array<{ name: string; route: string }> {
+  const found: Array<{ name: string; route: string }> = [];
+  let name = '';
+  for (const line of pages.split(/\r?\n/)) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading) { name = heading[1] ?? ''; continue; }
+    const route = name ? /Route:?\*{0,2}:?\s*`(\/[^`\s]*)`/i.exec(line) : null;
+    if (route?.[1] && !route[1].includes('*')) { found.push({ name, route: route[1] }); name = ''; }
+  }
+  return found;
+}
+
+const wordsOf = (text: string): Set<string> => new Set(text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((word) => word.length > 2 && !['the', 'and', 'page', 'screen', 'with', 'for'].includes(word)));
+
+/**
+ * A screen card the model left without a route gets the one its page has in the pages document, when the names
+ * agree closely enough to be the same screen. A card with no route can never pass its screen check, and a person
+ * should not have to type thirteen paths the document already holds. Cards that already have a route are untouched.
+ */
+export function withRoutesFromPages(cards: BoardCard[], pages: string): BoardCard[] {
+  const known = routesFromPagesDocument(pages).map((page) => ({ ...page, words: wordsOf(page.name) }));
+  if (known.length === 0) return cards;
+  return cards.map((card) => {
+    if (!isUiCard(card) || card.route.trim()) return card;
+    const own = wordsOf(card.title);
+    if (own.size === 0) return card;
+    let best: { route: string; score: number } | null = null;
+    for (const page of known) {
+      const shared = [...own].filter((word) => page.words.has(word)).length;
+      const score = shared / Math.min(own.size, Math.max(page.words.size, 1));
+      if (shared > 0 && score >= 0.6 && (!best || score > best.score)) best = { route: page.route, score };
+    }
+    return best ? { ...card, route: best.route } : card;
+  });
 }
 
 /** Reads the model's reply as a board draft. */
