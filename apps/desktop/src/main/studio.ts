@@ -723,11 +723,14 @@ export function parseBoardDraft(content: string) {
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)} ${replySnippet(content)}`);
   }
-  const parsed = studioBoardDraftSchema.safeParse(json);
+  // Models wrap the cards with a title, a summary or a bare array; only the cards matter, so ignore the rest
+  // instead of failing the whole board on a key nobody asked for.
+  const cards = Array.isArray(json) ? json : json && typeof json === 'object' ? (json as { cards?: unknown }).cards : undefined;
+  const parsed = studioBoardDraftSchema.safeParse({ cards });
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    throw new Error(`The Project Studio board reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
+    throw new ReplyShapeError(`The Project Studio board reply did not match the expected shape (${issue ? `${issue.path.join('.') || 'reply'}: ${issue.message}` : 'unknown error'}).`);
   }
-  if (parsed.data.cards.length === 0) throw new Error('The Project Studio board reply had no cards.');
+  if (parsed.data.cards.length === 0) throw new ReplyShapeError('The Project Studio board reply had no cards.');
   return parsed.data;
 }

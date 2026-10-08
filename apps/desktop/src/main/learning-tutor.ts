@@ -623,7 +623,9 @@ export class DesktopLearningTutor {
           usage: combinedTutorUsage(first, repaired, prompt, repair),
         };
       } catch (repairError) {
-        throw new Error(`The provider returned an invalid Learning Tutor response after one automatic repair attempt. ${messageOf(repairError)}`);
+        const message = `The provider returned an invalid Learning Tutor response after one automatic repair attempt. ${messageOf(repairError)}`;
+        // Keep the kind: a caller that can fall back on an unreadable reply (the board reads the stories) needs it.
+        throw repairError instanceof ReplyShapeError ? new ReplyShapeError(message) : new Error(message);
       }
     }
   }
