@@ -234,7 +234,15 @@ export class StudioBoardStore {
     if (status === 'ready') {
       const byId = new Map(board.cards.map((item) => [item.id, item]));
       const unmet = card.dependsOn.filter((id) => byId.get(id)?.status !== 'done');
-      if (unmet.length > 0) throw new Error(`Card ${cardId} is blocked by ${unmet.join(', ')}.`);
+      if (unmet.length > 0) {
+        // Named by title, with where each one stands: a person who dragged this card is reading the message, and an id
+        // like "scaffold" says nothing about what is in the way or what would clear it.
+        const waiting = unmet.map((id) => {
+          const blocker = byId.get(id);
+          return blocker ? `"${blocker.title}" (${blocker.status === 'review' ? 'in review, not yet checked' : blocker.status})` : id;
+        });
+        throw new Error(`"${card.title}" cannot go to Ready yet: it waits on ${waiting.join(', ')}, which ${unmet.length === 1 ? 'is' : 'are'} not done.`);
+      }
     }
     let next: BoardCard = { ...card, status, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null, movedBy: by, movedAt: this.ports.now() };
     if (status === 'done') {

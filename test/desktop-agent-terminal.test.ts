@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { KAI_TERMINAL_MCP_SERVER_ID, createDefaultSettings, type TerminalEvent, type TerminalSession, type TerminalShell } from '../packages/contracts/src';
 import { RedactedLogger } from '../packages/runtime/src';
-import { AgentTerminal, availableShells, sentinelLine, terminalBriefing, sentinelPattern, stripAnsi, type AgentShell, type AgentTerminalPort } from '../apps/desktop/src/main/agent-terminal';
+import { AgentTerminal, availableShells, cleanOutput, sentinelLine, terminalBriefing, sentinelPattern, stripAnsi, type AgentShell, type AgentTerminalPort } from '../apps/desktop/src/main/agent-terminal';
 import { DesktopMcpRuntime } from '../apps/desktop/src/main/mcp-runtime';
 import { startTerminalMcpHost, type TerminalMcpHost } from '../apps/desktop/src/main/terminal-mcp-host';
 import { TerminalManager, findGitBash } from '../apps/desktop/src/main/terminal';
@@ -110,6 +110,23 @@ describe('agent terminal', () => {
     expect(stripAnsi('\u001b[32mok\u001b[0m\r\n')).toBe('ok\n');
     expect(availableShells('win32', null)).toEqual(['powershell', 'cmd']);
     expect(availableShells('win32', 'C:\\Git\\bin\\bash.exe')).toEqual(['gitbash', 'powershell', 'cmd']);
+  });
+});
+
+describe('clean output', () => {
+  it('drops the echoed command, the prompt and however much of the typed marker line had arrived', () => {
+    expect(cleanOutput('> echo hi\nhi\n> Write-Host "__KAI_DONE_ab12cd_', 'ab12cd', 'echo hi')).toBe('hi');
+    expect(cleanOutput("$ echo hi\nhi\n$ printf '\\n__KAI_DONE_ab12cd_", 'ab12cd', 'echo hi')).toBe('hi');
+    expect(cleanOutput('> echo hi\nhi\n> echo __KAI_DONE_ab12cd_', 'ab12cd', 'echo hi')).toBe('hi');
+  });
+
+  it('drops a prompt drawn and then redrawn, which leaves stale fragments on lines of their own', () => {
+    expect(cleanOutput('> echo hi\nhi\n>\n> Wri\n> Write-Host "__KAI_DONE_ab12cd_', 'ab12cd', 'echo hi')).toBe('hi');
+    expect(cleanOutput('> echo hi\nhi\n> \n> Write-Host "__KAI_DONE_ab12cd_', 'ab12cd', 'echo hi')).toBe('hi');
+  });
+
+  it('keeps output that merely begins with a prompt character', () => {
+    expect(cleanOutput("$ echo '> quoted'\n> quoted\n$ printf '\\n__KAI_DONE_ab12cd_", 'ab12cd', "echo '> quoted'")).toBe('> quoted');
   });
 });
 

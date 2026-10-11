@@ -120,6 +120,12 @@ class SystemicFailure extends Error {}
  */
 const BLOCKED_BEFORE_GIVING_UP = 3;
 
+/**
+ * The note a card carries when the agent finished its work but there was nothing to check it with. It is also how a
+ * later pass finds those cards: once the project can be checked, they are closed on that check.
+ */
+const NO_CHECK_NOTE = 'Autopilot finished the work but has no check command, so a person has to close it.';
+
 /** A page with nowhere to point can never pass its screen check, and the board never closes it. */
 export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
   return card.kind === 'page' && card.route.trim() === '';
@@ -225,7 +231,7 @@ export class DesktopAutopilot {
     const deadline = input.maxHours > 0 ? startedAt + input.maxHours * 3_600_000 : Infinity;
     // Pacing is only worth the bookkeeping for Direct API runs; a CLI agent paces itself.
     if (input.execution === 'api') this.ports.setPacer(new RequestPacer({ maxConcurrent: 2, minGapMs: input.minGapSeconds * 1_000 }));
-    const command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
+    let command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
     if (!command) this.record(projectId, owner, 'warn', 'No check command is set and none was detected, so cards cannot be closed. They will stop in review.');
     await this.noteProvisionalDesign(projectId, owner);
     try {
@@ -237,6 +243,11 @@ export class DesktopAutopilot {
 
         const board = await this.ports.board(projectId);
         this.counts(projectId, board);
+        // The scaffold card is what creates the project's manifest, so a project that had nothing to check when the
+        // run began can have something by now. Looked for again, because without a check the scaffold card waits in
+        // review for a person and every card behind it waits on that.
+        if (!command) command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
+        if (command && (await this.settleReviewed(input, label, board, command, active))) continue;
         const card = board.cards.find((item) => item.status === 'inProgress' && item.claimedBy === label) ?? readyCards(board)[0];
         if (!card) {
           await this.proveDev(projectId, owner, board, active);
@@ -374,44 +385,16 @@ export class DesktopAutopilot {
         continue;
       }
       if (!command) {
-        await this.ports.moveCard(projectId, card.id, 'review', 'Autopilot finished the work but has no check command, so a person has to close it.', 'agent');
+        await this.ports.moveCard(projectId, card.id, 'review', NO_CHECK_NOTE, 'agent');
         await this.forget(projectId);
         this.record(projectId, owner, 'warn', `"${card.title}" is in review: there is no check command.`);
         state.restStreak = 0;
         return;
       }
 
-      this.phase(projectId, owner, 'checking', `Checking "${card.title}".`);
-      const check = await this.ports.runCheck(projectId, command, signal);
-      if (!check.passed || !check.runId) {
-        failure = `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}`;
-        this.record(projectId, owner, 'check', `Check failed for "${card.title}".`);
-        continue;
-      }
-      await this.ports.setCheck(projectId, card.id, {
-        runId: check.runId,
-        at: new Date(this.ports.now()).toISOString(),
-        visual: needsScreenCheck(card) ? null : 'skipped',
-        screenshots: [],
-      });
-      if (needsScreenCheck(card)) {
-        const visual = card.route
-          ? await this.ports.checkUi(projectId, card).catch((error: unknown) => ({ passed: false, summary: error instanceof Error ? error.message : String(error) }))
-          : { passed: false, summary: 'The card has no route, so there is no screen to check.' };
-        if (!visual.passed) {
-          failure = `The build passes but the screen check did not: ${visual.summary}`;
-          this.record(projectId, owner, 'check', `Screen check failed for "${card.title}".`);
-          // The visual check hands a failed card back to `ready`; take it again for the next attempt.
-          await this.ports.claimCard(projectId, card.id, label).catch(() => undefined);
-          continue;
-        }
-        await this.ports.claimCard(projectId, card.id, label).catch(() => undefined);
-      }
-      try {
-        await this.ports.moveCard(projectId, card.id, 'done', 'Autopilot: the check passed.', 'check');
-      } catch (error) {
-        failure = `The board would not close the card: ${error instanceof Error ? error.message : String(error)}`;
-        this.record(projectId, owner, 'warn', failure.slice(0, 300));
+      const verdict = await this.checkAndClose(projectId, owner, label, card, command, signal);
+      if (!verdict.closed) {
+        failure = verdict.failure;
         continue;
       }
       state.cardsDone += 1;
@@ -431,6 +414,69 @@ export class DesktopAutopilot {
       throw new SystemicFailure(`Autopilot stopped: two cards in a row ended with exactly the same agent error, which points at the setup rather than the cards. ${failure.slice(0, 300)}`);
     }
     this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${input.attemptsPerCard} attempts; moving on.`);
+  }
+
+  /**
+   * Runs the check for one card and, when it passes, closes the card: the build check, then the screen check for a
+   * card that has a screen. The board has the last word, as ever: a card it will not close comes back with its reason.
+   */
+  private async checkAndClose(projectId: string, owner: number, label: string, card: BoardCard, command: string, signal: AbortSignal): Promise<{ closed: boolean; failure: string }> {
+    this.phase(projectId, owner, 'checking', `Checking "${card.title}".`);
+    const check = await this.ports.runCheck(projectId, command, signal);
+    if (!check.passed || !check.runId) {
+      this.record(projectId, owner, 'check', `Check failed for "${card.title}".`);
+      return { closed: false, failure: `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}` };
+    }
+    await this.ports.setCheck(projectId, card.id, {
+      runId: check.runId,
+      at: new Date(this.ports.now()).toISOString(),
+      visual: needsScreenCheck(card) ? null : 'skipped',
+      screenshots: [],
+    });
+    if (needsScreenCheck(card)) {
+      const visual = card.route
+        ? await this.ports.checkUi(projectId, card).catch((error: unknown) => ({ passed: false, summary: error instanceof Error ? error.message : String(error) }))
+        : { passed: false, summary: 'The card has no route, so there is no screen to check.' };
+      // The visual check hands a failed card back to `ready`; take it again for whatever comes next.
+      await this.ports.claimCard(projectId, card.id, label).catch(() => undefined);
+      if (!visual.passed) {
+        this.record(projectId, owner, 'check', `Screen check failed for "${card.title}".`);
+        return { closed: false, failure: `The build passes but the screen check did not: ${visual.summary}` };
+      }
+    }
+    try {
+      await this.ports.moveCard(projectId, card.id, 'done', 'Autopilot: the check passed.', 'check');
+    } catch (error) {
+      const failure = `The board would not close the card: ${error instanceof Error ? error.message : String(error)}`;
+      this.record(projectId, owner, 'warn', failure.slice(0, 300));
+      return { closed: false, failure };
+    }
+    return { closed: true, failure: '' };
+  }
+
+  /**
+   * Closes the cards Autopilot parked in review for want of a check, now that there is one. Those are the cards a run
+   * could do the work for but not prove — the scaffold card above all, which every other card waits behind. A card
+   * whose check still fails stays in review with the reason in the log; it is not worked again here.
+   */
+  private async settleReviewed(input: AutopilotStartInput, label: string, board: StudioBoard, command: string, active: ActiveRun): Promise<boolean> {
+    const { projectId } = input;
+    const owner = active.ownerWindowId;
+    const waiting = board.cards.filter((card) => card.status === 'review' && !card.check && card.notes.includes(NO_CHECK_NOTE));
+    let closed = false;
+    for (const card of waiting) {
+      if (active.controller.signal.aborted) break;
+      const verdict = await this.checkAndClose(projectId, owner, label, card, command, active.controller.signal);
+      if (verdict.closed) {
+        const state = this.state(projectId);
+        state.cardsDone += 1;
+        this.record(projectId, owner, 'card', `"${card.title}" is done: it was waiting in review for a check, and the check now passes.`);
+        closed = true;
+      } else {
+        this.record(projectId, owner, 'warn', `"${card.title}" is still in review: ${verdict.failure.slice(0, 200)}`);
+      }
+    }
+    return closed;
   }
 
   /**

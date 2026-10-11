@@ -198,6 +198,28 @@ describe('desktop autopilot', () => {
     expect(h.board.cards[0]?.status).toBe('review');
   });
 
+  it('closes the scaffold card it parked for want of a check once the project can be checked, and carries on behind it', async () => {
+    const h = harness({ cards: [card('scaffold'), card('b', ['scaffold'])] });
+    // The project has nothing to check until the scaffold card has written its manifest.
+    let asked = 0;
+    h.ports.suggestCheck = async () => { asked += 1; return h.board.cards[0]?.status === 'review' ? 'npm test' : null; };
+    await start(h);
+    const final = await settled(h);
+    expect(asked).toBeGreaterThan(1);
+    expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+    expect(h.board.cards[0]?.check?.runId).toBeTruthy();
+    expect(final.phase).toBe('finished');
+  });
+
+  it('leaves a card in review when its check still fails, and does not loop on it', async () => {
+    const h = harness({ cards: [card('scaffold'), card('b', ['scaffold'])], check: () => false });
+    h.ports.suggestCheck = async () => (h.board.cards[0]?.status === 'review' ? 'npm test' : null);
+    await start(h);
+    const final = await settled(h);
+    expect(h.board.cards.map((item) => item.status)).toEqual(['review', 'backlog']);
+    expect(final.phase).toBe('finished');
+  });
+
   it('stops at the card limit', async () => {
     const h = harness({ cards: [card('a'), card('b'), card('c')] });
     await start(h, { maxCards: 2 });

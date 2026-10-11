@@ -83,6 +83,28 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI, '').replace(/\r(?!\n)/g, '\n').replace(/\r\n/g, '\n');
 }
 
+/** What a shell echoes of the marker line while it is being typed, which can arrive in pieces. */
+const TYPED_MARKER_STARTS = ["printf '\\n", 'Write-Host "', 'echo '];
+
+/**
+ * Drops the prompt, and as much of the typed marker line as had arrived, from the end of the text before the real
+ * marker. Done by what it says, not by where a line ends: cmd prints the next prompt on the same line as the
+ * command's last output, and PowerShell redraws its prompt in pieces when the machine is busy. Only a prompt
+ * followed by the start of the marker line is removed, so output that happens to begin with `>` stays.
+ */
+function withoutTypedTail(text: string): string {
+  let current = text.replace(/\s+$/, '');
+  // More than one pass: a prompt drawn and then redrawn leaves a stale fragment on a line of its own, and the redraw's
+  // carriage return reads as a line break, so what is left to remove can be several short lines deep.
+  for (;;) {
+    const match = /(?:\$ |> ?)([^\n]*)$/.exec(current);
+    if (!match) return current;
+    const typed = match[1] ?? '';
+    if (!TYPED_MARKER_STARTS.some((start) => start.startsWith(typed) || typed.startsWith(start))) return current;
+    current = current.slice(0, match.index).replace(/\s+$/, '');
+  }
+}
+
 /**
  * What the command printed, without the shell's echo of what was typed. The marker line is typed along with the
  * command, so the shell echoes it (behind a prompt) before the real marker arrives; everything from that echo on goes,
@@ -92,7 +114,7 @@ export function cleanOutput(text: string, nonce: string, command: string): strin
   const marker = text.indexOf(`__KAI_DONE_${nonce}`);
   // What stands in front of the echoed marker is the prompt and the start of the typed marker line. Dropped by what
   // it says, not by where the line ends: cmd prints the next prompt on the same line as the command's last output.
-  const kept = marker >= 0 ? text.slice(0, marker).replace(/(?:\$ |> ?)(?:printf '\\n|Write-Host "|echo )$/, '') : text;
+  const kept = marker >= 0 ? withoutTypedTail(text.slice(0, marker)) : text;
   const lines = kept.split('\n');
   const first = command.split(/\r?\n/)[0]!.trim().slice(0, 30);
   // A fresh session prints a banner and prompt before the command is echoed; none of that is the command's output.

@@ -13,6 +13,8 @@ interface Props {
   /** Cards in the backlog: work that exists but is waiting on something else to be done first. */
   waiting: number;
   blocked: number;
+  /** Cards Autopilot finished but could not check, which it can close once the project has a check. */
+  unchecked?: number;
   /** Another action on the screen is running, so starting is held back. */
   disabled: boolean;
 }
@@ -45,7 +47,7 @@ function remaining(iso: string, now: number): string {
 }
 
 /** Autopilot: hand the board to the agents and let it run, resting when the provider says it has had enough. */
-export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked, disabled }: Props): ReactNode {
+export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked, unchecked = 0, disabled }: Props): ReactNode {
   const status = useAutopilotStatus(projectId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +64,8 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
 
   const running = Boolean(status && AUTOPILOT_ACTIVE.has(status.phase));
   const cooling = status?.phase === 'cooling' && Boolean(status.resumeAt);
-  const hasWork = ready > 0 || inProgress > 0;
+  // Cards waiting in review for a check count as work: a run can close them, and every card behind them waits on that.
+  const hasWork = ready > 0 || inProgress > 0 || unchecked > 0;
 
   useEffect(() => {
     if (!cooling) return undefined;

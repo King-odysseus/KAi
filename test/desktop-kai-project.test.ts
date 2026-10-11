@@ -185,7 +185,7 @@ describe('working the board', () => {
   });
 
   it('refuses to ready a card whose dependency is not done', async () => {
-    await expect(server.tool('move_task')({ cardId: 'sign-in', status: 'ready' })).rejects.toThrow('blocked by button');
+    await expect(server.tool('move_task')({ cardId: 'sign-in', status: 'ready' })).rejects.toThrow(/cannot go to Ready yet: it waits on "button card"/);
   });
 
   it('moves a card and keeps the reason it was blocked', async () => {

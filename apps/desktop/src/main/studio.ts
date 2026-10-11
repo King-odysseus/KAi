@@ -745,6 +745,25 @@ export function arrangeBoardPrompt(board: StudioBoard, brief: string, stack: str
   return { system, user };
 }
 
+/**
+ * The list of cards in an arrange reply, under whatever key the model chose. The schema asks for `cards`, but a
+ * model that returned `order`, `arrangement` or a bare list was still answering the question, so the list is found
+ * rather than demanded by name: `cards` first, then the first value, at most two levels in, that is a list of
+ * cards or of ids.
+ */
+function findArrangeList(json: unknown, depth = 0): unknown[] | null {
+  const looksLikeCards = (list: unknown[]): boolean => list.length > 0 && list.every((item) => typeof item === 'string' || (item !== null && typeof item === 'object' && typeof (item as { id?: unknown }).id === 'string'));
+  if (Array.isArray(json)) return looksLikeCards(json) ? json : null;
+  if (!json || typeof json !== 'object' || depth > 2) return null;
+  const record = json as Record<string, unknown>;
+  if (Array.isArray(record.cards)) return record.cards;
+  for (const value of Object.values(record)) {
+    const found = findArrangeList(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** Reads an arranged order. A reply that names no card is refused rather than applied as an empty board. */
 export function parseArrangePlan(content: string): { cards: StudioArrangeEntry[] } {
   let json: unknown;
@@ -753,10 +772,15 @@ export function parseArrangePlan(content: string): { cards: StudioArrangeEntry[]
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)} ${replySnippet(content)}`);
   }
-  const raw = (json as { cards?: unknown } | null)?.cards;
-  if (!Array.isArray(raw)) throw new Error(`The arrange reply had no card list. ${replySnippet(content)}`);
+  const raw = findArrangeList(json);
+  if (!raw) throw new Error(`The arrange reply had no card list. ${replySnippet(content)}`);
   const cards: StudioArrangeEntry[] = [];
   for (const item of raw) {
+    // A bare id is a card with no dependencies named: some models answer with just the order.
+    if (typeof item === 'string') {
+      if (item.trim()) cards.push({ id: item.trim(), dependsOn: [] });
+      continue;
+    }
     const entry = item as { id?: unknown; dependsOn?: unknown };
     if (typeof entry?.id !== 'string' || !entry.id.trim()) continue;
     const dependsOn = Array.isArray(entry.dependsOn)

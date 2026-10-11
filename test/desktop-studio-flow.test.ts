@@ -146,6 +146,12 @@ describe('studio drafts', () => {
 
     // A reply that names nothing is refused, so arranging can never empty a board.
     expect(() => parseArrangePlan('{"cards":[]}')).toThrow();
+    // A model that answered under another key, or with only the order, was still answering.
+    expect(parseArrangePlan('{"order":[{"id":"scaffold","title":"Scaffold","kind":"chore","dependsOn":[]},{"id":"model","dependsOn":["scaffold"]}]}').cards)
+      .toEqual([{ id: 'scaffold', dependsOn: [] }, { id: 'model', dependsOn: ['scaffold'] }]);
+    expect(parseArrangePlan('{"order":["scaffold","model"]}').cards).toEqual([{ id: 'scaffold', dependsOn: [] }, { id: 'model', dependsOn: [] }]);
+    expect(parseArrangePlan('{"result":{"arrangement":[{"id":"a","dependsOn":[]}]}}').cards).toEqual([{ id: 'a', dependsOn: [] }]);
+    expect(() => parseArrangePlan('{"note":"done","count":3}')).toThrow(/no card list/);
     expect(parseArrangePlan('{"cards":[{"id":"home","dependsOn":["railway"]}]}').cards)
       .toEqual([{ id: 'home', dependsOn: ['railway'] }]);
   });

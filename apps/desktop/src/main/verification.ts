@@ -75,6 +75,8 @@ export async function suggestTestCommand(projectPath: string): Promise<string | 
     if (manifest.scripts?.test) return 'npm test';
     if (manifest.scripts?.typecheck) return 'npm run typecheck';
     if (manifest.scripts?.lint) return 'npm run lint';
+    // A scaffolded project often has a build before it has tests, and a build that fails is still a check that can.
+    if (manifest.scripts?.build) return 'npm run build';
   } catch {
     // No usable package.json; try other ecosystems.
   }

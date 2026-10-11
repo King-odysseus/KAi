@@ -2427,6 +2427,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 inProgress={board.cards.filter((card) => card.status === 'inProgress').length}
                 waiting={board.cards.filter((card) => card.status === 'backlog').length}
                 blocked={board.cards.filter((card) => card.status === 'blocked').length}
+                unchecked={board.cards.filter((card) => card.status === 'review' && !card.check && card.notes.includes('has no check command')).length}
                 disabled={busy !== null}
               />
             )}
