@@ -57,6 +57,12 @@ const BOARD_STATUS_LABEL: Record<BoardStatus, string> = {
 };
 
 /**
+ * Projects whose design build was stopped because the Studio was left while it ran, so the Studio can say so when it
+ * is opened again. Held outside the component because the component is gone by the time anyone could read it.
+ */
+const stoppedByLeaving = new Set<string>();
+
+/**
  * What a design build was asked to do, beyond its plain form. Plain, it fills in only the screens that are missing.
  * `redraw` draws screens again that are already there — all of them, or one — for a look that changed. `clean` clears
  * whatever is broken or duplicated about one screen first (a page with the wrong name, a duplicate, a half-drawn
@@ -123,6 +129,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
   const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'guide'>('interview');
+  // How the last design build ended, shown beside the buttons that start it. The page's own banner is at the very top,
+  // a long way above the build controls, and a build that stopped there looked like one that had not said anything.
+  const [buildOutcome, setBuildOutcome] = useState<string | null>(null);
   const [designChatText, setDesignChatText] = useState('');
   const [designChatImage, setDesignChatImage] = useState<{ name: string; dataUrl: string } | null>(null);
   const [designChatMessages, setDesignChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
@@ -1210,6 +1219,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBusy('design-build');
     setError(null);
     setNotice(null);
+    setBuildOutcome(null);
     setLastFailedStep(null);
     setBuildCostUsd(0);
     buildCostRef.current = 0;
@@ -1232,10 +1242,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       }
       if (action) {
         const queue = screensToRedraw(pagesText, pulled, action.target === 'all' ? undefined : action.target);
-        if (queue.length === 0) { setNotice('There is nothing to redraw: the pages list names no screens yet.'); return; }
+        if (queue.length === 0) { announceBuild('There is nothing to redraw: the pages list names no screens yet.'); return; }
         for (const target of queue) {
           if (buildCancelled.current) {
-            setNotice(`Stopped with ${queue.length - drawn} screen${queue.length - drawn === 1 ? '' : 's'} still to redraw.`);
+            announceBuild(`Stopped with ${queue.length - drawn} screen${queue.length - drawn === 1 ? '' : 's'} still to redraw.`);
             return;
           }
           const result = await runBuildStepWithRetry(target.name, promptFor(target.name, mode, pulled.artifacts));
@@ -1247,7 +1257,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           }
           drawn += 1;
         }
-        setNotice(`${mode === 'clean' ? 'Fixed and redrew' : 'Redrew'} ${drawn} screen${drawn === 1 ? '' : 's'} in open-pencil${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
+        announceBuild(`${mode === 'clean' ? 'Fixed and redrew' : 'Redrew'} ${drawn} screen${drawn === 1 ? '' : 's'} in open-pencil${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
         clearStyleChanged();
         return;
       }
@@ -1257,7 +1267,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         const remaining = remainingScreens(pagesText, pulled).filter((row) => !skipped.has(screenTitleKey(row.name)));
         if (remaining.length === 0) break;
         if (buildCancelled.current) {
-          setNotice(`Stopped with ${remaining.length} screen${remaining.length === 1 ? '' : 's'} still to draw. Everything already drawn is kept; press Resume to carry on from here.`);
+          announceBuild(`Stopped with ${remaining.length} screen${remaining.length === 1 ? '' : 's'} still to draw. Everything already drawn is kept; press Resume to carry on from here.`);
           return;
         }
         const row = remaining[0]!;
@@ -1270,9 +1280,10 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         }
         drawn += 1;
       }
-      setNotice(`Design build finished: ${drawn} screen${drawn === 1 ? '' : 's'} drawn and confirmed in open-pencil${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
+      announceBuild(`Design build finished: ${drawn} screen${drawn === 1 ? '' : 's'} drawn and confirmed in open-pencil${buildCostRef.current > 0 ? `, ~$${buildCostRef.current.toFixed(2)} spent` : ''}.`);
     } catch (caught) {
       setError(messageOf(caught));
+      setBuildOutcome(`Stopped: ${messageOf(caught)}`);
     } finally {
       buildStepId.current = null;
       setBuildingStep(null);
@@ -1434,9 +1445,24 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // second build into the same document.
   useEffect(() => () => {
     if (!buildStepId.current) return;
+    if (projectId) stoppedByLeaving.add(projectId);
     buildCancelled.current = true;
     void window.kaiDesktop.cancelStudioDesignStep(projectId ?? '', buildStepId.current).catch(() => undefined);
   }, [projectId]);
+
+  // Coming back to a Studio whose build was stopped by leaving it: say so, so it does not look like it quietly gave up.
+  useEffect(() => {
+    if (!projectId || !stoppedByLeaving.delete(projectId)) return;
+    const text = 'The design build was stopped when you left the Studio. Everything already drawn is kept; Resume carries on from the first screen still missing.';
+    setNotice(text);
+    setBuildOutcome(text);
+  }, [projectId]);
+
+  /** Says how a design build ended, in the page banner and beside the build buttons. */
+  function announceBuild(text: string): void {
+    setNotice(text);
+    setBuildOutcome(text);
+  }
 
   async function move(cardId: string, status: BoardStatus): Promise<void> {
     if (!projectId) return;
@@ -2232,6 +2258,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 <p className="studio-note">
                   Build the design runs the whole list for you: the foundation first, then one screen at a time, checking after each step that open-pencil really holds the screen before moving on. Stop any time — the screens already drawn are kept and Resume carries on from the first one still missing. Copy prompt is still here for running a single step yourself.
                 </p>
+                {buildOutcome && <p className="studio-note" role="status">{buildOutcome}</p>}
                 <div className="page-actions">
                   {busy === 'design-build' ? (
                     <button type="button" className="secondary-button" onClick={stopBuildingDesign}>

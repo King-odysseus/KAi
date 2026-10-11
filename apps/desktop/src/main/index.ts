@@ -1035,11 +1035,12 @@ async function startApplication(): Promise<void> {
     screens: (projectId) => new DesktopEqualizer(equalizerPortsFor(projectId)).screens(projectId),
     run: (input) => new DesktopEqualizer(equalizerPortsFor(input.projectId)).run(input),
   };
-  const openConversationInWindow = (ownerWindowId: number, conversation: ConversationRecord, openTab: boolean): void => {
+  const openConversationInWindow = (ownerWindowId: number, conversation: ConversationRecord, openTab: boolean, background = false): void => {
     desktopWindows.send(ownerWindowId, 'app:open-conversation', {
       conversationId: conversation.id,
       ...(conversation.projectId ? { projectId: conversation.projectId } : {}),
       ...(openTab ? { openTab: true } : {}),
+      ...(background ? { background: true } : {}),
     });
   };
   autopilot = new DesktopAutopilot({
@@ -1069,8 +1070,9 @@ async function startApplication(): Promise<void> {
     },
     preflight: async (projectId) => { await ensureStudioDesktopProject(ipcContext!, projectId); },
     // Its own tab, the way Auto opens one: a run that took over the tab someone was reading in is a run they cannot
-    // see the rest of the app around.
-    openConversation: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true),
+    // see the rest of the app around. And in the background: showing it switched the window to the conversation,
+    // which closed the Studio under a design build that was drawing and cancelled it without a word.
+    openConversation: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true, true),
     runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
     runCheck: async (projectId, command, signal) => {

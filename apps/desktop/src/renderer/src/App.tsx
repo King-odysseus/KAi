@@ -851,8 +851,16 @@ export function App(): ReactNode {
    */
   const activeConversationIdRef = useRef<string | null>(null);
   activeConversationIdRef.current = activeConversationId;
-  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId, projectId, openTab }) => {
+  useEffect(() => window.kaiDesktop.onOpenConversation(({ conversationId, projectId, openTab, background }) => {
     void (async () => {
+      // A run working unattended gets its tab and nothing more: no switch of project, view or open conversation, so
+      // whatever the person is in the middle of (a design build in the Studio, say) carries on undisturbed.
+      if (background) {
+        const loaded = await window.kaiDesktop.getConversation(conversationId).then(unwrap).catch(() => null);
+        if (loaded) setConversations((current) => (current.some((item) => item.id === conversationId) ? current : [loaded, ...current]));
+        setOpenConversationIds((current) => (current.includes(conversationId) ? current : [...current, conversationId]));
+        return;
+      }
       // A conversation belongs to a project; switch to it first or the composer would show the wrong one.
       if (projectId && projectId !== activeProjectIdRef.current) await openProjectRef.current(projectId, 'stay');
       // Auto hands a split's remainder to a conversation of its own, so it needs a tab, not just to be shown.

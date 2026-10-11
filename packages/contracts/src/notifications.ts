@@ -23,8 +23,11 @@ export const viewReportSchema = z
 // `projectId`, when given, is the project the conversation belongs to, so the window can switch to it first.
 // `openTab` adds the conversation to the window's tabs rather than only showing it, which is how a split from Auto
 // gives its remainder somewhere of its own to run.
+// `background` keeps the window where it is: the conversation gets its tab and nothing else changes, which is how an
+// unattended Autopilot run puts its card's conversation somewhere to be looked at without taking over the screen the
+// person is working in.
 export const openConversationEventSchema = z
-  .object({ conversationId: z.string().min(1), projectId: z.string().min(1).optional(), openTab: z.boolean().optional() })
+  .object({ conversationId: z.string().min(1), projectId: z.string().min(1).optional(), openTab: z.boolean().optional(), background: z.boolean().optional() })
   .strict();
 
 export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
