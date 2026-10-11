@@ -62,7 +62,7 @@ describe('agent terminal', () => {
     expect(second.sessionId).toBe(first.sessionId);
     expect(port.started).toEqual([{ shell: 'gitbash', cwd: project.path, agent: true }]);
     // The command and the marker line go in as one write, command first.
-    expect(port.written[0]).toMatch(/^echo hello\r.*__KAI_DONE_[0-9a-f]+_.*\r$/s);
+    expect(port.written.find((entry) => entry.startsWith('echo hello'))).toMatch(/^echo hello\r.*__KAI_DONE_[0-9a-f]+_.*\r$/s);
   });
 
   it('lets the agent choose the shell, and refuses one that is not installed', async () => {
@@ -184,7 +184,7 @@ describe('the real terminal', () => {
     const ok = await terminal.run({ command: 'echo kai-marker-ok', shell, timeoutMs: 40_000 });
     expect(ok.timedOut).toBe(false);
     expect(ok.exitCode).toBe(0);
-    expect(ok.output).toContain('kai-marker-ok');
+    expect(ok.output).toBe('kai-marker-ok');
     const failing = shell === 'powershell' ? 'Get-Item C:\\definitely\\not\\here' : shell === 'cmd' && process.platform === 'win32' ? 'dir C:\\definitely\\not\\here' : 'ls /definitely/not/here';
     const bad = await terminal.run({ command: failing, shell, timeoutMs: 40_000 });
     expect(bad.timedOut).toBe(false);

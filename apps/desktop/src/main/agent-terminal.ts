@@ -57,6 +57,14 @@ function managerShell(shell: AgentShell): TerminalShell {
   return shell === 'cmd' ? 'default' : shell;
 }
 
+/** Typed into a new agent session so its prompt is one short line.  */
+export function promptSetup(shell: AgentShell): string | null {
+  if (shell === 'gitbash') return "PS1='$ '";
+  if (shell === 'powershell') return "function prompt { '> ' }";
+  if (shell === 'cmd' && process.platform === 'win32') return 'prompt $G';
+  return null;
+}
+
 /** The line that, typed after a command, prints a marker carrying that command's exit status. */
 export function sentinelLine(shell: AgentShell, nonce: string, platform: NodeJS.Platform = process.platform): string {
   if (shell === 'powershell') return `Write-Host "__KAI_DONE_${nonce}_$(if ($?) {0} else {1})__"`;
@@ -73,6 +81,24 @@ const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u00
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI, '').replace(/\r(?!\n)/g, '\n').replace(/\r\n/g, '\n');
+}
+
+/**
+ * What the command printed, without the shell's echo of what was typed. The marker line is typed along with the
+ * command, so the shell echoes it (behind a prompt) before the real marker arrives; everything from that echo on goes,
+ * and so does the echo of the command's own first line.
+ */
+export function cleanOutput(text: string, nonce: string, command: string): string {
+  const marker = text.indexOf(`__KAI_DONE_${nonce}`);
+  // What stands in front of the echoed marker is the prompt and the start of the typed marker line. Dropped by what
+  // it says, not by where the line ends: cmd prints the next prompt on the same line as the command's last output.
+  const kept = marker >= 0 ? text.slice(0, marker).replace(/(?:\$ |> ?)(?:printf '\\n|Write-Host "|echo )$/, '') : text;
+  const lines = kept.split('\n');
+  const first = command.split(/\r?\n/)[0]!.trim().slice(0, 30);
+  // A fresh session prints a banner and prompt before the command is echoed; none of that is the command's output.
+  const echoed = first ? lines.findIndex((line) => line.includes(first)) : -1;
+  if (echoed >= 0) lines.splice(0, echoed + 1);
+  return lines.join('\n').trim();
 }
 
 function tail(text: string, limit: number): string {
@@ -102,7 +128,11 @@ export class AgentTerminal {
     const project = await this.context.activeProject();
     const cwd = input.cwd?.trim() || project?.path;
     if (!cwd) throw new Error('No project is open, so there is no folder to start in. Pass `cwd`, or open a project in KAI.');
-    return this.terminal.start(project?.id ?? 'agent', cwd, managerShell(shell), 120, 30, null, { agent: true });
+    const session = this.terminal.start(project?.id ?? 'agent', cwd, managerShell(shell), 120, 30, null, { agent: true });
+    // A plain one-line prompt, so what comes back is the command's output and not the person's prompt theme.
+    const setup = promptSetup(shell);
+    if (setup) this.terminal.write(session.id, `${setup}\r`);
+    return session;
   }
 
   async run(input: { command: string; shell?: AgentShell; cwd?: string; sessionId?: string; timeoutMs?: number }): Promise<RunResult> {
@@ -111,7 +141,7 @@ export class AgentTerminal {
     const timeoutMs = Math.min(Math.max(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
     const session = await this.sessionFor(input);
     const shell = this.shellOf(session);
-    const nonce = randomBytes(6).toString('hex');
+    const nonce = randomBytes(3).toString('hex');
     const pattern = sentinelPattern(nonce);
     let seen = '';
     return new Promise<RunResult>((resolve) => {
@@ -122,8 +152,7 @@ export class AgentTerminal {
         clearTimeout(timer);
         stopOutput();
         stopExit();
-        const match = pattern.exec(seen);
-        const text = stripAnsi(match ? seen.slice(0, match.index) : seen).trim();
+        const text = cleanOutput(stripAnsi(seen), nonce, command);
         resolve({ sessionId: session.id, shell, exitCode, timedOut, output: tail(text, MAX_OUTPUT_CHARS) });
       };
       const stopOutput = this.terminal.onOutput((id, data) => {
