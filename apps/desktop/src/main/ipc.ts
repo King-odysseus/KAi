@@ -400,7 +400,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     const proxyWasReady = services.some((service) => service.kind === 'universalProxy' && service.status === 'ready');
     const cognitive1WasReady = services.some((service) => service.kind === 'cognitive1' && service.status === 'ready');
     context.desktopShell.apply(merged.notifications);
-    context.mcp.invalidate();
+    // No blanket invalidate: the runtime reconnects exactly the servers whose settings changed, and a save that
+    // touches none of them must not close a tool call an agent is in the middle of.
     if (proxyChanged && proxyWasReady) {
       if (merged.proxy.enabled) await context.services.restart('universalProxy', merged);
       else await context.services.stop('universalProxy');
@@ -2276,16 +2277,19 @@ function renderConversationHandoff(turns: readonly ConversationRecord['turns'][n
 function fullAccessExecutionBriefing(executionMode: ExecutionMode): string {
   const windows = process.platform === 'win32';
   // The Direct API's run_command tool spawns through Git Bash when it is installed (project-tools.ts,
-  // agentShell()), not cmd.exe or PowerShell — so the advice below has to match what the command actually runs
-  // in. A CLI agent's own shell tool is outside KAI's control and unverified, so it keeps the Windows-specific
-  // wording unchanged rather than being told something that may not hold for it.
-  const usesGitBash = windows && executionMode === 'api' && Boolean(findGitBash());
+  // agentShell()), and the in-app terminal defaults to it too. A CLI agent picks its own shell, so it is told to
+  // prefer Git Bash as well: left unsaid it falls back to PowerShell, which is not what the user works in. Without
+  // Git Bash installed there is nothing to prefer, so the Windows-compatible wording stays.
+  const usesGitBash = windows && Boolean(findGitBash());
+  const viaApi = executionMode === 'api';
   return [
     '# Full access execution policy',
     'The user explicitly selected Full access for this run. You may edit project files, run shell commands, and, when the user explicitly asks, commit and push changes without requesting an additional confirmation.',
     'Complete the requested workflow yourself. Do not stop after a command error merely to give the user instructions when a safe retry or equivalent command can be run.',
     usesGitBash
-      ? 'This is Windows, but your commands run through Git Bash, not cmd.exe or PowerShell. Write ordinary POSIX/Unix-style commands — pipes, `grep`, `tail`, `&&`, `$(...)` all work normally; do not switch to PowerShell syntax.'
+      ? viaApi
+        ? 'This is Windows, but your commands run through Git Bash, not cmd.exe or PowerShell. Write ordinary POSIX/Unix-style commands — pipes, `grep`, `tail`, `&&`, `$(...)` all work normally; do not switch to PowerShell syntax.'
+        : 'This is Windows with Git Bash installed. Run shell commands in Git Bash (your Bash tool, or `bash -c`) rather than PowerShell or cmd.exe, and write ordinary POSIX/Unix-style commands — pipes, `grep`, `tail`, `&&`, `$(...)`. Use PowerShell only for something Git Bash cannot do, such as a Windows-only cmdlet.'
       : windows
         ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
         : 'Use commands compatible with the current project shell.',
@@ -4033,7 +4037,7 @@ async function saveOpenPencil(context: IpcContext, input: OpenPencilSaveInput): 
   const token = input.token?.replace(/^bearer\s+/i, '').trim();
   if (token) await context.credentials.set(OPENPENCIL_CREDENTIAL_ID, `Bearer ${token}`);
   await context.settings.update((settings) => withOpenPencilMcpSetting(settings, { endpoint: input.endpoint, enabled: input.enabled }).settings);
-  context.mcp.invalidate();
+  context.mcp.invalidate(OPENPENCIL_MCP_SERVER_ID);
   await broadcastSharedState(context);
   return openPencilStatus(context);
 }

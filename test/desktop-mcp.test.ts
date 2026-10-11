@@ -168,6 +168,34 @@ describe('desktop MCP runtime', () => {
   });
 });
 
+describe('desktop MCP runtime reconnects per server', () => {
+  const stdio = (id: string, secret: string): AppSettings['mcpServers'][number] => ({
+    id, name: id, enabled: true, transport: 'stdio', command: process.execPath, args: [path.resolve('test/fixtures/mcp-echo-server.mjs')], cwd: null,
+    envCredentialIds: { KAI_TEST_MCP_SECRET: secret },
+  });
+  const clientsOf = (runtime: DesktopMcpRuntime): Map<string, unknown> => (runtime as unknown as { connection: { clients: Map<string, unknown> } }).connection.clients;
+
+  it('keeps the other servers connected when one server changes or is invalidated', async () => {
+    const settings = createDefaultSettings();
+    settings.mcpServers = [stdio('a', 'mcp.a'), stdio('b', 'mcp.b')];
+    const runtime = new DesktopMcpRuntime({ load: async () => structuredClone(settings) }, { get: async () => 'secret' }, new RedactedLogger());
+    runtimes.push(runtime);
+    await runtime.definitions();
+    const [a1, b1] = [clientsOf(runtime).get('a'), clientsOf(runtime).get('b')];
+
+    settings.mcpServers = [stdio('a', 'mcp.a2'), stdio('b', 'mcp.b')];
+    await runtime.definitions();
+    expect(clientsOf(runtime).get('a')).not.toBe(a1);
+    expect(clientsOf(runtime).get('b')).toBe(b1);
+
+    const [a2, b2] = [clientsOf(runtime).get('a'), clientsOf(runtime).get('b')];
+    runtime.invalidate('a');
+    await runtime.definitions();
+    expect(clientsOf(runtime).get('a')).not.toBe(a2);
+    expect(clientsOf(runtime).get('b')).toBe(b2);
+  });
+});
+
 function settingsPort(settings: AppSettings): { load(): Promise<AppSettings> } {
   return { load: async () => structuredClone(settings) };
 }

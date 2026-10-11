@@ -610,7 +610,7 @@ async function startApplication(): Promise<void> {
     if (upToDate) return;
     if (wantedAuth) await credentials.set(OPENPENCIL_CREDENTIAL_ID, wantedAuth);
     await settings.update((value) => withOpenPencilMcpSetting(value, { endpoint: live.endpoint, enabled: true, noAuth }).settings);
-    mcpRuntime?.invalidate();
+    mcpRuntime?.invalidate(OPENPENCIL_MCP_SERVER_ID);
   };
   // Pull the design and Check connection go through this instead of the plain port above, so they also launch the
   // editor and re-sync first. The Equalizer keeps the plain one: its designConnected() is a background status

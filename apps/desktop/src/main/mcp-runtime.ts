@@ -28,6 +28,8 @@ interface McpToolDescriptor {
 
 interface McpConnection {
   fingerprint: string;
+  /** One fingerprint per connected server, so a change to one server's settings reconnects only that server. */
+  serverFingerprints: Map<string, string>;
   clients: Map<string, Client>;
   tools: Map<string, McpToolDescriptor>;
 }
@@ -42,10 +44,25 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     private readonly logger: RedactedLogger,
   ) {}
 
-  invalidate(): void {
+  /**
+   * Drops the connection so the next call reconnects. With a server id it drops only that server's client and
+   * keeps every other one open: a tool call another server is in the middle of (Autopilot's agent, say) must not
+   * be cut off because open-pencil's token changed or one of its calls failed.
+   */
+  invalidate(serverId?: string): void {
     const previous = this.connection;
-    this.connection = undefined;
-    if (previous) void Promise.allSettled([...previous.clients.values()].map((client) => client.close()));
+    if (!previous) return;
+    if (serverId === undefined) {
+      this.connection = undefined;
+      void Promise.allSettled([...previous.clients.values()].map((client) => client.close()));
+      return;
+    }
+    const client = previous.clients.get(serverId);
+    previous.clients.delete(serverId);
+    previous.serverFingerprints.delete(serverId);
+    for (const [name, tool] of previous.tools) if (tool.serverId === serverId) previous.tools.delete(name);
+    previous.fingerprint = '';
+    if (client) void client.close().catch(() => undefined);
   }
 
   async definitions(): Promise<readonly unknown[]> {
@@ -152,7 +169,7 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     try {
       return await run(client);
     } catch (error) {
-      this.invalidate();
+      this.invalidate(serverId);
       const reconnected = await this.ensureConnected();
       const retried = reconnected.clients.get(serverId);
       if (!retried) throw error;
@@ -179,13 +196,26 @@ export class DesktopMcpRuntime implements ExternalToolPort {
   }
 
   private async connect(settings: AppSettings, fingerprint: string): Promise<McpConnection> {
+    const previous = this.connection;
     const clients = new Map<string, Client>();
     const tools = new Map<string, McpToolDescriptor>();
+    const serverFingerprints = new Map<string, string>();
     const enabledServers = settings.mcpServers.filter((server) => server.enabled);
     for (const server of enabledServers) {
+      const serverFingerprint = JSON.stringify(server);
+      // A server whose own settings did not change keeps its live client and tools, so one server's change never
+      // closes a call another server is in the middle of.
+      const kept = previous?.clients.get(server.id);
+      if (kept && previous?.serverFingerprints.get(server.id) === serverFingerprint) {
+        clients.set(server.id, kept);
+        serverFingerprints.set(server.id, serverFingerprint);
+        for (const [name, tool] of previous.tools) if (tool.serverId === server.id) tools.set(name, tool);
+        continue;
+      }
       try {
         const client = await this.connectServer(server);
         clients.set(server.id, client);
+        serverFingerprints.set(server.id, serverFingerprint);
         const listed = await client.listTools(undefined, { timeout: 15_000 });
         for (const tool of listed.tools) {
           const providerName = providerToolName(server, tool.name, tools.keys());
@@ -204,9 +234,11 @@ export class DesktopMcpRuntime implements ExternalToolPort {
         this.logger.error('internal', `MCP server failed to connect: ${server.name}`, undefined, error);
       }
     }
-    const previous = this.connection;
-    this.connection = { fingerprint, clients, tools };
-    if (previous) await Promise.allSettled([...previous.clients.values()].map((client) => client.close()));
+    this.connection = { fingerprint, serverFingerprints, clients, tools };
+    if (previous) {
+      const dropped = [...previous.clients].filter(([id, client]) => clients.get(id) !== client).map(([, client]) => client);
+      await Promise.allSettled(dropped.map((client) => client.close()));
+    }
     return this.connection;
   }
 
