@@ -15,7 +15,7 @@ import {
 } from '../packages/contracts/src';
 import { StudioArtifacts } from '../apps/desktop/src/main/artifacts';
 import { StudioBoardStore } from '../apps/desktop/src/main/board';
-import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseArrangePlan, parseArtifact, parseBoardDraft, routesFromPagesDocument, withRoutesFromPages, type StudioPorts } from '../apps/desktop/src/main/studio';
+import { DesktopStudio, arrangeBoardPrompt, artifactPrompt, boardPrompt, parseArrangePlan, parseArtifact, parseBoardDraft, routesFromPagesDocument, sharesTheseScreens, withRoutesFromPages, type StudioPorts } from '../apps/desktop/src/main/studio';
 import { DesktopUiCheck } from '../apps/desktop/src/main/ui-check';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { ReplyShapeError } from '../apps/desktop/src/main/learning-tutor';
@@ -391,6 +391,40 @@ describe('pulling the design from open-pencil', () => {
     expect(pulled.board.cards.map((card) => card.id)).toEqual(['c1', 'p1', 'p2']);
     // And nothing was written: the tokens are still this project's.
     expect(await again.artifactText('p1', 'tokens')).toContain('--color-ink');
+  });
+
+  it('recognises the same pages under new ids as the same document, and keeps the board it built', async () => {
+    // Reopening or re-importing a file numbers its pages again. The pages are the same ones, so the pull has to read
+    // them rather than tell the person to "open the right document" when it is open.
+    const first = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => first.ports });
+    await app.pullDesign('p1');
+
+    const renumbered = openPencil({
+      ...DESIGN,
+      list_pages: '{"current":"Sign in","pages":[{"id":"q1","name":"Sign in (/sign-in)"},{"id":"q2","name":"Sign up (/sign-up)"}]}',
+    });
+    const { studio: again } = studio({}, { openPencil: async () => renumbered.ports });
+    const pulled = await again.pullDesign('p1');
+
+    expect(pulled.differentDocument).toBe(false);
+    // Nothing is called changed just because every id is new: there is nothing to compare ids against.
+    expect(pulled.changed).toEqual([]);
+    expect(pulled.design.components.filter((component) => component.screen).map((component) => component.id).sort()).toEqual(['q1', 'q2']);
+  });
+
+  it('judges two documents the same by name only when nearly all the recorded screens are there', () => {
+    const recorded = ['Sign-in (/sign-in)', 'Admin shell (/admin/*)', 'Parent shell (/parent/*)', 'Student shell (/student/*)', 'Admin home dashboard (/admin)'];
+    expect(sharesTheseScreens(recorded, ['Sign-in', 'Admin shell', 'Parent shell', 'Student shell', 'Admin home dashboard', 'Levels'])).toBe(true);
+    // One page short of five is still four fifths.
+    expect(sharesTheseScreens(recorded, ['Sign-in', 'Admin shell', 'Parent shell', 'Student shell'])).toBe(true);
+    // A stranger's file that happens to share a page or two is not this project's.
+    expect(sharesTheseScreens(recorded, ['Sign-in', 'Landing'])).toBe(false);
+    expect(sharesTheseScreens(recorded, ['Sign-in', 'Admin shell', 'Landing'])).toBe(false);
+    // With few screens recorded, all of them have to be there.
+    expect(sharesTheseScreens(['Sign in', 'Sign up'], ['Sign in', 'Landing'])).toBe(false);
+    expect(sharesTheseScreens(['Sign in', 'Sign up'], ['Sign in', 'Sign up', 'Landing'])).toBe(true);
+    expect(sharesTheseScreens([], ['Sign in'])).toBe(false);
   });
 
   it('treats a page added inside the same document as the same document', async () => {

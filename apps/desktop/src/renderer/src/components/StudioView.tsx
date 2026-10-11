@@ -1110,6 +1110,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     return { ...pulled, artifacts };
   }
 
+  /** A pull of another document was refused, so it holds nothing of this project's. The build judges every step by
+   * reading the design back, and judging against the record from before — which is what a refused pull hands back —
+   * would call a screen that is really there "not drawn" and retry it for ever. */
+  function requireSameDocument(pull: { differentDocument: boolean }): void {
+    if (pull.differentDocument) {
+      throw new Error('open-pencil is open on a different document from the one this project was drawn in, so the build stopped instead of judging screens against it. Open this project\'s document, then press Resume.');
+    }
+  }
+
   /** Reads the design from open-pencil: the tokens go to `.kai/spec`, and a changed node restales its card. */
   async function pullDesign(): Promise<void> {
     if (!projectId) return;
@@ -1120,7 +1129,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       setNotice(
         // Said first of all: the editor is on another project's file, so none of this belongs to this project.
         pulled.differentDocument
-          ? 'The editor is open on a different document, so nothing was pulled into this project. Its pages share no id with the ones this project was drawn from. Open the document this project belongs to, then pull again.'
+          ? 'The editor is open on a different document, so nothing was pulled into this project. Its pages share no id, and not enough names, with the ones this project was drawn from. Open the document this project belongs to, then pull again.'
           // Said next, because it means the pull read the wrong document: the editor is open on something that has
           // no variables, or on a blank page. The token file was left as it was rather than emptied.
           : pulled.tokensPreserved
@@ -1210,11 +1219,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     // rather than guessed at.
     const namesInPencil = (pull: Parameters<typeof drawnPageNames>[0]): string => drawnPageNames(pull).join(', ') || 'no pages';
     try {
-      let pulled = await refreshDesign();
+      let pulled = await refreshDesign(); requireSameDocument(pulled);
       if (!foundationDone || (action?.kind === 'redraw' && action.target === 'all')) {
         const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation', 'draw', pulled.artifacts), foundationDone ? undefined : foundationLanded);
         if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
-        pulled = await refreshDesign();
+        pulled = await refreshDesign(); requireSameDocument(pulled);
         if (!foundationLanded(pulled)) {
           setLastFailedStep('Foundation');
           throw new Error(`Foundation: the turn finished, but open-pencil has no variables and no components of its own. ${describeTurn(result)}`);
@@ -1231,7 +1240,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           }
           const result = await runBuildStepWithRetry(target.name, promptFor(target.name, mode, pulled.artifacts));
           if (result.status === 'failed') { setLastFailedStep(target.name); throw new Error(`${target.name}: ${result.error || 'the step failed.'}`); }
-          pulled = await refreshDesign();
+          pulled = await refreshDesign(); requireSameDocument(pulled);
           if (!screenLanded(target.name, pulled)) {
             setLastFailedStep(target.name);
             throw new Error(`"${target.name}": the ${mode === 'clean' ? 'cleanup' : 'redraw'} finished, but open-pencil has no page named like it. It has: ${namesInPencil(pulled)}. ${describeTurn(result)}`);
@@ -1254,7 +1263,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
         const row = remaining[0]!;
         const result = await runBuildStepWithRetry(row.name, promptFor(row.name, 'draw', pulled.artifacts), (pull) => screenLanded(row.name, pull));
         if (result.status === 'failed') { setLastFailedStep(row.name); throw new Error(`${row.name}: ${result.error || 'the step failed.'}`); }
-        pulled = await refreshDesign();
+        pulled = await refreshDesign(); requireSameDocument(pulled);
         if (!screenLanded(row.name, pulled)) {
           setLastFailedStep(row.name);
           throw new Error(`"${row.name}": the turn finished, but open-pencil has no page named like it. It has: ${namesInPencil(pulled)}. ${describeTurn(result)}`);

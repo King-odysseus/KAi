@@ -479,7 +479,15 @@ export class DesktopStudio {
     // or an edit inside the document must not read as a different one.
     const previousPages = new Set(previous.components.filter((component) => component.screen).map((component) => component.id));
     const currentPages = read.components.filter((component) => component.screen).map((component) => component.id);
-    if (previousPages.size > 0 && currentPages.length > 0 && !currentPages.some((id) => previousPages.has(id))) {
+    const idsOverlap = currentPages.some((id) => previousPages.has(id));
+    // The ids are not always stable: reopening or re-importing the same file numbers its pages again, and the same
+    // pages arrive under new ids. Page names settle that case, but only when nearly all of them are here — a stranger's
+    // file can easily share one page called "Sign in", and must still be refused.
+    const sameByName = !idsOverlap && sharesTheseScreens(
+      previous.components.filter((component) => component.screen).map((component) => component.name),
+      read.components.filter((component) => component.screen).map((component) => component.name),
+    );
+    if (previousPages.size > 0 && currentPages.length > 0 && !idsOverlap && !sameByName) {
       return {
         design: previous,
         board: await this.ports.board.read(projectId),
@@ -490,7 +498,9 @@ export class DesktopStudio {
         differentDocument: true,
       };
     }
-    const changed = changedNodes(previous.hashes, read.hashes);
+    // Hashes are keyed by node id, so a document that was renumbered has nothing to compare against: every node would
+    // read as changed and every card as stale. The cards are matched to the new ids by name just below instead.
+    const changed = sameByName ? [] : changedNodes(previous.hashes, read.hashes);
     const tokens = `${JSON.stringify(read.tokens, null, 2)}\n`;
     // Only a real change writes: pulling the same design twice must not bump the artifact's version.
     const hadTokens = await this.ports.artifacts.readText(projectId, 'tokens');
@@ -688,6 +698,20 @@ export function boardPrompt(brief: string, stories: string, stack: string, conte
     context ? `Project snapshot (read-only; for naming real files and folders):\n${context}` : 'No project snapshot is available.',
   ].filter(Boolean).join('\n\n');
   return { system, user };
+}
+
+/**
+ * Whether the pages now in the editor are the pages this project was drawn from, judged by name. Nearly all of the
+ * recorded screens have to be there — all of them when there are only a few — so one name two projects happen to share
+ * is never enough.
+ */
+export function sharesTheseScreens(recorded: readonly string[], current: readonly string[]): boolean {
+  const before = new Set(recorded.map(screenTitleKey).filter(Boolean));
+  if (before.size === 0) return false;
+  const now = new Set(current.map(screenTitleKey));
+  const shared = [...before].filter((key) => now.has(key)).length;
+  const needed = before.size < 3 ? before.size : Math.ceil(before.size * 0.8);
+  return shared > 0 && shared >= needed;
 }
 
 /** One card's place in an arranged board: which card, and what it must wait for. */
