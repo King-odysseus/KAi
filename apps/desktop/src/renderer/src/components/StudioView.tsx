@@ -63,6 +63,15 @@ const BOARD_STATUS_LABEL: Record<BoardStatus, string> = {
 const stoppedByLeaving = new Set<string>();
 
 /**
+ * What a step's error looks like when the cause is the connection and not the step: open-pencil restarting (its
+ * token is reissued and the editor is unreachable for about twenty seconds), the provider rate-limiting or
+ * overloaded, a request timing out. Retried after a wait rather than straight away, because straight away is inside
+ * the outage and fails the same way.
+ */
+const TRANSIENT_STEP_ERROR = /not connected|fetch failed|terminated|unauthori[sz]ed|\b401\b|econn|socket|timed? ?out|did not finish starting|could not be found|network|overloaded|rate.?limit|too many requests|\b429\b|\b50[234]\b/i;
+const TRANSIENT_WAITS_MS = [8_000, 20_000, 45_000];
+
+/**
  * What a design build was asked to do, beyond its plain form. Plain, it fills in only the screens that are missing.
  * `redraw` draws screens again that are already there — all of them, or one — for a look that changed. `clean` clears
  * whatever is broken or duplicated about one screen first (a page with the wrong name, a duplicate, a half-drawn
@@ -1190,10 +1199,19 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
       setNotice(`"${name}" ended with an error (${failed.error || 'no reason given'}), but it is in open-pencil, so it was kept.`);
       return { ...failed, status: 'completed' };
     };
-    const first = await keptIfDrawn(await runBuildStep(name, prompt));
-    if (first.status !== 'failed') return first;
-    setNotice(`"${name}" failed, retrying once: ${first.error || 'the turn ended with an error and gave no reason.'}`);
-    return keptIfDrawn(await runBuildStep(name, prompt));
+    let latest = await keptIfDrawn(await runBuildStep(name, prompt));
+    // Any failure is tried again once straight away; one that looks like the connection is waited out, up to three
+    // times, which is longer than the editor takes to come back.
+    for (let attempt = 0; latest.status === 'failed'; attempt += 1) {
+      const transient = TRANSIENT_STEP_ERROR.test(latest.error ?? '');
+      if (attempt >= (transient ? TRANSIENT_WAITS_MS.length : 1) || buildCancelled.current) break;
+      const wait = transient ? TRANSIENT_WAITS_MS[attempt]! : 0;
+      announceBuild(`"${name}" failed (${latest.error || 'the turn ended with an error and gave no reason'}). ${wait > 0 ? `Waiting ${wait / 1000}s and trying again (${attempt + 1} of ${TRANSIENT_WAITS_MS.length}).` : 'Retrying once.'}`);
+      if (wait > 0) await new Promise<void>((resolve) => { setTimeout(resolve, wait); });
+      if (buildCancelled.current) break;
+      latest = await keptIfDrawn(await runBuildStep(name, prompt));
+    }
+    return latest;
   }
 
   /**

@@ -179,6 +179,11 @@ export function App(): ReactNode {
   const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
   const [view, setView] = useState<ViewId>('workspace');
+  // The Studio stays mounted once it has been opened, hidden rather than torn down when another screen is shown. A
+  // design build runs inside it, and leaving it used to cancel the build: a trip to the composer, or anywhere else,
+  // ended a run that was drawing, and coming back found it idle. The Code view is kept the same way.
+  const [studioKept, setStudioKept] = useState(false);
+  useEffect(() => { if (view === 'studio') setStudioKept(true); }, [view]);
   // The guided tour's progress is a per-viewer convenience, so it lives in this window's storage, not in settings.
   const [tourProgress, setTourProgress] = useState<TourProgress>(() => {
     try {
@@ -1969,15 +1974,8 @@ export function App(): ReactNode {
       case 'graph':
         return <GraphView />;
       case 'studio':
-        return (
-          <StudioView
-            activeProject={activeProject}
-            projects={bootstrap.projects}
-            onOpenSettings={() => setView('settings')}
-            onLaunchProject={openStudioProject}
-            onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
-          />
-        );
+        // Rendered by the persistent container beside the Code view, so it survives leaving it.
+        return null;
       case 'code':
         return null;
       case 'operations':
@@ -2261,6 +2259,17 @@ export function App(): ReactNode {
         <div className="main-column">
           <main className={`app-main view-${view}`}>
             {view !== 'code' && renderCurrentView()}
+            {(studioKept || view === 'studio') && (
+              <div className={`persistent-studio-view ${view === 'studio' ? 'active' : ''}`} aria-hidden={view !== 'studio'}>
+                <StudioView
+                  activeProject={activeProject}
+                  projects={bootstrap.projects}
+                  onOpenSettings={() => setView('settings')}
+                  onLaunchProject={openStudioProject}
+                  onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
+                />
+              </div>
+            )}
             <div className={`persistent-code-view ${view === 'code' ? 'active' : ''}`} aria-hidden={view !== 'code'}>
               <CodeView
                 activeProject={activeProject}

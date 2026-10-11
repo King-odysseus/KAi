@@ -939,7 +939,13 @@ async function startApplication(): Promise<void> {
       autonomy: 'plan',
       ...(contextChips ? { contextChips } : {}),
     };
-    const result = await designBuildDirectApi.run(request, projectRoot, undefined, onEvent);
+    // A design step runs with no one at a prompt. When the runtime would stop and ask whether to carry on (the same call
+    // five times running, or a run that keeps describing work without doing it) it is told to carry on a few times,
+    // and only then to wrap up. Left without an answer it wraps up at the first such question, which ended a step
+    // that was working, a screen half drawn, with nothing said.
+    let extraStretches = 0;
+    const approvals = { request: async (approval: { runQuestion?: unknown }) => approval.runQuestion !== undefined && (extraStretches += 1) <= 3 };
+    const result = await designBuildDirectApi.run(request, projectRoot, undefined, onEvent, approvals);
     const costUsd = result.events.reduce((total, event) => (event.type === 'cost.update' && event.amountUsd ? total + event.amountUsd : total), 0);
     return {
       status: result.status,
