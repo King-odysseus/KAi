@@ -283,6 +283,7 @@ const bridge: KaiDesktopBridge = {
   writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', { id, data }),
   resizeTerminal: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
   stopTerminalCommand: (id) => ipcRenderer.invoke('terminal:stop', { id }),
+  terminalBuffer: (id) => ipcRenderer.invoke('terminal:buffer', { id }),
   onTerminalEvent: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: TerminalEvent): void => listener(payload);
     ipcRenderer.on('terminal:event', handler);

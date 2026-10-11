@@ -8,7 +8,7 @@ import { unwrap } from '../types';
 
 import { Select } from './ui/Select';
 /** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
-export function TerminalView({ activeProject, open, height, onClose, onResizeStart, commandRequest }: {
+export function TerminalView({ activeProject, open, height, onClose, onResizeStart, commandRequest, onAgentSession }: {
   activeProject: ProjectRecord | null;
   open: boolean;
   height: number;
@@ -16,11 +16,20 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
   onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
   /** A command is only injected after the user chose an action such as GitHub sign-in. */
   commandRequest?: { command: string; nonce: number } | null;
+  /** An agent opened a session in KAI's terminal; the dock is shown so the person can watch it. */
+  onAgentSession?: () => void;
 }): ReactNode {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  /** The session on screen, which is where typing goes: the person's own shell, or an agent's they switched to. */
   const sessionRef = useRef<TerminalSession | null>(null);
+  /** The person's own shell, which the project and Restart controls own. Agent sessions are never stopped from here by accident. */
+  const userSessionRef = useRef<TerminalSession | null>(null);
+  const [agentSessions, setAgentSessions] = useState<TerminalSession[]>([]);
+  const agentSessionIds = useRef(new Set<string>());
+  const onAgentSessionRef = useRef(onAgentSession);
+  onAgentSessionRef.current = onAgentSession;
   const earlyOutputRef = useRef(new Map<string, string[]>());
   const [shell, setShell] = useState<TerminalShell>('default');
   const [session, setSession] = useState<TerminalSession | null>(null);
@@ -32,6 +41,8 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
       terminalRef.current?.write(data);
       return;
     }
+    // An agent's session that is not on screen keeps its own output in the app; it is read back when switched to.
+    if (agentSessionIds.current.has(id)) return;
     const queued = earlyOutputRef.current.get(id) ?? [];
     queued.push(data);
     earlyOutputRef.current.set(id, queued);
@@ -42,10 +53,39 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
       writeOutput(event.id, event.data);
       return;
     }
+    if (event.kind === 'agent-session') {
+      agentSessionIds.current.add(event.session.id);
+      setAgentSessions((current) => (current.some((item) => item.id === event.session.id) ? current : [...current, event.session]));
+      onAgentSessionRef.current?.();
+      return;
+    }
+    if (agentSessionIds.current.delete(event.id)) setAgentSessions((current) => current.filter((item) => item.id !== event.id));
     if (sessionRef.current?.id !== event.id) return;
     setStatus('exited');
     terminalRef.current?.write(`\r\n[process exited${event.code === null ? '' : ` with code ${event.code}`}]\r\n`);
   }), []);
+
+  /** Puts a session on screen: the person's own shell, or an agent's, with what it has printed so far. */
+  async function showSession(target: TerminalSession | null): Promise<void> {
+    if (!target) return;
+    sessionRef.current = target;
+    setSession(target);
+    setStatus('running');
+    const terminal = terminalRef.current;
+    terminal?.reset();
+    if (agentSessionIds.current.has(target.id)) {
+      const printed = await window.kaiDesktop.terminalBuffer(target.id).then(unwrap).catch(() => '');
+      if (sessionRef.current?.id === target.id) terminal?.write(printed);
+    }
+    window.setTimeout(() => {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        // The host may still be hidden.
+      }
+      terminalRef.current?.focus();
+    }, 0);
+  }
 
   useEffect(() => {
     const host = hostRef.current;
@@ -108,17 +148,19 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
   }, [open]);
 
   useEffect(() => {
-    const previous = sessionRef.current;
+    const previous = userSessionRef.current;
     if (previous) {
       void window.kaiDesktop.stopTerminalCommand(previous.id).catch(() => undefined);
     }
+    userSessionRef.current = null;
     sessionRef.current = null;
     setSession(null);
     setStatus('idle');
     terminalRef.current?.reset();
     if (activeProject) void startSession(shell);
     return () => {
-      const current = sessionRef.current;
+      const current = userSessionRef.current;
+      userSessionRef.current = null;
       sessionRef.current = null;
       if (current) void window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
     };
@@ -138,6 +180,7 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
         terminal?.cols || 120,
         terminal?.rows || 30,
       ));
+      userSessionRef.current = started;
       sessionRef.current = started;
       setSession(started);
       setStatus('running');
@@ -165,8 +208,9 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
   }, [commandRequest?.nonce, status]);
 
   async function restart(): Promise<void> {
-    const current = sessionRef.current;
+    const current = userSessionRef.current;
     if (current) await window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
+    userSessionRef.current = null;
     sessionRef.current = null;
     setSession(null);
     terminalRef.current?.reset();
@@ -188,6 +232,16 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
           <strong>Terminal</strong>
           <span>{activeProject ? ` · ${activeProject.name}` : ' · open a project to start a shell'} · interactive {session?.shell ?? shell} · {status}</span>
         </div>
+        {agentSessions.length > 0 && (
+          <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
+            <button type="button" role="tab" className="secondary-button" aria-selected={session?.id === userSessionRef.current?.id} disabled={!userSessionRef.current} onClick={() => void showSession(userSessionRef.current)}>You</button>
+            {agentSessions.map((item, index) => (
+              <button key={item.id} type="button" role="tab" className="secondary-button" aria-selected={session?.id === item.id} title={item.cwd} onClick={() => void showSession(item)}>
+                Agent {index + 1} · {item.shell === 'default' ? 'cmd' : item.shell}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="terminal-head-actions">
           {session && status === 'running' && <button type="button" className="secondary-button" onClick={() => void stop()}><Square size={12} /><span>Stop</span></button>}
           <button type="button" className="secondary-button" disabled={!activeProject || status === 'starting'} onClick={() => void restart()}><RotateCcw size={13} /><span>Restart</span></button>

@@ -4,11 +4,13 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
-import { installKaiProjectMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withOpenPencilMcpSetting } from './agent-mcp-config';
+import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
+import { AgentTerminal } from './agent-terminal';
+import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
 import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
@@ -93,6 +95,7 @@ let serviceController: DesktopServiceController | null = null;
 /** Held here as well as in `startApplication`, because the quit handler runs after that scope has gone. */
 let proxyRoutingRef: DesktopProxyRouting | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
+let terminalMcpHost: TerminalMcpHost | null = null;
 let remoteGateway: RemoteGateway | null = null;
 let shutdownPromise: Promise<void> | null = null;
 /**
@@ -262,6 +265,7 @@ app.on('before-quit', (event) => {
       // KAI; closing them one by one first would leave the processes behind them running.
       process.platform === 'win32' ? Promise.resolve() : (mcpRuntime?.dispose() ?? Promise.resolve()),
       remoteGateway?.dispose() ?? Promise.resolve(),
+      terminalMcpHost?.close() ?? Promise.resolve(),
     ]))
     .then(() => undefined)
     .catch((error) => {
@@ -283,6 +287,7 @@ app.on('before-quit', (event) => {
       serviceController = null;
       mcpRuntime = null;
       remoteGateway = null;
+      terminalMcpHost = null;
       desktopShell?.dispose();
       endOwnProcessTree();
       app.exit(0);
@@ -349,6 +354,32 @@ async function startApplication(): Promise<void> {
   if (await credentials.has?.(OPENPENCIL_CREDENTIAL_ID)) {
     const design = withOpenPencilMcpSetting(await settings.load());
     if (design.changed) await settings.save(design.settings);
+  }
+  // KAI's terminal, for agents. The sessions are the app's own so the terminal dock shows them, which is why the
+  // server runs in this process; the endpoint and token are new every launch, so the agents' entries are rewritten
+  // every launch too. Without it an agent runs commands in whatever shell it brings, or opens a window of its own.
+  const terminalManager = new TerminalManager((event, ownerWindowId) => {
+    if (ownerWindowId !== null && desktopWindows.send(ownerWindowId, 'terminal:event', event)) return;
+    const fallback = desktopWindows.focused();
+    if (fallback) fallback.window.webContents.send('terminal:event', event);
+  });
+  try {
+    const agentTerminal = new AgentTerminal(terminalManager, {
+      activeProject: async () => {
+        const current = await settings.load();
+        const active = (await projects.list()).find((project) => project.id === current.activeProjectId);
+        return active ? { id: active.id, path: active.path } : null;
+      },
+    });
+    terminalMcpHost = await startTerminalMcpHost(agentTerminal);
+    await credentials.set(KAI_TERMINAL_CREDENTIAL_ID, terminalMcpHost.authorization);
+    const terminalSetting = withKaiTerminalMcpSetting(await settings.load(), { endpoint: terminalMcpHost.endpoint });
+    if (terminalSetting.changed) await settings.save(terminalSetting.settings);
+    for (const result of await installKaiTerminalMcpForAgents({ endpoint: terminalMcpHost.endpoint, authorization: terminalMcpHost.authorization })) {
+      if (result.error) logger.warn('internal', `KAI terminal MCP could not be added to ${result.agent}`, `${result.configPath}: ${result.error}`);
+    }
+  } catch (error) {
+    logger.warn('internal', 'KAI terminal MCP could not start', messageOf(error));
   }
   // The board server is useful only with a project to point at, so it is registered for the active project. An
   // agent launched for another project keeps the entry it was given; opening that project rewrites it.
@@ -658,6 +689,7 @@ async function startApplication(): Promise<void> {
     executionRules,
     directApi,
     mcp: mcpRuntime,
+    terminalMcp: terminalMcpHost !== null,
     ensureOpenPencil: ensureOpenPencilReady,
     workflowTemplates,
     backups,
@@ -696,11 +728,7 @@ async function startApplication(): Promise<void> {
         desktopWindows.broadcast('app:update-state', state);
       },
     }),
-    terminal: new TerminalManager((event, ownerWindowId) => {
-      if (ownerWindowId !== null && desktopWindows.send(ownerWindowId, 'terminal:event', event)) return;
-      const fallback = desktopWindows.focused();
-      if (fallback) fallback.window.webContents.send('terminal:event', event);
-    }),
+    terminal: terminalManager,
     desktopShell: shell,
     getMainWindow: () => desktopWindows.focused()?.window ?? null,
     createWindow: (projectId) => createMainWindow(projectId),

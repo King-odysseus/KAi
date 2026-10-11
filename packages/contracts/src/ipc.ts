@@ -307,6 +307,7 @@ import { updateSettingsSchema, updateStateSchema, type UpdateState } from './upd
 import {
   terminalEventSchema,
   terminalResizeInputSchema,
+  terminalBufferInputSchema,
   terminalSessionSchema,
   terminalStartInputSchema,
   terminalStopInputSchema,
@@ -622,6 +623,7 @@ export const ipcChannels = [
   'terminal:write',
   'terminal:resize',
   'terminal:stop',
+  'terminal:buffer',
   'plan:read',
   'git:overview',
   'git:init',
@@ -949,6 +951,7 @@ export const ipcInputSchemas = {
   'terminal:write': terminalWriteInputSchema,
   'terminal:resize': terminalResizeInputSchema,
   'terminal:stop': terminalStopInputSchema,
+  'terminal:buffer': terminalBufferInputSchema,
   'plan:read': z.object({ projectId: z.string().min(1) }).strict(),
   'git:overview': z.object({ projectId: z.string().min(1) }).strict(),
   'git:init': z.object({ projectId: z.string().min(1) }).strict(),
@@ -1527,6 +1530,8 @@ export interface KaiDesktopBridge {
   writeTerminal(id: string, data: string): Promise<IpcResponse<boolean>>;
   resizeTerminal(id: string, cols: number, rows: number): Promise<IpcResponse<boolean>>;
   stopTerminalCommand(id: string): Promise<IpcResponse<boolean>>;
+  /** What a session has printed so far, so the dock can pick up an agent's session part-way through. */
+  terminalBuffer(id: string): Promise<IpcResponse<string>>;
   onTerminalEvent(listener: (event: TerminalEvent) => void): () => void;
   brainGitStatus(): Promise<IpcResponse<BrainGitStatus>>;
   brainGitSync(action: 'init' | 'commit' | 'pull' | 'push'): Promise<IpcResponse<BrainGitSyncResult>>;

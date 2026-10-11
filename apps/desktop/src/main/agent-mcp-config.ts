@@ -2,6 +2,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  KAI_TERMINAL_CREDENTIAL_ID,
+  KAI_TERMINAL_MCP_SERVER_ID,
   OPENPENCIL_CREDENTIAL_ID,
   OPENPENCIL_ENDPOINT,
   OPENPENCIL_MCP_SERVER_ID,
@@ -16,6 +18,7 @@ const PLAYWRIGHT_CLI_COMMAND = 'npx';
 const PLAYWRIGHT_ARGS = ['-y', '@playwright/mcp@latest'];
 export const COGNITIVE1_CLI_SERVER_NAME = 'cognitive1';
 export const KAI_PROJECT_CLI_SERVER_NAME = 'kai-project';
+export const KAI_TERMINAL_CLI_SERVER_NAME = KAI_TERMINAL_MCP_SERVER_ID;
 
 export type CliAgentId = 'claude' | 'codex' | 'qwen' | 'gemini';
 
@@ -202,6 +205,50 @@ export async function installKaiProjectMcpForAgents(
     ...(Object.keys(env).length > 0
       ? [`env = { ${Object.entries(env).map(([key, value]) => `${key} = "${escapeTomlString(value)}"`).join(', ')} }`]
       : []),
+  ], options);
+}
+
+/**
+ * KAI's terminal as a server KAI itself can call: the endpoint is the one the desktop app hosts this launch, and the
+ * token sits in the vault, never in settings.
+ */
+export function withKaiTerminalMcpSetting(
+  settings: AppSettings,
+  options: { endpoint: string; credentialId?: string },
+): { settings: AppSettings; changed: boolean } {
+  const desired: McpServerSettings = {
+    id: KAI_TERMINAL_MCP_SERVER_ID,
+    name: 'KAI terminal',
+    enabled: true,
+    transport: 'http',
+    url: options.endpoint,
+    headerCredentialIds: { Authorization: options.credentialId ?? KAI_TERMINAL_CREDENTIAL_ID },
+  };
+  const index = settings.mcpServers.findIndex((server) => server.id === KAI_TERMINAL_MCP_SERVER_ID);
+  if (index < 0) return { settings: { ...settings, mcpServers: [...settings.mcpServers, desired] }, changed: true };
+  if (sameJson(settings.mcpServers[index], desired)) return { settings, changed: false };
+  const mcpServers = [...settings.mcpServers];
+  mcpServers[index] = desired;
+  return { settings: { ...settings, mcpServers }, changed: true };
+}
+
+/**
+ * Offers KAI's terminal to the CLI agents. They would otherwise use whatever shell they bring, or open a window of
+ * their own; with this they can run commands in a session the terminal dock shows. The endpoint and token change on
+ * every launch, so the entry is rewritten on every launch.
+ */
+export async function installKaiTerminalMcpForAgents(
+  options: { endpoint: string; authorization: string } & AgentMcpInstallOptions,
+): Promise<AgentMcpInstallResult[]> {
+  const { endpoint, authorization } = options;
+  return installMcpForAgents(KAI_TERMINAL_CLI_SERVER_NAME, () => ({
+    claude: { type: 'http', url: endpoint, headers: { Authorization: authorization } },
+    qwen: { httpUrl: endpoint, headers: { Authorization: authorization } },
+    gemini: { httpUrl: endpoint, headers: { Authorization: authorization } },
+  }), [
+    `[mcp_servers.${KAI_TERMINAL_CLI_SERVER_NAME}]`,
+    `url = "${escapeTomlString(endpoint)}"`,
+    `http_headers = { Authorization = "${escapeTomlString(authorization)}" }`,
   ], options);
 }
 

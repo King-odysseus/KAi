@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import type { AppSettings, AutonomyMode, McpServerSettings } from '@kai/contracts';
+import { KAI_TERMINAL_MCP_SERVER_ID, type AppSettings, type AutonomyMode, type McpServerSettings } from '@kai/contracts';
 import type { RedactedLogger } from '@kai/runtime';
 import type { ExternalToolPort, ProjectToolExecution, ProjectToolPolicy } from './project-tools';
 
 const MAX_MCP_OUTPUT = 100_000;
+/** How long a server that failed to connect is left alone before the next call tries it again. */
+const RECONNECT_AFTER_MS = 15_000;
 
 interface McpSettingsPort {
   load(): Promise<AppSettings>;
@@ -30,6 +32,8 @@ interface McpConnection {
   fingerprint: string;
   /** One fingerprint per connected server, so a change to one server's settings reconnects only that server. */
   serverFingerprints: Map<string, string>;
+  /** When each enabled server last failed to connect. A failure is not cached for good: the editor may simply not have been open yet. */
+  failedAt: Map<string, number>;
   clients: Map<string, Client>;
   tools: Map<string, McpToolDescriptor>;
 }
@@ -60,6 +64,7 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     const client = previous.clients.get(serverId);
     previous.clients.delete(serverId);
     previous.serverFingerprints.delete(serverId);
+    previous.failedAt.delete(serverId);
     for (const [name, tool] of previous.tools) if (tool.serverId === serverId) previous.tools.delete(name);
     previous.fingerprint = '';
     if (client) void client.close().catch(() => undefined);
@@ -79,6 +84,17 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     const tool = this.connection?.tools.get(name);
     if (!tool) return undefined;
     if (autonomy === 'full') return { decision: 'allow' };
+    // KAI's own terminal is a shell, so it follows the shell tool's rules: refused in Plan, asked about otherwise,
+    // free in Full access. Only its read-only tools (listing and reading output) are allowed everywhere.
+    if (tool.serverId === KAI_TERMINAL_MCP_SERVER_ID && !tool.readOnly) {
+      if (autonomy === 'plan') return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
+      return {
+        decision: 'ask',
+        title: 'Use the KAI terminal?',
+        detail: 'Terminal commands run with your user permissions and can reach resources outside the project. Review the exact command before allowing it.',
+        risk: 'high',
+      };
+    }
     if (tool.readOnly && (autonomy === 'plan' || autonomy === 'ask' || autonomy === 'autoEdit' || autonomy === 'custom')) {
       return { decision: 'allow' };
     }
@@ -164,8 +180,16 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     run: (client: Client) => Promise<T>,
   ): Promise<T | undefined> {
     const connection = await this.ensureConnected();
-    const client = connection.clients.get(serverId);
-    if (!client) return undefined;
+    let client = connection.clients.get(serverId);
+    if (!client) {
+      // Enabled but not connected means it was down when KAI last tried (open-pencil not open yet, say). Try once
+      // more now rather than answering "not connected" for as long as the settings stay the same.
+      const configured = (await this.settings.load()).mcpServers.some((server) => server.id === serverId && server.enabled);
+      if (!configured) return undefined;
+      this.invalidate(serverId);
+      client = (await this.ensureConnected()).clients.get(serverId);
+      if (!client) return undefined;
+    }
     try {
       return await run(client);
     } catch (error) {
@@ -187,7 +211,7 @@ export class DesktopMcpRuntime implements ExternalToolPort {
   private async ensureConnected(): Promise<McpConnection> {
     const settings = await this.settings.load();
     const fingerprint = JSON.stringify(settings.mcpServers);
-    if (this.connection?.fingerprint === fingerprint) return this.connection;
+    if (this.connection?.fingerprint === fingerprint && !this.retryDue(this.connection)) return this.connection;
     if (this.connecting) return this.connecting;
     this.connecting = this.connect(settings, fingerprint).finally(() => {
       this.connecting = undefined;
@@ -195,11 +219,26 @@ export class DesktopMcpRuntime implements ExternalToolPort {
     return this.connecting;
   }
 
+  private retryDue(connection: McpConnection): boolean {
+    const now = Date.now();
+    return [...connection.failedAt.values()].some((failed) => now - failed > RECONNECT_AFTER_MS);
+  }
+
+  /** Drops what is held for one credential, so only the servers that use it reconnect. */
+  async invalidateCredential(credentialId: string): Promise<void> {
+    const settings = await this.settings.load();
+    for (const server of settings.mcpServers) {
+      const ids = server.transport === 'http' ? Object.values(server.headerCredentialIds) : Object.values(server.envCredentialIds);
+      if (ids.includes(credentialId)) this.invalidate(server.id);
+    }
+  }
+
   private async connect(settings: AppSettings, fingerprint: string): Promise<McpConnection> {
     const previous = this.connection;
     const clients = new Map<string, Client>();
     const tools = new Map<string, McpToolDescriptor>();
     const serverFingerprints = new Map<string, string>();
+    const failedAt = new Map<string, number>();
     const enabledServers = settings.mcpServers.filter((server) => server.enabled);
     for (const server of enabledServers) {
       const serverFingerprint = JSON.stringify(server);
@@ -231,10 +270,11 @@ export class DesktopMcpRuntime implements ExternalToolPort {
         }
         this.logger.info('internal', `MCP server connected: ${server.name}`, `${listed.tools.length} tool(s)`);
       } catch (error) {
+        failedAt.set(server.id, Date.now());
         this.logger.error('internal', `MCP server failed to connect: ${server.name}`, undefined, error);
       }
     }
-    this.connection = { fingerprint, serverFingerprints, clients, tools };
+    this.connection = { fingerprint, serverFingerprints, failedAt, clients, tools };
     if (previous) {
       const dropped = [...previous.clients].filter(([id, client]) => clients.get(id) !== client).map(([, client]) => client);
       await Promise.allSettled(dropped.map((client) => client.close()));

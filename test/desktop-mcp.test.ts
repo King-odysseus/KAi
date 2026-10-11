@@ -168,6 +168,44 @@ describe('desktop MCP runtime', () => {
   });
 });
 
+describe('desktop MCP runtime recovers a server that was down', () => {
+  it('connects on the next call once the server can be reached, without a settings change', async () => {
+    const server = await startHttpMcpServer('Bearer vault-token');
+    try {
+      const settings = createDefaultSettings();
+      settings.mcpServers = [{ id: 'remote', name: 'Remote', enabled: true, transport: 'http', url: server.url, headerCredentialIds: { Authorization: 'mcp.remote' } }];
+      let credential: string | undefined;
+      const runtime = new DesktopMcpRuntime({ load: async () => structuredClone(settings) }, { get: async () => credential }, new RedactedLogger());
+      runtimes.push(runtime);
+      // The credential is not there yet, so the first connection fails, as open-pencil does when the editor is not open.
+      await expect(runtime.callServerTool('remote', 'echo', { text: 'x' })).resolves.toBeNull();
+      credential = 'Bearer vault-token';
+      const blocks = await runtime.callServerTool('remote', 'echo', { text: 'again' });
+      expect(JSON.stringify(blocks)).toContain('echo:again');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('reconnects only the servers that use a credential that changed', async () => {
+    const settings = createDefaultSettings();
+    const stdio = (id: string, secret: string): AppSettings['mcpServers'][number] => ({
+      id, name: id, enabled: true, transport: 'stdio', command: process.execPath, args: [path.resolve('test/fixtures/mcp-echo-server.mjs')], cwd: null,
+      envCredentialIds: { KAI_TEST_MCP_SECRET: secret },
+    });
+    settings.mcpServers = [stdio('a', 'mcp.a'), stdio('b', 'mcp.b')];
+    const runtime = new DesktopMcpRuntime({ load: async () => structuredClone(settings) }, { get: async () => 'secret' }, new RedactedLogger());
+    runtimes.push(runtime);
+    await runtime.definitions();
+    const clients = (): Map<string, unknown> => (runtime as unknown as { connection: { clients: Map<string, unknown> } }).connection.clients;
+    const [a1, b1] = [clients().get('a'), clients().get('b')];
+    await runtime.invalidateCredential('mcp.a');
+    await runtime.definitions();
+    expect(clients().get('a')).not.toBe(a1);
+    expect(clients().get('b')).toBe(b1);
+  });
+});
+
 describe('desktop MCP runtime reconnects per server', () => {
   const stdio = (id: string, secret: string): AppSettings['mcpServers'][number] => ({
     id, name: id, enabled: true, transport: 'stdio', command: process.execPath, args: [path.resolve('test/fixtures/mcp-echo-server.mjs')], cwd: null,

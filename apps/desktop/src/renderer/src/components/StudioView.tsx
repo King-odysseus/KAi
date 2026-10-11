@@ -6,7 +6,7 @@ import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, scree
 import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
 import { GuidePanel, GuideStrip } from './GuidePanel';
 import { NeedsYouBanner } from './NeedsYouBanner';
-import { useAutopilotStatus } from './use-autopilot-status';
+import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
 import { buildFoundationPrompt, buildPagePrompt, filterScreens, parseFlows, parsePages, screenRows, screenTitleKey, type DesignContext, type DesignPromptMode } from '../flow-diagram';
@@ -2202,6 +2202,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             <>
               <article className="studio-card">
                 <h2><LayoutGrid size={16} /> Draw in open-pencil</h2>
+                {autopilot && AUTOPILOT_ACTIVE.has(autopilot.phase) && (
+                  <p className="studio-note" role="status">Autopilot is working this board right now. Drawing here as well is fine, but pulling the design can mark cards it is holding stale, so it may park or redo one.</p>
+                )}
                 <p className="studio-note">
                   Build the design runs the whole list for you: the foundation first, then one screen at a time, checking after each step that open-pencil really holds the screen before moving on. Stop any time — the screens already drawn are kept and Resume carries on from the first one still missing. Copy prompt is still here for running a single step yourself.
                 </p>

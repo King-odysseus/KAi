@@ -2669,6 +2669,22 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
   gap: 6px;
 }
 
+/* The person's own shell and any session an agent opened in KAI's terminal. Selection uses weight and an outline in
+   the current text colour, so it needs no colour of its own in any theme. */
+.terminal-tabs {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminal-tabs [role='tab'][aria-selected='true'] {
+  font-weight: 600;
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+
 .diagnostic-check {
   display: flex;
   flex-direction: column;

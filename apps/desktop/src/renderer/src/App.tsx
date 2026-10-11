@@ -2271,6 +2271,7 @@ export function App(): ReactNode {
             open={terminalOpen}
             height={terminalHeight}
             commandRequest={terminalCommand}
+            onAgentSession={() => setTerminalOpen(true)}
             onClose={() => setTerminalOpen(false)}
             onResizeStart={(event) => {
               event.preventDefault();

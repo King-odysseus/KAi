@@ -294,6 +294,14 @@ export const OPENPENCIL_ENDPOINT = 'http://127.0.0.1:7600/mcp';
 /** Where the Bearer token lives in the vault. Never written to a config file. */
 export const OPENPENCIL_CREDENTIAL_ID = 'design.openpencil';
 
+/**
+ * KAI's own terminal, offered to agents as an MCP server hosted by the desktop app. An agent that uses it runs its
+ * commands in a session KAI owns — the same kind the terminal dock shows — in whichever installed shell it picks,
+ * instead of opening a window of its own. The Bearer token is reissued every launch and kept only in the vault.
+ */
+export const KAI_TERMINAL_MCP_SERVER_ID = 'kai-terminal';
+export const KAI_TERMINAL_CREDENTIAL_ID = 'terminal.agent';
+
 export const mcpStdioServerSettingsSchema = z
   .object({
     ...mcpServerBaseSchema,

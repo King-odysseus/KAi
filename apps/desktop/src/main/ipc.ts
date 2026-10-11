@@ -101,6 +101,7 @@ import type { DesktopShell } from './desktop-shell';
 import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUrgentNotes } from './coordination';
 import type { TerminalManager } from './terminal';
 import { findGitBash } from './terminal';
+import { availableShells, terminalBriefing } from './agent-terminal';
 import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
@@ -190,6 +191,8 @@ export interface IpcContext {
   executionRules: DesktopExecutionRules;
   directApi: DesktopDirectProviderRuntime;
   mcp: DesktopMcpRuntime;
+  /** KAI's terminal is being offered to agents this launch, so their briefing says so. */
+  terminalMcp?: boolean;
   /** Launches open-pencil if it is not running, and re-syncs KAI's own connection to whatever it reports (its
    * token when auth is on, no header at all when it is off). Called before any user-initiated open-pencil action
    * — Pull the design, Check connection, a design-build step — so each one works from the editor's live state
@@ -701,7 +704,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'credentials:status', async () => credentialStatus(context));
   handle(context, 'credentials:set', async ({ id, value }) => {
     await context.credentials.set(id, value);
-    context.mcp.invalidate();
+    await context.mcp.invalidateCredential(id);
     await restartCognitive1ForOverwatchCredential(context, id);
     const status = await credentialStatus(context);
     await broadcastSharedState(context);
@@ -709,7 +712,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'credentials:clear', async ({ id }) => {
     await context.credentials.delete(id);
-    context.mcp.invalidate();
+    await context.mcp.invalidateCredential(id);
     await restartCognitive1ForOverwatchCredential(context, id);
     const status = await credentialStatus(context);
     await broadcastSharedState(context);
@@ -1042,6 +1045,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'terminal:write', async ({ id, data }) => context.terminal.write(id, data));
   handle(context, 'terminal:resize', async ({ id, cols, rows }) => context.terminal.resize(id, cols, rows));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
+  handle(context, 'terminal:buffer', async ({ id }) => context.terminal.buffer(id) ?? '');
   handle(context, 'plan:read', async ({ projectId }) => readPlan(await projectPath(projectId)));
   handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
   // Idempotent, so the Git page can offer it as an ordinary button rather than a one-shot action.
@@ -1622,7 +1626,9 @@ export async function runConversationAgent(
   let effectivePrompt = `${workingMethodBriefing()}\n\n${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
-  if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing(executionMode)}\n\n${effectivePrompt}`;
+  const terminalTools = context.terminalMcp === true;
+  if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing(executionMode, terminalTools)}\n\n${effectivePrompt}`;
+  if (terminalTools) effectivePrompt = `${terminalBriefing(executionMode, availableShells())}\n\n${effectivePrompt}`;
   // A route/agent switch starts a fresh CLI session. Carry enough transcript
   // forward that the new provider treats this as a continuation, not a new task.
   if (executionMode === 'cli' && !canResume) {
@@ -2274,25 +2280,25 @@ function renderConversationHandoff(turns: readonly ConversationRecord['turns'][n
   return `# Conversation handoff\nYou are continuing an existing conversation after the user changed agent, route, or provider. Preserve the prior intent, decisions, and context; do not ask them to repeat it.\n\n${lines.slice(-60_000)}`;
 }
 
-function fullAccessExecutionBriefing(executionMode: ExecutionMode): string {
+function fullAccessExecutionBriefing(executionMode: ExecutionMode, terminalTools = false): string {
   const windows = process.platform === 'win32';
   // The Direct API's run_command tool spawns through Git Bash when it is installed (project-tools.ts,
-  // agentShell()), and the in-app terminal defaults to it too. A CLI agent picks its own shell, so it is told to
-  // prefer Git Bash as well: left unsaid it falls back to PowerShell, which is not what the user works in. Without
-  // Git Bash installed there is nothing to prefer, so the Windows-compatible wording stays.
-  const usesGitBash = windows && Boolean(findGitBash());
-  const viaApi = executionMode === 'api';
+  // agentShell()), not cmd.exe or PowerShell — so the advice below has to match what the command actually runs
+  // in. A CLI agent's own shell tool is outside KAI's control and unverified, so it keeps the Windows-specific
+  // wording unchanged rather than being told something that may not hold for it. With KAI's terminal offered the
+  // agent chooses its shell itself (see terminalBriefing), so no one shell's syntax is dictated here.
+  const usesGitBash = windows && executionMode === 'api' && Boolean(findGitBash());
   return [
     '# Full access execution policy',
     'The user explicitly selected Full access for this run. You may edit project files, run shell commands, and, when the user explicitly asks, commit and push changes without requesting an additional confirmation.',
     'Complete the requested workflow yourself. Do not stop after a command error merely to give the user instructions when a safe retry or equivalent command can be run.',
-    usesGitBash
-      ? viaApi
+    terminalTools
+      ? 'Write each command in the syntax of the shell you run it in.'
+      : usesGitBash
         ? 'This is Windows, but your commands run through Git Bash, not cmd.exe or PowerShell. Write ordinary POSIX/Unix-style commands — pipes, `grep`, `tail`, `&&`, `$(...)` all work normally; do not switch to PowerShell syntax.'
-        : 'This is Windows with Git Bash installed. Run shell commands in Git Bash (your Bash tool, or `bash -c`) rather than PowerShell or cmd.exe, and write ordinary POSIX/Unix-style commands — pipes, `grep`, `tail`, `&&`, `$(...)`. Use PowerShell only for something Git Bash cannot do, such as a Windows-only cmdlet.'
-      : windows
-        ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
-        : 'Use commands compatible with the current project shell.',
+        : windows
+          ? 'This is Windows. Use Windows-compatible commands. Run build checks directly (for example `npm run build`), never pipe through Unix-only commands such as `tail` or `grep`. If output needs limiting in PowerShell, use `Select-Object -Last N`.'
+          : 'Use commands compatible with the current project shell.',
     'For build → commit → push work: make the requested change, run the verification command, fix actionable failures, then commit and push only if the user requested commit/push. Report the command results and commit hash at the end.',
   ].join('\n');
 }

@@ -9,6 +9,7 @@ import {
 } from '../packages/contracts/src';
 import {
   installCognitive1McpForAgents,
+  installKaiTerminalMcpForAgents,
   preparePlaywrightMcpSettings,
   withPlaywrightMcpSetting,
 } from '../apps/desktop/src/main/agent-mcp-config';
@@ -208,5 +209,24 @@ describe('Playwright MCP installation', () => {
       token: 'fresh-token',
     });
     expect(second.every((result) => !result.error && !result.changed)).toBe(true);
+  });
+});
+
+describe('KAI terminal MCP installation', () => {
+  it('writes the live endpoint to every CLI agent and rewrites it when the launch changes it', async () => {
+    const home = await temporaryHome();
+    const first = await installKaiTerminalMcpForAgents({ homeDirectory: home, endpoint: 'http://127.0.0.1:50001/mcp', authorization: 'Bearer one' });
+    expect(first.every((result) => !result.error && result.changed)).toBe(true);
+    const claude = JSON.parse(await fs.readFile(path.join(home, '.claude.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
+    expect(claude.mcpServers['kai-terminal']).toEqual({ type: 'http', url: 'http://127.0.0.1:50001/mcp', headers: { Authorization: 'Bearer one' } });
+    expect(await fs.readFile(path.join(home, '.codex', 'config.toml'), 'utf8')).toContain('url = "http://127.0.0.1:50001/mcp"');
+
+    const same = await installKaiTerminalMcpForAgents({ homeDirectory: home, endpoint: 'http://127.0.0.1:50001/mcp', authorization: 'Bearer one' });
+    expect(same.some((result) => result.changed)).toBe(false);
+    const next = await installKaiTerminalMcpForAgents({ homeDirectory: home, endpoint: 'http://127.0.0.1:50002/mcp', authorization: 'Bearer two' });
+    expect(next.every((result) => result.changed)).toBe(true);
+    const codex = await fs.readFile(path.join(home, '.codex', 'config.toml'), 'utf8');
+    expect(codex).toContain('50002');
+    expect(codex).not.toContain('50001');
   });
 });

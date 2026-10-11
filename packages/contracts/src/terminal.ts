@@ -28,10 +28,7 @@ export const terminalResizeInputSchema = z
 
 export const terminalStopInputSchema = z.object({ id: z.string().min(1) }).strict();
 
-export const terminalEventSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('output'), id: z.string().min(1), data: z.string() }).strict(),
-  z.object({ kind: z.literal('exit'), id: z.string().min(1), code: z.number().int().nullable(), signal: z.string().nullable() }).strict(),
-]);
+export const terminalBufferInputSchema = z.object({ id: z.string().min(1) }).strict();
 
 export const terminalSessionSchema = z
   .object({
@@ -41,8 +38,17 @@ export const terminalSessionSchema = z
     cwd: z.string().min(1),
     cols: z.number().int().positive(),
     rows: z.number().int().positive(),
+    /** Started by an agent rather than by the person at the dock. */
+    agent: z.boolean().optional(),
   })
   .strict();
+
+export const terminalEventSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('output'), id: z.string().min(1), data: z.string() }).strict(),
+  z.object({ kind: z.literal('exit'), id: z.string().min(1), code: z.number().int().nullable(), signal: z.string().nullable() }).strict(),
+  // An agent opened a session: the dock offers it so the person can watch, and type into it.
+  z.object({ kind: z.literal('agent-session'), session: terminalSessionSchema }).strict(),
+]);
 
 export type TerminalShell = z.infer<typeof terminalShellSchema>;
 export type TerminalEvent = z.infer<typeof terminalEventSchema>;
