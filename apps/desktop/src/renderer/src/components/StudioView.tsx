@@ -1156,11 +1156,26 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   /** A whole turn can fail for reasons that are gone a moment later — a provider hiccup, open-pencil briefly
    * unreachable between the per-step connection sync and the model's first call. One retry absorbs those without
    * making every transient blip stop the run and need a person to notice and click Build again. */
-  async function runBuildStepWithRetry(name: string, prompt: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
-    const first = await runBuildStep(name, prompt);
+  async function runBuildStepWithRetry(
+    name: string,
+    prompt: string,
+    landed?: (pull: Awaited<ReturnType<typeof refreshDesign>>) => boolean,
+  ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> {
+    // A turn can end in an error after it has done the work — cut off at the last step, a provider error while it
+    // checked its own drawing. Reading the design back before doing anything else is what tells that apart from a
+    // turn that drew nothing: a screen that is there is kept, not drawn over a second time. `landed` is given only
+    // where "it exists now" proves the step worked, which is a plain draw and not a redraw of what was already there.
+    const keptIfDrawn = async (failed: { status: 'completed' | 'failed'; output: string; error?: string }): Promise<{ status: 'completed' | 'failed'; output: string; error?: string }> => {
+      if (!landed || failed.status !== 'failed') return failed;
+      const pull = await refreshDesign().catch(() => null);
+      if (!pull || !landed(pull)) return failed;
+      setNotice(`"${name}" ended with an error (${failed.error || 'no reason given'}), but it is in open-pencil, so it was kept.`);
+      return { ...failed, status: 'completed' };
+    };
+    const first = await keptIfDrawn(await runBuildStep(name, prompt));
     if (first.status !== 'failed') return first;
-    setNotice(`"${name}" failed, retrying once: ${first.error || 'the step failed.'}`);
-    return runBuildStep(name, prompt);
+    setNotice(`"${name}" failed, retrying once: ${first.error || 'the turn ended with an error and gave no reason.'}`);
+    return keptIfDrawn(await runBuildStep(name, prompt));
   }
 
   /**
@@ -1197,7 +1212,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     try {
       let pulled = await refreshDesign();
       if (!foundationDone || (action?.kind === 'redraw' && action.target === 'all')) {
-        const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation', 'draw', pulled.artifacts));
+        const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation', 'draw', pulled.artifacts), foundationDone ? undefined : foundationLanded);
         if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign();
         if (!foundationLanded(pulled)) {
@@ -1237,7 +1252,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           return;
         }
         const row = remaining[0]!;
-        const result = await runBuildStepWithRetry(row.name, promptFor(row.name, 'draw', pulled.artifacts));
+        const result = await runBuildStepWithRetry(row.name, promptFor(row.name, 'draw', pulled.artifacts), (pull) => screenLanded(row.name, pull));
         if (result.status === 'failed') { setLastFailedStep(row.name); throw new Error(`${row.name}: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign();
         if (!screenLanded(row.name, pulled)) {
