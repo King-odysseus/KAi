@@ -67,6 +67,35 @@ export async function hashFile(projectPath: string, relativePath: string): Promi
     return null;
   }
 }
+/** The folders a split project keeps its parts in, looked at when the root itself has nothing to check. */
+const PART_FOLDERS = ['frontend', 'backend', 'web', 'client', 'server', 'api', 'app'];
+
+/** The npm script that checks a package, in the order of how much it proves; null when it has none. */
+function checkScript(manifest: { scripts?: Record<string, string> }): 'test' | 'typecheck' | 'lint' | 'build' | null {
+  for (const name of ['test', 'typecheck', 'lint', 'build'] as const) if (manifest.scripts?.[name]) return name;
+  return null;
+}
+
+/**
+ * The check for a project laid out as parts (`frontend/`, `backend/` and so on) with nothing at the root. A scaffold
+ * card writes exactly this shape, and without a check it can never close, which holds every card behind it. Each part
+ * with an npm script is checked through `npm --prefix`, which works from the project root in any shell; a part's
+ * checks are joined so the card passes only when all of them do.
+ */
+async function suggestPartsCommand(projectPath: string): Promise<string | null> {
+  const commands: string[] = [];
+  for (const folder of PART_FOLDERS) {
+    try {
+      const manifest = JSON.parse(await fs.readFile(path.join(projectPath, folder, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+      const script = checkScript(manifest);
+      if (script) commands.push(script === 'test' ? `npm --prefix ${folder} test` : `npm --prefix ${folder} run ${script}`);
+    } catch {
+      // This folder has no usable package.json.
+    }
+  }
+  return commands.length > 0 ? commands.join(' && ') : null;
+}
+
 /** Suggest the project's test command from its manifest files. */
 export async function suggestTestCommand(projectPath: string): Promise<string | null> {
   const has = async (name: string): Promise<boolean> => fs.access(path.join(projectPath, name)).then(() => true, () => false);
@@ -83,7 +112,7 @@ export async function suggestTestCommand(projectPath: string): Promise<string | 
   if (await has('Cargo.toml')) return 'cargo test';
   if (await has('go.mod')) return 'go test ./...';
   if (await has('pytest.ini') || await has('pyproject.toml') || await has('requirements.txt')) return 'python -m pytest';
-  return null;
+  return suggestPartsCommand(projectPath);
 }
 
 export class VerificationStore {

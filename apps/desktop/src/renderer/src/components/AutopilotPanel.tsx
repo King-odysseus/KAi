@@ -4,6 +4,7 @@ import type { AutopilotRunRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { useRunPanelCollapsed } from './run-panel-collapse';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
+import { Select } from './ui/Select';
 
 interface Props {
   projectId: string;
@@ -237,14 +238,15 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
           <div className="autopilot-fields">
             <label>
               <span>Runs through</span>
-              <select value={execution} onChange={(event) => setExecution(event.target.value as 'api' | 'cli')}>
-                <option value="api">Direct API (your provider, such as DeepSeek)</option>
+              <Select aria-label="Runs through" value={execution} onChange={(event) => setExecution(event.target.value as 'api' | 'cli')}>
+                <option value="api">Direct API (your provider)</option>
                 <option value="cli">The default CLI agent</option>
-              </select>
+              </Select>
             </label>
-            <label>
+            <label className="autopilot-field-wide">
               <span>Check command</span>
-              <input value={checkCommand} onChange={(event) => setCheckCommand(event.target.value)} placeholder="Blank: detect the project's test command" />
+              <input value={checkCommand} onChange={(event) => setCheckCommand(event.target.value)} placeholder="Blank: detect it (the project root, then frontend/ and backend/)" />
+              <small>Run after each card. A card closes only when it passes. For a project split into parts, for example: npm --prefix frontend run typecheck</small>
             </label>
             <label>
               <span>Attempts per card</span>

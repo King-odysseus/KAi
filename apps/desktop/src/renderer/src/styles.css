@@ -13830,8 +13830,26 @@ button.tool-call-head:hover strong { color: var(--mint); }
 }
 .autopilot-fields label {
   display: grid;
+  min-width: 0;
+  align-content: start;
   gap: 4px;
   font-size: 12px;
+}
+/* Every control fills its own cell and no wider: a native select sizes itself to its longest option and spilled into
+   the field beside it. */
+.autopilot-fields input,
+.autopilot-fields .kai-select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+/* The check command is a whole command line, so it gets the row to itself. */
+.autopilot-fields .autopilot-field-wide {
+  grid-column: 1 / -1;
+}
+.autopilot-fields label small {
+  opacity: 0.7;
+  line-height: 1.4;
 }
 .autopilot-line {
   display: flex;

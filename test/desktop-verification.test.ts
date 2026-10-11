@@ -158,4 +158,20 @@ describe('recognising checks', () => {
     expect(await suggestTestCommand(rust)).toBe('cargo test');
     expect(await suggestTestCommand(await temporary())).toBeNull();
   });
+
+  it('finds the check of a project split into parts when the root has none', async () => {
+    const split = await temporary();
+    await fs.mkdir(path.join(split, 'frontend'));
+    await fs.mkdir(path.join(split, 'backend'));
+    await fs.writeFile(path.join(split, 'frontend', 'package.json'), JSON.stringify({ scripts: { dev: 'vite', build: 'vite build', typecheck: 'tsc --noEmit' } }));
+    expect(await suggestTestCommand(split)).toBe('npm --prefix frontend run typecheck');
+    // A part with its own tests is checked by them, and every part's check has to pass.
+    await fs.writeFile(path.join(split, 'backend', 'package.json'), JSON.stringify({ scripts: { test: 'jest' } }));
+    expect(await suggestTestCommand(split)).toBe('npm --prefix frontend run typecheck && npm --prefix backend test');
+    // A part with nothing that checks anything gives no command.
+    const bare = await temporary();
+    await fs.mkdir(path.join(bare, 'frontend'));
+    await fs.writeFile(path.join(bare, 'frontend', 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    expect(await suggestTestCommand(bare)).toBeNull();
+  });
 });
