@@ -141,6 +141,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   // How the last design build ended, shown beside the buttons that start it. The page's own banner is at the very top,
   // a long way above the build controls, and a build that stopped there looked like one that had not said anything.
   const [buildOutcome, setBuildOutcome] = useState<string | null>(null);
+  // What the last "Sync OpenPencil designs" found, shown beside the button. Its notice used to go to the banner at the
+  // top of the page, which is out of sight from the board, so a sync that worked looked like a button that did nothing.
+  const [syncOutcome, setSyncOutcome] = useState<string[] | null>(null);
   const [designChatText, setDesignChatText] = useState('');
   const [designChatImage, setDesignChatImage] = useState<{ name: string; dataUrl: string } | null>(null);
   const [designChatMessages, setDesignChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
@@ -1117,7 +1120,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /** The read itself, shared by the manual "Pull the design" button and each step of the build loop below — the
    * loop needs it without the button's own busy/notice handling, since it has its own for the whole run. */
-  async function refreshDesign(): Promise<{ design: StudioDesign; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean; artifacts: StudioArtifacts }> {
+  async function refreshDesign(): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean; artifacts: StudioArtifacts }> {
     const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!));
     setDesign(pulled.design);
     setBoard(pulled.board);
@@ -1592,17 +1595,37 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   async function syncDesignFromBoard(): Promise<void> {
     if (!projectId) return;
-    setBusy('design'); setError(null);
+    setBusy('design'); setError(null); setSyncOutcome(null);
+    // Which cards were linked to a design before, so the result can say what this sync added and not only what exists.
+    const linkedBefore = new Set((board?.cards ?? []).filter((card) => card.designRef).map((card) => card.id));
     try {
       const pulled = await refreshDesign();
       if (pulled.differentDocument) {
-        setNotice('The open-pencil document belongs to another project, so no board cards were reconciled.');
+        const text = 'The open-pencil document belongs to another project, so no board cards were reconciled.';
+        setNotice(text);
+        setSyncOutcome([text]);
         return;
       }
-      const matched = designRows.filter((row) => row.inPages && screenLanded(row.name, pulled)).length;
-      setNotice(`OpenPencil synced: ${matched} of ${designRows.filter((row) => row.inPages).length} planned screens found. ${pulled.changed.length} changed design node${pulled.changed.length === 1 ? '' : 's'}; affected board cards are marked for an update.`);
-    } catch (caught) { setError(messageOf(caught)); }
-    finally { setBusy(null); }
+      const planned = designRows.filter((row) => row.inPages);
+      const notDrawn = planned.filter((row) => !screenLanded(row.name, pulled)).map((row) => row.name);
+      const linked = pulled.board.cards.filter((card) => card.designRef);
+      const newlyLinked = linked.filter((card) => !linkedBefore.has(card.id));
+      const stale = pulled.board.cards.filter((card) => card.stale);
+      const lines = [
+        `${planned.length - notDrawn.length} of ${planned.length} planned screens are drawn in OpenPencil.`,
+        `${linked.length} board card${linked.length === 1 ? ' is' : 's are'} linked to a design${newlyLinked.length > 0 ? `, ${newlyLinked.length} of them new in this sync` : ' (none new in this sync)'}. Linked cards show "Drawn in OpenPencil".`,
+        stale.length > 0 ? `${stale.length} card${stale.length === 1 ? ' is' : 's are'} marked for rebuilding because their design changed.` : 'No card is marked for rebuilding.',
+        notDrawn.length > 0
+          ? `Not drawn yet: ${notDrawn.slice(0, 5).join(', ')}${notDrawn.length > 5 ? ` and ${notDrawn.length - 5} more` : ''}.`
+          : 'Every planned screen is drawn.',
+      ];
+      setSyncOutcome(lines);
+      setNotice(lines[0]!);
+    } catch (caught) {
+      const text = messageOf(caught);
+      setError(text);
+      setSyncOutcome([`The sync failed: ${text}`]);
+    } finally { setBusy(null); }
   }
 
   async function suggestRoutes(): Promise<void> {
@@ -2496,6 +2519,12 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </button>
               {!!board?.cards.some((card) => card.kind === 'page' && !card.route.trim()) && <button type="button" className="secondary-button" onClick={() => void suggestRoutes()} disabled={busy !== null} title="Match routes from the page inventory and pulled design, then suggest any remaining routes from project context.">{busy === 'card' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Suggest route fixes</button>}
             </div>
+            {syncOutcome && (
+              <section className="studio-route-review studio-sync-result" role="status" aria-label="OpenPencil sync result">
+                <h3>OpenPencil sync</h3>
+                {syncOutcome.map((line) => <p key={line} className="studio-note">{line}</p>)}
+              </section>
+            )}
             {routeSuggestions && <section className="studio-route-review" aria-label="Review suggested routes">
               <h3>Review route suggestions</h3>
               <p className="studio-note">Routes found in the page inventory or screen name are marked high confidence. Model suggestions need your review before they are saved.</p>
@@ -2675,6 +2704,8 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute }: { card: Bo
         <span className="studio-kind">{card.kind}</span>
       </div>
       {card.stale && <p className="studio-note"><AlertTriangle size={12} /> {card.staleReason ?? 'Something this card reads changed.'}</p>}
+      {ui && card.designRef && !card.stale && <p className="studio-note studio-drawn"><Check size={12} /> Drawn in OpenPencil</p>}
+      {card.kind === 'page' && !card.designRef && <p className="studio-note">Not drawn in OpenPencil yet.</p>}
       {/* The reason a card is where it is. It was always on the card and never on the screen, so a board full of
           blocked cards read as a board with no reason — while the reason sat in this field. */}
       {card.notes.trim() && <CardNote note={card.notes} blocked={card.status === 'blocked'} />}
