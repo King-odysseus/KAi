@@ -3,7 +3,7 @@ import { Background, Controls, MarkerType, Position, ReactFlow, type Edge, type 
 import '@xyflow/react/dist/style.css';
 import { Loader2, Maximize2, Minimize2, RefreshCw, Workflow } from 'lucide-react';
 import type { BoardCard, BoardStatus, StudioBoard, StudioProjectSummary } from '@kai/contracts';
-import { agentLinks, connectedCardIds, layoutAgentLinks, layoutCards } from '../graph-layout';
+import { agentLinks, connectedCardIds, layoutAgentLinks, layoutCards, reducedDependencies } from '../graph-layout';
 import { unwrap } from '../types';
 
 /**
@@ -175,7 +175,6 @@ export function GraphView(): ReactNode {
 
 /** Nodes and edges for one view. Pure apart from the card data, so the page re-renders cleanly on every poll. */
 function buildGraph(cards: readonly BoardCard[], mode: Mode): { nodes: Node[]; edges: Edge[] } {
-  const positions = new Map(layoutCards(cards).map((position) => [position.id, position]));
   const cardNode = (card: BoardCard, x: number, y: number): Node => ({
     id: card.id,
     position: { x, y },
@@ -190,12 +189,15 @@ function buildGraph(cards: readonly BoardCard[], mode: Mode): { nodes: Node[]; e
     const shown = cards.filter((card) => connected.has(card.id) || cards.length <= 12);
     const ids = new Set(shown.map((card) => card.id));
     const byId = new Map(cards.map((card) => [card.id, card]));
+    const dependencies = reducedDependencies(shown);
+    const positions = new Map(layoutCards(shown).map((position) => [position.id, position]));
     return {
       nodes: shown.map((card) => cardNode(card, positions.get(card.id)?.x ?? 0, positions.get(card.id)?.y ?? 0)),
-      edges: shown.flatMap((card) => card.dependsOn.filter((dependency) => ids.has(dependency)).map((dependency): Edge => ({
+      edges: shown.flatMap((card) => (dependencies.get(card.id) ?? []).filter((dependency) => ids.has(dependency)).map((dependency): Edge => ({
         id: `${dependency}->${card.id}`,
         source: dependency,
         target: card.id,
+        type: 'step',
         animated: byId.get(dependency)?.status === 'done' && card.status === 'inProgress',
         markerEnd: { type: MarkerType.ArrowClosed },
         className: `graph-edge ${byId.get(dependency)?.status === 'done' ? 'met' : 'waiting'}`,

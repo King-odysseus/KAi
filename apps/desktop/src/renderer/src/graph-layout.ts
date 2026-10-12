@@ -23,6 +23,29 @@ const GRAPH_NODE_HEIGHT = 72;
 export const GRAPH_COLUMN_WIDTH = 280;
 export const GRAPH_ROW_HEIGHT = 92;
 
+/** Remove dependency links already represented by a longer prerequisite path. */
+export function reducedDependencies(cards: readonly Pick<BoardCard, 'id' | 'dependsOn'>[]): Map<string, string[]> {
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const result = new Map<string, string[]>();
+  for (const card of cards) {
+    const direct = card.dependsOn.filter((id) => byId.has(id));
+    const reduced = direct.filter((dependency) => !direct.some((other) => other !== dependency && dependsOn(other, dependency, byId)));
+    result.set(card.id, reduced);
+  }
+  return result;
+}
+
+function dependsOn(cardId: string, soughtId: string, byId: ReadonlyMap<string, Pick<BoardCard, 'id' | 'dependsOn'>>): boolean {
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (id === soughtId) return true;
+    if (visited.has(id)) return false;
+    visited.add(id);
+    return (byId.get(id)?.dependsOn ?? []).some(visit);
+  };
+  return visit(cardId);
+}
+
 /** How deep each card sits: 0 for a card with no dependencies, else one more than its deepest dependency. */
 export function cardDepths(cards: readonly Pick<BoardCard, 'id' | 'dependsOn'>[]): Map<string, number> {
   const byId = new Map(cards.map((card) => [card.id, card]));
@@ -54,24 +77,23 @@ export interface GraphPosition {
  * One column per depth, with dagre choosing where each card sits inside its column: it orders the cards so the lines
  * between them cross as little as possible, and centres each column against its neighbours.
  *
- * Cards are added in board order, which is what dagre falls back on for two cards it has no reason to order either
- * way — so a board with no dependencies at all still lays out exactly as it read.
+ * Redundant transitive links are removed before Dagre orders the nodes, leaving the shortest dependency structure to
+ * guide both the columns and the ordering within each column.
  */
 export function layoutCards(cards: readonly Pick<BoardCard, 'id' | 'dependsOn'>[]): GraphPosition[] {
+  const dependencies = reducedDependencies(cards);
   const graph = new graphlib.Graph();
   graph.setGraph({
     rankdir: 'LR',
     ranksep: GRAPH_COLUMN_WIDTH - GRAPH_NODE_WIDTH,
     nodesep: GRAPH_ROW_HEIGHT - GRAPH_NODE_HEIGHT,
-    // The board is read top to bottom in the order it was written, so a tie is broken by insertion rather than by
-    // dagre's own default ordering, which moves cards around on every relayout.
-    ranker: 'tight-tree',
+    ranker: 'network-simplex',
   });
   graph.setDefaultEdgeLabel(() => ({}));
   const known = new Set(cards.map((card) => card.id));
   for (const card of cards) graph.setNode(card.id, { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT });
   for (const card of cards) {
-    for (const dependency of card.dependsOn) {
+    for (const dependency of dependencies.get(card.id) ?? []) {
       // A dependency on a card that is not on the board is not an edge; it is ignored, as it always was.
       if (known.has(dependency)) graph.setEdge(dependency, card.id);
     }
