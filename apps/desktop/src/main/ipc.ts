@@ -84,7 +84,7 @@ import { canInterject, clearInterjections, interject, setInterjectionActive, tak
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, RULES_MARKER, shouldCarryRules } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, RULES_MARKER, shouldCarryRules, withAutopilotException } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -1433,6 +1433,9 @@ export async function runConversationAgent(
     );
   }
   if (stopped()) return stoppedResult();
+  // Autopilot promises to work on this machine only, so its runs are told, inside the rules, that the commit and push
+  // step does not apply to them. Everything built from the rules below (the briefing and the project context) sees it.
+  if (conversation.origin?.kind === 'autopilot') authoritativeRules = withAutopilotException(authoritativeRules);
   const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
 
   const executionMode = request.execution ?? 'cli';

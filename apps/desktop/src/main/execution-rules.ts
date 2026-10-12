@@ -96,6 +96,25 @@ export class DesktopExecutionRules {
  */
 export const RULES_MARKER = '[COGNITIVE1 STANDING INSTRUCTIONS]';
 
+/**
+ * What an unattended Autopilot run is told about committing, as part of the rule set itself.
+ *
+ * The rules call commit and push mandatory with no exceptions, and say they win any conflict, so a line in the card's
+ * own instructions would lose to them: one Autopilot run did push to a remote, while the screen promised it never
+ * commits and never deploys. The exception has to live inside the authoritative text to hold. It is written in plain
+ * ASCII like every other rule, since the rules forbid the dashes a tidier sentence would use.
+ */
+export const AUTOPILOT_EXCEPTION = [
+  '## Exception for Autopilot runs',
+  '',
+  'This is an unattended Autopilot run, and Autopilot works on this machine only. For this run the Commit & Push rules and the end-of-session commit and push step do not apply: do not run git add, git commit, git push or git tag, and do not run any command that publishes work off this machine. Leave your changes in the working tree. KAI checks the card, and the person decides when to commit. Every other rule still applies.',
+].join('\n');
+
+/** The rule set as an Autopilot run receives it: the standing rules, then the exception that overrides the commit step. */
+export function withAutopilotException(markdown: string): string {
+  return `${markdown.trim()}\n\n${AUTOPILOT_EXCEPTION}\n`;
+}
+
 export function buildExecutionRulesBriefing(markdown: string): string {
   const content = markdown.trim();
   if (!content) return '';

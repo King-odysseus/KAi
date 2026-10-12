@@ -5,12 +5,14 @@ import { describe, expect, it } from 'vitest';
 import {
   applyExecutionRulesToPrompt,
   applyExecutionRulesToRequest,
+  AUTOPILOT_EXCEPTION,
   buildExecutionRulesBriefing,
   DesktopExecutionRules,
   INJECTED_RULES_PATH,
   injectRulesIntoProjects,
   RULES_MARKER,
   shouldCarryRules,
+  withAutopilotException,
 } from '../apps/desktop/src/main/execution-rules';
 
 const bundledRulesPath = path.resolve('apps/desktop/resources/agent-rules/Cognitive1-Rules.md');
@@ -63,6 +65,30 @@ describe('desktop authoritative execution rules', () => {
  * Worth pinning because nothing else notices it: a file written under the wrong name, or one that stops carrying the
  * marker, would leave every project quietly unprotected and the button would still report success.
  */
+describe('the Autopilot exception to committing', () => {
+  it('goes inside the authoritative text, after the rules, so the rule set that wins is the one that carries it', async () => {
+    const rules = await new DesktopExecutionRules(bundledRulesPath).read();
+    const forAutopilot = withAutopilotException(rules);
+
+    expect(forAutopilot.startsWith(rules)).toBe(true);
+    expect(forAutopilot.trimEnd().endsWith(AUTOPILOT_EXCEPTION)).toBe(true);
+    // And it reaches the agent through the same briefing every other run gets, between the same markers.
+    const briefing = buildExecutionRulesBriefing(forAutopilot);
+    expect(briefing).toContain('do not run git add, git commit, git push or git tag');
+    expect(briefing.indexOf('## Exception for Autopilot runs')).toBeGreaterThan(briefing.indexOf('## Commit & Push'));
+    expect(briefing.startsWith(RULES_MARKER)).toBe(true);
+  });
+
+  it('is plain ASCII, like the rules it amends, which forbid dashes and decoration', () => {
+    expect(/^[\x09\x0a\x20-\x7e]*$/.test(AUTOPILOT_EXCEPTION)).toBe(true);
+  });
+
+  it('leaves an ordinary run, which keeps the commit rule, untouched', async () => {
+    const rules = await new DesktopExecutionRules(bundledRulesPath).read();
+    expect(buildExecutionRulesBriefing(rules)).not.toContain('Exception for Autopilot runs');
+  });
+});
+
 describe('injecting the standing rules into projects', () => {
   it('writes the rules into each project under the name the context builder reads', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-rules-inject-'));
