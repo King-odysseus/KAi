@@ -12622,6 +12622,22 @@ button.tool-call-head:hover strong { color: var(--mint); }
   padding: 16px clamp(18px, 2vw, 32px);
 }
 
+.graph-view.graph-view-full {
+  position: fixed;
+  inset: var(--titlebar-height) 0 0;
+  z-index: 880;
+  padding: 16px clamp(16px, 2vw, 32px);
+  background: var(--bg-deep, var(--bg-shell));
+}
+
+.graph-view-full .graph-body {
+  min-height: 0;
+}
+
+.graph-view-full .graph-canvas {
+  min-height: 0;
+}
+
 .graph-head {
   display: flex;
   flex-wrap: wrap;

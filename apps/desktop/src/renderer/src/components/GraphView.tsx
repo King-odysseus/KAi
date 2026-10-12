@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Background, Controls, MarkerType, Position, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Loader2, RefreshCw, Workflow } from 'lucide-react';
+import { Loader2, Maximize2, Minimize2, RefreshCw, Workflow } from 'lucide-react';
 import type { BoardCard, BoardStatus, StudioBoard, StudioProjectSummary } from '@kai/contracts';
-import { agentLinks, connectedCardIds, layoutCards } from '../graph-layout';
+import { agentLinks, connectedCardIds, layoutAgentLinks, layoutCards } from '../graph-layout';
 import { unwrap } from '../types';
 
 /**
@@ -40,6 +40,13 @@ export function GraphView(): ReactNode {
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [full, setFull] = useState(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setFull(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,7 +94,7 @@ export function GraphView(): ReactNode {
   }, [cards]);
 
   return (
-    <div className="graph-view">
+    <div className={`graph-view${full ? ' graph-view-full' : ''}`}>
       <header className="graph-head">
         <div>
           <h1><Workflow size={16} /> Project graph</h1>
@@ -104,6 +111,9 @@ export function GraphView(): ReactNode {
           </div>
           <button type="button" className="secondary-button" onClick={() => void load(false)} disabled={busy || !projectId}>
             {busy ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />} Refresh
+          </button>
+          <button type="button" className="secondary-button" onClick={() => setFull((value) => !value)} aria-pressed={full} title={full ? 'Exit full screen (Esc)' : 'Show the project graph full screen'}>
+            {full ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {full ? 'Exit full screen' : 'Full screen'}
           </button>
         </div>
       </header>
@@ -124,6 +134,7 @@ export function GraphView(): ReactNode {
             </p>
           ) : (
             <ReactFlow
+              key={`${projectId ?? ''}-${mode}-${full ? 'full' : 'page'}`}
               nodes={nodes}
               edges={edges}
               fitView
@@ -194,16 +205,17 @@ function buildGraph(cards: readonly BoardCard[], mode: Mode): { nodes: Node[]; e
 
   const links = agentLinks(cards);
   const agents = [...new Set(links.map((link) => link.agent))];
+  const agentPositions = new Map(layoutAgentLinks(links).map((position) => [position.id, position]));
   const held = new Set(links.map((link) => link.cardId));
   const agentNodes: Node[] = agents.map((agent, index) => ({
     id: `agent:${agent}`,
-    position: { x: 0, y: index * 120 },
+    position: { x: agentPositions.get(`agent:${agent}`)?.x ?? 0, y: agentPositions.get(`agent:${agent}`)?.y ?? index * 120 },
     data: { label: agent },
     className: 'graph-node agent',
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
   }));
-  const cardNodes = cards.filter((card) => held.has(card.id)).map((card, index) => cardNode(card, 300, index * 100));
+  const cardNodes = cards.filter((card) => held.has(card.id)).map((card, index) => cardNode(card, agentPositions.get(card.id)?.x ?? 300, agentPositions.get(card.id)?.y ?? index * 100));
   return {
     nodes: [...agentNodes, ...cardNodes],
     edges: links.map((link): Edge => ({

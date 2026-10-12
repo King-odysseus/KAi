@@ -99,7 +99,7 @@ export function applyStaleness(cards: readonly BoardCard[], artifacts: readonly 
 export function promoteReady(cards: readonly BoardCard[]): BoardCard[] {
   const byId = new Map(cards.map((card) => [card.id, card]));
   return cards.map((card) => {
-    if (card.status !== 'backlog' || card.stale) return card;
+    if (card.status !== 'backlog') return card;
     const ready = card.dependsOn.every((id) => byId.get(id)?.status === 'done');
     return ready ? { ...card, status: 'ready' as BoardStatus } : card;
   });
@@ -116,7 +116,7 @@ export function applyDesignStaleness(cards: readonly BoardCard[], changed: reado
   let next = cards.map((card) => {
     if (!card.designRef || !moved.has(card.designRef)) return card;
     stale.add(card.id);
-    return { ...card, stale: true, staleReason: `open-pencil node ${card.designRef} changed since this card was written.` };
+    return { ...card, stale: true, staleReason: `open-pencil node ${card.designRef} changed since this card was written.`, status: card.status === 'done' || card.status === 'review' ? 'backlog' : card.status, claimedBy: card.status === 'inProgress' ? card.claimedBy : null };
   });
   // A card built on a card that must be redone must be redone too, however deep the chain runs.
   for (let pass = 0; pass < cards.length; pass += 1) {
@@ -125,7 +125,7 @@ export function applyDesignStaleness(cards: readonly BoardCard[], changed: reado
       if (stale.has(card.id) || card.dependsOn.every((id) => !stale.has(id))) return card;
       stale.add(card.id);
       changedThisPass = true;
-      return { ...card, stale: true, staleReason: 'Something this card is built on has to be redone for the new design.' };
+      return { ...card, stale: true, staleReason: 'Something this card is built on has to be redone for the new design.', status: card.status === 'done' || card.status === 'review' ? 'backlog' : card.status, claimedBy: card.status === 'inProgress' ? card.claimedBy : null };
     });
     if (!changedThisPass) break;
   }
@@ -246,6 +246,7 @@ export class StudioBoardStore {
     }
     let next: BoardCard = { ...card, status, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null, movedBy: by, movedAt: this.ports.now() };
     if (status === 'done') {
+      if (card.stale) throw new Error(`"${card.title}" is stale: ${card.staleReason ?? 'its design or an input changed.'} Rebuild and check it before marking it done.`);
       const blocked = await this.explainDone(projectId, card);
       if (blocked) throw new Error(blocked);
     }
@@ -291,7 +292,8 @@ export class StudioBoardStore {
   async setCheck(projectId: string, cardId: string, check: CardCheck): Promise<BoardCard> {
     const board = await this.read(projectId);
     const card = this.require(board, cardId);
-    const next: BoardCard = { ...card, check, updatedAt: this.ports.now() };
+    const verified = check.visual === 'passed' || check.visual === 'skipped';
+    const next: BoardCard = { ...card, check, ...(verified ? { stale: false, staleReason: null } : {}), updatedAt: this.ports.now() };
     await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
     return next;
   }

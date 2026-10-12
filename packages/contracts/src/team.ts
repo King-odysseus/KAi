@@ -301,7 +301,7 @@ export function createDefaultAgentTeam(): AgentTeam {
     preset: 'balanced',
     custom: [],
     roles: {
-      orchestrator: { assignee: 'api', route: 'direct', instructions: '' },
+      orchestrator: { assignee: 'auto', route: 'auto', instructions: '' },
       frontend: { ...auto },
       backend: { ...auto },
       tests: { ...auto },

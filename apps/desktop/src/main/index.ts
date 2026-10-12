@@ -791,6 +791,7 @@ async function startApplication(): Promise<void> {
         available: capability.available,
         displayName: capability.displayName,
         local: isLocalProvider(capability.provider),
+        provider: capability.provider,
         ...(capability.unavailableReason ? { unavailableReason: capability.unavailableReason } : {}),
       };
     },

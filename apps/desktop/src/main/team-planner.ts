@@ -50,7 +50,7 @@ export interface TeamPlannerPorts {
   projectTeam?(projectId: string): Promise<AgentTeam | null>;
   teamRecords?(): Promise<TeamRecordEntry[]>;
   agentCapabilities(): Promise<AgentCapability[]>;
-  directApi(): Promise<{ available: boolean; displayName: string; unavailableReason?: string; local?: boolean }>;
+  directApi(): Promise<{ available: boolean; displayName: string; unavailableReason?: string; local?: boolean; provider?: string }>;
   proxyReady(): Promise<boolean>;
   createConversation(projectId: string, title: string): Promise<ConversationRecord>;
   runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;

@@ -94,6 +94,22 @@ export function agentLinks(cards: readonly Pick<BoardCard, 'id' | 'status' | 'cl
   return cards.flatMap((card) => (card.claimedBy && card.status === 'inProgress' ? [{ agent: card.claimedBy, cardId: card.id }] : []));
 }
 
+/** Places live agent assignments with the same layered, crossing-minimising layout used by flow diagrams. */
+export function layoutAgentLinks(links: readonly AgentLink[]): GraphPosition[] {
+  const graph = new graphlib.Graph();
+  graph.setGraph({ rankdir: 'LR', ranksep: 90, nodesep: 36, ranker: 'network-simplex' });
+  graph.setDefaultEdgeLabel(() => ({}));
+  const agents = [...new Set(links.map((link) => link.agent))];
+  for (const agent of agents) graph.setNode(`agent:${agent}`, { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT });
+  for (const { cardId } of links) graph.setNode(cardId, { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT });
+  for (const { agent, cardId } of links) graph.setEdge(`agent:${agent}`, cardId);
+  layout(graph);
+  return [...agents.map((agent) => `agent:${agent}`), ...links.map((link) => link.cardId)].map((id) => {
+    const placed = graph.node(id) as { x: number; y: number };
+    return { id, x: Math.round(placed.x - GRAPH_NODE_WIDTH / 2), y: Math.round(placed.y - GRAPH_NODE_HEIGHT / 2) };
+  });
+}
+
 /** The cards with at least one dependency or dependent, which is what a dependency view is worth drawing. */
 export function connectedCardIds(cards: readonly Pick<BoardCard, 'id' | 'dependsOn'>[]): Set<string> {
   const ids = new Set(cards.map((card) => card.id));

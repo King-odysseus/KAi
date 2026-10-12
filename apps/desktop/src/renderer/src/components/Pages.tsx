@@ -236,6 +236,19 @@ interface WorkflowDraftStep {
 
 type WorkflowStyle = 'fast' | 'safe' | 'security' | 'learning';
 
+function usesDeepSeekApi(settings: AppSettings): boolean {
+  return settings.directApi.enabled && settings.directApi.provider === 'deepseek';
+}
+
+function preferredArchitect(agents: readonly AgentCapability[], fallback: AgentId): AgentId {
+  return (['claude', 'codex'] as const).map((id) => agents.find((agent) => agent.id === id && agent.available)?.id).find(Boolean) ?? fallback;
+}
+
+function preferredImplementer(agents: readonly AgentCapability[], settings: AppSettings): AgentId {
+  if (usesDeepSeekApi(settings)) return settings.defaultAgent;
+  return agents.find((agent) => agent.id === 'kimi' && agent.available)?.id ?? settings.defaultAgent;
+}
+
 const WORKFLOW_STYLES: ReadonlyArray<{ id: WorkflowStyle; label: string; detail: string }> = [
   { id: 'fast', label: 'Fast', detail: 'One builder, then a focused review' },
   { id: 'safe', label: 'Safe', detail: 'Plan, build, then review' },
@@ -260,7 +273,7 @@ export function WorkflowsView({
 }): ReactNode {
   const [title, setTitle] = useState('Untitled workflow');
   const [steps, setSteps] = useState<WorkflowDraftStep[]>([
-    { id: 'step_0', agent: settings.defaultAgent, prompt: '', label: 'Step 1', status: 'pending' },
+    { id: 'step_0', agent: preferredArchitect(agentCapabilities, settings.defaultAgent), prompt: '', label: 'Step 1', status: 'pending' },
   ]);
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
@@ -364,44 +377,50 @@ export function WorkflowsView({
   function addStep(): void {
     setSteps((current) => [...current, {
       id: `step_${crypto.randomUUID()}`,
-      agent: settings.defaultAgent,
+      agent: preferredImplementer(agentCapabilities, settings),
       prompt: '',
       label: `Step ${current.length + 1}`,
+      ...(usesDeepSeekApi(settings) ? { execution: 'api' as const, route: 'direct' as const } : {}),
       status: 'pending',
     }]);
   }
 
   function applyWorkflowStyle(style: WorkflowStyle): void {
     const available = agentCapabilities.filter((agent) => agent.available).map((agent) => agent.id);
-    const agentAt = (index: number): AgentId => available[index % Math.max(available.length, 1)] ?? settings.defaultAgent;
-    const makeStep = (index: number, label: string, prompt: string): WorkflowDraftStep => ({ id: `step_${crypto.randomUUID()}`, agent: agentAt(index), label, prompt, status: 'pending' });
+    const architect = preferredArchitect(agentCapabilities, settings.defaultAgent);
+    const implementer = preferredImplementer(agentCapabilities, settings);
+    const reviewer = agentCapabilities.find((agent) => agent.id === architect && agent.available)?.id ?? available[0] ?? settings.defaultAgent;
+    const makeStep = (agent: AgentId, label: string, prompt: string, execution?: 'api' | 'cli'): WorkflowDraftStep => ({
+      id: `step_${crypto.randomUUID()}`, agent, label, prompt, status: 'pending',
+      ...(execution ? { execution, route: 'direct' as const } : {}),
+    });
     const styles: Record<WorkflowStyle, { title: string; autonomy: AutonomyMode; steps: WorkflowDraftStep[] }> = {
       fast: {
         title: 'Fast build and review', autonomy: 'autoEdit', steps: [
-          makeStep(0, 'Builder', 'Implement the requested change. Keep the change focused, explain important decisions, and run the most relevant checks.'),
-          makeStep(1, 'Reviewer', 'Review the preceding work. Check correctness, changed files, edge cases, and verification results. Report issues clearly; do not edit unless needed to fix a confirmed problem.'),
+          makeStep(implementer, 'Builder', 'Implement the requested change. Keep the change focused, explain important decisions, and run the most relevant checks.', usesDeepSeekApi(settings) ? 'api' : 'cli'),
+          makeStep(reviewer, 'Reviewer', 'Review the preceding work. Check correctness, changed files, edge cases, and verification results. Report issues clearly; do not edit unless needed to fix a confirmed problem.'),
         ],
       },
       safe: {
         title: 'Plan, build, review', autonomy: 'ask', steps: [
-          makeStep(0, 'Planner', 'Inspect the project and produce a concrete implementation plan. Identify files, risks, architecture impact, and verification steps. Do not edit files.'),
-          makeStep(1, 'Builder', 'Use the approved plan from the preceding step. Implement the smallest correct change and run the relevant checks.'),
-          makeStep(2, 'Reviewer', 'Review the completed change against the plan. Check the diff, regressions, tests, and any remaining risks. Give a clear ship/no-ship recommendation.'),
+          makeStep(architect, 'Planner', 'Inspect the project and produce a concrete implementation plan. Identify files, risks, architecture impact, and verification steps. Do not edit files.'),
+          makeStep(implementer, 'Builder', 'Use the approved plan from the preceding step. Implement the smallest correct change and run the relevant checks.', usesDeepSeekApi(settings) ? 'api' : 'cli'),
+          makeStep(reviewer, 'Reviewer', 'Review the completed change against the plan. Check the diff, regressions, tests, and any remaining risks. Give a clear ship/no-ship recommendation.'),
         ],
       },
       security: {
         title: 'Security-sensitive change', autonomy: 'ask', steps: [
-          makeStep(0, 'Architecture reviewer', 'Inspect the requested change. Identify trust boundaries, data flows, permissions, secrets, and abuse cases. Produce a plan; do not edit files.'),
-          makeStep(1, 'Builder', 'Implement the approved plan with least-privilege access, validation, safe error handling, and relevant tests.'),
-          makeStep(2, 'Security reviewer', 'Review the change for authentication, authorization, input validation, secret handling, data exposure, dependency risk, and unsafe defaults. Do not edit files.'),
-          makeStep(3, 'Verifier', 'Run the relevant tests and inspect the final diff. State what was verified, what remains uncertain, and whether it is safe to ship.'),
+          makeStep(architect, 'Architecture reviewer', 'Inspect the requested change. Identify trust boundaries, data flows, permissions, secrets, and abuse cases. Produce a plan; do not edit files.'),
+          makeStep(implementer, 'Builder', 'Implement the approved plan with least-privilege access, validation, safe error handling, and relevant tests.', usesDeepSeekApi(settings) ? 'api' : 'cli'),
+          makeStep(reviewer, 'Security reviewer', 'Review the change for authentication, authorization, input validation, secret handling, data exposure, dependency risk, and unsafe defaults. Do not edit files.'),
+          makeStep(reviewer, 'Verifier', 'Run the relevant checks and inspect the final diff. State what was verified, what remains uncertain, and whether it is safe to ship.'),
         ],
       },
       learning: {
         title: 'Learning-first build', autonomy: 'ask', steps: [
-          makeStep(0, 'Teacher and planner', 'Explain the relevant architecture and security concepts in simple terms. Propose a small, staged plan and one question the learner can answer before building. Do not edit files.'),
-          makeStep(1, 'Pair builder', 'Implement only the next small stage. Explain what changed, why, and how it fits the architecture. Stop after that stage and leave a clear next step.'),
-          makeStep(2, 'Teacher reviewer', 'Review the change with the learner in mind. Explain the architecture, security implications, trade-offs, and a small way to verify understanding.'),
+          makeStep(architect, 'Teacher and planner', 'Explain the relevant architecture and security concepts in simple terms. Propose a small, staged plan and one question the learner can answer before building. Do not edit files.'),
+          makeStep(implementer, 'Pair builder', 'Implement only the next small stage. Explain what changed, why, and how it fits the architecture. Stop after that stage and leave a clear next step.', usesDeepSeekApi(settings) ? 'api' : 'cli'),
+          makeStep(reviewer, 'Teacher reviewer', 'Review the change with the learner in mind. Explain the architecture, security implications, trade-offs, and a small way to verify understanding.'),
         ],
       },
     };

@@ -70,6 +70,29 @@ function parseRouteSuggestions(raw: string, allowed: BoardCard[]): Array<{ cardI
   }
   return routes;
 }
+
+function normalizeRouteKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** Pair explicit route declarations with nearby component names; never invent a route from a screen title alone. */
+function routesInSource(source: string): Array<{ route: string; keys: string[] }> {
+  const found = new Map<string, Set<string>>();
+  const patterns = [
+    /<Route\b[^>]*\bpath=["']([^"']+)["'][^>]*\belement=\{\s*<([A-Z][\w.]*)/g,
+    /\{\s*path:\s*["']([^"']+)["'][\s\S]{0,240}?element:\s*<([A-Z][\w.]*)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const route = match[1].startsWith('/') ? match[1] : `/${match[1]}`;
+      const keys = found.get(route) ?? new Set<string>();
+      keys.add(normalizeRouteKey(match[2].split('.').at(-1) ?? match[2]));
+      keys.add(normalizeRouteKey(route.split('/').filter(Boolean).at(-1) ?? 'home'));
+      found.set(route, keys);
+    }
+  }
+  return [...found].map(([route, keys]) => ({ route, keys: [...keys].filter((key) => key.length >= 4) }));
+}
 const BOARD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -361,17 +384,38 @@ export class DesktopStudio {
     if (remaining.length === 0) return { suggestions, unresolved: [] };
     const settings = await this.ports.settings();
     const context = await loadProjectContext(root, undefined, GENERATE_CONTEXT_CHARS).catch(() => null);
+    const sourceRoutes = routesInSource(context ?? '');
+    const sourceMatches = remaining.flatMap((card) => {
+      const title = normalizeRouteKey(card.title);
+      const matches = sourceRoutes.filter((entry) => entry.keys.some((key) => key === title || key.includes(title) || title.includes(key)));
+      const match = matches.length === 1 ? matches[0] : undefined;
+      return match ? [{ cardId: card.id, route: match.route, confidence: 'high' as const, reason: `Matched “${card.title}” to the route and screen component in the project source.` }] : [];
+    });
+    const covered = new Set([...suggestions, ...sourceMatches].map((entry) => entry.cardId));
+    const unresolvedBySource = remaining.filter((card) => !covered.has(card.id));
+    if (unresolvedBySource.length === 0) {
+      return { suggestions: [...suggestions, ...sourceMatches], unresolved: [] };
+    }
     const schema = { type: 'object', additionalProperties: false, required: ['routes'], properties: { routes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['cardId', 'route', 'reason'], properties: { cardId: { type: 'string' }, route: { type: 'string' }, reason: { type: 'string' } } } } } } as const;
-    const parsed = await this.ports.requester.structuredRequest(settings.promptGuide, NAMES, {
-      system: 'Suggest routes for unresolved page cards. Use only evidence from the page inventory, pulled design page names, project brief, and source snapshot. Return only JSON. Routes must start with /, must not be guessed from unrelated evidence, and every cardId must be one of those supplied. Leave uncertain screens out.',
-      user: [
-      `UNRESOLVED CARDS:\n${remaining.map((card) => `${card.id}: ${card.title}\n${card.story}`).join('\n\n')}`,
-        `PAGES INVENTORY:\n${pages ?? '(none)'}`, `PULLED DESIGN PAGES:\n${design.components.filter((item) => item.screen).map((item) => `${item.name} (node ${item.id})`).join('\n') || '(none recorded)'}`,
-        context ? `PROJECT SOURCE SNAPSHOT:\n${context}` : '',
-      ].filter(Boolean).join('\n\n'),
-    }, 'kai_studio_route_repair', schema, (raw) => parseRouteSuggestions(raw, remaining), { maxOutputTokens: 3_000 });
-    const valid = parsed.filter((entry) => !suggestions.some((item) => item.cardId === entry.cardId));
-    return { suggestions: [...suggestions, ...valid], unresolved: remaining.filter((card) => !valid.some((entry) => entry.cardId === card.id)).map((card) => card.id) };
+    let valid: ReturnType<typeof parseRouteSuggestions> = [];
+    try {
+      valid = await this.ports.requester.structuredRequest(settings.promptGuide, NAMES, {
+        system: 'Suggest routes for unresolved page cards. Use only supplied evidence. Routes start with /. Return only JSON. Leave uncertain cards out.',
+        user: [
+          `UNRESOLVED CARDS:\n${unresolvedBySource.map((card) => `${card.id}: ${card.title}\n${card.story.slice(0, 500)}`).join('\n\n')}`,
+          `PAGES INVENTORY:\n${(pages ?? '').slice(0, 4_000)}`,
+          `PULLED DESIGN PAGES:\n${design.components.filter((item) => item.screen).map((item) => item.name).join('\n') || '(none recorded)'}`,
+          context ? `PROJECT SOURCE ROUTES:\n${context.slice(0, 4_000)}` : '',
+        ].filter(Boolean).join('\n\n'),
+      }, 'kai_studio_route_repair', schema, (raw) => parseRouteSuggestions(raw, unresolvedBySource), { maxOutputTokens: 1_200 });
+    } catch (error) {
+      // Reasoning models can spend the entire output budget before returning JSON. Keep source and inventory matches
+      // and report the remaining cards instead of surfacing an unrelated generic tutor error.
+      if (!(error instanceof ReplyShapeError) && !/no tutor content|finish_reason:?\s*length|output budget|reasoning.*whole/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    }
+    const all = [...suggestions, ...sourceMatches, ...valid];
+    const ids = new Set(all.map((item) => item.cardId));
+    return { suggestions: all, unresolved: remaining.filter((card) => !ids.has(card.id)).map((card) => card.id) };
   }
 
   /**

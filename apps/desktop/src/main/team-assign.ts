@@ -27,7 +27,7 @@ import { betterRecord, MIN_TEAM_JOBS, recordPhrase, roleRecord } from './team-re
 export interface AssignmentEnvironment {
   capabilities: ReadonlyArray<Pick<AgentCapability, 'id' | 'displayName' | 'available' | 'state' | 'supportsRoutes' | 'unavailableReason'>>;
   /** `local` means a model on this machine (LM Studio): free per request, and fine for routine parts. */
-  api: { available: boolean; displayName: string; unavailableReason?: string; local?: boolean };
+  api: { available: boolean; displayName: string; unavailableReason?: string; local?: boolean; provider?: string };
   proxyReady: boolean;
   /** Set by the caller; only Windows changes a choice (see scoreFor). */
   platform?: NodeJS.Platform;
@@ -69,9 +69,9 @@ export interface Reach {
  * Balanced preset only uses them to break ties between agents that are all ready.
  */
 const STRENGTH: Record<TeamRoleId, Record<TeamResolvedAssignee, number>> = {
-  orchestrator: { claude: 9, codex: 8, gemini: 7, qwen: 6, kimi: 6, api: 7 },
-  frontend: { claude: 9, gemini: 7, codex: 7, kimi: 6, qwen: 6, api: 6 },
-  backend: { codex: 9, claude: 8, qwen: 6, kimi: 6, gemini: 6, api: 6 },
+  orchestrator: { claude: 11, codex: 10, gemini: 7, qwen: 6, kimi: 6, api: 7 },
+  frontend: { claude: 6, gemini: 6, codex: 6, kimi: 8, qwen: 6, api: 10 },
+  backend: { codex: 6, claude: 6, qwen: 6, kimi: 8, gemini: 6, api: 10 },
   tests: { codex: 8, claude: 8, qwen: 7, kimi: 6, gemini: 6, api: 6 },
   securityReviewer: { claude: 9, codex: 8, gemini: 6, kimi: 5, qwen: 5, api: 6 },
   codeReviewer: { claude: 9, codex: 8, gemini: 7, kimi: 6, qwen: 6, api: 6 },
@@ -160,6 +160,10 @@ function scoreFor(role: string, assignee: TeamResolvedAssignee, team: AgentTeam,
   if (assignee === 'kimi' && env.platform === 'win32') score -= 4;
   // The Budget preset exists to spare paid limits, so a free local model takes routine parts.
   if (assignee === 'api' && env.api.local && team.preset === 'budget' && info.routine) score += 3;
+  // Keep paid CLI subscriptions for architecture and hard reviews; use the configured DeepSeek API for implementation.
+  if (info.access === 'edit' && PREMIUM.has(assignee)) score -= 3;
+  if (assignee === 'api' && env.api.provider?.toLowerCase() === 'deepseek' && info.access === 'edit') score += 4;
+  if (assignee === 'kimi' && info.access === 'edit') score += 2;
   return score;
 }
 
@@ -219,11 +223,7 @@ export function resolveOrchestrator(teamInput: AgentTeam, env: AssignmentEnviron
     }
     warnings.push(`${agentName(pinned, env)} cannot plan right now (${whyUnreachable(pinned, env)}), so KAI chose another agent.`);
   }
-  // Prefer KAI's own API mode when it is set up: it is quick, and it does not spend a CLI account's limits.
-  const api = reach('api', config.route === 'proxy' ? 'proxy' : 'direct', env);
-  if (api) {
-    return { assignee: 'api', route: api.route, reason: `${env.api.displayName} plans by default.`, warnings };
-  }
+  // Planning and architecture belong to a ready Claude or Codex subscription. API credits are reserved for building.
   const picked = pickAuto('orchestrator', { ...config, assignee: 'auto' }, team, { ...env, api: { ...env.api, available: false } }, new Set());
   if (!picked) return null;
   return {

@@ -1590,6 +1590,21 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     finally { setBusy(null); }
   }
 
+  async function syncDesignFromBoard(): Promise<void> {
+    if (!projectId) return;
+    setBusy('design'); setError(null);
+    try {
+      const pulled = await refreshDesign();
+      if (pulled.differentDocument) {
+        setNotice('The open-pencil document belongs to another project, so no board cards were reconciled.');
+        return;
+      }
+      const matched = designRows.filter((row) => row.inPages && screenLanded(row.name, pulled)).length;
+      setNotice(`OpenPencil synced: ${matched} of ${designRows.filter((row) => row.inPages).length} planned screens found. ${pulled.changed.length} changed design node${pulled.changed.length === 1 ? '' : 's'}; affected board cards are marked for an update.`);
+    } catch (caught) { setError(messageOf(caught)); }
+    finally { setBusy(null); }
+  }
+
   async function suggestRoutes(): Promise<void> {
     if (!projectId) return;
     setBusy('card'); setError(null); setRouteSuggestions(null);
@@ -2454,6 +2469,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               </button>
               <button type="button" className="secondary-button" onClick={() => void planForTeam()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="One agent per ready card, reviewed on the Workflows page before anything runs">
                 {busy === 'team' ? <Loader2 className="spin" size={14} /> : <Users size={14} />} Plan these for the team
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void syncDesignFromBoard()} disabled={busy !== null} title="Pull the current OpenPencil document, compare its screens with the board, and mark changed designs for rebuilding.">
+                {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Sync OpenPencil designs
               </button>
               <button type="button" className="secondary-button" onClick={() => void workCard()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="Runs the next ready card with one agent. The card stops at review; the board decides when it is done.">
                 {busy === 'work' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Work the next card
