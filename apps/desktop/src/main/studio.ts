@@ -7,6 +7,7 @@ import {
   isUiCard,
   renamePageHeading,
   renamedPageName,
+  routeFromScreenName,
   screenTitleKey,
   studioBoardDraftSchema,
   type AppSettings,
@@ -382,19 +383,25 @@ export class DesktopStudio {
     }));
     const remaining = refreshedMissing.filter((card) => !suggestions.some((item) => item.cardId === card.id));
     if (remaining.length === 0) return { suggestions, unresolved: [] };
+    const namedRoutes = remaining.flatMap((card) => {
+      const route = routeFromScreenName(card.title);
+      return route ? [{ cardId: card.id, route, confidence: 'high' as const, reason: `Read the explicit route in the OpenPencil screen name “${card.title}”.` }] : [];
+    });
+    const stillMissing = remaining.filter((card) => !namedRoutes.some((item) => item.cardId === card.id));
+    if (stillMissing.length === 0) return { suggestions: [...suggestions, ...namedRoutes], unresolved: [] };
     const settings = await this.ports.settings();
     const context = await loadProjectContext(root, undefined, GENERATE_CONTEXT_CHARS).catch(() => null);
     const sourceRoutes = routesInSource(context ?? '');
-    const sourceMatches = remaining.flatMap((card) => {
+    const sourceMatches = stillMissing.flatMap((card) => {
       const title = normalizeRouteKey(card.title);
       const matches = sourceRoutes.filter((entry) => entry.keys.some((key) => key === title || key.includes(title) || title.includes(key)));
       const match = matches.length === 1 ? matches[0] : undefined;
       return match ? [{ cardId: card.id, route: match.route, confidence: 'high' as const, reason: `Matched “${card.title}” to the route and screen component in the project source.` }] : [];
     });
-    const covered = new Set([...suggestions, ...sourceMatches].map((entry) => entry.cardId));
-    const unresolvedBySource = remaining.filter((card) => !covered.has(card.id));
+    const covered = new Set([...suggestions, ...namedRoutes, ...sourceMatches].map((entry) => entry.cardId));
+    const unresolvedBySource = stillMissing.filter((card) => !covered.has(card.id));
     if (unresolvedBySource.length === 0) {
-      return { suggestions: [...suggestions, ...sourceMatches], unresolved: [] };
+      return { suggestions: [...suggestions, ...namedRoutes, ...sourceMatches], unresolved: [] };
     }
     const schema = { type: 'object', additionalProperties: false, required: ['routes'], properties: { routes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['cardId', 'route', 'reason'], properties: { cardId: { type: 'string' }, route: { type: 'string' }, reason: { type: 'string' } } } } } } as const;
     let valid: ReturnType<typeof parseRouteSuggestions> = [];
@@ -413,7 +420,7 @@ export class DesktopStudio {
       // and report the remaining cards instead of surfacing an unrelated generic tutor error.
       if (!(error instanceof ReplyShapeError) && !/no tutor content|finish_reason:?\s*length|output budget|reasoning.*whole/i.test(error instanceof Error ? error.message : String(error))) throw error;
     }
-    const all = [...suggestions, ...sourceMatches, ...valid];
+    const all = [...suggestions, ...namedRoutes, ...sourceMatches, ...valid];
     const ids = new Set(all.map((item) => item.cardId));
     return { suggestions: all, unresolved: remaining.filter((card) => !ids.has(card.id)).map((card) => card.id) };
   }

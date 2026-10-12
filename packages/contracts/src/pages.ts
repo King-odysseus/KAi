@@ -52,9 +52,14 @@ export function screenTitleKey(name: string): string {
  * (`Page 1`) has no route to give, so it yields nothing and a person fills it in on the card.
  */
 export function routeFromScreenName(name: string): string {
-  const first = name.trim().split(/\s+/)[0] ?? '';
-  if (!first.startsWith('/')) return '';
-  const route = first.replace(/[.,;:]+$/, '').replace(/\/+$/, '');
+  const trimmed = name.trim();
+  const first = trimmed.split(/\s+/)[0] ?? '';
+  const embedded = /[([{](\/[A-Za-z0-9_.*{}:/-]+)[)\]}]/.exec(trimmed)?.[1] ?? '';
+  const candidate = first.startsWith('/') ? first : embedded;
+  if (!candidate.startsWith('/')) return '';
+  // A shell wildcard names its base URL; a dynamic segment uses a harmless sample value so the checker can open it.
+  const route = candidate.replace(/\/\*$/, '').replace(/\{[A-Za-z_][\w-]*\}/g, '1').replace(/[.,;:]+$/, '').replace(/\/+$/, '');
+  if (route.includes('*')) return '';
   return (route || '/').slice(0, 300);
 }
 

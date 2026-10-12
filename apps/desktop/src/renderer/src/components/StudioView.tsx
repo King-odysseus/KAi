@@ -1610,8 +1610,17 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setBusy('card'); setError(null); setRouteSuggestions(null);
     try {
       const result = unwrap(await window.kaiDesktop.suggestStudioRouteRepairs(projectId));
-      setRouteSuggestions(result.suggestions); setRouteUnresolved(result.unresolved);
-      setNotice(result.suggestions.length ? `Found ${result.suggestions.length} route suggestion${result.suggestions.length === 1 ? '' : 's'} to review.` : 'No routes could be suggested from the available evidence.');
+      // Route repair also reconciles explicit routes from the pulled design. Refresh here so that work is visible
+      // immediately, including cases where the provider cannot suggest anything further.
+      const updated = unwrap(await window.kaiDesktop.studioBoard(projectId));
+      const stillMissing = new Set(updated.cards.filter((card) => card.kind === 'page' && !card.route.trim()).map((card) => card.id));
+      const suggestions = result.suggestions.filter((item) => stillMissing.has(item.cardId));
+      const unresolved = updated.cards.filter((card) => stillMissing.has(card.id)).map((card) => card.id);
+      setBoard(updated);
+      setRouteSuggestions(suggestions); setRouteUnresolved(unresolved);
+      setNotice(result.suggestions.length
+        ? `Found ${suggestions.length} route suggestion${suggestions.length === 1 ? '' : 's'} to review${unresolved.length ? `; ${unresolved.length} screen${unresolved.length === 1 ? '' : 's'} still need a route` : ''}.`
+        : `No additional routes could be matched from the available evidence${unresolved.length ? `; ${unresolved.length} screen${unresolved.length === 1 ? '' : 's'} still need a route` : ''}.`);
     } catch (caught) { setError(messageOf(caught)); }
     finally { setBusy(null); }
   }
@@ -1620,10 +1629,16 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     if (!projectId || !routeSuggestions?.length) return;
     setBusy('card'); setError(null);
     try {
+      const applied = routeSuggestions.length;
       for (const suggestion of routeSuggestions) await window.kaiDesktop.setStudioCardRoute({ projectId, cardId: suggestion.cardId, route: suggestion.route }).then(unwrap);
-      setBoard(unwrap(await window.kaiDesktop.studioBoard(projectId)));
-      setRouteSuggestions(null);
-      setNotice('Routes saved. The board is ready to retry those screen checks.');
+      const updated = unwrap(await window.kaiDesktop.studioBoard(projectId));
+      const unresolved = updated.cards.filter((card) => card.kind === 'page' && !card.route.trim()).map((card) => card.id);
+      setBoard(updated);
+      setRouteSuggestions([]);
+      setRouteUnresolved(unresolved);
+      setNotice(unresolved.length
+        ? `Saved ${applied} route${applied === 1 ? '' : 's'}. ${unresolved.length} screen${unresolved.length === 1 ? '' : 's'} still need a route before Autopilot can check every screen.`
+        : 'All screen routes are set. The board is ready to retry those screen checks.');
     } catch (caught) { setError(messageOf(caught)); }
     finally { setBusy(null); }
   }
@@ -2483,9 +2498,9 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             </div>
             {routeSuggestions && <section className="studio-route-review" aria-label="Review suggested routes">
               <h3>Review route suggestions</h3>
-              <p className="studio-note">Evidence from the page inventory is marked high confidence. Model suggestions need your review before they are saved.</p>
+              <p className="studio-note">Routes found in the page inventory or screen name are marked high confidence. Model suggestions need your review before they are saved.</p>
               {routeSuggestions.map((suggestion) => { const card = board?.cards.find((item) => item.id === suggestion.cardId); return <p key={suggestion.cardId}><strong>{card?.title ?? suggestion.cardId}</strong> → <code>{suggestion.route}</code> <span className="studio-kind">{suggestion.confidence} confidence · {suggestion.reason}</span></p>; })}
-              {routeUnresolved.length > 0 && <p className="studio-note">Still unresolved: {routeUnresolved.map((id) => board?.cards.find((card) => card.id === id)?.title ?? id).join(', ')}</p>}
+              {routeUnresolved.length > 0 && <p className="studio-note">Still unresolved: {routeUnresolved.map((id) => board?.cards.find((card) => card.id === id)?.title ?? id).join(', ')}. Add a route on each card; dialogs and panels can use their parent screen’s route.</p>}
               <div className="page-actions"><button type="button" className="primary-button" onClick={() => void applyRouteSuggestions()} disabled={busy !== null || routeSuggestions.length === 0}>Apply reviewed routes</button><button type="button" className="secondary-button" onClick={() => setRouteSuggestions(null)} disabled={busy !== null}>Dismiss</button></div>
             </section>}
             {projectId && board && board.cards.length > 0 && (
