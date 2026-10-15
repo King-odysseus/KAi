@@ -652,6 +652,7 @@ export const ipcChannels = [
   'runs:stop-all',
   'diagnostics:report',
   'diagnostics:data-locations',
+  'projects:knowledge',
   'diagnostics:recent-logs',
   'window:state',
   'window:new',
@@ -978,6 +979,7 @@ export const ipcInputSchemas = {
   'runs:stop-all': emptyInputSchema,
   'diagnostics:report': z.object({ copy: z.boolean() }).strict(),
   'diagnostics:data-locations': emptyInputSchema,
+  'projects:knowledge': z.object({ projectId: z.string().min(1) }).strict(),
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
   'window:state': emptyInputSchema,
   'window:new': z.object({ projectId: z.string().min(1).optional() }).strict(),
@@ -1577,6 +1579,8 @@ export interface KaiDesktopBridge {
   onOpenConversation(listener: (event: OpenConversationEvent) => void): () => void;
   diagnosticsReport(copy: boolean): Promise<IpcResponse<{ text: string }>>;
   dataLocations(): Promise<IpcResponse<DataLocation[]>>;
+  /** What KAI has learned about a project (its folders, what is being worked on, what earlier runs did), in plain text. */
+  projectKnowledge(projectId: string): Promise<IpcResponse<string>>;
   recentLogs(count?: number): Promise<IpcResponse<LogEntry[]>>;
   windowState(): Promise<IpcResponse<{ maximized: boolean }>>;
   /** Opens a new window, optionally already pointed at a project and its composer. */

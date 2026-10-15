@@ -481,6 +481,15 @@ export function App(): ReactNode {
     { id: 'studio', label: 'Open Project Studio', description: 'Interview a project idea and write the brief the board and agents work from', run: () => setView('studio') },
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => openOperations('verification') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
+    {
+      id: 'project-knowledge',
+      label: 'What KAI knows about this project',
+      description: 'The folders, the files being worked on, and what earlier runs did, as agents are told it',
+      run: () => {
+        if (!activeProject) return;
+        void window.kaiDesktop.projectKnowledge(activeProject.id).then(unwrap).then((text) => confirmDialog({ title: `What KAI knows about ${activeProject.name}`, detail: text, confirmLabel: 'Close' })).catch((caught: unknown) => setError(messageOf(caught)));
+      },
+    },
     { id: 'text-bigger', label: 'Text: Larger', description: 'Make text and controls bigger (Ctrl plus)', run: () => changeAppearance({ ...appearance, textScale: clampScale(appearance.textScale + 5) }) },
     { id: 'text-smaller', label: 'Text: Smaller', description: 'Make text and controls smaller (Ctrl minus)', run: () => changeAppearance({ ...appearance, textScale: clampScale(appearance.textScale - 5) }) },
     { id: 'text-reset', label: 'Text: Reset size', description: 'Back to the normal size (Ctrl 0)', run: () => changeAppearance({ ...appearance, textScale: 100 }) },

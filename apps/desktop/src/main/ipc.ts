@@ -121,6 +121,7 @@ import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
 import { autoCliModel } from './auto-model';
 import { invalidateRepoMap } from './repo-map';
+import { knowledgeBriefing, recordRunKnowledge, startWatchingProject } from './project-knowledge';
 import { runWithAutomation, type AutomationPorts } from './automation';
 import type { DesktopChangeReviewer } from './change-review';
 import type { DesktopEvals } from './evals';
@@ -1161,6 +1162,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return { text };
   });
   handle(context, 'diagnostics:data-locations', async () => dataLocations(context.paths));
+  handle(context, 'projects:knowledge', async ({ projectId }) => {
+    const project = await resolveProject(context, projectId, true);
+    return (await knowledgeBriefing(project.path, 6_000))
+      || 'KAI has not learned anything about this project yet. It learns from the files that change while the project is open and from the runs it finishes here.';
+  });
   handle(context, 'diagnostics:recent-logs', async ({ count }) => context.logger.recent(count));
   handle(context, 'window:state', async (_input, request) => ({
     maximized: request.session?.window.isMaximized() ?? false,
@@ -2033,6 +2039,19 @@ async function fileRunLesson(
   context: IpcContext,
   run: RunLessonInput & { conversationId: string; agent: AgentId; projectPath: string; projectName: string },
 ): Promise<PersistedEvent | null> {
+  // What KAI knows about the project is kept locally and does not depend on the brain being up, so it is written first.
+  // A run the person stopped says nothing about the project, so it is left out, as it is for the brain.
+  const stopped = run.status === 'failed' && /cancell?ed|abort|interrupted|stopped/i.test(run.error ?? '');
+  if (!stopped && (run.files.length > 0 || run.status === 'failed')) {
+    const checked = run.checks.filter((check) => check.passed !== null);
+    void recordRunKnowledge(run.projectPath, {
+      at: new Date().toISOString(),
+      task: run.prompt,
+      outcome: run.status === 'completed' ? 'completed' : 'failed',
+      files: run.files.slice(0, 12),
+      checks: checked.length === 0 ? 'none' : checked.every((check) => check.passed) ? 'passed' : 'failed',
+    }).catch(() => undefined);
+  }
   const lesson = composeRunLesson(run);
   if (!lesson || !(await cognitive1Ready(context))) return null;
   try {
@@ -2280,10 +2299,14 @@ async function buildConversationContext(
     includeRepoMap,
     ...(history ? { history } : {}),
   });
-  if (!compaction) return projectContext;
+  // What KAI has learned about this project leads, on the turns that carry the outline: it is the part an agent would
+  // otherwise spend its first minutes working out for itself.
+  const learned = includeRepoMap ? await knowledgeBriefing(projectPath).catch(() => '') : '';
+  const withKnowledge = learned ? { ...projectContext, text: `${learned}\n\n${projectContext.text}` } : projectContext;
+  if (!compaction) return withKnowledge;
   return {
-    ...projectContext,
-    text: `${renderCompactionContext(compaction)}\n\n${projectContext.text}`,
+    ...withKnowledge,
+    text: `${renderCompactionContext(compaction)}\n\n${withKnowledge.text}`,
   };
 }
 
@@ -3294,6 +3317,10 @@ async function createBootstrap(
     ? requestedProjectId
     : null;
   if (session && session.projectId !== activeProjectId) session.projectId = activeProjectId;
+  // The open project is watched from the moment it is open, so what changes in it is learned whether or not an agent
+  // is running. Watching a project already watched does nothing.
+  const openProject = projects.find((project) => project.id === activeProjectId);
+  if (openProject) void startWatchingProject(openProject.path).catch(() => undefined);
 
   return {
     appName: context.appName,

@@ -319,6 +319,7 @@ const bridge: KaiDesktopBridge = {
   },
   diagnosticsReport: (copy) => ipcRenderer.invoke('diagnostics:report', { copy }),
   dataLocations: () => ipcRenderer.invoke('diagnostics:data-locations', {}),
+  projectKnowledge: (projectId) => ipcRenderer.invoke('projects:knowledge', { projectId }),
   recentLogs: (count) => ipcRenderer.invoke('diagnostics:recent-logs', { count }),
   windowState: () => ipcRenderer.invoke('window:state', {}),
   newWindow: (projectId) => ipcRenderer.invoke('window:new', { projectId }),

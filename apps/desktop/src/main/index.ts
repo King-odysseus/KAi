@@ -29,6 +29,7 @@ import { AgentExperienceStore } from './experience-store';
 import { DesktopScheduler, ScheduleStore } from './scheduler';
 import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, cognitive1Ready, mirrorBrainNow, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
+import { configureProjectKnowledge, stopProjectKnowledge } from './project-knowledge';
 import { UniversalProxyClient } from './proxy-client';
 import { DesktopProxyRouting } from './proxy-routing';
 import { ProjectPreferenceStore } from './project-preference-store';
@@ -201,6 +202,8 @@ const QUIT_CONFIRMATION_MS = 120_000;
  * so it cannot re-enter the handler from here.
  */
 app.on('will-quit', () => {
+  // Best effort: what was learned since the last save is written before the process goes.
+  void stopProjectKnowledge();
   endOwnProcessTree();
 });
 
@@ -327,6 +330,8 @@ app.on('activate', () => {
 async function startApplication(): Promise<void> {
   const userDataRoot = process.env.KAI_DESKTOP_USER_DATA ?? app.getPath('userData');
   const paths = createDesktopPaths(userDataRoot);
+  // Where KAI keeps what it learns about each project: on this machine, beside the rest of its data.
+  configureProjectKnowledge(path.join(paths.root, 'knowledge'));
   const fileSystem = new NodeFileSystem();
   const logger = new RedactedLogger(new RotatingLogSink(paths.logs));
   const buildIdentifier = await identifyBuild(app.getVersion());

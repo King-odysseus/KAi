@@ -157,7 +157,7 @@ async function readSymbols(root: string, file: string): Promise<string[]> {
   }
 }
 
-async function listProjectFiles(root: string): Promise<string[]> {
+export async function listProjectFiles(root: string): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
       cwd: root,
