@@ -18,7 +18,7 @@ describe('desktop contracts', () => {
     expect(appSettingsV1Schema.parse(settings)).toEqual(settings);
     expect(settings.defaultAgent).toBe('codex');
     expect(settings.defaultAutonomy).toBe('ask');
-    expect(settings.theme).toBe('dark');
+    expect(settings.theme).toBe('code');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(settings.learningTutor).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(settings.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000, formatOnSave: true });

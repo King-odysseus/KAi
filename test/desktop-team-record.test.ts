@@ -67,8 +67,8 @@ describe('team track record', () => {
   });
 });
 
-const env = (records: TeamRecordEntry[] = []): AssignmentEnvironment => ({
-  capabilities: ['claude', 'codex', 'qwen'].map((id) => ({ id: id as 'claude' | 'codex' | 'qwen', displayName: id, available: true, state: 'ready', supportsRoutes: ['direct', 'proxy'] })),
+const env = (records: TeamRecordEntry[] = [], ids: string[] = ['claude', 'codex', 'qwen']): AssignmentEnvironment => ({
+  capabilities: ids.map((id) => ({ id: id as 'claude' | 'codex' | 'qwen', displayName: id, available: true, state: 'ready', supportsRoutes: ['direct', 'proxy'] })),
   api: { available: false, displayName: 'API' }, proxyReady: true, records, projectId: 'project',
 });
 const part = { id: 'part', title: 'Part', role: 'backend' as const, prompt: 'Build', dependsOn: [], paths: [] };
@@ -77,9 +77,12 @@ describe('track record assignment advice', () => {
   it('breaks a near tie, but never a pin or a larger score gap, and preserves the original assignment', () => {
     const team = createDefaultAgentTeam();
     const records = [...history('codex', 1), ...history('claude', 5), ...history('qwen', 5)];
-    expect(assignTeam([part], team, env()).assignments[0]?.assignee).toBe('codex');
-    expect(assignTeam([part], team, env(records)).assignments[0]).toMatchObject({ assignee: 'claude', suggestedAssignee: 'claude' });
-    expect(assignTeam([part], team, env([...history('codex', 1), ...history('qwen', 5)])).assignments[0]?.assignee).toBe('codex');
+    // Editing parts are steered off the premium subscriptions, so Claude and Codex tie and Qwen leads by a larger gap.
+    const premium = ['claude', 'codex'];
+    expect(assignTeam([part], team, env([], premium)).assignments[0]?.assignee).toBe('claude');
+    const codexRecords = [...history('claude', 1), ...history('codex', 5)];
+    expect(assignTeam([part], team, env(codexRecords, premium)).assignments[0]).toMatchObject({ assignee: 'codex', suggestedAssignee: 'codex' });
+    expect(assignTeam([part], team, env([...history('codex', 1), ...history('qwen', 5)])).assignments[0]?.assignee).toBe('qwen');
     team.roles.backend = { assignee: 'codex', route: 'auto', instructions: '' };
     const assigned = assignTeam([part], team, env(records)).assignments[0];
     expect(assigned.assignee).toBe('codex');
