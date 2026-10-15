@@ -1194,12 +1194,14 @@ button:disabled {
 }
 
 .workspace-view {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
+  height: auto;
   min-height: 0;
+  overflow: hidden;
 }
 
 .workspace-notices {
@@ -5798,6 +5800,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
 }
 
 .settings-category {
@@ -7926,6 +7930,36 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .hunk-line.gap { padding: 2px 8px; color: var(--text-dim); font-size: 10px; }
 .tool-call-note { margin: 0; padding: 3px 9px 5px; color: var(--text-dim); font-size: 9.5px; }
 .tool-call-note.failed { color: var(--red); }
+
+.command-group {
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+}
+.command-group.failed { border-left: 3px solid var(--red); }
+.command-group-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.command-group-toggle:hover { background: var(--bg-hover); }
+.command-group-toggle strong { color: var(--text); font-size: 10.5px; }
+.command-group-toggle small { margin-left: auto; color: var(--text-dim); font-size: 9.5px; }
+.command-group.failed .command-group-toggle small { color: var(--red); }
+.command-group-chevron { flex: 0 0 auto; color: var(--text-dim); transition: transform 120ms ease; }
+.command-group-toggle[aria-expanded="false"] .command-group-chevron { transform: rotate(-90deg); }
+.command-group-list { display: flex; flex-direction: column; gap: 4px; padding: 4px; border-top: 1px solid var(--border-soft); }
+.command-group-list .tool-call-card { border-color: transparent; background: transparent; }
+.command-group-list .tool-call-card:hover { background: var(--bg-hover); }
 
 .run-details {
   display: flex;

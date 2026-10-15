@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toolCallStatus } from '../apps/desktop/src/renderer/src/components/ToolCallCard';
+import { groupExecutableCommands } from '../apps/desktop/src/renderer/src/components/Workspace';
+import type { PersistedEvent } from '@kai/contracts';
 
 /**
  * How a tool call reads in the transcript.
@@ -34,5 +36,30 @@ describe('toolCallStatus', () => {
     // The mark is the point: a spinner is a claim that work is happening, which is exactly what was untrue.
     expect(started.mark).not.toBe('spin');
     expect(updated.mark).not.toBe('spin');
+  });
+});
+
+describe('groupExecutableCommands', () => {
+  const event = (id: string, name: string): PersistedEvent => ({
+    id,
+    type: 'tool.call',
+    timestamp: '2026-10-15T20:00:00.000Z',
+    name,
+    status: 'completed',
+  }) as PersistedEvent;
+
+  it('folds consecutive commands together without moving other transcript events', () => {
+    const edit = event('edit', 'replace_in_file');
+    const groups = groupExecutableCommands([
+      event('command-1', 'run_command'),
+      event('command-2', 'shell_command'),
+      edit,
+      event('command-3', 'bash'),
+    ]);
+
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toMatchObject({ kind: 'commands', events: [{ id: 'command-1' }, { id: 'command-2' }] });
+    expect(groups[1]).toEqual({ kind: 'event', event: edit });
+    expect(groups[2]).toMatchObject({ kind: 'commands', events: [{ id: 'command-3' }] });
   });
 });

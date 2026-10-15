@@ -60,8 +60,14 @@ const PREVIEW_TOOLS = new Set([
   'explore',
 ]);
 
+const COMMAND_TOOLS = new Set(['run_command', 'bash', 'shell_command']);
+
 export function isPreviewableTool(name: string): boolean {
   return PREVIEW_TOOLS.has(name.toLowerCase());
+}
+
+export function isCommandTool(name: string): boolean {
+  return COMMAND_TOOLS.has(name.toLowerCase());
 }
 
 export function describeToolCall(name: string, input: unknown, output: unknown): ToolCallPreview | null {

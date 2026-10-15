@@ -84,19 +84,18 @@ describe('team assignment', () => {
   it('picks each specialist on the Balanced preset and keeps reviewers independent of the authors', () => {
     const result = assignTeam(FULL_PARTS, team(), environment());
 
-    expect(agentFor(result, 'ui')).toBe('claude');
-    expect(agentFor(result, 'api')).toBe('codex');
-    expect(agentFor(result, 'tests')).toBe('qwen');
-    expect(agentFor(result, 'docs')).toBe('kimi');
+    // Paid subscriptions are kept for planning and review, so editing parts go to the cheaper agent.
+    for (const id of ['ui', 'api', 'tests', 'docs']) expect(agentFor(result, id)).toBe('kimi');
+    expect(['claude', 'codex']).toContain(agentFor(result, 'security'));
     const authors = new Set(['ui', 'api', 'tests', 'docs'].map((id) => agentFor(result, id)));
     expect(authors.has(agentFor(result, 'security'))).toBe(false);
     expect(authors.has(agentFor(result, 'review'))).toBe(false);
     expect(result.assignments.every((assignment) => assignment.billing === 'subscription' && assignment.route === 'direct')).toBe(true);
   });
 
-  it('follows the preset: Quality spends premium agents everywhere, Budget spares them', () => {
-    expect(agentFor(assignTeam([part('t', 'tests')], team({ preset: 'quality' }), environment()), 't')).toBe('claude');
-    expect(agentFor(assignTeam([part('t', 'tests')], team({ preset: 'budget' }), environment()), 't')).toBe('qwen');
+  it('keeps editing parts off the premium subscriptions on every preset', () => {
+    expect(agentFor(assignTeam([part('t', 'tests')], team({ preset: 'quality' }), environment()), 't')).toBe('kimi');
+    expect(agentFor(assignTeam([part('t', 'tests')], team({ preset: 'budget' }), environment()), 't')).toBe('kimi');
     expect(agentFor(assignTeam([part('d', 'docs')], team({ preset: 'budget' }), environment()), 'd')).toBe('kimi');
   });
 
@@ -130,10 +129,10 @@ describe('team assignment', () => {
   });
 
   it('lets a reviewer be an author only when nobody else is ready, and warns', () => {
-    const two = environment({ qwen: 'not_installed', gemini: 'not_installed', kimi: 'not_installed' }, { api: { available: false, displayName: 'KAI API' } });
-    const result = assignTeam([part('ui', 'frontend'), part('api', 'backend'), part('review', 'codeReviewer')], team(), two);
+    const one = environment({ codex: 'not_installed', qwen: 'not_installed', gemini: 'not_installed', kimi: 'not_installed' }, { api: { available: false, displayName: 'KAI API' } });
+    const result = assignTeam([part('ui', 'frontend'), part('api', 'backend'), part('review', 'codeReviewer')], team(), one);
 
-    expect(['claude', 'codex']).toContain(agentFor(result, 'review'));
+    expect(agentFor(result, 'review')).toBe('claude');
     expect(result.warnings.join(' ')).toContain('also wrote some of the code');
   });
 
@@ -160,8 +159,8 @@ describe('team assignment', () => {
 });
 
 describe('orchestrator choice', () => {
-  it("plans with KAI's own API mode by default", () => {
-    expect(resolveOrchestrator(team(), environment())).toMatchObject({ assignee: 'api', route: 'direct' });
+  it('plans with the strongest ready subscription by default, keeping API credits for building', () => {
+    expect(resolveOrchestrator(team(), environment())).toMatchObject({ assignee: 'claude', route: 'direct' });
   });
 
   it('falls back to the strongest ready CLI when API mode is not set up', () => {
@@ -175,7 +174,7 @@ describe('orchestrator choice', () => {
 
     const broken = resolveOrchestrator(chosen, environment({ codex: 'signed_out' }));
     expect(broken?.warnings.join(' ')).toContain('Codex cannot plan right now');
-    expect(broken?.assignee).toBe('api');
+    expect(broken?.assignee).toBe('claude');
   });
 
   it('returns nothing when nothing can plan', () => {
@@ -509,11 +508,11 @@ describe('sending a failed check to its owner', () => {
 });
 
 describe('team contracts', () => {
-  it('starts every install with KAI planning and every other role on Auto', () => {
+  it('starts every install with every role, planning included, on Auto', () => {
     const settings = createDefaultSettings();
     expect(settings.agentTeam.preset).toBe('balanced');
-    expect(settings.agentTeam.roles.orchestrator).toMatchObject({ assignee: 'api' });
-    expect(Object.entries(settings.agentTeam.roles).filter(([role]) => role !== 'orchestrator').every(([, config]) => config.assignee === 'auto')).toBe(true);
+    expect(settings.agentTeam.roles.orchestrator).toMatchObject({ assignee: 'auto' });
+    expect(Object.entries(settings.agentTeam.roles).every(([, config]) => config.assignee === 'auto')).toBe(true);
   });
 
   it('validates the IPC inputs', () => {
@@ -566,8 +565,9 @@ describe('team planner service', () => {
     const draft = await service.plan({ projectId: 'p1', goal: 'Add a login page' }, 7);
 
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ execution: 'api', autonomy: 'plan', freshSession: true, route: 'direct' });
-    expect(draft.orchestrator.assignee).toBe('api');
+    expect(requests[0]).toMatchObject({ execution: 'cli', autonomy: 'plan', freshSession: true, route: 'direct' });
+    // Auto planning goes to a ready CLI subscription; API credits are kept for building.
+    expect(draft.orchestrator.assignee).not.toBe('api');
     expect(draft.parts.map((item) => item.role)).toEqual(['frontend', 'backend', 'securityReviewer', 'codeReviewer']);
     expect(draft.assignments).toHaveLength(4);
     expect(draft.warnings.join(' ')).toContain('security review');
@@ -633,7 +633,7 @@ describe('team planner service', () => {
     const steps = started[0]!.steps;
     expect(steps.map((step) => step.id)).toEqual(draft.parts.map((item) => item.id));
     const byId = Object.fromEntries(steps.map((step) => [step.id, step]));
-    expect(byId.ui).toMatchObject({ role: 'frontend', autonomy: 'autoEdit', execution: 'cli', route: 'direct', label: 'Frontend specialist: Login form' });
+    expect(byId.ui).toMatchObject({ role: 'frontend', autonomy: 'autoEdit', execution: 'api', route: 'direct', label: 'Frontend specialist: Login form' });
     expect(byId['security-review']).toMatchObject({ role: 'securityReviewer', autonomy: 'plan', gate: 'security', dependsOn: ['ui', 'api'] });
     expect(byId['code-review']).toMatchObject({ autonomy: 'plan' });
     expect(byId['code-review']!.gate).toBeUndefined();

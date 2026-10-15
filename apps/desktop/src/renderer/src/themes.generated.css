@@ -62,6 +62,9 @@ html[data-theme="code"]:root .app-tooltip {
   color: #fafafa;
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.35), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
 }
+html[data-theme="code"]:root .git-change-select {
+  accent-color: var(--accent, #b4b4b4);
+}
 html[data-theme="code"]:root .app-tooltip::after {
   background: #242424;
 }
@@ -1331,6 +1334,9 @@ html[data-theme="purple"]:root .app-tooltip {
   color: #f9f9fb;
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.35), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
 }
+html[data-theme="purple"]:root .git-change-select {
+  accent-color: var(--accent, #8986e2);
+}
 html[data-theme="purple"]:root .app-tooltip::after {
   background: #1e1d2f;
 }
@@ -2599,6 +2605,9 @@ html[data-theme="navy"]:root .app-tooltip {
   background: #151f37;
   color: #f9fafb;
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.35), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+}
+html[data-theme="navy"]:root .git-change-select {
+  accent-color: var(--accent, #6998ff);
 }
 html[data-theme="navy"]:root .app-tooltip::after {
   background: #151f37;

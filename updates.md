@@ -1,5 +1,25 @@
 # KAI Agent Workbench — Updates
 
+## 2026-10-15
+
+### Collapsed executable command groups
+
+- **Executable commands no longer crowd out the response.** Consecutive shell commands now sit inside one collapsed summary that shows the command count and whether they finished, failed, are running, or were interrupted. Expanding it preserves each command's existing output and status details.
+- **Key files:** `apps/desktop/src/renderer/src/components/Workspace.tsx`, `apps/desktop/src/renderer/src/tool-call-preview.ts`, `apps/desktop/src/renderer/src/styles.css`
+- **Other OS action:** Run `npm run desktop:build` after pulling. Done on Windows.
+
+### Viewport-bound workspace dialogs
+
+- **Workspace dialogs now stay inside the visible main pane.** The workspace is anchored to the app's bounded content area, so long conversations cannot move Skills or other shared dialogs below the window.
+- **Key files:** `apps/desktop/src/renderer/src/styles.css`, `apps/desktop/scripts/smoke.mjs`
+- **Other OS action:** No build is required for the CSS change. Run `npm run smoke --workspace @kai/desktop` to repeat the layout check. Done on Windows.
+
+### Atomic managed-engine staging
+
+- **Engine packaging no longer exposes a half-built Cognitive1 folder.** Engine staging now prepares and validates a private snapshot, blocks overlapping staging jobs, replaces stale locks left by interrupted jobs, and publishes the complete snapshot only after every required file and entry point exists.
+- **Key file:** `apps/desktop/scripts/stage-engines.mjs`
+- **Other OS action:** Run `npm run stage:engines --workspace @kai/desktop` before the next desktop package build. Done on Windows.
+
 ## 2026-09-24
 
 ### Editor, Git, terminal, checks and themes

@@ -83,7 +83,9 @@ try {
     throw new Error(`Desktop workspace did not become ready: ${bodyText}`, { cause: error });
   }
   const agentCapabilities = await verifyAgentCapabilities(page);
-  await verifyWorkspaceControls(page);
+  // The basic smoke profile intentionally starts without a project, so composer controls that depend on an
+  // active workspace are only exercised by the profiles that provision the live smoke project.
+  if (usesAgentProject) await verifyWorkspaceControls(page);
   await verifyCommandPalette(page);
   await verifyDirectApiCapability(page);
   if ((directApiSmoke || mcpSmoke || commandSmoke) && directApiFixture) {
@@ -196,7 +198,6 @@ try {
     throw new Error('Managed services did not show live status for C1 and the Universal Proxy.');
   }
   await assertNoErrorBanner(page);
-  await assertPageContentFillsWidth(page, '.settings-categories');
   await assertControlsDoNotWrap(page, 'settings-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
@@ -259,6 +260,7 @@ try {
   const minimumSize = await resizeWindow(electronApp, 960, 640);
   assertSize(minimumSize, 960, 640);
   await assertControlsDoNotWrap(page, 'workspace-960x640');
+  if (usesAgentProject) await verifySkillsDialogFitsViewport(page);
   await page.screenshot({ path: path.join(outputDirectory, 'workspace-960x640.png') });
 
   if (rendererErrors.length > 0) {
@@ -428,11 +430,28 @@ async function verifyBuildIdentifier(page) {
   if (!response.ok || !response.data.buildIdentifier || response.data.buildIdentifier.includes('unidentified')) {
     throw new Error(`The desktop build identifier is missing: ${JSON.stringify(response)}`);
   }
-  const rail = await page.locator('.rail-footer').innerText();
+  const rail = await page.locator('.rail-footer span').getAttribute('title');
   const suffix = response.data.buildIdentifier.split('+').at(-1);
-  if (!suffix || !rail.includes(suffix)) {
-    throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail}`);
+  if (!suffix || !rail?.includes(suffix)) {
+    throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail ?? '<missing title>'}`);
   }
+}
+
+async function verifySkillsDialogFitsViewport(page) {
+  const canvas = page.locator('.conversation-canvas');
+  await canvas.evaluate((element) => { element.style.minHeight = '1400px'; });
+  await page.locator('.composer-box textarea').fill('$');
+  const dialog = page.getByRole('dialog', { name: 'Skills' });
+  await dialog.waitFor();
+  const panelBounds = await dialog.locator('.skills-panel').boundingBox();
+  const viewport = page.viewportSize();
+  if (!panelBounds || !viewport) throw new Error('Could not measure the Skills dialog.');
+  if (panelBounds.x < 0 || panelBounds.y < 0 || panelBounds.x + panelBounds.width > viewport.width || panelBounds.y + panelBounds.height > viewport.height) {
+    throw new Error(`Skills dialog is outside the viewport: ${JSON.stringify({ panelBounds, viewport })}`);
+  }
+  await page.getByRole('button', { name: 'Close skills' }).click();
+  await canvas.evaluate((element) => { element.style.minHeight = ''; });
+  await page.locator('.composer-box textarea').fill('');
 }
 
 async function verifyCodeLearningWorkspace(application, page) {

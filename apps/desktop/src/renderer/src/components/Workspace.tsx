@@ -49,6 +49,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Terminal,
   Trash2,
   Undo2,
   Wand2,
@@ -1325,6 +1326,9 @@ export function WorkspaceView({
    */
   const runActive = running || paused || awaitingApproval;
   const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} runActive={runActive} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
+  const renderInlineEvents = (events: readonly PersistedEvent[]): ReactNode => groupExecutableCommands(events).map((group) => group.kind === 'commands'
+    ? <ExecutableCommandsGroup key={group.key} events={group.events} runActive={runActive}>{group.events.map((event) => renderInlineEvent(event, false))}</ExecutableCommandsGroup>
+    : renderInlineEvent(group.event, false));
   const timelineSummary = runDetails.reduce((summary, event) => {
     if (event.type === 'tool.call') summary.tools += 1;
     else if (event.type === 'file.edit.applied' || event.type === 'file.change' || event.type === 'diff.proposal') summary.edits += 1;
@@ -1591,7 +1595,7 @@ export function WorkspaceView({
           <>
             {activeConversation?.turns.map((turn, index) => (
               <Fragment key={turn.id}>
-                {(inlineEventsByTurn.get(turn.id) ?? []).map((event) => renderInlineEvent(event, false))}
+                {renderInlineEvents(inlineEventsByTurn.get(turn.id) ?? [])}
                 <MessageTurn
                   turn={turn}
                   brainReady={brainReady}
@@ -1620,7 +1624,7 @@ export function WorkspaceView({
             )}
             {/* The run in progress shows its changes as they happen; a finished one keeps them closed. */}
             {/* Commands and edits stay folded to one line while the run is live too; opening one is the reader's choice. */}
-            {trailingInlineEvents.map((event) => renderInlineEvent(event, false))}
+            {renderInlineEvents(trailingInlineEvents)}
             {runDetails.length > 0 && (
               <section className="run-details" aria-label="Activity timeline">
                 <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
@@ -1986,6 +1990,58 @@ function useLatestHandler<A extends unknown[], R>(handler: (...args: A) => R): (
 // components that repeat per message, each character redraws the entire transcript and typing lags behind the
 // keyboard. Their props are already stable: the turn and event objects are replaced only when the run changes.
 const RunEventCard = memo(RunEventCardBase);
+
+type InlineEventGroup =
+  | { kind: 'event'; event: PersistedEvent }
+  | { kind: 'commands'; key: string; events: Array<Extract<PersistedEvent, { type: 'tool.call' }>> };
+
+const EXECUTABLE_COMMAND_TOOLS = new Set(['run_command', 'bash', 'shell_command']);
+
+function isExecutableCommandTool(name: string): boolean {
+  return EXECUTABLE_COMMAND_TOOLS.has(name.toLowerCase());
+}
+
+/** Keep the transcript's order, but turn a noisy streak of shell calls into one readable disclosure. */
+export function groupExecutableCommands(events: readonly PersistedEvent[]): InlineEventGroup[] {
+  const groups: InlineEventGroup[] = [];
+  for (const event of events) {
+    const isCommand = event.type === 'tool.call' && isExecutableCommandTool(event.name);
+    const previous = groups[groups.length - 1];
+    if (isCommand && previous?.kind === 'commands') {
+      previous.events.push(event);
+    } else if (isCommand) {
+      groups.push({ kind: 'commands', key: `commands-${event.id}`, events: [event] });
+    } else {
+      groups.push({ kind: 'event', event });
+    }
+  }
+  return groups;
+}
+
+function ExecutableCommandsGroup({ events, runActive, children }: { events: Array<Extract<PersistedEvent, { type: 'tool.call' }>>; runActive: boolean; children: ReactNode }): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const failed = events.filter((event) => event.status === 'failed').length;
+  const runningCount = events.filter((event) => toolCallStatus(event.status, runActive).mark === 'spin').length;
+  const interrupted = events.filter((event) => toolCallStatus(event.status, runActive).mark === 'dash').length;
+  const summary = failed > 0
+    ? `${failed} failed`
+    : runningCount > 0
+      ? `${runningCount} running`
+      : interrupted > 0
+        ? `${interrupted} interrupted`
+        : 'Done';
+  return (
+    <section className={`command-group${failed > 0 ? ' failed' : ''}`} aria-label={`${events.length} executable command${events.length === 1 ? '' : 's'}`}>
+      <button type="button" className="command-group-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)} title={expanded ? 'Hide executable commands' : 'Show executable commands'}>
+        <ChevronDown className="command-group-chevron" size={14} />
+        <span className="tool-call-icon"><Terminal size={13} /></span>
+        <strong>{events.length} command{events.length === 1 ? '' : 's'}</strong>
+        <small>{summary}</small>
+      </button>
+      {expanded && <div className="command-group-list">{children}</div>}
+    </section>
+  );
+}
 
 const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, awaitingAnswer, onAnswer }: {
   turn: ConversationTurn;

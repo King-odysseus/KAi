@@ -684,10 +684,10 @@ async function verifyBuildIdentifier(page) {
   if (!response.ok || !response.data.buildIdentifier || response.data.buildIdentifier.includes('unidentified')) {
     throw new Error(`The desktop build identifier is missing: ${JSON.stringify(response)}`);
   }
-  const rail = await page.locator('.rail-footer').innerText();
+  const rail = await page.locator('.rail-footer span').getAttribute('title');
   const suffix = response.data.buildIdentifier.split('+').at(-1);
-  if (!suffix || !rail.includes(suffix)) {
-    throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail}`);
+  if (!suffix || !rail?.includes(suffix)) {
+    throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail ?? '<missing title>'}`);
   }
 }
 

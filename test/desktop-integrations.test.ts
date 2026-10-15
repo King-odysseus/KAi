@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   AuthenticatedLoopbackGateway,
   EngineLocator,
+  cognitive1Manifest,
   ServiceManager,
   universalProxyManifest,
   type ServiceLaunchSpec,
@@ -59,6 +60,30 @@ describe('desktop engine integrations', () => {
       root,
       version: universalProxyManifest.expectedVersion,
       source: 'environment',
+    });
+  });
+
+  it('discovers Cognitive1 from the bundled engines directory', async () => {
+    const root = await temporaryDirectory();
+    const bundledRoot = path.join(root, 'resources', 'engines', 'cognitive1');
+    await fs.mkdir(path.join(bundledRoot, 'out'), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledRoot, 'package.json'),
+      JSON.stringify({ name: cognitive1Manifest.packageName, version: cognitive1Manifest.expectedVersion }),
+      'utf8',
+    );
+    await fs.writeFile(path.join(bundledRoot, 'out', 'index.js'), 'module.exports = {};', 'utf8');
+
+    const locator = new EngineLocator({
+      kaiRoot: path.join(root, 'kai'),
+      resourcesPath: path.join(root, 'resources'),
+      environment: {},
+    });
+
+    await expect(locator.locate(cognitive1Manifest)).resolves.toMatchObject({
+      root: bundledRoot,
+      entryPoint: path.join(bundledRoot, 'out', 'index.js'),
+      source: 'bundled',
     });
   });
 
