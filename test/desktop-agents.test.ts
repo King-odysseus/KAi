@@ -319,6 +319,68 @@ describe('desktop agent runtime', () => {
     expect(result.events.map((event) => event.type)).toEqual(['agent.lifecycle', 'text.delta', 'agent.lifecycle']);
   });
 
+  it('streams and saves the Codex final reply after progress and tool activity', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, {
+      lines: [
+        { type: 'item.completed', item: { type: 'agent_message', text: 'Checking the remote branch.' } },
+        { type: 'item.started', item: { type: 'command_execution', command: 'git status' } },
+        { type: 'item.completed', item: { type: 'command_execution', command: 'git status', exit_code: 0, aggregated_output: 'up to date' } },
+        { type: 'item.completed', item: { type: 'agent_message', text: 'Yes, the branch is pushed.' } },
+        { type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 20 } },
+      ],
+    });
+    const runtime = new DesktopAgentRuntime({ codex: command });
+    const streamed: string[] = [];
+    const result = await runtime.run(runRequest(), root, undefined, (event) => {
+      if (event.type === 'text.delta' && event.channel === 'assistant') streamed.push(event.text);
+    });
+    const expected = 'Checking the remote branch.\n\nYes, the branch is pushed.';
+    expect(result).toMatchObject({ status: 'completed', output: expected });
+    expect(streamed.join('').trim()).toBe(expected);
+    expect(result.events.filter((event) => event.type === 'text.delta')).toEqual([
+      expect.objectContaining({ channel: 'assistant', text: expected }),
+    ]);
+  });
+
+  it.each(['claude', 'qwen', 'gemini'] as const)('keeps a %s result answer after progress text without duplicating streamed results', async (agent) => {
+    const root = await temporaryDirectory();
+    const progress = { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking.' }] } };
+    for (const resultText of ['Finished.', 'Checking.\n\nFinished.']) {
+      const command = await fakeAgent(root, { lines: [
+        progress,
+        { type: 'result', result: resultText },
+        { type: 'result', result: resultText },
+      ] });
+      const runtime = new DesktopAgentRuntime({ [agent]: command });
+      const streamed: string[] = [];
+      const result = await runtime.run({ ...runRequest(), agent }, root, undefined, (event) => {
+        if (event.type === 'text.delta' && event.channel === 'assistant') streamed.push(event.text);
+      });
+      expect(result).toMatchObject({ status: 'completed', output: 'Checking.\n\nFinished.' });
+      expect(streamed.join('')).toBe(result.output);
+      expect(result.events.filter((event) => event.type === 'text.delta')).toEqual([
+        expect.objectContaining({ text: result.output }),
+      ]);
+    }
+  });
+
+  it('keeps the Kimi final assistant message after progress and tool output', async () => {
+    const root = await temporaryDirectory();
+    const command = await fakeAgent(root, { lines: [
+      { role: 'assistant', content: 'Checking.\n\n' },
+      { role: 'tool', content: 'tool output' },
+      { role: 'assistant', content: 'Finished.' },
+    ] });
+    const runtime = new DesktopAgentRuntime({ kimi: command });
+    const streamed: string[] = [];
+    const result = await withKimiHome(root, () => runtime.run({ ...runRequest(), agent: 'kimi' }, root, undefined, (event) => {
+      if (event.type === 'text.delta' && event.channel === 'assistant') streamed.push(event.text);
+    }));
+    expect(result).toMatchObject({ status: 'completed', output: 'Checking.\n\nFinished.' });
+    expect(streamed.join('')).toBe(result.output);
+  });
+
   it('closes a claude tool call when its result arrives, failures included', async () => {
     // Only the Task tool used to be matched back to its result, so a Bash command that failed — or an edit the
     // person refused — stayed "started" in the transcript for the rest of the run: a command card that never

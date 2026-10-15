@@ -106,12 +106,13 @@ export function TooltipLayer(): ReactNode {
   const [nudge, setNudge] = useState<{ dx: number; dy: number } | null>(null);
 
   useEffect(() => {
-    // The element whose title is currently held, so it can be put back exactly where it came from.
+    // Keep the text in a data attribute. Restoring `title` on pointerout lets the
+    // browser's native tooltip race the styled one and leaves a stale OS tooltip
+    // visible after the pointer has moved away.
     let held: { element: Element; title: string } | null = null;
 
     const restore = (): void => {
       if (held) {
-        held.element.setAttribute('title', held.title);
         held = null;
       }
       setShown(null);
@@ -119,7 +120,7 @@ export function TooltipLayer(): ReactNode {
 
     const show = (element: Element): void => {
       if (held?.element === element) return;
-      const title = element.getAttribute('title');
+      const title = element.getAttribute('data-kai-tooltip') ?? element.getAttribute('title');
       if (title === null) return;
       restore();
       if (!worthShowing(title) || isExcluded(element)) return;
@@ -127,6 +128,7 @@ export function TooltipLayer(): ReactNode {
       // Taking the attribute off is what stops the operating system drawing its own tooltip on top of this one.
       held = { element, title };
       element.removeAttribute('title');
+      element.setAttribute('data-kai-tooltip', title);
 
       const rect = element.getBoundingClientRect();
       const { side, left, top } = placeTooltip(rect, { width: window.innerWidth, height: window.innerHeight });

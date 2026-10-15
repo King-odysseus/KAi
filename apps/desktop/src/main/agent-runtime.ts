@@ -534,7 +534,6 @@ export class DesktopAgentRuntime {
     const outputParts: string[] = [];
     const errors: string[] = [];
     let sessionId = resumeSessionId;
-    let hasOutputText = false;
     let stdoutCarry = '';
     let stderrCarry = '';
     let exitCode: number | null = null;
@@ -699,13 +698,20 @@ export class DesktopAgentRuntime {
       if (parsed.error) errors.push(stripAnsi(parsed.error));
       if (parsed.text) {
         outputParts.push(parsed.text);
-        hasOutputText = true;
         onEvent?.(streamTextEvent(request, parsed.text));
       }
-      if (!hasOutputText && parsed.resultText) {
-        outputParts.push(parsed.resultText);
-        hasOutputText = true;
-        onEvent?.(streamTextEvent(request, parsed.resultText));
+      if (parsed.resultText?.trim()) {
+        // Result envelopes can repeat streamed text, or contain the final
+        // answer after progress-only messages. Suppress only an actual repeat.
+        const previous = outputParts.join('').trimEnd();
+        const result = parsed.resultText.trim();
+        const additional = previous.endsWith(result) ? ''
+          : previous && result.startsWith(previous) ? result.slice(previous.length)
+          : `${previous ? '\n\n' : ''}${result}`;
+        if (additional) {
+          outputParts.push(additional);
+          onEvent?.(streamTextEvent(request, additional));
+        }
       }
       for (const tool of parsed.tools ?? []) {
         if (tool.callId) pendingToolCalls.set(tool.callId, tool.name);
@@ -968,7 +974,9 @@ export function parseAgentLine(line: string, agent: AgentId): ParsedAgentLine {
     }
     const item = asRecord(value.item);
     if (value.type === 'item.completed' && item?.type === 'agent_message' && typeof item.text === 'string') {
-      return { resultText: item.text };
+      // Each completed item is a new message (progress or final), not a
+      // duplicate result envelope. Keep all of them, separated as paragraphs.
+      return item.text.trim() ? { text: `${item.text}\n\n` } : {};
     }
     // What the CLI did, as `codex exec --json` reports it. The tool is named `run_command` rather than codex's own
     // `command_execution` because the rest of KAI reads that name: the verification record and the command card both

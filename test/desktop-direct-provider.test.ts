@@ -2,7 +2,7 @@ import * as http from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, type AgentRunRequest, type AppSettings } from '../packages/contracts/src';
 import {
   DesktopDirectProviderRuntime,
@@ -13,6 +13,13 @@ import {
 
 const servers: http.Server[] = [];
 const temporaryDirectories: string[] = [];
+let isolatedProjectRoot: string;
+
+beforeEach(async () => {
+  // Local task plans must not trigger continuations in unrelated provider tests.
+  isolatedProjectRoot = await mkdtemp(path.join(tmpdir(), 'kai-provider-test-'));
+  temporaryDirectories.push(isolatedProjectRoot);
+});
 
 afterEach(async () => {
   await Promise.all(
@@ -69,7 +76,7 @@ describe('desktop direct provider runtime', () => {
       },
     );
 
-    const result = await runtime.run({ ...runRequest(), route: 'proxy' }, process.cwd());
+    const result = await runtime.run({ ...runRequest(), route: 'proxy' }, isolatedProjectRoot);
 
     expect(result).toMatchObject({ status: 'completed', output: 'Proxy ready.', sessionId: 'resp-proxy' });
     expect(requests).toHaveLength(1);
@@ -107,7 +114,7 @@ describe('desktop direct provider runtime', () => {
     );
     const streamed: string[] = [];
 
-    const result = await runtime.run(runRequest(), process.cwd(), undefined, (event) => {
+    const result = await runtime.run(runRequest(), isolatedProjectRoot, undefined, (event) => {
       if (event.type === 'text.delta') streamed.push(event.text);
     });
 
@@ -169,7 +176,7 @@ describe('desktop direct provider runtime', () => {
 
     const result = await runtime.run(
       runRequest(),
-      process.cwd(),
+      isolatedProjectRoot,
       undefined,
       undefined,
       undefined,
@@ -221,7 +228,7 @@ describe('desktop direct provider runtime', () => {
       credentialPort('provider.deepseek', 'ds-test-secret'),
     );
 
-    const result = await runtime.run(runRequest(), process.cwd());
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
 
     expect(result).toMatchObject({ status: 'completed', output: 'DeepSeek ready.' });
     expect(requests[0]).toMatchObject({ path: '/v1/chat/completions', body: { model: 'deepseek-reasoner' } });
@@ -552,7 +559,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.anthropic', 'anthropic-secret'),
     );
 
-    const result = await runtime.run(runRequest(), process.cwd(), undefined, undefined, undefined, '# KAI project context\nAnthropic context.');
+    const result = await runtime.run(runRequest(), isolatedProjectRoot, undefined, undefined, undefined, '# KAI project context\nAnthropic context.');
 
     expect(result).toMatchObject({ status: 'completed', output: 'Claude ready.' });
     expect(requests).toHaveLength(1);
@@ -595,7 +602,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.anthropic', 'anthropic-secret'),
     );
 
-    const result = await runtime.run(runRequest(), process.cwd());
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
 
     expect(result).toMatchObject({ status: 'completed', output: 'Carried on and finished.' });
     expect(bodies).toHaveLength(2);
@@ -631,7 +638,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.google', 'google-secret'),
     );
 
-    const result = await runtime.run(runRequest(), process.cwd());
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
 
     expect(result).toMatchObject({ status: 'completed', output: 'Gemini ready.' });
     expect(requests).toHaveLength(1);
@@ -658,7 +665,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.openrouter', 'or-test-secret'),
     );
 
-    const pending = runtime.run(runRequest(), process.cwd());
+    const pending = runtime.run(runRequest(), isolatedProjectRoot);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.cancel('conv-direct')).toBe(true);
 
@@ -733,7 +740,7 @@ data: {"type":"message_stop"}
 
     const result = await runtime.run(
       runRequest(),
-      process.cwd(),
+      isolatedProjectRoot,
       undefined,
       undefined,
       undefined,
@@ -772,8 +779,8 @@ data: {"type":"message_stop"}
       { retryBaseDelayMs: 1 },
     );
 
-    await expect(runtime.run(runRequest(), process.cwd(), undefined)).resolves.toMatchObject({ status: 'completed', sessionId: 'resp-parent' });
-    const failed = await runtime.run(runRequest(), process.cwd(), 'resp-parent');
+    await expect(runtime.run(runRequest(), isolatedProjectRoot, undefined)).resolves.toMatchObject({ status: 'completed', sessionId: 'resp-parent' });
+    const failed = await runtime.run(runRequest(), isolatedProjectRoot, 'resp-parent');
 
     expect(failed.status).toBe('failed');
     expect(failed.error).toContain('429');
@@ -803,7 +810,7 @@ data: {"type":"message_stop"}
     );
     const events: Array<Record<string, unknown>> = [];
 
-    const result = await runtime.run(runRequest(), process.cwd(), undefined, (event) => events.push(event as Record<string, unknown>));
+    const result = await runtime.run(runRequest(), isolatedProjectRoot, undefined, (event) => events.push(event as Record<string, unknown>));
 
     expect(result).toMatchObject({ status: 'completed', output: 'Recovered.', sessionId: 'resp-retry' });
     expect(requestCount).toBe(2);
@@ -1018,7 +1025,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.openai', 'sk-test-secret'),
     );
 
-    const pending = runtime.run(runRequest(), process.cwd());
+    const pending = runtime.run(runRequest(), isolatedProjectRoot);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.cancel('conv-direct')).toBe(true);
 
@@ -1067,7 +1074,7 @@ data: {"type":"message_stop"}
       },
     };
 
-    const result = await runtime.run(runRequest(), process.cwd(), undefined, undefined, approvals);
+    const result = await runtime.run(runRequest(), isolatedProjectRoot, undefined, undefined, approvals);
 
     expect(result.status).toBe('completed');
     expect(result.output).toContain('Using main, as chosen.');
@@ -1110,7 +1117,7 @@ data: {"type":"message_stop"}
     );
 
     // No approvals port at all: the same as a scheduled or unattended run.
-    const result = await runtime.run(runRequest(), process.cwd());
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
 
     expect(result.status).toBe('completed');
     expect(result.output).toContain('Nobody answered, so I stopped here.');
@@ -1160,7 +1167,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.anthropic', 'anthropic-secret'),
     );
 
-    const result = await runtime.run(runRequest(), process.cwd());
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
 
     expect(result.status).toBe('completed');
     expect(result.output).toContain('Done: login uses JWT.');
@@ -1202,7 +1209,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.anthropic', 'anthropic-secret'),
     );
 
-    const result = await runtime.run({ ...runRequest(), autonomy: 'plan' }, process.cwd());
+    const result = await runtime.run({ ...runRequest(), autonomy: 'plan' }, isolatedProjectRoot);
 
     expect(result.status).toBe('failed');
     expect(result.error).toContain('every action it tried was refused');
@@ -1210,6 +1217,7 @@ data: {"type":"message_stop"}
   });
 
   it('still counts a run as completed when one action got through, even if another was refused', async () => {
+    await writeFile(path.join(isolatedProjectRoot, 'package.json'), '{"name":"test-project"}');
     // The rule is "nothing got through", not "something was refused". A run that read a file and then had an edit
     // refused did real work, and its answer is the answer.
     const server = http.createServer((request, response) => {
@@ -1235,7 +1243,7 @@ data: {"type":"message_stop"}
       credentialPort('provider.anthropic', 'anthropic-secret'),
     );
 
-    const result = await runtime.run({ ...runRequest(), autonomy: 'plan' }, process.cwd());
+    const result = await runtime.run({ ...runRequest(), autonomy: 'plan' }, isolatedProjectRoot);
 
     expect(result.status).toBe('completed');
     expect(result.error).toBeUndefined();

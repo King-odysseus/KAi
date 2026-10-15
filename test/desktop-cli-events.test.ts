@@ -74,7 +74,8 @@ describe('the events a CLI line reports', () => {
   it('leaves the reply text where it was, so nothing is emitted twice', () => {
     const message = '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Hi! How can I help?"}}';
     const parsed = parseAgentLine(message, 'codex');
-    expect(parsed.resultText).toBe('Hi! How can I help?');
+    expect(parsed.text).toBe('Hi! How can I help?\n\n');
+    expect(parsed.resultText).toBeUndefined();
     expect(parsed.tools).toBeUndefined();
     expect(lineEvents(codex, parsed)).toEqual([]);
   });

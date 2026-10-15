@@ -43,6 +43,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
   const [diff, setDiff] = useState<{ path: string; text: string } | null>(null);
   // The file being staged or unstaged, so its row shows a spinner until Git answers.
   const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [pr, setPr] = useState({ title: '', body: '' });
   // Creating the remote: the name to register on GitHub, who may see it, and what `gh` last said about the account.
   const [repoName, setRepoName] = useState('');
@@ -67,6 +68,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
     setMessage(null);
     setSelectedBranch('');
     setRepoName(repositoryNameFrom(activeProject?.name ?? ''));
+    setSelectedPaths(new Set());
     void refresh();
     const timer = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(timer);
@@ -328,6 +330,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
               <div className="ops-actions">
                 <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => void act('Stage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, overview.changes.map((change) => change.path), true)).output, 'Staged everything.')}>Stage all</button>
                 <button type="button" className="secondary-button" disabled={busy !== null || staged.length === 0} onClick={() => void act('Unstage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, staged.map((change) => change.path), false)).output, 'Unstaged everything.')}>Unstage all</button>
+                {selectedPaths.size > 0 && <button type="button" className="primary-button" disabled={busy !== null} onClick={() => void act('Stage selected', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, [...selectedPaths], true)).output, `Staged ${selectedPaths.size} selected file${selectedPaths.size === 1 ? '' : 's'}.`)}>Stage selected ({selectedPaths.size})</button>}
               </div>
               {(['staged', 'unstaged'] as const).map((group) => {
                 // A partly staged file is listed in both groups, each showing its own half of the change.
@@ -344,6 +347,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
                         const pending = busy !== null && pendingPath === change.path;
                         return (
                           <li key={`${group}:${change.path}`} className={`git-${kind}`}>
+                            <input type="checkbox" className="git-change-select" checked={selectedPaths.has(change.path)} aria-label={`Select ${change.path}`} onChange={() => setSelectedPaths((current) => { const next = new Set(current); if (next.has(change.path)) next.delete(change.path); else next.add(change.path); return next; })} />
                             <GitBadge change={shown} />
                             <button type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, group === 'staged').then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><span className="truncate">{change.path}</span></button>
                             <small>{describeChange(change)}</small>
