@@ -18,21 +18,17 @@
       "state": "done"
     },
     {
-      "text": "Verify: desktop typecheck passed; workbench smoke test passes end to end with the fix",
+      "text": "Verify: desktop typecheck, workbench smoke test with the fix, full test suite (1800 passed, 3 skipped)",
       "state": "done"
     },
     {
-      "text": "Verify: full test suite (running now)",
-      "state": "active"
-    },
-    {
       "text": "Remove my temporary probe scripts and logs",
-      "state": "pending"
+      "state": "done"
     },
     {
-      "text": "Commit and push the verified fix",
-      "state": "pending"
+      "text": "Commit and push the verified fix (dc271c1, pushed to main)",
+      "state": "done"
     }
   ],
-  "updatedAt": "2026-10-15T20:43:25.541Z"
+  "updatedAt": "2026-10-15T20:47:44.864Z"
 }
