@@ -14,7 +14,7 @@ import { useRunPanelCollapsed } from './run-panel-collapse';
  * opens to the steps when anyone wants them, and remembers that choice.
  */
 export function PlanStrip({ projectId, refreshKey }: { projectId: string | null; refreshKey?: string }): ReactNode {
-  const [collapsed, toggle] = useRunPanelCollapsed('plan');
+  const [collapsed, toggle] = useRunPanelCollapsed('plan', true);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(false);
 

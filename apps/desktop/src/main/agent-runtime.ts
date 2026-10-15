@@ -12,6 +12,7 @@ import type {
   PermissionKey,
   PersistedEvent,
 } from '@kai/contracts';
+import { effortFitsAgent } from '@kai/contracts';
 
 /** How long to keep reading a finished process's output before giving up on pipes a background process still holds. */
 const OUTPUT_DRAIN_GRACE_MS = 1_000;
@@ -827,7 +828,7 @@ export function resolveWindowsExecutable(
 }
 
 export function buildAgentArgs(
-  request: Pick<AgentRunRequest, 'agent' | 'prompt' | 'autonomy'>,
+  request: Pick<AgentRunRequest, 'agent' | 'prompt' | 'autonomy' | 'reasoning'>,
   cwd: string,
   resumeSessionId?: string,
   customPermissions?: Partial<Record<PermissionKey, boolean>>,
@@ -837,19 +838,23 @@ export function buildAgentArgs(
 ): string[] {
   // Every supported CLI takes the model as `--model <name>`; without one the CLI keeps its own default.
   const modelArgs = model ? ['--model', model] : [];
+  // Thinking effort: Claude Code has a flag, Codex takes a config override, the rest have no such setting.
+  const effort = effortFitsAgent(request.agent, request.reasoning) ? request.reasoning : undefined;
   if (request.agent === 'codex') {
     const providerArgs = proxyBaseUrl ? codexProxyProviderArgs(proxyBaseUrl) : [];
     const imageArgs = imagePaths.flatMap((imagePath) => ['--image', imagePath]);
     // Full access is an explicit user choice in the composer. Preserve it when a
     // conversation resumes, otherwise Codex falls back to interactive approvals.
     const fullAccessArgs = request.autonomy === 'full' ? ['--dangerously-bypass-approvals-and-sandbox'] : [];
-    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...fullAccessArgs, ...modelArgs, ...imageArgs, '-'];
+    const effortArgs = effort ? ['-c', `model_reasoning_effort="${effort}"`] : [];
+    if (resumeSessionId) return ['exec', ...providerArgs, 'resume', resumeSessionId, '--json', ...fullAccessArgs, ...modelArgs, ...effortArgs, ...imageArgs, '-'];
     return [
       'exec',
       ...providerArgs,
       '--json',
       ...fullAccessArgs,
       ...modelArgs,
+      ...effortArgs,
       '--sandbox',
       codexSandbox(request.autonomy, customPermissions),
       '--skip-git-repo-check',
@@ -869,6 +874,7 @@ export function buildAgentArgs(
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
     if (permissionMode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
     args.push(...modelArgs);
+    if (effort) args.push('--effort', effort);
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     return args;
   }

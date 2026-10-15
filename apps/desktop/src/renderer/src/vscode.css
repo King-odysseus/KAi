@@ -1,0 +1,391 @@
+/*
+ * The editor look: flat surfaces, one-pixel dividers, small quiet controls, and colour only where it means something.
+ *
+ * Loaded last, and written only in the theme's own tokens (var(--...) and colour mixes of them), so every theme follows
+ * and nothing here needs the theme generator re-run. Spacing and control sizes that depend on the person's choice hang
+ * off `:root[data-density]`, set from the status bar.
+ */
+
+/* ---------- Composer: one box, one row, no cards inside it ---------- */
+
+.composer-box {
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.composer-box:focus-within {
+  border-color: color-mix(in srgb, var(--mint) 55%, var(--border));
+  box-shadow: none;
+}
+
+.composer-toolbar {
+  padding: 2px 4px 4px;
+  gap: 6px;
+}
+
+/* Every select in the composer reads as plain text with a chevron until it is pointed at: no pill, no border. */
+.composer-toolbar .kai-select,
+.composer-actions .kai-select {
+  min-height: 24px;
+  height: 24px;
+  max-width: 170px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 11.5px;
+}
+
+.composer-toolbar .kai-select:hover:not(:disabled),
+.composer-toolbar .kai-select.open {
+  border-color: transparent;
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.composer-toolbar .kai-select.unavailable { color: var(--amber); }
+
+.composer-icon-button {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+}
+
+.composer-icon-button:hover,
+.composer-icon-button.active {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* CLI / API: a quiet two-state switch, not a pair of filled buttons. */
+.composer-actions .mode-toggle {
+  padding: 0;
+  gap: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.composer-actions .mode-toggle button {
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.composer-actions .mode-toggle button.active {
+  color: var(--text);
+  background: var(--bg-hover);
+  font-weight: 700;
+}
+
+.composer-actions .send-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+}
+
+/* The slash-command row: one thin line of small text, scrolled sideways instead of wrapping into a block. */
+.command-chip-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  opacity: 0.75;
+}
+
+.command-chip-row::-webkit-scrollbar { display: none; }
+
+.command-chip-row button {
+  flex: 0 0 auto;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.command-chip-row button:hover { color: var(--text); background: var(--bg-hover); }
+
+.composer-footer { font-size: 10.5px; opacity: 0.7; }
+
+/* ---------- The plan, the queue and the running-checks line: slim strips, not boxes ---------- */
+
+.plan-strip {
+  margin: 0 0 4px;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
+}
+
+.plan-strip-head { padding: 4px 6px; font-weight: 600; color: var(--text-muted); }
+.plan-strip-head:hover { color: var(--text); }
+
+/* ---------- Commands and edits: one folded line each ---------- */
+
+.tool-call-card {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.tool-call-card:hover { background: color-mix(in srgb, var(--bg-hover) 55%, transparent); }
+
+.tool-call-head {
+  min-height: 24px;
+  padding: 2px 6px;
+  font-size: 11.5px;
+}
+
+.tool-call-body { border-top: 1px solid var(--border-soft); }
+
+.tool-call-card .tool-call-chevron { transition: transform 100ms ease; transform: rotate(-90deg); }
+.tool-call-card .tool-call-head[aria-expanded='true'] .tool-call-chevron { transform: rotate(0deg); }
+
+.run-event { padding-block: 2px; font-size: 11.5px; }
+
+/* ---------- Terminal: a tab strip and the terminal, the way an editor draws it ---------- */
+
+.terminal-dock {
+  gap: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+.terminal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.terminal-head .terminal-title {
+  margin-right: 8px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.terminal-tabs { flex-wrap: nowrap; gap: 0; }
+
+.terminal-tabs [role='tab'] {
+  min-height: 27px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  color: var(--text-dim);
+  background: transparent;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.terminal-tabs [role='tab']:hover { color: var(--text); }
+
+.terminal-tabs [role='tab'][aria-selected='true'] {
+  outline: 0;
+  border-bottom-color: var(--mint);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.terminal-head-actions { gap: 0; }
+
+.terminal-xterm {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 0;
+}
+
+.terminal-menu-wrap { position: relative; }
+
+.terminal-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 60;
+  display: flex;
+  min-width: 168px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--bg-deep) 70%, transparent);
+}
+
+.terminal-menu button {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-menu button:hover:not(:disabled) { background: var(--bg-hover); }
+.terminal-menu button:disabled { color: var(--text-dim); cursor: default; }
+
+/* ---------- Status bar ---------- */
+
+.status-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg-shell);
+  font-size: 11px;
+}
+
+.status-bar-group { display: flex; min-width: 0; align-items: center; gap: 2px; }
+
+.status-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  height: 22px;
+  overflow: hidden;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-button { cursor: pointer; }
+.status-button:hover,
+.status-button.active { color: var(--text); background: var(--bg-hover); }
+
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
+.status-running .status-dot { background: var(--mint); animation: kai-pulse 1.2s ease-in-out infinite; }
+.status-running { color: var(--text); }
+
+/* A badge says "something is waiting here": small, round, and the only filled accent on the bar. */
+.badge {
+  display: inline-grid;
+  min-width: 15px;
+  height: 15px;
+  place-items: center;
+  padding: 0 4px;
+  border-radius: 8px;
+  color: var(--bg-deep);
+  background: var(--mint);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.status-popover-wrap { position: relative; }
+
+.status-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 60;
+  display: flex;
+  width: 280px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--bg-raised);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--bg-deep) 70%, transparent);
+  white-space: normal;
+}
+
+.status-popover small { color: var(--text-dim); }
+
+.status-popover-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.status-stepper,
+.status-segment {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+}
+
+.status-stepper output { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.status-stepper button,
+.status-segment button {
+  min-height: 22px;
+  padding: 0 7px;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.status-stepper button:hover:not(:disabled),
+.status-segment button:hover { color: var(--text); background: var(--bg-hover); }
+.status-stepper button:disabled { opacity: 0.4; cursor: default; }
+.status-segment button.active { color: var(--text); background: var(--bg-hover); font-weight: 600; }
+
+.status-reset {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.status-reset:hover { color: var(--text); background: var(--bg-hover); }
+
+/* ---------- Density: the person's choice, from the status bar ---------- */
+
+:root[data-density='compact'] {
+  --titlebar-height: 36px;
+}
+
+:root[data-density='compact'] .icon-button { width: 26px; height: 26px; border-radius: 4px; }
+:root[data-density='compact'] .icon-button.compact { width: 22px; height: 22px; }
+:root[data-density='compact'] .nav-rail { flex-basis: 46px; }
+:root[data-density='compact'] .conversation-tab { height: 26px; font-size: 11px; }
+:root[data-density='compact'] .conversation-tab-strip { min-height: 30px; }
+
+:root[data-density='compact'] .secondary-button,
+:root[data-density='compact'] .primary-button {
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+:root[data-density='compact'] .kai-select { min-height: 26px; border-radius: 4px; font-size: 12px; }
+:root[data-density='compact'] .composer { padding: 6px clamp(8px, 1vw, 14px) 6px; gap: 4px; }
+:root[data-density='compact'] .composer-box textarea,
+:root[data-density='compact'] .composer textarea { min-height: 44px; padding: 7px 9px 2px; }
+:root[data-density='compact'] .message { padding-block: 6px; }
+:root[data-density='compact'] .changes-card { padding: 8px 10px; }
+
+:root[data-density='comfortable'] .icon-button { width: 34px; height: 34px; }
+:root[data-density='comfortable'] .composer { gap: 10px; padding-block: 12px; }
+:root[data-density='comfortable'] .message { padding-block: 12px; }

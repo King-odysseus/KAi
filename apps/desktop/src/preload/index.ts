@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import type { AgentRunEvent, AgentRunState, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, SharedDesktopState, TerminalEvent, UpdateState } from '@kai/contracts';
 
 const bridge: KaiDesktopBridge = {
@@ -322,6 +322,7 @@ const bridge: KaiDesktopBridge = {
   recentLogs: (count) => ipcRenderer.invoke('diagnostics:recent-logs', { count }),
   windowState: () => ipcRenderer.invoke('window:state', {}),
   newWindow: (projectId) => ipcRenderer.invoke('window:new', { projectId }),
+  setZoomFactor: (factor) => { if (Number.isFinite(factor)) webFrame.setZoomFactor(Math.min(2, Math.max(0.6, factor))); },
   setTitleBarOverlay: (color, symbolColor) => ipcRenderer.invoke('window:title-bar-overlay', { color, symbolColor }),
   remoteStatus: () => ipcRenderer.invoke('remote:status', {}),
   remoteWindows: () => ipcRenderer.invoke('remote:windows', {}),

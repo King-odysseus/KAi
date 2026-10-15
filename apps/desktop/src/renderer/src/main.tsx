@@ -8,6 +8,7 @@ import './themes.generated.css';
 import './uap-dashboard.css';
 import './controls.css';
 import './workspace-polish.css';
+import './vscode.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

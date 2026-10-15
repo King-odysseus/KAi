@@ -1581,6 +1581,8 @@ export interface KaiDesktopBridge {
   windowState(): Promise<IpcResponse<{ maximized: boolean }>>;
   /** Opens a new window, optionally already pointed at a project and its composer. */
   newWindow(projectId?: string): Promise<IpcResponse<boolean>>;
+  /** Scales the whole window's text and controls (1 is normal). Applied in the page itself, so it needs no round trip. */
+  setZoomFactor(factor: number): void;
   /** Recolours the operating system's window controls to match the theme. Hex, because that is what the overlay takes. */
   setTitleBarOverlay(color: string, symbolColor: string): Promise<IpcResponse<boolean>>;
   /** How KAI Remote is doing: whether it is listening, on what, and how many phones are attached. */

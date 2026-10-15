@@ -9,10 +9,13 @@ const PREFIX = 'kai.runPanel.collapsed.';
  * they switch tabs or come back to the view. The choice is per panel, so minimising Auto does not fold the Studio's
  * Autopilot away with it.
  */
-export function useRunPanelCollapsed(key: string): [boolean, () => void] {
+export function useRunPanelCollapsed(key: string, collapsedByDefault = false): [boolean, () => void] {
   const storageKey = `${PREFIX}${key}`;
   const [collapsed, setCollapsed] = useState(() => {
-    try { return window.localStorage.getItem(storageKey) === '1'; } catch { return false; }
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      return saved === null ? collapsedByDefault : saved === '1';
+    } catch { return collapsedByDefault; }
   });
   const toggle = useCallback(() => {
     setCollapsed((current) => {

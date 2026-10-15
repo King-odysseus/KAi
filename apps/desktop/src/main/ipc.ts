@@ -77,7 +77,7 @@ import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
 import { MemoryBudget } from './memory-budget';
 import { buildTurnDigest } from './turn-digest';
-import { workingMethodBriefing } from './working-method';
+import { responseStyleBriefing, workingMethodBriefing } from './working-method';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
 import { buildHistoryNote } from './run-history';
 import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections } from './interjections';
@@ -133,6 +133,7 @@ import type { DesktopAutopilot } from './autopilot';
 import type { DesktopAutoSession } from './auto-session';
 import { syncBrainToMirror } from './brain-mirror';
 import type { BrainMirrorOutcome } from '@kai/contracts';
+import { modelBelongsToOtherAgent } from '@kai/contracts';
 import { composeRunLesson, type RunLessonInput } from './run-learning';
 import type { DesktopPromptGuide } from './prompt-guide';
 import type { DesktopInterview } from './interview';
@@ -1625,8 +1626,12 @@ export async function runConversationAgent(
         conversation.compaction,
         // A resumed session already holds the rules, instruction files and skills from its first turn.
         Boolean(resumeSessionId),
+        // The same outline the direct API agent gets, on a CLI session's first turn: files and their main symbols, so
+        // the agent starts from a map of the project instead of walking the whole tree to find its way. A resumed
+        // session already has it.
+        !resumeSessionId,
       )).text;
-  let effectivePrompt = `${workingMethodBriefing()}\n\n${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
+  let effectivePrompt = `${workingMethodBriefing()}\n\n${responseStyleBriefing(request.responseStyle)}\n\n${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
   const terminalTools = context.terminalMcp === true;
@@ -1703,8 +1708,13 @@ export async function runConversationAgent(
     : undefined;
   // A model picked for this run wins; otherwise KAI sizes the request, and the Settings model is the last resort.
   // An agent that keeps getting a level of work wrong is handed that level's work one tier up.
-  const recentScores = executionMode === 'cli' && !request.model ? await context.runScores.list() : [];
-  const autoPick = executionMode === 'cli' && !request.model
+  // A model name that plainly belongs to another agent (a Codex model on a Claude run) would make the CLI refuse the
+  // run before it starts, so it is dropped here and the run falls back to the sized or default model instead.
+  const chosenModel = request.model && executionMode === 'cli' && modelBelongsToOtherAgent(request.agent, request.model)
+    ? undefined
+    : request.model;
+  const recentScores = executionMode === 'cli' && !chosenModel ? await context.runScores.list() : [];
+  const autoPick = executionMode === 'cli' && !chosenModel
     ? autoCliModel(request, settings, selectedPaths.length, (level, agent) => escalatedLevel(level, agent, recentScores))
     : undefined;
   let execution: AgentExecutionResult;
@@ -1745,7 +1755,7 @@ export async function runConversationAgent(
           apiHistory,
           preferences?.customPermissions,
         )
-      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, request.model ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note, chipContext.imagePaths);
+      : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, chosenModel ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note, chipContext.imagePaths);
 
     // A CLI run is a single process, so an agent that stops with its plan unfinished simply stops — unlike the Direct
     // API path, which loops inside the run and can push it to carry on. The only way to continue here is to invoke the
@@ -1760,7 +1770,7 @@ export async function runConversationAgent(
         sessionId ?? resumeSessionId,
         emit,
         preferences?.customPermissions,
-        request.model ?? autoPick?.model ?? settings.agentModels[request.agent],
+        chosenModel ?? autoPick?.model ?? settings.agentModels[request.agent],
         autoPick?.note,
         chipContext.imagePaths,
       ));

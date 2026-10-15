@@ -17,7 +17,9 @@ import type {
   ExecutionMode,
   LogEntry,
   ProjectPreferences,
+  ReasoningEffort,
   RecoveryResume,
+  ResponseStyle,
   RouteMode,
   SettingsUpdate,
   SetupCheck,
@@ -25,7 +27,9 @@ import type {
   SkillSummary,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
+import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
+import { StatusBar } from './components/StatusBar';
+import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -89,6 +93,10 @@ interface ComposerSelection {
   route: RouteMode;
   autonomy: AutonomyMode;
   model: string;
+  /** Thinking effort for this conversation; empty means the CLI's own default. */
+  reasoning?: ReasoningEffort | '';
+  /** How the agent words its replies in this conversation. */
+  style?: ResponseStyle;
 }
 
 const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
@@ -139,8 +147,30 @@ function loadComposerDrafts(): Record<string, string> {
   }
 }
 
-function isSupportedCodexCliModel(model: string): boolean {
-  return model === '' || CLI_MODEL_SUGGESTIONS.codex.includes(model);
+/**
+ * The model a conversation may use with this agent and mode. A saved model survives only while it still fits: a name
+ * that belongs to another agent (what was left behind when the agent was switched) is dropped, so a Claude run is
+ * never launched on a Codex model.
+ */
+function modelFor(agent: AgentId, execution: ExecutionMode, model: string | undefined): string {
+  if (!model) return '';
+  return execution === 'cli' && modelBelongsToOtherAgent(agent, model) ? '' : model;
+}
+
+const RESPONSE_STYLE_KEY = 'kai.responseStyle.v1';
+
+/** The wording a new conversation starts with: the one the person last chose, or plain words. */
+function loadDefaultResponseStyle(): ResponseStyle {
+  try {
+    const parsed = responseStyleSchema.safeParse(window.localStorage.getItem(RESPONSE_STYLE_KEY));
+    return parsed.success ? parsed.data : 'plain';
+  } catch {
+    return 'plain';
+  }
+}
+
+function reasoningFor(agent: AgentId, execution: ExecutionMode, reasoning: string | undefined): ReasoningEffort | '' {
+  return execution === 'cli' && effortFitsAgent(agent, reasoning) ? reasoning : '';
 }
 
 function loadComposerSelections(): Record<string, ComposerSelection> {
@@ -149,9 +179,7 @@ function loadComposerSelections(): Record<string, ComposerSelection> {
     if (!parsed || typeof parsed !== 'object') return {};
     return Object.fromEntries(Object.entries(parsed as Record<string, ComposerSelection>).map(([key, selection]) => [
       key,
-      selection.agent === 'codex' && selection.execution === 'cli' && !isSupportedCodexCliModel(selection.model)
-        ? { ...selection, model: '' }
-        : selection,
+      { ...selection, model: modelFor(selection.agent, selection.execution, selection.model), reasoning: reasoningFor(selection.agent, selection.execution, selection.reasoning) },
     ]));
   } catch {
     return {};
@@ -205,6 +233,9 @@ export function App(): ReactNode {
   const [incomingTeamPlan, setIncomingTeamPlan] = useState<TeamPlanDraft | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState(0);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  /** Shells an agent started while the terminal was closed. It does not open on its own; this is what says so. */
+  const [agentTerminals, setAgentTerminals] = useState(0);
+  const [appearance, setAppearanceState] = useState<Appearance>(loadAppearance);
   const [terminalCommand, setTerminalCommand] = useState<{ command: string; nonce: number } | null>(null);
   const [settingsDestination, setSettingsDestination] = useState<{ category: 'connections' | 'services'; nonce: number } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(() => {
@@ -324,10 +355,12 @@ export function App(): ReactNode {
   const activeContextKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
   const activeComposerContext = composerContexts[activeContextKey] ?? emptyComposerContext;
   const activeComposerSelection = composerSelections[activeDraftKey];
-  const savedActiveModel = activeComposerSelection?.model ?? modelChoices[`${executionMode}:${selectedAgent}`] ?? '';
-  const selectedWorkspaceModel = executionMode === 'cli' && selectedAgent === 'codex' && !isSupportedCodexCliModel(savedActiveModel)
-    ? ''
-    : savedActiveModel;
+  // The saved selection only counts while it still names the agent and mode on screen; otherwise it is another
+  // agent's leftover and the model remembered for this agent is shown instead.
+  const selectionFits = activeComposerSelection?.agent === selectedAgent && activeComposerSelection?.execution === executionMode;
+  const selectedWorkspaceModel = modelFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.model : modelChoices[`${executionMode}:${selectedAgent}`]);
+  const selectedWorkspaceStyle: ResponseStyle = activeComposerSelection?.style ?? loadDefaultResponseStyle();
+  const selectedWorkspaceReasoning = reasoningFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.reasoning : '');
   const updateComposerDraft = useCallback((value: string) => {
     setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
   }, [activeDraftKey]);
@@ -447,6 +480,12 @@ export function App(): ReactNode {
     { id: 'studio', label: 'Open Project Studio', description: 'Interview a project idea and write the brief the board and agents work from', run: () => setView('studio') },
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => openOperations('verification') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
+    { id: 'text-bigger', label: 'Text: Larger', description: 'Make text and controls bigger (Ctrl plus)', run: () => changeAppearance({ ...appearance, textScale: clampScale(appearance.textScale + 5) }) },
+    { id: 'text-smaller', label: 'Text: Smaller', description: 'Make text and controls smaller (Ctrl minus)', run: () => changeAppearance({ ...appearance, textScale: clampScale(appearance.textScale - 5) }) },
+    { id: 'text-reset', label: 'Text: Reset size', description: 'Back to the normal size (Ctrl 0)', run: () => changeAppearance({ ...appearance, textScale: 100 }) },
+    { id: 'density-compact', label: 'Spacing: Compact', description: 'Tight rows and small controls, like an editor', run: () => changeAppearance({ ...appearance, density: 'compact' }) },
+    { id: 'density-default', label: 'Spacing: Default', description: 'The original spacing', run: () => changeAppearance({ ...appearance, density: 'default' }) },
+    { id: 'density-comfortable', label: 'Spacing: Comfortable', description: 'More room around everything', run: () => changeAppearance({ ...appearance, density: 'comfortable' }) },
     { id: 'terminal', label: 'Toggle Terminal Panel', description: 'Show or hide the command terminal at the bottom of the window', shortcut: shortcutLabel(shortcuts, 'terminal'), run: () => setTerminalOpen((open) => !open) },
     { id: 'threads', label: 'Toggle Threads Panel', description: 'Show or hide the conversation threads on the left', shortcut: shortcutLabel(shortcuts, 'threads'), run: () => setThreadsOpen((open) => !open) },
     { id: 'context-panel', label: 'Toggle Context Panel', description: 'Show or hide project context on the right', shortcut: shortcutLabel(shortcuts, 'context-panel'), run: () => setContextOpen((open) => !open) },
@@ -874,8 +913,30 @@ export function App(): ReactNode {
     })();
   }), []);
 
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
+  const changeAppearance = useCallback((next: Appearance): void => {
+    setAppearanceState(next);
+    saveAppearance(next);
+    applyAppearance(next);
+  }, []);
+  useEffect(() => { applyAppearance(appearanceRef.current); }, []);
+  // Opening the terminal is how the person reads what an agent started in it, so the count clears.
+  useEffect(() => { if (terminalOpen) setAgentTerminals(0); }, [terminalOpen]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      // Ctrl + / Ctrl - / Ctrl 0 change the text size the way they do in an editor, from anywhere, even in a field.
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.defaultPrevented) {
+        const grow = event.key === '=' || event.key === '+';
+        const shrink = event.key === '-' || event.key === '_';
+        if (grow || shrink || event.key === '0') {
+          event.preventDefault();
+          const current = appearanceRef.current;
+          changeAppearance({ ...current, textScale: event.key === '0' ? 100 : clampScale(current.textScale + (grow ? 5 : -5)) });
+          return;
+        }
+      }
       if (event.defaultPrevented || shortcutSheetOpenRef.current) return;
       const action = matchingShortcutAction(event, shortcutsRef.current);
       if (!action) return;
@@ -1214,10 +1275,17 @@ export function App(): ReactNode {
           route: runRoute,
           autonomy: runAutonomy,
           ...(() => {
-            const model = options.model ?? composerSelections[conversation.id]?.model ?? modelChoices[`${runExecution}:${runAgentId}`] ?? '';
-            return runExecution === 'cli' && runAgentId === 'codex' && !isSupportedCodexCliModel(model)
-              ? {}
-              : model ? { model } : {};
+            const saved = composerSelections[conversation.id];
+            const savedFits = saved?.agent === runAgentId && saved?.execution === runExecution;
+            const model = modelFor(runAgentId, runExecution, options.model ?? (savedFits ? saved?.model : undefined) ?? modelChoices[`${runExecution}:${runAgentId}`]);
+            return model ? { model } : {};
+          })(),
+          responseStyle: composerSelections[conversation.id]?.style ?? loadDefaultResponseStyle(),
+          ...(() => {
+            const saved = composerSelections[conversation.id];
+            const savedFits = saved?.agent === runAgentId && saved?.execution === runExecution;
+            const reasoning = reasoningFor(runAgentId, runExecution, savedFits ? saved?.reasoning : undefined);
+            return reasoning ? { reasoning } : {};
           })(),
           ...(options.goal ? { goal: options.goal } : {}),
           ...(options.skills?.length ? { skills: options.skills } : {}),
@@ -2045,7 +2113,7 @@ export function App(): ReactNode {
             notice={agentNotice}
             onSelectExecution={(mode) => {
               setExecutionMode(mode);
-              updateComposerSelection({ execution: mode });
+              updateComposerSelection({ execution: mode, model: modelFor(selectedAgent, mode, modelChoices[`${mode}:${selectedAgent}`]), reasoning: '' });
               rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: mode });
               setAgentNotice(null);
             }}
@@ -2054,7 +2122,8 @@ export function App(): ReactNode {
               const capability = agentCapabilities.find((item) => item.id === agent);
               const route = capability?.supportsRoutes.includes('proxy') ? selectedRoute : 'direct';
               if (route !== selectedRoute) setSelectedRoute(route);
-              updateComposerSelection({ agent, route });
+              // The model and effort belong to the agent that was chosen with them; the new agent starts from its own.
+              updateComposerSelection({ agent, route, model: modelFor(agent, executionMode, modelChoices[`${executionMode}:${agent}`]), reasoning: '' });
               rememberAgentChoice({ agent, route, execution: executionMode });
               setAgentNotice(null);
             }}
@@ -2111,13 +2180,21 @@ export function App(): ReactNode {
             onOpenUsage={() => setView('usage')}
             selectedModel={selectedWorkspaceModel}
             onSelectModel={(model) => {
-              if (executionMode === 'cli' && selectedAgent === 'codex' && !isSupportedCodexCliModel(model)) {
-                setError('This Codex ChatGPT connection supports GPT-6 Astra or Default. GPT-6 Sol requires an API connection.');
+              if (executionMode === 'cli' && modelBelongsToOtherAgent(selectedAgent, model)) {
+                setError(`That model belongs to a different agent. Pick one of ${agentCapabilities.find((item) => item.id === selectedAgent)?.displayName ?? selectedAgent}'s models, or Default.`);
                 return;
               }
               setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }));
               updateComposerSelection({ model });
             }}
+            selectedStyle={selectedWorkspaceStyle}
+            onSelectStyle={(style) => {
+              try { window.localStorage.setItem(RESPONSE_STYLE_KEY, style); } catch { /* the choice still applies to this conversation */ }
+              updateComposerSelection({ style });
+            }}
+            selectedReasoning={selectedWorkspaceReasoning}
+            reasoningLevels={executionMode === 'cli' ? CLI_EFFORT_LEVELS[selectedAgent] : []}
+            onSelectReasoning={(reasoning) => updateComposerSelection({ reasoning })}
             interruptedRuns={interruptedRuns}
             onOpenRecovery={() => openOperations('recovery')}
             onOpenVerification={() => openOperations('verification')}
@@ -2288,7 +2365,7 @@ export function App(): ReactNode {
             open={terminalOpen}
             height={terminalHeight}
             commandRequest={terminalCommand}
-            onAgentSession={() => setTerminalOpen(true)}
+            onAgentSession={() => setAgentTerminals((count) => count + 1)}
             onClose={() => setTerminalOpen(false)}
             onResizeStart={(event) => {
               event.preventDefault();
@@ -2370,6 +2447,19 @@ export function App(): ReactNode {
           </>
         )}
       </div>
+      <StatusBar
+        project={activeProject?.name ?? null}
+        agent={executionMode === 'api' ? 'Direct API' : agentCapabilities.find((item) => item.id === selectedAgent)?.displayName ?? selectedAgent}
+        model={selectedWorkspaceModel || 'default model'}
+        effort={selectedWorkspaceReasoning ? REASONING_LABEL[selectedWorkspaceReasoning] : null}
+        runningCount={runningConversationIds.length}
+        agentTerminals={agentTerminals}
+        terminalOpen={terminalOpen}
+        appearance={appearance}
+        onAppearance={changeAppearance}
+        onOpenPalette={() => setCommandPaletteOpen(true)}
+        onToggleTerminal={() => setTerminalOpen((open) => !open)}
+      />
       {busy && (
         <div className="busy-indicator" role="status">
           <span />

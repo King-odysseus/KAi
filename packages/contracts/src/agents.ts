@@ -24,6 +24,33 @@ export const agentCapabilitySchema = z
   })
   .strict();
 
+/**
+ * How the agent words what it tells the person. 'plain' is the default: short sentences, everyday words, and every
+ * technical term explained the first time it appears.
+ */
+export const RESPONSE_STYLES = ['plain', 'concise', 'detailed', 'technical'] as const;
+export const responseStyleSchema = z.enum(RESPONSE_STYLES);
+export type ResponseStyle = z.infer<typeof responseStyleSchema>;
+
+export const RESPONSE_STYLE_LABEL: Record<ResponseStyle, string> = {
+  plain: 'Plain words',
+  concise: 'Concise',
+  detailed: 'Detailed',
+  technical: 'Technical',
+};
+
+export const RESPONSE_STYLE_DESCRIPTION: Record<ResponseStyle, string> = {
+  plain: 'Short sentences and everyday words. Explains any technical term the first time it appears.',
+  concise: 'The answer and nothing else. No background, no recap.',
+  detailed: 'Walks through what was done and why, step by step.',
+  technical: 'Precise engineering language. Assumes you know the codebase.',
+};
+
+/** Thinking effort, in the words the CLIs themselves use. */
+export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const reasoningEffortSchema = z.enum(REASONING_EFFORTS);
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+
 export const agentRunRequestSchema = z
   .object({
     conversationId: z.string().min(1),
@@ -39,6 +66,10 @@ export const agentRunRequestSchema = z
     contextChips: z.array(contextChipSchema).max(50).optional(),
     // Model for this run only. Without it the run uses the model from Settings (or the CLI's own default).
     model: cliModelNameSchema.optional(),
+    // How the agent words its replies; without it the run uses plain words.
+    responseStyle: responseStyleSchema.optional(),
+    // How hard the agent thinks on this run. Only agents that take an effort setting (see CLI_EFFORT_LEVELS) use it.
+    reasoning: reasoningEffortSchema.optional(),
     // How heavy the work is, when the caller already knows (a workflow step judged on its own prompt). Without it,
     // and without a model, KAI estimates it from the prompt to pick a model.
     effort: workLevelSchema.optional(),
@@ -52,10 +83,18 @@ export const agentRunRequestSchema = z
 // can still be typed when a different account or provider supports it.
 export const CLI_MODEL_SUGGESTIONS: Record<AgentId, readonly string[]> = {
   claude: [
+    'opus',
+    'sonnet',
+    'haiku',
     'claude-opus-5',
+    'claude-opus-5-5',
+    'claude-sonnet-5-5',
+    'claude-haiku-5-5',
   ],
   codex: [
     'gpt-6-astra',
+    'gpt-6-sol',
+    'gpt-6-luna',
   ],
   qwen: [
     'qwen3.8-max',
@@ -78,6 +117,42 @@ export const CLI_MODEL_SUGGESTIONS: Record<AgentId, readonly string[]> = {
     'kimi-for-coding',
   ],
 };
+
+/**
+ * The thinking-effort levels each CLI accepts, from its own `--help`: Claude Code has `--effort`, and Codex reads
+ * `model_reasoning_effort` from its config. The others have no such setting, so they list nothing and the composer
+ * shows no effort control for them.
+ */
+export const CLI_EFFORT_LEVELS: Record<AgentId, readonly ReasoningEffort[]> = {
+  claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['low', 'medium', 'high'],
+  qwen: [],
+  gemini: [],
+  kimi: [],
+};
+
+export const REASONING_LABEL: Record<ReasoningEffort, string> = {
+  low: 'Light',
+  medium: 'Balanced',
+  high: 'Deep',
+  xhigh: 'Very deep',
+  max: 'Maximum',
+};
+
+/** True when `effort` is something this agent's CLI accepts. */
+export function effortFitsAgent(agent: AgentId, effort: string | undefined): effort is ReasoningEffort {
+  return Boolean(effort) && (CLI_EFFORT_LEVELS[agent] as readonly string[]).includes(effort as string);
+}
+
+/**
+ * True when `model` is one of the names KAI lists for a *different* agent. A model typed by hand for this agent is
+ * left alone; a name that is plainly another agent's (a Codex model on a Claude run) is not, because the CLI
+ * rejects it and the run fails before it starts.
+ */
+export function modelBelongsToOtherAgent(agent: AgentId, model: string): boolean {
+  if (!model || CLI_MODEL_SUGGESTIONS[agent].includes(model)) return false;
+  return (Object.keys(CLI_MODEL_SUGGESTIONS) as AgentId[]).some((other) => other !== agent && CLI_MODEL_SUGGESTIONS[other].includes(model));
+}
 
 export const agentRunResultSchema = z
   .object({

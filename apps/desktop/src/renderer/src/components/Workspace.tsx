@@ -68,6 +68,8 @@ import type {
   ConversationRecord,
   ContextChip,
   ContextPreview,
+  ReasoningEffort,
+  ResponseStyle,
   ConversationTurn,
   DirectApiCapability,
   FileVerificationState,
@@ -86,7 +88,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -190,6 +192,14 @@ interface WorkspaceViewProps {
   onOpenUsage: () => void;
   selectedModel: string;
   onSelectModel: (model: string) => void;
+  /** Thinking effort chosen for this conversation ('' means the CLI's own default). */
+  selectedReasoning: ReasoningEffort | '';
+  /** How the agent words its replies; plain words unless the person changed it. */
+  selectedStyle: ResponseStyle;
+  onSelectStyle: (style: ResponseStyle) => void;
+  /** The effort levels the selected agent's CLI accepts; empty hides the control. */
+  reasoningLevels: readonly ReasoningEffort[];
+  onSelectReasoning: (reasoning: ReasoningEffort | '') => void;
   interruptedRuns: number;
   onOpenRecovery: () => void;
   onOpenVerification: () => void;
@@ -373,6 +383,11 @@ export function WorkspaceView({
   onOpenUsage,
   selectedModel,
   onSelectModel,
+  selectedReasoning,
+  selectedStyle,
+  onSelectStyle,
+  reasoningLevels,
+  onSelectReasoning,
   interruptedRuns,
   onOpenRecovery,
   onOpenVerification,
@@ -1594,7 +1609,8 @@ export function WorkspaceView({
               <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
             )}
             {/* The run in progress shows its changes as they happen; a finished one keeps them closed. */}
-            {trailingInlineEvents.map((event) => renderInlineEvent(event, running))}
+            {/* Commands and edits stay folded to one line while the run is live too; opening one is the reader's choice. */}
+            {trailingInlineEvents.map((event) => renderInlineEvent(event, false))}
             {runDetails.length > 0 && (
               <section className="run-details" aria-label="Activity timeline">
                 <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
@@ -1875,6 +1891,7 @@ export function WorkspaceView({
               <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
               <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
               <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
+              <SelectMenu ariaLabel="Reply style" className="composer-style-select" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
               {helperAgentCount > 0 && (
                 <span
                   className="composer-helper-pill"
@@ -1883,27 +1900,23 @@ export function WorkspaceView({
                   <Search size={12} /><span>{helperAgentCount}</span>
                 </span>
               )}
-              <button type="button" className={`composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}>
-                <span>{advancedComposerOpen ? 'Hide' : 'Work locally'}</span><ChevronDown size={13} />
-              </button>
-              {advancedComposerOpen && <div className="composer-advanced-controls">
-                <div className="mode-toggle" role="group" aria-label="Execution mode">
-                  <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><Cpu size={14} /><span>CLI</span></button>
-                  <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><Cloud size={14} /><span>API</span></button>
-                </div>
-                {apiRun ? (
-                  // The provider and its model were spelled out here as well as in the model control on the right, in
-                  // two different words for the same thing. This is the way to the provider's settings and nothing
-                  // more, so it reads as a button rather than as a second answer to a question already answered.
-                  <button type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></button>
-                ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason} value={selectedAgent} />}
-                <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
-                {/* The access level is not repeated here: it is in the composer's own row, always visible, and two
-                    controls for one setting is how a person stops being sure which one they are looking at. */}
-              </div>}
+              {/* Route is the one rarely-used choice, so it sits behind this gear. CLI/API, agent, model and effort are
+                  on the right, always in view: they are what a person changes between windows. */}
+              <button type="button" className={`composer-icon-button composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} aria-label="More run options" title="More run options (route)" onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}><Settings2 size={14} /></button>
+              {advancedComposerOpen && <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />}
             </div>
             <div className="composer-actions">
+              <div className="mode-toggle" role="group" aria-label="Execution mode">
+                <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><span>CLI</span></button>
+                <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><span>API</span></button>
+              </div>
+              {apiRun ? (
+                <button type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></button>
+              ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason ?? 'Which agent works on this conversation'} value={selectedAgent} />}
               <SelectMenu ariaLabel="Model" className="composer-model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
+              {!apiRun && reasoningLevels.length > 0 && (
+                <SelectMenu ariaLabel="Thinking effort" className="composer-effort-select" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />
+              )}
               <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               {(running || paused || awaitingApproval) ? (
                 <>
@@ -2377,6 +2390,16 @@ function messageOf(error: unknown): string {
 
 const CUSTOM_MODEL = '__custom__';
 
+/** Plain names for models whose identifiers say little: the size of the model, which is what a person is choosing. */
+const MODEL_LABELS: Record<string, string> = {
+  opus: 'Opus (strongest)',
+  sonnet: 'Sonnet (balanced)',
+  haiku: 'Haiku (fastest)',
+  'gpt-6-astra': 'GPT-6 Astra (strongest)',
+  'gpt-6-sol': 'GPT-6 Sol (balanced)',
+  'gpt-6-luna': 'GPT-6 Luna (fastest)',
+};
+
 function positiveLine(value: string): string | null {
   return /^\d+$/.test(value) && Number(value) >= 1 ? null : 'Enter a positive line number.';
 }
@@ -2401,7 +2424,7 @@ function modelOptions(
   const defaultLabel = apiRun && capability?.model ? `Default (${capability.model})` : 'Default';
   return [
     { value: '', label: defaultLabel },
-    ...suggestions.map((name) => ({ value: name, label: name })),
+    ...suggestions.map((name) => ({ value: name, label: MODEL_LABELS[name] ?? name })),
     ...(selected && !known.has(selected) ? [{ value: selected, label: selected }] : []),
     { value: CUSTOM_MODEL, label: 'Other model…' },
   ];

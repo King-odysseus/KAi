@@ -1,12 +1,11 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { Eraser, Play, RotateCcw, Square, X } from 'lucide-react';
+import { ChevronDown, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import type { ProjectRecord, TerminalSession, TerminalShell } from '@kai/contracts';
 import { unwrap } from '../types';
 
-import { Select } from './ui/Select';
 /** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
 export function TerminalView({ activeProject, open, height, onClose, onResizeStart, commandRequest, onAgentSession }: {
   activeProject: ProjectRecord | null;
@@ -35,6 +34,7 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
   const [session, setSession] = useState<TerminalSession | null>(null);
   const [status, setStatus] = useState<'idle' | 'starting' | 'running' | 'exited'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   function writeOutput(id: string, data: string): void {
     if (sessionRef.current?.id === id) {
@@ -207,6 +207,17 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
     void window.kaiDesktop.writeTerminal(id, `${request.command}\r`);
   }, [commandRequest?.nonce, status]);
 
+  /** Starts the person's own shell fresh in the chosen shell, replacing the one that is running. */
+  async function startSessionWith(nextShell: TerminalShell): Promise<void> {
+    const current = userSessionRef.current;
+    if (current) await window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
+    userSessionRef.current = null;
+    sessionRef.current = null;
+    setSession(null);
+    terminalRef.current?.reset();
+    await startSession(nextShell);
+  }
+
   async function restart(): Promise<void> {
     const current = userSessionRef.current;
     if (current) await window.kaiDesktop.stopTerminalCommand(current.id).catch(() => undefined);
@@ -224,44 +235,49 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
     setStatus('exited');
   }
 
+  const shellLabel = (value: string): string => (value === 'powershell' ? 'powershell' : value === 'gitbash' ? 'bash' : value === 'default' ? 'cmd' : value);
+  const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+  const closeMenu = (): void => setMenuOpen(false);
+
+  // A VS Code-style panel: a thin tab strip with three icon buttons, and the terminal itself. The rarely used
+  // actions (stop, clear, which shell) live in the menu so the strip stays quiet.
   return (
     <section className="terminal-dock" style={{ height }} hidden={!open} aria-label="Terminal">
       <div className="terminal-resize" role="separator" aria-orientation="horizontal" aria-label="Resize terminal" onPointerDown={onResizeStart} />
       <header className="terminal-head">
-        <div>
-          <strong>Terminal</strong>
-          <span>{activeProject ? ` · ${activeProject.name}` : ' · open a project to start a shell'} · interactive {session?.shell ?? shell} · {status}</span>
+        <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
+          <span className="terminal-title">Terminal</span>
+          <button type="button" role="tab" aria-selected={session?.id === userSessionRef.current?.id} disabled={!userSessionRef.current} title={activeProject ? `${activeProject.name} · ${status}` : 'Open a project to start a shell'} onClick={() => void showSession(userSessionRef.current)}>
+            {shellLabel(session?.shell ?? shell)}{status === 'exited' ? ' (exited)' : ''}
+          </button>
+          {agentSessions.map((item, index) => (
+            <button key={item.id} type="button" role="tab" aria-selected={session?.id === item.id} title={item.cwd} onClick={() => void showSession(item)}>
+              Agent {index + 1} · {shellLabel(item.shell)}
+            </button>
+          ))}
         </div>
-        {agentSessions.length > 0 && (
-          <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
-            <button type="button" role="tab" className="secondary-button" aria-selected={session?.id === userSessionRef.current?.id} disabled={!userSessionRef.current} onClick={() => void showSession(userSessionRef.current)}>You</button>
-            {agentSessions.map((item, index) => (
-              <button key={item.id} type="button" role="tab" className="secondary-button" aria-selected={session?.id === item.id} title={item.cwd} onClick={() => void showSession(item)}>
-                Agent {index + 1} · {item.shell === 'default' ? 'cmd' : item.shell}
-              </button>
-            ))}
-          </div>
-        )}
         <div className="terminal-head-actions">
-          {session && status === 'running' && <button type="button" className="secondary-button" onClick={() => void stop()}><Square size={12} /><span>Stop</span></button>}
-          <button type="button" className="secondary-button" disabled={!activeProject || status === 'starting'} onClick={() => void restart()}><RotateCcw size={13} /><span>Restart</span></button>
-          <button type="button" className="secondary-button" onClick={() => terminalRef.current?.clear()}><Eraser size={13} /><span>Clear</span></button>
+          <button type="button" className="icon-button compact" aria-label="New terminal" title={status === 'running' ? 'Restart the terminal' : 'Start the terminal'} disabled={!activeProject || status === 'starting'} onClick={() => void restart()}><Plus size={14} /></button>
+          <div className="terminal-menu-wrap">
+            <button type="button" className="icon-button compact" aria-label="Terminal options" aria-haspopup="menu" aria-expanded={menuOpen} title="More terminal actions" onClick={() => setMenuOpen((current) => !current)}><ChevronDown size={14} /></button>
+            {menuOpen && (
+              <div className="terminal-menu" role="menu" onMouseLeave={closeMenu}>
+                {session && status === 'running' && <button type="button" role="menuitem" onClick={() => { closeMenu(); void stop(); }}>Stop</button>}
+                <button type="button" role="menuitem" disabled={!activeProject || status === 'starting'} onClick={() => { closeMenu(); void restart(); }}>Restart</button>
+                <button type="button" role="menuitem" onClick={() => { closeMenu(); terminalRef.current?.clear(); }}>Clear</button>
+                {isWindows && (['default', 'powershell', 'gitbash'] as const).map((choice) => (
+                  <button key={choice} type="button" role="menuitemradio" aria-checked={shell === choice} onClick={() => { closeMenu(); setShell(choice); if (activeProject) void startSessionWith(choice); }}>
+                    {shell === choice ? '✓ ' : ''}{choice === 'default' ? 'Command Prompt' : choice === 'powershell' ? 'PowerShell' : 'Git Bash'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button type="button" className="icon-button compact" aria-label="Close terminal" title="Close (Ctrl+`)" onClick={onClose}><X size={14} /></button>
         </div>
       </header>
       {error && <div className="workbench-error" role="alert">{error}</div>}
       <div className="terminal-xterm" ref={hostRef} />
-      <div className="terminal-input terminal-launch-row">
-        {typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows') && (
-          <Select aria-label="Shell" value={shell} onChange={(event) => setShell(event.target.value as TerminalShell)}>
-            <option value="default">Command Prompt</option>
-            <option value="powershell">PowerShell</option>
-            <option value="gitbash">Git Bash</option>
-          </Select>
-        )}
-        <span>{activeProject ? 'Type directly in the terminal. Prompts, interactive tools, and full-screen programs are supported.' : 'Open a project to start a shell.'}</span>
-        <button type="button" className="primary-button" disabled={!activeProject || status === 'starting' || status === 'running'} onClick={() => void startSession(shell)}><Play size={14} /><span>Start</span></button>
-      </div>
     </section>
   );
 }

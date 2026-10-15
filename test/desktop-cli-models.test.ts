@@ -7,8 +7,12 @@ const base = { prompt: 'Fix the bug', autonomy: 'ask' as const };
 
 describe('CLI model selection', () => {
   it('offers verified model choices without duplicate menu entries', () => {
-    expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(['claude-opus-5']);
-    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(['gpt-6-astra']);
+    // The whole family, so a light task can use a light model: aliases for each size, then the full names.
+    expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku', 'claude-opus-5']));
+    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']);
+    for (const agent of ['claude', 'codex'] as const) {
+      expect(new Set(CLI_MODEL_SUGGESTIONS[agent]).size).toBe(CLI_MODEL_SUGGESTIONS[agent].length);
+    }
     expect(CLI_MODEL_SUGGESTIONS.qwen).toEqual(expect.arrayContaining(['qwen3.8-max', 'qwen3.8-flash', 'qwen3-coder-plus']));
     expect(CLI_MODEL_SUGGESTIONS.gemini).toEqual(expect.arrayContaining(['gemini-3.8-pro', 'gemini-3.8-flash', 'flash']));
 
