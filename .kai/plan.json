@@ -23,7 +23,7 @@
     },
     {
       "text": "Commit and push the verified changes",
-      "state": "active"
+      "state": "done"
     },
     {
       "text": "Run the dependency install (npm install) after the work is done, as asked",
