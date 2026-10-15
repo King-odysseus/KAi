@@ -2,33 +2,29 @@
   "schemaVersion": 1,
   "items": [
     {
-      "text": "Reported buttons in the code area (Open referenced file / Select lines / Run check): find them in source",
+      "text": "Wrapping request: fix the clipped text, sweep every page at four window sizes, verify (browser measurement + all-pages smoke + typecheck)",
       "state": "done"
     },
     {
-      "text": "Reproduce live: run the desktop app end to end and click the three buttons at wide and narrow window sizes",
+      "text": "Re-run the full test suite on the final tree: 1800 passed, 3 skipped, 0 failures",
       "state": "done"
     },
     {
-      "text": "Confirm the code path for each button (handlers, IPC, dialog, file open error handling)",
+      "text": "Run lint: fails on 1357 pre-existing errors in root src/ and test/, none from this session's changes",
       "state": "done"
     },
     {
-      "text": "Verify the tree: full test suite + lint + report the desktop build state",
+      "text": "Run the dependency install (npm install): up to date, 836 packages, exit 0",
       "state": "done"
     },
     {
-      "text": "Run the dependency install (npm install)",
+      "text": "Commit and push the verified changes: main in sync with origin/main (da1d678)",
       "state": "done"
     },
     {
-      "text": "Wrapping work: fix, verify, commit and push (done by the other KAI session; branch in sync with origin/main)",
-      "state": "done"
-    },
-    {
-      "text": "Buttons still reported broken by the person: needs one detail (which button, what happens) before touching button code",
+      "text": "Buttons reported as not working: needs one detail (which button, what happens) before button code is changed",
       "state": "active"
     }
   ],
-  "updatedAt": "2026-10-15T20:23:36.832Z"
+  "updatedAt": "2026-10-15T20:24:23.688Z"
 }
