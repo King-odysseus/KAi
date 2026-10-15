@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "javascript-animation": {
+      "source": "iart-ai/javascript-animation-skills",
+      "sourceType": "github",
+      "skillPath": "skills/javascript-animation/SKILL.md",
+      "computedHash": "a3b24c2d543e2ccc58b5b8e02805c0f79f683f90a05fddac69538dd91f2ec1f7"
+    },
+    "soundtrack": {
+      "source": "iart-ai/javascript-animation-skills",
+      "sourceType": "github",
+      "skillPath": "skills/soundtrack/SKILL.md",
+      "computedHash": "ff02391b5ba6f4b21ce2f4d786785fa6d3e36845f70ded196f5b029838d983ae"
+    }
+  }
+}
