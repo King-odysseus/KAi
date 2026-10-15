@@ -11,6 +11,20 @@ afterEach(async () => {
 });
 
 describe('desktop project tool runtime', () => {
+  it('views local images and rejects unsupported files and paths outside the project', async () => {
+    const root = await fixtureProject();
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUg==', 'base64');
+    await writeFile(path.join(root, 'shot.png'), bytes);
+    await writeFile(path.join(root, 'fake.png'), 'not an image');
+    const tools = new DesktopProjectToolRuntime(root);
+    expect(tools.policy('view_image', 'plan')).toEqual({ decision: 'allow' });
+    await expect(tools.execute('view_image', { path: 'shot.png' })).resolves.toMatchObject({ ok: true, output: { content: [{ type: 'image', mimeType: 'image/png', data: bytes.toString('base64') }] } });
+    await expect(tools.execute('view_image', { path: 'fake.png' })).resolves.toMatchObject({ ok: false });
+    await expect(tools.execute('view_image', { path: '../outside.png' })).resolves.toMatchObject({ ok: false, output: { error: expect.stringContaining('escapes the active project') } });
+    await writeFile(path.join(root, 'large.png'), Buffer.alloc(8 * 1024 * 1024 + 1));
+    await expect(tools.execute('view_image', { path: 'large.png' })).resolves.toMatchObject({ ok: false, output: { error: expect.stringContaining('limit') } });
+  });
+
   it('reads and searches only inside the project root', async () => {
     const root = await fixtureProject();
     await writeFile(path.join(root, 'src', 'main.ts'), 'export const marker = "needle";\n', 'utf8');

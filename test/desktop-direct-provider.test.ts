@@ -29,6 +29,36 @@ afterEach(async () => {
 });
 
 describe('desktop direct provider runtime', () => {
+  it('delivers a viewed local image to the next chat request as pixels, after tool replies', async () => {
+    const data = 'iVBORw0KGgoAAAANSUhEUg==';
+    await writeFile(path.join(isolatedProjectRoot, 'shot.png'), Buffer.from(data, 'base64'));
+    const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push(JSON.parse(raw));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const delta = requests.length === 1
+          ? { tool_calls: [{ index: 0, id: 'view-1', type: 'function', function: { name: 'view_image', arguments: JSON.stringify({ path: 'shot.png' }) } }] }
+          : { content: 'Image inspected.' };
+        response.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: requests.length === 1 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(settingsPort(chatProviderSettings(baseUrl, 'deepseek', 'deepseek-flash')), credentialPort('provider.deepseek', 'test'));
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
+    expect(result).toMatchObject({ status: 'completed', output: 'Image inspected.' });
+    expect(requests).toHaveLength(2);
+    const messages = requests[1]!.messages;
+    const toolIndex = messages.findIndex((message) => message.tool_call_id === 'view-1');
+    expect(toolIndex).toBeGreaterThan(-1);
+    expect(typeof messages[toolIndex]!.content).toBe('string');
+    expect(messages[toolIndex]!.content).not.toContain(data);
+    expect(messages[toolIndex + 1]).toMatchObject({ role: 'user', content: [expect.any(Object), { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } }] });
+  });
+
   it('preserves pending Responses tool results when adding an in-run message', () => {
     const toolResult = { type: 'function_call_output', call_id: 'call-1', output: 'test passed' };
     expect(appendUserInput([toolResult], 'also check lint')).toEqual([
@@ -1142,7 +1172,7 @@ data: {"type":"message_stop"}
         requests.push(body);
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
         const toolNames = (body.tools ?? []).map((tool) => tool.name);
-        const isExploreSubRun = toolNames.length > 0 && toolNames.every((name) => name === 'read_file' || name === 'search_files' || name === 'list_files');
+        const isExploreSubRun = toolNames.length > 0 && toolNames.every((name) => name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files');
         if (requests.length === 1) {
           // The main run's first turn: it hands the question off instead of reading files itself.
           response.end(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_explore', name: 'explore', input: { question: 'How does login work?' } } })}
@@ -1172,8 +1202,8 @@ data: {"type":"message_stop"}
     expect(result.status).toBe('completed');
     expect(result.output).toContain('Done: login uses JWT.');
     expect(requests).toHaveLength(3);
-    // The helper was offered only the three read-only tools, never the full project tool set.
-    expect(requests[1]!.tools).toHaveLength(3);
+    // The helper was offered only the four read-only tools, never the full project tool set.
+    expect(requests[1]!.tools).toHaveLength(4);
     expect(JSON.stringify(requests[1]!.messages)).toContain('How does login work?');
     // Its answer, not its (nonexistent, in this test) intermediate reads, is what reaches the main run.
     expect(JSON.stringify(requests[2]!.messages)).toContain('Login uses JWT in auth.ts.');

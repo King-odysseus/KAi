@@ -13,6 +13,7 @@ import type { AgentExecutionResult } from './agent-runtime';
 import { readPlan } from './plan-store';
 import { steeringInstruction, takeInterjection } from './interjections';
 import {
+  toolOutputImages,
   anthropicImagePart,
   attachedImages,
   geminiImagePart,
@@ -499,7 +500,7 @@ export class DesktopDirectProviderRuntime {
     // tokens are folded into the parent run's totals by the caller, which is where the parent's guard already is.
     const toolRuntime = new DesktopProjectToolRuntime(projectRoot);
     const readOnlyTools = projectToolDefinitions.filter(
-      (definition) => definition.name === 'read_file' || definition.name === 'search_files' || definition.name === 'list_files',
+      (definition) => definition.name === 'view_image' || definition.name === 'read_file' || definition.name === 'search_files' || definition.name === 'list_files',
     );
     const messages: AnthropicMessage[] = [{
       role: 'user',
@@ -1241,7 +1242,17 @@ export class DesktopDirectProviderRuntime {
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           chatToolOutput,
         );
-        messages.push(...toolResults as ChatMessage[]);
+        // Chat APIs generally require text-only tool messages; deliver images in a user message
+        // after all tool replies so parallel tool-call/result ordering stays valid.
+        const visualParts: Array<Record<string, unknown>> = [];
+        for (const result of toolResults as ChatMessage[]) {
+          if (Array.isArray(result.content)) {
+            visualParts.push({ type: 'text', text: `Images from tool call ${result.tool_call_id}:` }, ...result.content.filter((part) => part.type === 'image_url'));
+            result.content = result.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+          }
+          messages.push(result);
+        }
+        if (visualParts.length) messages.push({ role: 'user', content: visualParts });
         segmentRounds += 1;
         if (!forceFinalAnswer && segmentRounds >= segmentLimit) {
           if (toolRounds < totalToolRoundLimit) {
@@ -1756,12 +1767,12 @@ export class DesktopDirectProviderRuntime {
           this.externalTools,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
-          (callId, output) => geminiToolOutput(
+          (callId, output) => [geminiToolOutput(
             toolCalls.find((call) => call.callId === callId)?.name || 'unknown',
             output,
-          ),
+          ), ...toolOutputImages(output).images.map(geminiImagePart)],
         );
-        contents.push({ role: 'user', parts: toolResults as Array<Record<string, unknown>> });
+        contents.push({ role: 'user', parts: toolResults.flat() as Array<Record<string, unknown>> });
       }
     } catch (error) {
       aborted = controller.signal.aborted;
@@ -2426,19 +2437,21 @@ function geminiSchema(schema: Record<string, unknown>): Record<string, unknown> 
   return next;
 }
 
-function anthropicToolOutput(callId: string, output: unknown): Record<string, unknown> {
+export function anthropicToolOutput(callId: string, output: unknown): Record<string, unknown> {
+  const { text, images } = toolOutputImages(output);
   return {
     type: 'tool_result',
     tool_use_id: callId,
-    content: JSON.stringify(output),
+    content: images.length ? [{ type: 'text', text }, ...images.map(anthropicImagePart)] : text,
   };
 }
 
 function geminiToolOutput(name: string, output: unknown): Record<string, unknown> {
+  const clean = JSON.parse(toolOutputImages(output).text);
   return {
     functionResponse: {
       name,
-      response: output && typeof output === 'object' ? output : { output },
+      response: clean && typeof clean === 'object' ? clean : { output: clean },
     },
   };
 }
@@ -2791,11 +2804,12 @@ function chatContentText(value: unknown): string {
     .join('');
 }
 
-function chatToolOutput(callId: string, output: unknown): ChatMessage {
+export function chatToolOutput(callId: string, output: unknown): ChatMessage {
+  const { text, images } = toolOutputImages(output);
   return {
     role: 'tool',
     tool_call_id: callId,
-    content: JSON.stringify(output),
+    content: images.length ? [{ type: 'text', text }, ...images.map(openAiImagePart)] : text,
   };
 }
 
@@ -2816,11 +2830,12 @@ function parseToolArguments(value: string): unknown {
   }
 }
 
-function functionCallOutput(callId: string, output: unknown): Record<string, unknown> {
+export function functionCallOutput(callId: string, output: unknown): Record<string, unknown> {
+  const { text, images } = toolOutputImages(output);
   return {
     type: 'function_call_output',
     call_id: callId,
-    output: JSON.stringify(output),
+    output: images.length ? [{ type: 'input_text', text }, ...images.map((image) => ({ type: 'input_image', image_url: `data:${image.mediaType};base64,${image.base64}` }))] : text,
   };
 }
 

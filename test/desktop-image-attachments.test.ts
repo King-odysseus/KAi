@@ -1,6 +1,8 @@
+import { normalizeToolResult } from '../apps/desktop/src/main/mcp-runtime';
 import { describe, expect, it } from 'vitest';
 import type { AgentRunRequest } from '@kai/contracts';
 import {
+  toolOutputImages,
   anthropicImagePart,
   attachedImages,
   geminiImagePart,
@@ -10,7 +12,7 @@ import {
   parseImageDataUrl,
   withoutImageParts,
 } from '../apps/desktop/src/main/image-attachments';
-import { anthropicMessages, chatMessages } from '../apps/desktop/src/main/direct-provider-runtime';
+import { anthropicToolOutput, chatToolOutput, functionCallOutput, anthropicMessages, chatMessages } from '../apps/desktop/src/main/direct-provider-runtime';
 
 /**
  * The Direct API path had no image channel at all: the composer named the attachment in the prompt, the model asked
@@ -128,5 +130,32 @@ describe('a provider that will not take the image', () => {
   it('never leaves a message with nothing in it, which a provider rejects', () => {
     const stripped = withoutImageParts([{ role: 'user', content: [openAiImagePart({ mediaType: 'image/png', base64: 'AAAA' })] }]);
     expect(stripped[0]!.content).toEqual([{ type: 'text', text: '(the attached image could not be sent)' }]);
+  });
+});
+
+
+describe('tool images reach providers as visual content', () => {
+  const output = { text: 'Screenshot', content: [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }] };
+  it('preserves MCP image bytes without embedding base64 in text', () => {
+    const split = toolOutputImages(normalizeToolResult({ content: [{ type: 'text', text: 'Screenshot' }, ...output.content] }));
+    expect(split.images).toEqual([{ mediaType: 'image/png', base64: 'AAAA' }]);
+    expect(split.text).not.toContain('AAAA');
+    expect(split.text).toContain('Screenshot');
+    expect(anthropicToolOutput('a', output)).toMatchObject({ content: [expect.any(Object), { type: 'image', source: { data: 'AAAA' } }] });
+    expect(chatToolOutput('a', output)).toMatchObject({ content: [expect.any(Object), { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] });
+    expect(functionCallOutput('a', output)).toMatchObject({ output: [expect.any(Object), { type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] });
+  });
+  it('preserves tool IDs when removing rejected nested images', () => {
+    const messages = [{ content: [anthropicToolOutput('a', output)] }];
+    expect(hasImageParts(messages)).toBe(true);
+    const stripped = withoutImageParts(messages);
+    expect(hasImageParts(stripped)).toBe(false);
+    expect(stripped[0]!.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'a' });
+  });
+  it('reports unsupported image content without leaking its bytes into text', () => {
+    const split = toolOutputImages({ content: [{ type: 'image', mimeType: 'image/svg+xml', data: 'AAAA' }] });
+    expect(split.images).toEqual([]);
+    expect(split.text).toContain('Image omitted');
+    expect(split.text).not.toContain('AAAA');
   });
 });

@@ -63,7 +63,7 @@ export function geminiImagePart(image: AttachedImage): Record<string, unknown> {
 
 /** True when this content part is an image in any of the shapes above. */
 export function isImagePart(part: Record<string, unknown>): boolean {
-  return part.type === 'image' || part.type === 'image_url' || part.type === 'input_image' || part.inline_data !== undefined;
+  return (part.type === 'tool_result' && Array.isArray(part.content) && part.content.some((child) => isImagePart(child as Record<string, unknown>))) || part.type === 'image' || part.type === 'image_url' || part.type === 'input_image' || part.inline_data !== undefined;
 }
 
 /** Whether any of these messages carries an image, which is what makes a refusal worth retrying without them. */
@@ -93,8 +93,31 @@ export function isImageRefusal(status: number, detail: string): boolean {
 export function withoutImageParts<T extends { content?: string | Array<Record<string, unknown>> | null }>(messages: readonly T[]): T[] {
   return messages.map((message) => {
     if (!Array.isArray(message.content)) return message;
-    const kept = message.content.filter((part) => !isImagePart(part));
+    const kept = message.content.map((part) => part.type === 'tool_result' && Array.isArray(part.content)
+      ? { ...part, content: withoutImageParts([{ content: part.content as Array<Record<string, unknown>> }])[0]!.content }
+      : part).filter((part) => !isImagePart(part));
     const content = kept.length > 0 ? kept : [{ type: 'text', text: '(the attached image could not be sent)' }];
     return { ...message, content };
   });
+}
+
+/** Separate MCP image blocks from text so base64 is never serialized as prose. */
+export function toolOutputImages(output: unknown): { text: string; images: AttachedImage[] } {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return { text: JSON.stringify(output) ?? 'null', images: [] };
+  const record = output as Record<string, unknown>;
+  if (!Array.isArray(record.content)) return { text: JSON.stringify(output), images: [] };
+  const images: AttachedImage[] = [];
+  const content = record.content.map((block: unknown) => {
+    if (!block || typeof block !== 'object') return block;
+    const part = block as Record<string, unknown>;
+    if (part.type !== 'image') return part;
+    const image = typeof part.mimeType === 'string' && typeof part.data === 'string'
+      ? parseImageDataUrl(`data:${part.mimeType};base64,${part.data}`) : null;
+    if (image && images.length < MAX_IMAGES) {
+      images.push(image);
+      return { type: 'text', text: '[Image supplied as visual input]' };
+    }
+    return { type: 'text', text: '[Image omitted: unsupported format, invalid data, or image limit exceeded]' };
+  });
+  return { text: JSON.stringify({ ...record, content }), images };
 }

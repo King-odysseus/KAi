@@ -355,7 +355,7 @@ function mcpInputSchema(schema: unknown): Record<string, unknown> {
   return { type: 'object', properties: {}, additionalProperties: true };
 }
 
-function normalizeToolResult(result: Record<string, unknown>): unknown {
+export function normalizeToolResult(result: Record<string, unknown>): unknown {
   const parts: string[] = [];
   if (Array.isArray(result.content)) {
     for (const block of result.content) {
@@ -365,10 +365,12 @@ function normalizeToolResult(result: Record<string, unknown>): unknown {
       else if (typeof record.type === 'string') parts.push(`[${record.type} content]`);
     }
   }
+  const images = Array.isArray(result.content) ? result.content.filter((block: unknown) => block && typeof block === 'object' && (block as Record<string, unknown>).type === 'image') : [];
   const structured = result.structuredContent;
   const text = parts.join('\n').slice(0, MAX_MCP_OUTPUT);
   return {
     ...(text ? { text } : {}),
+    ...(images.length ? { content: images } : {}),
     ...(structured && typeof structured === 'object' ? { structuredContent: structured } : {}),
     ...(result.isError === true ? { isError: true } : {}),
   };

@@ -171,6 +171,12 @@ export const projectToolDefinitions = [
   },
   {
     type: 'function',
+    name: 'view_image',
+    description: 'View a local PNG, JPEG, GIF or WebP image inside the active project. Use this to inspect pictures and saved screenshots directly.',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: 'Project-relative image path.' } }, required: ['path'], additionalProperties: false },
+  },
+  {
+    type: 'function',
     name: 'read_file',
     description: 'Read a UTF-8 text file inside the active project. Paths are relative to the project root.',
     parameters: {
@@ -431,7 +437,7 @@ export class DesktopProjectToolRuntime {
   ) {}
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
-    if (name === 'read_file' || name === 'search_files' || name === 'list_files') return { decision: 'allow' };
+    if (name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files') return { decision: 'allow' };
     // The plan is the model's own note about where the task has got to, and KAI reads it to decide whether a task
     // is finished — so it is allowed at every level, plan mode included. It writes `.kai/plan.json` and nothing
     // else: it cannot touch project source. Without this line it fell through to the deny below as an unknown tool,
@@ -484,6 +490,7 @@ export class DesktopProjectToolRuntime {
 
   async execute(name: string, rawInput: unknown, signal?: AbortSignal): Promise<ProjectToolExecution> {
     try {
+      if (name === 'view_image') return await this.viewImage(deleteFileInputSchema.parse(rawInput));
       if (name === 'read_file') return await this.readFile(readFileInputSchema.parse(rawInput));
       if (name === 'search_files') return await this.searchFiles(searchFilesInputSchema.parse(rawInput));
       if (name === 'replace_in_file') return await this.replaceInFile(replaceInFileInputSchema.parse(rawInput));
@@ -528,6 +535,22 @@ export class DesktopProjectToolRuntime {
     };
   }
 
+  private async viewImage(input: { path: string }): Promise<ProjectToolExecution> {
+    const target = await this.resolveInsideProject(input.path, true);
+    const stat = await fs.stat(target);
+    if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
+    const limit = 8 * 1024 * 1024;
+    if (stat.size > limit) throw new Error(`Image exceeds the ${limit} byte limit.`);
+    const bytes = await fs.readFile(target);
+    if (bytes.length > limit) throw new Error(`Image exceeds the ${limit} byte limit.`);
+    const mimeType = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png'
+      : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? 'image/jpeg'
+      : /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString('ascii')) ? 'image/gif'
+      : bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP' ? 'image/webp' : undefined;
+    if (!mimeType) throw new Error('Unsupported image: use PNG, JPEG, GIF or WebP.');
+    return { ok: true, output: { path: normalizeRelative(input.path), content: [{ type: 'image', mimeType, data: bytes.toString('base64') }] } };
+  }
+
   private async readFile(input: z.infer<typeof readFileInputSchema>): Promise<ProjectToolExecution> {
     const target = await this.resolveInsideProject(input.path, true);
     const stat = await fs.stat(target);
@@ -539,7 +562,7 @@ export class DesktopProjectToolRuntime {
     if (looksBinary(content)) {
       // Named for what it is: an agent handed an image used to be told only that the file was not UTF-8 text, so it
       // tried the next thing it could think of — once, a browser — instead of saying it could not see the picture.
-      const image = IMAGE_FILE.test(input.path) ? ` It is an image (${path.extname(input.path).slice(1).toLowerCase()}), and this tool reads text: images travel with the run as attachments, not through here.` : '';
+      const image = IMAGE_FILE.test(input.path) ? ` It is an image (${path.extname(input.path).slice(1).toLowerCase()}), and this tool reads text: use view_image to inspect it.` : '';
       throw new Error(`${input.path} does not appear to be a UTF-8 text file.${image}`);
     }
     const lines = content.split(/\r?\n/);
