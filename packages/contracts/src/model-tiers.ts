@@ -39,7 +39,7 @@ export type AutoModelSettings = z.infer<typeof autoModelSettingsSchema>;
  */
 export const DEFAULT_MODEL_TIERS: Readonly<Record<AgentId, ModelTier>> = {
   claude: { light: 'haiku', standard: 'sonnet', heavy: 'opus' },
-  codex: { light: 'gpt-6-luna', standard: 'gpt-6-sol', heavy: 'gpt-6-astra' },
+  codex: { light: 'gpt-5.6-luna', standard: 'gpt-5.6-sol', heavy: 'gpt-6-astra' },
   gemini: { light: 'flash', standard: 'pro', heavy: 'pro' },
   qwen: { light: 'qwen3-coder-flash', standard: 'qwen3-coder-plus', heavy: 'qwen3.8-max' },
   kimi: {},

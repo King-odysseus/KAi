@@ -9,7 +9,7 @@ describe('CLI model selection', () => {
   it('offers verified model choices without duplicate menu entries', () => {
     // The whole family, so a light task can use a light model: aliases for each size, then the full names.
     expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku', 'claude-opus-5']));
-    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']);
+    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna']);
     for (const agent of ['claude', 'codex'] as const) {
       expect(new Set(CLI_MODEL_SUGGESTIONS[agent]).size).toBe(CLI_MODEL_SUGGESTIONS[agent].length);
     }

@@ -2409,8 +2409,8 @@ const MODEL_LABELS: Record<string, string> = {
   sonnet: 'Sonnet (balanced)',
   haiku: 'Haiku (fastest)',
   'gpt-6-astra': 'GPT-6 Astra (strongest)',
-  'gpt-6-sol': 'GPT-6 Sol (balanced)',
-  'gpt-6-luna': 'GPT-6 Luna (fastest)',
+  'gpt-5.6-sol': 'GPT-5.6 Sol (balanced)',
+  'gpt-5.6-luna': 'GPT-5.6 Luna (fastest)',
 };
 
 function positiveLine(value: string): string | null {

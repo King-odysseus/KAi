@@ -155,6 +155,10 @@ function loadComposerDrafts(): Record<string, string> {
  */
 function modelFor(agent: AgentId, execution: ExecutionMode, model: string | undefined): string {
   if (!model) return '';
+  if (execution === 'cli' && agent === 'codex') {
+    if (model === 'gpt-6-sol') return 'gpt-5.6-sol';
+    if (model === 'gpt-6-luna') return 'gpt-5.6-luna';
+  }
   return execution === 'cli' && modelBelongsToOtherAgent(agent, model) ? '' : model;
 }
 

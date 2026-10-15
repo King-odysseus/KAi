@@ -37,6 +37,24 @@ describe('portable desktop runtime', () => {
     await expect(service.load()).resolves.toEqual(settings);
   });
 
+  it('migrates unavailable Codex model IDs in saved defaults and persists the supported replacements', async () => {
+    const directory = await temporaryDirectory();
+    const file = path.join(directory, 'settings.json');
+    const service = new SettingsService(file, new NodeFileSystem());
+    const settings = createDefaultSettings();
+    settings.agentModels.codex = 'gpt-6-luna';
+    settings.autoModel.tiers.codex = { light: 'gpt-6-luna', standard: 'gpt-6-sol', heavy: 'gpt-6-astra' };
+    await service.save(settings);
+
+    const loaded = await service.load();
+    expect(loaded.agentModels.codex).toBe('gpt-5.6-luna');
+    expect(loaded.autoModel.tiers.codex).toEqual({ light: 'gpt-5.6-luna', standard: 'gpt-5.6-sol', heavy: 'gpt-6-astra' });
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toMatchObject({
+      agentModels: { codex: 'gpt-5.6-luna' },
+      autoModel: { tiers: { codex: { light: 'gpt-5.6-luna', standard: 'gpt-5.6-sol' } } },
+    });
+  });
+
   it('persists conversation records with atomic replacements', async () => {
     const directory = await temporaryDirectory();
     const store = new ConversationStore(path.join(directory, 'conversations'));

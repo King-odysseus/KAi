@@ -13,7 +13,7 @@ import { TEXT_SCALE_MAX, TEXT_SCALE_MIN, clampScale } from '../apps/desktop/src/
 describe('models and thinking effort per agent', () => {
   it('offers the lighter Claude and Codex models, not just the strongest', () => {
     expect(CLI_MODEL_SUGGESTIONS.claude).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku']));
-    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(expect.arrayContaining(['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']));
+    expect(CLI_MODEL_SUGGESTIONS.codex).toEqual(expect.arrayContaining(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna']));
   });
 
   it('recognises a model that belongs to a different agent, and leaves typed ones alone', () => {
@@ -39,8 +39,8 @@ describe('models and thinking effort per agent', () => {
     expect(buildAgentArgs({ ...base, agent: 'claude', reasoning: 'low' }, 'C:/repo', undefined, undefined, 'haiku')).toEqual(
       expect.arrayContaining(['--model', 'haiku', '--effort', 'low']),
     );
-    const codex = buildAgentArgs({ ...base, agent: 'codex', reasoning: 'high' }, 'C:/repo', undefined, undefined, 'gpt-6-luna');
-    expect(codex).toEqual(expect.arrayContaining(['--model', 'gpt-6-luna', '-c', 'model_reasoning_effort="high"']));
+    const codex = buildAgentArgs({ ...base, agent: 'codex', reasoning: 'high' }, 'C:/repo', undefined, undefined, 'gpt-5.6-luna');
+    expect(codex).toEqual(expect.arrayContaining(['--model', 'gpt-5.6-luna', '-c', 'model_reasoning_effort="high"']));
     // Codex stops reading its own options at the trailing "-", so the override must come before it.
     expect(codex.indexOf('model_reasoning_effort="high"')).toBeLessThan(codex.lastIndexOf('-'));
   });

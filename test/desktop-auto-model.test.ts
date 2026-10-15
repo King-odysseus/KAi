@@ -84,7 +84,7 @@ describe('autoCliModel', () => {
   });
 
   it('trusts a level the caller already judged', () => {
-    expect(autoCliModel({ agent: 'codex', route: 'direct', prompt: 'x'.repeat(5_000), effort: 'light' }, settings)?.model).toBe('gpt-6-luna');
+    expect(autoCliModel({ agent: 'codex', route: 'direct', prompt: 'x'.repeat(5_000), effort: 'light' }, settings)?.model).toBe('gpt-5.6-luna');
   });
 
   it('leaves proxy runs, disabled settings and agents without tiers alone', () => {
