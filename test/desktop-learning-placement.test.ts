@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findAnchor, placeSuggestion, suggestionTarget } from '../apps/desktop/src/renderer/src/learning-placement';
+import { findAnchor, placeSuggestion, responseReferenceTarget, suggestionTarget } from '../apps/desktop/src/renderer/src/learning-placement';
 
 /** Applies an edit to plain lines the way the editor would, so the tests read as before-and-after files. */
 function apply(lines: string[], result: ReturnType<typeof placeSuggestion>): string {
@@ -34,6 +34,23 @@ describe('the file a tutor suggestion is meant for', () => {
     expect(suggestionTarget([instructions], [{ filePath: 'accounts/middleware.py' }])).toEqual({ filePath: 'config/settings.py' });
     expect(suggestionTarget(['Add it after the import.'], [{ filePath: 'src/app.ts', startLine: 3 }])).toEqual({ filePath: 'src/app.ts', startLine: 3 });
     expect(suggestionTarget(['Add it after the import.'], [])).toBeNull();
+  });
+});
+
+describe('the tutor reference for its next action', () => {
+  it('opens the file named in the next step instead of an unrelated first citation', () => {
+    expect(responseReferenceTarget(
+      ['Open accounts/middleware.py and read line 11, then check config/settings.py.'],
+      [{ filePath: 'docs/STATUS.md', startLine: 28, endLine: 30 }],
+      ['docs/STATUS.md', 'accounts/middleware.py', 'config/settings.py'],
+    )).toEqual({ filePath: 'accounts/middleware.py' });
+  });
+
+  it('uses line citations only for the chosen file and refuses missing or ambiguous paths', () => {
+    const notes = [{ filePath: 'src/app.ts', startLine: 3, endLine: 5 }];
+    expect(responseReferenceTarget(['Open src/app.ts.'], notes, ['src/app.ts'])).toEqual({ filePath: 'src/app.ts', startLine: 3, endLine: 5 });
+    expect(responseReferenceTarget(['Open src/missing.ts.'], notes, ['src/app.ts'])).toBeNull();
+    expect(responseReferenceTarget(['Open app.ts.'], notes, ['src/app.ts', 'test/app.ts'])).toBeNull();
   });
 });
 

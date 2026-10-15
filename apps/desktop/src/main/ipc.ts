@@ -3692,6 +3692,10 @@ async function generateCompactionSummary(
   const agent = conversation.activeAgent ?? settings.defaultAgent;
   const execution = conversation.execution ?? 'cli';
   const route = conversation.route ?? 'direct';
+  // Compaction is an agent invocation too. It used to bypass the standing rules because it
+  // called the provider directly, leaving this maintenance path outside the 57-rule contract.
+  const authoritativeRules = await context.executionRules.read();
+  const rulesBriefing = buildExecutionRulesBriefing(authoritativeRules);
   const request: AgentRunRequest = {
     conversationId: `compact_${crypto.randomUUID()}`,
     prompt: compactionPrompt(transcript),
@@ -3700,15 +3704,16 @@ async function generateCompactionSummary(
     route,
     autonomy: 'plan',
   };
+  const ruledRequest = applyExecutionRulesToRequest(request, rulesBriefing);
 
   try {
     if (execution === 'api' && (await context.directApi.capability()).available) {
-      const result = await context.directApi.run(request, projectPath);
+      const result = await context.directApi.run(ruledRequest, projectPath);
       if (result.status === 'completed' && result.output.trim()) {
         return limitText(result.output.trim(), MAX_COMPACTION_SUMMARY_CHARS, 'summary');
       }
     } else if (execution === 'cli') {
-      const result = await context.agents.run(request, projectPath);
+      const result = await context.agents.run(ruledRequest, projectPath);
       if (result.status === 'completed' && result.output.trim()) {
         return limitText(result.output.trim(), MAX_COMPACTION_SUMMARY_CHARS, 'summary');
       }

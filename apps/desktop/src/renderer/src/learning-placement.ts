@@ -38,6 +38,37 @@ export function suggestionTarget(
   return cited[0] ?? null;
 }
 
+/** A tutor reference for the next action, constrained to paths that exist in the active project. */
+export function responseReferenceTarget(
+  instructions: readonly string[],
+  sourceNotes: ReadonlyArray<{ filePath?: string; startLine?: number; endLine?: number }>,
+  projectFiles: readonly string[],
+): SuggestionTarget | null {
+  const normalise = (value: string): string => value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  const files = projectFiles.map((filePath) => ({ filePath, key: normalise(filePath) }));
+  let namedAFile = false;
+  for (const text of instructions) {
+    for (const mention of text.replace(/\\/g, '/').match(FILE_MENTION) ?? []) {
+      namedAFile = true;
+      const key = normalise(mention);
+      const matches = files.filter((file) => file.key === key || (key.includes('/') && file.key.endsWith(`/${key}`)));
+      if (matches.length !== 1) continue;
+      const filePath = matches[0]!.filePath;
+      const citations = sourceNotes.filter((note) => note.filePath && normalise(note.filePath) === normalise(filePath));
+      const citation = citations.length === 1 ? citations[0] : undefined;
+      return {
+        filePath,
+        ...(citation?.startLine ? { startLine: citation.startLine } : {}),
+        ...(citation?.endLine ? { endLine: citation.endLine } : {}),
+      };
+    }
+  }
+  if (namedAFile) return null;
+  const first = sourceNotes.find((note) => note.filePath && files.some((file) => file.key === normalise(note.filePath!)));
+  return first?.filePath ? { filePath: files.find((file) => file.key === normalise(first.filePath!))!.filePath,
+    ...(first.startLine ? { startLine: first.startLine } : {}), ...(first.endLine ? { endLine: first.endLine } : {}) } : null;
+}
+
 const leadingSpace =(line: string): string => /^[ \t]*/.exec(line)?.[0] ?? '';
 
 /**

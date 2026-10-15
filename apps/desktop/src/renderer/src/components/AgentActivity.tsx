@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, FileCode2, Loader2, Pause, Search, Terminal, Wrench } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { AlertTriangle, CheckCircle2, ChevronDown, FileCode2, Loader2, Pause, Search, Terminal, Wrench } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { relativeTime } from '../types';
 
@@ -90,15 +90,19 @@ export function AgentActivityStrip({ events, running, paused, awaitingApproval, 
   tokenEstimate?: number;
 }): ReactNode {
   const activity = deriveAgentActivity(events, running, paused, awaitingApproval);
+  const [expanded, setExpanded] = useState(false);
   if (!running && !paused && !awaitingApproval && !['waiting', 'blocked'].includes(activity.kind)) return null;
   return (
-    <section className={`agent-activity ${activity.kind}`} aria-live="polite" aria-label="Agent activity">
-      <span className="agent-activity-icon">{activityIcon(activity.kind)}</span>
-      <div className="agent-activity-copy">
-        <div><strong>{activity.label}</strong>{activity.lastAt && <small>Last action {relativeTime(activity.lastAt)}</small>}</div>
-        <span>{activity.detail}</span>
-        {activity.lastAction && <small className="agent-activity-last" title={activity.lastAction}>Last: {activity.lastAction}</small>}
-      </div>
+    <section className={`agent-activity ${activity.kind}${expanded ? ' is-expanded' : ''}`} aria-live="polite" aria-label="Agent activity">
+      <button type="button" className="agent-activity-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} title={expanded ? 'Hide activity details' : 'Show full activity details'}>
+        <span className="agent-activity-icon">{activityIcon(activity.kind)}</span>
+        <span className="agent-activity-copy">
+          <span className="agent-activity-heading"><strong>{activity.label}</strong>{activity.lastAt && <small>Last action {relativeTime(activity.lastAt)}</small>}</span>
+          <span className="agent-activity-detail">{activity.detail}</span>
+        </span>
+        <ChevronDown className="agent-activity-chevron" size={13} />
+      </button>
+      {expanded && <div className="agent-activity-expanded"><p>{activity.detail}</p>{activity.lastAction && <p><strong>Last action:</strong> {activity.lastAction}</p>}</div>}
       {(running || paused || awaitingApproval) && (() => {
         const agents = activeAgentCount(events);
         return (

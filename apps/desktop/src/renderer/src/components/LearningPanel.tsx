@@ -46,7 +46,7 @@ import type {
   TeachingLibraryEntryInput,
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
-import { suggestionTarget } from '../learning-placement';
+import { responseReferenceTarget, suggestionTarget } from '../learning-placement';
 import { projectLessons } from './learning-path';
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
 
@@ -189,7 +189,7 @@ export function LearningPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const lessons = useMemo(() => projectLessons(projectFiles, progress), [projectFiles, progress]);
   const responseUnderstood = progress?.lessons?.find((lesson) => lesson.id === responseLessonId)?.understood ?? false;
-  const reference = result?.response.sourceNotes.find((source) => source.filePath);
+  const reference = result ? responseReferenceTarget([result.response.steps[0]?.explanation ?? ''], result.response.sourceNotes, projectFiles) : null;
   const runCheck = async (): Promise<void> => {
     setChecking(true);
     try { setCheckOutput(await onRunCheck()); }
@@ -395,8 +395,8 @@ export function LearningPanel({
         )}
         {response && tab === 'tutor' && <div className="learning-response-actions">
           {reference?.filePath && <>
-            <button type="button" onClick={() => onReference(reference.filePath!)}>Open referenced file</button>
-            {reference.startLine && <button type="button" onClick={() => onReference(reference.filePath!, reference.startLine, reference.endLine)}>Select lines</button>}
+            <button type="button" onClick={() => onReference(reference.filePath)}>Open {reference.filePath}</button>
+            {reference.startLine && <button type="button" onClick={() => onReference(reference.filePath, reference.startLine, reference.endLine)}>Select lines {reference.startLine}{reference.endLine && reference.endLine !== reference.startLine ? `-${reference.endLine}` : ''}</button>}
           </>}
           <button type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</button>
           {referenceNotice && <span className="learning-reference-notice" role="status">{referenceNotice}</span>}

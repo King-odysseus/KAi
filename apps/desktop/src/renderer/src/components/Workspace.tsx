@@ -1634,7 +1634,7 @@ export function WorkspaceView({
                 </button>
                 {showRunDetails && (
                   <div className="run-details-list">
-                    {runDetails.map((event) => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={false} runActive={runActive} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />)}
+                    {renderInlineEvents(runDetails)}
                   </div>
                 )}
               </section>
@@ -2308,8 +2308,9 @@ function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, runAc
 
 function isRunDetailEvent(event: PersistedEvent): boolean {
   if (event.type === 'turn.changes') return event.files.length === 0;
-  // An edit or a command renders in the conversation, so the Activity list would only repeat it.
-  if (event.type === 'tool.call') return !isPreviewableTool(event.name);
+  // Edits stay inline where they happened; executable commands live in Activity so the transcript
+  // stays compact and the full command is available inside its larger disclosure.
+  if (event.type === 'tool.call') return isExecutableCommandTool(event.name) || !isPreviewableTool(event.name);
   return event.type === 'diff.proposal'
     || event.type === 'file.edit.applied'
     || event.type === 'file.change'
