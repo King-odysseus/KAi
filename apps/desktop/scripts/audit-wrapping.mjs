@@ -61,6 +61,11 @@ async function resize(width, height) {
   await page.waitForTimeout(600);
 }
 
+/** Clicks a control the layout shows. A control that is not there is not the subject here, and a 30s wait for it is a 30s wait. */
+async function clickIfPresent(name, role = 'button') {
+  return page.getByRole(role, { name, exact: true }).click({ timeout: 3_000 }).then(() => true).catch(() => false);
+}
+
 /** Records everything the page is hiding behind an edge, tagged with where it was found. */
 async function audit(where) {
   const offenders = await findClippedText(page, { includeTruncated: true });
@@ -91,27 +96,28 @@ try {
     }
     // The workspace with both side panels open holds the densest text on the page.
     await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
-    await page.getByRole('button', { name: 'Show threads panel' }).click().catch(() => undefined);
-    await page.getByRole('button', { name: 'Show context panel' }).click().catch(() => undefined);
+    await clickIfPresent('Show threads panel');
+    await clickIfPresent('Show context panel');
     await page.waitForTimeout(500);
     await audit(`Workspace-panels-${width}x${height}`);
-    await page.getByRole('button', { name: 'Hide threads panel' }).click().catch(() => undefined);
-    await page.getByRole('button', { name: 'Hide context panel' }).click().catch(() => undefined);
+    await clickIfPresent('Hide threads panel');
+    await clickIfPresent('Hide context panel');
     // The Learn & Code page carries the tutor column and its own tabs, the densest prose in the app.
     await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
-    await page.getByRole('button', { name: 'Show learning tutor' }).click().catch(() => undefined);
+    const tutorOpen = await clickIfPresent('Show learning tutor');
+    if (!tutorOpen) console.log(`  (no learning panel toggle at ${width}x${height})`);
     await page.waitForTimeout(500);
     for (const tab of ['Learn', 'Review', 'Senior dev']) {
-      await page.getByRole('button', { name: tab, exact: true }).click().catch(() => undefined);
+      await clickIfPresent(tab);
       await page.waitForTimeout(400);
       await audit(`LearnCode-${tab}-${width}x${height}`);
     }
     for (const tab of ['Tutor', 'History', 'Progress', 'Teaching', 'Git']) {
-      await page.getByRole('tab', { name: tab, exact: true }).click().catch(() => undefined);
+      await clickIfPresent(tab, 'tab');
       await page.waitForTimeout(400);
       await audit(`LearnCode-Learn-${tab}-${width}x${height}`);
     }
-    await page.getByRole('button', { name: 'Hide learning tutor' }).click().catch(() => undefined);
+    await clickIfPresent('Hide learning tutor');
   }
 } finally {
   await application.close().catch(() => undefined);
