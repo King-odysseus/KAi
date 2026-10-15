@@ -1067,6 +1067,18 @@
   white-space: nowrap;
 }
 
+/*
+ * A path under a selection is one piece of data, so it stays on one line. The hint under the prompt is prose and
+ * takes a second line instead: at panel width its tail was the part that got cut, which is the part that says how
+ * to send the question.
+ */
+.learning-composer footer > span {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .learning-selection-meta small {
   flex: 0 0 auto;
   color: var(--mint-strong);
@@ -1764,7 +1776,8 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 
   .code-pane-resize.learning { display: none; }
 
-  .learning-panel {
+  /* Keep the whole assistance column, including its tabs, inside the editor viewport on compact windows. */
+  .code-side-panel {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 20;
@@ -1786,7 +1799,7 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
     display: none;
   }
 
-  .learning-panel {
+  .code-side-panel {
     width: 100%;
   }
 }
@@ -2773,7 +2786,7 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-inline-toggle { margin: 0; }
 
 .learning-history { display: flex; flex-direction: column; gap: 8px; }
-.learning-history button { display: flex; flex-direction: column; gap: 5px; text-align: left; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-input); color: var(--text); overflow-wrap: anywhere; cursor: pointer; }
+.learning-history button { display: flex; min-width: 0; max-width: 100%; flex-direction: column; gap: 5px; text-align: left; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-input); color: var(--text); overflow-wrap: anywhere; white-space: normal; cursor: pointer; }
 .learning-history small, .learning-history p { color: var(--text-dim); }
 .learning-tabs { overflow-x: auto; flex-shrink: 0; }
 

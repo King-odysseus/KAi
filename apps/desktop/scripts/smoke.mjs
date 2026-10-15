@@ -9,7 +9,7 @@ import { _electron as electron } from '@playwright/test';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { assertControlsDoNotWrap } from './layout-checks.mjs';
+import { assertControlsDoNotWrap, assertTextIsNotClipped } from './layout-checks.mjs';
 import { chooseOption, optionLabels, selectedValue, waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -522,6 +522,7 @@ async function verifyControlsOnEveryPage(page, size) {
     await page.getByRole('button', { name: label, exact: true }).click();
     await page.waitForTimeout(400);
     await assertControlsDoNotWrap(page, `${label} at ${size}`);
+    await assertTextIsNotClipped(page, `${label} at ${size}`);
   }
   await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
 }
