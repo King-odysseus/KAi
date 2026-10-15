@@ -198,7 +198,7 @@ button:disabled {
 }
 
 .titlebar-more { position: relative; display: flex; }
-.titlebar-more-popover { left: auto; right: 8px; width: min(320px, calc(100vw - 16px)); box-sizing: border-box; }
+.titlebar-more-popover { position: fixed; top: 42px; left: auto; right: 8px; width: min(320px, calc(100vw - 16px)); max-width: calc(100vw - 16px); box-sizing: border-box; }
 .titlebar-more-popover .truncate { overflow: visible; text-overflow: clip; white-space: nowrap; }
 .titlebar-more-hint { margin-left: auto; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
 
