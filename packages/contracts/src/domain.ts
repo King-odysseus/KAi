@@ -500,7 +500,7 @@ export function createDefaultSettings(): AppSettings {
     defaultAutonomy: 'ask',
     // A fresh install starts with the most guidance and the safest access; Settings changes it any time.
     experienceLevel: 'beginner',
-    theme: 'dark',
+    theme: 'code',
     activeProjectId: null,
     projectOrder: [],
     windowBounds: null,

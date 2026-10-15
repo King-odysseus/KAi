@@ -134,6 +134,12 @@ export function loadMonaco(): Promise<typeof Monaco> {
       rules: [],
       colors: { 'editor.background': '#091625', 'editorGutter.background': '#091625' },
     });
+    monaco.editor.defineTheme('kai-code', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [],
+      colors: { 'editor.background': '#1f1f1f', 'editorGutter.background': '#1f1f1f', 'editor.lineHighlightBackground': '#2a2d2e' },
+    });
     monaco.editor.defineTheme('kai-navy', {
       base: 'vs-dark',
       inherit: true,
@@ -245,4 +251,4 @@ export function monacoThemeName(theme = document.documentElement.dataset.theme ?
  * rather than to nothing: `kai-dark` for a dark theme, `kai-light` for a light one, which is the half that must not
  * be wrong — a light app with a dark editor was the failure that started this list.
  */
-const THEME_IDS_WITH_MONACO = new Set(['dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
+const THEME_IDS_WITH_MONACO = new Set(['code', 'dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);

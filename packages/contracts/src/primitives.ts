@@ -4,7 +4,7 @@ export const schemaVersionSchema = z.literal(1);
 export const agentIdSchema = z.enum(['claude', 'codex', 'qwen', 'gemini', 'kimi']);
 export const executionModeSchema = z.enum(['cli', 'api']);
 export const themeModeSchema = z.enum([
-  'dark', 'navy', 'purple', 'forest',
+  'code', 'dark', 'navy', 'purple', 'forest',
   'light', 'sky', 'meadow', 'sand',
 ]);
 
@@ -21,6 +21,7 @@ export type ThemeFamily = 'dark' | 'light';
  * kept in step with this one.
  */
 export const THEME_MODES: ReadonlyArray<{ id: z.infer<typeof themeModeSchema>; label: string; family: ThemeFamily }> = [
+  { id: 'code', label: 'Editor — neutral', family: 'dark' },
   { id: 'dark', label: 'Dark', family: 'dark' },
   { id: 'navy', label: 'Navy — blue', family: 'dark' },
   { id: 'purple', label: 'Purple — violet', family: 'dark' },

@@ -22,6 +22,14 @@ const output = path.join(rendererSource, 'themes.generated.css');
 
 // hue in degrees; satScale multiplies saturation of the base navy neutrals; lift raises dark lightness.
 const themes = {
+  // Editor: no tint at all. A saturation scale of zero turns every blue-grey neutral into a plain grey, and the base
+  // accent becomes the one blue.
+  code: {
+    neutral: { hue: 0, satScale: 0, lift: 0.012 },
+    accent: { hue: 207, sat: 1, light: 0.6 },
+    lavender: { hue: 280, sat: 0.5 },
+    amber: null,
+  },
   purple: {
     neutral: { hue: 243, satScale: 0.62, lift: 0.028 },
     accent: { hue: 49, sat: 1, light: 0.49 },

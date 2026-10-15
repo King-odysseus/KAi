@@ -440,6 +440,8 @@ export function WorkspaceView({
   const [stuckNotice, setStuckNotice] = useState<string | null>(null);
   /** Set while Auto is being asked to start, so the composer's send cannot be pressed twice into it. */
   const [startingAuto, setStartingAuto] = useState(false);
+  /** Set by the one-click access fix below: send as soon as the new access level has reached this component. */
+  const [sendWhenAccessReady, setSendWhenAccessReady] = useState(false);
   const [refiningPrompt, setRefiningPrompt] = useState(false);
   const [interjecting, setInterjecting] = useState(false);
   const [promptGuideReadiness, setPromptGuideReadiness] = useState<PromptGuideReadiness | null>(null);
@@ -764,6 +766,14 @@ export function WorkspaceView({
     clearComposerContext();
     setSelectedSkills([]);
   };
+
+  useEffect(() => {
+    if (!sendWhenAccessReady || !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) return;
+    setSendWhenAccessReady(false);
+    send();
+    // send reads the latest props on every render; this runs once the new access level has arrived.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendWhenAccessReady, selectedAutonomy]);
 
   /**
    * Starts Auto on the task in the composer, under the composer's own choices — agent, mode, route, autonomy and
@@ -1930,7 +1940,10 @@ export function WorkspaceView({
           </div>
         </div>
         {taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
-          <p className="composer-task-guidance" role="note">Auto needs Edit files or Full access. Choose one in Access before sending.</p>
+          <p className="composer-task-guidance" role="note">
+            <span>Auto works on its own, so it needs Edit files or Full access, and Access is lower than that.</span>{' '}
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => { onSelectAutonomy('autoEdit'); if (prompt.trim()) setSendWhenAccessReady(true); }}>{prompt.trim() ? 'Use Edit files and send' : 'Use Edit files'}</button>
+          </p>
         )}
         {taskIntent === 'build' && selectedAutonomy === 'plan' && (
           <p className="composer-task-guidance" role="note">With Plan only access, KAI can plan this build but cannot edit files.</p>

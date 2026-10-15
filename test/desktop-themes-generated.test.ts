@@ -36,8 +36,8 @@ describe('generated theme stylesheet', () => {
 });
 
 describe('the list of themes', () => {
-  it('offers four dark themes and four light ones', () => {
-    expect(THEME_MODES.filter((theme) => theme.family === 'dark')).toHaveLength(4);
+  it('offers five dark themes (the neutral Editor one among them) and four light ones', () => {
+    expect(THEME_MODES.filter((theme) => theme.family === 'dark')).toHaveLength(5);
     expect(THEME_MODES.filter((theme) => theme.family === 'light')).toHaveLength(4);
   });
 

@@ -83,8 +83,8 @@ describe('themes', () => {
   it('offers the dark themes and then the light ones, and keeps the cycle order stable', () => {
     // The order is what the title-bar button cycles through and what the picker lists, so it is pinned rather than
     // derived: dark themes first, light ones after, each group in the order they were added.
-    expect(themeModeSchema.options).toEqual(['dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
-    expect(THEME_MODES.map((theme) => theme.id)).toEqual(['dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
+    expect(themeModeSchema.options).toEqual(['code', 'dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
+    expect(THEME_MODES.map((theme) => theme.id)).toEqual(['code', 'dark', 'navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand']);
     // Every group of dark themes comes before every light one, which is what makes the picker readable.
     const families = THEME_MODES.map((theme) => theme.family);
     expect(families.indexOf('light')).toBe(families.lastIndexOf('dark') + 1);

@@ -3,6 +3,37 @@
  * hard-code colours are re-mapped by themes.generated.css (see scripts/generate-themes.mjs).
  */
 
+/*
+ * Editor: the neutral one. Greys with no tint, one blue accent, and colour left to mean something (amber waiting, red
+ * needs you). It follows VS Code's Dark Modern, which is the palette the layout is drawn to match: when every surface
+ * is the same grey, a panel, a card and a button read as one family instead of three coloured boxes.
+ */
+:root[data-theme="code"] {
+  color-scheme: dark;
+  color: #cccccc;
+  background: #181818;
+  --bg-deep: #181818;
+  --bg-shell: #181818;
+  --bg-panel: #1f1f1f;
+  --bg-raised: #252526;
+  --bg-inset: #161616;
+  --bg-input: #2a2a2a;
+  --bg-subtle: #1c1c1c;
+  --bg-hover: #2a2d2e;
+  --border: #3c3c3c;
+  --border-soft: #2b2b2b;
+  --text: #cccccc;
+  --text-muted: #9d9d9d;
+  --text-dim: #787878;
+  --mint: #4da3f5;
+  --mint-strong: #0078d4;
+  --mint-soft: rgba(0, 120, 212, 0.18);
+  --lavender: #b180d7;
+  --lavender-soft: rgba(177, 128, 215, 0.15);
+  --amber: #cca700;
+  --red: #f85149;
+}
+
 /* Purple: follows the "Shades of Purple (Super Dark)" palette used in VS Code. */
 :root[data-theme="purple"] {
   color-scheme: dark;

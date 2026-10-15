@@ -604,7 +604,7 @@ async function verifyThemes(page) {
   // control whose text wraps — is exactly what a new palette is most likely to break, so a theme left out of this
   // list is a theme nobody looks at. Synchronize on state rather than assuming a click landed before the previous
   // settings write completed.
-  const order = ['navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand', 'dark'];
+  const order = ['navy', 'purple', 'forest', 'light', 'sky', 'meadow', 'sand', 'dark', 'code'];
   for (const theme of order) {
     await setTheme(page, theme);
     for (const [button, heading] of [['Control: Usage', 'Usage'], ['Learn: Learn & Code', null], ['Work: Workspace', null], ['Control: Settings', 'Settings']]) {
