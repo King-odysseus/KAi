@@ -26,6 +26,8 @@ export interface RunNote {
   outcome: 'completed' | 'failed';
   files: string[];
   checks: 'passed' | 'failed' | 'none';
+  /** A short account from the finished agent run; file paths above remain the evidence to verify it against. */
+  summary?: string;
 }
 
 export interface ProjectKnowledge {
@@ -100,7 +102,7 @@ function oneLine(text: string, limit: number): string {
  */
 export function renderKnowledge(
   knowledge: ProjectKnowledge,
-  extras: { folders?: readonly string[]; scripts?: readonly string[]; now?: number; maxCharacters?: number } = {},
+  extras: { folders?: readonly string[]; scripts?: readonly string[]; now?: number; maxCharacters?: number; query?: string } = {},
 ): string {
   const now = extras.now ?? Date.now();
   const sections: string[] = [];
@@ -116,10 +118,24 @@ export function renderKnowledge(
     .map(([file, change]) => `${file} (${change.count}×)`);
   if (hot.length) sections.push(`Files being worked on lately: ${hot.join(', ')}.`);
 
-  const runs = knowledge.runs.slice(-5).reverse().map((run) => {
+  const recentRuns = knowledge.runs.slice(-5).reverse();
+  const queryTerms = new Set((extras.query?.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []));
+  const relevance = (run: RunNote): number => {
+    if (queryTerms.size === 0) return 0;
+    const searchable = `${run.task} ${run.summary ?? ''} ${run.files.join(' ')}`.toLowerCase();
+    let matches = 0;
+    for (const term of queryTerms) if (searchable.includes(term)) matches += 1;
+    return matches / queryTerms.size;
+  };
+  const runs = [...recentRuns]
+    .map((run, index) => ({ run, index, score: relevance(run) }))
+    .sort((left, right) => right.score - left.score || right.index - left.index)
+    .slice(0, 5)
+    .map(({ run }) => {
     const files = run.files.slice(0, 4).join(', ') + (run.files.length > 4 ? ` and ${run.files.length - 4} more` : '');
     const checks = run.checks === 'none' ? '' : `, checks ${run.checks}`;
-    return `- ${run.at.slice(0, 10)} ${run.outcome === 'completed' ? 'done' : 'did not finish'}: "${oneLine(run.task, 110)}" touched ${files || 'no files'}${checks}`;
+    const summary = run.summary ? ` — ${oneLine(run.summary, 180)}` : '';
+    return `- ${run.at.slice(0, 10)} ${run.outcome === 'completed' ? 'done' : 'did not finish'}: "${oneLine(run.task, 110)}"${summary}; evidence: ${files || 'no files'}${checks}`;
   });
   if (runs.length) sections.push(`What earlier runs here did:\n${runs.join('\n')}`);
 
@@ -262,7 +278,7 @@ export async function startWatchingProject(root: string): Promise<void> {
 }
 
 /** The briefing for a project, or an empty string when there is nothing to say yet. */
-export async function knowledgeBriefing(root: string, maxCharacters?: number): Promise<string> {
+export async function knowledgeBriefing(root: string, maxCharacters?: number, query?: string): Promise<string> {
   if (!storageDirectory) return '';
   const resolved = path.resolve(root);
   const entry = await open(resolved);
@@ -274,6 +290,7 @@ export async function knowledgeBriefing(root: string, maxCharacters?: number): P
     folders: entry.folders.lines,
     scripts: await projectScripts(resolved),
     ...(maxCharacters ? { maxCharacters } : {}),
+    ...(query ? { query } : {}),
   });
 }
 

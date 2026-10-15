@@ -2050,6 +2050,13 @@ async function fileRunLesson(
       outcome: run.status === 'completed' ? 'completed' : 'failed',
       files: run.files.slice(0, 12),
       checks: checked.length === 0 ? 'none' : checked.every((check) => check.passed) ? 'passed' : 'failed',
+      // Keep the local account short and redact common credential forms before it reaches persistent project memory.
+      summary: run.output
+        .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [redacted]')
+        .replace(/\b(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 240),
     }).catch(() => undefined);
   }
   const lesson = composeRunLesson(run);
@@ -2301,7 +2308,7 @@ async function buildConversationContext(
   });
   // What KAI has learned about this project leads, on the turns that carry the outline: it is the part an agent would
   // otherwise spend its first minutes working out for itself.
-  const learned = includeRepoMap ? await knowledgeBriefing(projectPath).catch(() => '') : '';
+  const learned = includeRepoMap ? await knowledgeBriefing(projectPath, undefined, prompt).catch(() => '') : '';
   const withKnowledge = learned ? { ...projectContext, text: `${learned}\n\n${projectContext.text}` } : projectContext;
   if (!compaction) return withKnowledge;
   return {
