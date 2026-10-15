@@ -73,7 +73,7 @@ export interface CommandPaletteItem {
   run: () => void | Promise<void>;
 }
 
-export function NavigationRail({ view, version, serviceStatus, shortcuts, onChange }: { view: ViewId; version: string; serviceStatus: string; shortcuts: AppSettings['shortcuts']; onChange: (view: ViewId) => void }): ReactNode {
+export function NavigationRail({ view, version, versionTitle, serviceStatus, shortcuts, onChange }: { view: ViewId; version: string; /** The full version and build, for the tooltip; the rail itself shows only the short one. */ versionTitle?: string; serviceStatus: string; shortcuts: AppSettings['shortcuts']; onChange: (view: ViewId) => void }): ReactNode {
   return (
     <aside className="nav-rail" aria-label="Primary navigation">
       <div className="brand-mark" aria-label="KAI">K</div>
@@ -99,7 +99,7 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
           );
         })}
       </nav>
-      <div className="rail-footer"><div className={`status-dot ${serviceStatus}`} /><span>{version}</span></div>
+      <div className="rail-footer"><div className={`status-dot ${serviceStatus}`} /><span title={versionTitle ?? version}>{version}</span></div>
     </aside>
   );
 }

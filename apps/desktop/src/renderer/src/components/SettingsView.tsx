@@ -7,6 +7,7 @@ import { RemoteAccessPanel } from './RemoteAccessPanel';
 import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
+import { ThemeColors } from './ThemeColors';
 import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
 import type { AgentConfigImportPreview, AppSettings, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
@@ -527,6 +528,10 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           </div>
           <p className="settings-note">{experienceProfile(draft.experienceLevel).summary} Changing the level also resets the default access to match; you can still pick any access level per chat. {ACCESS_LEVELS.find((level) => level.value === draft.defaultAutonomy)?.description}</p>
           <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><input type="checkbox" checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
+          <div className="settings-subsection">
+            <div className="settings-subsection-title"><span>Colours</span></div>
+            <ThemeColors theme={settings.theme} themeLabel={THEME_MODES.find((item) => item.id === settings.theme)?.label ?? settings.theme} />
+          </div>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>CLI models</span></div>
             <p className="settings-note">The model each CLI agent is asked to use when Auto model has none for the job. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>

@@ -90,3 +90,25 @@ describe('text size', () => {
     expect(clampScale(Number.NaN)).toBe(100);
   });
 });
+
+describe('custom theme colours', () => {
+  it('derives the shades around a chosen colour so the palette stays one family', async () => {
+    const { COLOR_ROLES, propertiesFor } = await import('../apps/desktop/src/renderer/src/custom-colors');
+    expect(propertiesFor('background', '#102030')).toMatchObject({ '--bg-deep': '#102030', '--bg-shell': '#102030' });
+    expect(Object.keys(propertiesFor('panel', '#223344'))).toEqual(
+      expect.arrayContaining(['--bg-panel', '--bg-raised', '--bg-input', '--bg-subtle', '--bg-hover']),
+    );
+    expect(propertiesFor('accent', '#33aaff')['--mint']).toBe('#33aaff');
+    expect(propertiesFor('accent', '#33aaff')['--mint-soft']).toContain('#33aaff');
+    // Every role sets something, and no role sets what another owns.
+    const seen = new Set<string>();
+    for (const role of COLOR_ROLES) {
+      const own = Object.keys(propertiesFor(role.id, '#abcdef'));
+      expect(own.length).toBeGreaterThan(0);
+      for (const property of own) {
+        expect(seen.has(property)).toBe(false);
+        seen.add(property);
+      }
+    }
+  });
+});

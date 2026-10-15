@@ -29,6 +29,7 @@ import type {
 } from '@kai/contracts';
 import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
+import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
@@ -722,6 +723,8 @@ export function App(): ReactNode {
   useEffect(() => {
     const theme = bootstrap?.settings.theme ?? 'dark';
     document.documentElement.dataset.theme = theme;
+    // The person's own colours for this theme go on top of it, replacing the last theme's.
+    applyColorOverrides(loadColorOverrides(theme));
     // Which half of the palette this is, for the rules that are written once per family rather than once per theme:
     // the light-mode overrides in styles.css, and the code editor's own colours.
     document.documentElement.dataset.themeFamily = themeFamily(theme);
@@ -2292,7 +2295,8 @@ export function App(): ReactNode {
       <div className="app-body">
         <NavigationRail
           view={view}
-          version={`v${bootstrap.version} · ${bootstrap.buildIdentifier.split('+').at(-1) ?? 'dev'}`}
+          version={`v${bootstrap.version.split('.').slice(0, 2).join('.')}`}
+          versionTitle={`KAI ${bootstrap.version} · build ${bootstrap.buildIdentifier.split('+').at(-1) ?? 'dev'}`}
           serviceStatus={serviceFor(bootstrap, 'universalProxy').status}
           shortcuts={shortcuts}
           onChange={setView}
