@@ -20,7 +20,11 @@
     {
       "text": "Verify the tree is clean and report",
       "state": "done"
+    },
+    {
+      "text": "Check whether the collapsed command-groups change is in the build",
+      "state": "done"
     }
   ],
-  "updatedAt": "2026-10-15T21:05:37.074Z"
+  "updatedAt": "2026-10-15T21:08:18.221Z"
 }
