@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   Clock3,
+  Ellipsis,
   DraftingCompass,
   GraduationCap,
   SquareTerminal,
@@ -116,15 +117,6 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} onRemove={onRemoveProject} onClear={onClearProjects} />
       </div>
       <div className="titlebar-actions">
-        <button type="button" className="icon-button" title={`New window${newWindowShortcut ? ` (${newWindowShortcut})` : ''}`} aria-label="New window" onClick={onNewWindow}>
-          <AppWindow size={17} />
-        </button>
-        <button type="button" className="icon-button" title={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} aria-label={`Theme: ${themeLabel(theme)}. Switch to ${themeLabel(nextTheme(theme))}`} onClick={onToggleTheme}>
-          <Palette size={17} />
-        </button>
-        <button type="button" className={`icon-button ${tourListOpen ? 'active' : ''}`} title="Guided tour and lessons" aria-label="Open the guided tour" aria-pressed={tourListOpen} onClick={onOpenTour}>
-          <GraduationCap size={17} />
-        </button>
         <button type="button" className="icon-button" title={`Command palette${searchShortcut ? ` (${searchShortcut})` : ''}`} aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
         <button type="button" className="icon-button" title={leftOpen ? `Hide threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}` : `Show threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}`} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>
           {leftOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
@@ -138,9 +130,58 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         <button type="button" className={`icon-button ${terminalOpen ? 'active' : ''}`} title={terminalOpen ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)'} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} aria-pressed={terminalOpen} onClick={onToggleTerminal}>
           <Terminal size={17} />
         </button>
-        <button type="button" className="icon-button" title={`Keyboard shortcuts${sheetShortcut ? ` (${sheetShortcut})` : ''}`} aria-label="Open keyboard shortcuts" onClick={onOpenShortcuts}><Keyboard size={17} /></button>
+        <MoreMenu
+          items={[
+            { label: 'New window', hint: newWindowShortcut, icon: <AppWindow size={15} />, onSelect: onNewWindow },
+            { label: `Theme: ${themeLabel(theme)}`, hint: `Switch to ${themeLabel(nextTheme(theme))}`, icon: <Palette size={15} />, onSelect: onToggleTheme, keepOpen: true },
+            { label: 'Guided tour and lessons', hint: '', icon: <GraduationCap size={15} />, onSelect: onOpenTour, active: tourListOpen },
+            { label: 'Keyboard shortcuts', hint: sheetShortcut, icon: <Keyboard size={15} />, onSelect: onOpenShortcuts },
+          ]}
+        />
       </div>
     </header>
+  );
+}
+
+interface MoreMenuItem { label: string; hint: string; icon: ReactNode; onSelect: () => void; /** Stay open so the theme can be stepped through without reopening the menu. */ keepOpen?: boolean; active?: boolean }
+
+function MoreMenu({ items }: { items: MoreMenuItem[] }): ReactNode {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent): void => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="titlebar-more" ref={wrapRef}>
+      <button type="button" className={`icon-button ${open ? 'active' : ''}`} title="More" aria-label="More" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <Ellipsis size={17} />
+      </button>
+      {open && (
+        <div className="popover titlebar-more-popover" role="menu">
+          {items.map((item) => (
+            <button key={item.label} type="button" role="menuitem" className={item.active ? 'selected' : ''} onClick={() => { item.onSelect(); if (!item.keepOpen) setOpen(false); }}>
+              {item.icon}
+              <span className="truncate">{item.label}</span>
+              {item.hint && <small className="titlebar-more-hint">{item.hint}</small>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
