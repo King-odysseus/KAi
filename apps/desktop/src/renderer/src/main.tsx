@@ -7,6 +7,7 @@ import './themes.css';
 import './themes.generated.css';
 import './uap-dashboard.css';
 import './controls.css';
+import './workspace-polish.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

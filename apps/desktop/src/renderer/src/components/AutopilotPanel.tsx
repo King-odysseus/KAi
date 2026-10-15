@@ -222,12 +222,13 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
       </p>
 
       {interrupted && !running && (
-        <p className="studio-note run-interrupted" role="status">
-          The board still has &ldquo;{interrupted.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.{' '}
-          <button type="button" className="link-button" disabled={busy} onClick={() => void carryOn()}>Carry on where it stopped</button>
-          {' or '}
-          <button type="button" className="link-button" disabled={busy} onClick={() => void putBack()}>put the card back in the queue</button>.
-        </p>
+        <div className="studio-note run-interrupted" role="status">
+          <span>The board still has &ldquo;{interrupted.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.</span>
+          <div className="run-interrupted-actions">
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => void carryOn()}>Carry on where it stopped</button>
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => void putBack()}>Put the card back</button>
+          </div>
+        </div>
       )}
 
       {!running && !hasWork && <p className="studio-note run-stalled">{blockedReason}</p>}

@@ -77,13 +77,13 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
   return (
     <aside className="nav-rail" aria-label="Primary navigation">
       <div className="brand-mark" aria-label="KAI">K</div>
-      <nav className="nav-stack">
+      <nav className="nav-stack" aria-label="Workbench pages">
         {navigation.map((item, index) => {
           const Icon = item.icon;
           const previous = navigation[index - 1];
           return (
             <Fragment key={item.id}>
-              {(!previous || previous.group !== item.group) && <div className="nav-group-label" title={item.group} aria-label={`${item.group} section`}>{item.group.slice(0, 1)}</div>}
+              {(!previous || previous.group !== item.group) && <div className="nav-group-label" title={item.group} aria-label={`${item.group} section`}><span>{item.group}</span><i aria-hidden="true" /> </div>}
               <button
                 type="button"
                 className={`nav-button ${view === item.id ? 'active' : ''}`}
@@ -93,6 +93,7 @@ export function NavigationRail({ view, version, serviceStatus, shortcuts, onChan
                 aria-current={view === item.id ? 'page' : undefined}
               >
                 <Icon size={19} />
+                <span className="nav-button-label">{item.label}</span>
               </button>
             </Fragment>
           );
