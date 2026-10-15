@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, Copy, ExternalLink, GitBranch, GitCommitHorizontal,
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { GitChange, GitGithubState, GitOverview, GitRepositoryVisibility, GitSyncAction, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
-import { confirmDialog } from './AppDialog';
+import { confirmDialog, promptDialog } from './AppDialog';
 import { GitBadge } from './GitBadge';
 import { changeKindOf } from './project-files-tree';
 
@@ -111,9 +111,21 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
    */
   function startRepository(): Promise<void> {
     if (!activeProject) return Promise.resolve();
-    return act('Starting a repository', async () => {
+    return (async () => {
+      const visibility = await promptDialog({
+        title: 'Choose repository visibility',
+        label: 'Type private or public. This controls the GitHub repository created later; local files remain on this machine for now.',
+        initialValue: repoVisibility,
+        placeholder: 'private or public',
+        confirmLabel: 'Start repository',
+        validate: (value) => /^(private|public)$/i.test(value.trim()) ? null : 'Enter private or public.',
+      });
+      if (!visibility) return;
+      setRepoVisibility(visibility.trim().toLowerCase() === 'public' ? 'public' : 'private');
+      await act('Starting a repository', async () => {
       unwrap(await window.kaiDesktop.gitInit(activeProject.id));
-    }, 'Repository started.');
+      }, `Repository started as ${visibility.trim().toLowerCase()}.`);
+    })();
   }
 
   /**
