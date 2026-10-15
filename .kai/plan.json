@@ -39,7 +39,7 @@
     },
     {
       "text": "Verify the wrapping audit, full tests, lint baseline, and dependency install",
-      "state": "done"
+      "state": "active"
     },
     {
       "text": "Commit and push the wrapping audit changes",
