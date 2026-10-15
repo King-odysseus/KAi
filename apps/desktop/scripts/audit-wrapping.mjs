@@ -1,5 +1,6 @@
-// Layout audit: opens the real desktop UI, visits every page in the navigation rail at three window sizes, and
-// reports every piece of text that runs past a box which hides it (see findClippedText in layout-checks.mjs).
+// Layout audit: opens the real desktop UI, visits every page in the navigation rail plus the panels that hang off
+// them, and reports every piece of text that runs past a box which hides it (see findClippedText in
+// layout-checks.mjs). The narrow sizes matter most: compact windows are where a laid-out row runs out of room.
 // Run it after touching CSS that lays text out: `node scripts/audit-wrapping.mjs`.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -17,8 +18,9 @@ const userDataDirectory = await mkdtemp(path.join(tmpdir(), 'kai-wrap-audit-'));
 const electronExecutable = createRequire(import.meta.url)('electron');
 const { ELECTRON_RUN_AS_NODE: _runAsNode, ...launchEnvironment } = process.env;
 const sizes = [
+  [445, 900],
+  [640, 800],
   [960, 640],
-  [1180, 760],
   [1440, 920],
 ];
 const findings = [];
@@ -30,6 +32,7 @@ await writeFile(
   `${JSON.stringify({
     schemaVersion: 1,
     theme: 'dark',
+    setupCompletedAt: now,
     activeProjectId: project.id,
     projectOrder: [project.id],
     diagnosticsEnabled: false,
@@ -60,7 +63,7 @@ async function resize(width, height) {
 
 /** Records everything the page is hiding behind an edge, tagged with where it was found. */
 async function audit(where) {
-  const offenders = await findClippedText(page);
+  const offenders = await findClippedText(page, { includeTruncated: true });
   for (const offender of offenders) findings.push({ where, ...offender });
 }
 
@@ -94,6 +97,21 @@ try {
     await audit(`Workspace-panels-${width}x${height}`);
     await page.getByRole('button', { name: 'Hide threads panel' }).click().catch(() => undefined);
     await page.getByRole('button', { name: 'Hide context panel' }).click().catch(() => undefined);
+    // The Learn & Code page carries the tutor column and its own tabs, the densest prose in the app.
+    await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+    await page.getByRole('button', { name: 'Show learning tutor' }).click().catch(() => undefined);
+    await page.waitForTimeout(500);
+    for (const tab of ['Learn', 'Review', 'Senior dev']) {
+      await page.getByRole('button', { name: tab, exact: true }).click().catch(() => undefined);
+      await page.waitForTimeout(400);
+      await audit(`LearnCode-${tab}-${width}x${height}`);
+    }
+    for (const tab of ['Tutor', 'History', 'Progress', 'Teaching', 'Git']) {
+      await page.getByRole('tab', { name: tab, exact: true }).click().catch(() => undefined);
+      await page.waitForTimeout(400);
+      await audit(`LearnCode-Learn-${tab}-${width}x${height}`);
+    }
+    await page.getByRole('button', { name: 'Hide learning tutor' }).click().catch(() => undefined);
   }
 } finally {
   await application.close().catch(() => undefined);
@@ -101,15 +119,21 @@ try {
 }
 
 findings.sort((left, right) => left.where.localeCompare(right.where) || right.overhang - left.overhang);
-if (findings.length === 0) {
-  console.log('No clipped text found.');
+// Silent clipping is a fault. An ellipsis or a line clamp is the app choosing to shorten text, which is only a
+// fault when the shortened part is something the reader needs, so it is listed separately for triage.
+const silent = findings.filter((item) => !item.ellipsis && !item.clamped);
+const shortened = findings.filter((item) => item.ellipsis || item.clamped);
+const describe = (item) =>
+  `${item.where} | <${item.tag} class="${item.className}"> in <${item.in}> overhang ${item.overhang}/${item.overhangLeft}/${item.overhangBottom} (${item.overflow}${item.nowrap ? ', nowrap' : ''}${item.ellipsis ? ', ellipsis' : ''}${item.clamped ? ', clamped' : ''}) "${item.text}"`;
+if (silent.length === 0) {
+  console.log('No silently clipped text found.');
 } else {
-  console.log(`${findings.length} clipped text findings:\n`);
-  for (const item of findings) {
-    console.log(
-      `${item.where} | <${item.tag} class="${item.className}"> in <${item.in}> overhang ${item.overhang}/${item.overhangLeft}/${item.overhangBottom} (${item.overflow}${item.nowrap ? ', nowrap' : ''}${item.ellipsis ? ', ellipsis' : ''}) "${item.text}"`,
-    );
-  }
+  console.log(`${silent.length} clipped text findings:\n`);
+  for (const item of silent) console.log(describe(item));
+}
+if (shortened.length > 0) {
+  console.log(`\n${shortened.length} deliberately shortened (check these read well):\n`);
+  for (const item of shortened) console.log(describe(item));
 }
 await mkdir(path.join(appRoot, 'test-results'), { recursive: true });
 await writeFile(path.join(appRoot, 'test-results', 'wrap-audit.json'), `${JSON.stringify(findings, null, 2)}\n`, 'utf8');

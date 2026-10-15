@@ -85,37 +85,69 @@ export async function assertControlsDoNotWrap(page, where) {
  *
  * The mirror image of the control check above: prose is meant to wrap, so when a line reaches the edge of a clipping
  * box the reader loses the end of the sentence. This walks every visible text node and measures it against the
- * nearest ancestor that hides its overflow. A box that scrolls is left alone, since the text is still reachable, and
- * so is an ellipsis, which at least admits that something is missing. `overhangBottom` marks text cut off at the
- * bottom of a fixed-height box, the same fault in the other direction.
+ * nearest ancestor that hides its overflow. A box that scrolls is left alone, since the text is still reachable.
+ * `overhangBottom` marks text cut off at the bottom of a fixed-height box, the same fault in the other direction.
+ *
+ * An ellipsis or a line clamp is the app saying out loud that text is missing, so it is not silent clipping and does
+ * not fail a guard; `includeTruncated` lists those too, for a sweep that wants to judge each one by hand.
  */
-export async function findClippedText(page, { tolerance = 2 } = {}) {
-  return page.evaluate((limit) => {
+export async function findClippedText(page, { tolerance = 2, includeTruncated = false } = {}) {
+  return page.evaluate(({ limit, includeTruncated }) => {
     const offenders = [];
+    /*
+     * Reading a style or a range rectangle lays the page out again, and this walks every text node on the page, so
+     * elements are asked once and their answer is kept. Two of those answers are what make the walk cheap: only a
+     * box that hides overflow and reports more content than it can show can have cut a line, and the window is the
+     * only other edge text can disappear behind. Text anywhere else is skipped without touching the layout path,
+     * which is the difference between a sweep of the settings page taking seconds instead of minutes.
+     */
+    const styles = new Map();
+    const styleOf = (element) => {
+      let style = styles.get(element);
+      if (style === undefined) {
+        style = getComputedStyle(element);
+        styles.set(element, style);
+      }
+      return style;
+    };
+    const overflows = new Map();
+    const hasMoreThanItShows = (element) => {
+      let value = overflows.get(element);
+      if (value === undefined) {
+        value = element.scrollWidth > element.clientWidth + limit || element.scrollHeight > element.clientHeight + limit;
+        overflows.set(element, value);
+      }
+      return value;
+    };
+
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.textContent?.trim()) continue;
       const parent = node.parentElement;
       if (!parent) continue;
-      const own = getComputedStyle(parent);
+      const own = styleOf(parent);
       if (own.display === 'none' || own.visibility === 'hidden' || Number.parseFloat(own.opacity || '1') === 0) continue;
-      // A line-clamped summary is intentionally shortened; the clamp is the visible equivalent of an ellipsis.
-      if (own.webkitLineClamp && own.webkitLineClamp !== 'none' && own.webkitLineClamp !== '0') continue;
       // Offscreen measurement layers and screen-reader copies are not what the reader sees.
       if (parent.closest('[aria-hidden="true"], .sr-only, .visually-hidden, [hidden]')) continue;
+      const clamped = Boolean(own.webkitLineClamp) && own.webkitLineClamp !== 'none' && own.webkitLineClamp !== '0';
+      const truncated = own.textOverflow === 'ellipsis' || clamped;
+      if (truncated && !includeTruncated) continue;
+
+      let clip = parent;
+      let clipStyle = own;
+      while (clip.parentElement && clipStyle.overflowX === 'visible') {
+        clip = clip.parentElement;
+        clipStyle = styleOf(clip);
+      }
+      const scrollable = clipStyle.overflowX === 'auto' || clipStyle.overflowX === 'scroll';
+      const clipping = clip !== document.documentElement && !scrollable && hasMoreThanItShows(clip);
+      if (!clipping && !hasMoreThanItShows(document.documentElement)) continue;
 
       const range = document.createRange();
       range.selectNodeContents(node);
       const box = range.getBoundingClientRect();
       if (box.width === 0 || box.height === 0) continue;
 
-      let clip = parent;
-      let clipStyle = own;
-      while (clip.parentElement && clipStyle.overflowX === 'visible') {
-        clip = clip.parentElement;
-        clipStyle = getComputedStyle(clip);
-      }
-      const scrollable = clipStyle.overflowX === 'auto' || clipStyle.overflowX === 'scroll';
       if (clip !== document.documentElement && !scrollable) {
         const box_ = clip.getBoundingClientRect();
         const left = box_.left + clip.clientLeft;
@@ -129,7 +161,7 @@ export async function findClippedText(page, { tolerance = 2 } = {}) {
         const overhang = Math.round(box.right - right);
         const overhangLeft = Math.round(left - box.left);
         const overhangBottom = vertical ? Math.round(box.bottom - bottom) : 0;
-        if ((overhang <= limit && overhangLeft <= limit && overhangBottom <= limit) || own.textOverflow === 'ellipsis') continue;
+        if (overhang <= limit && overhangLeft <= limit && overhangBottom <= limit) continue;
         offenders.push({
           in: `${clip.tagName.toLowerCase()}${clip.className ? `.${String(clip.className).trim().split(/\s+/).join('.')}` : ''}`.slice(0, 90),
           tag: parent.tagName.toLowerCase(),
@@ -137,6 +169,7 @@ export async function findClippedText(page, { tolerance = 2 } = {}) {
           text: (node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60),
           overflow: `${clipStyle.overflowX}/${clipStyle.overflowY}`,
           ellipsis: own.textOverflow === 'ellipsis',
+          clamped,
           nowrap: own.whiteSpace === 'nowrap' || own.whiteSpace === 'pre',
           length: Math.round(box.width),
           overhang,
@@ -155,6 +188,7 @@ export async function findClippedText(page, { tolerance = 2 } = {}) {
           text: (node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60),
           overflow: 'visible',
           ellipsis: own.textOverflow === 'ellipsis',
+          clamped,
           nowrap: own.whiteSpace === 'nowrap' || own.whiteSpace === 'pre',
           length: Math.round(box.width),
           overhang: Math.round(box.right - viewport),
@@ -167,15 +201,16 @@ export async function findClippedText(page, { tolerance = 2 } = {}) {
     const unique = new Map();
     for (const item of offenders) unique.set(`${item.tag}|${item.className}|${item.text}`, item);
     return [...unique.values()];
-  }, tolerance);
+  }, { limit: tolerance, includeTruncated });
 }
 
 /** Throws when prose is cut off by a box that hides it. Set KAI_WRAP_REPORT=1 to list offenders without failing. */
 export async function assertTextIsNotClipped(page, where) {
-  const offenders = await findClippedText(page);
+  // An ellipsis or a clamp is a deliberate shortening, so it is listed by an audit rather than failed here.
+  const offenders = (await findClippedText(page)).filter((item) => !item.ellipsis && !item.clamped);
   if (offenders.length === 0) return;
   const detail = offenders
-    .map((item) => `  - <.${item.className || item.tag}> inside <${item.in}> "${item.text}" overhangs ${item.overhang}px right / ${item.overhangLeft}px left / ${item.overhangBottom}px bottom (${item.overflow}${item.nowrap ? ', nowrap' : ''}${item.ellipsis ? ', ellipsis' : ''}, ${item.length}px wide)`)
+    .map((item) => `  - <.${item.className || item.tag}> inside <${item.in}> "${item.text}" overhangs ${item.overhang}px right / ${item.overhangLeft}px left / ${item.overhangBottom}px bottom (${item.overflow}${item.nowrap ? ', nowrap' : ''}, ${item.length}px wide)`)
     .join('\n');
   if (process.env.KAI_WRAP_REPORT === '1') {
     console.log(`Clipped text on ${where}:\n${detail}`);

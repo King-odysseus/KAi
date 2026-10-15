@@ -2,23 +2,31 @@
   "schemaVersion": 1,
   "items": [
     {
-      "text": "Resolve the reported team routing test failures and rerun the test suite",
+      "text": "Inspect failing team-planner tests and the code they exercise",
       "state": "done"
     },
     {
-      "text": "Read the attached screenshots to see which pages/labels break",
+      "text": "Fix the Auto-role/execution mismatch so behavior and tests agree",
       "state": "done"
     },
     {
-      "text": "Audit renderer styles for text that cannot wrap (nowrap, min-width, fixed widths)",
+      "text": "Fix briefing run-order tie-break so recent runs rank first",
       "state": "done"
     },
     {
-      "text": "Fix the wrapping problems across the app pages",
+      "text": "Isolate the LM Studio test from the repo's own plan file",
       "state": "done"
     },
     {
-      "text": "Verify: layout checks + relevant tests + lint",
+      "text": "Let the shipped kai script load in tests (shebang) and ignore CRLF in the generated theme check",
+      "state": "done"
+    },
+    {
+      "text": "Run the full npm test on the settled working tree",
+      "state": "done"
+    },
+    {
+      "text": "Run lint and confirm no new problems from these edits",
       "state": "done"
     },
     {
@@ -26,9 +34,17 @@
       "state": "done"
     },
     {
-      "text": "Run the dependency install (npm install) after the work is done, as asked",
+      "text": "Audit narrow desktop pages and learning panels for silently clipped text",
+      "state": "done"
+    },
+    {
+      "text": "Verify the wrapping audit, full tests, lint baseline, and dependency install",
+      "state": "done"
+    },
+    {
+      "text": "Commit and push the wrapping audit changes",
       "state": "done"
     }
   ],
-  "updatedAt": "2026-10-15T20:41:10.000Z"
+  "updatedAt": "2026-10-15T21:14:00.000Z"
 }
