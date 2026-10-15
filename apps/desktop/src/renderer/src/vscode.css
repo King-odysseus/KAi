@@ -443,3 +443,35 @@ html[data-theme]:root .composer-toolbar {
 .theme-color-name { display: flex; min-width: 0; flex-direction: column; }
 .theme-color-name small { color: var(--text-dim); font-size: 11px; }
 .theme-color-row code { color: var(--text-muted); font-size: 11px; }
+
+/* ---------- Text that has to wrap ---------- */
+
+/* A notice is a flex row (icon, sentence, button). Text and bold names written straight into it each become their own
+   column, which is what split a sentence into pieces when the window was enlarged. The sentence goes in a span, and the
+   span is allowed to shrink and wrap. */
+.studio-notice > span { min-width: 0; overflow-wrap: anywhere; }
+.studio-notice > svg { flex: 0 0 auto; }
+.studio-notice > button { flex: 0 0 auto; margin-left: auto; }
+
+/* A long project title wraps onto up to three lines instead of ending in an ellipsis; the full title is also the tooltip. */
+.studio-project-picker strong {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/* Notes and captions that are a sentence with a bold or code word in it. They were flex or grid rows, so each word run
+   and each bold name became its own column. With no icon or button beside the text they are plain paragraphs again. */
+.settings-note:not(:has(> svg, > button)),
+.studio-note:not(:has(> svg, > button)),
+.cognitive1-copy:not(:has(> svg, > button)),
+.command-when,
+.learning-limits {
+  display: block;
+  overflow-wrap: anywhere;
+}

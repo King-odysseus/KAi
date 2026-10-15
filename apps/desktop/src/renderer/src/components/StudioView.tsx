@@ -1929,7 +1929,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           <span className="studio-project-icon"><NotebookPen size={17} /></span>
           <div>
             <span className="studio-project-label">{screen === 'new' ? 'New project' : state?.status === 'done' ? 'Brief ready' : 'In discussion'}</span>
-            <strong>{projectTitle}</strong>
+            <strong title={projectTitle}>{projectTitle}</strong>
             <small className="studio-workspace-note">
               <FolderOpen size={11} />
               {screen === 'new'
@@ -1963,7 +1963,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
           project saw another's brief, style guide and drawing run. Say it whenever the two names disagree. */}
       {screen === 'project' && currentFolder && !projectTitle.toLowerCase().includes(currentFolder.name.toLowerCase()) && (
         <p className="studio-notice warning" role="status">
-          <AlertTriangle size={14} /> This Studio project is <strong>{projectTitle.split(/[,.:—-]/)[0]?.trim()}</strong>, not the open workspace <strong>{currentFolder.name}</strong>. Everything written or drawn here is for the Studio project.
+          <AlertTriangle size={14} />
+          <span>This Studio project is <strong>{projectTitle.split(/[,.:—-]/)[0]?.trim()}</strong>, not the open workspace <strong>{currentFolder.name}</strong>. Everything written or drawn here is for the Studio project.</span>
           <button type="button" className="composer-text-button" onClick={leaveProjectStudio} disabled={busy !== null}>Choose another project</button>
         </p>
       )}
