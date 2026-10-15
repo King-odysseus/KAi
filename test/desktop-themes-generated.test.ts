@@ -18,7 +18,9 @@ import { themeCss } from '../apps/desktop/scripts/generate-themes.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rendererSource = path.join(here, '..', 'apps', 'desktop', 'src', 'renderer', 'src');
-const read = (file: string): string => readFileSync(path.join(rendererSource, file), 'utf8');
+// Git hands this file out with CRLF line endings on Windows while the generator writes LF, so compare the text and
+// not the line ends: the point of the check is a stale stylesheet, not which platform checked it out.
+const read = (file: string): string => readFileSync(path.join(rendererSource, file), 'utf8').replace(/\r\n/g, '\n');
 
 describe('generated theme stylesheet', () => {
   it('is what the generator produces today, so a colour added to styles.css cannot go unmapped', () => {

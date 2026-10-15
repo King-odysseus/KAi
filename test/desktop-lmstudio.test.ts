@@ -1,4 +1,7 @@
+import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DIRECT_PROVIDER_ORDER,
@@ -15,9 +18,13 @@ import { listProviderModels } from '../apps/desktop/src/main/provider-models';
 import { assignTeam, billingFor, type AssignmentEnvironment } from '../apps/desktop/src/main/team-assign';
 
 const servers: http.Server[] = [];
+const tempProjects: string[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  for (const dir of tempProjects.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /** A stand-in for LM Studio's OpenAI-compatible server. */
@@ -61,6 +68,13 @@ function noVault(): { isAvailable(): boolean; has(id: string): Promise<boolean>;
 
 function request(): AgentRunRequest {
   return { conversationId: 'conv-local', prompt: 'Say hello', agent: 'codex', execution: 'api', route: 'direct', autonomy: 'ask' };
+}
+
+// A directory with no .kai/plan.json: the runtime reads the project's own plan to decide whether a run is finished.
+function emptyProject(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-lmstudio-'));
+  tempProjects.push(dir);
+  return dir;
 }
 
 describe('LM Studio as a provider', () => {
@@ -137,7 +151,7 @@ describe('LM Studio as a provider', () => {
     // "gpt-oss" looks like a paid GPT to the price table; a local run must still cost nothing.
     const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl, 'gpt-oss-20b') }, noVault());
 
-    const result = await runtime.run(request(), process.cwd());
+    const result = await runtime.run(request(), emptyProject());
 
     expect(result).toMatchObject({ status: 'completed', output: 'Local model ready.' });
     const chat = seen.find((entry) => entry.url === '/v1/chat/completions')!;
@@ -153,14 +167,14 @@ describe('LM Studio as a provider', () => {
     const vault = { isAvailable: () => true, has: async (id: string) => id === 'provider.lmstudio', get: async (id: string) => (id === 'provider.lmstudio' ? 'lm-token' : undefined) };
     const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings(baseUrl) }, vault);
 
-    await runtime.run(request(), process.cwd());
+    await runtime.run(request(), emptyProject());
 
     expect(seen.find((entry) => entry.url === '/v1/chat/completions')!.authorization).toBe('Bearer lm-token');
   });
 
   it('refuses a run when the server is down instead of sending it anywhere', async () => {
     const runtime = new DesktopDirectProviderRuntime({ load: async () => lmStudioSettings('http://127.0.0.1:9/v1') }, noVault());
-    const result = await runtime.run(request(), process.cwd());
+    const result = await runtime.run(request(), emptyProject());
     expect(result.status).toBe('failed');
     expect(result.error).toContain('not reachable');
   });

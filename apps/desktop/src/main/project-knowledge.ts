@@ -129,7 +129,7 @@ export function renderKnowledge(
   };
   const runs = [...recentRuns]
     .map((run, index) => ({ run, index, score: relevance(run) }))
-    .sort((left, right) => right.score - left.score || right.index - left.index)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
     .slice(0, 5)
     .map(({ run }) => {
     const files = run.files.slice(0, 4).join(', ') + (run.files.length > 4 ? ` and ${run.files.length - 4} more` : '');

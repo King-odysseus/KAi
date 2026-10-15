@@ -1,6 +1,10 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Vite leaves plain .mjs files to the runner, which chokes on the shebang line of the shipped `kai` command
+  // script. Running esbuild over them strips the shebang, so the test can import the real file. (Vite's own default
+  // covers .ts/.mts/.jsx/.tsx; only .mjs is added here.)
+  esbuild: { include: /\.(m?ts|[jt]sx|mjs)$/ },
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
