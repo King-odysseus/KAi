@@ -2,49 +2,33 @@
   "schemaVersion": 1,
   "items": [
     {
-      "text": "Inspect failing team-planner tests and the code they exercise",
+      "text": "Reported buttons in the code area (Open referenced file / Select lines / Run check): find them in source",
       "state": "done"
     },
     {
-      "text": "Fix the Auto-role/execution mismatch so behavior and tests agree",
+      "text": "Reproduce live: run the desktop app end to end and click the three buttons at wide and narrow window sizes",
       "state": "done"
     },
     {
-      "text": "Fix briefing run-order tie-break so recent runs rank first",
+      "text": "Confirm the code path for each button (handlers, IPC, dialog, file open error handling)",
       "state": "done"
     },
     {
-      "text": "Isolate the LM Studio test from the repo's own plan file",
+      "text": "Verify the tree: full test suite + lint + report the desktop build state",
       "state": "done"
     },
     {
-      "text": "Let the shipped kai script load in tests (shebang) and ignore CRLF in the generated theme check",
+      "text": "Run the dependency install (npm install)",
       "state": "done"
     },
     {
-      "text": "Run the full npm test on the settled working tree",
+      "text": "Wrapping work: fix, verify, commit and push (done by the other KAI session; branch in sync with origin/main)",
       "state": "done"
     },
     {
-      "text": "Run lint and confirm no new problems from these edits",
-      "state": "done"
-    },
-    {
-      "text": "Commit and push the verified changes",
-      "state": "done"
-    },
-    {
-      "text": "Audit narrow desktop pages and learning panels for silently clipped text",
-      "state": "done"
-    },
-    {
-      "text": "Verify wrapping audit, full tests, dependency install, and record lint baseline limitation",
-      "state": "done"
-    },
-    {
-      "text": "Commit and push the wrapping audit changes",
-      "state": "done"
+      "text": "Buttons still reported broken by the person: needs one detail (which button, what happens) before touching button code",
+      "state": "active"
     }
   ],
-  "updatedAt": "2026-10-15T21:14:00.000Z"
+  "updatedAt": "2026-10-15T20:23:36.832Z"
 }
