@@ -1177,7 +1177,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     const targets = windows.length > 0 ? windows : (request.session ? [request.session] : []);
     for (const session of targets) {
       try {
-        session.window.setTitleBarOverlay({ color, symbolColor, height: 42 });
+        session.window.setTitleBarOverlay({ color, symbolColor, height: 38 });
       } catch (error) {
         // An older Electron, or a platform without the overlay. The window still works; it just keeps its colours.
         context.logger.warn('internal', 'Could not recolour the window controls', messageOf(error));

@@ -361,10 +361,6 @@
 
 /* ---------- Density: the person's choice, from the status bar ---------- */
 
-:root[data-density='compact'] {
-  --titlebar-height: 36px;
-}
-
 :root[data-density='compact'] .icon-button { width: 26px; height: 26px; border-radius: 4px; }
 :root[data-density='compact'] .icon-button.compact { width: 22px; height: 22px; }
 :root[data-density='compact'] .nav-rail { flex-basis: 46px; }

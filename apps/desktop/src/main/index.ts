@@ -1371,7 +1371,8 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
     titleBarOverlay: {
       color: '#08111f',
       symbolColor: '#d8e2f0',
-      height: 42,
+      // The title bar is 38px tall (workspace-polish.css); a taller overlay leaves a block of a different colour under it.
+      height: 38,
     },
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.cjs'),
