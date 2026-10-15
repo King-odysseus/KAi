@@ -175,6 +175,9 @@
 .code-view {
   position: relative;
   display: grid;
+  /* The row is pinned to the view's own height: an implicit auto row would grow to fit the file tree, and a long
+     tree then pushed the whole view below the window, taking the editor area and the empty state with it. */
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: clamp(160px, var(--code-file-pane-width, 230px), 420px) 5px minmax(0, 1fr);
   width: 100%;
   height: 100%;
@@ -203,6 +206,9 @@
 .code-sidebar {
   display: flex;
   min-width: 0;
+  /* A grid item's automatic minimum height is its content: without this the column refuses to shrink and the tree
+     scrolls off the bottom of the window instead of inside its own pane. */
+  min-height: 0;
   flex-direction: column;
   border-right: 1px solid var(--border-soft);
   background: var(--bg-panel);
@@ -700,11 +706,20 @@
   gap: 2px;
 }
 
-.teaching-entry-copy strong,
-.teaching-entry-copy small {
+.teaching-entry-copy strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The description is a sentence, not a name: one line plus an ellipsis hid what the method actually does. Two lines
+   fit the row without pushing the On/Off state out of view. */
+.teaching-entry-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .teaching-entry-copy strong {

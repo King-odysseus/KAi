@@ -2331,9 +2331,13 @@ button:disabled {
 }
 
 .context-item span {
+  /* Item labels run on ("JavaScript Animation (every frame drawn in code)") and there is no tooltip for the label
+     itself, so a cut-off line loses the name. Two lines, then the ellipsis, and the token count stays put. */
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .context-item small {
