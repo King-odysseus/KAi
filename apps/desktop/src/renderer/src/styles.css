@@ -198,7 +198,7 @@ button:disabled {
 }
 
 .titlebar-more { position: relative; display: flex; }
-.titlebar-more-popover { position: fixed; left: 8px; top: 42px; width: min(400px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: calc(100vh - 50px); overflow-y: auto; box-sizing: border-box; }
+.popover.titlebar-more-popover { position: fixed; left: 8px; top: 42px; width: min(400px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: calc(100vh - 50px); overflow-y: auto; box-sizing: border-box; -webkit-app-region: no-drag; }
 .titlebar-more-popover .truncate { min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
 .titlebar-more-popover > button { min-height: 40px; }
 @media (max-width: 440px) { .titlebar-more-popover .titlebar-more-hint { display: none; } }
