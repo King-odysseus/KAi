@@ -27,7 +27,7 @@
     },
     {
       "text": "Run the dependency install (npm install) after the work is done, as asked",
-      "state": "active"
+      "state": "done"
     }
   ],
   "updatedAt": "2026-10-15T20:41:10.000Z"

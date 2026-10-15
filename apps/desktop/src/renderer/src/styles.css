@@ -78,10 +78,15 @@ legend {
   white-space: nowrap;
 }
 
-/* A description inside a button or summary is prose and may wrap. */
+/*
+ * What a control shows is prose and may wrap. A description (small, p) and a title (strong) are content the control
+ * is presenting, not the label on the control itself, so a long one takes a second line instead of losing its tail.
+ */
 button small,
 button p,
-summary small {
+button strong,
+summary small,
+summary strong {
   white-space: normal;
 }
 

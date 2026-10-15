@@ -1183,7 +1183,7 @@ html[data-theme="code"]:root .learning-suggestion {
   border: 1px solid rgba(53, 164, 255, 0.28);
 }
 @media (max-width: 1100px) {
-  html[data-theme="code"]:root .learning-panel {
+  html[data-theme="code"]:root .code-side-panel {
     box-shadow: -18px 0 40px rgba(0, 0, 0, 0.32);
   }
 }
@@ -2455,7 +2455,7 @@ html[data-theme="purple"]:root .learning-suggestion {
   border: 1px solid rgba(251, 205, 0, 0.28);
 }
 @media (max-width: 1100px) {
-  html[data-theme="purple"]:root .learning-panel {
+  html[data-theme="purple"]:root .code-side-panel {
     box-shadow: -18px 0 40px rgba(0, 0, 0, 0.32);
   }
 }
@@ -3727,7 +3727,7 @@ html[data-theme="navy"]:root .learning-suggestion {
   border: 1px solid rgba(109, 187, 255, 0.28);
 }
 @media (max-width: 1100px) {
-  html[data-theme="navy"]:root .learning-panel {
+  html[data-theme="navy"]:root .code-side-panel {
     box-shadow: -18px 0 40px rgba(0, 0, 0, 0.32);
   }
 }
