@@ -148,6 +148,29 @@ interface MoreMenuItem { label: string; hint: string; icon: ReactNode; onSelect:
 function MoreMenu({ items }: { items: MoreMenuItem[] }): ReactNode {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [placement, setPlacement] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const place = (): void => {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(400, window.innerWidth - 16);
+      setPlacement({
+        left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+        top: Math.min(rect.bottom + 5, window.innerHeight - 8),
+        width,
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -167,11 +190,11 @@ function MoreMenu({ items }: { items: MoreMenuItem[] }): ReactNode {
 
   return (
     <div className="titlebar-more" ref={wrapRef}>
-      <button type="button" className={`icon-button ${open ? 'active' : ''}`} title="More" aria-label="More" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <button ref={buttonRef} type="button" className={`icon-button ${open ? 'active' : ''}`} title="More" aria-label="More" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <Ellipsis size={17} />
       </button>
       {open && (
-        <div className="popover titlebar-more-popover" role="menu">
+        <div className="popover titlebar-more-popover" role="menu" style={placement ?? undefined}>
           {items.map((item) => (
             <button key={item.label} type="button" role="menuitem" className={item.active ? 'selected' : ''} onClick={() => { item.onSelect(); if (!item.keepOpen) setOpen(false); }}>
               {item.icon}
