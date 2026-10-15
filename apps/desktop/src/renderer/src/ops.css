@@ -1815,7 +1815,9 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
   }
 
   .code-side-panel {
-    width: 100%;
+    /* Full width here hid the whole code area, so opening a cited file appeared to do nothing.
+       Keep the drawer, but always leave the editor's left edge in view. */
+    width: min(390px, calc(100vw - 190px));
   }
 }
 
@@ -2746,6 +2748,8 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-question-actions { flex-wrap: wrap; }
 .learning-explain-back .learning-question-actions button { max-width: 100%; white-space: normal; text-align: left; }
 .learning-response-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+/* A source click changes the editor, which at a narrow size can sit behind this panel. */
+.learning-reference-notice { align-self: center; color: var(--text-dim); font-size: 11px; overflow-wrap: anywhere; }
 .learning-response-actions button:disabled { opacity: .5; cursor: default; }
 .learning-pending { display: flex; align-items: center; gap: 10px; }
 .learning-chat-question {

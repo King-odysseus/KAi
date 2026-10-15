@@ -54,6 +54,8 @@ import { Select } from './ui/Select';
 interface LearningPanelProps {
   projectFiles: string[];
   onReference: (filePath: string, startLine?: number, endLine?: number) => void;
+  /** What the last source action did. The file it opened can sit behind this panel, so the panel says so. */
+  referenceNotice: string | null;
   responseLessonId: string | null;
   onLessonSelect: (lesson: NonNullable<LearningProgress['lessons']>[number]) => void;
   onUnderstood: (lessonId: string) => void;
@@ -157,6 +159,7 @@ export function LearningPanel({
   gitInfo,
   busy,
   error,
+  referenceNotice,
   question,
   submittedQuestion,
   conversation,
@@ -396,6 +399,7 @@ export function LearningPanel({
             {reference.startLine && <button type="button" onClick={() => onReference(reference.filePath!, reference.startLine, reference.endLine)}>Select lines</button>}
           </>}
           <button type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</button>
+          {referenceNotice && <span className="learning-reference-notice" role="status">{referenceNotice}</span>}
         </div>}
         {response && tab === 'tutor' && responseLessonId && (
           <ExplainBack

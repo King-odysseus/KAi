@@ -2,29 +2,37 @@
   "schemaVersion": 1,
   "items": [
     {
-      "text": "Wrapping request: fix the clipped text, sweep every page at four window sizes, verify (browser measurement + all-pages smoke + typecheck)",
+      "text": "Answer the install question: confirm npm install runs with the app open (it did, exit 0)",
       "state": "done"
     },
     {
-      "text": "Re-run the full test suite on the final tree: 1800 passed, 3 skipped, 0 failures",
+      "text": "Find the real cause of the dead source buttons instead of guessing",
       "state": "done"
     },
     {
-      "text": "Run lint: fails on 1357 pre-existing errors in root src/ and test/, none from this session's changes",
+      "text": "Reproduce it in the real app: tutor panel covers the whole code area at a narrow/zoomed window",
       "state": "done"
     },
     {
-      "text": "Run the dependency install (npm install): up to date, 836 packages, exit 0",
+      "text": "Fix: keep the code area visible, confirm source clicks in the panel, wait for the editor instead of returning silently",
       "state": "done"
     },
     {
-      "text": "Commit and push the verified changes: main in sync with origin/main (da1d678)",
+      "text": "Verify: desktop typecheck passed; workbench smoke test passes end to end with the fix",
       "state": "done"
     },
     {
-      "text": "Buttons reported as not working: needs one detail (which button, what happens) before button code is changed",
+      "text": "Verify: full test suite (running now)",
       "state": "active"
+    },
+    {
+      "text": "Remove my temporary probe scripts and logs",
+      "state": "pending"
+    },
+    {
+      "text": "Commit and push the verified fix",
+      "state": "pending"
     }
   ],
-  "updatedAt": "2026-10-15T20:24:23.688Z"
+  "updatedAt": "2026-10-15T20:43:25.541Z"
 }

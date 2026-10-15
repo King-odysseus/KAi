@@ -298,6 +298,8 @@ export function CodeView({
   const [learningResult, setLearningResult] = useState<LearningEvaluationResult | null>(null);
   const [learningBusy, setLearningBusy] = useState<LearningAction | 'record' | null>(null);
   const [learningError, setLearningError] = useState<string | null>(null);
+  /** What the last source action did, shown in the tutor panel, which is where the click happened. */
+  const [referenceNotice, setReferenceNotice] = useState<string | null>(null);
   const [learningSelection, setLearningSelection] = useState<LearningSelectionPreview | null>(null);
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
@@ -958,9 +960,31 @@ export function CodeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest, editorReady, projectId]);
 
+  /** Monaco arrives in its own chunk, so a click on a source button can land before the editor exists. */
+  function waitForEditor(timeoutMs = 5_000): Promise<Monaco.editor.IStandaloneCodeEditor | null> {
+    if (editorRef.current) return Promise.resolve(editorRef.current);
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const poll = (): void => {
+        if (editorRef.current) resolve(editorRef.current);
+        else if (Date.now() >= deadline) resolve(null);
+        else window.setTimeout(poll, 100);
+      };
+      poll();
+    });
+  }
+
   async function openFile(path: string): Promise<void> {
     const currentProjectId = projectIdRef.current;
-    if (!currentProjectId || !monacoRef.current || !editorRef.current) return;
+    if (!currentProjectId) {
+      setNotice('Open a project before opening a file.');
+      return;
+    }
+    // This used to return without a word while the editor was still loading, so the click looked dead.
+    if (!(await waitForEditor())) {
+      setNotice('The code editor is still starting. Try again in a moment.');
+      return;
+    }
     setDiskChanged(null);
     let document = documents.current.get(path);
     if (!document) {
@@ -968,6 +992,7 @@ export function CodeView({
         const opened = unwrap(await window.kaiDesktop.readProjectFile(currentProjectId, path));
         if (projectIdRef.current !== currentProjectId) return;
         const monaco = monacoRef.current;
+        if (!monaco) throw new Error('The code editor is still starting. Try again in a moment.');
         const language = languageForPath(path);
         const model = monaco.editor.createModel(opened.content, language, monaco.Uri.file(`/${path}`));
         model.setEOL(opened.eol === 'crlf' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF);
@@ -990,7 +1015,12 @@ export function CodeView({
         return;
       }
     }
-    editorRef.current.setModel(document.model);
+    const target = editorRef.current;
+    if (!target) {
+      setNotice('The code editor is still starting. Try again in a moment.');
+      return;
+    }
+    target.setModel(document.model);
     const nextOpenPaths = openPathsRef.current.includes(path) ? openPathsRef.current : [...openPathsRef.current, path];
     openPathsRef.current = nextOpenPaths;
     setOpenPaths(nextOpenPaths);
@@ -998,6 +1028,7 @@ export function CodeView({
     activeRef.current = path;
     setActivePath(path);
     setLearningError(null);
+    setReferenceNotice(null);
   }
 
   async function saveDocument(path: string, mode: 'manual' | 'auto'): Promise<void> {
@@ -1126,9 +1157,15 @@ export function CodeView({
 
   async function openLearningReference(filePath: string, startLine?: number, endLine?: number): Promise<void> {
     const originProject = projectIdRef.current;
+    setReferenceNotice(null);
     await openFile(filePath);
     const editor = editorRef.current;
-    if (projectIdRef.current !== originProject || activeRef.current !== filePath || !editor) return;
+    if (projectIdRef.current !== originProject) return;
+    // A click that changes nothing is indistinguishable from a broken button, so say what happened.
+    if (activeRef.current !== filePath || !editor) {
+      setReferenceNotice(`Could not open ${filePath}. Open it from the project file list to check it.`);
+      return;
+    }
     if (startLine) {
       const model = editor.getModel();
       if (!model || startLine > model.getLineCount() || (endLine ?? startLine) > model.getLineCount()) {
@@ -1138,6 +1175,9 @@ export function CodeView({
       const lastLine = Math.max(startLine, endLine ?? startLine);
       editor.setSelection({ startLineNumber: startLine, startColumn: 1, endLineNumber: lastLine, endColumn: model.getLineMaxColumn(lastLine) });
       editor.revealLineInCenter(startLine);
+      setReferenceNotice(`Selected lines ${startLine}-${lastLine} of ${filePath}.`);
+    } else {
+      setReferenceNotice(`Opened ${filePath}.`);
     }
     editor.focus();
   }
@@ -1681,6 +1721,7 @@ export function CodeView({
             key={projectId}
             projectFiles={files.map((file) => file.path)}
             onReference={(filePath, startLine, endLine) => void openLearningReference(filePath, startLine, endLine)}
+            referenceNotice={referenceNotice}
             responseLessonId={responseLessonId}
             onLessonSelect={(lesson) => {
               // The lesson already on screen is not reopened a second time.
