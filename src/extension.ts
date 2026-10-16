@@ -207,6 +207,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             profile,
             port: proxyPort,
             model: config.get<string>('codexConfigModel', 'gpt-5.5'),
+            authToken: proxyAuthToken,
           });
           return [
             {
@@ -316,7 +317,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // When route switches to proxy, write Qwen config immediately
     // (Qwen uses AcpAgentAdapter which has no beforeRun hook)
     if (s.route === 'proxy') {
-      void qwenConfigWriter.ensureProxyConfig({ port: proxyPort }).catch(err =>
+      void qwenConfigWriter.ensureProxyConfig({ port: proxyPort, authToken: proxyAuthToken }).catch(err =>
         logger.error('config_failure', 'Failed to configure Qwen proxy settings.', undefined, err)
       );
     }

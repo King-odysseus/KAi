@@ -7,6 +7,7 @@ export interface CodexProxyConfig {
   profile: string;
   port: number;
   model: string;
+  authToken?: string;
 }
 
 export interface CodexMcpConfig {
@@ -96,7 +97,7 @@ export class CodexConfigWriter {
     }
 
     const topLevel = codexTopLevelKeys(config.profile, config.model);
-    const tables = codexProviderTables(config.profile, config.port);
+    const tables = codexProviderTables(config.profile, config.port, config.authToken);
     const cleanPreamble = stripTopLevelRoutingKeys(preamble).trim();
 
     const parts = [topLevel];
@@ -210,13 +211,14 @@ function codexTopLevelKeys(profile: string, model: string): string {
 }
 
 /** The provider table the top-level `model_provider` key selects. */
-function codexProviderTables(profile: string, port: number): string {
+function codexProviderTables(profile: string, port: number, authToken?: string): string {
   return [
     '# >>> KAI codex-' + profile,
     '[model_providers.' + profile + ']',
     'name = "KAI Proxy"',
     'base_url = "http://127.0.0.1:' + port + '/a/codex/v1"',
     'wire_api = "responses"',
+    ...(authToken ? ['http_headers = { Authorization = "Bearer ' + authToken + '" }'] : []),
     '# <<< KAI codex-' + profile
   ].join('\n');
 }

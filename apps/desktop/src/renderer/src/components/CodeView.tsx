@@ -1340,6 +1340,21 @@ export function CodeView({
       if (normalise(document.model.getValue()) !== document.savedValue) throw new Error(`Could not save ${path}. Resolve the save issue before running a check against the file on disk.`);
     }
     const run = unwrap(await window.kaiDesktop.runVerification(id, command));
+    if (responseLessonId && projectIdRef.current === id) {
+      const updated = unwrap(await window.kaiDesktop.recordLearningCheckEvidence({
+        projectId: id,
+        lessonId: responseLessonId,
+        command: run.command,
+        passed: run.passed,
+        exitCode: run.exitCode,
+        testsPassed: run.testsPassed,
+        testsFailed: run.testsFailed,
+      }));
+      if (projectIdRef.current === id) {
+        setProgress(updated);
+        setLearningResult((current) => current ? { ...current, progress: updated } : current);
+      }
+    }
     return `${run.command}: ${run.passed ? 'Passed' : 'Failed'} (exit ${run.exitCode ?? 'unknown'})\n${run.outputTail}`;
   }
 

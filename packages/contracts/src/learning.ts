@@ -265,6 +265,17 @@ export const learningProgressSchema = z
   .strict();
 export type LearningProgress = z.infer<typeof learningProgressSchema>;
 
+export const learningCheckEvidenceInputSchema = z.object({
+  projectId: z.string().min(1),
+  lessonId: z.string().min(1),
+  command: z.string().trim().min(1).max(2_000),
+  passed: z.boolean(),
+  exitCode: z.number().int().nullable(),
+  testsPassed: z.number().int().nonnegative().nullable(),
+  testsFailed: z.number().int().nonnegative().nullable(),
+}).strict();
+export type LearningCheckEvidenceInput = z.infer<typeof learningCheckEvidenceInputSchema>;
+
 export const learningPreferencesInputSchema = z
   .object({
     projectId: z.string().min(1),

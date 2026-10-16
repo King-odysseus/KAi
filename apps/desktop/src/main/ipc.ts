@@ -613,6 +613,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'autopilot:status', async ({ projectId }) => context.autopilot.status(projectId));
   handle(context, 'autopilot:requeue', async ({ projectId }) => ({ requeued: await context.autopilot.requeueBlocked(projectId) }));
   handle(context, 'autopilot:interrupted', async () => context.autopilot.interrupted());
+  handle(context, 'autopilot:audit', async ({ projectId }) => context.autopilot.audit(projectId));
   handle(context, 'autopilot:interrupted-resume', async ({ studioProjectId }, request) => context.autopilot.resumeInterrupted(studioProjectId, request.ownerWindowId));
   handle(context, 'autopilot:interrupted-release', async ({ studioProjectId }) => ({ released: await context.autopilot.releaseInterrupted(studioProjectId) }));
   handle(context, 'auto:start', async (input, request) => context.auto.start(input, request.ownerWindowId));
@@ -874,6 +875,10 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'learning:understood', async ({ projectId, lessonId }) => {
     await resolveProject(context, projectId, true);
     return context.learningProgress.markUnderstood(projectId, lessonId);
+  });
+  handle(context, 'learning:record-check-evidence', async (input) => {
+    await resolveProject(context, input.projectId, true);
+    return context.learningProgress.recordCheckEvidence(input);
   });
   handle(context, 'learning:explain-back', async ({ projectId, lessonId, question, answer }): Promise<LearningExplainBackResult> => {
     await resolveProject(context, projectId, true);

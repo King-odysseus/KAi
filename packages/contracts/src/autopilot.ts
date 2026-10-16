@@ -30,6 +30,8 @@ export const autopilotStartInputSchema = z
     maxHours: z.number().min(0).max(168).default(12),
     /** The least seconds between two API requests; the pace widens by itself when the provider pushes back. */
     minGapSeconds: z.number().min(0).max(120).default(0),
+    /** How unattended runs use decisions recorded in the project decision log when a card is blocked. */
+    blockerPolicy: z.enum(['continue-and-report', 'continue-and-use-decisions']).default('continue-and-report'),
   })
   .strict();
 export type AutopilotStartInput = z.infer<typeof autopilotStartInputSchema>;
@@ -45,6 +47,18 @@ export const autopilotLogEntrySchema = z
   })
   .strict();
 export type AutopilotLogEntry = z.infer<typeof autopilotLogEntrySchema>;
+
+/** Durable copy of a run log entry. Unlike live status, this survives a completed or interrupted run. */
+export const autopilotAuditEntrySchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().min(1).max(120),
+  projectId: z.string().min(1),
+  at: timestampSchema,
+  kind: z.enum(['info', 'card', 'check', 'rest', 'warn']),
+  text: z.string().max(500),
+  cardId: z.string().max(120).nullable(),
+}).strict();
+export type AutopilotAuditEntry = z.infer<typeof autopilotAuditEntrySchema>;
 
 /** One route the run's dev proof loaded, and what the page showed. */
 export const devRouteResultSchema = z
@@ -141,4 +155,7 @@ export type AutopilotRunRecord = z.infer<typeof autopilotRunRecordSchema>;
 
 export const autopilotInterruptedInputSchema = z.object({ studioProjectId: z.string().min(1) }).strict();
 export type AutopilotInterruptedInput = z.infer<typeof autopilotInterruptedInputSchema>;
+
+export const autopilotAuditInputSchema = z.object({ projectId: z.string().min(1) }).strict();
+export type AutopilotAuditInput = z.infer<typeof autopilotAuditInputSchema>;
 

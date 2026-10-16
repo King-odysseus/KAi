@@ -183,7 +183,7 @@ describe('desktop learning mode', () => {
     const root = await temporaryDirectory();
     const store = new LearningProgressStore(root, new NodeFileSystem());
     const progress = await store.recordEvaluation({ ...tutorRequest('next-step', 'guided'), hintLevel: 3 }, tutorResponse());
-    expect(progress.concepts[0]).toMatchObject({ mastery: 'introduced', score: 25 });
+    expect(progress.concepts[0]).toMatchObject({ mastery: 'introduced', score: 0 });
   });
 
   it('grades an explain-back answer and sends the hint ladder rule with a stuck request', async () => {
@@ -310,18 +310,19 @@ describe('desktop learning mode', () => {
     expect(completed.concepts[0]).toMatchObject({
       name: 'Variables',
       mastery: 'introduced',
-      score: 20,
+      score: 0,
       evidenceCount: 1,
     });
-    expect(completed.concepts[0]?.evidence[0]).toContain('AI-generated completion');
+    expect(completed.concepts[0]?.evidence[0]).toContain('does not demonstrate learner mastery');
 
     const checked = await store.recordEvaluation(tutorRequest('check-code', 'pair'), response);
     expect(checked.concepts[0]).toMatchObject({
       name: 'Variables',
-      mastery: 'practising',
-      score: 78,
+      mastery: 'introduced',
+      score: 0,
       evidenceCount: 2,
     });
+    expect(checked.concepts[0]?.evidence[1]).toContain('does not demonstrate learner mastery');
     expect(checked.preferences).toEqual({ assistance: 'guided', inlineSuggestions: false });
   });
 

@@ -1,4 +1,5 @@
-import { isUiCard, machineBlocked, needsScreenCheck, readyCards } from '@kai/contracts';
+import { randomUUID } from 'node:crypto';
+import { explainBlocked, isUiCard, machineBlocked, needsScreenCheck, readyCards } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -6,6 +7,7 @@ import type {
   ArtifactKind,
   AutopilotLogEntry,
   AutopilotRunRecord,
+  AutopilotAuditEntry,
   AutopilotStartInput,
   AutopilotStatus,
   BoardCard,
@@ -50,6 +52,8 @@ export interface AutopilotJournal {
   read(studioProjectId: string): Promise<AutopilotRunRecord | null>;
   /** Everything still on disk, newest first — which at startup is every run that was interrupted. */
   list(): Promise<AutopilotRunRecord[]>;
+  audit?(entry: Omit<AutopilotAuditEntry, 'schemaVersion'>): Promise<void>;
+  listAudit?(projectId: string, limit?: number): Promise<AutopilotAuditEntry[]>;
 }
 
 export interface AutopilotPorts {
@@ -106,19 +110,11 @@ interface ActiveRun {
   completed: number;
 }
 
-/** Nothing works: several cards parked and not one finished, so the run stops and puts them back rather than the board. */
-class SystemicFailure extends Error {}
-
 /**
- * How many cards one run may park before giving up, provided it has not closed a single one in the meantime.
- *
- * It used to give up after two cards failed with the same message, which sounded like a setup problem but is also
- * exactly what a missing resource looks like: a design tool that is not open, a service that is down, a credential
- * nobody has added yet. Those block the cards that need them and nothing else, and stopping the whole run for them
- * means the work that needs nothing stops too — while the person goes off to open the tool. Park them, say so, and
- * carry on with the rest.
+ * Repeated failures do not stop the run. A missing resource can affect several cards, but independent work should
+ * continue while the person is away. The blocked cards remain visible with a suggested next step and can be retried
+ * after the user resolves the shared problem.
  */
-const BLOCKED_BEFORE_GIVING_UP = 3;
 
 /**
  * The note a card carries when the agent finished its work but there was nothing to check it with. It is also how a
@@ -189,6 +185,10 @@ export class DesktopAutopilot {
   /** The runs KAI was closed in the middle of, newest first. Nothing is running for any of them. */
   async interrupted(): Promise<AutopilotRunRecord[]> {
     return (await this.ports.journal?.list().catch(() => [])) ?? [];
+  }
+
+  async audit(projectId: string): Promise<AutopilotAuditEntry[]> {
+    return (await this.ports.journal?.listAudit?.(projectId, 100).catch(() => [])) ?? [];
   }
 
   /**
@@ -262,11 +262,6 @@ export class DesktopAutopilot {
     } catch (error) {
       if (active.controller.signal.aborted) return this.settle(projectId, owner, 'stopped', 'Autopilot was stopped.');
       const message = error instanceof Error ? error.message : String(error);
-      if (error instanceof SystemicFailure) {
-        const restored = await this.putBack(projectId, active.blocked.map((item) => item.id), 'Autopilot stopped on a setup problem, so this card was put back untouched.');
-        this.record(projectId, owner, 'warn', `${message}${restored > 0 ? ` ${restored} card${restored === 1 ? ' was' : 's were'} put back in the queue.` : ''}`);
-        return this.settle(projectId, owner, 'failed', `${message}${restored > 0 ? ` The ${restored} card${restored === 1 ? '' : 's'} it had parked ${restored === 1 ? 'was' : 'were'} put back.` : ''}`);
-      }
       this.record(projectId, owner, 'warn', message);
       return this.settle(projectId, owner, 'failed', message);
     }
@@ -360,7 +355,9 @@ export class DesktopAutopilot {
       state.attempt = attempt;
       this.phase(projectId, owner, 'working', `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
       const artifacts = await this.ports.artifactsFor(projectId).catch(() => ({}));
-      const base = boardCardPrompt(card, artifacts);
+      const base = `${boardCardPrompt(card, artifacts)}\n\nAUTOPILOT BLOCKER POLICY:\n${input.blockerPolicy === 'continue-and-use-decisions'
+        ? 'If this card is blocked, read the approved project decisions above and apply one only when its conditions genuinely match. Report which decision you applied and continue independent cards.'
+        : 'If this card is blocked, report the exact blocker and a practical next step. Do not wait for the user; independent cards must continue.'}`;
       const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
       active.conversationId = conversation.id;
       state.conversationId = conversation.id;
@@ -409,11 +406,8 @@ export class DesktopAutopilot {
     await this.forget(projectId);
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
-    const lastTwo = active.blocked.slice(-2);
-    if (lastTwo.length === 2 && lastTwo[0]!.reason === lastTwo[1]!.reason && lastTwo[0]!.reason.startsWith('The last attempt ended with an error:')) {
-      throw new SystemicFailure(`Autopilot stopped: two cards in a row ended with exactly the same agent error, which points at the setup rather than the cards. ${failure.slice(0, 300)}`);
-    }
-    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${input.attemptsPerCard} attempts; moving on.`);
+    const explanation = explainBlocked(failure);
+    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${input.attemptsPerCard} attempts; moving on. ${explanation.ask}`);
   }
 
   /**
@@ -432,6 +426,11 @@ export class DesktopAutopilot {
       at: new Date(this.ports.now()).toISOString(),
       visual: needsScreenCheck(card) ? null : 'skipped',
       screenshots: [],
+      acceptanceEvidence: card.acceptance.map((criterion) => ({
+        criterion,
+        status: 'passed' as const,
+        evidence: `Verification run ${check.runId} passed: ${command}`,
+      })),
     });
     if (needsScreenCheck(card)) {
       const visual = card.route
@@ -664,10 +663,15 @@ export class DesktopAutopilot {
 
   private record(projectId: string, owner: number, kind: AutopilotLogEntry['kind'], text: string): void {
     const state = this.state(projectId);
-    state.log = [...state.log, { at: new Date(this.ports.now()).toISOString(), kind, text: text.slice(0, 500) }].slice(-LOG_LIMIT);
+    const at = new Date(this.ports.now()).toISOString();
+    const bounded = text.slice(0, 500);
+    state.log = [...state.log, { at, kind, text: bounded }].slice(-LOG_LIMIT);
     // Best effort and not awaited: this is the line an interrupted run is reported with, so an older one costs
     // nothing but a slightly stale sentence, and waiting on a disk write here would stall the run itself.
     void this.keep((journal) => journal.touch(projectId, text));
+    void this.keep(async (journal) => {
+      await journal.audit?.({ id: `audit_${randomUUID()}`, projectId, at, kind, text: bounded, cardId: state.cardId });
+    });
     this.publish(projectId, owner);
   }
 

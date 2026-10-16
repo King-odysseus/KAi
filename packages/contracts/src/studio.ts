@@ -207,6 +207,12 @@ export const cardCheckSchema = z
     /** The visual check's pass, for `component` and `page` cards; null for the rest. */
     visual: z.enum(['passed', 'failed', 'skipped']).nullable(),
     screenshots: z.array(z.string()).default([]),
+    /** Evidence attached to each acceptance criterion. Optional for boards written before criterion evidence existed. */
+    acceptanceEvidence: z.array(z.object({
+      criterion: z.string().min(1).max(400),
+      status: z.enum(['passed', 'failed', 'unknown']),
+      evidence: z.string().max(1_000),
+    }).strict()).max(20).optional(),
   })
   .strict();
 export type CardCheck = z.infer<typeof cardCheckSchema>;

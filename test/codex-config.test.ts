@@ -23,7 +23,8 @@ describe('CodexConfigWriter', () => {
       configPath,
       profile: 'codeproxy',
       port: 8082,
-      model: 'gpt-5.5'
+      model: 'gpt-5.5',
+      authToken: 'kai-test-token'
     });
 
     const next = await fs.readFile(configPath, 'utf8');
@@ -33,6 +34,7 @@ describe('CodexConfigWriter', () => {
     expect(next).toContain('[profiles.native]');
     expect(next).toContain('[model_providers.codeproxy]');
     expect(next).toContain('base_url = "http://127.0.0.1:8082/a/codex/v1"');
+    expect(next).toContain('http_headers = { Authorization = "Bearer kai-test-token" }');
     // Codex 0.153+ rejects `--profile` while a [profiles.<name>] table exists,
     // and the top-level model_provider key already selects the proxy. Writing
     // one would make `codex exec --profile codeproxy` a config-load error.

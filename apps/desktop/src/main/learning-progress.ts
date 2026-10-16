@@ -7,6 +7,7 @@ import {
   type LearningEvidence,
   type LearningExplainBackGrade,
   type LearningExplainBackVerdict,
+  type LearningCheckEvidenceInput,
   type LearningMastery,
   type LearningPreferencesInput,
   type LearningProgress,
@@ -31,7 +32,7 @@ const masteryRank: Record<LearningMastery, number> = {
 };
 
 interface EvaluationEvidence {
-  mastery: LearningMastery;
+  mastery: LearningMastery | null;
   score: number;
   summary: string;
 }
@@ -111,7 +112,7 @@ export class LearningProgressStore {
     const evidence = response.concepts.map((concept): LearningEvidence => ({
       id: `evidence_${createHash('sha256').update(`${request.projectId}:${request.filePath ?? 'project'}:${request.action}:${concept.name}:${createdAt}`).digest('hex').slice(0, 24)}`,
       conceptName: concept.name,
-      mastery: capMastery(concept.mastery, evaluation.mastery),
+      mastery: evaluation.mastery ? capMastery(concept.mastery, evaluation.mastery) : 'introduced',
       summary: concept.evidence
         ? `${concept.evidence} (${evaluation.summary})`
         : evaluation.summary,
@@ -127,10 +128,12 @@ export class LearningProgressStore {
       const id = conceptId(concept.name, concept.category);
       const existingIndex = concepts.findIndex((candidate) => candidate.id === id);
       const existing = existingIndex >= 0 ? concepts[existingIndex] : undefined;
-      const mastery = existing
-        ? maxMastery(existing.mastery, capMastery(concept.mastery, evaluation.mastery))
-        : capMastery(concept.mastery, evaluation.mastery);
-      const score = Math.max(existing?.score ?? 0, evaluation.score);
+      const mastery = evaluation.mastery
+        ? existing
+          ? maxMastery(existing.mastery, capMastery(concept.mastery, evaluation.mastery))
+          : capMastery(concept.mastery, evaluation.mastery)
+        : existing?.mastery ?? 'introduced';
+      const score = evaluation.mastery ? Math.max(existing?.score ?? 0, evaluation.score) : existing?.score ?? 0;
       const strengths = uniqueBounded([
         ...(existing?.strengths ?? []),
         ...(masteryRank[mastery] >= masteryRank.developing ? [evaluation.summary] : []),
@@ -169,6 +172,60 @@ export class LearningProgressStore {
     });
     await this.store(request.projectId).save(updated);
     return updated;
+  }
+
+  /**
+   * A passing project check is objective evidence attached to the current lesson. It can raise a concept to
+   * practising; a solid explanation plus that check is enough to show independent understanding. A failed project
+   * check is retained as evidence but never treated as proof that the learner does not understand the concept.
+   */
+  async recordCheckEvidence(input: LearningCheckEvidenceInput): Promise<LearningProgress> {
+    return this.serialiseWrite(async () => {
+      const progress = await this.get(input.projectId);
+      const lesson = progress.lessons?.find((candidate) => candidate.id === input.lessonId);
+      if (!lesson) throw new Error('This lesson is no longer available.');
+      const createdAt = this.now().toISOString();
+      const result = input.passed ? 'passed' : `failed (exit ${input.exitCode ?? 'unknown'})`;
+      const counts = input.testsPassed === null ? '' : `, ${input.testsPassed} tests passed${input.testsFailed === null ? '' : ` and ${input.testsFailed} failed`}`;
+      const summary = `Project check ${result}${counts}: ${input.command}`.slice(0, 1_000);
+      const concepts = progress.concepts.map((concept) => {
+        if (!lesson.response.concepts.some((taught) => conceptId(taught.name, taught.category) === concept.id)) return concept;
+        const mastery = input.passed
+          ? lesson.explainBack?.verdict === 'solid' ? 'independent' as const : maxMastery(concept.mastery, 'practising')
+          : concept.mastery;
+        return {
+          ...concept,
+          mastery,
+          score: input.passed ? Math.max(concept.score, mastery === 'independent' ? 100 : 82) : concept.score,
+          evidenceCount: concept.evidenceCount + 1,
+          evidence: [summary, ...concept.evidence].slice(0, 20),
+          strengths: input.passed ? uniqueBounded([...concept.strengths, summary], 12, 500) : concept.strengths,
+          nextStep: input.passed ? concept.nextStep : `Review the project check failure, then rerun it: ${input.command}`.slice(0, 1_000),
+          lastSeenAt: createdAt,
+        };
+      });
+      const evidence: LearningEvidence[] = lesson.response.concepts.map((concept) => ({
+        id: `evidence_${createHash('sha256').update(`${input.projectId}:${input.lessonId}:${concept.name}:${input.command}:${createdAt}`).digest('hex').slice(0, 24)}`,
+        conceptName: concept.name,
+        mastery: input.passed ? (lesson.explainBack?.verdict === 'solid' ? 'independent' : 'practising') : 'introduced',
+        summary,
+        ...(lesson.filePath ? { filePath: lesson.filePath } : {}),
+        action: 'check-code',
+        assistance: progress.preferences.assistance,
+        createdAt,
+      }));
+      const updated = learningProgressSchema.parse({
+        ...progress,
+        concepts,
+        recentEvidence: [...evidence, ...progress.recentEvidence].slice(0, 100),
+        memory: progress.memory?.lessonId === input.lessonId
+          ? { ...progress.memory, unresolvedCheck: input.passed ? '' : summary }
+          : progress.memory,
+        updatedAt: createdAt,
+      });
+      await this.store(input.projectId).save(updated);
+      return updated;
+    });
   }
 
   async markUnderstood(projectId: string, lessonId: string): Promise<LearningProgress> {
@@ -255,45 +312,12 @@ const explanationEvidence: Record<LearningExplainBackVerdict, { mastery: Learnin
 };
 
 function evaluationEvidence(request: LearningTutorRequest): EvaluationEvidence {
-  if (request.hintLevel === 3) {
-    return {
-      mastery: 'introduced',
-      score: 25,
-      summary: 'Needed the full answer after two hints.',
-    };
-  }
-  if (request.action === 'complete') {
-    return {
-      mastery: 'introduced',
-      score: 20,
-      summary: 'Observed an AI-generated completion; this does not by itself demonstrate learner mastery.',
-    };
-  }
-  if (request.action === 'check-code' && !request.errorText?.trim()) {
-    return {
-      mastery: request.assistance === 'copilot' ? 'developing' : 'practising',
-      score: request.assistance === 'copilot' ? 60 : 78,
-      summary: 'Submitted code for a knowledge check without a reported runtime error.',
-    };
-  }
-  if (request.action === 'explain-error') {
-    return {
-      mastery: 'developing',
-      score: 52,
-      summary: 'Investigated a concrete error and its cause.',
-    };
-  }
-  if (request.action === 'hint' || request.action === 'next-step') {
-    return {
-      mastery: 'developing',
-      score: 38,
-      summary: 'Requested a guided hint or the next learning step.',
-    };
-  }
   return {
-    mastery: 'introduced',
-    score: 30,
-    summary: 'Requested an explanation of the code or concept.',
+    mastery: null,
+    score: 0,
+    summary: request.action === 'complete' || request.hintLevel === 3
+      ? 'Saw a worked answer; this interaction alone does not demonstrate learner mastery.'
+      : 'Asked for tutor support; this interaction alone does not demonstrate learner mastery.',
   };
 }
 

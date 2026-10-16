@@ -5,6 +5,7 @@ import * as path from 'path';
 export interface QwenProxyConfig {
   configPath?: string;
   port: number;
+  authToken?: string;
 }
 
 export interface QwenProxyConfigResult {
@@ -28,6 +29,8 @@ export class QwenConfigWriter {
     const proxyUrl = proxyBaseUrl(config.port);
     const modelProviders = asProviderMap(settings.modelProviders);
     const model = asRecord(settings.model);
+    const authSnapshots = readAuthSnapshots(settings);
+    const authOriginals = authSnapshots ?? { providers: [] as AuthHeaderSnapshot[], model: null as AuthHeaderSnapshot | null };
 
     // Snapshot the user's real upstreams before the first rewrite so a later
     // restore can put them back. A base URL already pointing at a local proxy
@@ -44,22 +47,35 @@ export class QwenConfigWriter {
     }
 
     let changed = false;
-    for (const providers of Object.values(modelProviders)) {
+    for (const [providerKey, providers] of Object.entries(modelProviders)) {
       for (const provider of providers) {
-        if (typeof provider.baseUrl !== 'string' || provider.baseUrl === proxyUrl) continue;
-        provider.baseUrl = proxyUrl;
-        changed = true;
+        if (typeof provider.baseUrl !== 'string') continue;
+        if (provider.baseUrl !== proxyUrl && !isLocalProxy(provider.baseUrl)) {
+          provider.baseUrl = proxyUrl;
+          changed = true;
+        }
+        if (config.authToken) {
+          if (!authSnapshots) authOriginals.providers.push({ provider: providerKey, id: idOf(provider), customHeaders: readCustomHeaders(provider) });
+          changed = setProxyAuthorization(provider, config.authToken) || changed;
+        }
       }
     }
-    if (model && typeof model.baseUrl === 'string' && model.baseUrl !== proxyUrl) {
-      model.baseUrl = proxyUrl;
-      changed = true;
+    if (model && typeof model.baseUrl === 'string') {
+      if (model.baseUrl !== proxyUrl && !isLocalProxy(model.baseUrl)) {
+        model.baseUrl = proxyUrl;
+        changed = true;
+      }
+      if (config.authToken) {
+        if (!authSnapshots) authOriginals.model = { customHeaders: readCustomHeaders(model) };
+        changed = setProxyAuthorization(model, config.authToken) || changed;
+      }
     }
 
     if (!changed) {
       return { configPath, changed: false, providerCount: 0 };
     }
     if (originals) settings[ORIGINALS_KEY] = originals;
+    if (config.authToken && (authOriginals.providers.length > 0 || authOriginals.model)) settings[AUTH_ORIGINALS_KEY] = authOriginals;
 
     const next = JSON.stringify(settings, null, 2) + '\n';
     const backupPath = await this.backupExisting(configPath, existingRaw);
@@ -76,23 +92,24 @@ export class QwenConfigWriter {
     }
 
     const originals = readOriginals(settings);
+    const authOriginals = readAuthSnapshots(settings);
     // Without a snapshot there is nothing trustworthy to restore to. Guessing a
     // default upstream would clobber whatever a third-party tool (or the user)
     // had configured, so leave the file alone instead.
-    if (!originals) {
+    if (!originals && !authOriginals) {
       return { configPath: targetPath, changed: false, providerCount: 0 };
     }
 
     const modelProviders = asProviderMap(settings.modelProviders);
     let restored = 0;
-    for (const original of originals.providers) {
+    for (const original of originals?.providers ?? []) {
       for (const provider of modelProviders[original.provider] ?? []) {
         if (idOf(provider) !== original.id || provider.baseUrl === original.baseUrl) continue;
         provider.baseUrl = original.baseUrl;
         restored++;
       }
     }
-    if (originals.modelBaseUrl !== undefined) {
+    if (originals?.modelBaseUrl !== undefined) {
       const model = asRecord(settings.model);
       if (model && model.baseUrl !== originals.modelBaseUrl) {
         model.baseUrl = originals.modelBaseUrl;
@@ -100,7 +117,22 @@ export class QwenConfigWriter {
       }
     }
 
-    const next = JSON.stringify(withoutOriginals(settings), null, 2) + '\n';
+    if (authOriginals) {
+      for (const original of authOriginals.providers) {
+        for (const provider of modelProviders[original.provider] ?? []) {
+          if (idOf(provider) !== original.id) continue;
+          restoreCustomHeaders(provider, original.customHeaders);
+          restored++;
+        }
+      }
+      const model = asRecord(settings.model);
+      if (model && authOriginals.model) {
+        restoreCustomHeaders(model, authOriginals.model.customHeaders);
+        restored++;
+      }
+    }
+
+    const next = JSON.stringify(withoutAuthOriginals(withoutOriginals(settings)), null, 2) + '\n';
     if (next === existingRaw) {
       return { configPath: targetPath, changed: false, providerCount: 0 };
     }
@@ -138,10 +170,23 @@ export function defaultQwenConfigPath(): string {
 
 /** Key under which KAI remembers the user's real upstreams for a clean restore. */
 const ORIGINALS_KEY = '_kaiProxyOriginals';
+const AUTH_ORIGINALS_KEY = '_kaiProxyOriginalAuthHeaders';
 
 interface RecordedOriginals {
   providers: Array<{ provider: string; id: string; baseUrl: string }>;
   modelBaseUrl?: string;
+}
+
+interface AuthHeaderSnapshot {
+  provider?: string;
+  id?: string;
+  hadGenerationConfig: boolean;
+  customHeaders: Record<string, unknown> | null;
+}
+
+interface RecordedAuthHeaders {
+  providers: AuthHeaderSnapshot[];
+  model: AuthHeaderSnapshot | null;
 }
 
 /**
@@ -159,6 +204,57 @@ function withoutOriginals(settings: Record<string, unknown>): Record<string, unk
     if (key !== ORIGINALS_KEY) copy[key] = value;
   }
   return copy;
+}
+
+function withoutAuthOriginals(settings: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(settings)) if (key !== AUTH_ORIGINALS_KEY) copy[key] = value;
+  return copy;
+}
+
+function readCustomHeaders(entry: Record<string, unknown>): AuthHeaderSnapshot {
+  const generationConfig = asRecord(entry.generationConfig);
+  const headers = generationConfig && asRecord(generationConfig.customHeaders);
+  return {
+    hadGenerationConfig: Boolean(generationConfig),
+    customHeaders: headers ? { ...headers } : null,
+  };
+}
+
+function setProxyAuthorization(entry: Record<string, unknown>, token: string): boolean {
+  const generationConfig = asRecord(entry.generationConfig) ?? {};
+  const customHeaders = asRecord(generationConfig.customHeaders) ?? {};
+  const authorization = `Bearer ${token}`;
+  if (customHeaders.Authorization === authorization) return false;
+  entry.generationConfig = { ...generationConfig, customHeaders: { ...customHeaders, Authorization: authorization } };
+  return true;
+}
+
+function restoreCustomHeaders(entry: Record<string, unknown>, snapshot: AuthHeaderSnapshot): void {
+  const generationConfig = asRecord(entry.generationConfig);
+  if (!generationConfig) return;
+  const restored = { ...generationConfig };
+  if (snapshot.customHeaders) restored.customHeaders = snapshot.customHeaders;
+  else delete restored.customHeaders;
+  if (!snapshot.hadGenerationConfig && Object.keys(restored).length === 0) delete entry.generationConfig;
+  else entry.generationConfig = restored;
+}
+
+function readAuthSnapshots(settings: Record<string, unknown>): RecordedAuthHeaders | null {
+  const raw = asRecord(settings[AUTH_ORIGINALS_KEY]);
+  if (!raw) return null;
+  const providers = Array.isArray(raw.providers)
+    ? raw.providers.flatMap((item): AuthHeaderSnapshot[] => {
+      const value = asRecord(item);
+      if (!value || typeof value.provider !== 'string' || typeof value.id !== 'string') return [];
+      return [{ provider: value.provider, id: value.id, hadGenerationConfig: value.hadGenerationConfig === true, customHeaders: asRecord(value.customHeaders) ? { ...asRecord(value.customHeaders)! } : null }];
+    })
+    : [];
+  const modelRaw = asRecord(raw.model);
+  const model = modelRaw
+    ? { hadGenerationConfig: modelRaw.hadGenerationConfig === true, customHeaders: asRecord(modelRaw.customHeaders) ? { ...asRecord(modelRaw.customHeaders)! } : null }
+    : null;
+  return { providers, model };
 }
 
 /** A base URL that already points at a local proxy, i.e. not a real upstream. */

@@ -68,10 +68,15 @@ export interface DoneEvidence {
 }
 
 /** Null when the card may be marked `done`; otherwise the one rule that blocked it, for the caller to show. */
-export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'route' | 'check'>, evidence: DoneEvidence): string | null {
+export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'route' | 'check' | 'acceptance'>, evidence: DoneEvidence): string | null {
   if (!card.check) return 'The card has no record of a passing check.';
   if (!evidence.run) return 'The check the card was closed on is no longer in the verification history.';
   if (!evidence.run.passed) return `The recorded check did not pass (${evidence.run.command} exited ${evidence.run.exitCode ?? 'unknown'}).`;
+  if (card.acceptance.length > 0) {
+    const criterionEvidence = card.check.acceptanceEvidence ?? [];
+    const missing = card.acceptance.find((criterion) => !criterionEvidence.some((item) => item.criterion === criterion && item.status === 'passed' && item.evidence.trim()));
+    if (missing) return `Acceptance criterion lacks passing evidence: ${missing}`;
+  }
   if (needsScreenCheck(card) && card.check.visual !== 'passed') return 'A page, or a component with its own route, needs a passing visual check before it can be done.';
   if (evidence.drifted) return 'Files changed after the check passed, so the result does not cover the current tree.';
   if (evidence.recordedNow === null) return 'The checked files could not be read back to confirm they still match.';
@@ -195,6 +200,9 @@ export function designCardId(nodeId: string): string {
 }
 
 export class StudioBoardStore {
+  /** Serializes writes per project and lets the final writer reject a stale read-modify-write transaction. */
+  private readonly writeTails = new Map<string, Promise<void>>();
+
   constructor(private readonly ports: BoardPorts) {}
 
   async read(projectId: string): Promise<StudioBoard> {
@@ -434,14 +442,29 @@ export class StudioBoardStore {
   }
 
   private async save(projectId: string, board: StudioBoard): Promise<StudioBoard> {
-    // Every write bumps the revision, which is what the board's stale-write check compares: a writer that read
-    // revision N and finds the file at another one is writing over something it never saw. Done here because every
-    // write goes through here, so no caller can forget it.
-    const parsed = studioBoardSchema.parse({ ...board, revision: board.revision + 1 });
-    const root = await this.ports.projectRoot(projectId);
-    await this.ports.spec.write(root, STUDIO_BOARD_PATH, `${JSON.stringify(parsed, null, 2)}\n`);
-    this.ports.changed?.(projectId, parsed);
-    return parsed;
+    const previous = this.writeTails.get(projectId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.then(() => gate);
+    this.writeTails.set(projectId, tail);
+    await previous;
+    try {
+      const root = await this.ports.projectRoot(projectId);
+      const raw = await this.ports.spec.read(root, STUDIO_BOARD_PATH);
+      const current = raw === null ? createStudioBoard() : studioBoardSchema.parse(JSON.parse(raw));
+      if (current.revision !== board.revision) {
+        throw new Error(`The Studio board changed while this update was pending (expected revision ${board.revision}, found ${current.revision}). Reload the board and try again.`);
+      }
+      // Every write bumps the revision. The check happens inside the serialized queue immediately before writing,
+      // so a second agent cannot overwrite the first agent's update after both read the same old revision.
+      const parsed = studioBoardSchema.parse({ ...board, revision: board.revision + 1 });
+      await this.ports.spec.write(root, STUDIO_BOARD_PATH, `${JSON.stringify(parsed, null, 2)}\n`);
+      this.ports.changed?.(projectId, parsed);
+      return parsed;
+    } finally {
+      release();
+      if (this.writeTails.get(projectId) === tail) this.writeTails.delete(projectId);
+    }
   }
 }
 

@@ -16,14 +16,9 @@ export interface ProxyServerConfig {
     apiKey?: string;
     defaultModel?: string;
   };
-  /** Random token written into ~/.claude/settings.json's
-   * ANTHROPIC_AUTH_TOKEN (see proxy-token.ts). When set, /v1/messages
-   * rejects any request whose Authorization header doesn't match it —
-   * closing the gap where any local process (or, unauthenticated, a web
-   * page's fetch()) could ride this proxy to your real upstream key.
-   * Left undefined preserves the old unauthenticated behavior. Codex/Qwen
-   * aren't covered yet — their config.toml/settings schema for carrying a
-   * matching token hasn't been verified against a live run. */
+  /** Random per-installation token written into the supported agent configs.
+   * Every model route requires this token, so another local process cannot
+   * spend the configured upstream key just because it can reach loopback. */
   authToken?: string;
 }
 
@@ -82,6 +77,16 @@ function isOpenAIResponseTarget(url: string): boolean {
 function normalizeAgentPath(pathname: string): string {
   const match = /^\/(?:a|agent)\/[A-Za-z0-9_-]{1,32}(\/.*)?$/.exec(pathname);
   return match ? match[1] || '/' : pathname;
+}
+
+function isLoopbackHost(host: string | undefined): boolean {
+  if (!host) return false;
+  try {
+    const hostname = new URL(`http://${host}`).hostname.toLowerCase();
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
 }
 
 // ---- Responses API → Chat Completions translation ----
@@ -684,6 +689,15 @@ export class KaiProxyServer {
       return;
     }
 
+    // A loopback listener can still be reached through DNS rebinding. Reject
+    // external Host values before serving even the unauthenticated metadata
+    // endpoints, then require the per-installation token on every model route.
+    if (!isLoopbackHost(req.headers.host)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Forbidden host', type: 'forbidden_host' } }));
+      return;
+    }
+
     // Health check
     if (req.method === 'GET' && pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -709,23 +723,21 @@ export class KaiProxyServer {
 
     // Codex Responses API
     if (req.method === 'POST' && pathname === '/v1/responses') {
+      if (!this.isAuthorizedRequest(req)) return this.writeUnauthorized(res);
       await this.handleResponses(req, res);
       return;
     }
 
     // Chat Completions (passthrough)
     if (req.method === 'POST' && pathname === '/v1/chat/completions') {
+      if (!this.isAuthorizedRequest(req)) return this.writeUnauthorized(res);
       await this.handleChatCompletions(req, res);
       return;
     }
 
     // Anthropic Messages (translate → Chat Completions)
     if (req.method === 'POST' && pathname === '/v1/messages') {
-      if (!this.isAuthorizedClaudeRequest(req)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'unauthorized' } }));
-        return;
-      }
+      if (!this.isAuthorizedRequest(req)) return this.writeUnauthorized(res);
       await this.handleAnthropicMessages(req, res);
       return;
     }
@@ -735,15 +747,16 @@ export class KaiProxyServer {
     res.end(JSON.stringify({ error: { message: 'Not found: ' + pathname, type: 'not_found' } }));
   }
 
-  /** Checks the caller's Authorization header against config.authToken —
-   * the value claude-config.ts writes into ANTHROPIC_AUTH_TOKEN, which
-   * Claude Code sends back as `Authorization: Bearer <token>`. No
-   * authToken configured (the pre-Phase-6 default) skips the check
-   * entirely, so this can't newly break anyone who hasn't set one. */
-  private isAuthorizedClaudeRequest(req: http.IncomingMessage): boolean {
-    if (!this.config.authToken) return true;
+  /** A missing token is a configuration error, not permission to use the upstream key. */
+  private isAuthorizedRequest(req: http.IncomingMessage): boolean {
+    if (!this.config.authToken) return false;
     const header = req.headers.authorization;
     return header === `Bearer ${this.config.authToken}`;
+  }
+
+  private writeUnauthorized(res: http.ServerResponse): void {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'unauthorized' } }));
   }
 
   private async handleResponses(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -969,6 +982,7 @@ export class KaiProxyServer {
       proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
     });
 
+    proxyReq.on('timeout', () => proxyReq.destroy(new Error('Upstream request timed out.')));
     proxyReq.on('error', () => {
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -1003,6 +1017,7 @@ export class KaiProxyServer {
         proxyRes.on('end', resolve);
         proxyRes.on('error', () => { if (!res.writableEnded) res.end(); resolve(); });
       });
+      proxyReq.on('timeout', () => proxyReq.destroy(new Error('Upstream request timed out.')));
       proxyReq.on('error', () => {
         if (!res.headersSent) { res.writeHead(502); res.end(JSON.stringify({ error: 'Upstream unreachable' })); }
         resolve();
@@ -1059,6 +1074,7 @@ export class KaiProxyServer {
         });
         proxyRes.on('error', () => { if (!res.writableEnded) res.end(); resolve(); });
       });
+      proxyReq.on('timeout', () => proxyReq.destroy(new Error('Upstream request timed out.')));
       proxyReq.on('error', () => {
         if (!res.headersSent) { res.writeHead(502); res.end(JSON.stringify({ error: 'Upstream unreachable' })); }
         resolve();
@@ -1093,6 +1109,7 @@ export class KaiProxyServer {
         translateChatStreamToResponses(res, proxyRes, reqModel);
         resolve();
       });
+      proxyReq.on('timeout', () => proxyReq.destroy(new Error('Upstream request timed out.')));
       proxyReq.on('error', () => {
         if (!res.headersSent) { res.writeHead(502); res.end(JSON.stringify({ error: 'Upstream unreachable' })); }
         resolve();

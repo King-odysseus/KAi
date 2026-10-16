@@ -264,14 +264,14 @@ describe('desktop autopilot', () => {
     expect(h.board.cards[1]?.status).toBe('ready');
   });
 
-  it('stops and puts the cards back when every run fails the same way, instead of parking the whole board', async () => {
+  it('parks repeated blockers but keeps working independent cards and reports a next step', async () => {
     const h = harness({ cards: [card('a'), card('b'), card('c')], agent: () => new Error('Open a project before sending a message.') });
     await start(h, { attemptsPerCard: 1 });
     const final = await settled(h);
-    expect(final.phase).toBe('failed');
-    expect(final.message).toContain('put back');
-    expect(h.board.cards.map((item) => item.status)).toEqual(['ready', 'ready', 'ready']);
-    expect(h.prompts).toHaveLength(2);
+    expect(final.phase).toBe('finished');
+    expect(h.board.cards.map((item) => item.status)).toEqual(['blocked', 'blocked', 'blocked']);
+    expect(h.prompts).toHaveLength(3);
+    expect(final.log.some((entry) => entry.text.includes('Suggested') || entry.text.includes('Open a project'))).toBe(true);
   });
 
   it('refuses to start, touching no card, when the preflight finds a setup problem', async () => {

@@ -16,6 +16,8 @@ import {
   ARTIFACT_PATHS,
   directDependencies,
   BOARD_STATUSES,
+  explainBlocked,
+  machineBlocked,
   interviewGivenAnswers,
   interviewOpenOptions,
   interviewOpenQuestions,
@@ -1504,6 +1506,32 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     }
   }
 
+  async function rememberBlockedApproach(card: BoardCard): Promise<void> {
+    if (!projectId) return;
+    const approach = await promptDialog({
+      title: `Remember an approach for “${card.title}”`,
+      label: 'When a similar blocker appears, tell Autopilot what approach it should try first.',
+      placeholder: 'For example: use the existing mock provider in tests; do not wait for production credentials.',
+      multiline: true,
+      rows: 4,
+      confirmLabel: 'Remember approach',
+      validate: (value) => value.trim() ? null : 'Describe the approach or cancel.',
+    });
+    if (!approach?.trim()) return;
+    setBusy('card');
+    setError(null);
+    try {
+      const current = unwrap(await window.kaiDesktop.studioArtifactText({ projectId, kind: 'decisions' })) ?? '';
+      const entry = `\n\n## Approved approach for similar blockers\n\n- Card context: ${card.title}\n- Blocker: ${card.notes.slice(0, 700)}\n- Approach: ${approach.trim().slice(0, 1_500)}\n`;
+      setArtifacts(unwrap(await window.kaiDesktop.saveStudioArtifact({ projectId, kind: 'decisions', content: `${current.trimEnd()}${entry}`.trimStart() })));
+      setNotice('Saved to the project decision log. Future Autopilot cards will see it when the situation matches.');
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /**
    * The walkthrough. The only call the guide makes, and the service only passes it on when the stored explanation is
    * for a different situation — so reading the same screen twice costs once.
@@ -2589,7 +2617,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                       }}
                     >
                       <h3>{BOARD_STATUS_LABEL[status]} <span className="studio-count">{cards.length}</span></h3>
-                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} onLearn={(chosen) => { if (projectId) onLearnCard(chosen, projectId); }} />)}
+                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} onRememberApproach={rememberBlockedApproach} onLearn={(chosen) => { if (projectId) onLearnCard(chosen, projectId); }} />)}
                       {cards.length === 0 && <p className="studio-note">Empty</p>}
                     </div>
                   );
@@ -2663,10 +2691,14 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
  * through under the last one.
  */
 function CardNote({ note, blocked }: { note: string; blocked: boolean }): ReactNode {
+  const explanation = blocked ? explainBlocked(note) : null;
   return (
     <div className={`studio-note studio-why${blocked ? ' blocked' : ''}`}>
       <span className="studio-why-icon" aria-hidden="true">{blocked ? <AlertTriangle size={12} /> : <FileText size={12} />}</span>
-      <div className="studio-why-text">{note.trim()}</div>
+      <div className="studio-why-text">
+        <div>{note.trim()}</div>
+        {explanation && <div className="studio-blocked-next"><strong>Suggested next step:</strong> {explanation.ask}</div>}
+      </div>
     </div>
   );
 }
@@ -2697,7 +2729,7 @@ function CardRoute({ cardId, title, route, busy, onSetRoute }: { cardId: string;
   );
 }
 
-function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onLearn }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void>; onLearn: (card: BoardCard) => void }): ReactNode {
+function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberApproach, onLearn }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void>; onRememberApproach: (card: BoardCard) => Promise<void>; onLearn: (card: BoardCard) => void }): ReactNode {
   const ui = card.kind === 'component' || card.kind === 'page';
   return (
     <div
@@ -2715,6 +2747,12 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onLearn }: {
       {/* The reason a card is where it is. It was always on the card and never on the screen, so a board full of
           blocked cards read as a board with no reason — while the reason sat in this field. */}
       {card.notes.trim() && <CardNote note={card.notes} blocked={card.status === 'blocked'} />}
+      {card.status === 'blocked' && machineBlocked(card) && (
+        <div className="page-actions">
+          <p className="studio-note"><AlertTriangle size={12} /> This card is parked while other independent cards continue. Review the suggested next step above, then move it to Ready when you want Autopilot to try again.</p>
+          <button type="button" className="secondary-button" onClick={() => void onRememberApproach(card)} disabled={busy}>Remember an approach</button>
+        </div>
+      )}
       {card.claimedBy && <p className="studio-note"><Loader2 size={12} /> Held by {card.claimedBy}</p>}
       {card.movedBy && card.movedAt && (
         <p className="studio-note studio-moved">
@@ -2723,6 +2761,17 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onLearn }: {
         </p>
       )}
       {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots</p>}
+      {card.acceptance.length > 0 && (
+        <div className="studio-note studio-acceptance" aria-label={`Acceptance criteria for ${card.title}`}>
+          <strong>Acceptance evidence</strong>
+          <ul>
+            {card.acceptance.map((criterion) => {
+              const evidence = card.check?.acceptanceEvidence?.find((item) => item.criterion === criterion);
+              return <li key={criterion}>{evidence?.status === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} {criterion}{evidence?.evidence ? <small> — {evidence.evidence}</small> : <small> — no passing evidence yet</small>}</li>;
+            })}
+          </ul>
+        </div>
+      )}
       {ui && !card.route && card.kind === 'page' && (
         <p className="studio-note studio-why blocked">
           <AlertTriangle size={12} /> No route, so this screen cannot be checked and the board will not close it. Set one below.

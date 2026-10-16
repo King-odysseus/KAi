@@ -7,8 +7,8 @@ import { QwenConfigWriter } from '../src/config/qwen-config';
 let tempDir: string;
 
 interface QwenSettings {
-  modelProviders: Record<string, Array<{ id?: string; name?: string; baseUrl?: string }>>;
-  model?: { name?: string; baseUrl?: string };
+  modelProviders: Record<string, Array<{ id?: string; name?: string; baseUrl?: string; generationConfig?: Record<string, unknown> }>>;
+  model?: { name?: string; baseUrl?: string; generationConfig?: Record<string, unknown> };
   env?: Record<string, string>;
   security?: { auth?: { selectedType?: string } };
   _kaiProxyOriginals?: {
@@ -84,6 +84,27 @@ describe('QwenConfigWriter.ensureProxyConfig', () => {
     });
   });
 
+  it('adds proxy authorization and restores existing custom headers', async () => {
+    const original: QwenSettings = {
+      ...deepseekSettings(),
+      modelProviders: { openai: [{
+        id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1',
+        generationConfig: { customHeaders: { 'X-Team': 'kai', Authorization: 'Bearer original' }, temperature: 0.3 },
+      }] },
+    };
+    const configPath = await writeSettings(original);
+    const writer = new QwenConfigWriter();
+
+    await writer.ensureProxyConfig({ configPath, port: 8083, authToken: 'kai-test-token' });
+    const proxied = await readSettings(configPath);
+    expect(proxied.modelProviders.openai[0].generationConfig).toMatchObject({
+      customHeaders: { 'X-Team': 'kai', Authorization: 'Bearer kai-test-token' }, temperature: 0.3,
+    });
+
+    await writer.restoreConfig(configPath);
+    expect(await readSettings(configPath)).toEqual(original);
+  });
+
   it('is idempotent and keeps the first snapshot', async () => {
     const configPath = await writeSettings(deepseekSettings());
     const writer = new QwenConfigWriter();
@@ -113,8 +134,8 @@ describe('QwenConfigWriter.ensureProxyConfig', () => {
     const result = await new QwenConfigWriter().ensureProxyConfig({ configPath, port: 8083 });
     const next = await readSettings(configPath);
 
-    expect(result.changed).toBe(true);
-    expect(next.modelProviders.openai[0].baseUrl).toBe('http://127.0.0.1:8083/a/qwen/v1');
+    expect(result.changed).toBe(false);
+    expect(next.modelProviders.openai[0].baseUrl).toBe('http://127.0.0.1:8082/a/qwen/v1');
     expect(next._kaiProxyOriginals).toBeUndefined();
   });
 

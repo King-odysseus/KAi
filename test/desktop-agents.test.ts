@@ -530,6 +530,16 @@ describe('desktop agent runtime', () => {
     ]);
   });
 
+  it('maps custom permissions to bounded CLI modes and rejects unsupported Kimi modes', () => {
+    const base = { prompt: 'Edit one file', autonomy: 'custom' as const };
+    expect(buildAgentArgs({ ...base, agent: 'qwen' }, 'C:/repo', undefined, { workspaceEdit: false })).toContain('plan');
+    expect(buildAgentArgs({ ...base, agent: 'qwen' }, 'C:/repo', undefined, { workspaceEdit: true })).toContain('auto-edit');
+    expect(buildAgentArgs({ ...base, agent: 'gemini' }, 'C:/repo', undefined, { workspaceEdit: false })).toContain('plan');
+    expect(buildAgentArgs({ ...base, agent: 'gemini' }, 'C:/repo', undefined, { workspaceEdit: true })).toContain('auto_edit');
+    expect(() => buildAgentArgs({ ...base, agent: 'kimi' }, 'C:/repo')).toThrow(/cannot safely enforce/);
+    expect(() => buildAgentArgs({ ...base, agent: 'kimi', autonomy: 'autoEdit' }, 'C:/repo')).toThrow(/cannot safely enforce/);
+  });
+
   it.each(['qwen', 'gemini'] as const)('sends a multi-line %s prompt on stdin, untouched, and keeps it out of the command line', async (agent) => {
     const root = await temporaryDirectory();
     const resultFile = path.join(root, 'invocation.json');

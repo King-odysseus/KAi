@@ -317,9 +317,9 @@ export class SettingsViewProvider {
       const codexCfg = proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
       const model = (codexCfg.configModel as string) || 'gpt-5.5';
       const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
-      await this.codexConfigWriter.ensureProxyProfile({ profile, port, model });
+      await this.codexConfigWriter.ensureProxyProfile({ profile, port, model, authToken: this.proxyAuthToken });
     } else if (agent === 'qwen') {
-      await this.qwenConfigWriter.ensureProxyConfig({ port });
+      await this.qwenConfigWriter.ensureProxyConfig({ port, authToken: this.proxyAuthToken });
     }
 
     // Set global route to proxy if any agent is routed
@@ -371,12 +371,12 @@ export class SettingsViewProvider {
     await proxyCfg.update('routeClaudeCode', true, vscode.ConfigurationTarget.Global);
     await proxyCfg.update('routeCodex', true, vscode.ConfigurationTarget.Global);
     await this.claudeConfigWriter.ensureProxyConfig({ port, authToken: this.proxyAuthToken });
-    await this.qwenConfigWriter.ensureProxyConfig({ port });
+    await this.qwenConfigWriter.ensureProxyConfig({ port, authToken: this.proxyAuthToken });
 
     const codexCfg = proxyCfg.get<Record<string, unknown>>('codexConfig', {}) as Record<string, unknown>;
     const model = (codexCfg.configModel as string) || 'gpt-5.5';
     const profile = cfg.get<string>('codexProxyProfile', 'codeproxy');
-    await this.codexConfigWriter.ensureProxyProfile({ profile, port, model });
+    await this.codexConfigWriter.ensureProxyProfile({ profile, port, model, authToken: this.proxyAuthToken });
 
     if (this.orchestrator.getState().route !== 'proxy') {
       this.orchestrator.setRoute('proxy');

@@ -33,6 +33,10 @@ export async function loadLearningStudioContext(projectRoot: string, request: Le
       `Studio card: ${card.title} (${card.id}; ${card.kind}; ${card.status})`,
       card.story && `Story: ${card.story}`,
       card.acceptance.length && `Acceptance: ${card.acceptance.join('; ')}`,
+      card.acceptance.length && `Acceptance evidence: ${card.acceptance.map((criterion) => {
+        const evidence = card.check?.acceptanceEvidence?.find((item) => item.criterion === criterion);
+        return `${criterion} — ${evidence?.status ?? 'not checked'}${evidence?.evidence ? ` (${evidence.evidence})` : ''}`;
+      }).join('; ')}`,
       card.checks.length && `Checks: ${card.checks.join('; ')}`,
       card.route && `Route: ${card.route}`,
       cardFiles.length && `Files this card touches: ${cardFiles.join(', ')}`,

@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { planItemStateSchema, type AutonomyMode, type PermissionKey } from '@kai/contracts';
+import { FileConflictError, readProjectFile, writeProjectFile } from './project-files';
 import { RunGuard } from './run-guard';
 import { writePlan } from './plan-store';
 import { findGitBash } from './terminal';
@@ -645,7 +646,9 @@ export class DesktopProjectToolRuntime {
     const stat = await fs.stat(target);
     if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
     if (stat.size > MAX_EDIT_FILE_BYTES) throw new Error(`${input.path} is too large to edit safely.`);
-    const content = await fs.readFile(target, 'utf8');
+    const root = await this.projectRoot();
+    const opened = await readProjectFile(root, input.path);
+    const content = opened.content;
     const occurrences = countOccurrences(content, input.old_text);
     if (occurrences === 0) throw new Error(`The exact old_text was not found in ${input.path}.`);
     if (!input.replace_all && occurrences !== 1) {
@@ -654,7 +657,7 @@ export class DesktopProjectToolRuntime {
     const next = input.replace_all
       ? content.split(input.old_text).join(input.new_text)
       : content.replace(input.old_text, () => input.new_text);
-    await fs.writeFile(target, next, 'utf8');
+    await writeProjectFile(root, input.path, next, { expectedHash: opened.hash, eol: opened.eol, bom: opened.bom });
     return {
       ok: true,
       output: {
@@ -709,7 +712,9 @@ export class DesktopProjectToolRuntime {
     const stat = await fs.stat(target);
     if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
     if (stat.size > MAX_EDIT_FILE_BYTES) throw new Error(`${input.path} is too large to edit safely.`);
-    let content = await fs.readFile(target, 'utf8');
+    const root = await this.projectRoot();
+    const opened = await readProjectFile(root, input.path);
+    let content = opened.content;
     let replacements = 0;
     for (const [index, edit] of input.edits.entries()) {
       const occurrences = countOccurrences(content, edit.old_text);
@@ -720,7 +725,7 @@ export class DesktopProjectToolRuntime {
       content = edit.replace_all ? content.split(edit.old_text).join(edit.new_text) : content.replace(edit.old_text, () => edit.new_text);
       replacements += edit.replace_all ? occurrences : 1;
     }
-    await fs.writeFile(target, content, 'utf8');
+    await writeProjectFile(root, input.path, content, { expectedHash: opened.hash, eol: opened.eol, bom: opened.bom });
     return {
       ok: true,
       output: { path: normalizeRelative(input.path), edits: input.edits.length, replacements },
@@ -734,16 +739,25 @@ export class DesktopProjectToolRuntime {
 
   private async writeFile(input: z.infer<typeof writeFileInputSchema>): Promise<ProjectToolExecution> {
     const target = await this.resolveInsideProject(input.path, false);
+    const root = await this.projectRoot();
     let existed = true;
+    let expectedHash: string | null = null;
     try {
       const stat = await fs.stat(target);
       if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
+      expectedHash = (await readProjectFile(root, input.path)).hash;
     } catch (error) {
       if (!isMissingPathError(error)) throw error;
       existed = false;
     }
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, input.content, 'utf8');
+    if (existed) {
+      const opened = await readProjectFile(root, input.path);
+      if (opened.hash !== expectedHash) throw new FileConflictError(`${input.path} changed while the agent was preparing its edit.`);
+      await writeProjectFile(root, input.path, input.content, { expectedHash: opened.hash, eol: opened.eol, bom: opened.bom });
+    } else {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, input.content, { encoding: 'utf8', flag: 'wx' });
+    }
     return {
       ok: true,
       output: { path: normalizeRelative(input.path), created: !existed, bytes: Buffer.byteLength(input.content, 'utf8') },

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as http from 'http';
 import { KaiProxyServer } from '../src/proxy/proxy-server';
 
+const TEST_PROXY_TOKEN = 'codex-proxy-test-token';
+
 const running: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -46,6 +48,7 @@ async function startProxy(targetBaseUrl: string): Promise<number> {
     apiKey: 'sk-test',
     defaultModel: 'deepseek-chat',
     modelMap: { 'gpt-5.5': 'deepseek-chat' },
+    authToken: TEST_PROXY_TOKEN,
   });
   await server.start();
   running.push(() => server.stop());
@@ -68,6 +71,7 @@ function request(
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
+        Authorization: `Bearer ${TEST_PROXY_TOKEN}`,
       },
     }, res => {
       let data = '';

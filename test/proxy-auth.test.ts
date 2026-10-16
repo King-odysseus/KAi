@@ -88,6 +88,7 @@ function post(
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
+        ...(Object.hasOwn(headers, 'Authorization') ? {} : { Authorization: `Bearer ${TOKEN}` }),
         ...headers,
       },
     }, (res) => {
@@ -141,6 +142,7 @@ async function startProxy(
     apiKey: 'sk-real-upstream-key',
     defaultModel: 'test-model',
     modelMap: {},
+    authToken: overrides.authToken ?? TOKEN,
     ...overrides,
   });
   await server.start();
@@ -190,7 +192,7 @@ describe('proxy /v1/messages auth', () => {
   it('rejects a request with no Authorization header', async () => {
     const { port, upstream } = await startProxy({ authToken: TOKEN });
 
-    const result = await post(port, '/v1/messages', ANTHROPIC_REQUEST);
+    const result = await post(port, '/v1/messages', ANTHROPIC_REQUEST, { Authorization: '' });
 
     expect(result.status).toBe(401);
     expect(result.body).toContain('unauthorized');
@@ -234,18 +236,43 @@ describe('proxy /v1/messages auth', () => {
     expect(upstream.hits[0].authorization).toBe('Bearer sk-real-upstream-key');
   });
 
-  it('leaves /v1/messages unauthenticated when no token is configured', async () => {
-    const { port, upstream } = await startProxy();
+  it('rejects every model route when the proxy token is missing', async () => {
+    const { port, upstream } = await startProxy({ authToken: '' });
 
-    const result = await post(port, '/v1/messages', ANTHROPIC_REQUEST);
+    const results = await Promise.all([
+      post(port, '/v1/messages', ANTHROPIC_REQUEST),
+      post(port, '/v1/responses', { model: 'test-model', input: 'hello' }),
+      post(port, '/v1/chat/completions', { model: 'test-model', messages: [] }),
+    ]);
 
-    expect(result.status).toBe(200);
-    expect(upstream.hits).toHaveLength(1);
+    expect(results.map((result) => result.status)).toEqual([401, 401, 401]);
+    expect(upstream.hits).toEqual([]);
   });
 
   it('does not gate the health endpoint', async () => {
     const { port } = await startProxy({ authToken: TOKEN });
 
     expect(await get(port, '/health')).toBe(200);
+  });
+});
+
+describe('proxy OpenAI-compatible route auth', () => {
+  it.each(['/v1/responses', '/v1/chat/completions'])('rejects unauthenticated %s before using the upstream key', async (route) => {
+    const { port, upstream } = await startProxy();
+    const body = route === '/v1/responses' ? { model: 'test-model', input: 'hello' } : { model: 'test-model', messages: [] };
+    const result = await post(port, route, body, { Authorization: '' });
+    expect(result.status).toBe(401);
+    expect(upstream.hits).toEqual([]);
+  });
+
+  it('rejects a non-loopback Host header', async () => {
+    const { port, upstream } = await startProxy();
+    const result = await post(port, '/v1/chat/completions', { model: 'test-model', messages: [] }, {
+      Host: '127.0.0.1.attacker.example',
+      Authorization: `Bearer ${TOKEN}`,
+    });
+    expect(result.status).toBe(403);
+    expect(result.body).toContain('forbidden_host');
+    expect(upstream.hits).toEqual([]);
   });
 });

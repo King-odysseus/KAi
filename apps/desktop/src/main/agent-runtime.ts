@@ -886,7 +886,7 @@ export function buildAgentArgs(
   }
 
   if (request.agent === 'qwen') {
-    const args = ['--output-format', 'stream-json', '--approval-mode', qwenApproval(request.autonomy), ...modelArgs];
+    const args = ['--output-format', 'stream-json', '--approval-mode', qwenApproval(request.autonomy, customPermissions), ...modelArgs];
     if (proxyBaseUrl) args.push('--auth-type', 'openai', '--openai-base-url', proxyBaseUrl);
     if (resumeSessionId) args.push('--resume', resumeSessionId);
     args.push('-p', STDIN_PROMPT_NOTE);
@@ -894,6 +894,9 @@ export function buildAgentArgs(
   }
 
   if (request.agent === 'kimi') {
+    if (request.autonomy === 'custom' || request.autonomy === 'autoEdit') {
+      throw new Error('Kimi CLI cannot safely enforce KAI Custom or Auto edit permissions. Choose Plan or Full access, or use another agent for this run.');
+    }
     const args = ['-p', request.prompt, '--output-format', 'stream-json', ...kimiApproval(request.autonomy), ...modelArgs];
     if (resumeSessionId) args.push('--session', resumeSessionId);
     return args;
@@ -905,7 +908,7 @@ export function buildAgentArgs(
     '--output-format',
     'stream-json',
     '--approval-mode',
-    geminiApproval(request.autonomy),
+    geminiApproval(request.autonomy, customPermissions),
     '--skip-trust',
     ...modelArgs,
   ];
@@ -938,8 +941,8 @@ function claudePermission(
   return 'plan';
 }
 
-function qwenApproval(autonomy: AutonomyMode): 'plan' | 'auto-edit' | 'yolo' {
-  if (autonomy === 'custom') return 'auto-edit';
+function qwenApproval(autonomy: AutonomyMode, customPermissions?: Partial<Record<PermissionKey, boolean>>): 'plan' | 'auto-edit' | 'yolo' {
+  if (autonomy === 'custom') return customPermissions?.workspaceEdit ? 'auto-edit' : 'plan';
   if (autonomy === 'autoEdit') return 'auto-edit';
   if (autonomy === 'full') return 'yolo';
   return 'plan';
@@ -951,8 +954,8 @@ function kimiApproval(autonomy: AutonomyMode): string[] {
   return ['--plan'];
 }
 
-function geminiApproval(autonomy: AutonomyMode): 'plan' | 'auto_edit' | 'yolo' {
-  if (autonomy === 'custom') return 'auto_edit';
+function geminiApproval(autonomy: AutonomyMode, customPermissions?: Partial<Record<PermissionKey, boolean>>): 'plan' | 'auto_edit' | 'yolo' {
+  if (autonomy === 'custom') return customPermissions?.workspaceEdit ? 'auto_edit' : 'plan';
   if (autonomy === 'autoEdit') return 'auto_edit';
   if (autonomy === 'full') return 'yolo';
   return 'plan';

@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp, Loader2, Moon, Plane, Square } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import type { AutopilotRunRecord } from '@kai/contracts';
+import type { AutopilotAuditEntry, AutopilotRunRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { useRunPanelCollapsed } from './run-panel-collapse';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
@@ -34,6 +34,7 @@ export const DEFAULT_AUTOPILOT_START = {
   maxCostUsd: 0,
   attemptsPerCard: 3,
   minGapSeconds: 0,
+  blockerPolicy: 'continue-and-report' as const,
 };
 
 function clock(iso: string): string {
@@ -60,8 +61,21 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
   const [maxCostUsd, setMaxCostUsd] = useState(DEFAULT_AUTOPILOT_START.maxCostUsd);
   const [attemptsPerCard, setAttemptsPerCard] = useState(DEFAULT_AUTOPILOT_START.attemptsPerCard);
   const [minGapSeconds, setMinGapSeconds] = useState(DEFAULT_AUTOPILOT_START.minGapSeconds);
+  const [blockerPolicy, setBlockerPolicy] = useState<'continue-and-report' | 'continue-and-use-decisions'>(() => {
+    try {
+      const saved = window.localStorage.getItem('kai.autopilot.blockerPolicy');
+      return saved === 'continue-and-use-decisions' ? saved : DEFAULT_AUTOPILOT_START.blockerPolicy;
+    } catch {
+      return DEFAULT_AUTOPILOT_START.blockerPolicy;
+    }
+  });
   const [collapsed, toggleCollapsed] = useRunPanelCollapsed('autopilot');
   const [interrupted, setInterrupted] = useState<AutopilotRunRecord | null>(null);
+  const [audit, setAudit] = useState<AutopilotAuditEntry[]>([]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('kai.autopilot.blockerPolicy', blockerPolicy); } catch { /* preference only */ }
+  }, [blockerPolicy]);
 
   const running = Boolean(status && AUTOPILOT_ACTIVE.has(status.phase));
   const cooling = status?.phase === 'cooling' && Boolean(status.resumeAt);
@@ -88,12 +102,20 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
     return () => { cancelled = true; };
   }, [projectId, running]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void window.kaiDesktop.autopilotAudit({ projectId }).then(unwrap)
+      .then((entries) => { if (!cancelled) setAudit(entries); })
+      .catch(() => { if (!cancelled) setAudit([]); });
+    return () => { cancelled = true; };
+  }, [projectId, status?.updatedAt]);
+
   async function start(): Promise<void> {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: DEFAULT_AUTOPILOT_START.maxCards, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds }).then(unwrap);
+      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: DEFAULT_AUTOPILOT_START.maxCards, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds, blockerPolicy }).then(unwrap);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -265,6 +287,14 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
               <span>Seconds between API requests</span>
               <input type="number" min={0} max={120} value={minGapSeconds} onChange={(event) => setMinGapSeconds(Math.min(120, Math.max(0, Number(event.target.value) || 0)))} />
             </label>
+            <label className="autopilot-field-wide">
+              <span>Blocked-card policy</span>
+              <Select aria-label="Blocked-card policy" value={blockerPolicy} onChange={(event) => setBlockerPolicy(event.target.value as 'continue-and-report' | 'continue-and-use-decisions')}>
+                <option value="continue-and-report">Report blockers and continue independent cards</option>
+                <option value="continue-and-use-decisions">Apply matching approved project decisions automatically</option>
+              </Select>
+              <small>Either policy keeps the run productive. The second may reuse an approach saved in the project decision log when the situation matches.</small>
+            </label>
           </div>
           <p className="studio-note">The pace also slows by itself after a 429 and speeds back up when the provider stops pushing back.</p>
         </details>
@@ -307,6 +337,14 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
                 <li key={`${entry.at}-${index}`} className={`log-${entry.kind}`}><time>{clock(entry.at)}</time> {entry.text}</li>
               ))}
             </ol>
+          )}
+          {audit.length > 0 && (
+            <details className="autopilot-settings">
+              <summary>Run history ({audit.length})</summary>
+              <ol className="autopilot-log" aria-label="Persistent Autopilot audit history">
+                {[...audit].reverse().slice(0, 20).map((entry) => <li key={entry.id} className={`log-${entry.kind}`}><time>{clock(entry.at)}</time> {entry.text}</li>)}
+              </ol>
+            </details>
           )}
         </div>
       )}

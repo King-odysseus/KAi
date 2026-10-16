@@ -48,6 +48,7 @@ const bridge: KaiDesktopBridge = {
     return () => ipcRenderer.removeListener('editor:documents-saved', handler);
   },
   markLearningUnderstood: (projectId, lessonId) => ipcRenderer.invoke('learning:understood', { projectId, lessonId }),
+  recordLearningCheckEvidence: (input) => ipcRenderer.invoke('learning:record-check-evidence', input),
   explainLearningBack: (input) => ipcRenderer.invoke('learning:explain-back', input),
   explainLearningBackHelp: (input) => ipcRenderer.invoke('learning:explain-back-help', input),
   learningProgress: (projectId) => ipcRenderer.invoke('learning:progress', { projectId }),
@@ -131,6 +132,7 @@ const bridge: KaiDesktopBridge = {
   autopilotStatus: (request) => ipcRenderer.invoke('autopilot:status', request),
   requeueAutopilot: (request) => ipcRenderer.invoke('autopilot:requeue', request),
   autopilotInterrupted: () => ipcRenderer.invoke('autopilot:interrupted', {}),
+  autopilotAudit: (request) => ipcRenderer.invoke('autopilot:audit', request),
   resumeInterruptedAutopilot: (request) => ipcRenderer.invoke('autopilot:interrupted-resume', request),
   releaseInterruptedAutopilot: (request) => ipcRenderer.invoke('autopilot:interrupted-release', request),
   onAutopilotChanged: (listener) => {

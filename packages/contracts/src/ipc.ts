@@ -25,12 +25,16 @@ import {
 } from './interview';
 import { brainMirrorInputSchema, brainMirrorOutcomeSchema, type BrainMirrorInput, type BrainMirrorOutcome } from './brain-mirror';
 import {
+  autopilotAuditEntrySchema,
+  autopilotAuditInputSchema,
   autopilotInterruptedInputSchema,
   autopilotProjectInputSchema,
   autopilotRunRecordSchema,
   autopilotStartInputSchema,
   autopilotStatusResponseSchema,
   type AutopilotInterruptedInput,
+  type AutopilotAuditInput,
+  type AutopilotAuditEntry,
   type AutopilotProjectInput,
   type AutopilotRunRecord,
   type AutopilotStartInput,
@@ -325,6 +329,7 @@ import {
   codeFormatResultSchema,
   gitFileInfoSchema,
   learningEvaluationResultSchema,
+  learningCheckEvidenceInputSchema,
   learningExplainBackHelpInputSchema,
   learningExplainBackHelpSchema,
   learningExplainBackInputSchema,
@@ -345,6 +350,7 @@ import {
   type CodeFormatResult,
   type GitFileInfo,
   type LearningEvaluationResult,
+  type LearningCheckEvidenceInput,
   type LearningExplainBackHelp,
   type LearningExplainBackHelpInput,
   type LearningExplainBackInput,
@@ -443,6 +449,7 @@ export const ipcChannels = [
   'editor:update-window',
   'learning:progress',
   'learning:understood',
+  'learning:record-check-evidence',
   'learning:explain-back',
   'learning:explain-back-help',
   'learning:readiness',
@@ -523,6 +530,7 @@ export const ipcChannels = [
   'autopilot:status',
   'autopilot:requeue',
   'autopilot:interrupted',
+  'autopilot:audit',
   'autopilot:interrupted-resume',
   'autopilot:interrupted-release',
   'auto:start',
@@ -762,6 +770,7 @@ export const ipcInputSchemas = {
   'editor:remove-document': editorDocumentRemoveSchema,
   'editor:update-window': editorWindowSnapshotSchema,
   'learning:understood': z.object({ projectId: z.string().min(1), lessonId: z.string().min(1) }).strict(),
+  'learning:record-check-evidence': learningCheckEvidenceInputSchema,
   'learning:explain-back': learningExplainBackInputSchema,
   'learning:explain-back-help': learningExplainBackHelpInputSchema,
   'learning:progress': z.object({ projectId: z.string().min(1) }).strict(),
@@ -848,6 +857,7 @@ export const ipcInputSchemas = {
   'autopilot:status': autopilotProjectInputSchema,
   'autopilot:requeue': autopilotProjectInputSchema,
   'autopilot:interrupted': emptyInputSchema,
+  'autopilot:audit': autopilotAuditInputSchema,
   'autopilot:interrupted-resume': autopilotInterruptedInputSchema,
   'autopilot:interrupted-release': autopilotInterruptedInputSchema,
   'auto:start': autoStartInputSchema,
@@ -1123,6 +1133,7 @@ export const studioDesignBuildStepResponseSchema = studioDesignBuildStepResultSc
 export const studioBoardWorkResponseSchema = z.array(boardCardSchema);
 export const autopilotResponseSchema = autopilotStatusResponseSchema;
 export const autopilotInterruptedResponseSchema = z.array(autopilotRunRecordSchema);
+export const autopilotAuditResponseSchema = z.array(autopilotAuditEntrySchema);
 export const brainMirrorResponseSchema = brainMirrorOutcomeSchema;
 export const conversationCompactionResponseSchema = conversationRecordV1Schema;
 export const editorSavedDocumentResponseSchema = z.array(editorSavedDocumentSchema);
@@ -1245,6 +1256,7 @@ export interface KaiDesktopBridge {
   updateEditorWindow(snapshot: EditorWindowSnapshot): Promise<IpcResponse<boolean>>;
   onEditorDocumentsSaved(listener: (documents: EditorSavedDocument[]) => void): () => void;
   markLearningUnderstood(projectId: string, lessonId: string): Promise<IpcResponse<LearningProgress>>;
+  recordLearningCheckEvidence(input: LearningCheckEvidenceInput): Promise<IpcResponse<LearningProgress>>;
   explainLearningBack(input: LearningExplainBackInput): Promise<IpcResponse<LearningExplainBackResult>>;
   explainLearningBackHelp(input: LearningExplainBackHelpInput): Promise<IpcResponse<LearningExplainBackHelp>>;
   learningProgress(projectId: string): Promise<IpcResponse<LearningProgress>>;
@@ -1383,6 +1395,7 @@ export interface KaiDesktopBridge {
    * so anything still there at startup is a run that never got to finish — and the board still holds its card.
    */
   autopilotInterrupted(): Promise<IpcResponse<AutopilotRunRecord[]>>;
+  autopilotAudit(request: AutopilotAuditInput): Promise<IpcResponse<AutopilotAuditEntry[]>>;
   /** Starts a recorded run again. The loop takes back the card it was still holding rather than starting a new one. */
   resumeInterruptedAutopilot(request: AutopilotInterruptedInput): Promise<IpcResponse<AutopilotStatus>>;
   /** Puts the card an interrupted run was holding back in the queue, for someone who would rather start clean. */
