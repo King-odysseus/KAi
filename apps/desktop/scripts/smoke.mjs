@@ -482,6 +482,9 @@ async function verifyCodeLearningWorkspace(application, page) {
   await page.locator('.learning-pending-turn').waitFor({ state: 'detached' });
   await page.locator('.learning-chat-question').getByText('What should I do next?').waitFor();
   if (await page.locator('.learning-response').count() < 2) throw new Error('The follow-up tutor response did not join the conversation.');
+  await page.getByRole('textbox', { name: 'Your explanation' }).fill('The project rules live in AGENTS.md and guide the agent when it opens this project.');
+  await page.getByRole('button', { name: 'Check my answer' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.learning-response').length >= 3);
   await page.screenshot({ path: path.join(outputDirectory, 'code-learning-tutor-1440x920.png') });
   await page.getByRole('tab', { name: 'Progress' }).click();
   await page.getByText('Variables', { exact: true }).waitFor();
@@ -952,6 +955,11 @@ async function startDirectApiFixture({ mcp = false, command = false, provider = 
       await new Promise((resolve) => setTimeout(resolve, 350));
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ output_text: JSON.stringify(learningTutorFixture()) }));
+      return;
+    }
+    if (body?.text?.format?.name === 'kai_explain_back_grade') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ output_text: JSON.stringify({ verdict: 'solid', feedback: 'You connected the file to its purpose.', gap: '' }) }));
       return;
     }
     if (provider !== 'openai') {
