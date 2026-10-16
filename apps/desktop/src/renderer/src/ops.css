@@ -1615,6 +1615,11 @@ button.learning-question.answerable {
   cursor: pointer;
 }
 
+/* The follow-up question is a lesson sentence in a button, like the rows further down, so it takes itself out of the
+   global one-line control rule and wraps. Left on one line it overran its box by hundreds of pixels: the sentence ran
+   under the "Answer below" marker and past the edge of the pane, which clipped it (`.learning-scroll` is overflow-x:
+   clip), so the end of the question could not be read at all. */
+button.learning-question.answerable { white-space: normal; }
 button.learning-question.answerable span { flex: 1; }
 button.learning-question.answerable small { flex: 0 0 auto; color: var(--amber); font-weight: 600; white-space: nowrap; }
 button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12); color: var(--text); }
