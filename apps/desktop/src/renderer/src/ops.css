@@ -2755,6 +2755,10 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-explain-back { grid-template-columns: minmax(0, 1fr); }
 .learning-explain-back > * { min-width: 0; }
 .learning-question-actions { flex-wrap: wrap; }
+.learning-next-lesson { display: grid; justify-content: stretch; gap: 6px; margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-panel); }
+.learning-next-lesson strong { font-size: 12px; }
+.learning-next-lesson p { margin: 0; overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.learning-next-lesson button { justify-self: end; }
 .learning-explain-back .learning-question-actions button { max-width: 100%; white-space: normal; text-align: left; }
 .learning-response-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 /* A source click changes the editor, which at a narrow size can sit behind this panel. */
@@ -2773,10 +2777,12 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 }
 .learning-chat-question small { color: var(--blue); font-size: 10px; font-weight: 700; }
 .learning-chat-question p { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; }
+.learning-chat-question.learning-chat-action { margin-left: 0; margin-right: auto; border-color: var(--border); border-radius: 9px 9px 9px 2px; background: var(--bg-panel); color: var(--text-muted); }
 .learning-conversation-turn { margin-bottom: 18px; }
 .learning-conversation-turn .learning-response { opacity: 0.9; }
 .learning-pending-turn { margin: 12px 0 18px; }
-.learning-pending-reply { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.learning-pending-reply { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.learning-pending-reply span { overflow-wrap: anywhere; }
 .learning-pending-reply.failed { color: var(--red); }
 .learning-pending-reply button { color: var(--blue); text-decoration: underline; }
 .learning-suggestion-preview { display: grid; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--blue); border-radius: 8px; background: var(--bg-panel); }
@@ -2784,6 +2790,16 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-suggestion-preview > div > span { font-size: 11px; color: var(--text-muted); }
 .learning-suggestion-preview pre { max-height: 180px; overflow: auto; margin: 3px 0 0; padding: 8px; border-radius: 5px; background: var(--bg-input); color: var(--text); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .learning-suggestion-preview > div:nth-of-type(2) pre { border-left: 2px solid var(--mint); }
+/* The Studio card a tutor conversation is about. It sits between the composer's header and its question box so the
+   context in play is never invisible; only the stale warning is coloured, and it is the same red as "needs you". */
+.learning-card-context { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-panel); color: var(--text-muted); font-size: 11px; }
+.learning-card-context > svg { flex: 0 0 auto; color: var(--mint-strong); }
+.learning-card-context > span { min-width: 0; overflow-wrap: anywhere; }
+.learning-card-context strong { color: var(--text); font-size: 11px; }
+.learning-card-context em { flex-basis: 100%; overflow-wrap: anywhere; font-style: normal; }
+.learning-card-context.stale > svg,
+.learning-card-context.stale em { color: var(--red); }
+.learning-card-context > button { margin-left: auto; }
 .learning-composer-processing {
   display: flex;
   align-items: flex-start;

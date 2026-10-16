@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createDefaultSettings,
   learningTutorResponseSchema,
@@ -15,6 +15,7 @@ import { NodeFileSystem } from '../packages/runtime/src/node-file-system';
 import { formatProjectCode, installRuffFormatter, projectGitFileInfo } from '../apps/desktop/src/main/code-tools';
 import { recordLearningLesson } from '../apps/desktop/src/main/learning-records';
 import { LearningProgressStore } from '../apps/desktop/src/main/learning-progress';
+import { loadLearningStudioContext } from '../apps/desktop/src/main/learning-studio-context';
 import { DesktopLearningTutor, groundedSourceNotes, parseLearningTutorContent, parseTeachingDraftContent } from '../apps/desktop/src/main/learning-tutor';
 import { TeachingLibraryStore } from '../apps/desktop/src/main/teaching-library';
 import { boundedCode } from '../apps/desktop/src/renderer/src/components/CodeView';
@@ -31,11 +32,28 @@ function onPath(command: string): boolean {
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   await Promise.all(directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
 describe('desktop learning mode', () => {
+  it('disables DeepSeek thinking for structured tutor replies', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(tutorResponse()) } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+    const settings = createDefaultSettings();
+    settings.learningTutor = { ...settings.learningTutor, enabled: true, provider: 'deepseek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com' };
+    const tutor = new DesktopLearningTutor({ load: async () => settings }, { isAvailable: () => true, get: async () => 'test-key' }, async () => temporaryDirectory());
+    await tutor.evaluateDetailed(tutorRequest('explain-file', 'guided'));
+    expect(bodies[0]?.thinking).toEqual({ type: 'disabled' });
+  });
+
   it('stops an in-flight tutor request when the learner cancels it', async () => {
     let requestStarted!: () => void;
     const started = new Promise<void>((resolve) => { requestStarted = resolve; });
@@ -889,6 +907,116 @@ describe('desktop learning mode', () => {
     expect(guide).toContain('not by itself proof of independent mastery');
   });
 });
+
+describe('learning Studio context', () => {
+  const totalsCard = {
+    id: 'totals',
+    title: 'Totals panel',
+    kind: 'page',
+    story: 'As a shopper I see what I owe.',
+    acceptance: ['Shows the running total', 'Shows a warning when the basket is empty'],
+    route: '/totals',
+    dependsOn: ['data'],
+    needsArtifacts: ['acceptance'],
+    status: 'ready',
+    runs: [{ agent: 'codex', at: '2026-10-01T00:00:00.000Z', files: ['src/value.ts'] }],
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  };
+  const dataCard = {
+    id: 'data',
+    title: 'Data layer',
+    kind: 'backend',
+    status: 'done',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  };
+  const acceptanceEntry = {
+    kind: 'acceptance',
+    path: '.kai/spec/acceptance.md',
+    version: 1,
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    generatedBy: 'codex',
+    dependsOn: ['stories'],
+    stale: true,
+    staleReason: 'stories.md was regenerated.',
+  };
+
+  it('answers with the card the learner chose, its dependencies and the files its runs touched', async () => {
+    const root = await temporaryDirectory();
+    await writeStudioFixture(root, [totalsCard, dataCard], [acceptanceEntry], {
+      '.kai/spec/acceptance.md': '# Acceptance\n\n- The totals panel shows a running total.\n',
+      '.kai/spec/brief.md': '# Brief\n\nA budgeting app.\n',
+    });
+    const context = await loadLearningStudioContext(root, { ...tutorRequest('next-step', 'guided'), studioCardId: 'totals' });
+    expect(context).toContain('Totals panel (totals; page; ready)');
+    expect(context).toContain('Acceptance: Shows the running total; Shows a warning when the basket is empty');
+    expect(context).toContain('Files this card touches: src/value.ts');
+    expect(context).toContain('Dependencies: Data layer (done)');
+    expect(context).toContain('File: .kai/spec/board.json');
+    expect(context).toContain('File: .kai/spec/acceptance.md');
+    // A dependency that is not done yet is what stops the card, which is what "what should I work on" turns on.
+    expect(context).not.toContain('Not yet done, so this card cannot start');
+  });
+
+  it('says a stale artifact is stale instead of teaching from it silently', async () => {
+    const root = await temporaryDirectory();
+    await writeStudioFixture(root, [totalsCard], [acceptanceEntry], { '.kai/spec/acceptance.md': '# Acceptance\n\n- The totals panel shows a running total.\n' });
+    const context = await loadLearningStudioContext(root, { ...tutorRequest('next-step', 'guided'), studioCardId: 'totals' });
+    expect(context).toContain('Status: STALE — stories.md was regenerated.');
+    expect(context).toContain('Treat stale content as provisional');
+  });
+
+  it('picks the card the question is about and keeps the whole answer inside the context budget', async () => {
+    const root = await temporaryDirectory();
+    const authCard = {
+      id: 'auth',
+      title: 'Sign-in flow',
+      kind: 'flow',
+      story: 'As a returning shopper I sign in.',
+      // Enough of the card, and of the artifacts it reads, to run past the budget on their own.
+      acceptance: Array.from({ length: 20 }, (_value, index) => `Criterion ${index}: the sign-in flow must report its own state.`.padEnd(400, 'x')),
+      needsArtifacts: ['brief', 'stories', 'acceptance', 'decisions'],
+      status: 'backlog',
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const filler = `# Filler\n\n${'a'.repeat(8_000)}`;
+    await writeStudioFixture(root, [totalsCard, authCard], [], {
+      '.kai/spec/brief.md': filler,
+      '.kai/spec/stories.md': filler,
+      '.kai/spec/acceptance.md': filler,
+      '.kai/spec/decisions.md': filler,
+    });
+    const context = await loadLearningStudioContext(root, { ...tutorRequest('next-step', 'guided'), filePath: 'src/pages/sign-in.tsx', question: 'How does the sign-in flow work?' });
+    expect(context).toContain('Sign-in flow (auth; flow; backlog)');
+    // Only the card the question is about: the whole board would not fit, and would bury the answer.
+    expect(context).not.toContain('Totals panel');
+    expect(context).toContain('[truncated]');
+    // The cap itself, not just "under it": without it this material runs to nearly twice the budget.
+    expect(context!.length).toBe(9_000);
+  });
+
+  it('has nothing to add for a project with no board', async () => {
+    const root = await temporaryDirectory();
+    await expect(loadLearningStudioContext(root, tutorRequest('next-step', 'guided'))).resolves.toBeNull();
+  });
+});
+
+async function writeStudioFixture(
+  root: string,
+  cards: Array<Record<string, unknown>>,
+  artifacts: Array<Record<string, unknown>>,
+  files: Record<string, string>,
+): Promise<void> {
+  await fs.mkdir(path.join(root, '.kai', 'spec'), { recursive: true });
+  await fs.writeFile(path.join(root, '.kai', 'spec', 'board.json'), `${JSON.stringify({ schemaVersion: 1, revision: 1, cards }, null, 2)}\n`);
+  await fs.writeFile(path.join(root, '.kai', 'spec', 'artifacts.json'), `${JSON.stringify({ schemaVersion: 1, artifacts }, null, 2)}\n`);
+  for (const [relative, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await fs.writeFile(path.join(root, relative), content);
+  }
+}
 
 function tutorRequest(action: LearningTutorRequest['action'], assistance: LearningTutorRequest['assistance']): LearningTutorRequest {
   return {

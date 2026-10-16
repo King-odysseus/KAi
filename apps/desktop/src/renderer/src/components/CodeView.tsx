@@ -230,9 +230,12 @@ export function CodeView({
   onOpenSettings,
   onCreateReviewFollowup,
   openRequest = null,
+  learnRequest = null,
 }: {
   /** A file another part of the app wants shown; a new `nonce` asks again even for the same path. */
   openRequest?: { path: string; nonce: number } | null;
+  /** A Studio card to learn from, with the project that owns it already open; a new `nonce` asks again for it. */
+  learnRequest?: { cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null;
   activeProject: ProjectRecord | null;
   editorState: EditorWindowSnapshot | null;
   autoSave: boolean;
@@ -272,6 +275,12 @@ export function CodeView({
       return 'auto';
     }
   });
+  /**
+   * The Studio card the learner chose to learn from. It travels with every tutor request as `studioCardId`, so the
+   * tutor reads that card and its artifacts rather than guessing from the question alone — and it is shown above the
+   * composer, because context the learner cannot see is context they cannot correct.
+   */
+  const [learningCard, setLearningCard] = useState<{ id: string; title: string; stale: boolean; staleReason: string | null } | null>(null);
   const [filePaneWidth, setFilePaneWidth] = useState(() => {
     try {
       return clampNumber(Number(window.localStorage.getItem('kai.codeFilePaneWidth')) || DEFAULT_FILE_PANE_WIDTH, 160, 420);
@@ -313,7 +322,8 @@ export function CodeView({
   const [learningSelection, setLearningSelection] = useState<LearningSelectionPreview | null>(null);
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
-  const [pendingTutorQuestion, setPendingTutorQuestion] = useState<{ requestId: string; text: string; action: LearningAction; stuckHint?: 1 | 2 | 3; status: 'sending' | 'failed' | 'cancelled' } | null>(null);
+  const [submittedSource, setSubmittedSource] = useState<'user' | 'action'>('user');
+  const [pendingTutorQuestion, setPendingTutorQuestion] = useState<{ requestId: string; text: string; source: 'user' | 'action'; action: LearningAction; stuckHint?: 1 | 2 | 3; status: 'sending' | 'failed' | 'cancelled'; error?: string } | null>(null);
   const [suggestionPreview, setSuggestionPreview] = useState<SuggestionPreview | null>(null);
   const [lastAppliedSuggestion, setLastAppliedSuggestion] = useState<{ filePath: string; version: number } | null>(null);
   const [tutorConversation, setTutorConversation] = useState<TutorConversationTurn[]>([]);
@@ -653,9 +663,10 @@ export function CodeView({
     writeTutorSession(id, {
       turns: tutorConversation,
       submittedQuestion,
+      submittedSource,
       ...(learningResult ? { current: learningResult.response, progress: learningResult.progress } : {}),
     });
-  }, [tutorConversation, submittedQuestion, learningResult]);
+  }, [tutorConversation, submittedQuestion, submittedSource, learningResult]);
 
   // The main process owns snapshots, so changing projects replaces the local session cleanly.
   useEffect(() => {
@@ -679,11 +690,13 @@ export function CodeView({
     setResponseLessonId(null);
     setLearningError(null);
     setQuestion('');
+    setLearningCard(null);
     setPendingTutorQuestion(null);
     setSuggestionPreview(null);
     setLastAppliedSuggestion(null);
     const saved = projectId ? readTutorSession(projectId) : null;
     setSubmittedQuestion(saved?.submittedQuestion ?? '');
+    setSubmittedSource(saved?.submittedSource ?? 'user');
     setTutorConversation(saved?.turns ?? []);
     if (saved?.current && saved.progress) setLearningResult({ response: saved.current, progress: saved.progress });
     setAppliedSuggestionNeedsExplanation(false);
@@ -986,6 +999,21 @@ export function CodeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest, editorReady, projectId]);
 
+  const handledLearnRequest = useRef(0);
+  useEffect(() => {
+    if (!learnRequest || learnRequest.nonce === handledLearnRequest.current) return;
+    handledLearnRequest.current = learnRequest.nonce;
+    // The card arrives whole from the Studio, which is the view that holds the board, and the project that owns it has
+    // been opened by the time this runs — so the title and staleness shown are the ones the learner just clicked.
+    setLearningCard({ id: learnRequest.cardId, title: learnRequest.title, stale: learnRequest.stale, staleReason: learnRequest.staleReason });
+    openSidePanel('learn');
+    setTutorOpen(true);
+    // The question is written, not sent: starting a model turn is the learner's call.
+    setQuestion(`What should I do for the Studio card "${learnRequest.title}", and which files should I change?`);
+    // openSidePanel and setTutorOpen only touch state, so the request is the whole dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [learnRequest]);
+
   /** Monaco arrives in its own chunk, so a click on a source button can land before the editor exists. */
   function waitForEditor(timeoutMs = 5_000): Promise<Monaco.editor.IStandaloneCodeEditor | null> {
     if (editorRef.current) return Promise.resolve(editorRef.current);
@@ -1224,11 +1252,6 @@ export function CodeView({
       const result = unwrap(await window.kaiDesktop.explainLearningBack({ projectId: id, lessonId, question: lessonQuestion, answer }));
       if (projectIdRef.current !== id) return null;
       setProgress(result.progress);
-      if (result.grade.verdict === 'solid') {
-        const nextPrompt = projectLessons(files.map((file) => file.path), result.progress)[0]?.prompt;
-        void runLearningAction('next-step', false, undefined,
-          `${nextPrompt ?? 'Find the next unfinished coding step in this project.'} I correctly answered the check about "${lessonQuestion}". Do not repeat that lesson or question.`);
-      }
       return result.grade;
     } catch (error) {
       if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'Could not check your explanation.');
@@ -1265,7 +1288,7 @@ export function CodeView({
     return `${run.command}: ${run.passed ? 'Passed' : 'Failed'} (exit ${run.exitCode ?? 'unknown'})\n${run.outputTail}`;
   }
 
-  async function runLearningAction(action: LearningAction, inline = false, stuckHint?: 1 | 2 | 3, questionOverride?: string): Promise<LearningEvaluationResult | null> {
+  async function runLearningAction(action: LearningAction, inline = false, stuckHint?: 1 | 2 | 3, questionOverride?: string, sourceOverride?: 'user' | 'action'): Promise<LearningEvaluationResult | null> {
     if (learningBusyRef.current) return null;
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
@@ -1296,13 +1319,15 @@ export function CodeView({
     const requestId = `learning_${crypto.randomUUID()}`;
     const requestAssistance = assistance;
     const requestQuestion = questionOverride?.trim() || question.trim() || (stuckHint ? `I'm stuck. Hint ${stuckHint} of 3, please.` : '');
+    const requestSource = sourceOverride ?? (questionOverride || stuckHint || !question.trim() ? 'action' : 'user');
     const explainingAppliedSuggestion = appliedSuggestionNeedsExplanation && /^I applied the Tutor suggestion/i.test(question.trim());
     const priorTurns = learningResult?.response
-      ? [...tutorConversation, { id: 'current', question: submittedQuestion.trim() || learningResult.response.title, response: learningResult.response }]
+      ? [...tutorConversation, { id: 'current', question: submittedQuestion.trim() || learningResult.response.title, source: submittedSource, response: learningResult.response }]
       : tutorConversation;
     const request: LearningTutorRequest = {
       requestId,
       projectId,
+      ...(learningCard ? { studioCardId: learningCard.id } : {}),
       ...(path && document ? { filePath: path, documentVersion: document.version } : {}),
       ...(selection ? {
         selection: {
@@ -1333,7 +1358,7 @@ export function CodeView({
     learningBusyRef.current = true;
     setLearningBusy(action);
     if (!inline) {
-      setPendingTutorQuestion({ requestId, text: requestQuestion || `Tutor action: ${action.replace(/-/g, ' ')}`, action, ...(stuckHint ? { stuckHint } : {}), status: 'sending' });
+      setPendingTutorQuestion({ requestId, text: requestQuestion || `Tutor action: ${action.replace(/-/g, ' ')}`, source: requestSource, action, ...(stuckHint ? { stuckHint } : {}), status: 'sending' });
       if (!questionOverride) setQuestion((current) => current.trim() === requestQuestion ? '' : current);
     }
     setLearningError(null);
@@ -1353,10 +1378,12 @@ export function CodeView({
         setTutorConversation((current) => [...current, {
           id: `turn_${crypto.randomUUID()}`,
           question: submittedQuestion.trim() || learningResult.response.title,
+          source: submittedSource,
           response: learningResult.response,
         }].slice(-30));
       }
       setSubmittedQuestion(request.question ?? `Tutor action: ${action.replace(/-/g, ' ')}`);
+      setSubmittedSource(requestSource);
       setPendingTutorQuestion(null);
       setSuggestionPreview(null);
       setHintLevel(stuckHint ?? 0);
@@ -1372,7 +1399,7 @@ export function CodeView({
       if (activeLearningRequestId.current === requestId) {
         const message = caught instanceof Error ? caught.message : 'The tutor request failed.';
         setLearningError(message);
-        if (!inline) setPendingTutorQuestion((current) => current?.status === 'sending' ? { ...current, status: 'failed' } : current);
+        if (!inline) setPendingTutorQuestion((current) => current?.status === 'sending' ? { ...current, status: 'failed', error: message } : current);
         if (inline) setNotice(`Inline suggestion: ${message}`);
       }
       return null;
@@ -1843,10 +1870,12 @@ export function CodeView({
                 setTutorConversation((current) => [...current, {
                   id: `turn_${crypto.randomUUID()}`,
                   question: submittedQuestion.trim() || shown.title,
+                  source: submittedSource,
                   response: shown,
                 }].slice(-30));
               }
               setSubmittedQuestion(`Reopened lesson: ${lesson.response.title}`);
+              setSubmittedSource('action');
               setLearningResult({ response: lesson.response, progress });
               setResponseLessonId(lesson.id);
             }}
@@ -1862,15 +1891,18 @@ export function CodeView({
             readiness={readiness}
             result={learningResult}
             scope={learningScope}
+            card={learningCard}
+            onClearCard={() => setLearningCard(null)}
             selection={learningSelection}
             gitInfo={gitInfo}
             busy={learningBusy}
             error={learningError}
             question={question}
             submittedQuestion={submittedQuestion}
+            submittedSource={submittedSource}
             pendingQuestion={pendingTutorQuestion}
             onRetryQuestion={() => {
-              if (pendingTutorQuestion) void runLearningAction(pendingTutorQuestion.action, false, pendingTutorQuestion.stuckHint, pendingTutorQuestion.text);
+              if (pendingTutorQuestion) void runLearningAction(pendingTutorQuestion.action, false, pendingTutorQuestion.stuckHint, pendingTutorQuestion.text, pendingTutorQuestion.source);
             }}
             onCancelQuestion={cancelLearningQuestion}
             conversation={tutorConversation}
@@ -1930,6 +1962,7 @@ function learningState(
 interface SavedTutorSession {
   turns: TutorConversationTurn[];
   submittedQuestion: string;
+  submittedSource?: 'user' | 'action';
   current?: TutorConversationTurn['response'];
   progress?: LearningEvaluationResult['progress'];
 }

@@ -28,6 +28,7 @@ import {
   type TeachingDraftGenerateInput,
 } from '@kai/contracts';
 import { teachingDraftJsonSchema, teachingDraftPrompt } from './teaching-library';
+import { loadLearningStudioContext } from './learning-studio-context';
 
 interface SettingsPort {
   load(): Promise<AppSettings>;
@@ -376,7 +377,7 @@ export class DesktopLearningTutor {
     if (scope === 'active-file' && !request.filePath) {
       throw new Error('Open a file before using file context.');
     }
-    const [teachingProfile, projectProfile, projectContext] = await Promise.all([
+    const [teachingProfile, projectProfile, projectContext, studioContext] = await Promise.all([
       this.teachingLibrary ? this.teachingLibrary.profile() : Promise.resolve(null),
       loadProjectTeachingProfile(projectRoot),
       scope === 'project'
@@ -384,8 +385,10 @@ export class DesktopLearningTutor {
         : scope === 'auto'
           ? searchProjectContext(projectRoot, [request.question ?? '', request.selectedText ?? '', request.errorText ?? ''].join('\n'), request.filePath)
           : Promise.resolve(null),
+      scope === 'active-file' && !request.studioCardId ? Promise.resolve(null) : loadLearningStudioContext(projectRoot, request),
     ]);
-    const prompt = tutorPrompt(request, teachingProfile, projectProfile, projectContext);
+    const combinedContext = [studioContext, projectContext].filter(Boolean).join('\n\n') || null;
+    const prompt = tutorPrompt(request, teachingProfile, projectProfile, combinedContext);
     if (memory) prompt.user += `\n\nPersistent project learning memory (self-reported understanding is not mastery):\n${memory}`;
     const result = await outputBudget.run(request.question?.trim() || request.hintLevel ? 4_096 : TUTOR_MAX_OUTPUT_TOKENS, () => this.requestAndParse(
       provider,
@@ -397,7 +400,7 @@ export class DesktopLearningTutor {
       signal,
     ));
     return {
-      response: { ...result.value, sourceNotes: groundedSourceNotes(result.value.sourceNotes, request, projectContext) },
+      response: { ...result.value, sourceNotes: groundedSourceNotes(result.value.sourceNotes, request, combinedContext) },
       usage: result.usage,
     };
   }
@@ -849,6 +852,8 @@ export class DesktopLearningTutor {
         },
         body: JSON.stringify({
           model,
+          // DeepSeek enables thinking by default. Structured tutor replies need the output budget for visible JSON.
+          ...(new URL(baseUrl).hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {}),
           messages: [
             { role: 'system', content: prompt.system },
             { role: 'user', content: prompt.user },

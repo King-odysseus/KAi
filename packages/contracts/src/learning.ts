@@ -97,6 +97,8 @@ export const learningTutorRequestSchema = z
   .object({
     requestId: z.string().min(1).max(160).optional(),
     projectId: z.string().min(1),
+    /** Studio card deliberately chosen by the learner; resolved again from the project's board. */
+    studioCardId: z.string().min(1).max(120).optional(),
     filePath: z.string().min(1).max(1_000).optional(),
     documentVersion: z.number().int().nonnegative().optional(),
     selection: z.object({

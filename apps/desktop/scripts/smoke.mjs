@@ -484,7 +484,13 @@ async function verifyCodeLearningWorkspace(application, page) {
   if (await page.locator('.learning-response').count() < 2) throw new Error('The follow-up tutor response did not join the conversation.');
   await page.getByRole('textbox', { name: 'Your explanation' }).fill('The project rules live in AGENTS.md and guide the agent when it opens this project.');
   await page.getByRole('button', { name: 'Check my answer' }).click();
+  const nextLessonButton = page.getByRole('button', { name: /Ask tutor (to start next step|for a new challenge)/ });
+  await nextLessonButton.waitFor();
+  await page.locator('.learning-next-lesson').waitFor();
+  if (await page.locator('.learning-pending-turn').count()) throw new Error('A graded answer started an unrequested tutor conversation.');
+  await nextLessonButton.click();
   await page.waitForFunction(() => document.querySelectorAll('.learning-response').length >= 3);
+  await page.locator('.learning-chat-action').getByText('KAI action').waitFor();
   await page.screenshot({ path: path.join(outputDirectory, 'code-learning-tutor-1440x920.png') });
   await page.getByRole('tab', { name: 'Progress' }).click();
   await page.getByText('Variables', { exact: true }).waitFor();

@@ -84,12 +84,17 @@ type DesignBuildAction = { kind: 'redraw'; target: 'all' | string } | { kind: 'c
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, projects: desktopProjects, onOpenSettings, onLaunchProject, onPlanForTeam }: {
+export function StudioView({ activeProject, projects: desktopProjects, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard }: {
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
   onOpenSettings: () => void;
-  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate') => Promise<void>;
+  onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate') => Promise<boolean>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
+  /**
+   * Hands one card, and the plan that owns it, to the Learning tutor. The plan is needed as well as the card: the
+   * board, the artifacts and the files the card's runs touched all live in that plan's own project folder.
+   */
+  onLearnCard: (card: BoardCard, studioProjectId: string) => void;
 }): ReactNode {
   const [screen, setScreen] = useState<'list' | 'project' | 'new'>('list');
   const [viewedProjectId, setViewedProjectId] = useState<string | null>(null);
@@ -2584,7 +2589,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                       }}
                     >
                       <h3>{BOARD_STATUS_LABEL[status]} <span className="studio-count">{cards.length}</span></h3>
-                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} />)}
+                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} onLearn={(chosen) => { if (projectId) onLearnCard(chosen, projectId); }} />)}
                       {cards.length === 0 && <p className="studio-note">Empty</p>}
                     </div>
                   );
@@ -2692,7 +2697,7 @@ function CardRoute({ cardId, title, route, busy, onSetRoute }: { cardId: string;
   );
 }
 
-function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void> }): ReactNode {
+function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onLearn }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void>; onLearn: (card: BoardCard) => void }): ReactNode {
   const ui = card.kind === 'component' || card.kind === 'page';
   return (
     <div
@@ -2732,6 +2737,12 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute }: { card: Bo
         </button>
       )}
       {ui && <CardRoute cardId={card.id} title={card.title} route={card.route} busy={busy} onSetRoute={onSetRoute} />}
+      {/* The card, its acceptance criteria, its dependencies and the files its runs touched are exactly the context a
+          tutor needs, and the board is where that context already lives — so it is offered from the card rather than
+          re-described in the question box. It opens the tutor with the question written and waiting, not sent. */}
+      <button type="button" className="secondary-button" onClick={() => onLearn(card)} title={`Ask the tutor about "${card.title}"`}>
+        <Code2 size={13} /> Learn this card
+      </button>
       <select
         className="studio-move"
         value={card.status}

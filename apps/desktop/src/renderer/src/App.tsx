@@ -205,6 +205,9 @@ export function App(): ReactNode {
   const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
   const [codeOpenRequest, setCodeOpenRequest] = useState<{ path: string; nonce: number } | null>(null);
+  // The same hand-off for a board card, rather than a file. The card travels whole, because the Studio is the view
+  // that holds the board: the Code view is pointed at the card rather than left to look it up in another project.
+  const [codeLearnRequest, setCodeLearnRequest] = useState<{ cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null>(null);
   const [contextPreviewLoading, setContextPreviewLoading] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
   const signInAttempt = useRef(0);
@@ -1008,33 +1011,34 @@ export function App(): ReactNode {
   async function openStudioProject(
     studioProjectId: string,
     destination: 'composer' | 'editor' | 'generate',
-  ): Promise<void> {
+  ): Promise<boolean> {
     const launch = await perform(
       () => window.kaiDesktop.launchStudioProject({ projectId: studioProjectId, destination }).then(unwrap),
       destination === 'composer' ? 'Preparing the composer' : destination === 'generate' ? 'Starting project generation' : 'Opening the code editor',
     );
-    if (!launch) return;
+    if (!launch) return false;
     const next = await openProject(launch.projectId, 'stay');
-    if (!next) return;
+    if (!next) return false;
     if (destination === 'editor') {
       setView('code');
-      return;
+      return true;
     }
 
     const conversation = await perform(
       () => window.kaiDesktop.createConversation(launch.projectId, launch.prompt).then(unwrap),
       'Creating conversation',
     );
-    if (!conversation) return;
+    if (!conversation) return false;
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
     if (destination === 'generate') {
       setView('workspace');
       await runConversation(conversation, launch.prompt);
-      return;
+      return true;
     }
     setWorkspaceCommand({ kind: 'prompt', nonce: Date.now(), prompt: launch.prompt });
     setView('workspace');
+    return true;
   }
 
   async function openProjectInNewWindow(id: string): Promise<void> {
@@ -2361,6 +2365,12 @@ export function App(): ReactNode {
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
                   onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
+                  onLearnCard={async (card, studioProjectId) => {
+                    // The plan's own project is opened first: the card's board, its artifacts and the files its
+                    // runs touched all live in that folder, so nothing else could read them for the tutor.
+                    if (!(await openStudioProject(studioProjectId, 'editor'))) return;
+                    setCodeLearnRequest({ cardId: card.id, title: card.title, stale: card.stale, staleReason: card.staleReason, nonce: Date.now() });
+                  }}
                 />
               </div>
             )}
@@ -2374,6 +2384,7 @@ export function App(): ReactNode {
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
                 openRequest={codeOpenRequest}
+                learnRequest={codeLearnRequest}
               />
             </div>
           </main>

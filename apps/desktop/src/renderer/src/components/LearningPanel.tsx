@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   BookOpen,
   BrainCircuit,
   CheckCircle2,
@@ -70,13 +71,17 @@ interface LearningPanelProps {
   readiness: LearningReadiness | null;
   result: LearningEvaluationResult | null;
   scope: LearningTutorScope;
+  /** The Studio card this conversation is about, when the learner came here from one. */
+  card: { id: string; title: string; stale: boolean; staleReason: string | null } | null;
+  onClearCard: () => void;
   selection: LearningSelectionPreview | null;
   gitInfo: GitFileInfo | null;
   busy: LearningAction | 'record' | null;
   error: string | null;
   question: string;
   submittedQuestion: string;
-  pendingQuestion: { text: string; status: 'sending' | 'failed' | 'cancelled' } | null;
+  submittedSource: 'user' | 'action';
+  pendingQuestion: { text: string; source: 'user' | 'action'; status: 'sending' | 'failed' | 'cancelled'; error?: string } | null;
   onRetryQuestion: () => void;
   onCancelQuestion: () => void;
   conversation: TutorConversationTurn[];
@@ -121,6 +126,7 @@ export interface LearningSelectionPreview {
 export interface TutorConversationTurn {
   id: string;
   question: string;
+  source?: 'user' | 'action';
   response: LearningEvaluationResult['response'];
 }
 
@@ -166,6 +172,8 @@ export function LearningPanel({
   readiness,
   result,
   scope,
+  card,
+  onClearCard,
   selection,
   gitInfo,
   busy,
@@ -173,6 +181,7 @@ export function LearningPanel({
   referenceNotice,
   question,
   submittedQuestion,
+  submittedSource,
   pendingQuestion,
   onRetryQuestion,
   onCancelQuestion,
@@ -383,12 +392,12 @@ export function LearningPanel({
           {lessons.map((lesson, index) => <button key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { setTab('tutor'); onStartLesson(lesson.prompt); }}><span>{index + 1}. {lesson.title}</span><small>{lesson.filePath ?? 'Based on learning evidence'} · Start step</small></button>)}
           {!lessons.length && <p>{progress?.lessons?.length ? 'You have completed the current path. Open another file or ask the tutor for a new challenge.' : 'Scan or open a project to build your lesson queue.'}</p>}
         </section>}
-        {error && tab === 'tutor' && <div className="learning-error" role="alert">{error}</div>}
+        {error && tab === 'tutor' && !pendingQuestion && <div className="learning-error" role="alert">{error}</div>}
         {tab === 'tutor' && (
           <>
             {conversation.map((turn) => (
               <div className="learning-conversation-turn" key={turn.id}>
-                <TutorQuestion question={turn.question} />
+                <TutorQuestion question={turn.question} source={turn.source} />
                 <TutorContent
                   onReference={onReference}
                   response={turn.response}
@@ -400,7 +409,7 @@ export function LearningPanel({
                 />
               </div>
             ))}
-            {submittedQuestion.trim() && <TutorQuestion question={submittedQuestion} />}
+            {submittedQuestion.trim() && <TutorQuestion question={submittedQuestion} source={submittedSource} />}
             <TutorContent
               onReference={onReference}
               response={response}
@@ -444,16 +453,17 @@ export function LearningPanel({
             disabled={Boolean(busy)}
             onExplainBack={onExplainBack}
             onContinue={onContinueLesson}
+            nextLesson={lessons[0] ?? null}
             onExplainBackHelp={onExplainBackHelp}
             onSkip={() => onUnderstood(responseLessonId)}
           />
         )}
         {tab === 'tutor' && pendingQuestion && (
           <div className="learning-pending-turn">
-            <TutorQuestion question={pendingQuestion.text} />
+            <TutorQuestion question={pendingQuestion.text} source={pendingQuestion.source} />
             {pendingQuestion.status === 'sending'
               ? <div className="learning-pending-reply" role="status"><LoaderCircle className="spin" size={14} />Tutor is replying... <button type="button" onClick={onCancelQuestion}>Stop</button></div>
-              : <div className="learning-pending-reply failed" role="alert">{pendingQuestion.status === 'cancelled' ? 'Stopped.' : 'Tutor could not reply.'} <button type="button" onClick={onRetryQuestion}>Retry</button></div>}
+              : <div className="learning-pending-reply failed" role="alert"><span>{pendingQuestion.status === 'cancelled' ? 'Stopped.' : pendingQuestion.error ?? 'Tutor could not reply.'}</span> <button type="button" onClick={onRetryQuestion}>Retry</button></div>}
           </div>
         )}
         {tab === 'history' && <section className="learning-history">
@@ -499,6 +509,8 @@ export function LearningPanel({
           selection={selection}
           response={Boolean(response)}
           scope={scope}
+          card={card}
+          onClearCard={onClearCard}
           open={focus || composerOpen}
           onToggle={() => setComposerOpen((current) => !current)}
           onScopeChange={onScopeChange}
@@ -676,6 +688,7 @@ function ExplainBack({
   disabled,
   onExplainBack,
   onContinue,
+  nextLesson,
   onExplainBackHelp,
   onSkip,
 }: {
@@ -686,6 +699,7 @@ function ExplainBack({
   disabled: boolean;
   onExplainBack: LearningPanelProps['onExplainBack'];
   onContinue: LearningPanelProps['onContinueLesson'];
+  nextLesson: ReturnType<typeof projectLessons>[number] | null;
   onExplainBackHelp: LearningPanelProps['onExplainBackHelp'];
   onSkip: () => void;
 }): ReactNode {
@@ -740,7 +754,11 @@ function ExplainBack({
           {shown.gap && <p><b>Revisit:</b> {shown.gap}</p>}
         </div>
       )}
-      {solid && <div className="learning-question-actions"><button type="button" className="primary-button" disabled={disabled} onClick={() => onContinue(asked)}>{disabled ? 'Finding next step...' : 'Continue to next step'}</button></div>}
+      {solid && <div className="learning-question-actions learning-next-lesson">
+        <strong>{nextLesson ? `Next in your path: ${nextLesson.title}` : 'Current learning path complete'}</strong>
+        <p>{nextLesson?.prompt ?? 'Open another project file or ask the tutor for a new challenge.'}</p>
+        <button type="button" className="primary-button" disabled={disabled} onClick={() => onContinue(asked)}>{disabled ? 'Asking tutor...' : nextLesson ? 'Ask tutor to start next step' : 'Ask tutor for a new challenge'}</button>
+      </div>}
       {!solid && (
         <>
           <textarea
@@ -818,6 +836,8 @@ function TutorComposer({
   selection,
   response,
   scope,
+  card,
+  onClearCard,
   open,
   onToggle,
   onScopeChange,
@@ -834,6 +854,8 @@ function TutorComposer({
   selection: LearningSelectionPreview | null;
   response: boolean;
   scope: LearningTutorScope;
+  card: { id: string; title: string; stale: boolean; staleReason: string | null } | null;
+  onClearCard: () => void;
   open: boolean;
   onToggle: () => void;
   onScopeChange: (scope: LearningTutorScope) => void;
@@ -914,6 +936,16 @@ function TutorComposer({
           </button>
         </div>
       </header>
+      {card && (
+        // The card travels with every request from here, so it is shown above the question box rather than in the
+        // reply: a learner who cannot see which card is in play cannot tell whether the advice is about their board.
+        <div className={`learning-card-context${card.stale ? ' stale' : ''}`}>
+          {card.stale ? <AlertTriangle size={13} aria-hidden="true" /> : <ListChecks size={13} aria-hidden="true" />}
+          <span><strong>{card.title}</strong> · learning from this Studio card</span>
+          {card.stale && <em>{card.staleReason ?? 'Something this card reads changed.'} Check the card before trusting this advice.</em>}
+          <button type="button" className="link-button" onClick={onClearCard} aria-label={`Stop learning from the Studio card ${card.title}`}>Clear</button>
+        </div>
+      )}
       {open && (
         <div className="learning-composer-body" id="learning-composer-body">
           <textarea
@@ -1047,10 +1079,10 @@ function TutorProcessing({ tick }: { tick: number }): ReactNode {
   );
 }
 
-function TutorQuestion({ question }: { question: string }): ReactNode {
+function TutorQuestion({ question, source = 'user' }: { question: string; source?: 'user' | 'action' }): ReactNode {
   return (
-    <article className="learning-chat-question" aria-label="Your tutor question">
-      <small>You</small>
+    <article className={`learning-chat-question${source === 'action' ? ' learning-chat-action' : ''}`} aria-label={source === 'action' ? 'KAI tutor action' : 'Your tutor question'}>
+      <small>{source === 'action' ? 'KAI action' : 'You'}</small>
       <p>{question}</p>
     </article>
   );
