@@ -255,6 +255,16 @@ export function CodeView({
   const [notice, setNotice] = useState<string | null>(null);
   const [diskChanged, setDiskChanged] = useState<string | null>(null);
   const [editorReady, setEditorReady] = useState(false);
+  /** The failure that stopped the editor starting, named so the panel can offer a retry instead of a stall. */
+  const [editorError, setEditorError] = useState<string | null>(null);
+  /** Bumped to create the editor again after a failure; Monaco remembers nothing about a failed load. */
+  const [editorAttempt, setEditorAttempt] = useState(0);
+  /**
+   * A click that arrives while Monaco is still starting is held here and honoured the moment it is ready, rather than
+   * answered with "try again in a moment" and dropped. Monaco is its own lazily loaded chunk, so a reference clicked
+   * in the first seconds of a project opening used to open nothing at all, which reads as a dead button.
+   */
+  const pendingOpenRef = useRef<(() => Promise<unknown>) | null>(null);
   // Whether the tutor panel is open is remembered between visits.
   const [tutorOpen, setTutorOpenState] = useState(() => {
     try {
@@ -407,6 +417,18 @@ export function CodeView({
   function openSidePanel(panel: 'learn' | 'review' | 'guide'): void {
     setSidePanel(panel);
     window.localStorage.setItem('kai.codeSidePanel', panel);
+  }
+
+  /**
+   * Starts the editor again after it failed to come up. Without this the pane had no way forward: every file click
+   * answered "try again in a moment" and nothing ever changed. Monaco is asked to load afresh, and because a failed
+   * load is not remembered, this is a genuinely new attempt rather than the same rejection replayed.
+   */
+  function retryEditor(): void {
+    pendingOpenRef.current = null;
+    setEditorError(null);
+    setNotice('Starting the code editor again…');
+    setEditorAttempt((attempt) => attempt + 1);
   }
 
   /**
@@ -743,7 +765,7 @@ export function CodeView({
     };
   }, [projectId, refreshGitChanges]);
 
-  // Create the editor once, on first use.
+  // Create the editor on first use, and again when the learner asks for a retry after a failed start.
   useEffect(() => {
     let disposed = false;
     let observer: MutationObserver | null = null;
@@ -869,8 +891,13 @@ export function CodeView({
       editorRef.current = editor;
       observer = new MutationObserver(() => monaco.editor.setTheme(monacoThemeName()));
       observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      setEditorError(null);
       setEditorReady(true);
-    }).catch((caught) => setNotice(caught instanceof Error ? caught.message : 'The editor could not be loaded.'));
+    }).catch((caught) => {
+      const message = caught instanceof Error ? caught.message : 'The editor could not be loaded.';
+      setEditorError(message);
+      setNotice(message);
+    });
     return () => {
       disposed = true;
       observer?.disconnect();
@@ -882,9 +909,19 @@ export function CodeView({
       for (const document of documents.current.values()) document.model.dispose();
       documents.current.clear();
     };
-    // The first editor is intentionally created once for the lifetime of the view.
+    // The editor is created once per attempt and lives for the lifetime of the view; `editorAttempt` is the learner
+    // asking for another go after a failure, which is also what runs the dispose path above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [editorAttempt]);
+
+  // Whatever was clicked while the editor was starting is opened as soon as it is ready, so the click is kept.
+  useEffect(() => {
+    if (!editorReady) return;
+    const pending = pendingOpenRef.current;
+    if (!pending) return;
+    pendingOpenRef.current = null;
+    void pending();
+  }, [editorReady]);
 
   useEffect(() => {
     if (!editorReady || !projectId || !monacoRef.current || !editorRef.current) return;
@@ -1028,25 +1065,39 @@ export function CodeView({
     });
   }
 
-  async function openFile(path: string): Promise<void> {
+  /**
+   * Holds a click until the editor is up, and says so. Monaco arrives in its own chunk, so the first seconds of a
+   * project opening are exactly when a reference gets clicked; dropping that click is what made those buttons look
+   * dead. A load that has actually failed is not worth waiting for, so that case is reported instead.
+   */
+  function holdUntilEditorReady(path: string): false {
+    pendingOpenRef.current = () => openFile(path);
+    setNotice(`Opening ${path} as soon as the editor finishes starting…`);
+    return false;
+  }
+
+  /** Whether the file is on screen now. `false` means it was deferred or refused, and a notice says which. */
+  async function openFile(path: string): Promise<boolean> {
     const currentProjectId = projectIdRef.current;
     if (!currentProjectId) {
       setNotice('Open a project before opening a file.');
-      return;
+      return false;
     }
-    // This used to return without a word while the editor was still loading, so the click looked dead.
-    if (!(await waitForEditor())) {
-      setNotice('The code editor is still starting. Try again in a moment.');
-      return;
+    if (!(await waitForEditor(editorError ? 0 : 15_000))) {
+      if (editorError) {
+        setNotice(`The code editor could not start: ${editorError}`);
+        return false;
+      }
+      return holdUntilEditorReady(path);
     }
     setDiskChanged(null);
     let document = documents.current.get(path);
     if (!document) {
       try {
         const opened = unwrap(await window.kaiDesktop.readProjectFile(currentProjectId, path));
-        if (projectIdRef.current !== currentProjectId) return;
+        if (projectIdRef.current !== currentProjectId) return false;
         const monaco = monacoRef.current;
-        if (!monaco) throw new Error('The code editor is still starting. Try again in a moment.');
+        if (!monaco) return holdUntilEditorReady(path);
         const language = languageForPath(path);
         const model = monaco.editor.createModel(opened.content, language, monaco.Uri.file(`/${path}`));
         model.setEOL(opened.eol === 'crlf' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF);
@@ -1064,16 +1115,13 @@ export function CodeView({
         reportDocument(currentProjectId, path, created);
         setNotice(null);
       } catch (caught) {
-        if (projectIdRef.current !== currentProjectId) return;
+        if (projectIdRef.current !== currentProjectId) return false;
         setNotice(caught instanceof Error ? caught.message : 'That file could not be opened.');
-        return;
+        return false;
       }
     }
     const target = editorRef.current;
-    if (!target) {
-      setNotice('The code editor is still starting. Try again in a moment.');
-      return;
-    }
+    if (!target) return holdUntilEditorReady(path);
     target.setModel(document.model);
     const nextOpenPaths = openPathsRef.current.includes(path) ? openPathsRef.current : [...openPathsRef.current, path];
     openPathsRef.current = nextOpenPaths;
@@ -1083,6 +1131,7 @@ export function CodeView({
     setActivePath(path);
     setLearningError(null);
     setReferenceNotice(null);
+    return true;
   }
 
   async function saveDocument(path: string, mode: 'manual' | 'auto'): Promise<void> {
@@ -1212,7 +1261,13 @@ export function CodeView({
   async function openLearningReference(filePath: string, startLine?: number, endLine?: number): Promise<void> {
     const originProject = projectIdRef.current;
     setReferenceNotice(null);
-    await openFile(filePath);
+    const opened = await openFile(filePath);
+    if (!opened) {
+      // Deferred rather than failed: replay the whole click — file and line range together — once the editor is up.
+      // `openFile` has already said what is happening, and a failed load has already named its own cause.
+      if (!editorError) pendingOpenRef.current = () => openLearningReference(filePath, startLine, endLine);
+      return;
+    }
     const editor = editorRef.current;
     if (projectIdRef.current !== originProject) return;
     // A click that changes nothing is indistinguishable from a broken button, so say what happened.
@@ -1806,7 +1861,7 @@ export function CodeView({
             </span>
           </div>
         )}
-        {notice && <div className="workbench-notice" role="status"><span>{notice}</span>{offerInstallRuff && <button type="button" className="secondary-button" disabled={formatting} onClick={() => void installRuff()}>{formatting ? 'Installing…' : 'Install Ruff'}</button>}<button type="button" className="icon-button compact" aria-label="Dismiss" onClick={() => { setNotice(null); setOfferInstallRuff(false); }}><X size={12} /></button></div>}
+        {notice && <div className="workbench-notice" role="status"><span>{notice}</span>{!editorReady && <button type="button" className="secondary-button" onClick={retryEditor} title="Load the code editor again">{editorError ? 'Try again' : 'Start the editor again'}</button>}{offerInstallRuff && <button type="button" className="secondary-button" disabled={formatting} onClick={() => void installRuff()}>{formatting ? 'Installing…' : 'Install Ruff'}</button>}<button type="button" className="icon-button compact" aria-label="Dismiss" onClick={() => { setNotice(null); setOfferInstallRuff(false); }}><X size={12} /></button></div>}
         <div className="code-editor-host" ref={containerRef} aria-label="Code editor" />
         {editorReady && openPaths.length === 0 && <div className="code-empty"><Sparkles size={18} /><span>Choose a file from the list to edit it</span></div>}
       </section>
@@ -1849,7 +1904,7 @@ export function CodeView({
             changes={reviewChanges}
             activePath={activePath}
             hasSelection={Boolean(learningSelection?.text.trim())}
-            onOpenFile={openFile}
+            onOpenFile={async (path) => { await openFile(path); }}
             onExplainFile={async (path) => { await openFile(path); setSidePanel('learn'); setTutorOpen(true); await runLearningAction('explain-file'); }}
             onCreateFollowup={onCreateReviewFollowup}
             onOpenAt={(filePath, line) => void openLearningReference(filePath, line, line)}

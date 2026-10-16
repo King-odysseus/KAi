@@ -18,10 +18,6 @@ const electronExecutable = createRequire(import.meta.url)('electron');
 const packagedExecutable = process.env.KAI_PACKAGED_EXECUTABLE;
 const { ELECTRON_RUN_AS_NODE: _runAsNode, ...launchEnvironment } = process.env;
 const rendererErrors = [];
-// One tutor-panel check still names a control the redesigned panel no longer has: it waits for an "Open referenced
-// file" button, and no such button exists anywhere in the renderer. It is skipped when asked for rather than
-// rewritten here, so the rest of the walk can run and say what it did cover; a plain run is unchanged.
-const skipStaleTutorChecks = process.env.KAI_SKIP_STALE_TUTOR_CHECKS === '1';
 let electronApp;
 
 await rm(outputDirectory, { recursive: true, force: true });
@@ -99,7 +95,7 @@ async function verifyCodeEditor(page) {
   await verifyTutorScope(page);
   await verifyTutorCollapsibleSections(page);
   await verifyTutorCompactControls(page);
-  if (!skipStaleTutorChecks) await verifyTutorInlineCompletion(page);
+  await verifyTutorInlineCompletion(page);
   await verifyResizablePane(page, 'Resize project files pane', '.code-sidebar');
   await verifyResizablePane(page, 'Resize learning tutor pane', '.learning-panel');
   await assertControlsDoNotWrap(page, 'code-1440x920');
@@ -1068,10 +1064,12 @@ async function verifyTutorInlineCompletion(page) {
   await page.getByRole('button', { name: 'Ask tutor', exact: true }).click();
   await page.locator('.learning-composer-processing').waitFor();
   await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Open referenced file', exact: true }).click();
+  // The reference row names the file it opens, so this is the button a learner actually clicks.
+  await page.getByRole('button', { name: 'Open README.md', exact: true }).click();
   await page.getByRole('button', { name: 'Close README.md', exact: true }).waitFor();
   if (!(await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).isVisible())) throw new Error('Opening a file cleared the lesson.');
-  await page.getByRole('button', { name: 'Select lines', exact: true }).click();
+  // The line range is part of the label ("Select lines 1"), so it is matched by its start.
+  await page.getByRole('button', { name: /^Select lines 1\b/ }).click();
   await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.locator('.learning-history button').first().click();
   await page.getByRole('heading', { name: 'Smoke lesson', exact: true }).waitFor();

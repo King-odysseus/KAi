@@ -218,6 +218,13 @@ export function LearningPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const lessons = useMemo(() => projectLessons(projectFiles, progress), [projectFiles, progress]);
   const responseUnderstood = progress?.lessons?.find((lesson) => lesson.id === responseLessonId)?.understood ?? false;
+  // Recorded lessons are newest first, so the lesson before the one on screen sits one place further along. The path
+  // queue above cannot answer this: it is derived from what is still weak or unexplored, so it has no beginning to
+  // go back to, and every step it lists is ahead of the learner.
+  const recordedLessons = progress?.lessons ?? [];
+  const recordedIndex = recordedLessons.findIndex((lesson) => lesson.id === responseLessonId);
+  const previousLesson = recordedIndex >= 0 ? recordedLessons[recordedIndex + 1] : recordedLessons[0];
+  const firstLesson = recordedLessons.length > 1 ? recordedLessons.at(-1) : undefined;
   const reference = result ? responseReferenceTarget([result.response.steps[0]?.explanation ?? ''], result.response.sourceNotes, projectFiles) : null;
   const runCheck = async (): Promise<void> => {
     setChecking(true);
@@ -378,6 +385,24 @@ export function LearningPanel({
         <button type="button" disabled={Boolean(busy)} onClick={() => onStartLesson(lessons[0]!.prompt)}><span>{lessons[0]!.title}</span><small>{lessons[0]!.filePath ?? 'Practice from your recent work'} · Start this step</small></button>
         {lessons.length > 1 && <small>{lessons.length - 1} more step{lessons.length === 2 ? '' : 's'} in Progress</small>}
       </section>}
+      {!focus && tab === 'tutor' && (previousLesson || firstLesson) && (
+        <section className="learning-path learning-path-next">
+          <strong>Go back</strong>
+          {/* Reopening a lesson shows it again and costs no tutor turn; nothing already recorded is changed. */}
+          {previousLesson && previousLesson.id !== responseLessonId && (
+            <button type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(previousLesson); setTab('tutor'); }}>
+              <span>Previous lesson: {previousLesson.response.title}</span>
+              <small>{new Date(previousLesson.createdAt).toLocaleString()} · Reopen it</small>
+            </button>
+          )}
+          {firstLesson && firstLesson.id !== responseLessonId && firstLesson.id !== previousLesson?.id && (
+            <button type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(firstLesson); setTab('tutor'); }}>
+              <span>Start over from the first lesson</span>
+              <small>{firstLesson.response.title}</small>
+            </button>
+          )}
+        </section>
+      )}
       <div className="learning-scroll" ref={scrollRef}>
         {!focus && response && progress?.memory && <section className="learning-memory">
           <strong>Last lesson: {progress.memory.lastLesson}</strong>

@@ -236,7 +236,12 @@ export function loadMonaco(): Promise<typeof Monaco> {
     typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
     javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
     return monaco as unknown as typeof Monaco;
-  })();
+  })().catch((error: unknown) => {
+    // A failure is deliberately not remembered. Caching the rejected promise would make every later attempt replay
+    // it, so the retry the Code view offers after the editor fails to start would be the same failure again.
+    loading = null;
+    throw error;
+  });
   return loading;
 }
 
