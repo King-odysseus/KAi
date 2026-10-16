@@ -326,6 +326,7 @@ function trackIpcCall<T>(channel: string, work: () => Promise<T>): Promise<T> {
 
 export function registerIpc(context: IpcContext): IpcRegistry {
   const handlers = new Map<IpcChannel, IpcChannelHandler>();
+  const tutorRequests = new Map<string, { controller: AbortController; ownerWindowId: number }>();
 
   // Shadows the module-level helper of the same name so the ~178 registrations below stay exactly as
   // they were. Validation lives here, in the one place both the ipcMain path and dispatch() go
@@ -942,38 +943,53 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     await resolveProject(context, input.projectId, true);
     return context.learningProgress.updatePreferences(input);
   });
-  handle(context, 'learning:evaluate', async (request): Promise<LearningEvaluationResult> => {
-    await resolveProject(context, request.projectId, true);
-    const settings = await context.settings.load();
-    const readiness = await context.learningTutor.readiness();
-    if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
-    const estimatedInputTokens = Math.ceil((request.code.length + (request.completionContext?.prefix.length ?? 0) + (request.completionContext?.suffix.length ?? 0) + (request.selectedText?.length ?? 0) + (request.question?.length ?? 0) + (request.conversationContext?.length ?? 0)) / 4) + 1_500;
-    const reservation = context.learningBudget.reserve({
-      projectId: request.projectId,
-      provider: readiness.provider,
-      model: readiness.model,
-      conversations: await context.conversations.list(),
-      budget: settings.usageBudget,
-      estimatedInputTokens,
-      estimatedOutputTokens: 6_000,
-      externalRuns: await context.learningUsage.runs(),
-    });
-    if (reservation.blockedReason) {
-      throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
-    }
+  handle(context, 'learning:cancel', async ({ requestId }, ipcRequest) => {
+    const active = tutorRequests.get(requestId);
+    if (!active || active.ownerWindowId !== ipcRequest.ownerWindowId) return false;
+    active.controller.abort();
+    return true;
+  });
+  handle(context, 'learning:evaluate', async (request, ipcRequest): Promise<LearningEvaluationResult> => {
+    const controller = new AbortController();
+    if (request.requestId) tutorRequests.set(request.requestId, { controller, ownerWindowId: ipcRequest.ownerWindowId });
     try {
-      const remembered = await context.learningProgress.get(request.projectId);
-      const detailed = await context.learningTutor.evaluateDetailed(request, JSON.stringify({ memory: remembered.memory, concepts: remembered.concepts.slice(0, 20) }));
-      await context.learningUsage.record({
+      await resolveProject(context, request.projectId, true);
+      const settings = await context.settings.load();
+      const readiness = await context.learningTutor.readiness();
+      if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
+      const estimatedInputTokens = Math.ceil((request.code.length + (request.completionContext?.prefix.length ?? 0) + (request.completionContext?.suffix.length ?? 0) + (request.selectedText?.length ?? 0) + (request.question?.length ?? 0) + (request.conversationContext?.length ?? 0)) / 4) + 1_500;
+      const reservation = context.learningBudget.reserve({
         projectId: request.projectId,
         provider: readiness.provider,
         model: readiness.model,
-        usage: detailed.usage,
+        conversations: await context.conversations.list(),
+        budget: settings.usageBudget,
+        estimatedInputTokens,
+        estimatedOutputTokens: 6_000,
+        externalRuns: await context.learningUsage.runs(),
       });
-      const progress = request.completionContext ? await context.learningProgress.get(request.projectId) : await context.learningProgress.recordEvaluation(request, detailed.response);
-      return { response: detailed.response, progress, usage: detailed.usage };
+      if (reservation.blockedReason) {
+        throw new Error(`${reservation.blockedReason} Raise the limit or switch to warn mode in Settings to continue.`);
+      }
+      try {
+        const remembered = await context.learningProgress.get(request.projectId);
+        controller.signal.throwIfAborted();
+        const detailed = await context.learningTutor.evaluateDetailed(request, JSON.stringify({ memory: remembered.memory, concepts: remembered.concepts.slice(0, 20) }), controller.signal);
+        controller.signal.throwIfAborted();
+        await context.learningUsage.record({
+          projectId: request.projectId,
+          provider: readiness.provider,
+          model: readiness.model,
+          usage: detailed.usage,
+        });
+        controller.signal.throwIfAborted();
+        const progress = request.completionContext ? await context.learningProgress.get(request.projectId) : await context.learningProgress.recordEvaluation(request, detailed.response);
+        return { response: detailed.response, progress, usage: detailed.usage };
+      } finally {
+        context.learningBudget.release(reservation.id);
+      }
     } finally {
-      context.learningBudget.release(reservation.id);
+      if (request.requestId) tutorRequests.delete(request.requestId);
     }
   });
   handle(context, 'learning:record-lesson', async (input): Promise<LearningLessonRecordResult> => {

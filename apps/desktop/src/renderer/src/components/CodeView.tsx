@@ -46,6 +46,7 @@ import { changeMap, type FileChange } from './project-files-tree';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { LearningPanel, type LearningSelectionPreview, type TutorConversationTurn } from './LearningPanel';
+import { projectLessons } from './learning-path';
 import { GuidedReviewPanel } from './GuidedReviewPanel';
 import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
 import { confirmDialog, promptDialog } from './AppDialog';
@@ -63,6 +64,15 @@ interface OpenDocument {
   savedValue: string;
   language: string;
   version: number;
+}
+
+interface SuggestionPreview {
+  filePath: string;
+  range: Monaco.IRange;
+  before: string;
+  after: string;
+  expectedVersion: number;
+  insertedLines?: { start: number; end: number };
 }
 
 const normalise = (text: string): string => text.replace(/\r\n/g, '\n');
@@ -303,6 +313,9 @@ export function CodeView({
   const [learningSelection, setLearningSelection] = useState<LearningSelectionPreview | null>(null);
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
+  const [pendingTutorQuestion, setPendingTutorQuestion] = useState<{ requestId: string; text: string; action: LearningAction; stuckHint?: 1 | 2 | 3; status: 'sending' | 'failed' | 'cancelled' } | null>(null);
+  const [suggestionPreview, setSuggestionPreview] = useState<SuggestionPreview | null>(null);
+  const [lastAppliedSuggestion, setLastAppliedSuggestion] = useState<{ filePath: string; version: number } | null>(null);
   const [tutorConversation, setTutorConversation] = useState<TutorConversationTurn[]>([]);
   const [appliedSuggestionNeedsExplanation, setAppliedSuggestionNeedsExplanation] = useState(false);
   // How many "I'm stuck" hints the learner has taken on the current step (0-3); a new question resets it.
@@ -666,6 +679,9 @@ export function CodeView({
     setResponseLessonId(null);
     setLearningError(null);
     setQuestion('');
+    setPendingTutorQuestion(null);
+    setSuggestionPreview(null);
+    setLastAppliedSuggestion(null);
     const saved = projectId ? readTutorSession(projectId) : null;
     setSubmittedQuestion(saved?.submittedQuestion ?? '');
     setTutorConversation(saved?.turns ?? []);
@@ -678,6 +694,7 @@ export function CodeView({
     setCodeGuide(null);
     setGuideError(null);
     autoExplainedGuide.current = null;
+    if (activeLearningRequestId.current) void window.kaiDesktop.cancelLearning(activeLearningRequestId.current).catch(() => undefined);
     activeLearningRequestId.current = null;
     learningBusyRef.current = false;
     clearAutoSaveTimer();
@@ -1207,6 +1224,11 @@ export function CodeView({
       const result = unwrap(await window.kaiDesktop.explainLearningBack({ projectId: id, lessonId, question: lessonQuestion, answer }));
       if (projectIdRef.current !== id) return null;
       setProgress(result.progress);
+      if (result.grade.verdict === 'solid') {
+        const nextPrompt = projectLessons(files.map((file) => file.path), result.progress)[0]?.prompt;
+        void runLearningAction('next-step', false, undefined,
+          `${nextPrompt ?? 'Find the next unfinished coding step in this project.'} I correctly answered the check about "${lessonQuestion}". Do not repeat that lesson or question.`);
+      }
       return result.grade;
     } catch (error) {
       if (projectIdRef.current === id) setLearningError(error instanceof Error ? error.message : 'Could not check your explanation.');
@@ -1233,11 +1255,17 @@ export function CodeView({
     const command = await promptDialog({ title: 'Run project check', label: 'Check command (runs saved files on disk)', initialValue: overview.suggestedCommand ?? '', confirmLabel: 'Run check' });
     if (!command?.trim()) return 'Check cancelled.';
     if (projectIdRef.current !== id) return 'Project changed; check cancelled.';
+    const path = activeRef.current;
+    const document = path ? documents.current.get(path) : undefined;
+    if (path && document && normalise(document.model.getValue()) !== document.savedValue) {
+      await saveDocument(path, 'manual');
+      if (normalise(document.model.getValue()) !== document.savedValue) throw new Error(`Could not save ${path}. Resolve the save issue before running a check against the file on disk.`);
+    }
     const run = unwrap(await window.kaiDesktop.runVerification(id, command));
     return `${run.command}: ${run.passed ? 'Passed' : 'Failed'} (exit ${run.exitCode ?? 'unknown'})\n${run.outputTail}`;
   }
 
-  async function runLearningAction(action: LearningAction, inline = false, stuckHint?: 1 | 2 | 3): Promise<LearningEvaluationResult | null> {
+  async function runLearningAction(action: LearningAction, inline = false, stuckHint?: 1 | 2 | 3, questionOverride?: string): Promise<LearningEvaluationResult | null> {
     if (learningBusyRef.current) return null;
     const path = activeRef.current;
     const document = path ? documents.current.get(path) : undefined;
@@ -1267,7 +1295,7 @@ export function CodeView({
     const selectedText = document && selection && !selection.isEmpty() ? document.model.getValueInRange(selection).slice(0, 50_000) : undefined;
     const requestId = `learning_${crypto.randomUUID()}`;
     const requestAssistance = assistance;
-    const requestQuestion = question.trim() || (stuckHint ? `I'm stuck. Hint ${stuckHint} of 3, please.` : '');
+    const requestQuestion = questionOverride?.trim() || question.trim() || (stuckHint ? `I'm stuck. Hint ${stuckHint} of 3, please.` : '');
     const explainingAppliedSuggestion = appliedSuggestionNeedsExplanation && /^I applied the Tutor suggestion/i.test(question.trim());
     const priorTurns = learningResult?.response
       ? [...tutorConversation, { id: 'current', question: submittedQuestion.trim() || learningResult.response.title, response: learningResult.response }]
@@ -1304,12 +1332,18 @@ export function CodeView({
     activeLearningRequestId.current = requestId;
     learningBusyRef.current = true;
     setLearningBusy(action);
-    // Keep the draft and the last useful answer visible until a replacement arrives.
-    // A failed provider request should be immediately retryable.
+    if (!inline) {
+      setPendingTutorQuestion({ requestId, text: requestQuestion || `Tutor action: ${action.replace(/-/g, ' ')}`, action, ...(stuckHint ? { stuckHint } : {}), status: 'sending' });
+      if (!questionOverride) setQuestion((current) => current.trim() === requestQuestion ? '' : current);
+    }
     setLearningError(null);
     try {
       const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
-      if (activeLearningRequestId.current !== requestId || projectIdRef.current !== request.projectId || (action === 'complete' && !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current))) return null;
+      if (activeLearningRequestId.current !== requestId || projectIdRef.current !== request.projectId) return null;
+      if (action === 'complete' && !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current)) {
+        setPendingTutorQuestion(null);
+        return null;
+      }
       if (inline) {
         if (!result.response.suggestion) setNotice('No inline suggestion for this cursor position.');
         return result;
@@ -1323,17 +1357,22 @@ export function CodeView({
         }].slice(-30));
       }
       setSubmittedQuestion(request.question ?? `Tutor action: ${action.replace(/-/g, ' ')}`);
-      setQuestion('');
+      setPendingTutorQuestion(null);
+      setSuggestionPreview(null);
       setHintLevel(stuckHint ?? 0);
       setLearningResult(result);
       setResponseLessonId(result.progress.memory?.lessonId ?? null);
       setProgress(result.progress);
+      void window.kaiDesktop.learningReadiness().then((state) => {
+        if (state.ok && projectIdRef.current === request.projectId) setReadiness(state.data);
+      }).catch(() => undefined);
       if (explainingAppliedSuggestion) setAppliedSuggestionNeedsExplanation(false);
       return result;
     } catch (caught) {
       if (activeLearningRequestId.current === requestId) {
         const message = caught instanceof Error ? caught.message : 'The tutor request failed.';
         setLearningError(message);
+        if (!inline) setPendingTutorQuestion((current) => current?.status === 'sending' ? { ...current, status: 'failed' } : current);
         if (inline) setNotice(`Inline suggestion: ${message}`);
       }
       return null;
@@ -1345,6 +1384,16 @@ export function CodeView({
     }
   }
   learningActionRef.current = runLearningAction;
+
+  function cancelLearningQuestion(): void {
+    const pending = pendingTutorQuestion;
+    if (!pending || pending.status !== 'sending') return;
+    activeLearningRequestId.current = null;
+    learningBusyRef.current = false;
+    setLearningBusy(null);
+    setPendingTutorQuestion({ ...pending, status: 'cancelled' });
+    void window.kaiDesktop.cancelLearning(pending.requestId).catch(() => undefined);
+  }
 
   async function updatePreferences(nextAssistance: LearningAssistance, nextInline: boolean, modes: LearningAssistance[] = teachingModes): Promise<void> {
     if (!projectId) return;
@@ -1398,12 +1447,8 @@ export function CodeView({
       return;
     }
     const { range, text, insertedLines } = placed.edit;
-    document.model.pushEditOperations([], [{ range: new monaco.Range(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn), text }], () => null);
-    editor.setSelection({ startLineNumber: insertedLines.start, startColumn: 1, endLineNumber: insertedLines.end, endColumn: document.model.getLineMaxColumn(insertedLines.end) });
-    editor.revealLinesInCenter(insertedLines.start, insertedLines.end);
-    editor.focus();
-    setAppliedSuggestionNeedsExplanation(true);
-    setNotice(`Put the tutor suggestion in ${placement.filePath} at line ${insertedLines.start}. Review it, run the relevant check, and save when you are satisfied.`);
+    const editRange = new monaco.Range(range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn);
+    setSuggestionPreview({ filePath: placement.filePath, range: editRange, before: document.model.getValueInRange(editRange), after: text, expectedVersion: document.model.getVersionId(), insertedLines });
   }
 
   function insertSuggestion(): void {
@@ -1427,9 +1472,44 @@ export function CodeView({
           selection?.positionLineNumber ?? 1,
           selection?.positionColumn ?? 1,
         );
-    document.model.pushEditOperations([], [{ range, text: suggestion.code }], () => selection ? [selection] : null);
+    setSuggestionPreview({ filePath: path!, range, before: document.model.getValueInRange(range), after: suggestion.code, expectedVersion: document.model.getVersionId() });
+  }
+
+  function applySuggestionPreview(): void {
+    const preview = suggestionPreview;
+    const document = preview ? documents.current.get(preview.filePath) : undefined;
+    const editor = editorRef.current;
+    if (!preview || !document || !editor || activeRef.current !== preview.filePath || document.model.getVersionId() !== preview.expectedVersion || document.model.getValueInRange(preview.range) !== preview.before) {
+      setSuggestionPreview(null);
+      setNotice('The file changed while the code preview was open. Review the suggestion again.');
+      return;
+    }
+    document.model.pushStackElement();
+    document.model.pushEditOperations([], [{ range: preview.range, text: preview.after }], () => null);
+    document.model.pushStackElement();
+    setLastAppliedSuggestion({ filePath: preview.filePath, version: document.model.getVersionId() });
+    setSuggestionPreview(null);
+    if (preview.insertedLines) {
+      editor.setSelection({ startLineNumber: preview.insertedLines.start, startColumn: 1, endLineNumber: preview.insertedLines.end, endColumn: document.model.getLineMaxColumn(preview.insertedLines.end) });
+      editor.revealLinesInCenter(preview.insertedLines.start, preview.insertedLines.end);
+    }
+    editor.focus();
     setAppliedSuggestionNeedsExplanation(true);
-    setNotice('Inserted the tutor suggestion. Review it, run the relevant check, and save when you are satisfied.');
+    setNotice(`Applied tutor code in ${preview.filePath}. You can undo it from the tutor panel; Run check saves the current file before testing it.`);
+  }
+
+  function undoAppliedSuggestion(): void {
+    const applied = lastAppliedSuggestion;
+    const document = applied ? documents.current.get(applied.filePath) : undefined;
+    if (!applied || !document || document.model.getVersionId() !== applied.version) {
+      setLastAppliedSuggestion(null);
+      setNotice('The file changed after the tutor edit. Use the editor Undo command to review its history.');
+      return;
+    }
+    document.model.undo();
+    setLastAppliedSuggestion(null);
+    setAppliedSuggestionNeedsExplanation(false);
+    setNotice(`Undid the tutor code in ${applied.filePath}.`);
   }
 
   async function recordLesson(): Promise<void> {
@@ -1772,6 +1852,9 @@ export function CodeView({
             }}
             onUnderstood={(lessonId) => void markUnderstood(lessonId)}
             onExplainBack={explainBack}
+            onContinueLesson={(lessonQuestion) => void runLearningAction('next-step', false, undefined,
+              `${projectLessons(files.map((file) => file.path), progress)[0]?.prompt ?? 'Find the next unfinished coding step in this project.'} I completed the lesson about "${lessonQuestion}". Do not repeat that lesson or question.`)}
+            onStartLesson={(prompt) => void runLearningAction('next-step', false, undefined, prompt)}
             onExplainBackHelp={explainBackHelp}
             onRunCheck={runLearningCheck}
             projectName={activeProject?.name ?? null}
@@ -1785,6 +1868,11 @@ export function CodeView({
             error={learningError}
             question={question}
             submittedQuestion={submittedQuestion}
+            pendingQuestion={pendingTutorQuestion}
+            onRetryQuestion={() => {
+              if (pendingTutorQuestion) void runLearningAction(pendingTutorQuestion.action, false, pendingTutorQuestion.stuckHint, pendingTutorQuestion.text);
+            }}
+            onCancelQuestion={cancelLearningQuestion}
             conversation={tutorConversation}
             onQuestionChange={setQuestion}
             onAction={(action) => void runLearningAction(action)}
@@ -1799,6 +1887,11 @@ export function CodeView({
             onPreferences={(nextAssistance, nextInline, modes) => void updatePreferences(nextAssistance, nextInline, modes)}
             onInsertSuggestion={insertSuggestion}
             onPlaceSuggestion={() => void placeSuggestionInFile()}
+            suggestionPreview={suggestionPreview && { filePath: suggestionPreview.filePath, before: suggestionPreview.before, after: suggestionPreview.after }}
+            onApplySuggestion={applySuggestionPreview}
+            onCancelSuggestion={() => setSuggestionPreview(null)}
+            canUndoSuggestion={Boolean(lastAppliedSuggestion)}
+            onUndoSuggestion={undoAppliedSuggestion}
             appliedSuggestionNeedsExplanation={appliedSuggestionNeedsExplanation}
             onExplainAppliedSuggestion={() => {
               setQuestion('I applied the Tutor suggestion. I think it works because ');

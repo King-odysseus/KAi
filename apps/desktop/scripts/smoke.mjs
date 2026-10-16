@@ -455,25 +455,33 @@ async function verifySkillsDialogFitsViewport(page) {
 }
 
 async function verifyCodeLearningWorkspace(application, page) {
-  await page.getByRole('button', { name: 'Code' }).click();
+  if (directApiFixture) {
+    const credential = await page.evaluate(() => window.kaiDesktop.setCredential('provider.openai', 'sk-local-smoke'));
+    if (!credential.ok) throw new Error(credential.error.message);
+    const settings = await page.evaluate((baseUrl) => window.kaiDesktop.updateSettings({ learningTutor: { enabled: true, provider: 'openai', model: 'smoke-api-model', baseUrl, credentialId: 'provider.openai' } }), directApiFixture.baseUrl);
+    if (!settings.ok) throw new Error(settings.error.message);
+  }
+  await page.getByRole('button', { name: 'Learn: Learn & Code' }).click();
   await page.locator('.code-view').waitFor();
-  await page.getByRole('button', { name: 'AGENTS.md' }).click();
+  await page.locator('.code-tree-item').getByText('AGENTS.md', { exact: true }).click();
   await page.locator('.learning-panel').waitFor();
-  await page.locator('.monaco-editor').click();
-  await page.keyboard.press('Control+A');
-  const selectionContext = page.locator('.learning-selection-context');
-  await selectionContext.getByText('Selected code', { exact: true }).waitFor();
-  await selectionContext.getByText('Attached', { exact: true }).waitFor();
-  await page.getByLabel('Tutor question').waitFor();
-  const explain = selectionContext.getByRole('button', { name: 'Explain selection', exact: true });
-  await explain.click();
+  await page.getByRole('textbox', { name: 'Tutor question' }).waitFor();
+  await page.getByRole('textbox', { name: 'Tutor question' }).fill('Explain this file.');
+  await page.getByRole('button', { name: 'Ask tutor' }).click();
   try {
     await page.getByRole('heading', { name: 'KAI Learning Mode response', level: 2 }).waitFor({ timeout: 20_000 });
   } catch (error) {
     const panelText = await page.locator('.learning-panel').innerText().catch(() => '<panel unavailable>');
     throw new Error(`The selected-code tutor response did not render. Panel text: ${panelText}`, { cause: error });
   }
-  await page.getByText('Variables hold changing values.').waitFor();
+  await page.locator('.learning-response .learning-question').getByText('Variables hold changing values.').waitFor();
+  await page.getByRole('textbox', { name: 'Tutor question' }).fill('What should I do next?');
+  await page.getByRole('button', { name: 'Ask', exact: true }).click();
+  await page.locator('.learning-pending-turn .learning-chat-question').getByText('What should I do next?').waitFor();
+  await page.locator('.learning-pending-reply').getByText('Tutor is replying...').waitFor();
+  await page.locator('.learning-pending-turn').waitFor({ state: 'detached' });
+  await page.locator('.learning-chat-question').getByText('What should I do next?').waitFor();
+  if (await page.locator('.learning-response').count() < 2) throw new Error('The follow-up tutor response did not join the conversation.');
   await page.screenshot({ path: path.join(outputDirectory, 'code-learning-tutor-1440x920.png') });
   await page.getByRole('tab', { name: 'Progress' }).click();
   await page.getByText('Variables', { exact: true }).waitFor();
@@ -482,7 +490,7 @@ async function verifyCodeLearningWorkspace(application, page) {
   await page.getByText(/KAI-owned Markdown:/).waitFor();
   await page.screenshot({ path: path.join(outputDirectory, 'teaching-library-1440x920.png') });
   await page.getByRole('tab', { name: 'Git' }).click();
-  await page.getByText(/Working tree:|not a Git repository/).waitFor();
+  await page.locator('.learning-git').getByText(/Working tree:|not a Git repository/).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(outputDirectory, 'code-learning-1440x920.png') });
 
@@ -941,6 +949,7 @@ async function startDirectApiFixture({ mcp = false, command = false, provider = 
       body,
     });
     if (body?.text?.format?.name === 'kai_learning_tutor_response') {
+      await new Promise((resolve) => setTimeout(resolve, 350));
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ output_text: JSON.stringify(learningTutorFixture()) }));
       return;

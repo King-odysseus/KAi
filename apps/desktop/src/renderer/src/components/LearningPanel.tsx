@@ -60,6 +60,8 @@ interface LearningPanelProps {
   onLessonSelect: (lesson: NonNullable<LearningProgress['lessons']>[number]) => void;
   onUnderstood: (lessonId: string) => void;
   onExplainBack: (lessonId: string, question: string, answer: string) => Promise<LearningExplainBackGrade | null>;
+  onContinueLesson: (question: string) => void;
+  onStartLesson: (prompt: string) => void;
   /** Rewords the question or shows a model answer; neither is graded or counts toward mastery. */
   onExplainBackHelp: (lessonId: string, question: string, kind: LearningExplainBackHelpKind) => Promise<LearningExplainBackHelp | null>;
   onRunCheck: () => Promise<string>;
@@ -74,6 +76,9 @@ interface LearningPanelProps {
   error: string | null;
   question: string;
   submittedQuestion: string;
+  pendingQuestion: { text: string; status: 'sending' | 'failed' | 'cancelled' } | null;
+  onRetryQuestion: () => void;
+  onCancelQuestion: () => void;
   conversation: TutorConversationTurn[];
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
@@ -82,6 +87,11 @@ interface LearningPanelProps {
   onInsertSuggestion: () => void;
   /** Puts the suggestion where the tutor said it belongs; only offered when the tutor named a place. */
   onPlaceSuggestion: () => void;
+  suggestionPreview: { filePath: string; before: string; after: string } | null;
+  onApplySuggestion: () => void;
+  onCancelSuggestion: () => void;
+  canUndoSuggestion: boolean;
+  onUndoSuggestion: () => void;
   appliedSuggestionNeedsExplanation: boolean;
   onExplainAppliedSuggestion: () => void;
   onStuck: () => void;
@@ -151,7 +161,7 @@ function explainBackQuestion(response: LearningEvaluationResult['response']): st
 }
 
 export function LearningPanel({
-  projectFiles, onReference, onUnderstood, onExplainBack, onExplainBackHelp, onRunCheck, responseLessonId, onLessonSelect,
+  projectFiles, onReference, onUnderstood, onExplainBack, onContinueLesson, onStartLesson, onExplainBackHelp, onRunCheck, responseLessonId, onLessonSelect,
   progress,
   readiness,
   result,
@@ -163,6 +173,9 @@ export function LearningPanel({
   referenceNotice,
   question,
   submittedQuestion,
+  pendingQuestion,
+  onRetryQuestion,
+  onCancelQuestion,
   conversation,
   onQuestionChange,
   onAction,
@@ -170,6 +183,11 @@ export function LearningPanel({
   onPreferences,
   onInsertSuggestion,
   onPlaceSuggestion,
+  suggestionPreview,
+  onApplySuggestion,
+  onCancelSuggestion,
+  canUndoSuggestion,
+  onUndoSuggestion,
   appliedSuggestionNeedsExplanation,
   onExplainAppliedSuggestion,
   onStuck,
@@ -242,7 +260,9 @@ export function LearningPanel({
     const scroll = scrollRef.current;
     if (!scroll) return;
     scroll.scrollTop = scroll.scrollHeight;
-  }, [tab, conversation.length, submittedQuestion, result]);
+  }, [tab, conversation.length, submittedQuestion, result, pendingQuestion]);
+
+  useEffect(() => { setCheckOutput(''); }, [responseLessonId]);
 
   return (
     <aside className={`learning-panel ${focus ? 'learning-focus' : ''}`} aria-label="Learning tutor">
@@ -344,6 +364,11 @@ export function LearningPanel({
         <button type="button" className={tab === 'git' ? 'active' : ''} role="tab" aria-selected={tab === 'git'} onClick={() => setTab('git')}><GitBranch size={13} />Git</button>
       </div>
 
+      {!focus && tab === 'tutor' && lessons.length > 0 && <section className="learning-path learning-path-next">
+        <strong>Next in your coding path</strong>
+        <button type="button" disabled={Boolean(busy)} onClick={() => onStartLesson(lessons[0]!.prompt)}><span>{lessons[0]!.title}</span><small>{lessons[0]!.filePath ?? 'Practice from your recent work'} · Start this step</small></button>
+        {lessons.length > 1 && <small>{lessons.length - 1} more step{lessons.length === 2 ? '' : 's'} in Progress</small>}
+      </section>}
       <div className="learning-scroll" ref={scrollRef}>
         {!focus && response && progress?.memory && <section className="learning-memory">
           <strong>Last lesson: {progress.memory.lastLesson}</strong>
@@ -355,10 +380,9 @@ export function LearningPanel({
         {!focus && tab === 'progress' && <section className="learning-path">
           <strong>Learning path</strong>
           <p>Practice needs first, then project structure. Independent evidence advances the queue.</p>
-          {lessons.map((lesson, index) => <button key={lesson.id} type="button" onClick={() => { onQuestionChange(lesson.prompt); setTab('tutor'); }}><span>{index + 1}. {lesson.title}</span><small>{lesson.filePath ?? 'Based on learning evidence'}</small></button>)}
-          {!lessons.length && <p>Scan or open a project to build your lesson queue.</p>}
+          {lessons.map((lesson, index) => <button key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { setTab('tutor'); onStartLesson(lesson.prompt); }}><span>{index + 1}. {lesson.title}</span><small>{lesson.filePath ?? 'Based on learning evidence'} · Start step</small></button>)}
+          {!lessons.length && <p>{progress?.lessons?.length ? 'You have completed the current path. Open another file or ask the tutor for a new challenge.' : 'Scan or open a project to build your lesson queue.'}</p>}
         </section>}
-        {checkOutput && <pre className="learning-check-output" role="status">{checkOutput}</pre>}
         {error && tab === 'tutor' && <div className="learning-error" role="alert">{error}</div>}
         {tab === 'tutor' && (
           <>
@@ -385,6 +409,11 @@ export function LearningPanel({
               onAction={onAction}
               onInsertSuggestion={onInsertSuggestion}
               onPlaceSuggestion={onPlaceSuggestion}
+              suggestionPreview={suggestionPreview}
+              onApplySuggestion={onApplySuggestion}
+              onCancelSuggestion={onCancelSuggestion}
+              canUndoSuggestion={canUndoSuggestion}
+              onUndoSuggestion={onUndoSuggestion}
               onAnswerQuestion={responseLessonId ? focusExplainBack : undefined}
               canInsertSuggestion
               hintLevel={hintLevel}
@@ -404,6 +433,7 @@ export function LearningPanel({
           <button type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</button>
           {referenceNotice && <span className="learning-reference-notice" role="status">{referenceNotice}</span>}
         </div>}
+        {response && tab === 'tutor' && checkOutput && <section className="learning-check-result" role="status"><strong>Project check</strong><pre className="learning-check-output">{checkOutput}</pre></section>}
         {response && tab === 'tutor' && responseLessonId && (
           <ExplainBack
             key={responseLessonId}
@@ -413,9 +443,18 @@ export function LearningPanel({
             understood={responseUnderstood}
             disabled={Boolean(busy)}
             onExplainBack={onExplainBack}
+            onContinue={onContinueLesson}
             onExplainBackHelp={onExplainBackHelp}
             onSkip={() => onUnderstood(responseLessonId)}
           />
+        )}
+        {tab === 'tutor' && pendingQuestion && (
+          <div className="learning-pending-turn">
+            <TutorQuestion question={pendingQuestion.text} />
+            {pendingQuestion.status === 'sending'
+              ? <div className="learning-pending-reply" role="status"><LoaderCircle className="spin" size={14} />Tutor is replying... <button type="button" onClick={onCancelQuestion}>Stop</button></div>
+              : <div className="learning-pending-reply failed" role="alert">{pendingQuestion.status === 'cancelled' ? 'Stopped.' : 'Tutor could not reply.'} <button type="button" onClick={onRetryQuestion}>Retry</button></div>}
+          </div>
         )}
         {tab === 'history' && <section className="learning-history">
           <strong>Lesson history</strong><p>The last {MAX_SAVED_LESSONS} lessons for this project, newest first.</p>
@@ -483,6 +522,11 @@ function TutorContent({
   onAction,
   onInsertSuggestion,
   onPlaceSuggestion,
+  suggestionPreview,
+  onApplySuggestion,
+  onCancelSuggestion,
+  canUndoSuggestion,
+  onUndoSuggestion,
   onAnswerQuestion,
   canInsertSuggestion = true,
   hintLevel = 0,
@@ -494,6 +538,11 @@ function TutorContent({
   onAction: (action: LearningAction) => void;
   onInsertSuggestion: () => void;
   onPlaceSuggestion?: () => void;
+  suggestionPreview?: LearningPanelProps['suggestionPreview'];
+  onApplySuggestion?: LearningPanelProps['onApplySuggestion'];
+  onCancelSuggestion?: LearningPanelProps['onCancelSuggestion'];
+  canUndoSuggestion?: boolean;
+  onUndoSuggestion?: LearningPanelProps['onUndoSuggestion'];
   /** Takes the learner to the Explain it back box, where the follow-up question can be answered. */
   onAnswerQuestion?: () => void;
   canInsertSuggestion?: boolean;
@@ -553,9 +602,16 @@ function TutorContent({
           <div className="learning-question-actions">
             <button type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</button>
             {!placement && suggestedLocation && <button type="button" className="secondary-button" title={`Opens ${suggestedLocation.filePath}`} onClick={() => onReference(suggestedLocation.filePath, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open {suggestedLocation.filePath.split('/').at(-1)}</button>}
-            {canInsertSuggestion && placement && <button type="button" className="primary-button" title={`Opens ${placement.filePath} and puts the code ${placementWhere} the line the tutor named`} onClick={onPlaceSuggestion}><WandSparkles size={13} />Apply code in {placementFile}</button>}
-            {canInsertSuggestion && <button type="button" className={placement ? 'secondary-button' : 'primary-button'} onClick={onInsertSuggestion}>{!placement && <WandSparkles size={13} />}{applyLabel}</button>}
+            {canInsertSuggestion && placement && <button type="button" className="primary-button" title={`Preview code ${placementWhere} the line the tutor named in ${placement.filePath}`} onClick={onPlaceSuggestion}><WandSparkles size={13} />Review code in {placementFile}</button>}
+            {canInsertSuggestion && <button type="button" className={placement ? 'secondary-button' : 'primary-button'} onClick={onInsertSuggestion}>{!placement && <WandSparkles size={13} />}{applyLabel.replace('Apply', 'Review')}</button>}
           </div>
+          {canInsertSuggestion && suggestionPreview && <section className="learning-suggestion-preview" aria-label="Review tutor code change">
+            <strong>Review change in {suggestionPreview.filePath}</strong>
+            <div><span>Before</span><pre>{suggestionPreview.before || '(no code at this position)'}</pre></div>
+            <div><span>After</span><pre>{suggestionPreview.after}</pre></div>
+            <div className="learning-question-actions"><button type="button" className="secondary-button" onClick={onCancelSuggestion}>Cancel</button><button type="button" className="primary-button" onClick={onApplySuggestion}>Apply reviewed code</button></div>
+          </section>}
+          {canInsertSuggestion && canUndoSuggestion && <button type="button" className="secondary-button" onClick={onUndoSuggestion}>Undo tutor edit</button>}
         </div>
       )}
       {response.followUpQuestion && (onAnswerQuestion
@@ -619,6 +675,7 @@ function ExplainBack({
   understood,
   disabled,
   onExplainBack,
+  onContinue,
   onExplainBackHelp,
   onSkip,
 }: {
@@ -628,6 +685,7 @@ function ExplainBack({
   understood: boolean;
   disabled: boolean;
   onExplainBack: LearningPanelProps['onExplainBack'];
+  onContinue: LearningPanelProps['onContinueLesson'];
   onExplainBackHelp: LearningPanelProps['onExplainBackHelp'];
   onSkip: () => void;
 }): ReactNode {
@@ -682,6 +740,7 @@ function ExplainBack({
           {shown.gap && <p><b>Revisit:</b> {shown.gap}</p>}
         </div>
       )}
+      {solid && <div className="learning-question-actions"><button type="button" className="primary-button" disabled={disabled} onClick={() => onContinue(asked)}>{disabled ? 'Finding next step...' : 'Continue to next step'}</button></div>}
       {!solid && (
         <>
           <textarea

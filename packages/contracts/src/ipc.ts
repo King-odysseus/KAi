@@ -448,6 +448,7 @@ export const ipcChannels = [
   'learning:readiness',
   'learning:update-preferences',
   'learning:evaluate',
+  'learning:cancel',
   'learning:record-lesson',
   'learning:teaching-library',
   'learning:save-teaching-entry',
@@ -767,6 +768,7 @@ export const ipcInputSchemas = {
   'learning:readiness': emptyInputSchema,
   'learning:update-preferences': learningPreferencesInputSchema,
   'learning:evaluate': learningTutorRequestSchema,
+  'learning:cancel': z.object({ requestId: z.string().min(1) }).strict(),
   'learning:record-lesson': learningLessonRecordInputSchema,
   'learning:teaching-library': emptyInputSchema,
   'learning:save-teaching-entry': teachingLibrarySaveInputSchema,
@@ -1249,6 +1251,7 @@ export interface KaiDesktopBridge {
   learningReadiness(): Promise<IpcResponse<LearningReadiness>>;
   updateLearningPreferences(input: LearningPreferencesInput): Promise<IpcResponse<LearningProgress>>;
   evaluateLearning(request: LearningTutorRequest): Promise<IpcResponse<LearningEvaluationResult>>;
+  cancelLearning(requestId: string): Promise<IpcResponse<boolean>>;
   recordLearningLesson(input: LearningLessonRecordInput): Promise<IpcResponse<LearningLessonRecordResult>>;
   teachingLibrary(): Promise<IpcResponse<TeachingLibrary>>;
   saveTeachingEntry(input: TeachingLibrarySaveInput): Promise<IpcResponse<TeachingLibrary>>;

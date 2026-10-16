@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { jsonrepair } from 'jsonrepair';
 import {
@@ -348,7 +349,7 @@ export class DesktopLearningTutor {
     return (await this.evaluateDetailed(request)).response;
   }
 
-  async evaluateDetailed(request: LearningTutorRequest, memory = ''): Promise<{ response: LearningTutorResponse; usage: LearningProviderUsage }> {
+  async evaluateDetailed(request: LearningTutorRequest, memory = '', signal?: AbortSignal): Promise<{ response: LearningTutorResponse; usage: LearningProviderUsage }> {
     const provider = await this.providerConfiguration();
     if (request.completionContext) {
       if (request.action !== 'complete' || request.assistance !== 'copilot' || request.teachingModes?.some((mode) => mode !== 'copilot')) throw new Error('Inline completion requires Copilot mode.');
@@ -359,7 +360,7 @@ export class DesktopLearningTutor {
       const result = await this.requestAndParse(provider, prompt, 'kai_inline_completion', {
         type: 'object', additionalProperties: false, required: ['code'], properties: { code: { type: 'string' } },
       }, (content) => parseStructuredResponse(z.object({ code: z.string().max(4_000) }).strict(), content, 'inline completion'),
-      () => ({ ...prompt, user: `${prompt.user}\nReturn valid JSON with only the code string.` }));
+      () => ({ ...prompt, user: `${prompt.user}\nReturn valid JSON with only the code string.` }), signal);
       return {
         usage: result.usage,
         response: {
@@ -393,6 +394,7 @@ export class DesktopLearningTutor {
       learningTutorJsonSchema,
       parseLearningTutorContent,
       (invalid, error) => tutorRepairPrompt(prompt, invalid, error),
+      signal,
     ));
     return {
       response: { ...result.value, sourceNotes: groundedSourceNotes(result.value.sourceNotes, request, projectContext) },
@@ -603,8 +605,10 @@ export class DesktopLearningTutor {
     schema: object,
     parse: (content: string) => T,
     repairPrompt: (invalidContent: string, error: unknown) => { system: string; user: string },
+    signal?: AbortSignal,
   ): Promise<{ value: T; usage: LearningProviderUsage }> {
-    const first = await this.requestStructured(provider, prompt, schemaName, schema);
+    const first = await this.requestStructured(provider, prompt, schemaName, schema, signal);
+    signal?.throwIfAborted();
     try {
       return {
         value: parse(first.content),
@@ -612,7 +616,8 @@ export class DesktopLearningTutor {
       };
     } catch (firstError) {
       const repair = repairPrompt(first.content, firstError);
-      const repaired = await this.requestStructured(provider, repair, schemaName, schema);
+      const repaired = await this.requestStructured(provider, repair, schemaName, schema, signal);
+      signal?.throwIfAborted();
       try {
         return {
           value: parse(repaired.content),
@@ -636,10 +641,12 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     schemaName: string,
     schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
     for (let attempt = 0; ; attempt += 1) {
+      signal?.throwIfAborted();
       try {
-        return await this.requestStructuredOnce(provider, prompt, schemaName, schema);
+        return await this.requestStructuredOnce(provider, prompt, schemaName, schema, signal);
       } catch (error) {
         const dropped = error instanceof TypeError && /fetch failed/i.test(error.message);
         if (!dropped || attempt >= 2) {
@@ -647,7 +654,7 @@ export class DesktopLearningTutor {
           const cause = (error as TypeError & { cause?: { code?: string } }).cause?.code;
           throw new Error(`The connection to ${new URL(provider.baseUrl).host} dropped after three attempts${cause ? ` (${cause})` : ''}. Check the Learning Tutor endpoint and try again.`);
         }
-        await new Promise((resolve) => setTimeout(resolve, 1_500 * (attempt + 1)));
+        await delay(1_500 * (attempt + 1), undefined, signal ? { signal } : undefined);
       }
     }
   }
@@ -657,17 +664,18 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     schemaName: string,
     schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
     if (provider.protocol === 'responses') {
-      return this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema);
+      return this.requestResponses(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema, signal);
     }
     if (provider.protocol === 'anthropic-messages') {
-      return this.requestAnthropicMessages(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema);
+      return this.requestAnthropicMessages(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema, signal);
     }
     if (provider.protocol === 'google-generative-ai') {
-      return this.requestGoogleGenerativeAi(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema);
+      return this.requestGoogleGenerativeAi(provider.baseUrl, provider.model, provider.apiKey, prompt, schemaName, schema, signal);
     }
-    return this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, schemaName, schema);
+    return this.requestChatCompletions(provider.baseUrl, provider.model, provider.apiKey, prompt, provider.openRouter, schemaName, schema, signal);
   }
 
   private async requestAnthropicMessages(
@@ -677,6 +685,7 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     _schemaName: string,
     _schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
     const response = await fetch(anthropicMessagesUrl(baseUrl), {
       method: 'POST',
@@ -691,7 +700,7 @@ export class DesktopLearningTutor {
         max_tokens: currentOutputTokens(),
         messages: [{ role: 'user', content: prompt.user }],
       }),
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
@@ -705,6 +714,7 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     _schemaName: string,
     _schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
     const response = await fetch(geminiGenerateUrl(baseUrl, model), {
       method: 'POST',
@@ -720,7 +730,7 @@ export class DesktopLearningTutor {
           responseMimeType: 'application/json',
         },
       }),
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
@@ -734,6 +744,7 @@ export class DesktopLearningTutor {
     prompt: { system: string; user: string },
     schemaName: string,
     schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
     const response = await fetch(responsesUrl(baseUrl), {
       method: 'POST',
@@ -755,7 +766,7 @@ export class DesktopLearningTutor {
           },
         },
       }),
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok) throw await providerFailure(response);
     const value = await response.json() as Record<string, unknown>;
@@ -765,7 +776,8 @@ export class DesktopLearningTutor {
     // A few OpenAI-compatible gateways acknowledge /responses but emit an empty
     // output array. Their chat-completions route still returns the model text.
     try {
-      return await this.requestChatCompletions(baseUrl, model, apiKey, prompt, false, schemaName, schema);
+      signal?.throwIfAborted();
+      return await this.requestChatCompletions(baseUrl, model, apiKey, prompt, false, schemaName, schema, signal);
     } catch (error) {
       if (messageOf(error).includes('no tutor content')) {
         throw new Error(`The provider returned no tutor content (${emptyResponsesDetail(value)}). Check the Learning Tutor model or provider endpoint.`);
@@ -782,13 +794,14 @@ export class DesktopLearningTutor {
     openRouter: boolean,
     schemaName: string,
     schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
     try {
-      return await this.requestChatCompletionsOnce(baseUrl, model, apiKey, prompt, openRouter, schemaName, schema);
+      return await this.requestChatCompletionsOnce(baseUrl, model, apiKey, prompt, openRouter, schemaName, schema, signal);
     } catch (error) {
       // Some providers cap max_tokens below what a long document needs and answer 400 to a bigger ask.
       if (currentOutputTokens() > TUTOR_MAX_OUTPUT_TOKENS && /max_tokens|max.?output|maximum|valid range|exceed/i.test(messageOf(error))) {
-        return outputBudget.run(TUTOR_MAX_OUTPUT_TOKENS, () => this.requestChatCompletionsOnce(baseUrl, model, apiKey, prompt, openRouter, schemaName, schema));
+        return outputBudget.run(TUTOR_MAX_OUTPUT_TOKENS, () => this.requestChatCompletionsOnce(baseUrl, model, apiKey, prompt, openRouter, schemaName, schema, signal));
       }
       throw error;
     }
@@ -802,13 +815,15 @@ export class DesktopLearningTutor {
     openRouter: boolean,
     schemaName: string,
     schema: object,
+    signal?: AbortSignal,
   ): Promise<LearningProviderResult> {
-    const structured = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, true, schemaName, schema);
+    const structured = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, true, schemaName, schema, signal);
     if (structured.ok) return { content: structured.content, usage: structured.usage };
     // Reasoning models such as DeepSeek flash can accept json_schema yet answer with an
     // empty content field, so an empty structured reply earns the same plain retry.
     if (!structured.empty && ![400, 404, 415, 422].includes(structured.status)) throw structured.error;
-    const fallback = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, false, schemaName, schema);
+    signal?.throwIfAborted();
+    const fallback = await this.fetchChatCompletion(baseUrl, model, apiKey, prompt, openRouter, false, schemaName, schema, signal);
     if (!fallback.ok) throw fallback.error;
     return { content: fallback.content, usage: fallback.usage };
   }
@@ -822,6 +837,7 @@ export class DesktopLearningTutor {
     structured: boolean,
     schemaName: string,
     schema: object,
+    signal?: AbortSignal,
   ): Promise<{ ok: true; content: string; usage: LearningProviderUsage | null } | { ok: false; status: number; empty?: boolean; error: Error }> {
     try {
       const response = await fetch(chatCompletionsUrl(baseUrl), {
@@ -849,7 +865,7 @@ export class DesktopLearningTutor {
             },
           } : {}),
         }),
-        signal: AbortSignal.timeout(this.requestTimeoutMs),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]) : AbortSignal.timeout(this.requestTimeoutMs),
       });
       if (!response.ok) return { ok: false, status: response.status, error: await providerFailure(response) };
       const value = await response.json() as Record<string, unknown>;

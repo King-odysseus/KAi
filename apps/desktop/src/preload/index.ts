@@ -54,6 +54,7 @@ const bridge: KaiDesktopBridge = {
   learningReadiness: () => ipcRenderer.invoke('learning:readiness', {}),
   updateLearningPreferences: (input) => ipcRenderer.invoke('learning:update-preferences', input),
   evaluateLearning: (request) => ipcRenderer.invoke('learning:evaluate', request),
+  cancelLearning: (requestId) => ipcRenderer.invoke('learning:cancel', { requestId }),
   recordLearningLesson: (input) => ipcRenderer.invoke('learning:record-lesson', input),
   teachingLibrary: () => ipcRenderer.invoke('learning:teaching-library', {}),
   saveTeachingEntry: (input) => ipcRenderer.invoke('learning:save-teaching-entry', input),

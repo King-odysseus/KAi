@@ -18,6 +18,7 @@ import { LearningProgressStore } from '../apps/desktop/src/main/learning-progres
 import { DesktopLearningTutor, groundedSourceNotes, parseLearningTutorContent, parseTeachingDraftContent } from '../apps/desktop/src/main/learning-tutor';
 import { TeachingLibraryStore } from '../apps/desktop/src/main/teaching-library';
 import { boundedCode } from '../apps/desktop/src/renderer/src/components/CodeView';
+import { projectLessons } from '../apps/desktop/src/renderer/src/components/learning-path';
 import { LearningBudgetGuard, LearningUsageStore } from '../apps/desktop/src/main/learning-usage';
 
 const directories: string[] = [];
@@ -35,6 +36,28 @@ afterEach(async () => {
 });
 
 describe('desktop learning mode', () => {
+  it('stops an in-flight tutor request when the learner cancels it', async () => {
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const server = http.createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.flushHeaders();
+        requestStarted();
+      });
+    });
+    const baseUrl = await listen(server);
+    const settings = createDefaultSettings();
+    settings.learningTutor = { ...settings.learningTutor, enabled: true, provider: 'openai', model: 'test-model', baseUrl: `${baseUrl}/v1` };
+    const tutor = new DesktopLearningTutor({ load: async () => settings }, { isAvailable: () => true, get: async () => 'test-key' }, async () => temporaryDirectory());
+    const controller = new AbortController();
+    const response = tutor.evaluateDetailed({ ...tutorRequest('next-step', 'guided'), scope: 'active-file' }, '', controller.signal);
+    await started;
+    controller.abort();
+    await expect(response).rejects.toThrow();
+  });
+
   it('requests a compact cursor insertion without scanning the project for inline completion', async () => {
     const bodies: unknown[] = [];
     const server = http.createServer((request, response) => {
@@ -119,7 +142,7 @@ describe('desktop learning mode', () => {
   it('awards mastery for a solid explain-back answer but only records the gap for a partial one', async () => {
     const root = await temporaryDirectory();
     const store = new LearningProgressStore(root, new NodeFileSystem());
-    const request = tutorRequest('explain-file', 'guided');
+    const request = { ...tutorRequest('explain-file', 'guided'), filePath: 'src/main.ts' };
     const first = await store.recordEvaluation(request, tutorResponse());
     const lessonId = first.memory!.lessonId;
     expect(first.concepts[0]?.mastery).toBe('introduced');
@@ -133,6 +156,8 @@ describe('desktop learning mode', () => {
     expect(solid.concepts[0]).toMatchObject({ mastery: 'practising', score: 72 });
     expect(solid.lessons?.[0]).toMatchObject({ understood: true, explainBack: { verdict: 'solid' } });
     expect(solid.memory).toMatchObject({ understood: true, unresolvedCheck: '' });
+    expect(projectLessons(['README.md', request.filePath!, 'tests/next.test.ts'], solid).some((lesson) => lesson.title === `Practise ${solid.concepts[0]!.name}`)).toBe(false);
+    expect(projectLessons(['README.md', request.filePath!, 'tests/next.test.ts'], solid)[0]?.filePath).not.toBe(request.filePath);
     await expect(store.recordExplanation(request.projectId, 'missing', 'Q', { verdict: 'solid', feedback: 'Yes.', gap: '' })).rejects.toThrow('no longer available');
   });
 

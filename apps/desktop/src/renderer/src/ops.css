@@ -2737,6 +2737,11 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-memory p, .learning-path p { font-size: 12px; color: var(--text-dim); }
 .learning-path button { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; margin-top: 6px; }
 .learning-path small, .learning-pending small { display: block; color: var(--text-dim); font-size: 11px; }
+.learning-path-next { flex: 0 0 auto; margin: 7px 10px; padding: 7px 9px; }
+.learning-path-next > strong { font-size: 11px; color: var(--blue); }
+.learning-path-next button { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 3px; padding: 4px 6px; font-size: 12px; }
+.learning-path-next button small { text-align: right; }
+.learning-path-next > small { margin-top: 3px; }
 .learning-memory button, .learning-path button, .learning-response-actions button, .learning-sources button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; color: var(--text); background: var(--bg-input); cursor: pointer; overflow-wrap: anywhere; }
 /* These buttons carry lesson sentences, so they wrap instead of keeping the global one-line button rule. */
 .learning-memory button, .learning-path button, .learning-sources button { max-width: 100%; text-align: left; white-space: normal; }
@@ -2770,6 +2775,15 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-chat-question p { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; }
 .learning-conversation-turn { margin-bottom: 18px; }
 .learning-conversation-turn .learning-response { opacity: 0.9; }
+.learning-pending-turn { margin: 12px 0 18px; }
+.learning-pending-reply { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.learning-pending-reply.failed { color: var(--red); }
+.learning-pending-reply button { color: var(--blue); text-decoration: underline; }
+.learning-suggestion-preview { display: grid; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--blue); border-radius: 8px; background: var(--bg-panel); }
+.learning-suggestion-preview > strong { font-size: 12px; overflow-wrap: anywhere; }
+.learning-suggestion-preview > div > span { font-size: 11px; color: var(--text-muted); }
+.learning-suggestion-preview pre { max-height: 180px; overflow: auto; margin: 3px 0 0; padding: 8px; border-radius: 5px; background: var(--bg-input); color: var(--text); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.learning-suggestion-preview > div:nth-of-type(2) pre { border-left: 2px solid var(--mint); }
 .learning-composer-processing {
   display: flex;
   align-items: flex-start;
@@ -2787,6 +2801,9 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-composer-processing span { color: var(--mint-strong); font-size: 12px; }
 .learning-composer-processing small { color: var(--text-dim); font-size: 11px; }
 .learning-check-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+.learning-check-result { margin: 0 0 12px; padding: 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-input); }
+.learning-check-result > strong { font-size: 12px; }
+.learning-check-result pre { margin: 6px 0 0; font-size: 11px; }
 .learning-focus > .learning-tabs,
 .learning-focus .learning-panel-head-actions > :not(.learning-focus-toggle),
 .learning-focus .learning-title,
