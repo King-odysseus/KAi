@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Check, Circle, Loader2, Sparkles } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, Circle, Loader2, Sparkles, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import type { CodeGuideAction, CodeGuideStep, CodeGuideView } from '@kai/contracts';
 
@@ -26,6 +26,8 @@ interface Props {
   error?: string | null;
   onExplain: () => void;
   onAction: (action: CodeGuideAction) => void;
+  stripHidden: boolean;
+  onToggleStrip: () => void;
 }
 
 function StepMark({ state }: { state: CodeGuideStep['state'] }): ReactNode {
@@ -56,7 +58,7 @@ function Step({ step, index, busy, onAction }: { step: CodeGuideStep; index: num
   );
 }
 
-export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain, onAction }: Props): ReactNode {
+export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain, onAction, stripHidden, onToggleStrip }: Props): ReactNode {
   const [showHistory, setShowHistory] = useState(false);
 
   if (!view) {
@@ -74,6 +76,7 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
   return (
     <article className="studio-card" aria-label="Senior dev">
       <h2><Sparkles size={16} /> Senior dev</h2>
+      <button type="button" className="link-button" onClick={onToggleStrip}>{stripHidden ? 'Show guide bar above editor' : 'Hide guide bar above editor'}</button>
       <p className="studio-note">
         Reads this project — the repository, the files, what you have studied and the board — and says where it has
         got to and what to do next. The steps come from the project itself; the explanation is written for you.
@@ -163,7 +166,7 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
  * to go and open is a guide you will not read. It is deliberately not tied to the Learn panel being open, for the
  * same reason — the moment it is most useful is the moment the panel is closed.
  */
-export function CodeGuideStrip({ view, busy, onAction, onOpen }: { view: CodeGuideView | null; busy: boolean; onAction: (action: CodeGuideAction) => void; onOpen: () => void }): ReactNode {
+export function CodeGuideStrip({ view, busy, onAction, onOpen, onDismiss }: { view: CodeGuideView | null; busy: boolean; onAction: (action: CodeGuideAction) => void; onOpen: () => void; onDismiss: () => void }): ReactNode {
   if (!view) return null;
   const current = view.steps.find((step) => step.id === view.currentStepId);
   if (!current) return null;
@@ -182,6 +185,7 @@ export function CodeGuideStrip({ view, busy, onAction, onOpen }: { view: CodeGui
           <button type="button" className="secondary-button" onClick={() => onAction(current.action as CodeGuideAction)} disabled={busy}>{current.actionLabel}</button>
         )}
         <button type="button" className="link-button" onClick={onOpen}>Open the guide</button>
+        <button type="button" className="icon-button compact" aria-label="Hide guide bar" title="Hide guide bar" onClick={onDismiss}><X size={13} /></button>
       </span>
     </div>
   );

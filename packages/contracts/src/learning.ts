@@ -398,6 +398,9 @@ export const codeFormatInputSchema = z
   .strict();
 export type CodeFormatInput = z.infer<typeof codeFormatInputSchema>;
 
+export const codeInstallFormatterInputSchema = z.object({ projectId: z.string().min(1), formatter: z.literal('ruff') }).strict();
+export type CodeInstallFormatterInput = z.infer<typeof codeInstallFormatterInputSchema>;
+
 export const codeFormatResultSchema = z
   .object({
     formatted: z.string(),

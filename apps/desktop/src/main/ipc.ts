@@ -151,7 +151,7 @@ import { buildSetupStatus } from './setup-status';
 import { syncCognitive1Mcp, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { projectSelectionForWindow, type DesktopWindowRegistry, type DesktopWindowSession } from './desktop-windows';
 import type { EditorSessionManager } from './editor-sessions';
-import { formatProjectCode, projectGitFileInfo } from './code-tools';
+import { formatProjectCode, installRuffFormatter, projectGitFileInfo } from './code-tools';
 import {
   createProjectCheckpoint,
   diffFromCheckpoint,
@@ -1017,7 +1017,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'code:format', async ({ projectId, filePath, content }): Promise<CodeFormatResult> => {
     const project = await resolveProject(context, projectId, true);
-    return formatProjectCode(project.path, filePath, content);
+    return formatProjectCode(project.path, filePath, content, context.paths.root);
+  });
+  handle(context, 'code:install-formatter', async ({ projectId }) => {
+    await resolveProject(context, projectId, true);
+    return installRuffFormatter(context.paths.root);
   });
   handle(context, 'git:file-info', async ({ projectId, path: filePath }): Promise<GitFileInfo> => {
     const project = await resolveProject(context, projectId, true);

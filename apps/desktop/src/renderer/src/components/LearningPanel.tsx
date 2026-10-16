@@ -85,6 +85,7 @@ interface LearningPanelProps {
   appliedSuggestionNeedsExplanation: boolean;
   onExplainAppliedSuggestion: () => void;
   onStuck: () => void;
+  onShowCode: () => void;
   /** Hints already taken on the current step: 0 none, 3 means the exact code was shown. */
   hintLevel: number;
   onRecordLesson?: () => void;
@@ -172,6 +173,7 @@ export function LearningPanel({
   appliedSuggestionNeedsExplanation,
   onExplainAppliedSuggestion,
   onStuck,
+  onShowCode,
   hintLevel,
   onRecordLesson,
   teachingLibrary,
@@ -357,7 +359,7 @@ export function LearningPanel({
           {!lessons.length && <p>Scan or open a project to build your lesson queue.</p>}
         </section>}
         {checkOutput && <pre className="learning-check-output" role="status">{checkOutput}</pre>}
-        {error && <div className="learning-error" role="alert">{error}</div>}
+        {error && tab === 'tutor' && <div className="learning-error" role="alert">{error}</div>}
         {tab === 'tutor' && (
           <>
             {conversation.map((turn) => (
@@ -385,6 +387,7 @@ export function LearningPanel({
               onPlaceSuggestion={onPlaceSuggestion}
               onAnswerQuestion={responseLessonId ? focusExplainBack : undefined}
               canInsertSuggestion
+              hintLevel={hintLevel}
             />
             {appliedSuggestionNeedsExplanation && <section className="learning-applied-suggestion-nudge" role="status">
               <div><BrainCircuit size={14} /><strong>You applied Tutor code</strong></div>
@@ -463,6 +466,7 @@ export function LearningPanel({
           onQuestionChange={onQuestionChange}
           onAction={onAction}
           onStuck={onStuck}
+          onShowCode={onShowCode}
           hintLevel={hintLevel}
           onRecordLesson={onRecordLesson}
         />
@@ -481,6 +485,7 @@ function TutorContent({
   onPlaceSuggestion,
   onAnswerQuestion,
   canInsertSuggestion = true,
+  hintLevel = 0,
 }: {
   onReference: LearningPanelProps['onReference'];
   response: LearningEvaluationResult['response'] | null;
@@ -492,6 +497,7 @@ function TutorContent({
   /** Takes the learner to the Explain it back box, where the follow-up question can be answered. */
   onAnswerQuestion?: () => void;
   canInsertSuggestion?: boolean;
+  hintLevel?: number;
 }): ReactNode {
   const [copied, setCopied] = useState(false);
   if (!response) {
@@ -504,7 +510,7 @@ function TutorContent({
     : null;
   const applyLabel = response.suggestion?.replaceSelection && selection?.text.trim()
     ? 'Apply to selected code'
-    : 'Insert at cursor';
+    : 'Apply code at cursor';
   const placement = onPlaceSuggestion ? response.suggestion?.placement : undefined;
   const placementFile = placement?.filePath.split(/[\\/]/).at(-1);
   const placementLine = placement?.anchor.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
@@ -522,7 +528,7 @@ function TutorContent({
     <div className="learning-response">
       {selection?.text.trim() && <SelectionContext selection={selection} busy={busy} onAction={onAction} />}
       <header>
-        <span className="learning-mastery introduced">Tutor response</span>
+        <span className="learning-mastery introduced">{hintLevel ? `Hint ${hintLevel} of 3` : 'Tutor response'}</span>
         <h2>{response.title}</h2>
       </header>
       <p className="learning-answer">{response.recap}</p>
@@ -547,7 +553,7 @@ function TutorContent({
           <div className="learning-question-actions">
             <button type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</button>
             {!placement && suggestedLocation && <button type="button" className="secondary-button" title={`Opens ${suggestedLocation.filePath}`} onClick={() => onReference(suggestedLocation.filePath, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open {suggestedLocation.filePath.split('/').at(-1)}</button>}
-            {canInsertSuggestion && placement && <button type="button" className="primary-button" title={`Opens ${placement.filePath} and puts the code ${placementWhere} the line the tutor named`} onClick={onPlaceSuggestion}><WandSparkles size={13} />Insert in {placementFile}</button>}
+            {canInsertSuggestion && placement && <button type="button" className="primary-button" title={`Opens ${placement.filePath} and puts the code ${placementWhere} the line the tutor named`} onClick={onPlaceSuggestion}><WandSparkles size={13} />Apply code in {placementFile}</button>}
             {canInsertSuggestion && <button type="button" className={placement ? 'secondary-button' : 'primary-button'} onClick={onInsertSuggestion}>{!placement && <WandSparkles size={13} />}{applyLabel}</button>}
           </div>
         </div>
@@ -759,6 +765,7 @@ function TutorComposer({
   onQuestionChange,
   onAction,
   onStuck,
+  onShowCode,
   hintLevel,
   onRecordLesson,
 }: {
@@ -774,6 +781,7 @@ function TutorComposer({
   onQuestionChange: (value: string) => void;
   onAction: (action: LearningAction) => void;
   onStuck: () => void;
+  onShowCode: () => void;
   hintLevel: number;
   onRecordLesson?: () => void;
 }): ReactNode {
@@ -868,6 +876,7 @@ function TutorComposer({
             <span title={selection?.filePath ?? undefined}>{contextLabel} · Enter to ask · Shift+Enter for a new line</span>
             <div>
               <button type="button" className="secondary-button" disabled={busy || hintLevel >= 3 || (scope === 'active-file' && !selection)} onClick={onStuck} title={stuckHints[Math.min(hintLevel, 3)]!.title}><Lightbulb size={13} />{stuckHints[Math.min(hintLevel, 3)]!.label}</button>
+              {hintLevel < 3 && <button type="button" className="secondary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={onShowCode} title="Ask for exact code and an apply button"><WandSparkles size={13} />Show code</button>}
               {response && onRecordLesson && (
                 <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
               )}

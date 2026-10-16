@@ -61,6 +61,7 @@ const bridge: KaiDesktopBridge = {
   resetTeachingEntry: (input) => ipcRenderer.invoke('learning:reset-teaching-entry', input),
   generateTeachingDraft: (input) => ipcRenderer.invoke('learning:generate-teaching-draft', input),
   formatCode: (input) => ipcRenderer.invoke('code:format', input),
+  installCodeFormatter: (input) => ipcRenderer.invoke('code:install-formatter', input),
   gitFileInfo: (projectId, path) => ipcRenderer.invoke('git:file-info', { projectId, path }),
   rejectCheckpointHunks: (conversationId, turnId, filePath, hunkIds) => ipcRenderer.invoke('checkpoints:reject-hunks', { conversationId, turnId, filePath, hunkIds }),
   gitDiffStat: (projectId) => ipcRenderer.invoke('context:git-diff', { projectId }),

@@ -321,6 +321,7 @@ import { verificationOverviewSchema, verificationRunInputSchema, verificationRun
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
 import {
   codeFormatInputSchema,
+  codeInstallFormatterInputSchema,
   codeFormatResultSchema,
   gitFileInfoSchema,
   learningEvaluationResultSchema,
@@ -340,6 +341,7 @@ import {
   teachingLibrarySaveInputSchema,
   teachingLibrarySchema,
   type CodeFormatInput,
+  type CodeInstallFormatterInput,
   type CodeFormatResult,
   type GitFileInfo,
   type LearningEvaluationResult,
@@ -453,6 +455,7 @@ export const ipcChannels = [
   'learning:reset-teaching-entry',
   'learning:generate-teaching-draft',
   'code:format',
+  'code:install-formatter',
   'code:guide-read',
   'code:guide-explain',
   'git:file-info',
@@ -771,6 +774,7 @@ export const ipcInputSchemas = {
   'learning:reset-teaching-entry': teachingLibraryEntryInputSchema,
   'learning:generate-teaching-draft': teachingDraftGenerateInputSchema,
   'code:format': codeFormatInputSchema,
+  'code:install-formatter': codeInstallFormatterInputSchema,
   'code:guide-read': studioProjectInputSchema,
   'code:guide-explain': studioProjectInputSchema,
   'git:file-info': z.object({ projectId: z.string().min(1), path: z.string().min(1).max(1_000) }).strict(),
@@ -1252,6 +1256,7 @@ export interface KaiDesktopBridge {
   resetTeachingEntry(input: TeachingLibraryEntryInput): Promise<IpcResponse<TeachingLibrary>>;
   generateTeachingDraft(input: TeachingDraftGenerateInput): Promise<IpcResponse<TeachingDraft>>;
   formatCode(input: CodeFormatInput): Promise<IpcResponse<CodeFormatResult>>;
+  installCodeFormatter(input: CodeInstallFormatterInput): Promise<IpcResponse<{ message: string }>>;
   /**
    * Where this code project is, from the rules alone — the repository, the files, what has been studied, the board.
    * Free, so the strip above the editor can ask whenever anything it reads moves.

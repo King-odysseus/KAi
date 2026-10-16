@@ -309,6 +309,7 @@ export function CodeView({
   const [hintLevel, setHintLevel] = useState(0);
   const [gitInfo, setGitInfo] = useState<GitFileInfo | null>(null);
   const [formatting, setFormatting] = useState(false);
+  const [offerInstallRuff, setOfferInstallRuff] = useState(false);
   const [teachingLibrary, setTeachingLibrary] = useState<TeachingLibrary | null>(null);
   const [teachingBusy, setTeachingBusy] = useState<string | null>(null);
   const assistance = optimisticPreferences?.assistance ?? progress?.preferences.assistance ?? 'guided';
@@ -370,6 +371,14 @@ export function CodeView({
   const [guideExplaining, setGuideExplaining] = useState(false);
   const [guideError, setGuideError] = useState<string | null>(null);
   const [guideBusy, setGuideBusy] = useState(false);
+  const [guideStripHidden, setGuideStripHidden] = useState(() => {
+    try { return window.localStorage.getItem('kai.codeGuideStripHidden') === 'true'; } catch { return false; }
+  });
+
+  function toggleGuideStrip(hidden: boolean): void {
+    setGuideStripHidden(hidden);
+    try { window.localStorage.setItem('kai.codeGuideStripHidden', String(hidden)); } catch { /* Session state still works. */ }
+  }
 
   /** Opens one of the side panels, remembering the choice the way the tab buttons already do. */
   function openSidePanel(panel: 'learn' | 'review' | 'guide'): void {
@@ -1295,8 +1304,17 @@ export function CodeView({
     activeLearningRequestId.current = requestId;
     learningBusyRef.current = true;
     setLearningBusy(action);
-    if (!inline) {
-      // A lesson reopened from History has no typed question; it still belongs to the conversation.
+    // Keep the draft and the last useful answer visible until a replacement arrives.
+    // A failed provider request should be immediately retryable.
+    setLearningError(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
+      if (activeLearningRequestId.current !== requestId || projectIdRef.current !== request.projectId || (action === 'complete' && !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current))) return null;
+      if (inline) {
+        if (!result.response.suggestion) setNotice('No inline suggestion for this cursor position.');
+        return result;
+      }
+      lastLearningRequest.current = request;
       if (learningResult?.response) {
         setTutorConversation((current) => [...current, {
           id: `turn_${crypto.randomUUID()}`,
@@ -1307,18 +1325,6 @@ export function CodeView({
       setSubmittedQuestion(request.question ?? `Tutor action: ${action.replace(/-/g, ' ')}`);
       setQuestion('');
       setHintLevel(stuckHint ?? 0);
-      setLearningResult(null);
-      setResponseLessonId(null);
-    }
-    setLearningError(null);
-    try {
-      const result = unwrap(await window.kaiDesktop.evaluateLearning(request));
-      if (activeLearningRequestId.current !== requestId || projectIdRef.current !== request.projectId || (action === 'complete' && !learningRequestStillCurrent(request, projectIdRef.current, activeRef.current, learningStateRef.current.assistance, learningStateRef.current.scope, editorRef.current, documents.current))) return null;
-      if (inline) {
-        if (!result.response.suggestion) setNotice('No inline suggestion for this cursor position.');
-        return result;
-      }
-      lastLearningRequest.current = request;
       setLearningResult(result);
       setResponseLessonId(result.progress.memory?.lessonId ?? null);
       setProgress(result.progress);
@@ -1517,7 +1523,10 @@ export function CodeView({
       return reason === 'save' ? `, not formatted. ${message}` : message;
     }
     if (result.skipped) {
-      if (reason === 'button') return result.skipped.reason;
+      if (reason === 'button') {
+        if (result.skipped.missingTool && /\.pyi?$/.test(path)) setOfferInstallRuff(true);
+        return result.skipped.reason;
+      }
       // On save, only a missing tool is worth saying, and only once per file type.
       const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
       if (!result.skipped.missingTool || missingFormatterNoted.current.has(extension)) return '';
@@ -1542,9 +1551,27 @@ export function CodeView({
     const currentProjectId = projectIdRef.current;
     if (!currentProjectId || !path || !document) return;
     setFormatting(true);
+    setOfferInstallRuff(false);
     setNotice(null);
     try {
       setNotice(await formatDocument(currentProjectId, path, document, 'button'));
+    } finally {
+      setFormatting(false);
+    }
+  }
+
+  async function installRuff(): Promise<void> {
+    const id = projectIdRef.current;
+    if (!id || formatting) return;
+    setFormatting(true);
+    setNotice('Installing Ruff in KAI…');
+    try {
+      const installed = unwrap(await window.kaiDesktop.installCodeFormatter({ projectId: id, formatter: 'ruff' }));
+      setOfferInstallRuff(false);
+      setNotice(installed.message);
+      if (projectIdRef.current === id) await formatActive();
+    } catch (caught) {
+      setNotice(caught instanceof Error ? caught.message : 'Ruff could not be installed.');
     } finally {
       setFormatting(false);
     }
@@ -1656,12 +1683,13 @@ export function CodeView({
         {/* Above the editor rather than only behind a panel tab: what to do next is worth seeing while typing, and a
             guide you have to go and open is one you will not read. It is not tied to the tutor being open, for the
             same reason — the moment it is most useful is the moment the panel is closed. */}
-        <CodeGuideStrip
+        {!guideStripHidden && <CodeGuideStrip
           view={codeGuide}
           busy={guideBusy}
           onAction={(action) => void runCodeGuideAction(action)}
           onOpen={() => openSidePanel('guide')}
-        />
+          onDismiss={() => toggleGuideStrip(true)}
+        />}
         {diskChanged && (
           <div className="workbench-notice usage-banner warning" role="alert">
             <span>{diskChanged} changed on disk after you opened it{dirty[diskChanged] ? ' and you have unsaved edits' : ''}.</span>
@@ -1671,7 +1699,7 @@ export function CodeView({
             </span>
           </div>
         )}
-        {notice && <div className="workbench-notice" role="status"><span>{notice}</span><button type="button" className="icon-button compact" aria-label="Dismiss" onClick={() => setNotice(null)}><X size={12} /></button></div>}
+        {notice && <div className="workbench-notice" role="status"><span>{notice}</span>{offerInstallRuff && <button type="button" className="secondary-button" disabled={formatting} onClick={() => void installRuff()}>{formatting ? 'Installing…' : 'Install Ruff'}</button>}<button type="button" className="icon-button compact" aria-label="Dismiss" onClick={() => { setNotice(null); setOfferInstallRuff(false); }}><X size={12} /></button></div>}
         <div className="code-editor-host" ref={containerRef} aria-label="Code editor" />
         {editorReady && openPaths.length === 0 && <div className="code-empty"><Sparkles size={18} /><span>Choose a file from the list to edit it</span></div>}
       </section>
@@ -1707,6 +1735,8 @@ export function CodeView({
             error={guideError}
             onExplain={() => void explainCodeGuide()}
             onAction={(action) => void runCodeGuideAction(action)}
+            stripHidden={guideStripHidden}
+            onToggleStrip={() => toggleGuideStrip(!guideStripHidden)}
           /> : sidePanel === 'review' ? <GuidedReviewPanel
             projectId={activeProject.id}
             changes={reviewChanges}
@@ -1775,6 +1805,7 @@ export function CodeView({
               setTutorOpen(true);
             }}
             onStuck={() => void runLearningAction('next-step', false, Math.min(3, hintLevel + 1) as 1 | 2 | 3)}
+            onShowCode={() => void runLearningAction('next-step', false, 3)}
             hintLevel={hintLevel}
             onRecordLesson={lastLearningRequest.current ? () => void recordLesson() : undefined}
             teachingLibrary={teachingLibrary}

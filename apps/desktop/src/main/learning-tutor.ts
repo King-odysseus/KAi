@@ -101,8 +101,8 @@ const LEARNING_TUTOR_FORMAT_GUIDE = [
   'steps: at least one { title: string, explanation: string }.',
   'concepts: [{ name: string, category: string, mastery: one of introduced|needs-practice|developing|practising|independent, evidence: string }].',
   'codePreview: string. lineByLine: [{ line: string, explanation: string }]. checks: string[].',
-  'sourceNotes: [{ label: string, url: string or null }]. followUpQuestion: string.',
-  'suggestion: null or { code: string, language: string, replaceSelection: boolean, explanation: string, placement?: { filePath: string, anchor: string, position: one of before|after|replace } }.',
+  'sourceNotes: [{ label: string, url: string or null, filePath: string or null, startLine: integer or null, endLine: integer or null }]. followUpQuestion: string.',
+  'suggestion: null or { code: string, language: string, replaceSelection: boolean, explanation: string, placement: null or { filePath: string, anchor: string, position: one of before|after|replace } }.',
   'Use empty arrays where an optional collection has no entries, but steps must contain at least one entry. Do not rename, wrap, or omit keys.',
 ].join('\n');
 
@@ -211,8 +211,8 @@ const learningTutorJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['label'],
-        properties: { label: { type: 'string' }, url: { anyOf: [{ type: 'string' }, { type: 'null' }] }, filePath: { type: 'string' }, startLine: { type: 'integer', minimum: 1 }, endLine: { type: 'integer', minimum: 1 } },
+        required: ['label', 'url', 'filePath', 'startLine', 'endLine'],
+        properties: { label: { type: 'string' }, url: { type: ['string', 'null'] }, filePath: { type: ['string', 'null'] }, startLine: { type: ['integer', 'null'] }, endLine: { type: ['integer', 'null'] } },
       },
     },
     followUpQuestion: { type: 'string' },
@@ -222,22 +222,18 @@ const learningTutorJsonSchema = {
         {
           type: 'object',
           additionalProperties: false,
-          required: ['code', 'language', 'replaceSelection', 'explanation'],
+          required: ['code', 'language', 'replaceSelection', 'explanation', 'placement'],
           properties: {
             code: { type: 'string' },
             language: { type: 'string' },
             replaceSelection: { type: 'boolean' },
             explanation: { type: 'string' },
-            placement: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['filePath', 'anchor', 'position'],
-              properties: {
-                filePath: { type: 'string' },
-                anchor: { type: 'string' },
-                position: { enum: ['before', 'after', 'replace'] },
-              },
-            },
+            placement: { anyOf: [
+              { type: 'null' },
+              { type: 'object', additionalProperties: false, required: ['filePath', 'anchor', 'position'], properties: {
+                filePath: { type: 'string' }, anchor: { type: 'string' }, position: { enum: ['before', 'after', 'replace'] },
+              } },
+            ] },
           },
         },
       ],
@@ -390,14 +386,14 @@ export class DesktopLearningTutor {
     ]);
     const prompt = tutorPrompt(request, teachingProfile, projectProfile, projectContext);
     if (memory) prompt.user += `\n\nPersistent project learning memory (self-reported understanding is not mastery):\n${memory}`;
-    const result = await this.requestAndParse(
+    const result = await outputBudget.run(request.question?.trim() || request.hintLevel ? 4_096 : TUTOR_MAX_OUTPUT_TOKENS, () => this.requestAndParse(
       provider,
       prompt,
       'kai_learning_tutor_response',
       learningTutorJsonSchema,
       parseLearningTutorContent,
       (invalid, error) => tutorRepairPrompt(prompt, invalid, error),
-    );
+    ));
     return {
       response: { ...result.value, sourceNotes: groundedSourceNotes(result.value.sourceNotes, request, projectContext) },
       usage: result.usage,
@@ -646,7 +642,11 @@ export class DesktopLearningTutor {
         return await this.requestStructuredOnce(provider, prompt, schemaName, schema);
       } catch (error) {
         const dropped = error instanceof TypeError && /fetch failed/i.test(error.message);
-        if (!dropped || attempt >= 2) throw dropped ? new Error('The connection to the model dropped (fetch failed), even after retrying. Check the network and try again.') : error;
+        if (!dropped || attempt >= 2) {
+          if (!dropped) throw error;
+          const cause = (error as TypeError & { cause?: { code?: string } }).cause?.code;
+          throw new Error(`The connection to ${new URL(provider.baseUrl).host} dropped after three attempts${cause ? ` (${cause})` : ''}. Check the Learning Tutor endpoint and try again.`);
+        }
         await new Promise((resolve) => setTimeout(resolve, 1_500 * (attempt + 1)));
       }
     }
@@ -923,7 +923,10 @@ function normaliseTutorResponse(value: unknown): unknown {
     codePreview: typeof source.codePreview === 'string' ? source.codePreview : '',
     lineByLine: Array.isArray(source.lineByLine) ? source.lineByLine : [],
     checks: Array.isArray(source.checks) ? source.checks : [],
-    sourceNotes: Array.isArray(source.sourceNotes) ? source.sourceNotes : [],
+    sourceNotes: Array.isArray(source.sourceNotes) ? source.sourceNotes.map((note: unknown) => {
+      if (!note || typeof note !== 'object' || Array.isArray(note)) return note;
+      return Object.fromEntries(Object.entries(note).filter(([key, value]) => key === 'url' || value !== null));
+    }) : [],
     followUpQuestion: typeof source.followUpQuestion === 'string' ? source.followUpQuestion : '',
     suggestion: source.suggestion === undefined ? null : withoutBadPlacement(source.suggestion),
   };
@@ -1295,9 +1298,9 @@ function tutorPrompt(
     : scope === 'project'
     ? `Scope: whole project. Act like a senior developer guiding a novice through this codebase. Use the project brief, file map, manifests, docs, tests, nearby files, and active file together. ${hasActiveFile ? 'Explain how the active file fits the larger architecture, data flow, and verification path.' : 'No file is open. Guide the learner from the project snapshot and name a concrete file or command to inspect first.'} Do not pretend to know files or results outside the bounded snapshot.`
     : 'Scope: active file only. Teach from the active file and selected code. Mention the wider project only when needed to explain a concrete dependency, and state clearly when more project context is required.';
-  const code = limitMiddle(request.code, 80_000);
-  const selection = request.selectedText ? limitMiddle(request.selectedText, 30_000) : '';
   const followUp = Boolean(request.question?.trim() || request.conversationContext);
+  const code = limitMiddle(request.code, followUp ? 16_000 : 80_000);
+  const selection = request.selectedText ? limitMiddle(request.selectedText, 30_000) : '';
   const lessonAction = request.action === 'explain-selection' || request.action === 'explain-file';
   const system = [
     'You are KAI Learning Mode, an evidence-based coding tutor inside a desktop editor.',

@@ -607,7 +607,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           )}
           <NotificationToggle
             label="Format on save"
-            hint="Prettier for JS, TS, React, HTML, CSS, JSON, Markdown and YAML (built in); Ruff or Black, gofmt, rustfmt and clang-format when installed"
+            hint="Prettier for JS, TS, React, HTML, CSS, JSON, Markdown and YAML (built in); Format can install Ruff for Python; Black, gofmt, rustfmt and clang-format work when installed"
             checked={draft.editor.formatOnSave}
             onChange={(formatOnSave) => setDraft((current) => ({ ...current, editor: { ...current.editor, formatOnSave } }))}
           />

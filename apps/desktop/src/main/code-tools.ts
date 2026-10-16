@@ -8,6 +8,7 @@ import { resolveInside } from './project-files';
 
 const FORMAT_TIMEOUT_MS = 20_000;
 const MAX_FORMAT_OUTPUT = 4 * 1024 * 1024;
+const INSTALL_TIMEOUT_MS = 180_000;
 
 interface ExternalFormatter {
   /** Shown to the learner, for example "Ruff". */
@@ -93,7 +94,11 @@ function runFormatter(command: string, args: string[], input: string, cwd: strin
 }
 
 /** The project's own copy of a tool (.venv or venv) first, then whatever PATH finds. */
-async function formatterCandidates(projectRoot: string, formatter: ExternalFormatter): Promise<string[]> {
+function managedRuffPath(dataRoot: string): string {
+  return path.join(dataRoot, 'formatters', 'ruff', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'ruff.exe' : 'ruff');
+}
+
+async function formatterCandidates(projectRoot: string, formatter: ExternalFormatter, dataRoot?: string): Promise<string[]> {
   const candidates: string[] = [];
   if (formatter.venv) {
     for (const environment of ['.venv', 'venv']) {
@@ -103,21 +108,70 @@ async function formatterCandidates(projectRoot: string, formatter: ExternalForma
       if (await fs.access(executable).then(() => true, () => false)) candidates.push(executable);
     }
   }
+  if (dataRoot && formatter.command === 'ruff') {
+    const managed = managedRuffPath(dataRoot);
+    if (await fs.access(managed).then(() => true, () => false)) candidates.push(managed);
+  }
   candidates.push(formatter.command);
   return candidates;
+}
+
+function runInstallCommand(command: string, args: string[], cwd: string): Promise<FormatterRun> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try { child = spawn(command, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch { resolve({ status: 'missing' }); return; }
+    let output = '';
+    let settled = false;
+    const finish = (result: FormatterRun): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => { child.kill(); finish({ status: 'failed', message: 'Installing Ruff took too long.' }); }, INSTALL_TIMEOUT_MS);
+    for (const stream of [child.stdout, child.stderr]) stream?.on('data', (chunk: Buffer) => { output = (output + chunk.toString('utf8')).slice(-8_000); });
+    child.on('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ENOENT' || error.code === 'EACCES' ? { status: 'missing' } : { status: 'failed', message: error.message }));
+    child.on('close', (code) => finish(code === 0 ? { status: 'ok', output } : { status: 'failed', message: output.trim().split(/\r?\n/).slice(-8).join('\n') || `${command} exited with code ${code}.` }));
+  });
+}
+
+/** Installs Ruff in KAI's own app-data environment, leaving the project and system Python untouched. */
+export async function installRuffFormatter(dataRoot: string): Promise<{ message: string }> {
+  const environment = path.join(dataRoot, 'formatters', 'ruff');
+  const executable = managedRuffPath(dataRoot);
+  if (await fs.access(executable).then(() => true, () => false)) return { message: 'Ruff is already installed in KAI.' };
+  await fs.mkdir(path.dirname(environment), { recursive: true });
+  const pythonCandidates: Array<[string, string[]]> = process.platform === 'win32'
+    ? [['py', ['-3']], ['python', []]]
+    : [['python3', []], ['python', []]];
+  let created = false;
+  let lastFailure = '';
+  for (const [python, prefix] of pythonCandidates) {
+    const run = await runInstallCommand(python, [...prefix, '-m', 'venv', environment], dataRoot);
+    if (run.status === 'ok') { created = true; break; }
+    if (run.status === 'failed') lastFailure = run.message;
+  }
+  if (!created) throw new Error(`KAI needs Python 3 to install Ruff.${lastFailure ? ` ${lastFailure}` : ' Install Python 3, then try again.'}`);
+  const environmentPython = path.join(environment, process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python');
+  const install = await runInstallCommand(environmentPython, ['-m', 'pip', 'install', '--disable-pip-version-check', 'ruff'], dataRoot);
+  if (install.status !== 'ok') throw new Error(`Ruff installation failed: ${install.status === 'failed' ? install.message : 'Python in KAI’s environment was not found.'}`);
+  if (!(await fs.access(executable).then(() => true, () => false))) throw new Error('Ruff installation completed, but the Ruff executable was not found.');
+  return { message: 'Ruff is installed in KAI and ready to format Python files.' };
 }
 
 export async function formatProjectCode(
   projectRoot: string,
   filePath: string,
   content: string,
+  dataRoot?: string,
 ): Promise<CodeFormatResult> {
   const target = await resolveInside(projectRoot, filePath);
   const extension = path.extname(target).toLowerCase();
   const external = EXTERNAL_FORMATTERS.find((entry) => entry.extensions.includes(extension));
   if (external) {
     for (const formatter of external.formatters) {
-      for (const command of await formatterCandidates(projectRoot, formatter)) {
+      for (const command of await formatterCandidates(projectRoot, formatter, dataRoot)) {
         const run = await runFormatter(command, formatter.args(target), content, projectRoot);
         if (run.status === 'missing' || (run.status === 'failed' && formatter.absentWhen?.test(run.message))) continue;
         if (run.status === 'failed') throw new Error(`${formatter.name} could not format ${filePath}: ${run.message}`);

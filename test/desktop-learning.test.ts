@@ -12,7 +12,7 @@ import {
   type LearningTutorResponse,
 } from '../packages/contracts/src';
 import { NodeFileSystem } from '../packages/runtime/src/node-file-system';
-import { formatProjectCode, projectGitFileInfo } from '../apps/desktop/src/main/code-tools';
+import { formatProjectCode, installRuffFormatter, projectGitFileInfo } from '../apps/desktop/src/main/code-tools';
 import { recordLearningLesson } from '../apps/desktop/src/main/learning-records';
 import { LearningProgressStore } from '../apps/desktop/src/main/learning-progress';
 import { DesktopLearningTutor, groundedSourceNotes, parseLearningTutorContent, parseTeachingDraftContent } from '../apps/desktop/src/main/learning-tutor';
@@ -246,6 +246,16 @@ describe('desktop learning mode', () => {
     }));
     expect(malformed.suggestion).toMatchObject(suggestion);
     expect(malformed.suggestion?.placement).toBeUndefined();
+  });
+
+  it('accepts nullable optional fields emitted by strict tutor schemas', () => {
+    const parsed = parseLearningTutorContent(JSON.stringify({
+      ...tutorResponse(),
+      sourceNotes: [{ label: 'Current file', url: null, filePath: 'app.py', startLine: null, endLine: null }],
+      suggestion: { code: 'x = 1', language: 'python', replaceSelection: false, explanation: 'Set it.', placement: null },
+    }));
+    expect(parsed.sourceNotes[0]).toEqual({ label: 'Current file', url: null, filePath: 'app.py' });
+    expect(parsed.suggestion?.placement).toBeUndefined();
   });
 
   it('records evidence without promoting AI-generated completion to learner mastery', async () => {
@@ -710,6 +720,10 @@ describe('desktop learning mode', () => {
     });
     expect(calls).toBe(2);
     expect(JSON.stringify(bodies[0])).toContain('exactly these top-level keys');
+    const schema = (bodies[0].text as { format: { schema: { properties: Record<string, any> } } }).format.schema;
+    expect(schema.properties.sourceNotes.items.required).toEqual(['label', 'url', 'filePath', 'startLine', 'endLine']);
+    expect(schema.properties.suggestion.anyOf[1].required).toContain('placement');
+    expect(schema.properties.suggestion.anyOf[1].properties.placement.anyOf[0]).toEqual({ type: 'null' });
     expect(JSON.stringify(bodies[1])).toContain('previous response did not match');
   });
 
@@ -786,6 +800,22 @@ describe('desktop learning mode', () => {
       skipped: { missingTool: false },
     });
   });
+
+  it('recognises a Ruff installation managed by KAI', async () => {
+    const dataRoot = await temporaryDirectory();
+    const binary = path.join(dataRoot, 'formatters', 'ruff', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'ruff.exe' : 'ruff');
+    await fs.mkdir(path.dirname(binary), { recursive: true });
+    await fs.writeFile(binary, '', 'utf8');
+    await expect(installRuffFormatter(dataRoot)).resolves.toEqual({ message: 'Ruff is already installed in KAI.' });
+  });
+
+  it.skipIf(!process.env.KAI_TEST_RUFF_INSTALL)('installs Ruff and formats Python using KAI app data', async () => {
+    const dataRoot = await temporaryDirectory();
+    const projectRoot = await temporaryDirectory();
+    await fs.writeFile(path.join(projectRoot, 'app.py'), 'x=1\n', 'utf8');
+    await expect(installRuffFormatter(dataRoot)).resolves.toMatchObject({ message: expect.stringContaining('ready') });
+    await expect(formatProjectCode(projectRoot, 'app.py', 'x=1\n', dataRoot)).resolves.toEqual({ formatted: 'x = 1\n', changed: true, parser: 'Ruff' });
+  }, 180_000);
 
   it.skipIf(onPath('gofmt'))('names the formatter to install when a language has none', async () => {
     const root = await temporaryDirectory();

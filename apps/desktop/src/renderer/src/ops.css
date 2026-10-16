@@ -1163,8 +1163,12 @@
 .learning-composer footer > div {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 5px;
 }
+
+.learning-composer footer { flex-wrap: wrap; }
 
 .learning-composer .secondary-button,
 .learning-composer .primary-button {
