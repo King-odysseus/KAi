@@ -226,9 +226,9 @@ function messageOfFailure(error: unknown): string {
 /**
  * Whether a run has to carry the standing rules itself, or whether they are already going with it.
  *
- * A CLI run past its first turn does not: the session is alive and remembers them. A Direct API run has no such
- * session, so the rules go in the prompt — unless the context block being sent already carries them, which is where
- * the API path puts them every time.
+ * Every CLI invocation receives the current rules, including resumed sessions. Long sessions can compact or drop
+ * earlier instructions, and edits made in the Rules page must apply to the next turn. The API context already
+ * carries them each turn, so that path avoids a second copy in the prompt.
  *
  * This lives here because it failed silently once. The test used to be "does any turn in the history contain the
  * rules", and those turns hold the request as the person wrote it, never the briefed prompt, so the answer was always
@@ -243,7 +243,7 @@ export function shouldCarryRules(input: {
   /** Whether a turn actually being sent still carries them — a compacted history may have dropped the one that did. */
   historyCarriesRules: boolean;
 }): boolean {
-  if (input.execution === 'cli') return !input.resumeSessionId;
+  if (input.execution === 'cli') return true;
   return !input.rulesInContext && !input.historyCarriesRules;
 }
 

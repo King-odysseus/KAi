@@ -1689,9 +1689,8 @@ export async function runConversationAgent(
   /*
    * Whether this run has to carry the standing rules itself, or whether they are already going with it.
    *
-   * A CLI run does not, past its first turn: the session is alive and remembers them. A Direct API run has no such
-   * session — a request is whatever is sent with it — so the rules go in the prompt, unless the context block being
-   * sent already carries them, which is where the API path puts them every time.
+   * A CLI run carries the current rules on every turn, including resumed sessions where the model may have compacted
+   * earlier context. The API context block already carries them every turn, so it does not need a second copy.
    *
    * The test is what is actually being sent rather than "is this the first turn". It used to ask whether any turn in
    * the history contained the rules — and those turns hold the request as the person wrote it, never the briefed
@@ -1721,9 +1720,7 @@ export async function runConversationAgent(
     type: 'notice',
     message: carryRules
       ? 'Standing execution rules (57 rules from Cognitive1) were included in this turn.'
-      : executionMode === 'cli'
-        ? 'Standing execution rules were sent on this session’s first turn and do not need to be resent while it stays open.'
-        : 'Standing execution rules are already carried in this turn’s context, so they were not sent twice.',
+      : 'Standing execution rules are already carried in this turn’s context, so they were not sent twice.',
   };
   const apiHistory = executionMode === 'api' && historyTurns.length > 0
     ? [

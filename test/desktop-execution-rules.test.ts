@@ -144,7 +144,7 @@ describe('injecting the standing rules into projects', () => {
 describe('who carries the standing rules', () => {
   it('has a fresh CLI session carry them, and a continued one not', () => {
     expect(shouldCarryRules({ execution: 'cli', rulesInContext: false, historyCarriesRules: false })).toBe(true);
-    expect(shouldCarryRules({ execution: 'cli', resumeSessionId: 'sess-1', rulesInContext: false, historyCarriesRules: false })).toBe(false);
+    expect(shouldCarryRules({ execution: 'cli', resumeSessionId: 'sess-1', rulesInContext: false, historyCarriesRules: false })).toBe(true);
   });
 
   it('leaves them to the context block on the API path, which always states them', () => {
