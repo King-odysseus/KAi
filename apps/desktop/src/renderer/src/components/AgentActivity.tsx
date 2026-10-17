@@ -13,11 +13,21 @@ export interface AgentActivitySummary {
   lastAt: string | null;
 }
 
-export function deriveAgentActivity(events: readonly PersistedEvent[], running: boolean, paused: boolean, awaitingApproval: boolean): AgentActivitySummary {
+export function deriveAgentActivity(
+  events: readonly PersistedEvent[],
+  running: boolean,
+  paused: boolean,
+  awaitingApproval: boolean,
+  /** Auto has parked the run until the person answers. Not something they paused, so it must not read as one. */
+  autoWaiting = false,
+): AgentActivitySummary {
   const meaningful = [...events].reverse();
   const last = meaningful.find((event) => event.type !== 'text.delta' && event.type !== 'cost.update') ?? null;
   const action = last ? describeEvent(last) : null;
   if (awaitingApproval) return { kind: 'waiting', label: 'Waiting for approval', detail: 'KAI paused before a protected action.', lastAction: action, lastAt: last?.timestamp ?? null };
+  // Said before "Paused": this state is drawn as paused everywhere else, and the label that read "suspended, and can
+  // continue from the same point" sent a person who had paused nothing looking for the run they thought they had held.
+  if (running && autoWaiting) return { kind: 'waiting', label: 'Waiting for you', detail: 'Auto stopped to ask something. Answer in the composer, or press Resume to let it carry on without an answer.', lastAction: action, lastAt: last?.timestamp ?? null };
   if (running && paused) return { kind: 'paused', label: 'Paused', detail: 'The run is suspended and can continue from the same point.', lastAction: action, lastAt: last?.timestamp ?? null };
   if (last?.type === 'error') return { kind: 'blocked', label: running ? 'Blocked' : 'Failed', detail: last.message, lastAction: action, lastAt: last.timestamp };
   if (last?.type === 'permission.escalation') return { kind: 'waiting', label: 'Waiting for permission', detail: last.reason || last.permission, lastAction: action, lastAt: last.timestamp };
@@ -81,15 +91,16 @@ function describeEvent(event: PersistedEvent): string {
   return event.type.replaceAll('.', ' ');
 }
 
-export function AgentActivityStrip({ events, running, paused, awaitingApproval, elapsedSeconds = 0, tokenEstimate = 0 }: {
+export function AgentActivityStrip({ events, running, paused, autoWaiting = false, awaitingApproval, elapsedSeconds = 0, tokenEstimate = 0 }: {
   events: readonly PersistedEvent[];
   running: boolean;
   paused: boolean;
+  autoWaiting?: boolean;
   awaitingApproval: boolean;
   elapsedSeconds?: number;
   tokenEstimate?: number;
 }): ReactNode {
-  const activity = deriveAgentActivity(events, running, paused, awaitingApproval);
+  const activity = deriveAgentActivity(events, running, paused, awaitingApproval, autoWaiting);
   const [expanded, setExpanded] = useState(false);
   if (!running && !paused && !awaitingApproval && !['waiting', 'blocked'].includes(activity.kind)) return null;
   return (

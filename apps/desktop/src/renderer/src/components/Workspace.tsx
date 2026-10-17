@@ -95,6 +95,7 @@ import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
 import { isPreviewableTool } from '../tool-call-preview';
+import { collapseToolCalls } from '../tool-call-events';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
@@ -147,6 +148,8 @@ interface WorkspaceViewProps {
   onCommandHandled: () => void;
   running: boolean;
   paused: boolean;
+  /** Auto has parked this run until the person answers. It is also counted in `paused`, but it is not a pause. */
+  autoWaiting?: boolean;
   awaitingApproval: boolean;
   pendingQuestion: WorkspaceQuestion | null;
   onAnswerQuestion: (requestId: string, answer: string | null) => void;
@@ -343,6 +346,7 @@ export function WorkspaceView({
   onCommandHandled,
   running,
   paused,
+  autoWaiting = false,
   awaitingApproval,
   pendingQuestion,
   onAnswerQuestion,
@@ -1334,12 +1338,13 @@ export function WorkspaceView({
     .slice(-50)
     .reverse();
   const recentEvents = (activeConversation?.events ?? []).slice(-40);
-  const runDetails = recentEvents.filter(isRunDetailEvent);
+  // A call is stored as a "started" event and a result event; each is shown once, as the state it has reached.
+  const runDetails = collapseToolCalls(recentEvents.filter(isRunDetailEvent));
   // Errors and change summaries sit in the conversation where they happened, before the next message,
   // so a new message pushes them up instead of leaving them pinned under the chat.
   const inlineEventsByTurn = new Map<string, PersistedEvent[]>();
   const trailingInlineEvents: PersistedEvent[] = [];
-  for (const event of (activeConversation?.events ?? []).filter((item) => !isRunDetailEvent(item)).slice(-100)) {
+  for (const event of collapseToolCalls((activeConversation?.events ?? []).filter((item) => !isRunDetailEvent(item))).slice(-100)) {
     const next = activeConversation?.turns.find((turn) => turn.role === 'user' && turn.createdAt > event.timestamp);
     if (!next) trailingInlineEvents.push(event);
     else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
@@ -1360,7 +1365,7 @@ export function WorkspaceView({
     else if (event.type === 'cost.update') summary.usage += 1;
     return summary;
   }, { tools: 0, edits: 0, usage: 0 });
-  const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval);
+  const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval, autoWaiting);
   // Autopilot runs a Studio plan, so it is reached through the plan this conversation was opened for — the studio id,
   // not the desktop project the plan happens to be registered as. Auto, by contrast, is about this conversation.
   const autopilotOrigin = activeConversation?.origin?.kind === 'autopilot' ? activeConversation.origin : null;
@@ -1710,6 +1715,7 @@ export function WorkspaceView({
           events={activeConversation.events}
           running={running}
           paused={paused}
+          autoWaiting={autoWaiting}
           awaitingApproval={awaitingApproval}
           elapsedSeconds={elapsedSeconds}
           tokenEstimate={liveTokenEstimate}

@@ -2204,6 +2204,7 @@ export function App(): ReactNode {
             streamingText={streamingText}
             running={activeRunning}
             paused={activePaused}
+            autoWaiting={Boolean(activeConversationId && autoWaitingConversationIds.includes(activeConversationId))}
             awaitingApproval={Boolean(activeQuestion) || isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
             pendingQuestion={activeQuestion?.options ? { ...activeQuestion, options: activeQuestion.options } : null}
             onAnswerQuestion={(requestId, answer) => void respondToApproval(Boolean(answer), false, answer ?? undefined, requestId)}

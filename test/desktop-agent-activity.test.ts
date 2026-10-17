@@ -30,6 +30,18 @@ describe('desktop agent activity summary', () => {
     expect(deriveAgentActivity([blocked], true, false, false)).toMatchObject({ kind: 'blocked', detail: 'The build failed.' });
   });
 
+  it('says Auto is waiting for the person, rather than calling a run they never paused "Paused"', () => {
+    const read = event({ type: 'tool.call', name: 'read_file', status: 'started', input: { path: 'src/App.tsx' } });
+    // Auto parked the run, so the composer treats it as paused too; the person still did not pause anything.
+    const parked = deriveAgentActivity([read], true, true, false, true);
+    expect(parked).toMatchObject({ kind: 'waiting', label: 'Waiting for you' });
+    expect(parked.detail).toContain('Answer in the composer');
+    expect(parked.detail).not.toContain('suspended');
+    // A pause the person asked for keeps its own wording, and a pending approval still wins over both.
+    expect(deriveAgentActivity([read], true, true, false, false)).toMatchObject({ kind: 'paused', label: 'Paused' });
+    expect(deriveAgentActivity([read], true, true, true, true)).toMatchObject({ label: 'Waiting for approval' });
+  });
+
   it('surfaces reviewable changes and the last meaningful action when idle', () => {
     const changes = event({
       type: 'turn.changes',
