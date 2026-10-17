@@ -109,6 +109,15 @@ describe('extended project tools', () => {
     }
   });
 
+  it('offers task as a helper and refuses it if called outside the run loop', async () => {
+    const names = projectToolDefinitions.map((tool) => tool.name);
+    expect(names).toContain('task');
+    expect(runtime.policy('task', 'plan').decision).toBe('allow');
+    const direct = await runtime.execute('task', { prompt: 'Find the parser.' });
+    expect(direct.ok).toBe(false);
+    expect(String((direct.output as { error?: string }).error)).toContain('must be handled by the run loop');
+  });
+
   it('refuses ask_user and explore if called directly, since the run loop must intercept them first', async () => {
     const askUser = await runtime.execute('ask_user', { question: 'Continue?', options: ['Yes', 'No'] });
     expect(askUser.ok).toBe(false);

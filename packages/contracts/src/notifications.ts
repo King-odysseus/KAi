@@ -4,6 +4,8 @@ export const notificationSettingsSchema = z
   .object({
     // Closing the window hides it to the system tray instead of quitting. Off by default.
     trayEnabled: z.boolean().default(false),
+    // Start KAI when the person signs in. Only applied by a packaged build.
+    launchAtLogin: z.boolean().default(false),
     onComplete: z.boolean().default(true),
     onFailure: z.boolean().default(true),
     onApproval: z.boolean().default(true),
@@ -37,6 +39,7 @@ export type OpenConversationEvent = z.infer<typeof openConversationEventSchema>;
 
 export const defaultNotificationSettings: NotificationSettings = {
   trayEnabled: false,
+  launchAtLogin: false,
   onComplete: true,
   onFailure: true,
   onApproval: true,

@@ -34,6 +34,38 @@ describe('desktop contracts', () => {
     });
   });
 
+  it('defaults web search off and keeps it separate from the model provider', () => {
+    const settings = createDefaultSettings();
+    expect(settings.webSearch).toEqual({
+      enabled: false,
+      fetchEnabled: true,
+      source: 'searxng',
+      endpoint: 'http://127.0.0.1:8080',
+      credentialId: '',
+      results: 5,
+      maxSearchesPerRun: 5,
+      maxFetchesPerRun: 8,
+      timeoutMs: 15_000,
+    });
+    expect(() => appSettingsV1Schema.parse({ ...settings, webSearch: { ...settings.webSearch, extra: true } })).toThrow();
+    expect(directProviderPreset('deepseek').credentialId).toBe('provider.deepseek');
+  });
+
+  it('fills web search defaults for settings saved before it existed', () => {
+    const legacy = createDefaultSettings() as Record<string, unknown>;
+    delete legacy.webSearch;
+    const migrated = migrateSettings(legacy);
+    expect(migrated.webSearch).toMatchObject({ enabled: false, source: 'searxng', maxSearchesPerRun: 5 });
+  });
+
+  it('accepts a web search update and rejects an unknown field', () => {
+    expect(parseIpcInput('settings:update', { webSearch: { enabled: true, source: 'brave' } })).toMatchObject({
+      webSearch: { enabled: true, source: 'brave' },
+    });
+    expect(() => parseIpcInput('settings:update', { webSearch: { nope: true } })).toThrow();
+    expect(() => parseIpcInput('settings:update', { webSearch: { source: 'not-a-source' } })).toThrow();
+  });
+
   it('ships current provider model catalogs', () => {
     expect(directProviderPreset('openai')).toMatchObject({
       defaultModel: 'gpt-6-astra',

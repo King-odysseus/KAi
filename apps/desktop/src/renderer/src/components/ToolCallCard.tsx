@@ -1,4 +1,4 @@
-import { Check, ChevronDown, FileDiff, FilePlus, Loader2, Minus, MoveRight, Search, Terminal, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, FileDiff, FilePlus, Globe, Loader2, Minus, MoveRight, Search, Terminal, Trash2, X } from 'lucide-react';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { describeToolCall, renderToolCallPreview, type ToolCallPreview } from '../tool-call-preview';
@@ -87,7 +87,8 @@ function iconFor(preview: ToolCallPreview): ReactNode {
   if (preview.kind === 'write') return <FilePlus size={12} />;
   if (preview.kind === 'delete') return <Trash2 size={12} />;
   if (preview.kind === 'move') return <MoveRight size={12} />;
-  if (preview.kind === 'explore') return <Search size={12} />;
+  if (preview.kind === 'explore' || preview.kind === 'search') return <Search size={12} />;
+  if (preview.kind === 'fetch') return <Globe size={12} />;
   return <Terminal size={12} />;
 }
 

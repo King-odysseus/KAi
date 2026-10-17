@@ -35,7 +35,7 @@ export const TOUR_LESSONS: TourLesson[] = [
     steps: [
       RAIL,
       { target: '.composer-box', title: 'The composer', body: 'Describe a task here and press Enter to send it to an agent. Shift+Enter starts a new line. This is where building happens.' },
-      { target: '.conversation-sidebar', title: 'Threads and project files', body: 'Use Threads to reopen a conversation or Files to browse this project. Selecting a file opens it beside the composer. Use Edit and Save there to change it without leaving Workspace.' },
+      { target: '.conversation-sidebar', title: 'Threads and project files', body: 'Use Threads to reopen a conversation or Files to browse this project. Selecting a file opens a full-height code editor beside the composer. Use Edit, Format and Save there without leaving Workspace.' },
       { target: '.composer-toolbar', title: 'Context, access and refine', body: 'The plus button adds files, images or notes as context. You can paste or attach an image and send it without typing a message. The access menu chooses how much the agent may change. The wand rewrites a rough prompt into a clearer one before you send it.' },
       { title: 'Goals, skills and commands', body: 'Use composer commands for a goal, project context, skills, rules, reviews and handoffs. Search the Skills picker and select the capabilities you want for the next run.' },
       { target: '.composer-advanced-toggle', title: 'Route and run choices', body: 'The agent, model, task, access and execution mode controls stay beside the composer. This button opens the route choice when you want to use the Universal Proxy.' },
@@ -160,7 +160,7 @@ export const TOUR_LESSONS: TourLesson[] = [
     summary: 'The standing rules every agent run gets',
     steps: [
       RAIL,
-      { title: 'Rules agents must follow', body: 'These rules are added to every agent run. Edit them to change how agents behave across all your projects.' },
+      { title: 'Rules agents must follow', body: 'These standing instructions are sent with each KAI agent turn. Edit them here to guide coding behavior across projects. For enforceable tool and path limits, use Permission rules in Settings, Automation.' },
       { title: 'Review before saving', body: 'Read the current rules, make a focused edit and save it here. A project-specific request can still be explained in the Workspace prompt.' },
     ],
   },
@@ -203,7 +203,7 @@ export const TOUR_LESSONS: TourLesson[] = [
       RAIL,
       { target: '.settings-search', title: 'Search every setting', body: 'Type a word such as model, token or open-pencil and only the matching cards stay. Press Escape to clear.' },
       { target: '.settings-category-nav', title: 'Categories stay with you', body: 'This bar stays pinned as you scroll, and the current category is underlined. Design tools holds the open-pencil connection.' },
-      { title: 'General and connections', body: 'General holds agent defaults, team, automation, editor, updates and shortcuts. Connections and models holds providers, API keys, tutor settings and MCP servers.' },
+      { title: 'General and connections', body: 'General holds agent defaults, team, automation, editor, updates and shortcuts. Automation has permission rules for tool and path access. Connections and models holds providers, API keys, web search, the connector catalog, tutor settings and MCP servers.' },
       { title: 'Design and services', body: 'Design tools connects open-pencil. Services and access covers the C1 brain, Universal Proxy and remote access; check service status here when a feature is unavailable.' },
       { title: 'Data and diagnostics', body: 'Find local data locations, configuration backups and recent diagnostic logs in the final category. Search a setting’s name when you are unsure where it lives.' },
     ],

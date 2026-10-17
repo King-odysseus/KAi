@@ -5,6 +5,7 @@ import { workLevelSchema } from './model-tiers';
 import { persistedEventV1Schema } from './events';
 import { type AgentId, agentIdSchema, autonomyModeSchema, executionModeSchema, providerIdSchema, routeModeSchema } from './primitives';
 import { goalInputSchema } from './workbench';
+import { permissionRulesSchema } from './permission-rules';
 
 export const agentCapabilitySchema = z
   .object({
@@ -76,6 +77,9 @@ export const agentRunRequestSchema = z
     // Start a new agent session even if the conversation could resume one. Team parts use this so a reviewer
     // never inherits the session of the agent that wrote the code.
     freshSession: z.boolean().optional(),
+    // The project's allow/ask/deny rules. API runs enforce them directly; a CLI run gets the whole-tool denials
+    // its harness can express (Claude Code), because a CLI's own tool loop cannot be intercepted.
+    permissionRules: permissionRulesSchema.optional(),
   })
   .strict();
 

@@ -225,6 +225,8 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.invoke('conversations:create', { projectId, firstPrompt }),
   compactConversation: (conversationId) => ipcRenderer.invoke('conversations:compact', { conversationId }),
   saveConversation: (conversation) => ipcRenderer.invoke('conversations:save', conversation),
+  forkConversation: (request) => ipcRenderer.invoke('conversations:fork', request),
+  rewindConversation: (request) => ipcRenderer.invoke('conversations:rewind', request),
   deleteConversation: (id) => ipcRenderer.invoke('conversations:delete', { id }),
   reviewCheckpoint: (conversationId, turnId) => ipcRenderer.invoke('checkpoints:review', { conversationId, turnId }),
   rejectCheckpointFile: (conversationId, turnId, filePath) => ipcRenderer.invoke('checkpoints:reject', { conversationId, turnId, filePath }),
@@ -240,6 +242,9 @@ const bridge: KaiDesktopBridge = {
   agentCapabilities: () => ipcRenderer.invoke('agents:capabilities', {}),
   directApiCapability: () => ipcRenderer.invoke('agents:api-capability', {}),
   listProviderModels: (request) => ipcRenderer.invoke('providers:list-models', request),
+  testWebSearch: (request) => ipcRenderer.invoke('web-search:test', request),
+  listConnectorCatalog: () => ipcRenderer.invoke('catalog:list'),
+  installConnector: (id) => ipcRenderer.invoke('catalog:install', { id }),
   previewContext: (request) => ipcRenderer.invoke('context:preview', request),
   previewInfo: (projectId) => ipcRenderer.invoke('preview:info', { projectId }),
   previewStatus: (projectId) => ipcRenderer.invoke('preview:status', { projectId }),
@@ -320,6 +325,11 @@ const bridge: KaiDesktopBridge = {
     const handler = (_event: Electron.IpcRendererEvent, payload: OpenConversationEvent): void => listener(payload);
     ipcRenderer.on('app:open-conversation', handler);
     return () => ipcRenderer.removeListener('app:open-conversation', handler);
+  },
+  onConversationChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { conversationId: string }): void => listener(payload);
+    ipcRenderer.on('app:conversation-changed', handler);
+    return () => ipcRenderer.removeListener('app:conversation-changed', handler);
   },
   diagnosticsReport: (copy) => ipcRenderer.invoke('diagnostics:report', { copy }),
   dataLocations: () => ipcRenderer.invoke('diagnostics:data-locations', {}),

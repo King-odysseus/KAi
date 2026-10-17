@@ -26,7 +26,10 @@ import {
   openPlanReminder,
   planIsUnfinished,
   type BrainEntry,
+  type ConversationBranchResult,
+  type ConversationForkInput,
   type ConversationRecord,
+  type ConversationRewindInput,
   type ContextChip,
   type CompareRun,
   type CompareStartInput,
@@ -119,6 +122,9 @@ import type { TeachingLibraryStore } from './teaching-library';
 import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
+import { testSearchSource } from './web-search';
+import { branchedConversation, rewoundConversation } from './conversation-branching';
+import { connectorServer, listConnectorCatalog } from './connector-catalog';
 import { autoCliModel } from './auto-model';
 import { invalidateRepoMap } from './repo-map';
 import { knowledgeBriefing, recordRunKnowledge, startWatchingProject } from './project-knowledge';
@@ -380,6 +386,26 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     }
   });
   handle(context, 'providers:list-models', async (request) => listProviderModels(request, context.credentials));
+  handle(context, 'catalog:list', async () => listConnectorCatalog());
+  handle(context, 'catalog:install', async ({ id }) => {
+    const server = connectorServer(id);
+    if (!server) throw new Error('That connector is not in the catalog.');
+    return server;
+  });
+  handle(context, 'web-search:test', async (request) => {
+    const settings = await context.settings.load();
+    return testSearchSource(
+      request.source,
+      request.endpoint,
+      request.credentialId,
+      context.credentials,
+      {
+        provider: settings.directApi.provider,
+        credentialId: settings.directApi.credentialId,
+        baseUrl: settings.directApi.baseUrl,
+      },
+    );
+  });
   handle(context, 'settings:update', async (update) => {
     const snapshot: { previous: AppSettings | null } = { previous: null };
     // Before anything is written: a brain path inside a repository is the one setting here that can reach outside
@@ -750,6 +776,16 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     await context.conversations.save(conversation);
     if (request.session) request.session.conversationId = conversation.id;
     return conversation;
+  });
+  handle(context, 'conversations:fork', async (input) => {
+    const result = await forkConversation(context, input);
+    context.windows.broadcast('app:conversation-changed', { conversationId: result.conversation.id });
+    return result;
+  });
+  handle(context, 'conversations:rewind', async (input) => {
+    const result = await rewindConversation(context, input);
+    context.windows.broadcast('app:conversation-changed', { conversationId: result.conversation.id });
+    return result;
   });
   handle(context, 'conversations:delete', async ({ id }) => {
     const conversation = await context.conversations.get(id);
@@ -1706,9 +1742,13 @@ export async function runConversationAgent(
     rulesInContext,
     historyCarriesRules: carried,
   });
-  const executionRequest = carryRules
+  const requestWithRules = carryRules
     ? applyExecutionRulesToRequest(preparedRequest, rulesBriefing)
     : preparedRequest;
+  // API runs load these themselves; a CLI run needs them on the request so the harness flags it can express are set.
+  const executionRequest: AgentRunRequest = preferences?.automation?.permissionRules?.length
+    ? { ...requestWithRules, permissionRules: preferences.automation.permissionRules }
+    : requestWithRules;
   // Visible in the conversation itself, not just true in the code: asked plainly, this answers it without
   // anyone having to trust that `shouldCarryRules` did the right thing.
   const rulesNotice: PersistedEvent = {
@@ -2321,6 +2361,7 @@ async function buildConversationContext(
     .catch(() => null);
   const projectContext = await buildProjectContext(projectPath, {
     selectedPaths: filesInPlay.slice(-12),
+    touchedPaths: filesInPlay,
     memories: recall.memories,
     memoryNote: recall.note,
     authoritativeRules,
@@ -2606,6 +2647,43 @@ async function rejectCheckpointHunks(
   conversation.updatedAt = new Date().toISOString();
   await context.conversations.save(conversation);
   return { restored: [filePath], deleted: [] };
+}
+
+/**
+ * Copies a conversation up to a chosen turn into a new conversation. The copy has new turn IDs so it can diverge
+ * without touching the original, and it starts with no provider session, run events or compaction: none of those
+ * refer to the new branch.
+ */
+async function forkConversation(context: IpcContext, input: ConversationForkInput): Promise<ConversationBranchResult> {
+  const original = await context.conversations.get(input.conversationId);
+  if (!original) throw new NotFoundError('Conversation not found.');
+  const copy = branchedConversation(original, input.throughTurnId);
+  await context.conversations.save(copy);
+  return { conversation: copy, checkpoint: null };
+}
+
+/**
+ * Removes a user turn and everything after it, optionally putting the project files back to the checkpoint taken
+ * just before that turn. A running conversation is refused: its own turn would be written back afterwards.
+ */
+async function rewindConversation(context: IpcContext, input: ConversationRewindInput): Promise<ConversationBranchResult> {
+  const original = await context.conversations.get(input.conversationId);
+  if (!original) throw new NotFoundError('Conversation not found.');
+  if (context.directApi.isRunning(input.conversationId) || automationRuns.has(input.conversationId)) {
+    throw new ConflictError('Stop the run before rewinding this conversation.');
+  }
+  const turn = original.turns.find((candidate) => candidate.id === input.turnId);
+  if (!turn) throw new NotFoundError('Turn not found.');
+  const conversation = rewoundConversation(original, input.turnId);
+
+  let checkpoint: CheckpointRestoreResult | null = null;
+  if (input.restoreFiles && turn.checkpoint) {
+    const project = await resolveProject(context, conversation.projectId ?? undefined, true);
+    checkpoint = await restoreCheckpoint(project.path, turn.checkpoint);
+  }
+
+  await context.conversations.save(conversation);
+  return { conversation, checkpoint };
 }
 
 async function restoreConversationCheckpoint(

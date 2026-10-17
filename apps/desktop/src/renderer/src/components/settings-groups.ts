@@ -14,6 +14,7 @@ export const SETTINGS_GROUPS = {
   experienceCapture: ['experienceCapture'],
   promptGuide: ['promptGuide'],
   directApi: ['directApi'],
+  webSearch: ['webSearch'],
   mcpServers: ['mcpServers'],
   cognitive1: ['cognitive1'],
   proxy: ['proxy'],

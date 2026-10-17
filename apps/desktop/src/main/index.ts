@@ -41,6 +41,7 @@ import { TerminalManager } from './terminal';
 import { UpdateController } from './updater';
 import { autoUpdater } from 'electron-updater';
 import { hashFile, recordVerification, runCheckCommand, suggestTestCommand, VerificationStore } from './verification';
+import { runToolHooks, type ToolHookCall } from './automation';
 import { gitOverview } from './git-tools';
 import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
@@ -549,6 +550,21 @@ async function startApplication(): Promise<void> {
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
   const directApiOptions = {
     waitIfPaused: (conversationId: string, signal: AbortSignal) => runControl.waitIfPaused(conversationId, signal),
+    // Rules and tool hooks are user-owned project preferences. A run only sees the project it is working in.
+    loadPermissionRules: async (projectRoot: string) => {
+      const project = (await projects.list()).find((candidate) => candidate.path === projectRoot);
+      return project ? (await preferences.get(project.id))?.automation?.permissionRules ?? [] : [];
+    },
+    runToolHook: async (call: ToolHookCall) => {
+      const project = (await projects.list()).find((candidate) => candidate.path === call.projectRoot);
+      const automation = project ? (await preferences.get(project.id))?.automation : undefined;
+      return runToolHooks(automation?.hooks, call, (command, timeoutMs, env) => runCheckCommand(
+        call.projectRoot,
+        command,
+        call.signal ? AbortSignal.any([call.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+        env,
+      ));
+    },
     resolveProxyRoute: async (request: AgentRunRequest) => {
       const controller = serviceController;
       if (!controller) throw new Error('The managed service controller is unavailable.');
@@ -1404,7 +1420,7 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
   });
   window.on('close', (event) => {
     if (forceClosing.has(session.id)) return;
-    if (desktopShell?.hideForActiveWork()) {
+    if (desktopShell?.hideOnClose()) {
       event.preventDefault();
       window.hide();
       return;

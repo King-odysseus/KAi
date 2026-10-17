@@ -16,7 +16,9 @@ export type ToolCallPreview =
   | { kind: 'delete'; path: string }
   | { kind: 'move'; from: string; to: string }
   | { kind: 'command'; command: string; cwd: string | null; output: string; exitCode: number | null }
-  | { kind: 'explore'; question: string; answer: string | null };
+  | { kind: 'explore'; question: string; answer: string | null }
+  | { kind: 'search'; query: string; results: ReadonlyArray<{ title: string; url: string; snippet: string }>; error: string | null }
+  | { kind: 'fetch'; url: string; title: string | null; text: string; truncated: boolean; error: string | null };
 
 export interface PreviewLine {
   kind: 'context' | 'removed' | 'added' | 'gap';
@@ -58,6 +60,9 @@ const PREVIEW_TOOLS = new Set([
   'bash',
   'shell_command',
   'explore',
+  'task',
+  'web_search',
+  'web_fetch',
 ]);
 
 const COMMAND_TOOLS = new Set(['run_command', 'bash', 'shell_command']);
@@ -128,6 +133,38 @@ export function describeToolCall(name: string, input: unknown, output: unknown):
       const answer = result && typeof result.answer === 'string' ? result.answer : result && typeof result.error === 'string' ? `Could not answer: ${result.error}` : null;
       return { kind: 'explore', question, answer };
     }
+    case 'task': {
+      const question = typeof args.prompt === 'string' ? args.prompt : null;
+      if (!question) return null;
+      const result = asRecord(output);
+      const answer = result && typeof result.answer === 'string' ? result.answer : result && typeof result.error === 'string' ? `Could not finish: ${result.error}` : null;
+      return { kind: 'explore', question, answer };
+    }
+    case 'web_search': {
+      const query = typeof args.query === 'string' ? args.query : null;
+      if (!query) return null;
+      const result = asRecord(output);
+      const entries = result && Array.isArray(result.results) ? result.results : [];
+      const results = entries.flatMap((entry) => {
+        const record = asRecord(entry);
+        if (!record || typeof record.title !== 'string' || typeof record.url !== 'string') return [];
+        return [{ title: record.title, url: record.url, snippet: typeof record.snippet === 'string' ? record.snippet : '' }];
+      });
+      return { kind: 'search', query, results, error: result && typeof result.error === 'string' ? result.error : null };
+    }
+    case 'web_fetch': {
+      const url = typeof args.url === 'string' ? args.url : null;
+      if (!url) return null;
+      const result = asRecord(output);
+      return {
+        kind: 'fetch',
+        url,
+        title: result && typeof result.title === 'string' ? result.title : null,
+        text: result && typeof result.text === 'string' ? result.text : '',
+        truncated: result?.truncated === true,
+        error: result && typeof result.error === 'string' ? result.error : null,
+      };
+    }
     default:
       return null;
   }
@@ -178,6 +215,25 @@ export function renderToolCallPreview(preview: ToolCallPreview): ToolCallPreview
     if (preview.exitCode !== null && preview.exitCode !== 0) note = `Exit code ${preview.exitCode}`;
   } else if (preview.kind === 'explore') {
     for (const line of (preview.answer ?? 'Still exploring…').split(/\r?\n/)) push('context', line);
+  } else if (preview.kind === 'search') {
+    if (preview.error) {
+      push('removed', preview.error);
+    } else {
+      preview.results.forEach((result, index) => {
+        if (index > 0) push('gap', '');
+        push('added', `${result.title} — ${result.url}`);
+        if (result.snippet) push('context', result.snippet);
+      });
+      note = `${preview.results.length} result${preview.results.length === 1 ? '' : 's'}`;
+    }
+  } else if (preview.kind === 'fetch') {
+    if (preview.error) {
+      push('removed', preview.error);
+    } else {
+      if (preview.title) push('context', preview.title);
+      for (const line of preview.text.split(/\r?\n/)) push('context', line);
+      if (preview.truncated) note = 'Page truncated';
+    }
   }
 
   if (omitted > 0) lines.push({ kind: 'gap', text: `… ${omitted} more ${omitted === 1 ? 'line' : 'lines'}` });
@@ -191,6 +247,8 @@ function headerFor(preview: ToolCallPreview): { verb: string; target: string } {
   if (preview.kind === 'delete') return { verb: 'Delete file', target: preview.path };
   if (preview.kind === 'move') return { verb: 'Move file', target: `${preview.from} → ${preview.to}` };
   if (preview.kind === 'explore') return { verb: 'Explored', target: preview.question };
+  if (preview.kind === 'search') return { verb: 'Searched the web', target: preview.query };
+  if (preview.kind === 'fetch') return { verb: 'Read page', target: preview.title ? `${preview.title} — ${preview.url}` : preview.url };
   return { verb: 'Command', target: preview.cwd ? `${preview.command}  (in ${preview.cwd})` : preview.command };
 }
 

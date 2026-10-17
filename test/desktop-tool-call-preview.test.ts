@@ -75,6 +75,34 @@ describe('desktop tool call preview', () => {
     expect(describeToolCall('run_command', { cwd: '.' }, undefined)).toBeNull();
   });
 
+  it('shows a helper agent\'s task and answer', () => {
+    const view = renderToolCallPreview(describeToolCall('task', { prompt: 'Find the parser entry point.' }, { answer: 'It starts in parser.ts.', costUsd: 0.02 })!);
+    expect(view).toMatchObject({ verb: 'Explored', target: 'Find the parser entry point.' });
+    expect(view.lines.map((line) => line.text)).toEqual(['It starts in parser.ts.']);
+  });
+
+  it('shows a web search with its sources, or the error it hit', () => {
+    const found = renderToolCallPreview(describeToolCall('web_search', { query: 'electron security' }, {
+      results: [{ title: 'Security', url: 'https://example.com/security', snippet: 'Use isolation.' }],
+    })!);
+    expect(found).toMatchObject({ verb: 'Searched the web', target: 'electron security', note: '1 result' });
+    expect(found.lines.map((line) => line.text)).toEqual(['Security — https://example.com/security', 'Use isolation.']);
+
+    const failed = renderToolCallPreview(describeToolCall('web_search', { query: 'x' }, { error: 'No key is stored.' })!);
+    expect(failed.lines[0]).toMatchObject({ kind: 'removed', text: 'No key is stored.' });
+  });
+
+  it('shows a fetched page and notes when it was truncated', () => {
+    const view = renderToolCallPreview(describeToolCall('web_fetch', { url: 'https://example.com/doc' }, {
+      title: 'Docs',
+      url: 'https://example.com/doc',
+      text: 'First line\nSecond line',
+      truncated: true,
+    })!);
+    expect(view).toMatchObject({ verb: 'Read page', target: 'Docs — https://example.com/doc', note: 'Page truncated' });
+    expect(view.lines.map((line) => line.text)).toEqual(['Docs', 'First line', 'Second line']);
+  });
+
   it('stops at the line cap but still counts the whole change', () => {
     const content = Array.from({ length: 500 }, (_, index) => `line ${index}`).join('\n');
     const view = renderToolCallPreview(describeToolCall('create_file', { path: 'src/big.ts', content }, undefined)!);

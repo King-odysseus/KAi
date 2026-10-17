@@ -55,15 +55,14 @@ export class DesktopShell {
   }
 
   /**
-   * Whether closing the window should hide it instead, because a run would be abandoned by closing.
+   * Whether closing the window should hide it instead of ending KAI.
    *
-   * Yes only while there is work to protect, and it remembers that it said yes: the app is resident for a reason
-   * that can expire, and this is what tells it so.
+   * With the tray enabled, closing is how the user asks KAI to keep working in the background: schedules keep
+   * ticking, runs keep going, and the phone console stays reachable. That is deliberately not conditional on an
+   * active run, because a schedule can come due later. The tray's own Quit item is the way to end the process.
    */
-  hideForActiveWork(): boolean {
-    if (!this.trayEnabled || this.quitting || this.deps.center.activeRunIds().length === 0) return false;
-    this.residentForWork = true;
-    return true;
+  hideOnClose(): boolean {
+    return this.trayEnabled && !this.quitting;
   }
 
   /**
@@ -110,6 +109,10 @@ export class DesktopShell {
 
   apply(settings: NotificationSettings): void {
     this.trayEnabled = settings.trayEnabled;
+    // Registering the development binary as a login item would be noise the person cannot find; only a packaged
+    // install owns its own startup entry.
+    if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
+
     if (this.trayEnabled && !this.tray && !this.notificationsOff) {
       this.tray = new Tray(trayIcon());
       this.tray.setToolTip('KAI');

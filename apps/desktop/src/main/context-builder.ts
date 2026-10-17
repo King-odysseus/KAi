@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { BrainEntry, ContextPreview, ContextPreviewItem, ContextPreviewSection } from '@kai/contracts';
 import { buildRepoMap } from './repo-map';
+import { globMatches } from './glob-match';
 
 const INSTRUCTION_FILES = [
   'AGENTS.md',
@@ -21,6 +22,10 @@ const MAX_SELECTED_FILES = 12;
 const MAX_SKILLS = 100;
 const MAX_MEMORIES = 8;
 const MAX_MEMORY_CHARACTERS = 4_000;
+/** Path-scoped instructions under `.kai/rules/*.md`, loaded only when a touched file matches their `applyTo` globs. */
+const PATH_RULE_DIRECTORY = '.kai/rules';
+const MAX_PATH_RULE_BYTES = 8 * 1024;
+const MAX_PATH_RULES = 20;
 
 interface ContextEntry {
   item: ContextPreviewItem;
@@ -43,6 +48,8 @@ export interface BuildProjectContextOptions {
   includeRepoMap?: boolean;
   /** What KAI's own runs already did here, as lines. Omitted from the context entirely when there are none. */
   history?: readonly string[];
+  /** Project-relative paths this turn touches; `.kai/rules` files whose `applyTo` matches one of them are included. */
+  touchedPaths?: readonly string[];
 }
 
 export interface BuiltProjectContext {
@@ -58,9 +65,12 @@ export async function buildProjectContext(
   const rootStat = await fs.stat(root);
   if (!rootStat.isDirectory()) throw new Error('The active project is not a directory.');
 
+  const pathRules = options.omitStatic
+    ? []
+    : await collectPathRules(root, options.touchedPaths ?? options.selectedPaths ?? []);
   const instructions = options.omitStatic
     ? []
-    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...(await collectInstructions(root))];
+    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...(await collectInstructions(root)), ...pathRules];
   const instructionPaths = new Set(instructions.map((entry) => entry.item.source));
   const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths);
   const skills = options.omitStatic ? [] : await collectSkills(root);
@@ -108,6 +118,56 @@ async function collectInstructions(root: string): Promise<ContextEntry[]> {
     entries.push(toEntry('instructions', path.basename(relativePath), normalizeRelative(relativePath), content.text, content.truncated));
   }
   return entries;
+}
+
+/**
+ * Reads `.kai/rules/*.md` and keeps the ones whose frontmatter `applyTo` globs match a path this turn touches.
+ * A rule with no frontmatter is ignored: path rules are opt-in per path, not another always-loaded instruction file.
+ */
+async function collectPathRules(root: string, touchedPaths: readonly string[]): Promise<ContextEntry[]> {
+  if (touchedPaths.length === 0) return [];
+  const directory = path.join(root, PATH_RULE_DIRECTORY);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .slice(0, MAX_PATH_RULES);
+  const results: ContextEntry[] = [];
+  for (const file of files) {
+    const content = await readBoundedText(path.join(directory, file.name), MAX_PATH_RULE_BYTES);
+    if (!content.text) continue;
+    const rule = parsePathRule(content.text);
+    if (!rule || !ruleApplies(rule.applyTo, touchedPaths)) continue;
+    results.push(toEntry(
+      'instructions',
+      `Rule: ${file.name}`,
+      normalizeRelative(path.join(PATH_RULE_DIRECTORY, file.name)),
+      rule.body,
+      content.truncated,
+    ));
+  }
+  return results;
+}
+
+function parsePathRule(text: string): { applyTo: string[]; body: string } | null {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
+  if (!match) return null;
+  const header = match[1];
+  const line = /^applyTo:\s*(.+)$/im.exec(header)?.[1] ?? /^globs:\s*(.+)$/im.exec(header)?.[1];
+  if (!line) return null;
+  const applyTo = line.split(',').map((value) => value.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  const body = match[2].trim();
+  return applyTo.length > 0 && body ? { applyTo, body } : null;
+}
+
+function ruleApplies(patterns: readonly string[], touchedPaths: readonly string[]): boolean {
+  if (patterns.some((pattern) => pattern === '*' || pattern === '**')) return true;
+  return touchedPaths.some((touched) => patterns.some((pattern) => globMatches(pattern, touched)));
 }
 
 async function collectSelectedFiles(

@@ -1,4 +1,4 @@
-import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
+import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type PermissionRule, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
 import { Check, Play, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
@@ -25,6 +25,51 @@ function commandsToLines(hooks: ReadonlyArray<{ command: string }> | undefined):
 
 function linesToHooks(text: string): Array<{ command: string }> {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 5).map((command) => ({ command: command.slice(0, 2_000) }));
+}
+
+/** Tool hooks accept `tool-glob :: command` so one list can target different tools. */
+function toolHooksToLines(hooks: ReadonlyArray<{ command: string; tool?: string }> | undefined): string {
+  return (hooks ?? []).map((hook) => (hook.tool ? `${hook.tool} :: ${hook.command}` : hook.command)).join('\n');
+}
+
+function linesToToolHooks(text: string): Array<{ command: string; tool?: string }> {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 20).map((line) => {
+    const separator = line.indexOf('::');
+    if (separator > 0) {
+      const tool = line.slice(0, separator).trim();
+      const command = line.slice(separator + 2).trim();
+      return command ? { command: command.slice(0, 2_000), ...(tool ? { tool: tool.slice(0, 200) } : {}) } : null;
+    }
+    return { command: line.slice(0, 2_000) };
+  }).filter((hook): hook is { command: string; tool?: string } => Boolean(hook));
+}
+
+type RuleKind = 'tool' | 'command' | 'path';
+interface RuleDraft {
+  id: string;
+  effect: PermissionRule['effect'];
+  kind: RuleKind;
+  pattern: string;
+  note: string;
+}
+
+function rulesToDrafts(rules: readonly PermissionRule[] | undefined): RuleDraft[] {
+  return (rules ?? []).map((rule) => {
+    const kind: RuleKind = rule.tools.length ? 'tool' : rule.commands.length ? 'command' : 'path';
+    const pattern = kind === 'tool' ? rule.tools[0] : kind === 'command' ? rule.commands[0] : rule.paths[0];
+    return { id: rule.id, effect: rule.effect, kind, pattern: pattern ?? '', note: rule.note ?? '' };
+  });
+}
+
+function draftsToRules(drafts: readonly RuleDraft[]): PermissionRule[] {
+  return drafts.filter((draft) => draft.pattern.trim()).map((draft) => ({
+    id: draft.id,
+    effect: draft.effect,
+    tools: draft.kind === 'tool' ? [draft.pattern.trim()] : [],
+    commands: draft.kind === 'command' ? [draft.pattern.trim()] : [],
+    paths: draft.kind === 'path' ? [draft.pattern.trim()] : [],
+    ...(draft.note.trim() ? { note: draft.note.trim() } : {}),
+  }));
 }
 
 function formatDuration(ms: number): string {
@@ -76,6 +121,9 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
   const [beforeRun, setBeforeRun] = useState(commandsToLines(automation?.hooks?.beforeRun));
   const [afterEdit, setAfterEdit] = useState(commandsToLines(automation?.hooks?.afterEdit));
   const [afterRun, setAfterRun] = useState(commandsToLines(automation?.hooks?.afterRun));
+  const [preTool, setPreTool] = useState(toolHooksToLines(automation?.hooks?.preTool));
+  const [postTool, setPostTool] = useState(toolHooksToLines(automation?.hooks?.postTool));
+  const [rules, setRules] = useState<RuleDraft[]>(rulesToDrafts(automation?.permissionRules));
   const [saved, setSaved] = useState<string | null>(null);
 
   async function save(): Promise<void> {
@@ -83,10 +131,14 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
       ...(linesToHooks(beforeRun).length ? { beforeRun: linesToHooks(beforeRun) } : {}),
       ...(linesToHooks(afterEdit).length ? { afterEdit: linesToHooks(afterEdit) } : {}),
       ...(linesToHooks(afterRun).length ? { afterRun: linesToHooks(afterRun) } : {}),
+      ...(linesToToolHooks(preTool).length ? { preTool: linesToToolHooks(preTool) } : {}),
+      ...(linesToToolHooks(postTool).length ? { postTool: linesToToolHooks(postTool) } : {}),
     };
+    const permissionRules = draftsToRules(rules);
     const next: ProjectAutomation = {
       ...(checkEnabled || command.trim() ? { autoCheck: { enabled: checkEnabled, ...(command.trim() ? { command: command.trim() } : {}), maxRounds: Math.min(Math.max(Math.round(rounds) || 1, 1), MAX_AUTO_FIX_ROUNDS) } } : {}),
       ...(Object.keys(hooks).length ? { hooks } : {}),
+      ...(permissionRules.length ? { permissionRules } : {}),
       ...(review ? { review: { enabled: true } } : {}),
     };
     const ok = await onSave(Object.keys(next).length ? next : null);
@@ -122,6 +174,34 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
       <label className="field"><span>Before a run</span><textarea rows={2} value={beforeRun} onChange={(event) => { setBeforeRun(event.target.value); setSaved(null); }} /></label>
       <label className="field"><span>After a run that edited files, for example a formatter</span><textarea rows={2} value={afterEdit} onChange={(event) => { setAfterEdit(event.target.value); setSaved(null); }} /></label>
       <label className="field"><span>After every run</span><textarea rows={2} value={afterRun} onChange={(event) => { setAfterRun(event.target.value); setSaved(null); }} /></label>
+      <div className="settings-subsection-title"><span>Around each tool call</span></div>
+      <p className="settings-note">
+        One command per line, optionally written as <code>tool-glob :: command</code>. A failing preTool hook blocks the call; a postTool hook's output is added to the result. These apply in full to KAI's own API runs. Claude Code receives whole-tool denials where its flags can express them; the other CLIs keep their own tool handling.
+      </p>
+      <label className="field"><span>Before a tool call</span><textarea rows={2} value={preTool} placeholder="run_command :: npm run lint" onChange={(event) => { setPreTool(event.target.value); setSaved(null); }} /></label>
+      <label className="field"><span>After a tool call</span><textarea rows={2} value={postTool} placeholder="write_file :: npm run format" onChange={(event) => { setPostTool(event.target.value); setSaved(null); }} /></label>
+      <div className="settings-subsection-title"><span>Permission rules</span></div>
+      <p className="settings-note">
+        Rules sit on top of the access mode. A base refusal is never undone; otherwise Deny beats Ask, and Ask beats Allow. Tool and path patterns accept <code>*</code> and <code>**</code>; command patterns match the beginning of a command. They are enforced in full on KAI's API runs; Claude Code receives whole-tool denials where its flags can express them, and the other CLIs keep their own tool handling.
+      </p>
+      {rules.length === 0 ? <p className="settings-note">No rules for this project.</p> : (
+        <div className="automation-stack">
+          {rules.map((rule, index) => (
+            <div className="field-grid" key={rule.id}>
+              <label className="field"><span>Effect</span><select value={rule.effect} onChange={(event) => { const effect = event.target.value as PermissionRule['effect']; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, effect } : item)); setSaved(null); }}><option value="deny">Deny</option><option value="ask">Ask</option><option value="allow">Allow</option></select></label>
+              <label className="field"><span>Matches</span><select value={rule.kind} onChange={(event) => { const kind = event.target.value as RuleKind; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, kind } : item)); setSaved(null); }}><option value="tool">Tool name</option><option value="command">Command starts with</option><option value="path">Project path</option></select></label>
+              <label className="field"><span>Pattern</span><input value={rule.pattern} placeholder={rule.kind === 'tool' ? 'mcp_*' : rule.kind === 'command' ? 'git push' : 'src/**'} onChange={(event) => { const pattern = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, pattern } : item)); setSaved(null); }} /></label>
+              <label className="field"><span>Reason shown when it applies</span><input value={rule.note} placeholder="Ask before publishing" onChange={(event) => { const note = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, note } : item)); setSaved(null); }} /></label>
+              <div className="button-row align-start">
+                <button type="button" className="icon-button danger-button" aria-label="Remove rule" onClick={() => { setRules((current) => current.filter((_item, itemIndex) => itemIndex !== index)); setSaved(null); }}><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="button-row align-start">
+        <button type="button" className="secondary-button" onClick={() => { setRules((current) => [...current, { id: crypto.randomUUID(), effect: 'ask', kind: 'command', pattern: '', note: '' }]); setSaved(null); }}><Plus size={15} /><span>Add rule</span></button>
+      </div>
       <div className="button-row align-start">
         <button type="button" className="primary-button" disabled={busy} onClick={() => void save()}><Check size={16} /><span>Save automation</span></button>
         {saved && <span className="settings-feedback success" role="status">{saved}</span>}

@@ -596,6 +596,7 @@ export function mergeSettingsUpdate(settings: AppSettings, update: SettingsUpdat
     ...settings,
     ...update,
     directApi: { ...settings.directApi, ...update.directApi },
+    webSearch: { ...settings.webSearch, ...update.webSearch },
     learningTutor: { ...settings.learningTutor, ...update.learningTutor },
     experienceCapture: { ...settings.experienceCapture, ...update.experienceCapture },
     promptGuide: { ...settings.promptGuide, ...update.promptGuide },

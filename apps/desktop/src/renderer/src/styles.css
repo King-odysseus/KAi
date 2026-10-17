@@ -7850,6 +7850,8 @@ code {
   display: flex;
   width: 46%;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--bg-shell);
@@ -7876,15 +7878,11 @@ code {
   white-space: nowrap;
 }
 
-.workspace-file-preview-content {
-  flex: 1;
+.workspace-file-preview-monaco {
+  flex: 1 1 auto;
+  height: 0;
   min-height: 0;
-  margin: 0;
-  padding: 16px;
-  overflow: auto;
-  color: var(--text);
-  font: 12px/1.55 "Cascadia Code", Consolas, monospace;
-  tab-size: 2;
+  overflow: hidden;
 }
 
 .workspace-file-preview-status {
@@ -7893,14 +7891,6 @@ code {
 }
 
 .workspace-file-preview-dirty { color: var(--amber); font-size: 11px; }
-
-.workspace-file-preview-editor {
-  width: 100%;
-  border: 0;
-  outline: 0;
-  resize: none;
-  background: transparent;
-}
 
 .goal-editor.skills-panel,
 .context-picker.skills-panel { overflow-y: auto; }

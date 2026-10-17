@@ -21,8 +21,10 @@ import { createDefaultRemoteAccess, remoteAccessSettingsSchema } from './remote'
 import { agentTeamSchema, createDefaultAgentTeam } from './team';
 import { updateSettingsSchema } from './updates';
 import { usageBudgetSchema } from './usage';
+import { webSearchSettingsSchema } from './web-search';
 import {
   checkpointRecordSchema,
+  checkpointRestoreResultSchema,
   turnFileChangeSchema,
   workbenchGoalSchema,
   workflowSchema,
@@ -357,6 +359,8 @@ export const appSettingsV1Schema = z
     diagnosticsEnabled: z.boolean(),
     installedFeatures: z.array(z.string().min(1).max(100)).max(200).default([]),
     directApi: directApiSettingsSchema,
+    // Web search and URL fetching are separate from the model connection: any model can use an external source.
+    webSearch: webSearchSettingsSchema.default({}),
     learningTutor: learningTutorSettingsSchema,
     experienceCapture: experienceCaptureSettingsSchema.default({}),
     // Turns a rough idea into a clear goal and one prompt per teammate, on its own provider connection.
@@ -478,6 +482,35 @@ export const conversationRecordV1Schema = z
     events: z.array(persistedEventV1Schema),
   })
   .strict();
+
+export const conversationForkInputSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    /** Copy through this turn. Blank copies the whole conversation. */
+    throughTurnId: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const conversationRewindInputSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    /** Remove this user turn and everything after it. */
+    turnId: z.string().min(1),
+    /** Put the project files back as they were before that turn. */
+    restoreFiles: z.boolean().default(true),
+  })
+  .strict();
+
+export const conversationBranchResultSchema = z
+  .object({
+    conversation: conversationRecordV1Schema,
+    checkpoint: checkpointRestoreResultSchema.nullable(),
+  })
+  .strict();
+
+export type ConversationForkInput = z.infer<typeof conversationForkInputSchema>;
+export type ConversationRewindInput = z.infer<typeof conversationRewindInputSchema>;
+export type ConversationBranchResult = z.infer<typeof conversationBranchResultSchema>;
 
 export type ProjectRecord = z.infer<typeof projectRecordV1Schema>;
 export type AppSettings = z.infer<typeof appSettingsV1Schema>;

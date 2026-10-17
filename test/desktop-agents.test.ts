@@ -6,6 +6,7 @@ import type { AgentRunRequest } from '../packages/contracts/src';
 import {
   agentInstallCommand,
   buildAgentArgs,
+  claudeDisallowedTools,
   cliProxyEnvironment,
   codexProxyProviderArgs,
   DesktopAgentRuntime,
@@ -454,6 +455,34 @@ describe('desktop agent runtime', () => {
     const result = await runtime.run({ ...runRequest(), agent: 'gemini' }, root);
 
     expect(result).toMatchObject({ status: 'completed', output: 'gemini reply', sessionId: 'gemini-session' });
+  });
+
+  it('maps the deny rules Claude Code can express to --disallowedTools', () => {
+    const rules = [
+      { id: 'no-bash', effect: 'deny' as const, tools: ['run_command'], commands: [], paths: [] },
+      { id: 'no-push', effect: 'deny' as const, tools: ['run_command'], commands: ['git push'], paths: [] },
+      { id: 'no-mcp', effect: 'deny' as const, tools: ['mcp_*'], commands: [], paths: [] },
+      { id: 'ask-web', effect: 'ask' as const, tools: ['web_fetch'], commands: [], paths: [] },
+      { id: 'no-fetch', effect: 'deny' as const, tools: ['web_fetch'], commands: [], paths: [] },
+    ];
+    // A command or path rule cannot cross into Claude's own loop, and a glob has no flag equivalent.
+    expect(claudeDisallowedTools(rules)).toEqual(['Bash', 'WebFetch']);
+
+    const args = buildAgentArgs({ prompt: 'Review', autonomy: 'ask', agent: 'claude', permissionRules: rules }, 'C:/repo');
+    const index = args.indexOf('--disallowedTools');
+    expect(index).toBeGreaterThan(-1);
+    expect(args.slice(index + 1)).toEqual(['Bash', 'WebFetch']);
+  });
+
+  it('does not pass tool denials when the user chose bypass permissions', () => {
+    const args = buildAgentArgs({
+      prompt: 'Review',
+      autonomy: 'full',
+      agent: 'claude',
+      permissionRules: [{ id: 'no-bash', effect: 'deny', tools: ['run_command'], commands: [], paths: [] }],
+    }, 'C:/repo');
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).not.toContain('--disallowedTools');
   });
 
   it('builds truthful non-interactive arguments for every supported CLI', () => {

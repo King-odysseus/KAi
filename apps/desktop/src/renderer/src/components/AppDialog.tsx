@@ -25,9 +25,25 @@ export interface MessageDialogOptions {
   confirmLabel?: string;
 }
 
+/** A confirmation with one checkbox, for a smaller decision that belongs with the main one. */
+export interface OptionDialogOptions {
+  title: string;
+  detail: string;
+  confirmLabel?: string;
+  destructive?: boolean;
+  checkboxLabel: string;
+  checkboxChecked?: boolean;
+}
+
+export interface OptionDialogResult {
+  confirmed: boolean;
+  checked: boolean;
+}
+
 type DialogRequest =
   | { id: number; kind: 'prompt'; options: PromptDialogOptions; resolve: (value: string | null) => void }
   | { id: number; kind: 'confirm'; options: ConfirmDialogOptions; resolve: (value: boolean) => void }
+  | { id: number; kind: 'option'; options: OptionDialogOptions; resolve: (value: OptionDialogResult) => void }
   | { id: number; kind: 'message'; options: MessageDialogOptions; resolve: () => void };
 
 let nextId = 1;
@@ -58,6 +74,10 @@ export function messageDialog(options: MessageDialogOptions): Promise<void> {
   return enqueue<void>((resolve) => ({ id: nextId++, kind: 'message', options, resolve }));
 }
 
+export function optionDialog(options: OptionDialogOptions): Promise<OptionDialogResult> {
+  return enqueue<OptionDialogResult>((resolve) => ({ id: nextId++, kind: 'option', options, resolve }));
+}
+
 export function DialogHost(): ReactNode {
   const [request, setRequest] = useState<DialogRequest | null>(null);
   useEffect(() => {
@@ -72,17 +92,25 @@ export function DialogHost(): ReactNode {
     queue.shift();
     if (request.kind === 'prompt') request.resolve(value as string | null);
     else if (request.kind === 'confirm') request.resolve(Boolean(value));
+    else if (request.kind === 'option') request.resolve(value as OptionDialogResult);
     else request.resolve();
     publish();
   }} />;
 }
 
-function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (value: string | null | boolean) => void }): ReactNode {
+function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (value: string | null | boolean | OptionDialogResult) => void }): ReactNode {
   const [value, setValue] = useState(request.kind === 'prompt' ? request.options.initialValue ?? '' : '');
+  const [checked, setChecked] = useState(request.kind === 'option' ? request.options.checkboxChecked ?? true : false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+
+  const cancel = (): void => onFinish(
+    request.kind === 'prompt' ? null
+      : request.kind === 'option' ? { confirmed: false, checked }
+        : request.kind === 'confirm' ? false : true,
+  );
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -90,7 +118,7 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onFinish(request.kind === 'prompt' ? null : request.kind === 'confirm' ? false : true);
+        cancel();
       } else if (event.key === 'Tab') {
         const dialog = document.querySelector<HTMLElement>('[data-kai-dialog="true"]');
         if (!dialog) return;
@@ -111,6 +139,10 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
 
   function submit(event: FormEvent): void {
     event.preventDefault();
+    if (request.kind === 'option') {
+      onFinish({ confirmed: true, checked });
+      return;
+    }
     if (request.kind !== 'prompt') {
       onFinish(request.kind === 'confirm' ? true : true);
       return;
@@ -132,13 +164,13 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
   const detailId = `kai-dialog-detail-${request.id}`;
   return (
     <div className="app-dialog-overlay" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onFinish(request.kind === 'prompt' ? null : request.kind === 'confirm' ? false : true);
+      if (event.target === event.currentTarget) cancel();
     }}>
       <form className="app-dialog" data-kai-dialog="true" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={detailId} onSubmit={submit}>
         <header>
-          <span className="app-dialog-icon">{request.kind === 'confirm' && request.options.destructive ? <AlertTriangle size={17} /> : <span>K</span>}</span>
+          <span className="app-dialog-icon">{(request.kind === 'confirm' || request.kind === 'option') && request.options.destructive ? <AlertTriangle size={17} /> : <span>K</span>}</span>
           <div><h2 id={titleId}>{request.options.title}</h2><p id={detailId}>{request.kind === 'prompt' ? request.options.label : request.options.detail}</p></div>
-          <button type="button" className="icon-button compact" aria-label="Close dialog" onClick={() => onFinish(request.kind === 'prompt' ? null : request.kind === 'confirm' ? false : true)}><X size={14} /></button>
+          <button type="button" className="icon-button compact" aria-label="Close dialog" onClick={cancel}><X size={14} /></button>
         </header>
         {request.kind === 'prompt' && (
           <label className="app-dialog-field">
@@ -163,10 +195,16 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
             )}
           </label>
         )}
+        {request.kind === 'option' && (
+          <label className="toggle-row">
+            <span><strong>{request.options.checkboxLabel}</strong></span>
+            <input type="checkbox" checked={checked} onChange={(event) => setChecked(event.target.checked)} />
+          </label>
+        )}
         {error && <div className="app-dialog-error" role="alert">{error}</div>}
         <footer className={request.kind === 'message' ? 'single-action' : ''}>
-          {request.kind !== 'message' && <button ref={cancelRef} type="button" className="secondary-button" onClick={() => onFinish(request.kind === 'prompt' ? null : false)}>Cancel</button>}
-          <button ref={confirmRef} type="submit" className={`primary-button ${request.kind === 'confirm' && request.options.destructive ? 'destructive-button' : ''}`}>
+          {request.kind !== 'message' && <button ref={cancelRef} type="button" className="secondary-button" onClick={cancel}>Cancel</button>}
+          <button ref={confirmRef} type="submit" className={`primary-button ${(request.kind === 'confirm' || request.kind === 'option') && request.options.destructive ? 'destructive-button' : ''}`}>
             {request.options.confirmLabel ?? (request.kind === 'prompt' ? 'OK' : request.kind === 'message' ? 'Close' : 'Confirm')}
           </button>
         </footer>

@@ -103,7 +103,7 @@ describe('notification rules', () => {
 describe('notification settings contract', () => {
   it('defaults the tray off and every notification on, and loads settings saved before it existed', () => {
     const defaults = createDefaultSettings();
-    expect(defaults.notifications).toEqual({ trayEnabled: false, onComplete: true, onFailure: true, onApproval: true, onBudget: true });
+    expect(defaults.notifications).toEqual({ trayEnabled: false, launchAtLogin: false, onComplete: true, onFailure: true, onApproval: true, onBudget: true });
     const { notifications: _omitted, ...legacy } = defaults;
     expect(appSettingsV1Schema.parse(legacy).notifications.trayEnabled).toBe(false);
   });

@@ -35,6 +35,8 @@ export class RunGuard {
   private attempted = 0;
   private succeeded = 0;
   private blockedByPolicy = 0;
+  /** Spend made by work this run started, such as a helper agent, reported as it finishes. */
+  private externalCost = 0;
 
   constructor(private maxCostUsd: number = DEFAULT_MAX_RUN_COST_USD) {}
 
@@ -45,6 +47,15 @@ export class RunGuard {
   /** The limit in force, so a caller can ask about it instead of only being refused by it. Zero means no limit. */
   get maxCostLimitUsd(): number {
     return this.maxCostUsd;
+  }
+
+  /** Folds a helper's spend into this run's total, so a per-run limit covers it too. */
+  noteExternalCost(costUsd: number): void {
+    if (Number.isFinite(costUsd) && costUsd > 0) this.externalCost += costUsd;
+  }
+
+  get externalCostUsd(): number {
+    return this.externalCost;
   }
 
   /** Throws once the run's estimated cost passes the ceiling. An unpriced model (null) cannot be checked. */

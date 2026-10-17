@@ -62,7 +62,7 @@ import { composerSettingsFor } from './components/composer-settings';
 import { TourGuide } from './components/TourGuide';
 import { TOUR_STORAGE_KEY, parseTourProgress, type TourProgress } from './tour-lessons';
 import { clamp, unwrap, type ViewId } from './types';
-import { confirmDialog, DialogHost } from './components/AppDialog';
+import { confirmDialog, DialogHost, optionDialog } from './components/AppDialog';
 import { TooltipLayer } from './components/TooltipLayer';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
 import { approvalActions } from './approval-actions';
@@ -961,6 +961,15 @@ export function App(): ReactNode {
       await openConversationRef.current(conversationId);
     })();
   }), []);
+  // Fork and rewind are main-process operations, so every other window needs to hear about the result. The window
+  // that asked also receives this and simply replaces the same record.
+  useEffect(() => window.kaiDesktop.onConversationChanged(({ conversationId }) => {
+    void window.kaiDesktop.getConversation(conversationId).then((response) => {
+      if (!response.ok || !response.data) return;
+      const updated = response.data;
+      setConversations((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
+    });
+  }), []);
 
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
@@ -1707,36 +1716,42 @@ export function App(): ReactNode {
   }
 
   async function forkConversation(id: string, throughTurnId?: string): Promise<void> {
-    const original = conversations.find((item) => item.id === id) ?? await perform(
-      () => window.kaiDesktop.getConversation(id).then(unwrap),
-      'Loading conversation',
+    // The main process owns the copy: new turn IDs, no provider session, no run events, and no compaction that
+    // reaches past the branch point. Keeping that rule in one place keeps the original untouched.
+    const result = await perform(
+      () => window.kaiDesktop.forkConversation({ conversationId: id, ...(throughTurnId ? { throughTurnId } : {}) }).then(unwrap),
+      'Branching conversation',
     );
-    if (!original) return;
-    const throughIndex = throughTurnId ? original.turns.findIndex((turn) => turn.id === throughTurnId) : -1;
-    const turnsToCopy = throughIndex >= 0 ? original.turns.slice(0, throughIndex + 1) : original.turns;
-    const now = new Date().toISOString();
-    const forked: ConversationRecord = {
-      ...original,
-      id: `conv_${crypto.randomUUID()}`,
-      title: `${original.title} (branch)`,
-      createdAt: now,
-      updatedAt: now,
-      archived: false,
-      unread: false,
-      // Provider-native sessions belong to the original thread. Reusing one in a copy can trigger
-      // resume failures (for example, "no rollout found"), so the branch starts a fresh CLI session.
-      agentSessionId: undefined,
-      turns: turnsToCopy.map((turn) => ({ ...turn, id: `turn_${crypto.randomUUID()}` })),
-      // Events describe a provider run and may refer to turns after the branch point. The copied transcript is
-      // the branch context; new activity begins cleanly in the new conversation.
-      events: [],
-    };
-    await saveConversationRecord(forked);
-    setActiveConversationId(forked.id);
+    if (!result) return;
+    setConversations((current) => [result.conversation, ...current.filter((item) => item.id !== result.conversation.id)]);
+    setActiveConversationId(result.conversation.id);
     setError(null);
     setProxyContinuationAgent(null);
     setView('workspace');
-    setAgentNotice(`Branched into "${forked.title}". Continue from here without changing the original chat.`);
+    setAgentNotice(`Branched into "${result.conversation.title}". Continue from here without changing the original chat.`);
+  }
+
+  async function rewindConversation(id: string, turnId: string): Promise<void> {
+    const choice = await optionDialog({
+      title: 'Rewind to before this message?',
+      detail: 'This message and everything after it are removed. You choose below whether project files are put back too.',
+      confirmLabel: 'Rewind',
+      destructive: true,
+      checkboxLabel: 'Restore project files to before this message',
+      checkboxChecked: true,
+    });
+    if (!choice.confirmed) return;
+    const result = await perform(
+      () => window.kaiDesktop.rewindConversation({ conversationId: id, turnId, restoreFiles: choice.checked }).then(unwrap),
+      'Rewinding conversation',
+    );
+    if (!result) return;
+    setConversations((current) => [result.conversation, ...current.filter((item) => item.id !== result.conversation.id)]);
+    setAgentNotice(result.checkpoint
+      ? `Rewound. ${result.checkpoint.restored.length} file(s) restored and ${result.checkpoint.deleted.length} removed.`
+      : 'Rewound to before that message. Project files were left as they are.');
+    setError(null);
+    setView('workspace');
   }
 
   async function saveSettings(update: SettingsUpdate): Promise<boolean> {
@@ -2207,6 +2222,7 @@ export function App(): ReactNode {
             onChooseProject={() => void chooseProject()}
             onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
             onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
+            onRewindTurn={(turnId) => { if (activeConversation) void rewindConversation(activeConversation.id, turnId); }}
             onSend={(prompt, options) => void sendPrompt(prompt, options)}
             queuedPrompts={activeConversationId ? queuedPromptsByConversation[activeConversationId] ?? [] : []}
             onQueuePrompt={queuePrompt}
@@ -2388,7 +2404,7 @@ export function App(): ReactNode {
           <main className={`app-main view-${view}${view === 'workspace' && workspaceFilePath && activeProject ? ' file-preview-open' : ''}`}>
             {view !== 'code' && renderCurrentView()}
             {workspaceFilePath && activeProject && (
-              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
+              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} formatOnSave={bootstrap.settings.editor.formatOnSave} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
             )}
             {(studioKept || view === 'studio') && (
               <div className={`persistent-studio-view ${view === 'studio' ? 'active' : ''}`} aria-hidden={view !== 'studio'}>

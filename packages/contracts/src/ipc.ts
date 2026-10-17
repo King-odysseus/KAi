@@ -219,9 +219,14 @@ import {
 import {
   cliModelNameSchema,
   cognitive1ServiceSettingsSchema,
+  conversationBranchResultSchema,
+  conversationForkInputSchema,
   conversationRecordV1Schema,
+  conversationRewindInputSchema,
   mcpServerSettingsSchema,
   type AppSettings,
+  type McpServerSettings,
+  type ConversationBranchResult,
   type ConversationRecord,
   type ProjectPreferences,
   type ProjectRecord,
@@ -231,6 +236,8 @@ import {
   learningTutorSettingsSchema,
   experienceCaptureSettingsSchema,
 } from './domain';
+import { webSearchSettingsSchema, webSearchSourceSchema, webSearchTestResultSchema, type WebSearchSource, type WebSearchTestResult } from './web-search';
+import { connectorCatalogEntrySchema, connectorInstallInputSchema, type ConnectorCatalogEntry } from './catalog';
 import { providerModelCatalogSchema, type ProviderModelCatalog } from './direct-providers';
 import {
   agentIdSchema,
@@ -419,6 +426,9 @@ export const ipcChannels = [
   'settings:get',
   'settings:update',
   'providers:list-models',
+  'web-search:test',
+  'catalog:list',
+  'catalog:install',
   'services:status',
   'services:start',
   'services:stop',
@@ -591,6 +601,8 @@ export const ipcChannels = [
   'conversations:compact',
   'conversations:save',
   'conversations:delete',
+  'conversations:fork',
+  'conversations:rewind',
   'checkpoints:review',
   'checkpoints:reject',
   'checkpoints:restore',
@@ -711,6 +723,7 @@ export const ipcInputSchemas = {
         .strict()
         .optional(),
       learningTutor: learningTutorSettingsSchema.partial().strict().optional(),
+      webSearch: webSearchSettingsSchema.partial().strict().optional(),
       experienceCapture: experienceCaptureSettingsSchema.partial().strict().optional(),
       promptGuide: promptGuideSettingsSchema.partial().strict().optional(),
       editor: z
@@ -741,6 +754,15 @@ export const ipcInputSchemas = {
       credentialId: z.string().min(1),
     })
     .strict(),
+  'web-search:test': z
+    .object({
+      source: webSearchSourceSchema,
+      endpoint: z.string().url(),
+      credentialId: z.string().max(200),
+    })
+    .strict(),
+  'catalog:list': emptyInputSchema,
+  'catalog:install': connectorInstallInputSchema,
   'services:status': emptyInputSchema,
   'services:start': z.object({ kind: serviceKindSchema }).strict(),
   'services:stop': z.object({ kind: serviceKindSchema }).strict(),
@@ -924,6 +946,8 @@ export const ipcInputSchemas = {
   'conversations:compact': z.object({ conversationId: z.string().min(1) }).strict(),
   'conversations:save': conversationRecordV1Schema,
   'conversations:delete': z.object({ id: z.string().min(1) }).strict(),
+  'conversations:fork': conversationForkInputSchema,
+  'conversations:rewind': conversationRewindInputSchema,
   'checkpoints:review': checkpointTurnInputSchema,
   'checkpoints:reject': checkpointRejectInputSchema,
   'checkpoints:restore': checkpointTurnInputSchema,
@@ -1082,6 +1106,9 @@ export const agentCancelResponseSchema = z.boolean();
 export const agentSignInResponseSchema = agentSignInResultSchema;
 export const directApiCapabilityResponseSchema = directApiCapabilitySchema;
 export const providerModelCatalogResponseSchema = providerModelCatalogSchema;
+export const webSearchTestResponseSchema = webSearchTestResultSchema;
+export const conversationBranchResultResponseSchema = conversationBranchResultSchema;
+export const connectorCatalogResponseSchema = z.array(connectorCatalogEntrySchema);
 export const contextPreviewResponseSchema = contextPreviewSchema;
 export const usageSummaryResponseSchema = usageSummarySchema;
 export const projectFileTreeResponseSchema = projectFileTreeSchema;
@@ -1189,6 +1216,7 @@ export interface SettingsUpdate {
   diagnosticsEnabled?: boolean;
   mcpServers?: AppSettings['mcpServers'];
   directApi?: Partial<AppSettings['directApi']>;
+  webSearch?: Partial<AppSettings['webSearch']>;
   learningTutor?: Partial<AppSettings['learningTutor']>;
   experienceCapture?: Partial<AppSettings['experienceCapture']>;
   promptGuide?: Partial<AppSettings['promptGuide']>;
@@ -1494,6 +1522,8 @@ export interface KaiDesktopBridge {
   createConversation(projectId: string | null, firstPrompt: string): Promise<IpcResponse<ConversationRecord>>;
   compactConversation(conversationId: string): Promise<IpcResponse<ConversationRecord>>;
   saveConversation(conversation: ConversationRecord): Promise<IpcResponse<ConversationRecord>>;
+  forkConversation(request: { conversationId: string; throughTurnId?: string }): Promise<IpcResponse<ConversationBranchResult>>;
+  rewindConversation(request: { conversationId: string; turnId: string; restoreFiles: boolean }): Promise<IpcResponse<ConversationBranchResult>>;
   deleteConversation(id: string): Promise<IpcResponse<void>>;
   reviewCheckpoint(conversationId: string, turnId: string): Promise<IpcResponse<CheckpointReview>>;
   rejectCheckpointFile(conversationId: string, turnId: string, filePath: string): Promise<IpcResponse<CheckpointRestoreResult>>;
@@ -1509,6 +1539,9 @@ export interface KaiDesktopBridge {
   agentCapabilities(): Promise<IpcResponse<AgentCapability[]>>;
   directApiCapability(): Promise<IpcResponse<DirectApiCapability>>;
   listProviderModels(request: { provider: AppSettings['directApi']['provider']; baseUrl: string; credentialId: string }): Promise<IpcResponse<ProviderModelCatalog>>;
+  testWebSearch(request: { source: WebSearchSource; endpoint: string; credentialId: string }): Promise<IpcResponse<WebSearchTestResult>>;
+  listConnectorCatalog(): Promise<IpcResponse<ConnectorCatalogEntry[]>>;
+  installConnector(id: string): Promise<IpcResponse<McpServerSettings>>;
   previewContext(request: ContextPreviewInput): Promise<IpcResponse<ContextPreview>>;
   previewInfo(projectId: string): Promise<IpcResponse<PreviewInfo>>;
   previewStatus(projectId: string): Promise<IpcResponse<PreviewState>>;
@@ -1598,6 +1631,8 @@ export interface KaiDesktopBridge {
    */
   stopAllRuns(): Promise<IpcResponse<StopAllRunsResult>>;
   onOpenConversation(listener: (event: OpenConversationEvent) => void): () => void;
+  /** Another KAI window forked or rewound a conversation; refresh it. */
+  onConversationChanged(listener: (event: { conversationId: string }) => void): () => void;
   diagnosticsReport(copy: boolean): Promise<IpcResponse<{ text: string }>>;
   dataLocations(): Promise<IpcResponse<DataLocation[]>>;
   /** What KAI has learned about a project (its folders, what is being worked on, what earlier runs did), in plain text. */

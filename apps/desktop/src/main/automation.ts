@@ -1,5 +1,6 @@
 import type { AgentRunRequest, AgentRunResult, ConversationRecord, ProjectAutomation, ProjectHook } from '@kai/contracts';
 import { hasProjectAutomation, MAX_AUTO_FIX_ROUNDS } from '@kai/contracts';
+import { globMatches } from './glob-match';
 
 const HOOK_DEFAULT_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 10 * 60_000;
@@ -181,6 +182,94 @@ interface HookOutcome {
   /** Anything the hooks printed, ready to hand to the agent. */
   context: string;
   failure: string | null;
+}
+
+/** One tool call as the hooks see it. Tool hooks only run on KAI's own API runs, which own the tool call. */
+export interface ToolHookCall {
+  event: 'preTool' | 'postTool';
+  tool: string;
+  input: unknown;
+  output?: unknown;
+  autonomy: string;
+  projectRoot: string;
+  conversationId: string;
+  signal?: AbortSignal;
+}
+
+export interface ToolHookResult {
+  /** Set when a preTool hook refused the call. */
+  blocked: string | null;
+  /** stdout from the hooks, appended to the tool result the model sees. */
+  context: string;
+  /** A postTool hook may replace the tool output with `{ "output": ... }`. */
+  output?: unknown;
+}
+
+export type ToolHookRunner = (call: ToolHookCall) => Promise<ToolHookResult>;
+
+/**
+ * Runs the matching preTool/postTool hooks for one call. A failing preTool blocks the call; a failing postTool is
+ * reported but does not undo work that already happened. Output is capped with the same tail limit as run hooks.
+ */
+export async function runToolHooks(
+  hooks: ProjectAutomation['hooks'] | undefined,
+  call: ToolHookCall,
+  runShell: (command: string, timeoutMs: number, env: Record<string, string>) => Promise<ShellResult>,
+): Promise<ToolHookResult> {
+  const matching = (hooks?.[call.event] ?? []).filter((hook) => !hook.tool || globMatches(hook.tool, call.tool));
+  if (matching.length === 0) return { blocked: null, context: '' };
+
+  const environment: Record<string, string> = {
+    KAI_EVENT: call.event,
+    KAI_TOOL_NAME: call.tool,
+    KAI_TOOL_INPUT: jsonTail(call.input),
+    KAI_AUTONOMY: call.autonomy,
+    KAI_PROJECT_ROOT: call.projectRoot,
+    KAI_CONVERSATION_ID: call.conversationId,
+  };
+  if (call.event === 'postTool') environment.KAI_TOOL_OUTPUT = jsonTail(call.output);
+
+  const printed: string[] = [];
+  let replacement: unknown;
+
+  for (const hook of matching) {
+    const outcome = await runShell(hook.command, (hook.timeoutSeconds ?? HOOK_DEFAULT_TIMEOUT_MS / 1_000) * 1_000, environment);
+    const tail = outcome.output.slice(-HOOK_OUTPUT_TAIL).trim();
+    const parsed = parseJsonObject(tail);
+
+    if (call.event === 'preTool' && parsed?.decision === 'deny') {
+      return { blocked: typeof parsed.reason === 'string' ? parsed.reason : `The preTool hook \`${hook.command}\` refused ${call.tool}.`, context: '' };
+    }
+    if (outcome.exitCode !== 0) {
+      const reason = `\`${hook.command}\` ${describeExit(outcome)}.${tail ? `\n\n${tail}` : ''}`;
+      if (call.event === 'preTool') return { blocked: reason, context: '' };
+      printed.push(`[The project's postTool hook failed: ${reason}]`);
+      continue;
+    }
+    if (!tail) continue;
+    if (call.event === 'postTool' && parsed && 'output' in parsed) replacement = parsed.output;
+    printed.push(call.event === 'postTool' && parsed && typeof parsed.context === 'string' ? parsed.context : tail);
+  }
+
+  return { blocked: null, context: printed.join('\n\n'), output: replacement };
+}
+
+function jsonTail(value: unknown): string {
+  try {
+    return JSON.stringify(value).slice(0, 8_000);
+  } catch {
+    return '';
+  }
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  if (!value.trim().startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
 async function runHooks(

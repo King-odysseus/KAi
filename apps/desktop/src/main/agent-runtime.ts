@@ -10,6 +10,7 @@ import type {
   AgentSignInResult,
   AutonomyMode,
   PermissionKey,
+  PermissionRule,
   PersistedEvent,
 } from '@kai/contracts';
 import { effortFitsAgent } from '@kai/contracts';
@@ -833,8 +834,40 @@ export function resolveWindowsExecutable(
   return null;
 }
 
+/**
+ * KAI tool names mapped to the Claude Code tools that cover them. Only whole-tool denials can cross this boundary:
+ * Claude's own tool loop cannot be intercepted, and a glob (such as `mcp_*`) has no single flag equivalent.
+ */
+const CLAUDE_TOOL_NAMES: Readonly<Record<string, readonly string[]>> = {
+  run_command: ['Bash'],
+  read_file: ['Read'],
+  list_files: ['Glob'],
+  search_files: ['Grep', 'Glob'],
+  replace_in_file: ['Edit'],
+  multi_edit: ['Edit'],
+  write_file: ['Write'],
+  create_file: ['Write'],
+  delete_file: ['Bash'],
+  move_file: ['Bash'],
+  web_search: ['WebSearch'],
+  web_fetch: ['WebFetch'],
+};
+
+/** The Claude Code `--disallowedTools` values the project's whole-tool deny rules can express. */
+export function claudeDisallowedTools(rules: readonly PermissionRule[] | undefined): string[] {
+  if (!rules?.length) return [];
+  const names = new Set<string>();
+  for (const rule of rules) {
+    if (rule.effect !== 'deny' || rule.commands.length > 0 || rule.paths.length > 0) continue;
+    for (const tool of rule.tools) {
+      for (const mapped of CLAUDE_TOOL_NAMES[tool] ?? []) names.add(mapped);
+    }
+  }
+  return [...names];
+}
+
 export function buildAgentArgs(
-  request: Pick<AgentRunRequest, 'agent' | 'prompt' | 'autonomy' | 'reasoning'>,
+  request: Pick<AgentRunRequest, 'agent' | 'prompt' | 'autonomy' | 'reasoning' | 'permissionRules'>,
   cwd: string,
   resumeSessionId?: string,
   customPermissions?: Partial<Record<PermissionKey, boolean>>,
@@ -879,6 +912,9 @@ export function buildAgentArgs(
     // never reach the reply.
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
     if (permissionMode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
+    // Whole-tool denials the harness can express. Command and path rules stay KAI-side: Claude has no flag for them.
+    const denied = claudeDisallowedTools(request.permissionRules);
+    if (denied.length > 0 && permissionMode !== 'bypassPermissions') args.push('--disallowedTools', ...denied);
     args.push(...modelArgs);
     if (effort) args.push('--effort', effort);
     if (resumeSessionId) args.push('--resume', resumeSessionId);

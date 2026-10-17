@@ -2,11 +2,13 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { planItemStateSchema, type AutonomyMode, type PermissionKey } from '@kai/contracts';
+import { planItemStateSchema, type AutonomyMode, type PermissionKey, type PermissionRule } from '@kai/contracts';
+import type { ToolHookRunner } from './automation';
 import { FileConflictError, readProjectFile, writeProjectFile } from './project-files';
 import { RunGuard } from './run-guard';
 import { writePlan } from './plan-store';
 import { findGitBash } from './terminal';
+import { WEB_TOOLS, WebToolRuntime, webFetchToolInputSchema, webSearchToolInputSchema, webToolDefinitionsFor } from './web-tools';
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_READ_LINES = 400;
@@ -140,6 +142,14 @@ export const askUserInputSchema = z
 export const exploreInputSchema = z
   .object({
     question: z.string().trim().min(1).max(1_000),
+  })
+  .strict();
+
+export const taskInputSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(8_000),
+    /** Optional model for the helper. Blank uses the parent run's model. */
+    model: z.string().trim().min(1).max(100).optional(),
   })
   .strict();
 
@@ -355,6 +365,20 @@ export const projectToolDefinitions = [
   },
   {
     type: 'function',
+    name: 'task',
+    description: 'Hand a self-contained side task to a read-only helper agent. The helper has its own context, reads and searches the project (and the web if enabled), and returns only its final answer. It cannot edit files, run commands, ask questions, or start its own helpers. Use it to keep a lot of exploratory reading out of your own context, or to use a cheaper model for a small job.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'The task, with everything the helper needs to work on its own.' },
+        model: { type: 'string', description: 'Optional model for the helper. Leave out to use the same model as this run.' },
+      },
+      required: ['prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
     name: 'run_command',
     description: 'Run a shell command in the active project. Commands use your user permissions and may access resources outside the project, so approval is required outside Full mode.',
     parameters: {
@@ -431,11 +455,33 @@ export class DesktopProjectToolRuntime {
   private resolvedRoot: Promise<string> | undefined;
   /** Per-run limits: a spend ceiling and repeated-call detection. */
   readonly guard = new RunGuard();
+  /** User-owned rules and tool hooks loaded for this project when the run started. */
+  permissionRules: readonly PermissionRule[] = [];
+  toolHook: ToolHookRunner | undefined;
+  /** A nested helper gets only these tools. Undefined means every built-in tool. */
+  toolFilter: ReadonlySet<string> | undefined;
 
   constructor(
     private readonly root: string,
     private readonly customPermissions: Partial<Record<PermissionKey, boolean>> = {},
+    /** Present when this run may use the web tools. Absent for nested helpers and older call sites. */
+    private readonly web?: WebToolRuntime,
   ) {}
+
+  setPolicy(policy: { permissionRules?: readonly PermissionRule[]; toolHook?: ToolHookRunner }): void {
+    this.permissionRules = policy.permissionRules ?? [];
+    this.toolHook = policy.toolHook;
+  }
+
+  get rootPath(): string {
+    return this.root;
+  }
+
+  /** The built-in tools this run may offer: the fixed project tools plus the web tools that are configured. */
+  toolDefinitions(): readonly unknown[] {
+    const all = [...projectToolDefinitions, ...webToolDefinitionsFor(this.web?.availability() ?? { search: false, fetch: false })];
+    return this.toolFilter ? all.filter((definition) => this.toolFilter!.has((definition as { name: string }).name)) : all;
+  }
 
   policy(name: string, autonomy: AutonomyMode): ProjectToolPolicy {
     if (name === 'view_image' || name === 'read_file' || name === 'search_files' || name === 'list_files') return { decision: 'allow' };
@@ -449,7 +495,27 @@ export class DesktopProjectToolRuntime {
     // `explore` to run its own bounded read-only sub-loop — so allowing them here only governs whether the model
     // is offered the tool at all, which is also how nesting is prevented: a nested explore run is simply never
     // given these two tool definitions.
-    if (name === 'ask_user' || name === 'explore') return { decision: 'allow' };
+    if (name === 'ask_user' || name === 'explore' || name === 'task') return { decision: 'allow' };
+    // Web tools only read public pages; they never touch a project file. They are allowed in every mode unless the
+    // user switched them off, and Custom access can still require a decision when the network permission is off.
+    if (WEB_TOOLS.has(name)) {
+      const available = this.web?.availability();
+      if (!available || (name === 'web_search' ? !available.search : !available.fetch)) {
+        return {
+          decision: 'deny',
+          reason: name === 'web_search' ? 'Web search is switched off in Settings.' : 'Web fetch is switched off in Settings.',
+        };
+      }
+      if (autonomy === 'custom' && !this.customPermissions.network) {
+        return {
+          decision: 'ask',
+          title: name === 'web_search' ? 'Search the web?' : 'Read a web page?',
+          detail: 'This reads a public web address. It does not change project files.',
+          risk: 'low',
+        };
+      }
+      return { decision: 'allow' };
+    }
     if (name === 'run_command') {
       if (autonomy === 'plan') {
         return { decision: 'deny', reason: 'Plan mode does not allow shell commands.' };
@@ -502,11 +568,33 @@ export class DesktopProjectToolRuntime {
       if (name === 'move_file') return await this.moveFile(moveFileInputSchema.parse(rawInput));
       if (name === 'delete_file') return await this.deleteFile(deleteFileInputSchema.parse(rawInput));
       if (name === 'run_command') return await this.runCommand(runCommandInputSchema.parse(rawInput), signal);
+      if (name === 'web_search') {
+        const input = webSearchToolInputSchema.parse(rawInput);
+        const web = this.web;
+        if (!web) return toolFailure('Web search is not available in this run.');
+        try {
+          const results = await web.search(input.query, input.limit, signal);
+          return { ok: true, output: { query: input.query, results, trust: 'untrusted' } };
+        } catch (error) {
+          return toolFailure(error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (name === 'web_fetch') {
+        const input = webFetchToolInputSchema.parse(rawInput);
+        const web = this.web;
+        if (!web) return toolFailure('Web fetch is not available in this run.');
+        try {
+          const page = await web.fetch(input.url, input.max_chars, signal);
+          return { ok: true, output: { ...page, trust: 'untrusted' } };
+        } catch (error) {
+          return toolFailure(error instanceof Error ? error.message : String(error));
+        }
+      }
       if (name === 'update_plan') return await this.updatePlan(updatePlanInputSchema.parse(rawInput));
       // Both are handled earlier, in `direct-provider-runtime.ts`'s `executeToolCalls`, before a call ever reaches
       // here — `ask_user` needs the approval port to put the question to a person, and `explore` needs the
       // provider runtime to run its nested sub-loop. Reaching this branch means that interception was skipped.
-      if (name === 'ask_user' || name === 'explore') {
+      if (name === 'ask_user' || name === 'explore' || name === 'task') {
         return toolFailure(`${name} must be handled by the run loop, not called directly.`);
       }
       return toolFailure(`Unknown project tool: ${name}.`);

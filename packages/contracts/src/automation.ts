@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { permissionRulesSchema } from './permission-rules';
 import { agentIdSchema, routeModeSchema } from './primitives';
 
 /**
@@ -9,11 +10,13 @@ export const projectHookSchema = z
   .object({
     command: z.string().trim().min(1).max(2_000),
     timeoutSeconds: z.number().int().min(1).max(600).optional(),
+    /** A tool-name glob for `preTool`/`postTool`; blank means every tool. */
+    tool: z.string().trim().max(200).optional(),
   })
   .strict();
 export type ProjectHook = z.infer<typeof projectHookSchema>;
 
-export const PROJECT_HOOK_EVENTS = ['beforeRun', 'afterEdit', 'afterRun'] as const;
+export const PROJECT_HOOK_EVENTS = ['beforeRun', 'afterEdit', 'afterRun', 'preTool', 'postTool'] as const;
 export type ProjectHookEvent = (typeof PROJECT_HOOK_EVENTS)[number];
 
 export const MAX_AUTO_FIX_ROUNDS = 5;
@@ -38,9 +41,18 @@ export const projectAutomationSchema = z
         afterEdit: z.array(projectHookSchema).max(5).optional(),
         /** After everything else, for example a notification. Failures are reported, not fatal. */
         afterRun: z.array(projectHookSchema).max(5).optional(),
+        /**
+         * Before one tool call. A non-zero exit blocks the call; stdout is reported to the agent as the reason.
+         * Only KAI's own API runs can intercept a call this way.
+         */
+        preTool: z.array(projectHookSchema).max(20).optional(),
+        /** After one tool call. stdout is appended to the tool result the model sees. */
+        postTool: z.array(projectHookSchema).max(20).optional(),
       })
       .strict()
       .optional(),
+    /** User-owned allow/ask/deny rules for this project. Never read from the repository. */
+    permissionRules: permissionRulesSchema.optional(),
     /** A second model reads the change against the request before the run is called done. */
     review: z.object({ enabled: z.boolean() }).strict().optional(),
   })
@@ -55,7 +67,9 @@ export function hasProjectAutomation(automation: ProjectAutomation | undefined):
       || automation.review?.enabled
       || hooks?.beforeRun?.length
       || hooks?.afterEdit?.length
-      || hooks?.afterRun?.length,
+      || hooks?.afterRun?.length
+      || hooks?.preTool?.length
+      || hooks?.postTool?.length,
   );
 }
 

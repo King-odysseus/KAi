@@ -8,8 +8,8 @@ import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { ThemeColors } from './ThemeColors';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, directProviderPreset, isLocalProvider, pickLocalModel } from '@kai/contracts';
-import type { AgentConfigImportPreview, AppSettings, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
+import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
@@ -22,7 +22,7 @@ type McpServerPatch = Partial<HttpMcpServer> | Partial<StdioMcpServer>;
 type ProviderScope = 'direct' | 'learning' | 'guide';
 /** The settings entry each provider card edits. */
 const SCOPE_KEY = { direct: 'directApi', learning: 'learningTutor', guide: 'promptGuide' } as const;
-type FeedbackScope = ProviderScope | 'generic' | 'overwatch';
+type FeedbackScope = ProviderScope | 'generic' | 'overwatch' | 'search';
 type FeedbackKind = 'success' | 'error' | 'pending';
 interface SettingsFeedback { kind: FeedbackKind; message: string }
 type SettingsCategoryId = 'general' | 'connections' | 'design' | 'services' | 'data';
@@ -45,6 +45,7 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   experienceCapture: 'Agent experience capture',
   promptGuide: 'Prompt Guide',
   directApi: 'Direct API',
+  webSearch: 'Web search',
   mcpServers: 'MCP servers',
   cognitive1: 'C1 Brain',
   proxy: 'Universal Proxy',
@@ -68,10 +69,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const [learningCredentialValue, setLearningCredentialValue] = useState('');
   const [overwatchCredentialValue, setOverwatchCredentialValue] = useState('');
   const [guideCredentialValue, setGuideCredentialValue] = useState('');
+  const [searchCredentialValue, setSearchCredentialValue] = useState('');
+  const [searchTest, setSearchTest] = useState<{ kind: FeedbackKind; message: string; titles: string[] } | null>(null);
   const [providerModels, setProviderModels] = useState<Record<ProviderScope, ProviderModelCatalog | null>>({ direct: null, learning: null, guide: null });
   const [refreshingModels, setRefreshingModels] = useState<ProviderScope | null>(null);
   const [modelFeedback, setModelFeedback] = useState<Record<ProviderScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null });
-  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null, generic: null, overwatch: null });
+  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null, generic: null, overwatch: null, search: null });
   const [backups, setBackups] = useState<ConfigBackup[]>([]);
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
@@ -79,6 +82,9 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const [experienceCount, setExperienceCount] = useState(0);
   const [experienceMessage, setExperienceMessage] = useState('');
   const [cardFeedback, setCardFeedback] = useState<Record<string, SettingsFeedback | null>>({});
+  const [connectorCatalog, setConnectorCatalog] = useState<ConnectorCatalogEntry[]>([]);
+  const [connectorChoice, setConnectorChoice] = useState('');
+  const [connectorMessage, setConnectorMessage] = useState<string | null>(null);
   const [openCategories, setOpenCategories] = useState<Record<SettingsCategoryId, boolean>>({
     general: true,
     connections: false,
@@ -104,6 +110,13 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   useEffect(() => {
     void window.kaiDesktop.experienceCount().then((response) => { if (response.ok) setExperienceCount(response.data); });
   }, []);
+  useEffect(() => {
+    void window.kaiDesktop.listConnectorCatalog().then((response) => {
+      if (!response.ok) return;
+      setConnectorCatalog(response.data);
+      setConnectorChoice((current) => current || response.data[0]?.id || '');
+    });
+  }, []);
   const exportExperiences = async (): Promise<void> => {
     const response = await window.kaiDesktop.exportExperiences();
     setExperienceMessage(response.ok ? response.data ? `Exported ${response.data.count} records to ${response.data.path}` : 'Export cancelled or no records are available.' : response.error.message);
@@ -126,6 +139,13 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const guideModels = providerModels.guide?.provider === draft.promptGuide.provider
     ? providerModels.guide.models
     : guidePreset.models;
+  const webSearch = draft.webSearch;
+  const nativeSearchSource = nativeSearchProvider(webSearch.source);
+  // Blank override means: the matching Direct API key when it is the same provider, otherwise the provider's preset key.
+  const searchCredential = webSearch.credentialId.trim()
+    || (nativeSearchSource
+      ? (draft.directApi.provider === nativeSearchSource ? draft.directApi.credentialId : directProviderPreset(nativeSearchSource).credentialId)
+      : searchCredentialId(webSearch.source));
   const overwatchCredentialReady = credentialStatus.ids.includes(draft.cognitive1.overwatch.credentialId);
   const shortcutConflictList = shortcutConflicts(draft.shortcuts);
   const setAgentModel = (agent: AppSettings['defaultAgent'], value: string): void => {
@@ -271,6 +291,38 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           : 'The key could not be saved. Check the OS credential vault and try again.',
       },
     }));
+  }
+
+  async function addConnectorFromCatalog(): Promise<void> {
+    if (!connectorChoice) return;
+    const response = await window.kaiDesktop.installConnector(connectorChoice);
+    if (!response.ok) {
+      setConnectorMessage(response.error.message);
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      mcpServers: [...current.mcpServers.filter((server) => server.id !== response.data.id), response.data],
+    }));
+    setConnectorMessage(`${response.data.name} added disabled. Fill any credential and tick Enabled, then save.`);
+  }
+
+  async function testWebSearchConnection(): Promise<void> {
+    setSearchTest({ kind: 'pending', message: 'Testing the search source...', titles: [] });
+    const response = await window.kaiDesktop.testWebSearch({
+      source: webSearch.source,
+      endpoint: webSearch.endpoint,
+      credentialId: webSearch.credentialId,
+    });
+    if (!response.ok) {
+      setSearchTest({ kind: 'error', message: response.error.message, titles: [] });
+      return;
+    }
+    setSearchTest({
+      kind: response.data.ok ? 'success' : 'error',
+      message: response.data.detail,
+      titles: response.data.titles,
+    });
   }
 
   async function clearProviderCredential(scope: ProviderScope): Promise<void> {
@@ -557,7 +609,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           </div>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>Tray and notifications</span></div>
-            <NotificationToggle label="Hide to system tray on close" hint="Keeps KAI and running agents alive in the tray. Off by default." checked={draft.notifications.trayEnabled} onChange={(trayEnabled) => setDraft({ ...draft, notifications: { ...draft.notifications, trayEnabled } })} />
+            <NotificationToggle label="Keep KAI running when the window closes" hint="Runs and scheduled goals continue in the system tray, and the phone console stays reachable. Quit from the tray menu. Off by default." checked={draft.notifications.trayEnabled} onChange={(trayEnabled) => setDraft({ ...draft, notifications: { ...draft.notifications, trayEnabled } })} />
+            <NotificationToggle label="Start KAI when I sign in" hint="Only applies to an installed copy, not a development build." checked={draft.notifications.launchAtLogin} onChange={(launchAtLogin) => setDraft({ ...draft, notifications: { ...draft.notifications, launchAtLogin } })} />
             <NotificationToggle label="Notify when a run finishes" hint="Skipped when that conversation is already on screen" checked={draft.notifications.onComplete} onChange={(onComplete) => setDraft({ ...draft, notifications: { ...draft.notifications, onComplete } })} />
             <NotificationToggle label="Notify when a run fails" hint="Includes the first line of the error" checked={draft.notifications.onFailure} onChange={(onFailure) => setDraft({ ...draft, notifications: { ...draft.notifications, onFailure } })} />
             <NotificationToggle label="Notify when approval is needed" hint="A tool is waiting for your decision" checked={draft.notifications.onApproval} onChange={(onApproval) => setDraft({ ...draft, notifications: { ...draft.notifications, onApproval } })} />
@@ -742,6 +795,91 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         />
 
         <section className="settings-section span-two">
+          <div className="section-title"><Search size={17} /><span>Web search</span></div>
+          <p className="settings-note">Search and page reading for Direct API runs. This is separate from the model provider: an external source works with any model, and a native source uses that provider's key. Claude Code and Codex use their own web tools.</p>
+          <NotificationToggle
+            label="Allow API runs to search the web"
+            hint="The agent can look up current information and cite the pages it used."
+            checked={webSearch.enabled}
+            onChange={(enabled) => setDraft({ ...draft, webSearch: { ...webSearch, enabled } })}
+          />
+          <NotificationToggle
+            label="Allow API runs to read a page"
+            hint="Fetches one public http or https address and returns its text. Free, and needs no search service."
+            checked={webSearch.fetchEnabled}
+            onChange={(fetchEnabled) => setDraft({ ...draft, webSearch: { ...webSearch, fetchEnabled } })}
+          />
+          <div className="field-grid">
+            <SelectField
+              label="Source"
+              value={webSearch.source}
+              options={WEB_SEARCH_SOURCES.map((source) => ({ value: source, label: WEB_SEARCH_SOURCE_LABEL[source] }))}
+              onChange={(value) => setDraft({ ...draft, webSearch: { ...webSearch, source: value as AppSettings['webSearch']['source'] } })}
+            />
+            {webSearch.source === 'searxng' && (
+              <TextField
+                label="SearXNG address"
+                value={webSearch.endpoint}
+                onChange={(endpoint) => setDraft({ ...draft, webSearch: { ...webSearch, endpoint } })}
+              />
+            )}
+            <TextField
+              label="Credential override (blank reuses the provider key)"
+              value={webSearch.credentialId}
+              onChange={(credentialId) => setDraft({ ...draft, webSearch: { ...webSearch, credentialId } })}
+            />
+            <NumberField label="Results per search" value={webSearch.results} min={1} max={10} onChange={(results) => setDraft({ ...draft, webSearch: { ...webSearch, results } })} />
+            <NumberField label="Max searches per run" value={webSearch.maxSearchesPerRun} min={1} max={50} onChange={(maxSearchesPerRun) => setDraft({ ...draft, webSearch: { ...webSearch, maxSearchesPerRun } })} />
+            <NumberField label="Max page reads per run" value={webSearch.maxFetchesPerRun} min={1} max={50} onChange={(maxFetchesPerRun) => setDraft({ ...draft, webSearch: { ...webSearch, maxFetchesPerRun } })} />
+            <NumberField label="Timeout (ms)" value={webSearch.timeoutMs} min={1_000} max={60_000} step={1_000} onChange={(timeoutMs) => setDraft({ ...draft, webSearch: { ...webSearch, timeoutMs } })} />
+          </div>
+          <p className={`settings-note ${searchCredential ? 'ready' : ''}`}>
+            {webSearch.source === 'searxng'
+              ? 'SearXNG needs no key. It must be running and allow JSON results (search.formats: [html, json]).'
+              : `Key: ${searchCredential}${credentialStatus.ids.includes(searchCredential) ? ' (stored in the OS vault)' : ' (not stored yet)'}. Native search is billed per call by that provider (Moonshot charges about $0.002 per search). Choose SearXNG for free local search, or Brave/Tavily on their free tiers.`}
+          </p>
+          {webSearch.source !== 'searxng' && (
+            <div className="credential-form">
+              <TextField label="Search API key" value={searchCredentialValue} type="password" onChange={setSearchCredentialValue} />
+              <div className="button-row align-start">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!searchCredentialValue.trim() || !credentialStatus.available || busy}
+                  onClick={() => void saveNamedCredential(searchCredential, searchCredentialValue, 'search')}
+                >
+                  <KeyRound size={15} />
+                  <span>Save search key</span>
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy || !credentialStatus.ids.includes(searchCredential)}
+                  onClick={() => void clearNamedCredential(searchCredential, 'search')}
+                >
+                  <Trash2 size={15} />
+                  <span>Remove key</span>
+                </button>
+              </div>
+            </div>
+          )}
+          <FeedbackMessage feedback={credentialFeedback.search} />
+          <div className="button-row align-start">
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => void testWebSearchConnection()}>
+              <Search size={15} />
+              <span>Test search source</span>
+            </button>
+          </div>
+          {searchTest && <FeedbackMessage feedback={searchTest} />}
+          {searchTest && searchTest.titles.length > 0 && (
+            <ul className="settings-note">
+              {searchTest.titles.map((title) => <li key={title}>{title}</li>)}
+            </ul>
+          )}
+          {cardSave('webSearch', 'Save web search settings', ['webSearch'])}
+        </section>
+
+        <section className="settings-section span-two">
           <div className="section-title"><Plug size={17} /><span>MCP servers</span></div>
           <p className="settings-note">Connect local stdio or remote Streamable HTTP MCP servers to API mode. Secrets stay in the OS vault; the settings file stores credential IDs only.</p>
           <div className="mcp-server-list">
@@ -772,6 +910,20 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             ))}
             {draft.mcpServers.length === 0 && <div className="empty-list">No MCP servers configured</div>}
           </div>
+          {connectorCatalog.length > 0 && (
+            <div className="field-grid">
+              <SelectField
+                label="Ready-made connector"
+                value={connectorChoice}
+                options={connectorCatalog.map((entry) => ({ value: entry.id, label: `${entry.name} — ${entry.description}` }))}
+                onChange={setConnectorChoice}
+              />
+              <div className="button-row align-start">
+                <button type="button" className="secondary-button" disabled={!connectorChoice || busy} onClick={() => void addConnectorFromCatalog()}><Plus size={15} /><span>Add from catalog</span></button>
+              </div>
+            </div>
+          )}
+          {connectorMessage && <p className="settings-note">{connectorMessage}</p>}
           <div className="button-row align-start">
             <button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('stdio')] })}><Plus size={15} /><span>Add local server</span></button>
             <button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('http')] })}><Plus size={15} /><span>Add remote server</span></button>

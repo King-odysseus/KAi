@@ -169,6 +169,7 @@ interface WorkspaceViewProps {
   onChooseProject: () => void;
   onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
   onBranchTurn: (turnId: string) => void;
+  onRewindTurn: (turnId: string) => void;
   onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
   queuedPrompts: QueuedPrompt[];
   onQueuePrompt: (prompt: QueuedPrompt, first?: boolean) => void;
@@ -362,6 +363,7 @@ export function WorkspaceView({
   onChooseProject,
   onCreateConversation,
   onBranchTurn,
+  onRewindTurn,
   onSend,
   queuedPrompts,
   onQueuePrompt,
@@ -1606,6 +1608,7 @@ export function WorkspaceView({
                   brainReady={brainReady}
                   onSaveToBrain={setBrainDraft}
                   onBranch={onBranchTurn}
+                  onRewind={onRewindTurn}
                   onOpenFile={onOpenFile}
                   awaitingAnswer={Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1}
                   onAnswer={queueOrSendStable}
@@ -2053,11 +2056,12 @@ function ExecutableCommandsGroup({ events, runActive, children }: { events: Arra
   );
 }
 
-const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onOpenFile, awaitingAnswer, onAnswer }: {
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onRewind, onOpenFile, awaitingAnswer, onAnswer }: {
   turn: ConversationTurn;
   brainReady: boolean;
   onSaveToBrain: (text: string) => void;
   onBranch: (turnId: string) => void;
+  onRewind: (turnId: string) => void;
   onOpenFile: (path: string) => void;
   /** Set only for the conversation's latest turn, while nothing is running, so answering it is unambiguous. */
   awaitingAnswer: boolean;
@@ -2071,6 +2075,9 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
           <button type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => onSaveToBrain(turn.text)}>
             <BookmarkPlus size={12} /><span>Save to Brain</span>
           </button>
+        )}
+        {turn.role === 'user' && (
+          <button type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></button>
         )}
         <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
       </div>

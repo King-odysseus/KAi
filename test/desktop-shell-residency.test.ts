@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
 
 const TRAY_ON: NotificationSettings = {
   trayEnabled: true,
+  launchAtLogin: false,
   onComplete: true,
   onFailure: true,
   onApproval: true,
@@ -60,61 +61,20 @@ describe('desktop shell residency', () => {
     electron.quit.mockClear();
   });
 
-  it('closes the window normally when no run would be abandoned', () => {
-    const { shell } = harness();
-    expect(shell.hideForActiveWork()).toBe(false);
+  it('keeps KAI running in the background when the tray is on, even with no run active', () => {
+    const { shell, center } = harness({ visible: false });
+    // A schedule can come due after the window closes, so background mode cannot depend on an active run.
+    expect(shell.hideOnClose()).toBe(true);
+
+    center.runStarted('run-1');
+    center.runEnded('run-1');
+    expect(electron.quit).not.toHaveBeenCalled();
   });
 
-  it('hides the window while a run is active, then ends the app once that run finishes', () => {
+  it('keeps running after a run finishes while hidden', () => {
     const { shell, center } = harness({ visible: false });
     center.runStarted('run-1');
-
-    expect(shell.hideForActiveWork()).toBe(true);
-    // The window is hidden and the run is what is keeping the process up, so finishing it ends KAI rather than
-    // leaving a window nobody can see and no tray icon to reach it by when notifications are off.
-    expect(electron.quit).not.toHaveBeenCalled();
-
-    center.runEnded('run-1');
-    expect(electron.quit).toHaveBeenCalledTimes(1);
-  });
-
-  it('waits while another run is still going', () => {
-    const { shell, center } = harness();
-    center.runStarted('run-1');
-    center.runStarted('run-2');
-    shell.hideForActiveWork();
-
-    center.runEnded('run-1');
-    expect(electron.quit).not.toHaveBeenCalled();
-
-    center.runEnded('run-2');
-    expect(electron.quit).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps running when the window came back into view', () => {
-    const { shell, center, window } = harness({ visible: false });
-    center.runStarted('run-1');
-    shell.hideForActiveWork();
-
-    // The person reached the window again, so closing it from here is a fresh decision rather than the one that
-    // was suspended, and finishing the run must not discard it.
-    window.isVisible.mockReturnValue(true);
-    center.runEnded('run-1');
-    expect(electron.quit).not.toHaveBeenCalled();
-  });
-
-  it('leaves a window hidden on purpose alone', () => {
-    const { center } = harness({ visible: false });
-    // Hiding from the tray never asks the shell, so no residency was taken on this run's behalf.
-    center.runStarted('run-1');
-    center.runEnded('run-1');
-    expect(electron.quit).not.toHaveBeenCalled();
-  });
-
-  it('waits for a headless job that has no window of its own', () => {
-    const { shell, center } = harness({ canExit: false });
-    center.runStarted('run-1');
-    shell.hideForActiveWork();
+    expect(shell.hideOnClose()).toBe(true);
     center.runEnded('run-1');
     expect(electron.quit).not.toHaveBeenCalled();
   });
@@ -122,7 +82,23 @@ describe('desktop shell residency', () => {
   it('does not hide on close when the tray is off', () => {
     const { shell, center } = harness({ settings: { ...TRAY_ON, trayEnabled: false } });
     center.runStarted('run-1');
-    expect(shell.hideForActiveWork()).toBe(false);
+    expect(shell.hideOnClose()).toBe(false);
+  });
+
+  it('leaves a window hidden on purpose alone', () => {
+    const { center } = harness({ visible: false });
+    // Hiding from the tray never asks the shell; nothing should end KAI when the run finishes either.
+    center.runStarted('run-1');
+    center.runEnded('run-1');
+    expect(electron.quit).not.toHaveBeenCalled();
+  });
+
+  it('does not end the process when a headless job finishes while resident', () => {
+    const { shell, center } = harness({ canExit: false });
+    center.runStarted('run-1');
+    shell.hideOnClose();
+    center.runEnded('run-1');
+    expect(electron.quit).not.toHaveBeenCalled();
   });
 
   it('ends KAI when no window is on screen and there is no tray to bring one back', () => {

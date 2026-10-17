@@ -32,8 +32,16 @@ describe('per-card settings saves', () => {
     expect(Object.keys(updateForGroups(draft, SETTINGS_GROUP_NAMES)).sort()).toEqual([
       'agentModels', 'agentTeam', 'autoModel', 'cognitive1', 'defaultAgent', 'defaultAutonomy', 'defaultRoute', 'diagnosticsEnabled',
       'directApi', 'editor', 'experienceCapture', 'experienceLevel', 'learningTutor', 'logRetentionEntries', 'mcpServers', 'notifications', 'promptGuide', 'proxy',
-      'shortcuts', 'theme',
+      'shortcuts', 'theme', 'webSearch',
     ]);
+  });
+
+  it('keeps web search on its own card, separate from the model provider', () => {
+    const saved = createDefaultSettings();
+    const draft = { ...saved, webSearch: { ...saved.webSearch, enabled: true, source: 'brave' as const } };
+    expect(changedGroups(draft, saved)).toEqual(['webSearch']);
+    expect(updateForGroups(draft, ['webSearch'])).toEqual({ webSearch: draft.webSearch });
+    expect(changedGroups({ ...draft, directApi: { ...draft.directApi, model: 'another-model' } }, saved)).toEqual(['directApi', 'webSearch']);
   });
 
   it('saves the agent team on its own card without touching the other cards', () => {
@@ -56,6 +64,7 @@ describe('per-card settings saves', () => {
         onBudget: saved.notifications.onBudget,
         onFailure: saved.notifications.onFailure,
         trayEnabled: saved.notifications.trayEnabled,
+        launchAtLogin: saved.notifications.launchAtLogin,
         onComplete: saved.notifications.onComplete,
         onApproval: saved.notifications.onApproval,
       },

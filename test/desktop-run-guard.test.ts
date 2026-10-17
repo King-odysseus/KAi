@@ -35,6 +35,16 @@ describe('RunGuard', () => {
     expect(guard.recordToolCall('search_files', { query: 'a', path: 'src' }, [])).toBe('warn');
   });
 
+  it('folds a helper agent\'s spend into the run total', () => {
+    const guard = new RunGuard(1);
+    expect(guard.externalCostUsd).toBe(0);
+    guard.noteExternalCost(0.25);
+    guard.noteExternalCost(0.5);
+    guard.noteExternalCost(Number.NaN);
+    guard.noteExternalCost(-3);
+    expect(guard.externalCostUsd).toBe(0.75);
+  });
+
   it('reads the ceiling from the environment and ignores bad values', () => {
     expect(maxRunCostFromEnvironment({ KAI_MAX_RUN_COST_USD: '12.5' })).toBe(12.5);
     expect(maxRunCostFromEnvironment({ KAI_MAX_RUN_COST_USD: '0' })).toBe(0);

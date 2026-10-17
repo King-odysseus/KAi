@@ -7,6 +7,7 @@ import type {
   AutonomyMode,
   DirectApiCapability,
   PermissionKey,
+  PermissionRule,
   PersistedEvent,
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
@@ -29,12 +30,16 @@ import {
   describeArgumentError,
   DesktopProjectToolRuntime,
   exploreInputSchema,
+  taskInputSchema,
   projectToolDefinitions,
   type ExternalToolPort,
   isPublishingCommand,
   type ProjectToolExecution,
 } from './project-tools';
 import { estimateCostUsd } from './usage-budget';
+import { WebToolRuntime } from './web-tools';
+import { applyPermissionRules } from './permission-rules';
+import type { ToolHookRunner } from './automation';
 import { RateLimitError, RequestPacer } from './rate-limit';
 import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, type RunGuard } from './run-guard';
 
@@ -84,6 +89,15 @@ const MAX_TOTAL_TOOL_ROUNDS = 1_000;
 /** A helper's own loop is bounded much tighter than the main run's: it answers one question, not a whole task. */
 const EXPLORE_MAX_ROUNDS = 6;
 const EXPLORE_OUTPUT_TOKEN_BUDGET = 4_096;
+/** A nested helper may read and search, but never writes, runs commands, asks questions or starts another helper. */
+const SUBAGENT_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'view_image',
+  'read_file',
+  'search_files',
+  'list_files',
+  'web_search',
+  'web_fetch',
+]);
 /** Provider iterations allowed beyond the tool rounds, for nudges and truncated continuations. */
 const PROVIDER_ROUND_HEADROOM = 40;
 const DEEPSEEK_MAX_TOOL_ROUNDS = 7;
@@ -404,6 +418,14 @@ export interface DirectProviderRuntimeOptions {
    * reaches; a test sets it low to exercise the wrap-up without driving a thousand rounds.
    */
   maxToolRounds?: number;
+  /** User-owned allow/ask/deny rules for the project a run is about to work in. */
+  loadPermissionRules?: (projectRoot: string) => Promise<readonly PermissionRule[]>;
+  /** Runs the project's matching preTool/postTool hooks around a tool call. */
+  runToolHook?: ToolHookRunner;
+  /** False for a nested helper, so a subagent cannot start its own. */
+  allowSubagents?: boolean;
+  /** When set, a nested helper is offered only these built-in tools. */
+  allowedToolNames?: ReadonlySet<string>;
 }
 
 export class DesktopDirectProviderRuntime {
@@ -452,21 +474,38 @@ export class DesktopDirectProviderRuntime {
     outputTokens: number | undefined,
     approvals: DirectApiApprovalPort | undefined,
   ): Promise<void> {
-    if (inputTokens === undefined && outputTokens === undefined) return;
+    if (inputTokens === undefined && outputTokens === undefined && toolRuntime.guard.externalCostUsd === 0) return;
     const limitUsd = toolRuntime.guard.maxCostLimitUsd;
     if (limitUsd <= 0) return;
-    const costUsd = costFields(capability.provider, capability.model, inputTokens, outputTokens).amountUsd;
-    // An unpriced model cannot be checked, so it never asks.
-    if (costUsd === undefined || costUsd < limitUsd) return;
+    // Helper agents report their own spend, so the parent's limit covers the whole tree of work.
+    const costUsd = (costFields(capability.provider, capability.model, inputTokens, outputTokens).amountUsd ?? 0)
+      + toolRuntime.guard.externalCostUsd;
+    if (costUsd < limitUsd) return;
     toolRuntime.guard.setMaxCost(0);
     const answer = await askToContinue(approvals, SPEND_QUESTION(costUsd, limitUsd));
     if (answer === 'wrap-up') toolRuntime.guard.requestWrapUp();
   }
 
   private async newToolRuntime(projectRoot: string, customPermissions?: Partial<Record<PermissionKey, boolean>>): Promise<DesktopProjectToolRuntime> {
-    const runtime = new DesktopProjectToolRuntime(projectRoot, customPermissions);
+    const loaded = await this.settings.load().catch(() => undefined);
+    const web = loaded
+      ? new WebToolRuntime({
+        settings: loaded.webSearch,
+        directApi: {
+          provider: loaded.directApi.provider,
+          credentialId: loaded.directApi.credentialId,
+          baseUrl: loaded.directApi.baseUrl,
+        },
+      }, this.credentials)
+      : undefined;
+    const runtime = new DesktopProjectToolRuntime(projectRoot, customPermissions, web);
+    const permissionRules = this.options.loadPermissionRules
+      ? await this.options.loadPermissionRules(projectRoot).catch(() => [])
+      : [];
+    runtime.setPolicy({ permissionRules, toolHook: this.options.runToolHook });
+    runtime.toolFilter = this.options.allowedToolNames;
     // The environment variable wins so a script can loosen or tighten the limit without touching settings.
-    const fromSettings = await this.settings.load().then((loaded) => loaded.usageBudget.perRunUsd, () => undefined);
+    const fromSettings = loaded?.usageBudget.perRunUsd;
     runtime.guard.setMaxCost(this.options.maxRunCostUsd ?? maxRunCostFromEnvironment() ?? fromSettings ?? DEFAULT_MAX_RUN_COST_USD);
     return runtime;
   }
@@ -584,6 +623,56 @@ export class DesktopDirectProviderRuntime {
       if (round === EXPLORE_MAX_ROUNDS - 1) answer = roundText.trim();
     }
     return answer || 'The helper made no finding to report.';
+  }
+
+  /**
+   * The callback a run gives to the `task` tool. A nested helper gets a second runtime with the same settings but a
+   * read-only tool list and no `task` of its own, so it cannot recurse or widen its access. Only its answer and the
+   * cost of its calls come back; its intermediate reads stay in its own context.
+   */
+  private taskRunner(request: AgentRunRequest, projectRoot: string, contextText: string | undefined) {
+    if (this.options.allowSubagents === false) {
+      return async (): Promise<{ answer: string; costUsd: number; provider?: string; model?: string }> => {
+        throw new Error('A helper cannot start another helper.');
+      };
+    }
+    return (prompt: string, model: string | undefined) => this.runTaskQuery(prompt, model, request, projectRoot, contextText);
+  }
+
+  private async runTaskQuery(
+    prompt: string,
+    model: string | undefined,
+    request: AgentRunRequest,
+    projectRoot: string,
+    contextText: string | undefined,
+  ): Promise<{ answer: string; costUsd: number; provider?: string; model?: string }> {
+    const nested = new DesktopDirectProviderRuntime(this.settings, this.credentials, this.externalTools, {
+      ...this.options,
+      allowSubagents: false,
+      allowedToolNames: SUBAGENT_READ_ONLY_TOOLS,
+    });
+    const childRequest: AgentRunRequest = {
+      ...request,
+      conversationId: `sub_${request.conversationId}_${randomUUID()}`,
+      prompt,
+      execution: 'api',
+      route: request.route,
+      autonomy: 'plan',
+      ...(model ? { model } : {}),
+    };
+    const result = await nested.run(childRequest, projectRoot, undefined, undefined, undefined, contextText);
+    if (result.status === 'failed' && !result.cancelled) {
+      throw new Error(result.error ?? 'The helper could not finish.');
+    }
+    const costEvents = result.events.filter((event) => event.type === 'cost.update');
+    const costUsd = costEvents.reduce((total, event) => total + (event.amountUsd ?? 0), 0);
+    const lastCost = costEvents.at(-1);
+    return {
+      answer: result.output,
+      costUsd,
+      ...(lastCost?.provider ? { provider: lastCost.provider } : {}),
+      ...(lastCost?.model ? { model: lastCost.model } : {}),
+    };
   }
 
   async capability(): Promise<DirectApiCapability> {
@@ -847,6 +936,7 @@ export class DesktopDirectProviderRuntime {
           controller.signal,
           emit,
           !forceFinalAnswer,
+          toolRuntime.toolDefinitions(),
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -966,6 +1056,7 @@ export class DesktopDirectProviderRuntime {
           this.externalTools,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          this.taskRunner(request, projectRoot, contextText),
         );
       }
     } catch (error) {
@@ -1114,6 +1205,7 @@ export class DesktopDirectProviderRuntime {
           controller.signal,
           emit,
           !forceFinalAnswer,
+          toolRuntime.toolDefinitions(),
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -1240,6 +1332,7 @@ export class DesktopDirectProviderRuntime {
           this.externalTools,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          this.taskRunner(request, projectRoot, contextText),
           chatToolOutput,
         );
         // Chat APIs generally require text-only tool messages; deliver images in a user message
@@ -1412,6 +1505,7 @@ export class DesktopDirectProviderRuntime {
           emit,
           maxTokens,
           !forceFinalAnswer,
+          toolRuntime.toolDefinitions(),
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -1561,6 +1655,7 @@ export class DesktopDirectProviderRuntime {
           this.externalTools,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          this.taskRunner(request, projectRoot, contextText),
           anthropicToolOutput,
         );
         messages.push({ role: 'user', content: toolResults as Array<Record<string, unknown>> });
@@ -1662,6 +1757,7 @@ export class DesktopDirectProviderRuntime {
           controller.signal,
           emit,
           !forceFinalAnswer,
+          toolRuntime.toolDefinitions(),
         );
         if (!response.body) throw new Error('The provider returned no streaming response body.');
 
@@ -1767,6 +1863,7 @@ export class DesktopDirectProviderRuntime {
           this.externalTools,
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          this.taskRunner(request, projectRoot, contextText),
           (callId, output) => [geminiToolOutput(
             toolCalls.find((call) => call.callId === callId)?.name || 'unknown',
             output,
@@ -1799,6 +1896,11 @@ export class DesktopDirectProviderRuntime {
     await this.options.waitIfPaused?.(conversationId, signal);
   }
 
+  /** True while this conversation has a live API run, so destructive conversation edits can refuse. */
+  isRunning(conversationId: string): boolean {
+    return this.activeRuns.has(conversationId);
+  }
+
   cancel(conversationId: string): boolean {
     const controller = this.activeRuns.get(conversationId);
     if (!controller) return false;
@@ -1815,6 +1917,7 @@ export class DesktopDirectProviderRuntime {
     signal: AbortSignal,
     emit: (event: PersistedEvent) => void,
     includeTools = true,
+    builtinToolDefinitions: readonly unknown[] = projectToolDefinitions,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1834,7 +1937,7 @@ export class DesktopDirectProviderRuntime {
             stream: true,
             stream_options: { include_usage: true },
             ...(includeTools
-              ? { tools: chatToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]), tool_choice: 'auto' }
+              ? { tools: chatToolDefinitions([...builtinToolDefinitions, ...externalToolDefinitions]), tool_choice: 'auto' }
               : {}),
           }),
           signal,
@@ -1967,6 +2070,7 @@ export class DesktopDirectProviderRuntime {
     emit: (event: PersistedEvent) => void,
     // Off only for the last round of a run that has hit its tool ceiling, so the model answers instead of calling more.
     toolsEnabled = true,
+    builtinToolDefinitions: readonly unknown[] = projectToolDefinitions,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -1974,7 +2078,7 @@ export class DesktopDirectProviderRuntime {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
       try {
-        const functionDeclarations = toolsEnabled ? geminiToolDefinitions([...projectToolDefinitions, ...externalToolDefinitions]) : [];
+        const functionDeclarations = toolsEnabled ? geminiToolDefinitions([...builtinToolDefinitions, ...externalToolDefinitions]) : [];
         response = await this.pacedFetch(geminiGenerateUrl(capability.baseUrl, capability.model), {
           method: 'POST',
           headers: {
@@ -2033,6 +2137,7 @@ export class DesktopDirectProviderRuntime {
     emit: (event: PersistedEvent) => void,
     // Off only for the last round of a run that has hit its tool ceiling, so the model answers instead of calling more.
     toolsEnabled = true,
+    builtinToolDefinitions: readonly unknown[] = projectToolDefinitions,
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
@@ -2051,7 +2156,7 @@ export class DesktopDirectProviderRuntime {
             model: capability.model,
             input: providerInput,
             stream: true,
-            ...(toolsEnabled ? { tools: [...projectToolDefinitions, ...externalToolDefinitions], tool_choice: 'auto' } : {}),
+            ...(toolsEnabled ? { tools: [...builtinToolDefinitions, ...externalToolDefinitions], tool_choice: 'auto' } : {}),
             ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           }),
           signal,
@@ -2456,6 +2561,89 @@ function geminiToolOutput(name: string, output: unknown): Record<string, unknown
   };
 }
 
+/**
+ * Runs one `task` call after its arguments have been parsed and its start announced. Shared by the normal
+ * sequential path and the parallel batch path so both emit the same events and account for the same spend.
+ */
+async function executeTaskToolCall(
+  request: AgentRunRequest,
+  toolRuntime: DesktopProjectToolRuntime,
+  callId: string,
+  argumentsValue: unknown,
+  signal: AbortSignal,
+  emit: (event: PersistedEvent) => void,
+  taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
+  formatOutput: (callId: string, output: unknown) => unknown,
+): Promise<unknown> {
+  const parsed = taskInputSchema.safeParse(argumentsValue);
+  if (!parsed.success) {
+    const message = describeArgumentError('task', argumentsValue, parsed.error);
+    emit(toolCallEvent(request, 'task', 'failed', argumentsValue, { error: message }, callId));
+    return formatOutput(callId, { error: message });
+  }
+  if (signal.aborted) throw new Error('Provider tool execution was cancelled.');
+  emit({
+    schemaVersion: 1,
+    id: eventId(),
+    taskId: request.conversationId,
+    timestamp: nowIso(),
+    agent: request.agent,
+    type: 'notice',
+    message: `KAI asked a helper agent to work on: ${parsed.data.prompt.slice(0, 200)}`,
+  });
+  let output: { answer: string; costUsd: number; provider?: string; model?: string } | { error: string };
+  try {
+    output = await taskRun(parsed.data.prompt, parsed.data.model);
+  } catch (error) {
+    output = { error: error instanceof Error ? error.message : String(error) };
+  }
+  if ('costUsd' in output && output.costUsd > 0) {
+    // The helper's spend belongs to this run: the per-run limit and the usage summary both count it.
+    toolRuntime.guard.noteExternalCost(output.costUsd);
+    emit({
+      schemaVersion: 1,
+      id: eventId(),
+      taskId: request.conversationId,
+      timestamp: nowIso(),
+      agent: request.agent,
+      type: 'cost.update',
+      amountUsd: output.costUsd,
+      ...(output.provider ? { provider: output.provider } : {}),
+      ...(output.model ? { model: output.model } : {}),
+      estimateProvenance: 'estimated',
+    });
+  }
+  toolRuntime.guard.noteToolOutcome(!('error' in output));
+  emit(toolCallEvent(request, 'task', 'error' in output ? 'failed' : 'completed', argumentsValue, output, callId));
+  return formatOutput(callId, output);
+}
+
+/** A round made only of helper tasks: they do not depend on each other, so they run together. */
+async function executeTaskBatch(
+  request: AgentRunRequest,
+  toolRuntime: DesktopProjectToolRuntime,
+  calls: PendingToolCall[],
+  signal: AbortSignal,
+  emit: (event: PersistedEvent) => void,
+  taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
+  formatOutput: (callId: string, output: unknown) => unknown,
+): Promise<unknown[]> {
+  return Promise.all(calls.map(async (call) => {
+    const callId = call.callId || `call_${randomUUID()}`;
+    let argumentsValue: unknown;
+    try {
+      argumentsValue = parseToolArguments(call.argumentsText);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toolRuntime.guard.noteToolOutcome(false);
+      emit(toolCallEvent(request, 'task', 'failed', undefined, { error: message }, callId));
+      return formatOutput(callId, { error: message });
+    }
+    emit(toolCallEvent(request, 'task', 'started', argumentsValue, undefined, callId));
+    return executeTaskToolCall(request, toolRuntime, callId, argumentsValue, signal, emit, taskRun, formatOutput);
+  }));
+}
+
 async function executeToolCalls(
   request: AgentRunRequest,
   toolRuntime: DesktopProjectToolRuntime,
@@ -2466,8 +2654,15 @@ async function executeToolCalls(
   emit: (event: PersistedEvent) => void,
   /** Runs a read-only helper's nested loop for `explore` and returns its answer. See `runExploreQuery`. */
   explore: (question: string) => Promise<string>,
+  /** Runs a nested helper agent and reports its answer and what it cost. See `runTaskQuery`. */
+  taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
   formatOutput: (callId: string, output: unknown) => unknown = functionCallOutput,
 ): Promise<unknown[]> {
+  // Helper tasks are independent, so a round made only of them runs concurrently. Mixed rounds stay sequential:
+  // a read or edit later in the same round may depend on what came before it.
+  if (calls.length > 1 && calls.every((call) => call.name === 'task')) {
+    return executeTaskBatch(request, toolRuntime, calls, signal, emit, taskRun, formatOutput);
+  }
   const results: unknown[] = [];
   for (const call of calls) {
     if (signal.aborted) throw new Error('Provider tool execution was cancelled.');
@@ -2530,6 +2725,10 @@ async function executeToolCalls(
       results.push(formatOutput(callId, output));
       continue;
     }
+    if (name === 'task') {
+      results.push(await executeTaskToolCall(request, toolRuntime, callId, argumentsValue, signal, emit, taskRun, formatOutput));
+      continue;
+    }
     if (name === 'explore') {
       const parsed = exploreInputSchema.safeParse(argumentsValue);
       if (!parsed.success) {
@@ -2563,6 +2762,8 @@ async function executeToolCalls(
     }
 
     let policy = externalTools?.policy(name, request.autonomy) ?? toolRuntime.policy(name, request.autonomy);
+    // User-written project rules sit on top of the mode's own decision. A base deny is never relaxed.
+    policy = applyPermissionRules(policy, toolRuntime.permissionRules, { tool: name, input: argumentsValue });
     // Ask-first protects publishing operations, but an explicit Full access choice in
     // the composer authorizes the entire run, including Git commit/push.
     if (
@@ -2585,6 +2786,35 @@ async function executeToolCalls(
       emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }, callId));
       results.push(formatOutput(callId, { error: policy.reason }));
       continue;
+    }
+    let preToolContext = '';
+    if (toolRuntime.toolHook) {
+      try {
+        const hook = await toolRuntime.toolHook({
+          event: 'preTool',
+          tool: name,
+          input: argumentsValue,
+          autonomy: request.autonomy,
+          projectRoot: toolRuntime.rootPath,
+          conversationId: request.conversationId,
+          signal,
+        });
+        if (hook.blocked) {
+          const reason = `A project preTool hook blocked this call: ${hook.blocked}`;
+          toolRuntime.guard.noteToolOutcome(false);
+          emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
+          results.push(formatOutput(callId, { error: reason }));
+          continue;
+        }
+        preToolContext = hook.context;
+      } catch (error) {
+        // A guard that cannot run must not silently let the call through.
+        const reason = `The project's preTool hook could not run, so the call was refused: ${error instanceof Error ? error.message : String(error)}`;
+        toolRuntime.guard.noteToolOutcome(false);
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
+        results.push(formatOutput(callId, { error: reason }));
+        continue;
+      }
     }
     if (policy.decision === 'ask') {
       const approvalRequest: DirectApiApprovalRequest = {
@@ -2622,6 +2852,26 @@ async function executeToolCalls(
     const execution: ProjectToolExecution = (
       (await externalTools?.execute(name, argumentsValue, signal)) ?? await toolRuntime.execute(name, argumentsValue, signal)
     );
+    if (preToolContext) execution.output = withHookContext(execution.output, preToolContext);
+    if (toolRuntime.toolHook) {
+      try {
+        const hook = await toolRuntime.toolHook({
+          event: 'postTool',
+          tool: name,
+          input: argumentsValue,
+          output: execution.output,
+          autonomy: request.autonomy,
+          projectRoot: toolRuntime.rootPath,
+          conversationId: request.conversationId,
+          signal,
+        });
+        if (hook.output !== undefined) execution.output = hook.output;
+        if (hook.context) execution.output = withHookContext(execution.output, hook.context);
+      } catch (error) {
+        // The work already happened; a broken observer must not turn it into a failure.
+        execution.output = withHookContext(execution.output, `The project's postTool hook could not run: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     toolRuntime.guard.noteToolOutcome(execution.ok);
     const repeat = toolRuntime.guard.recordToolCall(name, argumentsValue, execution.output);
     if (repeat === 'stop') {
@@ -2948,6 +3198,13 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Adds a hook's message to a tool result so the model sees it, without discarding the result itself. */
+function withHookContext(output: unknown, context: string): unknown {
+  if (!context.trim()) return output;
+  const record = asRecord(output);
+  return record ? { ...record, kaiHookContext: context } : { result: output, kaiHookContext: context };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
