@@ -836,7 +836,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           <p className={`settings-note ${searchCredential ? 'ready' : ''}`}>
             {webSearch.source === 'searxng'
               ? 'SearXNG needs no key. It must be running and allow JSON results (search.formats: [html, json]).'
-              : `Key: ${searchCredential}${credentialStatus.ids.includes(searchCredential) ? ' (stored in the OS vault)' : ' (not stored yet)'}. Native search is billed per call by that provider (Moonshot charges about $0.002 per search). Choose SearXNG for free local search, or Brave/Tavily on their free tiers.`}
+              : `Key: ${searchCredential}${credentialStatus.ids.includes(searchCredential) ? ' (stored in the OS vault)' : ' (not stored yet)'}. Native search is billed per call by that provider (DeepSeek $0.75 per 1,000 searches from November 1; Moonshot about $0.002 per search). Choose SearXNG for free local search, or Brave/Tavily on their free tiers.`}
           </p>
           {webSearch.source !== 'searxng' && (
             <div className="credential-form">

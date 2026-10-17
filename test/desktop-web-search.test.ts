@@ -144,6 +144,56 @@ describe('native search sources', () => {
     expect(JSON.parse(String(init.body))).toEqual({ text_query: 'query', limit: 3 });
   });
 
+  it('searches through DeepSeek\'s own endpoint with the same key as chat', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      results: [
+        { title: 'DeepSeek hit', url: 'https://example.com/d', snippet: 'short', summary: 'A longer summary written for a model.', content: '', rerank_score: 2.1 },
+        { title: 'Second', url: 'https://example.com/e', snippet: 'only a snippet', summary: '', content: '' },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // The provider's chat address is the host; the search path is added to it, not appended to a /v1 or /anthropic tail.
+    for (const baseUrl of ['https://api.deepseek.com', 'https://api.deepseek.com/anthropic', 'https://api.deepseek.com/v1']) {
+      clearSearchCache();
+      fetchMock.mockClear();
+      const directApi = { provider: 'deepseek' as const, credentialId: 'provider.deepseek', baseUrl };
+      const results = await searchWeb(context({ source: 'deepseek' }, directApi), vault({ 'provider.deepseek': 'ds-key' }), 'electron security', 4);
+
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe('https://api.deepseek.com/v1/tools/search');
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer ds-key');
+      expect(JSON.parse(String(init.body))).toEqual({ query: 'electron security', count: 4, need_content: false });
+      // The summary is the text written for a model, so it wins over the short display snippet when there is one.
+      expect(results).toEqual([
+        { title: 'DeepSeek hit', url: 'https://example.com/d', snippet: 'A longer summary written for a model.' },
+        { title: 'Second', url: 'https://example.com/e', snippet: 'only a snippet' },
+      ]);
+    }
+  });
+
+  it('keeps a DeepSeek query inside the 128 characters the API takes, and explains a 402 plainly', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"error":{"message":"Insufficient Balance"}}', { status: 402 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const directApi = { provider: 'deepseek' as const, credentialId: 'provider.deepseek', baseUrl: 'https://api.deepseek.com' };
+
+    const error = await searchWeb(context({ source: 'deepseek' }, directApi), vault({ 'provider.deepseek': 'ds-key' }), 'x'.repeat(300))
+      .catch((caught: unknown) => caught as Error);
+
+    expect(error.message).toContain('insufficient balance');
+    expect(error.message).toContain('provider.deepseek');
+    expect(error.message).not.toContain('ds-key');
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).query).toHaveLength(128);
+  });
+
+  it('uses the DeepSeek chat key for DeepSeek search unless an override is set', () => {
+    expect(searchCredentialFor('deepseek')).toBe('provider.deepseek');
+    expect(searchCredentialFor('deepseek', 'custom.search')).toBe('custom.search');
+    expect(searchCredentialFor('deepseek', '', { provider: 'deepseek', credentialId: 'provider.deepseek.work', baseUrl: 'https://api.deepseek.com' }))
+      .toBe('provider.deepseek.work');
+  });
+
   it('falls back to the retiring builtin only when the REST endpoint is absent', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('not found', { status: 404 }))

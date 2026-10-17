@@ -234,6 +234,7 @@ async function searchNative(
   if (source === 'openai') return searchOpenai(baseUrl, apiKey, credentialId, query, limit, signal);
   if (source === 'google') return searchGoogle(baseUrl, apiKey, credentialId, query, limit, signal);
   if (source === 'moonshot') return searchMoonshot(baseUrl, apiKey, credentialId, query, limit, signal);
+  if (source === 'deepseek') return searchDeepseek(baseUrl, apiKey, credentialId, query, limit, signal);
   if (source === 'zai') return searchZai(baseUrl, apiKey, credentialId, query, limit, signal);
   throw new Error(`Unknown search source: ${source}.`);
 }
@@ -380,6 +381,32 @@ async function searchGoogle(
     results.push(resultOf(record.title, record.uri, snippets.get(String(index)) ?? ''));
   });
   return normalizeResults(results, limit);
+}
+
+/**
+ * DeepSeek's own search: a standalone endpoint on the same host and with the same key as chat, not a tool inside a
+ * chat request. The provider's base address is the chat address (`https://api.deepseek.com`, or its `/anthropic`
+ * form), so it is trimmed back to the host before the search path is added.
+ */
+async function searchDeepseek(
+  baseUrl: string,
+  apiKey: string,
+  credentialId: string,
+  query: string,
+  limit: number,
+  signal: AbortSignal,
+): Promise<WebSearchResult[]> {
+  const host = baseUrl.replace(/\/+$/, '').replace(/\/(?:v1|anthropic)$/i, '');
+  const response = await fetch(`${host}/v1/tools/search`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    // The API takes 1–128 characters of query, operators included, and up to 50 results.
+    body: JSON.stringify({ query: query.trim().slice(0, 128), count: Math.max(1, Math.min(limit, 50)), need_content: false }),
+    signal,
+  });
+  if (!response.ok) throw searchServiceError('DeepSeek', response.status, credentialId, await responseDetail(response));
+  const body = await response.json() as { results?: unknown };
+  return normalizeResults(body.results, limit);
 }
 
 async function searchMoonshot(
@@ -544,7 +571,8 @@ function normalizeResults(value: unknown, limit: number): WebSearchResult[] {
     const parsedResult = webSearchResultSchema.safeParse({
       title: title.slice(0, 500),
       url: key,
-      snippet: firstString(record.content, record.description, record.snippet, record.cited_text).slice(0, 2_000),
+      // `summary` is DeepSeek's longer text written for a model; the other services have no such field.
+      snippet: firstString(record.summary, record.content, record.description, record.snippet, record.cited_text).slice(0, 2_000),
     });
     if (parsedResult.success) results.push(parsedResult.data);
     if (results.length >= limit) break;
@@ -561,6 +589,7 @@ function firstString(...values: unknown[]): string {
 
 function searchServiceError(service: string, status: number, credentialId: string, detail: string): Error {
   if (status === 401 || status === 403) return new Error(`${service} rejected the key stored for ${credentialId}.`);
+  if (status === 402) return new Error(`${service} reports insufficient balance for ${credentialId}. Top up the account, or choose another search source.`);
   if (status === 429) return new Error(`${service} is rate-limiting this key. Try again shortly or lower the per-run cap.`);
   return new Error(`${service} answered ${status}${detail}`);
 }

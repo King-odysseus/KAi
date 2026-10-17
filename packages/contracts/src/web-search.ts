@@ -5,7 +5,7 @@ import type { ProviderId } from './primitives';
  * Where the agent's web search comes from. External sources work with any model; the native sources are tools
  * that run inside a request to that provider, so they are only available when the run uses the same provider.
  */
-export const WEB_SEARCH_SOURCES = ['searxng', 'brave', 'tavily', 'anthropic', 'openai', 'google', 'moonshot', 'zai'] as const;
+export const WEB_SEARCH_SOURCES = ['searxng', 'brave', 'tavily', 'anthropic', 'openai', 'google', 'moonshot', 'zai', 'deepseek'] as const;
 export const webSearchSourceSchema = z.enum(WEB_SEARCH_SOURCES);
 export type WebSearchSource = z.infer<typeof webSearchSourceSchema>;
 
@@ -17,12 +17,13 @@ export const WEB_SEARCH_SOURCE_LABEL: Readonly<Record<WebSearchSource, string>> 
   openai: 'OpenAI (native)',
   google: 'Google (native)',
   moonshot: 'Moonshot / Kimi (native)',
+  deepseek: 'DeepSeek (native)',
   zai: 'Z.AI / GLM (native)',
 };
 
 /** The provider whose own search tool a native source uses, or null for an external search service. */
 export function nativeSearchProvider(source: WebSearchSource): ProviderId | null {
-  if (source === 'anthropic' || source === 'openai' || source === 'google' || source === 'moonshot' || source === 'zai') {
+  if (source === 'anthropic' || source === 'openai' || source === 'google' || source === 'moonshot' || source === 'zai' || source === 'deepseek') {
     return source;
   }
   return null;
