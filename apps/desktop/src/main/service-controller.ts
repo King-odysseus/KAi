@@ -20,6 +20,8 @@ import type { DesktopPaths } from './paths';
 
 /** The port the standalone Cognitive1 daemon uses. KAI's managed copy must not share it. */
 export const STANDALONE_COGNITIVE1_PORT = 9876;
+export const LEGACY_MANAGED_COGNITIVE1_PORT = 9877;
+export const MANAGED_COGNITIVE1_PORT = 47831;
 
 export function isLoopbackPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -30,9 +32,7 @@ export function isLoopbackPortFree(port: number): Promise<boolean> {
 }
 
 /**
- * Older KAI versions defaulted the managed Cognitive1 endpoint to the standalone daemon's port. That exact
- * legacy value is always migrated, even when 9876 is currently free, so KAI cannot take the port first and
- * stop a standalone daemon from starting later. Any other user-selected endpoint is left untouched.
+ * Migrate KAI's older managed defaults to its dedicated port. Other endpoints belong to the user.
  */
 export async function moveOffStandalonePort(
   endpoint: string,
@@ -44,8 +44,9 @@ export async function moveOffStandalonePort(
   } catch {
     return null;
   }
-  if (Number(url.port) !== STANDALONE_COGNITIVE1_PORT) return null;
-  for (let port = STANDALONE_COGNITIVE1_PORT + 1; port < STANDALONE_COGNITIVE1_PORT + 50; port += 1) {
+  if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return null;
+  if (![STANDALONE_COGNITIVE1_PORT, LEGACY_MANAGED_COGNITIVE1_PORT].includes(Number(url.port))) return null;
+  for (let port = MANAGED_COGNITIVE1_PORT; port < MANAGED_COGNITIVE1_PORT + 50; port += 1) {
     if (await isFree(port)) {
       url.port = String(port);
       return url.toString().replace(/\/$/, '');
@@ -169,7 +170,7 @@ export class DesktopServiceController {
           ...current,
           cognitive1: { ...current.cognitive1, endpoint: moved },
         }));
-        this.options.logger.info('internal', `Cognitive1 endpoint moved to ${moved} because the standalone daemon uses port ${STANDALONE_COGNITIVE1_PORT}`);
+        this.options.logger.info('internal', `Cognitive1 endpoint moved to ${moved} from an older managed port`);
       }
     } else {
       const requested = settings.proxy.port;

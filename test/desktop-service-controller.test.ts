@@ -22,17 +22,19 @@ describe('managed Cognitive1 port', () => {
   const taken = (...ports: number[]) => async (port: number) => !ports.includes(port);
 
   it('defaults to a port that does not clash with the standalone daemon', () => {
-    expect(createDefaultSettings().cognitive1.endpoint).toBe('http://127.0.0.1:9877');
+    expect(createDefaultSettings().cognitive1.endpoint).toBe('http://127.0.0.1:47831');
   });
 
   it('moves the legacy managed endpoint even while 9876 is free, so standalone C1 can start later', async () => {
-    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken())).toBe('http://127.0.0.1:9877');
-    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken(9876))).toBe('http://127.0.0.1:9877');
-    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken(9876, 9877, 9878))).toBe('http://127.0.0.1:9879');
+    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken())).toBe('http://127.0.0.1:47831');
+    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken(9876))).toBe('http://127.0.0.1:47831');
+    expect(await moveOffStandalonePort('http://127.0.0.1:9876', taken(47831, 47832))).toBe('http://127.0.0.1:47833');
+    expect(await moveOffStandalonePort('http://127.0.0.1:9877', taken())).toBe('http://127.0.0.1:47831');
   });
 
   it('is idempotent and leaves a genuinely custom endpoint alone', async () => {
-    expect(await moveOffStandalonePort('http://127.0.0.1:9877', taken())).toBeNull();
+    expect(await moveOffStandalonePort('http://127.0.0.1:47831', taken())).toBeNull();
+    expect(await moveOffStandalonePort('http://example.com:9877', taken())).toBeNull();
     expect(await moveOffStandalonePort('http://127.0.0.1:9900', taken(9876, 9900))).toBeNull();
     expect(await moveOffStandalonePort('not a url', taken(9876))).toBeNull();
   });

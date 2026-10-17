@@ -488,6 +488,8 @@ export function WorkspaceView({
     ...selectedFiles.map((path) => ({ type: 'file' as const, path })),
     ...contextChips,
   ];
+  const hasImageAttachment = contextChips.some((chip) => chip.type === 'image');
+  const canSendPrompt = Boolean(prompt.trim()) || hasImageAttachment;
   const sendOptions: WorkspaceSendOptions | undefined = (activeGoal || selectedSkills.length || allContextChips.length)
     ? {
         ...(activeGoal ? { goal: activeGoal } : {}),
@@ -731,13 +733,14 @@ export function WorkspaceView({
   };
 
   const send = (): void => {
-    const text = prompt.trim();
-    if (!text || !activeProject || busy || refiningPrompt || !ready) return;
+    const typedText = prompt.trim();
+    if ((!typedText && !hasImageAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
+    const text = typedText || 'Please look at the attached image.';
     if (taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
       setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
       return;
     }
-    const goalAndImplementation = goalAndImplementationFor(text);
+    const goalAndImplementation = typedText ? goalAndImplementationFor(text) : null;
     if (goalAndImplementation) {
       setPrompt('');
       queueOrSend(goalAndImplementation.prompt, {
@@ -748,14 +751,14 @@ export function WorkspaceView({
       setSelectedSkills([]);
       return;
     }
-    const command = commandFor(text);
+    const command = typedText ? commandFor(text) : null;
     if (command) {
       setPrompt('');
       runCommand(command, text);
       return;
     }
     setPrompt('');
-    if (compareMode) {
+    if (compareMode && typedText) {
       setCompareResult(null);
       setComparing(true);
       void onCompare(text, compareAgent)
@@ -1941,12 +1944,12 @@ export function WorkspaceView({
               <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
               {(running || paused || awaitingApproval) ? (
                 <>
-                  {running && <button type="button" className="send-button" disabled={!prompt.trim() || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></button>}
+                  {running && <button type="button" className="send-button" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></button>}
                   {running && apiRun && <button type="button" className="send-button" disabled={!prompt.trim() || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></button>}
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
                   <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
                 </>
-              ) : <button type="button" className="send-button" disabled={!activeProject || !prompt.trim() || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={taskIntent === 'auto' ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={taskIntent === 'auto' ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</button>}
+              ) : <button type="button" className="send-button" disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={taskIntent === 'auto' ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={taskIntent === 'auto' ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</button>}
             </div>
           </div>
         </div>

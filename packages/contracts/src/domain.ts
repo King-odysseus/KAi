@@ -539,8 +539,8 @@ export function createDefaultSettings(): AppSettings {
     }],
     cognitive1: {
       enabled: false,
-      // 9876 belongs to the standalone Cognitive1 daemon, so KAI's own managed copy uses the next port.
-      endpoint: 'http://127.0.0.1:9877',
+      // Use a dedicated port outside the common local service range.
+      endpoint: 'http://127.0.0.1:47831',
       dataPath: null,
       mirror: { enabled: false, endpoint: 'http://127.0.0.1:9876', token: '' },
       overwatch: {
