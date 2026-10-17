@@ -12,7 +12,7 @@ import type {
 } from '@kai/contracts';
 import type { AgentExecutionResult } from './agent-runtime';
 import { readPlan } from './plan-store';
-import { steeringInstruction, takeInterjection } from './interjections';
+import { interjectionImages, steeringInstructionFor, takeInterjectionMessage } from './interjections';
 import {
   toolOutputImages,
   anthropicImagePart,
@@ -21,6 +21,7 @@ import {
   hasImageParts,
   isImageRefusal,
   openAiImagePart,
+  responsesImagePart,
   withoutImageParts,
   type AttachedImage,
 } from './image-attachments';
@@ -115,11 +116,37 @@ const CONTINUATION_TEXT_LIMIT = 200;
  */
 const WRAP_UP_MESSAGE = 'You have made many tool calls for this task. Stop calling tools now and give a clear final answer: summarize what you have done so far, call out anything left unfinished, and say how to continue if needed.';
 
-/** Keep pending tool outputs when a user adds guidance between Responses API rounds. */
-export function appendUserInput(input: unknown, message: string): unknown {
-  if (Array.isArray(input)) return [...input, { role: 'user', content: message }];
-  if (typeof input === 'string') return `${input}\n\nUser update: ${message}`;
-  return [{ role: 'user', content: message }];
+/**
+ * Keep pending tool outputs when a user adds guidance between Responses API rounds. Images the person attached ride
+ * beside the words as `input_image` parts, in the same user message.
+ */
+export function appendUserInput(input: unknown, message: string, images: readonly AttachedImage[] = []): unknown {
+  const content = (text: string): string | Array<Record<string, unknown>> => (
+    images.length === 0 ? text : [{ type: 'input_text', text }, ...images.map(responsesImagePart)]
+  );
+  if (Array.isArray(input)) return [...input, { role: 'user', content: content(message) }];
+  if (typeof input === 'string') {
+    return images.length === 0
+      ? `${input}\n\nUser update: ${message}`
+      : [{ role: 'user', content: content(`${input}\n\nUser update: ${message}`) }];
+  }
+  return [{ role: 'user', content: content(message) }];
+}
+
+/** A user message's content: plain text, or the text followed by the images when there are any. */
+function textWithImages(
+  text: string,
+  images: readonly AttachedImage[],
+  part: (image: AttachedImage) => Record<string, unknown>,
+): string | Array<Record<string, unknown>> {
+  return images.length === 0 ? text : [{ type: 'text', text }, ...images.map(part)];
+}
+
+/** Said to the model when a provider would not take an image, so it tells the person instead of searching for the file. */
+const IMAGE_REMOVED_NOTE = '[KAI removed the attached image from this request because the model could not accept it. You cannot see it. Say so plainly and ask the person to switch to a model that accepts images; do not search the file system for it.]';
+
+function noticeEvent(request: AgentRunRequest, message: string): PersistedEvent {
+  return { schemaVersion: 1, id: eventId(), taskId: request.conversationId, timestamp: nowIso(), agent: request.agent, type: 'notice', message };
 }
 const MAX_APPROVAL_DETAIL = 4_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
@@ -899,9 +926,16 @@ export class DesktopDirectProviderRuntime {
     let forceFinalAnswer = false;
     let resumeAfterSteer = false;
     const toolRoundLimit = this.options.maxToolRounds ?? MAX_TOTAL_TOOL_ROUNDS;
-    let providerInput: unknown = contextText?.trim()
+    const firstInputText = contextText?.trim()
       ? `${contextText.trim()}\n\nUser request:\n${request.prompt}`
       : request.prompt;
+    // The Responses API takes the text as a string, which has no room for an image. With one attached the first
+    // message goes as a user message of parts instead, so what the person attached is actually sent: the other three
+    // protocols already did this, and this one quietly sent only a prompt that described a file.
+    const firstImages = attachedImages(request.contextChips);
+    let providerInput: unknown = firstImages.length > 0
+      ? [{ role: 'user', content: [{ type: 'input_text', text: firstInputText }, ...firstImages.map(responsesImagePart)] }]
+      : firstInputText;
 
     try {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
@@ -911,10 +945,10 @@ export class DesktopDirectProviderRuntime {
         // Something the person said while this run was going. It is put to the model at its next turn, so it
         // answers — or takes the correction — and carries on, rather than the run being cancelled and started
         // again from the same prompt.
-        const interjected = takeInterjection(request.conversationId);
+        const interjected = takeInterjectionMessage(request.conversationId);
         if (interjected) {
           resumeAfterSteer = true;
-          providerInput = appendUserInput(providerInput, steeringInstruction(interjected));
+          providerInput = appendUserInput(providerInput, steeringInstructionFor(interjected), interjectionImages(interjected));
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1179,10 +1213,10 @@ export class DesktopDirectProviderRuntime {
         // Something the person said while this run was going. It is put to the model at its next turn, so it
         // answers — or takes the correction — and carries on, rather than the run being cancelled and started
         // again from the same prompt.
-        const interjected = takeInterjection(request.conversationId);
+        const interjected = takeInterjectionMessage(request.conversationId);
         if (interjected) {
           resumeAfterSteer = true;
-          messages.push({ role: 'user', content: steeringInstruction(interjected) });
+          messages.push({ role: 'user', content: textWithImages(steeringInstructionFor(interjected), interjectionImages(interjected), openAiImagePart) });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1477,10 +1511,10 @@ export class DesktopDirectProviderRuntime {
         // Something the person said while this run was going. It is put to the model at its next turn, so it
         // answers — or takes the correction — and carries on, rather than the run being cancelled and started
         // again from the same prompt.
-        const interjected = takeInterjection(request.conversationId);
+        const interjected = takeInterjectionMessage(request.conversationId);
         if (interjected) {
           resumeAfterSteer = true;
-          messages.push({ role: 'user', content: steeringInstruction(interjected) });
+          messages.push({ role: 'user', content: textWithImages(steeringInstructionFor(interjected), interjectionImages(interjected), anthropicImagePart) });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1732,10 +1766,10 @@ export class DesktopDirectProviderRuntime {
         // Something the person said while this run was going. It is put to the model at its next turn, so it
         // answers — or takes the correction — and carries on, rather than the run being cancelled and started
         // again from the same prompt.
-        const interjected = takeInterjection(request.conversationId);
+        const interjected = takeInterjectionMessage(request.conversationId);
         if (interjected) {
           resumeAfterSteer = true;
-          contents.push({ role: 'user', parts: [{ text: steeringInstruction(interjected) }] });
+          contents.push({ role: 'user', parts: [{ text: steeringInstructionFor(interjected) }, ...interjectionImages(interjected).map(geminiImagePart)] });
         }
         if (toolRuntime.guard.wrapUpRequested && !forceFinalAnswer) {
           forceFinalAnswer = true;
@@ -1962,8 +1996,8 @@ export class DesktopDirectProviderRuntime {
       // A model without vision refuses the whole request over one image. Losing a run to an attachment the person did
       // not have to think about would be worse than losing the attachment, so it goes and the request is made again.
       if (isImageRefusal(response.status, detail) && hasImageParts(outgoing)) {
-        outgoing = withoutImageParts(outgoing);
-        emit(lifecycleEvent(request, 'starting', `${capability.displayName} would not take the attached image, so this request was sent without it; the file is still named in the prompt.`));
+        outgoing = withoutImageParts(outgoing, IMAGE_REMOVED_NOTE);
+        emit(noticeEvent(request, `${capability.displayName} (${capability.model}) would not take the attached image, so this request was sent without it. Switch to a model that accepts images and send it again.`));
         continue;
       }
       if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
@@ -2042,8 +2076,8 @@ export class DesktopDirectProviderRuntime {
       // A model without vision refuses the whole request over one image. Losing a run to an attachment the person did
       // not have to think about would be worse than losing the attachment, so it goes and the request is made again.
       if (isImageRefusal(response.status, detail) && hasImageParts(outgoing)) {
-        outgoing = withoutImageParts(outgoing);
-        emit(lifecycleEvent(request, 'starting', `${capability.displayName} would not take the attached image, so this request was sent without it; the file is still named in the prompt.`));
+        outgoing = withoutImageParts(outgoing, IMAGE_REMOVED_NOTE);
+        emit(noticeEvent(request, `${capability.displayName} (${capability.model}) would not take the attached image, so this request was sent without it. Switch to a model that accepts images and send it again.`));
         continue;
       }
       if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
@@ -2141,6 +2175,9 @@ export class DesktopDirectProviderRuntime {
   ): Promise<Response> {
     const maxAttempts = Math.max(1, this.options.maxProviderAttempts ?? MAX_PROVIDER_ATTEMPTS);
     const baseDelayMs = Math.max(1, this.options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS);
+    // Mutable for the same reason as the other senders': an image a model refuses is dropped and the request made
+    // again, rather than the run ending over an attachment.
+    let outgoing: unknown = providerInput;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response: Response;
@@ -2154,7 +2191,7 @@ export class DesktopDirectProviderRuntime {
           },
           body: JSON.stringify({
             model: capability.model,
-            input: providerInput,
+            input: outgoing,
             stream: true,
             ...(toolsEnabled ? { tools: [...builtinToolDefinitions, ...externalToolDefinitions], tool_choice: 'auto' } : {}),
             ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
@@ -2178,6 +2215,11 @@ export class DesktopDirectProviderRuntime {
 
       const detail = await response.text();
       const message = providerErrorMessage(response.status, detail);
+      if (Array.isArray(outgoing) && isImageRefusal(response.status, detail) && hasImageParts(outgoing as Array<{ content?: unknown }>)) {
+        outgoing = withoutImageParts(outgoing as Array<{ content?: string | Array<Record<string, unknown>> | null }>, IMAGE_REMOVED_NOTE);
+        emit(noticeEvent(request, `${capability.displayName} (${capability.model}) would not take the attached image, so this request was sent without it. Switch to a model that accepts images and send it again.`));
+        continue;
+      }
       if (!isRetryableStatus(response.status) || attempt >= maxAttempts) throw providerFailure(response.status, message, response.headers.get('retry-after'));
       const delayMs = retryDelayMs(baseDelayMs, attempt, response.headers.get('retry-after'));
       emit(lifecycleEvent(

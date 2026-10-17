@@ -3,6 +3,7 @@ import { AutoSettings } from './AutoSettings';
 import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerRunLine';
 import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
 import { settleWithin } from '../async-deadline';
+import { steerWaitingNotice } from '../run-controls';
 import { PlanStrip } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
@@ -238,6 +239,8 @@ export function savedTaskIntent(stored: string | null): TaskIntent {
 const START_WAIT_MS = 30_000;
 const REFINE_WAIT_MS = 60_000;
 const STOP_WAIT_MS = 30_000;
+/** What goes with an image sent alone, so a message is never empty. The main process uses the same words. */
+const IMAGE_ONLY_PROMPT = 'Please look at the attached image.';
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'General', description: 'Ask a question or describe a task in your own words', placeholder: 'Ask KAI about this project or describe a task', starter: '' },
@@ -449,6 +452,8 @@ export function WorkspaceView({
   const [sendWhenAccessReady, setSendWhenAccessReady] = useState(false);
   const [refiningPrompt, setRefiningPrompt] = useState(false);
   const [interjecting, setInterjecting] = useState(false);
+  /** Queued prompts whose steer is still on its way to the run, so the same one cannot be sent twice. */
+  const [steeringQueued, setSteeringQueued] = useState<readonly string[]>([]);
   const [promptGuideReadiness, setPromptGuideReadiness] = useState<PromptGuideReadiness | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -737,7 +742,7 @@ export function WorkspaceView({
   const send = (): void => {
     const typedText = prompt.trim();
     if ((!typedText && !hasImageAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
-    const text = typedText || 'Please look at the attached image.';
+    const text = typedText || IMAGE_ONLY_PROMPT;
     if (taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
       setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
       return;
@@ -823,7 +828,8 @@ export function WorkspaceView({
   }
 
   const steerNow = (): void => {
-    const text = prompt.trim();
+    // An image alone is a complete message, the same as when it is sent rather than steered.
+    const text = prompt.trim() || (hasImageAttachment ? IMAGE_ONLY_PROMPT : '');
     if (!text || !activeProject || busy || refiningPrompt || !ready || !queueConversationId) return;
     if (!running) {
       send();
@@ -850,15 +856,21 @@ export function WorkspaceView({
    * The model handles the immediate instruction at its next step, then resumes the original task.
    */
   const interjectNow = (): void => {
-    const text = prompt.trim();
+    const typed = prompt.trim();
+    const text = typed || (hasImageAttachment ? IMAGE_ONLY_PROMPT : '');
     const conversationId = activeConversation?.id;
     if (!text || !conversationId || !running || interjecting) return;
+    // What a send would carry: an image, a selection or terminal output attached beside the words is part of what is
+    // being said. A steer that sent only the words answered a different question than the one asked.
+    const chips = allContextChips;
     setInterjecting(true);
-    setWorkbenchNotice('Waiting for the active model to take this message.');
-    void window.kaiDesktop.interjectAgent({ conversationId, text }).then(unwrap)
+    setWorkbenchNotice(steerWaitingNotice(paused));
+    void window.kaiDesktop.interjectAgent({ conversationId, text, ...(chips.length > 0 ? { contextChips: chips } : {}) }).then(unwrap)
       .then(({ queued }) => {
         if (queued) {
-          setPrompt((current) => current.trim() === text ? '' : current);
+          setPrompt((current) => current.trim() === typed ? '' : current);
+          // Cleared only now that the run has taken it: on any other outcome the composer is left as it was.
+          clearComposerContext();
           onInterjectionDelivered(conversationId, text);
           setWorkbenchNotice('Your message was added to the active run.');
         } else {
@@ -882,8 +894,13 @@ export function WorkspaceView({
     if (!item || busy || !activeProject || !ready) return;
     const conversationId = activeConversation?.id;
     if (running && conversationId && apiRun) {
-      setWorkbenchNotice('Sending this to the active run…');
-      void window.kaiDesktop.interjectAgent({ conversationId, text: item.text }).then(unwrap)
+      if (steeringQueued.includes(item.id)) return;
+      setSteeringQueued((current) => [...current, item.id]);
+      setWorkbenchNotice(steerWaitingNotice(paused));
+      // The queued prompt's own chips go with it. This used to send the words alone and then delete the queued row,
+      // which is how an image sat in the queue, was "sent", and was gone.
+      const chips = item.options.contextChips ?? [];
+      void window.kaiDesktop.interjectAgent({ conversationId, text: item.text, ...(chips.length > 0 ? { contextChips: chips } : {}) }).then(unwrap)
         .then(({ queued }) => {
           if (queued) {
             onInterjectionDelivered(conversationId, item.text);
@@ -893,7 +910,8 @@ export function WorkspaceView({
             setWorkbenchNotice('The active run could not take this message. It remains queued for the next turn; nothing was stopped.');
           }
         })
-        .catch(() => setWorkbenchNotice('Could not reach the active run. The instruction remains queued; nothing was stopped.'));
+        .catch(() => setWorkbenchNotice('Could not reach the active run. The instruction remains queued; nothing was stopped.'))
+        .finally(() => setSteeringQueued((current) => current.filter((id) => id !== item.id)));
       return;
     }
     if (running) {
@@ -1760,14 +1778,14 @@ export function WorkspaceView({
             {queuedPrompts.map((item, index) => (
               <div className="queue-row" key={item.id}>
                 <span className="queue-label" title={item.status === 'sending' ? 'Sending instruction' : item.status === 'blocked' ? 'Delivery failed' : 'Queued instruction'}><GitFork size={12} /></span><span className="truncate">{item.text}</span>
-                <span className="queue-status">{item.status === 'sending' ? 'Sending' : item.status === 'blocked' ? 'Needs retry' : 'Waiting'}</span>
+                <span className="queue-status">{item.status === 'sending' || steeringQueued.includes(item.id) ? 'Sending' : item.status === 'blocked' ? 'Needs retry' : 'Waiting'}</span>
                 {item.status === 'blocked' && <button type="button" aria-label="Retry queued prompt" title={item.error ?? 'Retry queued prompt'} onClick={() => onUpdateQueuedPrompt(item.id, 'retry')}><RefreshCw size={12} /></button>}
                 <button
                   type="button"
                   className="queue-steer-button"
                   aria-label="Send queued prompt now"
                   title={running ? apiRun ? 'Handle this instruction now, then resume the active task' : 'CLI runs cannot accept live messages; this will send after the run ends' : 'Send this instruction next'}
-                  disabled={item.status === 'sending' || (running && !apiRun)}
+                  disabled={item.status === 'sending' || steeringQueued.includes(item.id) || (running && !apiRun)}
                   onClick={() => steerQueuedPrompt(index)}
                 ><ArrowRight size={12} /><span>{running && !apiRun ? 'After run' : 'Steer now'}</span></button>
                 <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></button>
@@ -1948,7 +1966,7 @@ export function WorkspaceView({
               {(running || paused || awaitingApproval) ? (
                 <>
                   {running && <button type="button" className="send-button" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></button>}
-                  {running && apiRun && <button type="button" className="send-button" disabled={!prompt.trim() || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></button>}
+                  {running && apiRun && <button type="button" className="send-button" disabled={!canSendPrompt || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></button>}
                   {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
                   <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
                 </>

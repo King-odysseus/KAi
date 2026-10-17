@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearInterjections, hasInterjections, interject, setInterjectionActive, steeringInstruction, takeDeliveredInterjections, takeInterjection } from '../apps/desktop/src/main/interjections';
+import { clearInterjections, hasInterjections, interject, setInterjectionActive, steeringInstruction, takeDeliveredInterjections, takeInterjection, takeInterjectionMessage } from '../apps/desktop/src/main/interjections';
 
 const A = 'conv-a';
 const B = 'conv-b';
@@ -62,8 +62,16 @@ describe('messages waiting for a run in progress', () => {
     const delivered = interject(A, 'please adjust');
     expect(takeInterjection(A)).toBe('please adjust');
     await expect(delivered).resolves.toBe(true);
-    expect(takeDeliveredInterjections(A)).toEqual(['please adjust']);
+    expect(takeDeliveredInterjections(A)).toEqual([{ text: 'please adjust', context: '', attachments: [] }]);
     expect(takeDeliveredInterjections(A)).toEqual([]);
+  });
+
+  it('keeps what was attached to a message with it, so the run and the transcript both see it', async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+    const delivered = interject(A, 'look at this', { context: 'Selection: src/a.ts', attachments: [{ name: 'shot.png', dataUrl: png }] });
+    expect(takeInterjectionMessage(A)).toEqual({ text: 'look at this', context: 'Selection: src/a.ts', attachments: [{ name: 'shot.png', dataUrl: png }] });
+    await expect(delivered).resolves.toBe(true);
+    expect(takeDeliveredInterjections(A)).toEqual([{ text: 'look at this', context: 'Selection: src/a.ts', attachments: [{ name: 'shot.png', dataUrl: png }] }]);
   });
 
   it('reports an undelivered message when a run ends first', async () => {

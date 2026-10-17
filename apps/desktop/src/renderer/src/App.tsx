@@ -66,6 +66,7 @@ import { confirmDialog, DialogHost, optionDialog } from './components/AppDialog'
 import { TooltipLayer } from './components/TooltipLayer';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
 import { approvalActions } from './approval-actions';
+import { AUTO_STOP_WAIT_MS, canPauseRun, canResumeRun, canStopRun, STOP_STILL_RUNNING_MS, type RunControlState } from './run-controls';
 import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from './agent-memory';
 import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
@@ -1428,22 +1429,52 @@ export function App(): ReactNode {
     }
   }, [bootstrap, busy, conversations, queuedPromptsByConversation, runningConversationIds]);
 
+  /** What Stop, Pause and Resume can act on for a conversation, read the same way the composer decides what to draw. */
+  function controlStateFor(conversationId: string): RunControlState {
+    return {
+      running: runningConversationIds.includes(conversationId),
+      paused: pausedConversationIds.includes(conversationId),
+      autoWaiting: autoWaitingConversationIds.includes(conversationId),
+      awaitingApproval: pendingApprovals.some((approval) => approval.conversationId === conversationId),
+    };
+  }
+
   async function cancelConversation(): Promise<void> {
-    if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
+    const conversationId = activeConversationId;
+    // Not "is a turn running": Stop is also drawn for a run that is paused, waiting on a question, or parked by Auto
+    // for the person, and in those states there is no turn in flight. Asking for one made Stop do nothing exactly
+    // when the person most needed it.
+    if (!conversationId || !canStopRun(controlStateFor(conversationId))) return;
     // Auto keeps a session alive across turns, keyed by conversation. Cancelling the run in flight on its own leaves
-    // that session free to start the next turn, so Stop looked as though it had done nothing. End the session first.
+    // that session free to start the next turn, so Stop looked as though it had done nothing. Auto is asked first, so
+    // it cannot start another turn behind the cancel — but its answer is not waited for. It only comes back once its
+    // whole loop has unwound, and a Stop that waits on that never ends the run when the loop is waiting itself.
     // A conversation with no Auto session simply has nothing to stop, so a refusal here is not worth reporting.
-    await window.kaiDesktop.stopAuto({ conversationId: activeConversationId }).catch(() => undefined);
+    const stoppingAuto = window.kaiDesktop.stopAuto({ conversationId }).catch(() => undefined);
     const cancelled = await perform(
-      () => window.kaiDesktop.cancelAgent(activeConversationId).then(unwrap),
+      () => window.kaiDesktop.cancelAgent(conversationId).then(unwrap),
       'Stopping agent',
     );
-    if (cancelled) {
-      setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== activeConversationId));
-      setAgentNotice('Stopping the current agent run.');
-      // Keep the run marked active until its result settles. A queued follow-up must not begin beside a process
-      // that has only been asked to stop and is still cleaning up.
-    }
+    // Auto is given a moment to finish unwinding, then left to finish on its own.
+    await Promise.race([stoppingAuto, new Promise<void>((resolve) => { window.setTimeout(resolve, AUTO_STOP_WAIT_MS); })]);
+    // A failed call already reported itself; the run may still be alive, so nothing is cleared.
+    if (cancelled === null) return;
+    // Whatever was parked on the person is over once the run has been told to stop. Without this a run that had
+    // nothing in flight kept its "waiting for you" banner and its Stop button after Stop had worked.
+    setAutoWaitingConversationIds((current) => current.filter((id) => id !== conversationId));
+    setPausedConversationIds((current) => current.filter((id) => id !== conversationId));
+    setPendingApprovals((current) => current.filter((approval) => approval.conversationId !== conversationId));
+    setAgentNotice(cancelled ? 'Stopping the current agent run.' : 'Stopped.');
+    // A run still in flight stays marked active until its result settles. A queued follow-up must not begin beside a
+    // process that has only been asked to stop and is still cleaning up.
+    //
+    // A run that is blocked inside something that does not watch for Stop would otherwise sit there for good with
+    // nothing on screen saying so. Say it, and say what ends it.
+    window.setTimeout(() => {
+      if (runningConversationIdsRef.current.includes(conversationId)) {
+        setAgentNotice('Stop was sent, but the run is still going. "Stop everything" in Operations ends every run at once.');
+      }
+    }, STOP_STILL_RUNNING_MS);
   }
 
   /**
@@ -1936,7 +1967,7 @@ export function App(): ReactNode {
   }
 
   async function pauseConversation(): Promise<void> {
-    if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
+    if (!activeConversationId || !canPauseRun(controlStateFor(activeConversationId))) return;
     // Both levels, the same treatment Stop already gives: Auto's own loop, or it would go on starting turns while the
     // one in flight sits paused. A call with nothing to do refuses without an error, so neither has to know which
     // kind of run this is.
@@ -1954,7 +1985,8 @@ export function App(): ReactNode {
   }
 
   async function resumeConversation(): Promise<void> {
-    if (!activeConversationId || !runningConversationIds.includes(activeConversationId)) return;
+    // Resume is drawn for a run Auto parked as well as one the person paused, and a parked run has no turn in flight.
+    if (!activeConversationId || !canResumeRun(controlStateFor(activeConversationId))) return;
     await window.kaiDesktop.resumeAuto({ conversationId: activeConversationId }).catch(() => undefined);
     await window.kaiDesktop.resumeAgent(activeConversationId).catch(() => undefined);
     setPausedConversationIds((current) => current.filter((id) => id !== activeConversationId));

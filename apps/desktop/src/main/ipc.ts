@@ -83,7 +83,8 @@ import { buildTurnDigest } from './turn-digest';
 import { responseStyleBriefing, workingMethodBriefing } from './working-method';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
 import { buildHistoryNote } from './run-history';
-import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections } from './interjections';
+import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections, type InterjectionAttachment, type InterjectionExtras } from './interjections';
+import { parseImageDataUrl } from './image-attachments';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
@@ -845,9 +846,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'agents:run', async (request, ipcRequest) => runInteractiveAgent(context, request, ipcRequest.ownerWindowId));
   // Saying something to a run already going, rather than waiting for it to end or cancelling it. It reaches the
   // agent at its next turn, so it answers or takes the correction and carries on.
-  handle(context, 'agents:interject', async ({ conversationId, text }) => {
+  handle(context, 'agents:interject', async ({ conversationId, text, contextChips }) => {
     if (!canInterject(conversationId)) return { queued: false };
-    return { queued: await interject(conversationId, text) };
+    return { queued: await interject(conversationId, text, await interjectionExtras(context, conversationId, contextChips ?? [])) };
   });
   handle(context, 'agents:cancel', async ({ conversationId }) => cancelAgent(context, conversationId));
   handle(context, 'agents:pause', async ({ conversationId }) => context.runControl.pause(conversationId));
@@ -1805,8 +1806,13 @@ export async function runConversationAgent(
   context.notifications.runStarted(conversation.id);
   const recordDeliveredInterjections = (): number => {
     const messages = takeDeliveredInterjections(conversation.id);
-    for (const text of messages) conversation.turns.push({
-      id: `turn_${crypto.randomUUID()}`, role: 'user', text, createdAt: new Date().toISOString(),
+    // The transcript shows what the person typed and the images they attached, not the context built for the model.
+    for (const message of messages) conversation.turns.push({
+      id: `turn_${crypto.randomUUID()}`,
+      role: 'user',
+      text: message.text,
+      createdAt: new Date().toISOString(),
+      ...(message.attachments.length > 0 ? { attachments: message.attachments } : {}),
     });
     return messages.length;
   };
@@ -2415,6 +2421,38 @@ function longRunningCommandBriefing(): string {
     'Development servers are long-lived processes, not verification commands. When the user asks to run `npm run dev`, `npm start`, Vite, Next dev, or an equivalent server, start it in the background, confirm the local URL when possible, and then finish the agent turn.',
     'Never leave a conversation waiting for a dev server to exit and do not describe a timed-out foreground server as successfully running.',
   ].join('\n');
+}
+
+/**
+ * What a steer carries beside its words: the readable images, and the rest of the composer's context as text.
+ *
+ * A normal send builds this through `renderContextChips`; a steer used to skip it entirely, so an image attached to a
+ * steered message was thrown away and the model was told only to "look at the attached image".
+ */
+async function interjectionExtras(
+  context: IpcContext,
+  conversationId: string,
+  chips: readonly ContextChip[],
+): Promise<InterjectionExtras> {
+  if (chips.length === 0) return {};
+  const attachments: InterjectionAttachment[] = [];
+  for (const chip of chips) {
+    if (chip.type !== 'image' || !chip.dataUrl || !parseImageDataUrl(chip.dataUrl)) continue;
+    attachments.push({ name: chip.name, dataUrl: chip.dataUrl });
+    if (attachments.length >= 6) break;
+  }
+  const sections: string[] = [];
+  const files = chips.filter((chip): chip is Extract<ContextChip, { type: 'file' }> => chip.type === 'file').map((chip) => chip.path);
+  if (files.length > 0) sections.push(`Files the user pointed at: ${files.join(', ')}`);
+  const textual = chips.filter((chip) => chip.type !== 'image' && chip.type !== 'file');
+  if (textual.length > 0) {
+    const conversation = await context.conversations.get(conversationId);
+    const project = conversation?.projectId ? await resolveProject(context, conversation.projectId, true).catch(() => null) : null;
+    // Selections without their own text are read from the project; with no project they are simply left out.
+    const rendered = project ? await renderContextChips(project.path, context.paths.attachments, textual).catch(() => null) : null;
+    if (rendered?.text) sections.push(rendered.text);
+  }
+  return { context: sections.join('\n\n'), attachments };
 }
 
 async function renderContextChips(

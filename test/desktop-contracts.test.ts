@@ -58,6 +58,15 @@ describe('desktop contracts', () => {
     expect(migrated.webSearch).toMatchObject({ enabled: false, source: 'searxng', maxSearchesPerRun: 5 });
   });
 
+  it('lets a steered message carry the chips attached beside it', () => {
+    const image = { type: 'image', name: 'shot.png', path: 'attachments/shot.png', dataUrl: 'data:image/png;base64,AAAA' };
+    expect(parseIpcInput('agents:interject', { conversationId: 'conv-1', text: 'look at this', contextChips: [image, { type: 'file', path: 'src/a.ts' }] }))
+      .toMatchObject({ conversationId: 'conv-1', contextChips: [image, { type: 'file', path: 'src/a.ts' }] });
+    // Words alone still work, and a malformed chip is refused before it reaches the run.
+    expect(parseIpcInput('agents:interject', { conversationId: 'conv-1', text: 'just words' })).toEqual({ conversationId: 'conv-1', text: 'just words' });
+    expect(() => parseIpcInput('agents:interject', { conversationId: 'conv-1', text: 'x', contextChips: [{ type: 'image' }] })).toThrow();
+  });
+
   it('accepts a web search update and rejects an unknown field', () => {
     expect(parseIpcInput('settings:update', { webSearch: { enabled: true, source: 'brave' } })).toMatchObject({
       webSearch: { enabled: true, source: 'brave' },

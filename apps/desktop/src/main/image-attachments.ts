@@ -61,6 +61,11 @@ export function geminiImagePart(image: AttachedImage): Record<string, unknown> {
   return { inline_data: { mime_type: image.mediaType, data: image.base64 } };
 }
 
+/** The Responses API shape, as it appears beside an `input_text` part in a user message. */
+export function responsesImagePart(image: AttachedImage): Record<string, unknown> {
+  return { type: 'input_image', image_url: `data:${image.mediaType};base64,${image.base64}` };
+}
+
 /** True when this content part is an image in any of the shapes above. */
 export function isImagePart(part: Record<string, unknown>): boolean {
   return (part.type === 'tool_result' && Array.isArray(part.content) && part.content.some((child) => isImagePart(child as Record<string, unknown>))) || part.type === 'image' || part.type === 'image_url' || part.type === 'input_image' || part.inline_data !== undefined;
@@ -90,13 +95,22 @@ export function isImageRefusal(status: number, detail: string): boolean {
  * losing a run to an attachment the person did not have to think about would be worse than losing the attachment.
  * A content list that would be left empty keeps a text part, because a provider rejects an empty one.
  */
-export function withoutImageParts<T extends { content?: string | Array<Record<string, unknown>> | null }>(messages: readonly T[]): T[] {
+export function withoutImageParts<T extends { content?: string | Array<Record<string, unknown>> | null }>(
+  messages: readonly T[],
+  /**
+   * Said to the model in the place of what was removed. Without it the model still reads a prompt that names an
+   * attached image and goes looking for the file, which is how a plain refusal turns into a hunt through the disk.
+   */
+  note?: string,
+): T[] {
   return messages.map((message) => {
     if (!Array.isArray(message.content)) return message;
     const kept = message.content.map((part) => part.type === 'tool_result' && Array.isArray(part.content)
       ? { ...part, content: withoutImageParts([{ content: part.content as Array<Record<string, unknown>> }])[0]!.content }
       : part).filter((part) => !isImagePart(part));
-    const content = kept.length > 0 ? kept : [{ type: 'text', text: '(the attached image could not be sent)' }];
+    const removed = kept.length < message.content.length;
+    const withNote = removed && note ? [...kept, { type: 'text', text: note }] : kept;
+    const content = withNote.length > 0 ? withNote : [{ type: 'text', text: '(the attached image could not be sent)' }];
     return { ...message, content };
   });
 }

@@ -961,7 +961,16 @@ export const ipcInputSchemas = {
   'backups:delete': configBackupRestoreInputSchema,
   'agents:capabilities': emptyInputSchema,
   'agents:run': agentRunRequestSchema,
-  'agents:interject': z.object({ conversationId: z.string().min(1), text: z.string().min(1).max(20_000) }).strict(),
+  // Chips travel with a steer for the same reason they travel with a send: an image, a selection or terminal output
+  // attached beside the words is part of what the person said, and a message that dropped them would answer a
+  // different question than the one asked.
+  'agents:interject': z
+    .object({
+      conversationId: z.string().min(1),
+      text: z.string().min(1).max(20_000),
+      contextChips: z.array(contextChipSchema).max(50).optional(),
+    })
+    .strict(),
   'agents:cancel': agentCancelInputSchema,
   'agents:pause': agentCancelInputSchema,
   'agents:resume': agentCancelInputSchema,
@@ -1553,7 +1562,7 @@ export interface KaiDesktopBridge {
    * Says something to a run that is already going, answered at its next turn rather than waiting for the run to end
    * or cancelling it. Only a run KAI loops itself can take one; a CLI run has no turn to interrupt.
    */
-  interjectAgent(request: { conversationId: string; text: string }): Promise<IpcResponse<{ queued: boolean }>>;
+  interjectAgent(request: { conversationId: string; text: string; contextChips?: ContextChip[] }): Promise<IpcResponse<{ queued: boolean }>>;
   pauseAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   resumeAgent(conversationId: string): Promise<IpcResponse<boolean>>;
   signInAgent(agent: AgentRunRequest['agent']): Promise<IpcResponse<AgentSignInResult>>;
