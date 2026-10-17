@@ -115,8 +115,20 @@ export function withAutopilotException(markdown: string): string {
   return `${markdown.trim()}\n\n${AUTOPILOT_EXCEPTION}\n`;
 }
 
+/**
+ * Rule 47 forbids long dashes, and the rule text was full of them (79, in the rule that bans them): a model copies the
+ * style of what it is handed, so the briefing is written the way the rule asks. The two characters the rule names are
+ * spelled out first, or it would read "do not use (-) or (-)".
+ */
+export function plainDashes(text: string): string {
+  return text
+    .replace(/\s*[\u2014\u2013]\s*(?=\n|$)/g, '')
+    .replace(/(\d)\s*[\u2013\u2014]\s*(\d)/g, '$1-$2')
+    .replace(/\s*[\u2014\u2013]\s*/g, ' - ');
+}
+
 export function buildExecutionRulesBriefing(markdown: string): string {
-  const content = markdown.trim();
+  const content = plainDashes(markdown.trim().replace(/\(\u2014\)/g, '(U+2014)').replace(/\(\u2013\)/g, '(U+2013)'));
   if (!content) return '';
   return [
     RULES_MARKER,

@@ -44,3 +44,13 @@ describe('taskbar menu', () => {
     expect(buildJumpList([], 'KAI.exe', 'KAI.exe').categories).toEqual([]);
   });
 });
+
+describe('plain dashes', () => {
+  it('replaces long dashes and keeps the rule that names them readable', async () => {
+    const { plainDashes, buildExecutionRulesBriefing } = await import('../apps/desktop/src/main/execution-rules');
+    expect(plainDashes('one \u2014 two\u2013three 5\u201310')).toBe('one - two - three 5-10');
+    const briefing = buildExecutionRulesBriefing('47. **No em-dashes** \u2014 Do not use em-dashes (\u2014) or en-dashes (\u2013).');
+    expect(briefing).not.toMatch(/[\u2013\u2014]/);
+    expect(briefing).toContain('(U+2014)');
+  });
+});

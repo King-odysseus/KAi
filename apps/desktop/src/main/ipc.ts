@@ -88,7 +88,7 @@ import { parseImageDataUrl } from './image-attachments';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
-import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, RULES_MARKER, shouldCarryRules, withAutopilotException } from './execution-rules';
+import { applyExecutionRulesToRequest, buildExecutionRulesBriefing, injectRulesIntoProjects, plainDashes, RULES_MARKER, shouldCarryRules, withAutopilotException } from './execution-rules';
 import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
@@ -1628,7 +1628,11 @@ export async function runConversationAgent(
   const emit = (original: AgentRunEvent['event']): void => {
     let event = original;
     if (event.type === 'text.delta') {
-      if (event.channel === 'assistant') streamedChars += event.text.length;
+      // Rule 47: no long dashes in output. Held here as well as asked for, because a model forgets it mid-run.
+      if (event.channel === 'assistant') {
+        event = { ...event, text: plainDashes(event.text) };
+        streamedChars += event.text.length;
+      }
     } else {
       eventOffsets.set(event.id, streamedChars);
       event = { ...event, textOffset: streamedChars };
@@ -1981,6 +1985,7 @@ export async function runConversationAgent(
         }),
     diagnosis ? diagnosisLine(diagnosis) : null,
   ].filter(Boolean).join('\n\n');
+  const closingText = plainDashes(closing);
   const toolDigest = buildTurnDigest(execution.events);
   // Only the model's own words count as a question — the synthesized `describeRunOutcome` fallback never is one —
   // and only a run that actually finished: a failed or cancelled run did not stop because it was asking anything.
@@ -1988,7 +1993,7 @@ export async function runConversationAgent(
   conversation.turns.push({
     id: `turn_${crypto.randomUUID()}`,
     role: 'assistant' as const,
-    text: closing,
+    text: closingText,
     createdAt: conversation.updatedAt,
     ...(awaitingAnswer ? { awaitingAnswer: true } : {}),
     ...(toolDigest ? { toolDigest } : {}),
