@@ -2392,7 +2392,7 @@ export function App(): ReactNode {
       <div className="app-body">
         <NavigationRail
           view={view}
-          version={`v${bootstrap.version.split('.').slice(0, 2).join('.')}`}
+          version={`v${bootstrap.version}`}
           versionTitle={`KAI ${bootstrap.version} · build ${bootstrap.buildIdentifier.split('+').at(-1) ?? 'dev'}`}
           serviceStatus={serviceFor(bootstrap, 'universalProxy').status}
           shortcuts={shortcuts}
