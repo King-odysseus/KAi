@@ -319,3 +319,57 @@ html[data-theme]:root .autopilot-panel .run-interrupted { display: grid; grid-te
 }
 
 /* No selectors below target .flow-diagram, .react-flow, flow nodes, or chart artifact canvases. */
+
+/*
+ * Settings sidebar. One mark says where you are (a bar and a bolder name); a category that is open but not the one in
+ * view only carries a small dot. It used to draw both states as the same filled box, so two entries looked selected.
+ */
+.settings-sticky .settings-search { padding: 0 10px; border-radius: 6px; }
+.settings-sticky .settings-search input { height: 32px; font-size: 12.5px; }
+.settings-category-nav { gap: 1px; }
+.settings-category-nav button {
+  position: relative;
+  min-height: 32px;
+  padding: 0 12px 0 14px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  font-size: 12.5px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.settings-category-nav button:hover { color: var(--text); background: var(--bg-hover); box-shadow: none; }
+.settings-category-nav button.active:not(.current) { color: var(--text); background: transparent; }
+.settings-category-nav button.active:not(.current)::after {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  content: '';
+  transform: translateY(-50%);
+}
+.settings-category-nav button.current {
+  border: 0;
+  color: var(--text);
+  background: var(--mint-soft, var(--bg-hover));
+  box-shadow: none;
+  font-weight: 650;
+}
+.settings-category-nav button.current::before {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--mint);
+  content: '';
+}
+.settings-category-nav button:focus-visible { outline: 2px solid var(--mint); outline-offset: -2px; }
+@media (min-width: 1000px) {
+  .settings-view > .settings-sticky { padding-right: 14px; border-right: 1px solid var(--border-soft); border-bottom: 0; }
+}

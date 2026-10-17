@@ -1516,6 +1516,11 @@ button:disabled {
   color: var(--mint);
 }
 
+/* The next piece of a reply that was broken up by the activity between its sentences. */
+.message.continued {
+  margin-top: 10px;
+}
+
 .message.streaming .message-body::after {
   display: inline-block;
   width: 7px;

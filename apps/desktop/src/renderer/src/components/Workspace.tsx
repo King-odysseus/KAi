@@ -96,6 +96,7 @@ import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
 import { isPreviewableTool } from '../tool-call-preview';
 import { collapseToolCalls } from '../tool-call-events';
+import { interleaveRun, type RunSegment } from '../transcript-order';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
@@ -1349,6 +1350,27 @@ export function WorkspaceView({
     if (!next) trailingInlineEvents.push(event);
     else inlineEventsByTurn.set(next.id, [...(inlineEventsByTurn.get(next.id) ?? []), event]);
   }
+  // Each reply is drawn with its activity between the sentences it belongs to, in the order they happened, so the
+  // reader follows the run down the page instead of reading all the prose and then all the calls. A record from before
+  // positions were kept has nothing to place by and keeps the old layout.
+  const conversationTurns = activeConversation?.turns ?? [];
+  const runParts = new Map<string, RunSegment[]>();
+  const foldedBefore = new Set<string>();
+  let trailingFolded = false;
+  conversationTurns.forEach((turn, index) => {
+    if (turn.role !== 'assistant') return;
+    const following = conversationTurns[index + 1];
+    if (following && following.role !== 'user') return;
+    if (!following && running) return;
+    const runEvents = following ? inlineEventsByTurn.get(following.id) : trailingInlineEvents;
+    if (!runEvents?.length) return;
+    const parts = interleaveRun(turn.text, runEvents);
+    if (!parts) return;
+    runParts.set(turn.id, parts);
+    if (following) foldedBefore.add(following.id);
+    else trailingFolded = true;
+  });
+  const liveParts = running && !trailingFolded && trailingInlineEvents.length > 0 ? interleaveRun(streamingText, trailingInlineEvents) : null;
   /**
    * Whether anything is still going on this conversation. Paused and awaiting-approval count: a run parked on a
    * person still has a call in flight, so its cards must not read as interrupted. This is the same union the
@@ -1625,17 +1647,19 @@ export function WorkspaceView({
           <>
             {activeConversation?.turns.map((turn, index) => (
               <Fragment key={turn.id}>
-                {renderInlineEvents(inlineEventsByTurn.get(turn.id) ?? [])}
-                <MessageTurn
-                  turn={turn}
-                  brainReady={brainReady}
-                  onSaveToBrain={setBrainDraft}
-                  onBranch={onBranchTurn}
-                  onRewind={onRewindTurn}
-                  onOpenFile={onOpenFile}
-                  awaitingAnswer={Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1}
-                  onAnswer={queueOrSendStable}
-                />
+                {!foldedBefore.has(turn.id) && renderInlineEvents(inlineEventsByTurn.get(turn.id) ?? [])}
+                {(() => {
+                  const parts = runParts.get(turn.id);
+                  const awaiting = Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1;
+                  if (!parts) {
+                    return <MessageTurn turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} onRewind={onRewindTurn} onOpenFile={onOpenFile} awaitingAnswer={awaiting} onAnswer={queueOrSendStable} />;
+                  }
+                  const lastText = parts.map((part) => part.kind).lastIndexOf('text');
+                  const firstText = parts.findIndex((part) => part.kind === 'text');
+                  return parts.map((part, partIndex) => part.kind === 'events'
+                    ? <Fragment key={`events-${partIndex}`}>{renderInlineEvents(part.events)}</Fragment>
+                    : <MessageTurn key={`text-${partIndex}`} turn={turn} partText={part.text} partFirst={partIndex === firstText} partLast={partIndex === lastText} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} onRewind={onRewindTurn} onOpenFile={onOpenFile} awaitingAnswer={awaiting} onAnswer={queueOrSendStable} />);
+                })()}
               </Fragment>
             ))}
             {pendingUser && (activeConversation?.turns.length ?? 0) <= pendingUser.baseCount && (
@@ -1649,14 +1673,21 @@ export function WorkspaceView({
                 )}
               </article>
             )}
-            {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} onOpenFile={onOpenFile} /></article>}
+            {liveParts
+              ? liveParts.map((part, partIndex) => part.kind === 'events'
+                ? <Fragment key={`live-events-${partIndex}`}>{renderInlineEvents(part.events)}</Fragment>
+                : <article key={`live-text-${partIndex}`} className={`message assistant${partIndex === liveParts.length - 1 ? ' streaming' : ''}${partIndex === liveParts.findIndex((item) => item.kind === 'text') ? '' : ' continued'}`}>
+                    {partIndex === liveParts.findIndex((item) => item.kind === 'text') && <div className="message-role">KAI</div>}
+                    <Markdown text={part.text} onOpenFile={onOpenFile} />
+                  </article>)
+              : streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} onOpenFile={onOpenFile} /></article>}
             {pendingQuestion && <InlineQuestion key={pendingQuestion.requestId} question={pendingQuestion} onAnswer={onAnswerQuestion} />}
             {running && (
               <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
             )}
             {/* The run in progress shows its changes as they happen; a finished one keeps them closed. */}
             {/* Commands and edits stay folded to one line while the run is live too; opening one is the reader's choice. */}
-            {renderInlineEvents(trailingInlineEvents)}
+            {!trailingFolded && !liveParts && renderInlineEvents(trailingInlineEvents)}
             {runDetails.length > 0 && (
               <section className="run-details" aria-label="Activity timeline">
                 <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
@@ -2080,8 +2111,12 @@ function ExecutableCommandsGroup({ events, runActive, children }: { events: Arra
   );
 }
 
-const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onRewind, onOpenFile, awaitingAnswer, onAnswer }: {
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onRewind, onOpenFile, awaitingAnswer, onAnswer, partText, partFirst = true, partLast = true }: {
   turn: ConversationTurn;
+  /** Set when the reply is drawn in pieces with its activity between them: this piece's text, and whether it opens or closes the reply. */
+  partText?: string;
+  partFirst?: boolean;
+  partLast?: boolean;
   brainReady: boolean;
   onSaveToBrain: (text: string) => void;
   onBranch: (turnId: string) => void;
@@ -2092,8 +2127,8 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
   onAnswer: (text: string) => void;
 }): ReactNode {
   return (
-    <article className={`message ${turn.role}`}>
-      <div className="message-role">
+    <article className={`message ${turn.role}${partFirst ? '' : ' continued'}`}>
+      {partFirst && <div className="message-role">
         {turn.role === 'user' ? 'You' : 'KAI'}
         {turn.role === 'assistant' && brainReady && (
           <button type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => onSaveToBrain(turn.text)}>
@@ -2104,8 +2139,8 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
           <button type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></button>
         )}
         <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
-      </div>
-      <MessageContent text={turn.text} markdown={turn.role === 'assistant'} onOpenFile={onOpenFile} />
+      </div>}
+      <MessageContent text={partText ?? turn.text} markdown={turn.role === 'assistant'} onOpenFile={onOpenFile} />
       {turn.role === 'user' && turn.attachments?.length ? (
         <div className="message-attachments" aria-label="Attached images">
           {turn.attachments.map((attachment) => (
@@ -2113,8 +2148,8 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
           ))}
         </div>
       ) : null}
-      <CopyMessageButton text={turn.text} />
-      {awaitingAnswer && <AnswerBox onAnswer={onAnswer} />}
+      {partLast && <CopyMessageButton text={turn.text} />}
+      {awaitingAnswer && partLast && <AnswerBox onAnswer={onAnswer} />}
     </article>
   );
 });

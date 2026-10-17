@@ -23,6 +23,7 @@ import { readPlan, writePlan } from './plan-store';
 import { DesktopPlanReviewer, mergePlanItems } from './plan-review';
 import { coverageNote, isSourceNeedingCoverage, testNamedFor } from './check-coverage';
 import { jobFileFromArgv, processHeadlessJobFile } from './headless';
+import { applyJumpList, jumpListIconPath, launchIntentFromArgv, type LaunchIntent } from './jump-list';
 import { DesktopEvals, EvalStore } from './evals';
 import { RunScoreStore } from './run-scores';
 import { AgentExperienceStore } from './experience-store';
@@ -164,6 +165,11 @@ if (!hasSingleInstanceLock) {
       submitHeadlessJob(jobFile);
       return;
     }
+    const intent = launchIntentFromArgv(commandLine);
+    if (intent && ipcContext) {
+      void openWindowForIntent(intent);
+      return;
+    }
     const window = desktopWindows.focused()?.window;
     // A retained tray process can outlive a renderer/window failure. Never leave a
     // second launch stranded behind that process: create a usable window again.
@@ -177,6 +183,26 @@ if (!hasSingleInstanceLock) {
   });
 }
 
+/** A taskbar menu pick: a separate window, or one on a project. A project that has gone falls back to a plain window. */
+async function openWindowForIntent(intent: NonNullable<LaunchIntent>): Promise<void> {
+  if (intent.kind === 'new-window') {
+    await createMainWindow(null);
+    return;
+  }
+  const known = ipcContext ? (await ipcContext.projects.list()).some((project) => project.id === intent.projectId) : false;
+  await createMainWindow(known ? intent.projectId : undefined);
+}
+
+/** Keeps the taskbar menu in step with the projects the user has. */
+function refreshJumpList(): void {
+  const context = ipcContext;
+  if (!context) return;
+  void context.projects.list()
+    .then((projects) => applyJumpList(projects, jumpListIconPath()))
+    .catch(() => undefined);
+}
+
+if (process.platform === 'win32' && app.isPackaged) app.setAppUserModelId('ai.kai.desktop');
 app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
@@ -1197,7 +1223,11 @@ async function startApplication(): Promise<void> {
   remoteGateway = remote;
   ipcContext.remote = remote;
   installContentSecurityPolicy();
-  if (!startupJobFile) await createMainWindow();
+  if (!startupJobFile) {
+    const launchIntent = launchIntentFromArgv(process.argv);
+    await createMainWindow(launchIntent?.kind === 'project' ? launchIntent.projectId : undefined);
+  }
+  refreshJumpList();
   await remote.apply((await settings.load()).remote).catch((error: unknown) => {
     logger.warn('internal', 'KAI Remote could not start', messageOf(error));
   });
@@ -1406,6 +1436,7 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
     },
   });
   const session = desktopWindows.register(window, projectId);
+  refreshJumpList();
 
   if (isFirstWindow && settings.windowBounds?.maximized) window.maximize();
   window.once('ready-to-show', () => {

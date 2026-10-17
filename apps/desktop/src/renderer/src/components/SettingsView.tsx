@@ -539,7 +539,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Escape') setQuery(''); }}
-            placeholder="Search every setting: model, API key, token, open-pencil…"
+            placeholder="Search settings"
+            title="Search every setting: model, API key, token, open-pencil…"
             aria-label="Search settings"
           />
           {searching && <button type="button" onClick={() => setQuery('')} aria-label="Clear search"><X size={13} /></button>}
@@ -1416,8 +1417,33 @@ function TextField({ label, value, type = 'text', list, onChange }: { label: str
   return <label className="field"><span>{label}</span><input type={type} list={list} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
+/**
+ * A number the settings schema bounds. The input's own min and max are only hints, so a typed 20 in a field that stops at
+ * 10 went straight into the draft and the whole save was refused with nothing pointing at the field. A value inside the
+ * range is taken as it is typed; one outside it waits until the field is left and is then brought back to the nearest
+ * limit, so typing "1500" in a field that starts at 1000 is not cut off at "1".
+ */
 function NumberField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} /></label>;
+  const [text, setText] = useState<string | null>(null);
+  const clamp = (raw: number): number => Math.min(max, Math.max(min, Number.isFinite(raw) ? raw : min));
+  return <label className="field"><span>{label}</span><input
+    type="number"
+    value={text ?? value}
+    min={min}
+    max={max}
+    step={step}
+    onChange={(event) => {
+      const raw = event.target.value;
+      setText(raw);
+      const parsed = Number(raw);
+      if (raw !== '' && Number.isFinite(parsed) && parsed >= min && parsed <= max) onChange(parsed);
+    }}
+    onBlur={() => {
+      if (text === null) return;
+      onChange(clamp(Number(text)));
+      setText(null);
+    }}
+  /></label>;
 }
 
 function TextAreaField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }): ReactNode {

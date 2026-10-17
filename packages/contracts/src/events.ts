@@ -7,6 +7,11 @@ const eventBaseSchema = z.object({
   taskId: z.string().min(1),
   timestamp: timestampSchema,
   agent: agentIdSchema.optional(),
+  /**
+   * How much of the reply had been written when this happened, in characters. It is what lets the transcript put a
+   * tool call between the sentences that came before and after it, instead of listing every call under all the prose.
+   */
+  textOffset: z.number().int().nonnegative().optional(),
 });
 
 export const textDeltaEventSchema = eventBaseSchema.extend({

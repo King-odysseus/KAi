@@ -12,8 +12,12 @@ import type { PersistedEvent } from '@kai/contracts';
  */
 export function collapseToolCalls<T extends PersistedEvent>(events: readonly T[]): T[] {
   const latest = new Map<string, T>();
+  const firstOffset = new Map<string, number | undefined>();
   for (const event of events) {
-    if (event.type === 'tool.call' && event.callId) latest.set(event.callId, event);
+    if (event.type === 'tool.call' && event.callId) {
+      latest.set(event.callId, event);
+      if (!firstOffset.has(event.callId)) firstOffset.set(event.callId, event.textOffset);
+    }
   }
   const placed = new Set<string>();
   const collapsed: T[] = [];
@@ -24,7 +28,10 @@ export function collapseToolCalls<T extends PersistedEvent>(events: readonly T[]
     }
     if (placed.has(event.callId)) continue;
     placed.add(event.callId);
-    collapsed.push(latest.get(event.callId)!);
+    // The row keeps the place where the call began, so it also keeps that call's position in the reply.
+    const row = latest.get(event.callId)!;
+    const offset = firstOffset.get(event.callId);
+    collapsed.push(offset === undefined || row.textOffset === offset ? row : { ...row, textOffset: offset });
   }
   return collapsed;
 }

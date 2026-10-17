@@ -825,7 +825,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       .reverse()
       .find((turn) => turn.role === 'user')
       ?.text ?? '';
-    return (await buildConversationContext(context, project.path, project.name, project.id, conversation, prompt)).preview;
+    // The panel describes what a run would be sent. It was built without the standing rules, so it read "Instructions:
+    // None" for every project while the runs themselves did carry them, which looked exactly like rules being ignored.
+    let rules = await context.executionRules.read().catch(() => '');
+    if (rules && conversation?.origin?.kind === 'autopilot') rules = withAutopilotException(rules);
+    return (await buildConversationContext(context, project.path, project.name, project.id, conversation, prompt, rules)).preview;
   });
   handle(context, 'preview:info', async ({ projectId }) => {
     const project = await resolveProject(context, projectId, true);
@@ -1568,6 +1572,10 @@ export async function runConversationAgent(
         }
       : {}),
   };
+  // A thread opened with the + button starts unnamed; its first message is what names it, so tabs read as topics.
+  if (isPlaceholderTitle(conversation.title) && !conversation.turns.some((turn) => turn.role === 'user')) {
+    conversation.title = titleFromPrompt(request.prompt);
+  }
   conversation.turns.push(userTurn);
   writtenTurnId = userTurn.id;
 
@@ -1614,7 +1622,17 @@ export async function runConversationAgent(
   // The memory session is the slowest part of setup when the brain is unwell, so Stop is answered here too.
   if (stopped()) return stoppedResult();
 
-  const emit = (event: AgentRunEvent['event']): void => {
+  // Where in the reply each event happened, so the transcript can keep prose and activity in the order they occurred.
+  let streamedChars = 0;
+  const eventOffsets = new Map<string, number>();
+  const emit = (original: AgentRunEvent['event']): void => {
+    let event = original;
+    if (event.type === 'text.delta') {
+      if (event.channel === 'assistant') streamedChars += event.text.length;
+    } else {
+      eventOffsets.set(event.id, streamedChars);
+      event = { ...event, textOffset: streamedChars };
+    }
     const activity = describeEvent(event);
     if (activity) void context.recovery.touch(conversation.id, activity).catch(() => undefined);
     if (event.type === 'approval.request') {
@@ -1975,7 +1993,9 @@ export async function runConversationAgent(
     ...(awaitingAnswer ? { awaitingAnswer: true } : {}),
     ...(toolDigest ? { toolDigest } : {}),
   });
-  conversation.events.push(...execution.events);
+  conversation.events.push(...execution.events.map((event) => (
+    event.type !== 'text.delta' && eventOffsets.has(event.id) ? { ...event, textOffset: eventOffsets.get(event.id)! } : event
+  )));
   conversation.agentSessionId = execution.sessionId;
   try {
     await context.conversations.save(conversation);
@@ -3783,6 +3803,10 @@ export function failureFor(error: unknown): IpcFailure {
 
 class NotFoundError extends Error {}
 class ConflictError extends Error {}
+
+function isPlaceholderTitle(title: string | undefined): boolean {
+  return !title || !title.trim() || title === 'New conversation';
+}
 
 function titleFromPrompt(prompt: string): string {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 64);

@@ -698,8 +698,12 @@ export class DesktopAgentRuntime {
       if (parsed.sessionId) sessionId = parsed.sessionId;
       if (parsed.error) errors.push(stripAnsi(parsed.error));
       if (parsed.text) {
-        outputParts.push(parsed.text);
-        onEvent?.(streamTextEvent(request, parsed.text));
+        // Two messages from the agent arrive as two blocks of text with nothing between them, which read as one run-on
+        // sentence ("...done.I'll record..."). A finished sentence followed by a new one gets a paragraph break.
+        const joined = outputParts.length > 0 && /[.!?:)]$/.test(outputParts.join('')) && /^[^\s]/.test(parsed.text);
+        const text = joined ? `\n\n${parsed.text}` : parsed.text;
+        outputParts.push(text);
+        onEvent?.(streamTextEvent(request, text));
       }
       if (parsed.resultText?.trim()) {
         // Result envelopes can repeat streamed text, or contain the final
