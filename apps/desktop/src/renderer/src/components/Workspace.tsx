@@ -208,6 +208,7 @@ interface WorkspaceViewProps {
   onOpenWorkflows: () => void;
   onCompactConversation: () => void;
   onContinueInNewTab: () => void;
+  onOpenFile: (path: string) => void;
 }
 
 type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
@@ -396,6 +397,7 @@ export function WorkspaceView({
   onOpenWorkflows,
   onCompactConversation,
   onContinueInNewTab,
+  onOpenFile,
 }: WorkspaceViewProps): ReactNode {
   const [prompt, setPrompt] = useState('');
   const [contextPickerOpen, setContextPickerOpen] = useState(false);
@@ -1601,6 +1603,7 @@ export function WorkspaceView({
                   brainReady={brainReady}
                   onSaveToBrain={setBrainDraft}
                   onBranch={onBranchTurn}
+                  onOpenFile={onOpenFile}
                   awaitingAnswer={Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1}
                   onAnswer={queueOrSendStable}
                 />
@@ -1617,7 +1620,7 @@ export function WorkspaceView({
                 )}
               </article>
             )}
-            {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} /></article>}
+            {streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} onOpenFile={onOpenFile} /></article>}
             {pendingQuestion && <InlineQuestion key={pendingQuestion.requestId} question={pendingQuestion} onAnswer={onAnswerQuestion} />}
             {running && (
               <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
@@ -1797,7 +1800,8 @@ export function WorkspaceView({
           </div>
         ))}
         {contextPickerOpen && activeProject && (
-          <div className="context-picker">
+          <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Add context">
+          <div className="context-picker skills-panel">
             <div className="context-picker-head">
               <div><strong>Add context</strong><span>Files, selections, changes, memory, or an image</span></div>
               <button type="button" className="icon-button compact" aria-label="Close context picker" onClick={() => setContextPickerOpen(false)}><X size={14} /></button>
@@ -1819,14 +1823,17 @@ export function WorkspaceView({
               {!contextBusy && fileResults.length === 0 && <div className="empty-list">No matching files</div>}
             </div>
           </div>
+          </div>
         )}
         {goalEditor && (
-          <div className="goal-editor">
+          <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Goal">
+          <div className="goal-editor skills-panel">
             <div className="goal-editor-head"><strong>Goal</strong><span>Outcome, constraints, and proof of completion</span></div>
             <label><span>Outcome</span><textarea rows={2} value={goalEditor.outcome} onChange={(event) => setGoalEditor({ ...goalEditor, outcome: event.target.value })} placeholder="What should be true when this work is done?" /></label>
             <label><span>Constraints</span><textarea rows={2} value={goalEditor.constraints ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, constraints: event.target.value })} placeholder="Required tools, boundaries, or approaches to avoid" /></label>
             <label><span>Verification</span><textarea rows={2} value={goalEditor.verification ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, verification: event.target.value })} placeholder="Tests, measurements, or review criteria that prove completion" /></label>
             <div className="button-row align-end"><button type="button" className="secondary-button" onClick={() => setGoalEditor(null)}>Cancel</button><button type="button" className="secondary-button" onClick={() => void saveGoal(false)}>Save</button><button type="button" className="primary-button" onClick={() => void saveGoal(true)}>Start goal</button></div>
+          </div>
           </div>
         )}
         <input
@@ -2043,11 +2050,12 @@ function ExecutableCommandsGroup({ events, runActive, children }: { events: Arra
   );
 }
 
-const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, awaitingAnswer, onAnswer }: {
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onOpenFile, awaitingAnswer, onAnswer }: {
   turn: ConversationTurn;
   brainReady: boolean;
   onSaveToBrain: (text: string) => void;
   onBranch: (turnId: string) => void;
+  onOpenFile: (path: string) => void;
   /** Set only for the conversation's latest turn, while nothing is running, so answering it is unambiguous. */
   awaitingAnswer: boolean;
   onAnswer: (text: string) => void;
@@ -2063,7 +2071,7 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
         )}
         <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
       </div>
-      <MessageContent text={turn.text} markdown={turn.role === 'assistant'} />
+      <MessageContent text={turn.text} markdown={turn.role === 'assistant'} onOpenFile={onOpenFile} />
       {turn.role === 'user' && turn.attachments?.length ? (
         <div className="message-attachments" aria-label="Attached images">
           {turn.attachments.map((attachment) => (
@@ -2160,9 +2168,9 @@ function formatTokenEstimate(value: number): string {
 }
 
 /** A small, dependency-free response renderer: prose remains easy to scan and fenced commands become copyable cards. */
-function MessageContent({ text, markdown = false }: { text: string; markdown?: boolean }): ReactNode {
+function MessageContent({ text, markdown = false, onOpenFile }: { text: string; markdown?: boolean; onOpenFile?: (path: string) => void }): ReactNode {
   // KAI's replies are Markdown. What the user typed is shown exactly as written.
-  if (markdown) return <Markdown text={text} />;
+  if (markdown) return <Markdown text={text} onOpenFile={onOpenFile} />;
   const parts = text.split(/```([^\n`]*)\n?([\s\S]*?)```/g);
   return (
     <div className="message-body response-content">

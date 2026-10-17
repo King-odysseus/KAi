@@ -37,6 +37,13 @@ export function isSafeHref(href: string): boolean {
   return SAFE_LINK.test(href.trim());
 }
 
+/** Local paths become clickable only in a view that supplies a project file handler. */
+export function isProjectFileHref(href: string): boolean {
+  const value = href.trim();
+  if (!value || value.startsWith('//') || value.startsWith('#') || value.startsWith('?')) return false;
+  return /^file:\/\/\//i.test(value) || /^[a-z]:[\\/]/i.test(value) || !/^[a-z][a-z\d+.-]*:/i.test(value);
+}
+
 export function parseMarkdown(source: string): Block[] {
   return parseBlocks(source.replace(/\r\n?/g, '\n').split('\n'));
 }
@@ -278,7 +285,7 @@ export function parseInline(source: string): Inline[] {
       const link = matchLink(source, index);
       if (link) {
         flush();
-        out.push(isSafeHref(link.href)
+        out.push(isSafeHref(link.href) || isProjectFileHref(link.href)
           ? { type: 'link', href: link.href, children: parseInline(link.label) }
           : { type: 'text', text: link.label });
         index = link.end;

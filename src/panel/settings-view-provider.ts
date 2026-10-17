@@ -600,7 +600,8 @@ export class SettingsViewProvider {
     const presets = [
       { label: 'DeepSeek', claudeUrl: 'https://api.deepseek.com/anthropic', openaiUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
       { label: 'Groq', claudeUrl: '', openaiUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
-      { label: 'Moonshot (Kimi)', claudeUrl: '', openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
+      { label: 'Moonshot (Kimi)', claudeUrl: 'https://api.moonshot.ai/anthropic', openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2.6' },
+      { label: 'Z.AI / GLM', claudeUrl: 'https://api.z.ai/api/anthropic', openaiUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3' },
       { label: 'Together AI', claudeUrl: '', openaiUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
       { label: 'Ollama (local)', claudeUrl: '', openaiUrl: 'http://localhost:11434/v1', model: 'qwen2.5-coder' },
       { label: 'LM Studio (local)', claudeUrl: '', openaiUrl: 'http://localhost:1234/v1', model: 'local-model' },
@@ -908,7 +909,8 @@ export class SettingsViewProvider {
     var PROVIDER_PRESETS = [
       { label: 'DeepSeek', claudeUrl: 'https://api.deepseek.com/anthropic', openaiUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro' },
       { label: 'Groq', claudeUrl: null, openaiUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
-      { label: 'Moonshot (Kimi)', claudeUrl: null, openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2-5-flash-preview' },
+      { label: 'Moonshot (Kimi)', claudeUrl: 'https://api.moonshot.ai/anthropic', openaiUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2.6' },
+      { label: 'Z.AI / GLM', claudeUrl: 'https://api.z.ai/api/anthropic', openaiUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3' },
       { label: 'Together AI', claudeUrl: null, openaiUrl: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
       { label: 'Ollama (local)', claudeUrl: null, openaiUrl: 'http://localhost:11434/v1', model: 'qwen2.5-coder' },
       { label: 'LM Studio (local)', claudeUrl: null, openaiUrl: 'http://localhost:1234/v1', model: 'local-model' },

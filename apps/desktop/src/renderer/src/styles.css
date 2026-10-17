@@ -7815,12 +7815,13 @@ code {
 }
 
 .skills-overlay {
-  position: absolute;
+  position: fixed;
   z-index: 40;
-  inset: 0;
+  inset: var(--titlebar-height) 0 0;
   display: grid;
   padding: 18px;
   place-items: center;
+  overflow: auto;
   background: rgba(4, 10, 19, 0.58);
   backdrop-filter: blur(4px);
 }
@@ -7828,7 +7829,8 @@ code {
 .skills-panel {
   display: flex;
   width: min(760px, 100%);
-  max-height: min(680px, calc(100% - 20px));
+  max-height: min(680px, 100%);
+  min-height: 0;
   flex-direction: column;
   gap: 10px;
   padding: 14px;
@@ -7837,6 +7839,71 @@ code {
   background: var(--bg-panel);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
 }
+
+.file-preview-open .workspace-view {
+  width: 54%;
+}
+
+.workspace-file-preview {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: flex;
+  width: 46%;
+  min-width: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-shell);
+}
+
+.app-main:not(.view-workspace) .workspace-file-preview { display: none; }
+
+.workspace-file-preview-head {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.workspace-file-preview-head strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-file-preview-content {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: var(--text);
+  font: 12px/1.55 "Cascadia Code", Consolas, monospace;
+  tab-size: 2;
+}
+
+.workspace-file-preview-status {
+  padding: 16px;
+  color: var(--text-muted);
+}
+
+.workspace-file-preview-dirty { color: var(--amber); font-size: 11px; }
+
+.workspace-file-preview-editor {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+}
+
+.goal-editor.skills-panel,
+.context-picker.skills-panel { overflow-y: auto; }
 
 .skills-panel-head {
   display: flex;

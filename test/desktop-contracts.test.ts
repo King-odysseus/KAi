@@ -4,6 +4,7 @@ import {
   cognitive1McpTools,
   conversationRecordV1Schema,
   createDefaultSettings,
+  DIRECT_PROVIDER_ORDER,
   directProviderPreset,
   migrateDeepSeekModel,
   migrateConversation,
@@ -67,6 +68,25 @@ describe('desktop contracts', () => {
       'accounts/fireworks/models/deepseek-v4p1-flash',
       'accounts/fireworks/models/kimi-k3',
     ]));
+    expect(directProviderPreset('zai')).toMatchObject({
+      id: 'zai',
+      protocol: 'chat-completions',
+      defaultBaseUrl: 'https://api.z.ai/api/paas/v4',
+      defaultModel: 'glm-5.3',
+      credentialId: 'provider.zai',
+      supportsTools: true,
+      models: expect.arrayContaining(['glm-5.3', 'glm-4.7']),
+    });
+    expect(directProviderPreset('moonshot')).toMatchObject({
+      id: 'moonshot',
+      protocol: 'chat-completions',
+      defaultBaseUrl: 'https://api.moonshot.ai/v1',
+      defaultModel: 'kimi-k3',
+      credentialId: 'provider.moonshot',
+      supportsTools: true,
+      models: expect.arrayContaining(['kimi-k3', 'kimi-k2.6']),
+    });
+    expect(DIRECT_PROVIDER_ORDER).toEqual(expect.arrayContaining(['zai', 'moonshot']));
   });
 
   it('rejects malformed IPC before main handles it', () => {
@@ -84,6 +104,12 @@ describe('desktop contracts', () => {
     });
     expect(parseIpcInput('settings:update', { directApi: { provider: 'deepseek' } })).toMatchObject({
       directApi: { provider: 'deepseek' },
+    });
+    expect(parseIpcInput('settings:update', { directApi: { provider: 'zai' } })).toMatchObject({
+      directApi: { provider: 'zai' },
+    });
+    expect(parseIpcInput('settings:update', { directApi: { provider: 'moonshot' } })).toMatchObject({
+      directApi: { provider: 'moonshot' },
     });
     expect(parseIpcInput('settings:update', { learningTutor: { provider: 'deepseek', model: 'deepseek-v4-pro' } })).toMatchObject({
       learningTutor: { provider: 'deepseek', model: 'deepseek-v4-pro' },

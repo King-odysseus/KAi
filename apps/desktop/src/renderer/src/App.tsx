@@ -38,6 +38,7 @@ import { ProxyPanel } from './components/ProxyView';
 import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
 import { CodeView } from './components/CodeView';
+import { WorkspaceFilePreview } from './components/WorkspaceFilePreview';
 import { GitView } from './components/GitView';
 import { CommandsView } from './components/CommandsView';
 import { TasksView } from './components/TasksView';
@@ -148,6 +149,17 @@ function loadComposerDrafts(): Record<string, string> {
   }
 }
 
+function projectFileLinkPath(href: string, projectRoot: string): string {
+  let path = href;
+  if (/^file:\/\//i.test(path)) {
+    try { path = decodeURIComponent(new URL(path).pathname); } catch { /* Let the file reader report an invalid link. */ }
+  }
+  path = path.replace(/#.*$/, '').replace(/:\d+(?:-\d+)?$/, '').replace(/\\/g, '/').replace(/^\/(?=[a-z]:\/)/i, '');
+  const root = projectRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  if (path.toLowerCase().startsWith(`${root.toLowerCase()}/`)) return path.slice(root.length + 1);
+  return path.replace(/^\//, '');
+}
+
 /**
  * The model a conversation may use with this agent and mode. A saved model survives only while it still fits: a name
  * that belongs to another agent (what was left behind when the agent was switched) is dropped, so a Claude run is
@@ -204,7 +216,8 @@ export function App(): ReactNode {
   const [setupOpen, setSetupOpen] = useState(false);
   const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
-  const [codeOpenRequest, setCodeOpenRequest] = useState<{ path: string; nonce: number } | null>(null);
+  const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(null);
+  const [workspaceFileDirty, setWorkspaceFileDirty] = useState(false);
   // The same hand-off for a board card, rather than a file. The card travels whole, because the Studio is the view
   // that holds the board: the Code view is pointed at the card rather than left to look it up in another project.
   const [codeLearnRequest, setCodeLearnRequest] = useState<{ cardId: string; title: string; stale: boolean; staleReason: string | null; nonce: number } | null>(null);
@@ -351,6 +364,23 @@ export function App(): ReactNode {
   shortcutSheetOpenRef.current = shortcutSheetOpen;
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
+
+  async function openWorkspaceFile(path: string): Promise<void> {
+    if (workspaceFileDirty && workspaceFilePath && path !== workspaceFilePath && !(await confirmDialog({
+      title: 'Discard unsaved changes?', detail: `${workspaceFilePath} has unsaved changes.`, confirmLabel: 'Discard', destructive: true,
+    }))) return;
+    if (path !== workspaceFilePath) setWorkspaceFileDirty(false);
+    setWorkspaceFilePath(path);
+    setView('workspace');
+  }
+
+  async function closeWorkspaceFile(): Promise<void> {
+    if (workspaceFileDirty && workspaceFilePath && !(await confirmDialog({
+      title: 'Discard unsaved changes?', detail: `${workspaceFilePath} has unsaved changes.`, confirmLabel: 'Discard', destructive: true,
+    }))) return;
+    setWorkspaceFileDirty(false);
+    setWorkspaceFilePath(null);
+  }
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
   const activePaused = Boolean(
@@ -2222,6 +2252,7 @@ export function App(): ReactNode {
             onOpenWorkflows={() => setView('workflows')}
             onCompactConversation={() => void compactActiveConversation()}
             onContinueInNewTab={() => void continueInNewTab()}
+            onOpenFile={(href) => { if (activeProject) void openWorkspaceFile(projectFileLinkPath(href, activeProject.path)); }}
           />
         );
     }
@@ -2327,8 +2358,7 @@ export function App(): ReactNode {
                 projectId={activeProject?.id ?? null}
                 filesRefreshKey={`${activeConversation?.id ?? ''}:${activeConversation?.updatedAt ?? ''}`}
                 onOpenFile={(path) => {
-                  setCodeOpenRequest({ path, nonce: Date.now() });
-                  setView('code');
+                  void openWorkspaceFile(path);
                 }}
                 onOpen={(id) => void openConversation(id)}
                 onDelete={(id) => void deleteConversation(id)}
@@ -2355,8 +2385,11 @@ export function App(): ReactNode {
           </>
         )}
         <div className="main-column">
-          <main className={`app-main view-${view}`}>
+          <main className={`app-main view-${view}${view === 'workspace' && workspaceFilePath && activeProject ? ' file-preview-open' : ''}`}>
             {view !== 'code' && renderCurrentView()}
+            {workspaceFilePath && activeProject && (
+              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
+            )}
             {(studioKept || view === 'studio') && (
               <div className={`persistent-studio-view ${view === 'studio' ? 'active' : ''}`} aria-hidden={view !== 'studio'}>
                 <StudioView
@@ -2383,7 +2416,6 @@ export function App(): ReactNode {
                 formatOnSave={bootstrap.settings.editor.formatOnSave}
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
-                openRequest={codeOpenRequest}
                 learnRequest={codeLearnRequest}
               />
             </div>

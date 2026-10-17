@@ -27,6 +27,12 @@ const EXACT_PRICES: Readonly<Record<string, ModelPrice>> = {
   'deepseek-reasoner': { input: 0.55, output: 2.19 },
   'deepseek-flash': { input: 0.3, output: 1.2 },
   'deepseek-v4-pro': { input: 1.32, output: 3.96 },
+  'glm-5.3': { input: 0.6, output: 2.2 },
+  'glm-5.1': { input: 0.6, output: 2.2 },
+  'glm-4.7': { input: 0.6, output: 2.2 },
+  'kimi-k3': { input: 1, output: 4 },
+  'kimi-k2.6': { input: 0.6, output: 2.5 },
+  'moonshot-v1-128k': { input: 1, output: 3 },
 };
 
 const FAMILY_PRICES: ReadonlyArray<readonly [prefix: string, price: ModelPrice]> = [
@@ -37,6 +43,9 @@ const FAMILY_PRICES: ReadonlyArray<readonly [prefix: string, price: ModelPrice]>
   ['claude-', { input: 5, output: 25 }],
   ['gpt-6', { input: 10, output: 50 }],
   ['gpt-', { input: 4, output: 20 }],
+  ['glm-', { input: 0.6, output: 2.2 }],
+  ['kimi-', { input: 0.6, output: 2.5 }],
+  ['moonshot-', { input: 1, output: 3 }],
 ];
 
 /** Look up a price, tolerating OpenRouter `vendor/model` ids and dated snapshots. Unknown models return null. */

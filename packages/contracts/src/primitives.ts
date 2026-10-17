@@ -42,6 +42,8 @@ export const providerIdSchema = z.enum([
   'google',
   'deepseek',
   'openrouter',
+  'zai',
+  'moonshot',
   'groq',
   'mistral',
   'xai',

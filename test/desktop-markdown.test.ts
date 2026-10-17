@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Markdown } from '../apps/desktop/src/renderer/src/components/Markdown';
-import { isSafeHref, parseInline, parseMarkdown } from '../apps/desktop/src/renderer/src/markdown';
+import { isProjectFileHref, isSafeHref, parseInline, parseMarkdown } from '../apps/desktop/src/renderer/src/markdown';
 
 const html = (text: string): string => renderToStaticMarkup(createElement(Markdown, { text }));
 
@@ -92,6 +92,14 @@ describe('markdown inline', () => {
     expect(isSafeHref('file:///C:/secret')).toBe(false);
     expect(isSafeHref('https://example.com')).toBe(true);
     expect(parseInline('[click](javascript:alert(1))')).toEqual([{ type: 'text', text: 'click' }]);
+  });
+
+  it('keeps project file references available without accepting script links', () => {
+    expect(isProjectFileHref('src/app.tsx')).toBe(true);
+    expect(isProjectFileHref('file:///C:/project/src/app.tsx')).toBe(true);
+    expect(isProjectFileHref('javascript:alert(1)')).toBe(false);
+    expect(isProjectFileHref('//example.com/path')).toBe(false);
+    expect(parseInline('[app](src/app.tsx)')).toMatchObject([{ type: 'link', href: 'src/app.tsx' }]);
   });
 });
 
