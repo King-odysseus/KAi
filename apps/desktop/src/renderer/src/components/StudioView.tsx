@@ -39,6 +39,7 @@ import {
   type StudioDesign,
   type StudioGuideView,
   type StudioProjectSummary,
+  type StudioPlanAction,
   type StudioReadiness,
   type TeamPlanDraft,
 } from '@kai/contracts';
@@ -144,7 +145,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [boardFull, setBoardFull] = useState(false);
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
-  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'guide'>('interview');
+  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide'>('interview');
   // How the last design build ended, shown beside the buttons that start it. The page's own banner is at the very top,
   // a long way above the build controls, and a build that stopped there looked like one that had not said anything.
   const [buildOutcome, setBuildOutcome] = useState<string | null>(null);
@@ -154,6 +155,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [designChatText, setDesignChatText] = useState('');
   const [designChatImage, setDesignChatImage] = useState<{ name: string; dataUrl: string } | null>(null);
   const [designChatMessages, setDesignChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  // The Studio chat works on the plan, not on the drawing: it explains what a drawn page is or what changed, and
+  // answers with a change set the person ticks before anything is written.
+  const [planChatText, setPlanChatText] = useState('');
+  const [planChatMessages, setPlanChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const [planActions, setPlanActions] = useState<StudioPlanAction[] | null>(null);
+  const [planSelected, setPlanSelected] = useState<boolean[]>([]);
+  const [planOutcome, setPlanOutcome] = useState<{ applied: string[]; failed: Array<{ summary: string; reason: string }> } | null>(null);
+  // Artifacts ticked in the Artifacts tab, for "write only what I chose" rather than the whole set.
+  const [selectedKinds, setSelectedKinds] = useState<Set<ArtifactKind>>(new Set());
   const [routeSuggestions, setRouteSuggestions] = useState<import('@kai/contracts').StudioRouteSuggestion[] | null>(null);
   const [routeUnresolved, setRouteUnresolved] = useState<string[]>([]);
   // Where the project is, from the rules — free to read, so it is refreshed whenever the board changes. The
@@ -163,7 +173,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [handoffDismissed, setHandoffDismissed] = useState(false);
   const [dropColumn, setDropColumn] = useState<BoardStatus | null>(null);
   const threadEnd = useRef<HTMLDivElement | null>(null);
-  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'page-op' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | 'guide' | null>(null);
+  const [busy, setBusy] = useState<'load' | 'start' | 'answer' | 'enhance' | 'finish' | 'reset' | 'generate' | 'plan' | 'arrange' | 'card' | 'team' | 'work' | 'design' | 'design-build' | 'page-op' | 'archive' | 'delete' | 'folder' | 'launch' | 'link' | 'guide' | 'plan-chat' | null>(null);
   const [useCurrentFolder, setUseCurrentFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -484,7 +494,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
 
   /** The design tab's own data: the screens the project needs and the reference images for its look. */
   useEffect(() => {
-    if (tab !== 'design' || !projectId || state?.status !== 'done') return undefined;
+    // The chat needs the pages inventory too: it is what the "drawn but not planned" rows are compared against.
+    if ((tab !== 'design' && tab !== 'chat') || !projectId || state?.status !== 'done') return undefined;
     let cancelled = false;
     void Promise.all([
       window.kaiDesktop.studioArtifactText({ projectId, kind: 'pages' }).then(unwrap),
@@ -1728,6 +1739,133 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setDesignChatImage({ name: file.name, dataUrl });
   }
 
+  function toggleSelectedKind(kind: ArtifactKind): void {
+    setSelectedKinds((current) => {
+      const next = new Set(current);
+      if (next.has(kind)) next.delete(kind); else next.add(kind);
+      return next;
+    });
+  }
+
+  /** Everything not written yet, plus everything that went stale: the set "Generate selected" was made for. */
+  function selectMissingKinds(): void {
+    const missing = ARTIFACT_KINDS.filter((kind) => kind !== 'brief' && (() => {
+      const entry = artifacts?.artifacts.find((item) => item.kind === kind);
+      return !entry || entry.stale;
+    })());
+    setSelectedKinds(new Set(missing));
+  }
+
+  /** The design-only preset: the three artifacts the design layer actually reads, and nothing upstream of them. */
+  function selectDesignKinds(): void {
+    setSelectedKinds(new Set<ArtifactKind>(['style-guide', 'tokens', 'pages']));
+  }
+
+  async function generateSelectedKinds(): Promise<void> {
+    if (!projectId || selectedKinds.size === 0 || busy !== null) return;
+    const kinds = [...selectedKinds];
+    setBusy('generate');
+    setError(null);
+    setNotice(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.generateStudioArtifactsSelected({ projectId, kinds }));
+      setArtifacts(result.artifacts);
+      if (kinds.includes('pages')) setPagesText(unwrap(await window.kaiDesktop.studioArtifactText({ projectId, kind: 'pages' })));
+      setSelectedKinds(new Set());
+      if (result.failed.length > 0) {
+        setError(`Could not write ${result.failed.map((entry) => `${entry.kind} (${entry.reason})`).join(', ')}.`);
+      } else {
+        setNotice(`Wrote ${result.wrote.length} artifact${result.wrote.length === 1 ? '' : 's'}: ${result.wrote.join(', ')}.`);
+      }
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function togglePlanAction(index: number): void {
+    setPlanSelected((current) => current.map((value, at) => (at === index ? !value : value)));
+  }
+
+  async function sendPlanChat(override?: string): Promise<void> {
+    if (!projectId || busy !== null) return;
+    const message = (override ?? planChatText).trim();
+    if (!message) return;
+    setPlanChatMessages((items) => [...items, { role: 'user', text: message }]);
+    setPlanChatText('');
+    setPlanActions(null);
+    setPlanSelected([]);
+    setPlanOutcome(null);
+    setBusy('plan-chat');
+    setError(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.chatWithStudioPlan({ projectId, message }));
+      setPlanChatMessages((items) => [...items, { role: 'assistant', text: result.reply }]);
+      setPlanActions(result.actions);
+      setPlanSelected(result.actions.map(() => true));
+    } catch (caught) {
+      const text = messageOf(caught);
+      setError(text);
+      setPlanChatMessages((items) => [...items, { role: 'assistant', text }]);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function applyPlanChanges(): Promise<void> {
+    if (!projectId || !planActions || busy !== null) return;
+    const chosen = planActions.filter((_, index) => planSelected[index]);
+    if (chosen.length === 0) return;
+    setBusy('plan-chat');
+    setError(null);
+    try {
+      const result = unwrap(await window.kaiDesktop.applyStudioPlanChanges({ projectId, actions: chosen }));
+      setBoard(result.board);
+      setArtifacts(result.artifacts);
+      setDesign(result.design);
+      setPagesText(result.pages);
+      setPlanOutcome({ applied: result.applied, failed: result.failed });
+      setPlanActions(null);
+      setPlanSelected([]);
+      const summary = [
+        ...result.applied.map((line) => `Applied: ${line}`),
+        ...result.failed.map((entry) => `Not applied: ${entry.summary} (${entry.reason})`),
+      ].join('\n');
+      setPlanChatMessages((items) => [...items, { role: 'assistant', text: summary || 'Nothing changed.' }]);
+      if (result.failed.length > 0) setError(`${result.failed.length} change${result.failed.length === 1 ? '' : 's'} could not be applied.`);
+      else setNotice(`Applied ${result.applied.length} change${result.applied.length === 1 ? '' : 's'}.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * The direct question for a drawn page the plan does not know about. "Link" asks which planned screen it is, then
+   * the agent proposes the rename on both sides; "new" and "remove" say the rest in the person's own words.
+   */
+  async function explainDrawnPage(name: string, mode: 'link' | 'add' | 'remove'): Promise<void> {
+    if (mode === 'link') {
+      const target = await promptDialog({
+        title: `Link "${name}" to a planned screen`,
+        label: 'Planned screen name',
+        initialValue: '',
+        confirmLabel: 'Ask Studio to link them',
+        validate: (value) => (value.trim() ? null : 'Name the screen in the plan.'),
+      });
+      if (target === null || !target.trim()) return;
+      await sendPlanChat(`The page "${name}" drawn in OpenPencil is the planned screen "${target.trim()}". Link them, renaming the drawn page so the names match.`);
+      return;
+    }
+    if (mode === 'add') {
+      await sendPlanChat(`The page "${name}" I drew in OpenPencil is a new screen. Add it to the plan and the board.`);
+      return;
+    }
+    await sendPlanChat(`The page "${name}" is not needed. Remove it from the plan and the board, but keep the drawing.`);
+  }
+
   /** Runs the screenshots-and-DOM check on a UI card. The board it returns already reflects the result. */
   async function checkUi(cardId: string): Promise<void> {
     if (!projectId) return;
@@ -2016,6 +2154,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             ['artifacts', `Artifacts${artifacts ? ` (${artifacts.artifacts.length})` : ''}`],
             ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
             ['design', 'Design'],
+            ['chat', 'Studio chat'],
             ['guide', 'Senior dev'],
           ] as const).map(([id, label]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</button>
@@ -2246,6 +2385,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
               <button type="button" className="secondary-button" onClick={() => void regenerateAll()} disabled={busy !== null || !readiness?.ready} title="Rewrite every artifact from the brief, even the ones that are up to date">
                 <RefreshCw size={14} /> Regenerate all
               </button>
+              <button type="button" className="secondary-button" onClick={selectMissingKinds} disabled={busy !== null || !artifacts} title="Tick every artifact that is missing or stale">
+                Select missing &amp; stale
+              </button>
+              <button type="button" className="secondary-button" onClick={selectDesignKinds} disabled={busy !== null} title="Tick the style guide, tokens and pages: the design layer, without the PRD and stories">
+                Design only
+              </button>
+              <button type="button" className="primary-button" onClick={() => void generateSelectedKinds()} disabled={busy !== null || !readiness?.ready || selectedKinds.size === 0} title="Write only the ticked artifacts, in dependency order">
+                {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} Generate selected ({selectedKinds.size})
+              </button>
               {staleCount > 0 && <span className="studio-model">{staleCount} stale</span>}
             </div>
             {busy === 'generate' && progress && <GenerationProgress progress={progress} />}
@@ -2254,6 +2402,15 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 const entry = artifacts?.artifacts.find((item) => item.kind === kind);
                 return (
                   <li key={kind} className={[entry?.stale ? 'stale' : '', progress?.current === kind && busy === 'generate' ? 'writing' : '', progress?.failed[kind] ? 'failed' : ''].filter(Boolean).join(' ') || undefined}>
+                    {kind !== 'brief' && (
+                      <input
+                        type="checkbox"
+                        checked={selectedKinds.has(kind)}
+                        onChange={() => toggleSelectedKind(kind)}
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label={`Select ${kind} for generation`}
+                      />
+                    )}
                     <div className={entry ? 'studio-artifact-open' : undefined} role={entry ? 'button' : undefined} tabIndex={entry ? 0 : undefined} aria-expanded={entry ? viewing === kind : undefined} onClick={entry ? () => void viewArtifact(kind) : undefined} onKeyDown={entry ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void viewArtifact(kind); } } : undefined} title={entry ? `Open ${kind}` : undefined}>
                       <strong>{kind}</strong>
                       <span className="studio-note">
@@ -2321,6 +2478,18 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             <p className="studio-note">
               open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. Pull the design also launches the editor for you and reconnects KAI to whatever it reports, so there is nothing to start by hand.
             </p>
+            {designRows.some((row) => !row.inPages && row.drawn) && (() => {
+              const unplanned = designRows.filter((row) => !row.inPages && row.drawn).map((row) => row.name);
+              return (
+                <p className="studio-notice warning" role="status">
+                  <AlertTriangle size={14} />
+                  <span>
+                    {unplanned.length} drawn page{unplanned.length === 1 ? ' is' : 's are'} not in the plan: {unplanned.slice(0, 4).join(', ')}{unplanned.length > 4 ? ` and ${unplanned.length - 4} more` : ''}. Tell Studio what {unplanned.length === 1 ? 'it is' : 'they are'} so the plan, the board and the drawing agree.
+                  </span>
+                  <button type="button" className="secondary-button" onClick={() => setTab('chat')}>Open Studio chat</button>
+                </p>
+              );
+            })()}
             <div className="page-actions">
               <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                 {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Palette size={14} />} Pull the design
@@ -2517,6 +2686,81 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
             </>
           )}
 
+          {tab === 'chat' && (
+          <article className="studio-card">
+            <h2><NotebookPen size={16} /> Studio chat</h2>
+            <p className="studio-note">
+              Say what a drawn page is, what is missing, or what changed. Studio looks at the plan, the board and the design, then proposes the changes. Nothing is written until you tick the ones you want and apply them.
+            </p>
+            {(() => {
+              const unplanned = designRows.filter((row) => !row.inPages && row.drawn);
+              if (unplanned.length === 0) return null;
+              return (
+                <section>
+                  <h3>Drawn but not planned</h3>
+                  <p className="studio-note">These pages exist in open-pencil but not in the pages list, which is why the board cannot match them.</p>
+                  <ul className="studio-list">
+                    {unplanned.map((row) => (
+                      <li key={row.name}>
+                        <strong>{row.name}</strong>
+                        <span className="studio-step-buttons">
+                          <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'link')} disabled={busy !== null}>This is a planned screen</button>
+                          <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'add')} disabled={busy !== null}>It is new</button>
+                          <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'remove')} disabled={busy !== null}>Not needed</button>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              );
+            })()}
+            <section className="studio-design-chat" aria-label="Studio chat">
+              <div className="studio-design-chat-thread" aria-live="polite">
+                {planChatMessages.length === 0 && (
+                  <p className="studio-note">For example: “Register is the sign-up screen, just named differently.” “Add a parent portal with a report card page.” “The old dashboard is not needed.”</p>
+                )}
+                {planChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Studio'}</strong><br />{item.text}</p>)}
+              </div>
+              <textarea value={planChatText} onChange={(event) => setPlanChatText(event.target.value)} placeholder="Tell Studio what this page is, or what should change…" rows={3} disabled={busy !== null} />
+              <div className="page-actions">
+                <button type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</button>
+                <span className="studio-model">It proposes; you decide what to apply.</span>
+              </div>
+            </section>
+            {planActions && planActions.length > 0 && (
+              <section className="studio-handoff">
+                <h3><Check size={15} /> Proposed changes</h3>
+                <ul className="studio-list">
+                  {planActions.map((action, index) => (
+                    <li key={`${action.kind}-${index}`}>
+                      <label>
+                        <input type="checkbox" checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
+                        {' '}{action.summary}
+                      </label>
+                      <span className="studio-kind">{action.kind}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="page-actions">
+                  <button type="button" className="primary-button" onClick={() => void applyPlanChanges()} disabled={busy !== null || !planSelected.some(Boolean)}>
+                    {busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Apply selected ({planSelected.filter(Boolean).length})
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => { setPlanActions(null); setPlanSelected([]); }} disabled={busy !== null}>Dismiss</button>
+                </div>
+              </section>
+            )}
+            {planActions && planActions.length === 0 && (
+              <p className="studio-note" role="status">Studio found no plan change to propose. Ask it to wire a page in, or to add a screen by name.</p>
+            )}
+            {planOutcome && (
+              <section className="studio-note" role="status">
+                {planOutcome.applied.map((line) => <p key={line}><Check size={13} /> {line}</p>)}
+                {planOutcome.failed.map((entry) => <p key={entry.summary} className="studio-fail"><AlertTriangle size={13} /> {entry.summary}: {entry.reason}</p>)}
+              </section>
+            )}
+          </article>
+          )}
+
           {tab === 'guide' && (
             <GuidePanel
               view={guide}
@@ -2655,11 +2899,11 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     onClick={() => setUseCurrentFolder(true)}
                     disabled={busy !== null}
                   >
-                    <FolderOpen size={13} /> Use {currentFolder.name}
+                    <FolderOpen size={13} /> Plan {currentFolder.name}
                   </button>
                 )}
               </div>
-              <small>{currentFolder ? 'Start independent by default, or explicitly use the open folder. You can create a new project folder after the brief is ready.' : 'Plan first. You can create a project folder after the brief is ready.'}</small>
+              <small>{currentFolder ? 'Attach this plan to the open project, so the interview and the design read the code that is already there. The plan is written under that folder\'s .kai/spec.' : 'Plan first. You can create a project folder after the brief is ready.'}</small>
             </div>
             <StudioComposer
               value={idea}

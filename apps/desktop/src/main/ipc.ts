@@ -589,6 +589,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:style-refs-describe', async ({ projectId }) => context.styleReferences.describe(projectId));
   handle(context, 'studio:artifacts-generate', async ({ projectId, kind }) => context.studio.generate(projectId, kind));
   handle(context, 'studio:artifacts-generate-all', async ({ projectId }) => context.studio.generateAll(projectId));
+  handle(context, 'studio:artifacts-generate-selected', async ({ projectId, kinds }) => context.studio.generateSelected(projectId, kinds));
   handle(context, 'studio:artifacts-mark-edited', async ({ projectId, kind }) => context.studio.markEdited(projectId, kind));
   handle(context, 'studio:board-read', async ({ projectId }) => context.studio.board(projectId));
   handle(context, 'studio:board-plan', async ({ projectId }) => announceBoard(context, projectId, await context.studio.plan(projectId)));
@@ -672,6 +673,12 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       if (context.windows.send(request.ownerWindowId, 'agents:event', payload)) return;
       context.windows.broadcast('agents:event', payload);
     }));
+  handle(context, 'studio:plan-chat', async ({ projectId, message }) => context.studio.planChat(projectId, message));
+  handle(context, 'studio:plan-apply', async ({ projectId, actions }) => {
+    const applied = await context.studio.applyPlanActions(projectId, actions);
+    announceBoard(context, projectId, applied.board);
+    return applied;
+  });
   handle(context, 'studio:design-chat', async ({ projectId, message, imageDataUrl, stepId }, request) =>
     context.studio.chatDesign(projectId, message, imageDataUrl, stepId, (event) => {
       const payload = { conversationId: stepId, event } satisfies AgentRunEvent;

@@ -576,14 +576,15 @@ describe('acting on one page: rename and delete', () => {
     expect(await app.artifactText('p1', 'pages')).toContain('## /sign-in — Sign in /sign-in');
   });
 
-  it('refuses to delete a page that is not part of this project\'s design, and calls nothing', async () => {
+  it('refuses to delete a page that is not part of this project\'s design, and deletes nothing', async () => {
     const editor = opEditor(READ);
     const { studio: app } = studio({}, { openPencil: async () => editor.ports });
     await app.pullDesign('p1');
     editor.calls.length = 0;
 
     await expect(app.deleteDesignPage('p1', 'zzz')).rejects.toThrow('not part of this project');
-    expect(editor.calls).toHaveLength(0);
+    // It may read the editor live, because a page drawn since the last pull is legitimate. It must not delete one.
+    expect(editor.calls.some((call) => call.tool === 'delete_node')).toBe(false);
   });
 
   it('surfaces the editor\'s own error rather than reporting a delete that did not happen', async () => {

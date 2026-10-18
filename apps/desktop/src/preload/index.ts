@@ -111,6 +111,7 @@ const bridge: KaiDesktopBridge = {
   describeStudioStyle: (projectId) => ipcRenderer.invoke('studio:style-refs-describe', { projectId }),
   generateStudioArtifact: (input) => ipcRenderer.invoke('studio:artifacts-generate', input),
   generateStudioArtifacts: (projectId) => ipcRenderer.invoke('studio:artifacts-generate-all', { projectId }),
+  generateStudioArtifactsSelected: (input) => ipcRenderer.invoke('studio:artifacts-generate-selected', input),
   markStudioArtifactEdited: (input) => ipcRenderer.invoke('studio:artifacts-mark-edited', input),
   studioBoard: (projectId) => ipcRenderer.invoke('studio:board-read', { projectId }),
   planStudioBoard: (projectId) => ipcRenderer.invoke('studio:board-plan', { projectId }),
@@ -156,6 +157,8 @@ const bridge: KaiDesktopBridge = {
   deleteStudioDesignPage: (input) => ipcRenderer.invoke('studio:design-page-delete', input),
   buildStudioDesignStep: (projectId, prompt, stepId) => ipcRenderer.invoke('studio:design-build-step', { projectId, prompt, stepId }),
   chatWithStudioDesign: (input) => ipcRenderer.invoke('studio:design-chat', input),
+  chatWithStudioPlan: (input) => ipcRenderer.invoke('studio:plan-chat', input),
+  applyStudioPlanChanges: (input) => ipcRenderer.invoke('studio:plan-apply', input),
   cancelStudioDesignStep: (projectId, stepId) => ipcRenderer.invoke('studio:design-build-cancel', { projectId, stepId }),
   onStudioBoardChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { projectId: string; board: import('@kai/contracts').StudioBoard }): void => listener(payload);

@@ -1,0 +1,243 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  boardCardSchema,
+  createDefaultSettings,
+  type StudioReadiness,
+} from '../packages/contracts/src';
+import { StudioArtifacts } from '../apps/desktop/src/main/artifacts';
+import { StudioBoardStore } from '../apps/desktop/src/main/board';
+import { DESIGN_TOOLS, type DesignPorts } from '../apps/desktop/src/main/design-source';
+import { SpecStore } from '../apps/desktop/src/main/spec-store';
+import { DesktopStudio, parsePlanChatReply, type StudioPorts } from '../apps/desktop/src/main/studio';
+import { hashFile } from '../apps/desktop/src/main/verification';
+
+const NOW = '2026-10-18T12:00:00.000Z';
+const READY: StudioReadiness = { ready: true, displayName: 'OpenAI', model: 'gpt-6-luna', reason: null };
+let root = '';
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-studio-plan-chat-'));
+});
+afterEach(() => {
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+function fakeDesign(initialName: string): { ports: DesignPorts; renamed: string[]; current: () => string } {
+  let name = initialName;
+  const renamed: string[] = [];
+  const reply = (value: unknown): Array<{ type: string; text: string }> => [{ type: 'text', text: JSON.stringify(value) }];
+  return {
+    renamed,
+    current: () => name,
+    ports: {
+      endpoint: () => 'http://127.0.0.1:7600',
+      async call(tool, input) {
+        switch (tool) {
+          case DESIGN_TOOLS.tokens:
+            return reply({ output: JSON.stringify({ Light: { '--color-bg': '#ffffff' } }), tokenCount: 1 });
+          case DESIGN_TOOLS.components:
+            return reply({ components: [] });
+          case DESIGN_TOOLS.pages:
+            return reply({ pages: [{ id: 'p1', name }], current: name });
+          case DESIGN_TOOLS.tree:
+            return reply({ nodes: [{ id: 'frame-1', name: 'Frame', type: 'FRAME', children: [] }] });
+          case DESIGN_TOOLS.switchPage:
+            return reply({ ok: true });
+          case DESIGN_TOOLS.renameNode:
+            name = String((input as Record<string, unknown>).name);
+            renamed.push(name);
+            return reply({ ok: true });
+          default:
+            throw new Error(`unexpected open-pencil tool ${tool}`);
+        }
+      },
+    },
+  };
+}
+
+function makeStudio(replies: Record<string, string> = {}, over: Partial<StudioPorts> = {}) {
+  const calls: string[] = [];
+  const settings = createDefaultSettings();
+  const artifacts = new StudioArtifacts({ spec: new SpecStore(), projectRoot: async () => root, now: () => NOW });
+  const board = new StudioBoardStore({
+    spec: new SpecStore(),
+    projectRoot: async () => root,
+    dirtyFiles: async () => [],
+    hashFile: (projectRoot, relative) => hashFile(projectRoot, relative),
+    run: async () => null,
+    now: () => NOW,
+  });
+  const ports: StudioPorts = {
+    settings: async () => ({ ...settings, promptGuide: { ...settings.promptGuide, enabled: true } }),
+    projectRoot: async () => root,
+    requester: {
+      structuredRequest: (_c, _n, _p, schemaName, _s, parse) => {
+        calls.push(schemaName);
+        if (!(schemaName in replies)) return Promise.reject(new Error(`no canned reply for ${schemaName}`));
+        return Promise.resolve(parse(replies[schemaName]!));
+      },
+    },
+    interview: { readiness: async () => READY },
+    artifacts,
+    board,
+    uiCheck: {
+      check: async () => { throw new Error('not used'); },
+    } as unknown as StudioPorts['uiCheck'],
+    now: () => NOW,
+    ...over,
+  };
+  return { studio: new DesktopStudio(ports), calls, artifacts, board, ports };
+}
+
+const content = (markdown: string): string => JSON.stringify({ content: markdown });
+
+describe('selective artifact generation', () => {
+  it('writes only the chosen artifacts and lets the design stand without stories', async () => {
+    const { studio, calls, artifacts } = makeStudio({
+      kai_studio_style_guide: content('# Style\n\nCalm.'),
+      kai_studio_tokens: content('{"colors":{"bg":"#ffffff"}}'),
+      kai_studio_pages: content('## Sign up\n\nRoute: /sign-up\n\nA form.'),
+    });
+    await studio.saveArtifact('p1', 'brief', '# Brief\n\nA quiet sign-up flow.');
+
+    const result = await studio.generateSelected('p1', ['style-guide', 'tokens', 'pages']);
+
+    expect(result.failed).toEqual([]);
+    expect(result.wrote).toEqual(['style-guide', 'tokens', 'pages']);
+    expect(calls).toEqual(['kai_studio_style_guide', 'kai_studio_tokens', 'kai_studio_pages']);
+    const written = result.artifacts.artifacts.map((entry) => entry.kind);
+    expect(written).toEqual(expect.arrayContaining(['brief', 'style-guide', 'tokens', 'pages']));
+    expect(written).not.toContain('stories');
+    expect(written).not.toContain('prd');
+    // The pages prompt was built from the brief rather than refusing because stories and flows do not exist.
+    expect(await artifacts.readText('p1', 'pages')).toContain('Sign up');
+  });
+
+  it('reports an artifact it could not write without discarding the ones it did', async () => {
+    const { studio } = makeStudio({
+      kai_studio_style_guide: content('# Style\n\nCalm.'),
+      kai_studio_tokens: 'not json at all',
+      kai_studio_pages: content('## Sign up\n\nRoute: /sign-up'),
+    });
+    await studio.saveArtifact('p1', 'brief', '# Brief\n\nA quiet sign-up flow.');
+
+    const result = await studio.generateSelected('p1', ['style-guide', 'tokens', 'pages']);
+    expect(result.wrote).toContain('style-guide');
+    expect(result.failed.some((entry) => entry.kind === 'tokens')).toBe(true);
+    // pages depends on neither tokens nor style-guide in the table, so the failure did not block it.
+    expect(result.wrote).toContain('pages');
+  });
+});
+
+describe('plan chat replies', () => {
+  it('keeps valid actions, fills the optional fields, and drops invalid ones', () => {
+    const result = parsePlanChatReply(JSON.stringify({
+      reply: 'I can link the drawn page and add the portal.',
+      actions: [
+        { kind: 'link', summary: 'Link Register to Sign up', designName: 'Register', screenName: 'Sign up' },
+        { kind: 'add', summary: 'Add the parent portal', title: 'Parent portal', route: '/parent' },
+        { kind: 'add', summary: 'Broken add' },
+        { kind: 'generate', summary: 'Write the pages and stories', artifacts: 'pages, stories' },
+        { kind: 'invented', summary: 'Not a real action' },
+      ],
+    }));
+
+    expect(result.reply).toContain('link');
+    expect(result.actions.map((action) => action.kind)).toEqual(['link', 'add', 'generate']);
+    const added = result.actions[1];
+    expect(added?.kind === 'add' && added.purpose).toBe('');
+    expect(added?.kind === 'add' && added.designName).toBeNull();
+    const generated = result.actions[2];
+    expect(generated?.kind === 'generate' && generated.artifacts).toEqual(['pages', 'stories']);
+  });
+
+  it('refuses a reply with no words rather than showing an empty proposal', () => {
+    expect(() => parsePlanChatReply(JSON.stringify({ actions: [] }))).toThrow();
+  });
+});
+
+describe('applying a plan change set', () => {
+  async function seeded(): Promise<ReturnType<typeof makeStudio>> {
+    const made = makeStudio();
+    await made.studio.saveArtifact('p1', 'pages', [
+      '# Pages',
+      '',
+      '## Sign up',
+      '',
+      'Route: /sign-up',
+      '',
+      'A sign-up form.',
+      '',
+      '## Old dashboard',
+      '',
+      'Route: /dashboard',
+      '',
+      'Replaced by the new home page.',
+      '',
+    ].join('\n'));
+    const card = (id: string, title: string, route: string) => boardCardSchema.parse({
+      id, title, kind: 'page', route, needsArtifacts: ['tokens'], createdAt: NOW, updatedAt: NOW,
+    });
+    const catalog = await made.artifacts.read('p1');
+    await made.board.replace('p1', [card('signup', 'Sign up', '/sign-up'), card('dashboard', 'Old dashboard', '/dashboard')], catalog.artifacts);
+    return made;
+  }
+
+  it('adds a screen, reroutes it, and removes another, each on the board and in the pages list', async () => {
+    const { studio, board, artifacts, calls } = await seeded();
+    expect(calls).toEqual([]);
+
+    const result = await studio.applyPlanActions('p1', [
+      { kind: 'add', summary: 'Add Reports', title: 'Reports', route: '/reports', purpose: 'Monthly numbers.', designName: null },
+      { kind: 'route', summary: 'Move Reports under /reports/monthly', screenName: 'Reports', route: '/reports/monthly' },
+      { kind: 'remove', summary: 'Remove Old dashboard', screenName: 'Old dashboard', deletePage: false },
+    ]);
+
+    expect(result.failed).toEqual([]);
+    expect(result.applied).toEqual(['Add Reports', 'Move Reports under /reports/monthly', 'Remove Old dashboard']);
+
+    const pages = await artifacts.readText('p1', 'pages');
+    expect(pages).toContain('## /reports/monthly — Reports');
+    expect(pages).toContain('Route: /reports/monthly');
+    expect(pages).not.toContain('Old dashboard');
+
+    const cards = (await board.read('p1')).cards;
+    const reports = cards.find((card) => card.title === 'Reports');
+    expect(reports?.route).toBe('/reports/monthly');
+    expect(cards.some((card) => card.title === 'Old dashboard')).toBe(false);
+  });
+
+  it('keeps going when one action fails, and names the one that did', async () => {
+    const { studio } = await seeded();
+
+    const result = await studio.applyPlanActions('p1', [
+      { kind: 'link', summary: 'Link a page that is not drawn', designName: 'Ghost page', screenName: 'Sign up' },
+      { kind: 'route', summary: 'Reroute Sign up', screenName: 'Sign up', route: '/join' },
+    ]);
+
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]?.summary).toBe('Link a page that is not drawn');
+    expect(result.failed[0]?.reason).toContain('No drawn OpenPencil page');
+    expect(result.applied).toEqual(['Reroute Sign up']);
+  });
+
+  it('links a drawn page to the planned screen by renaming the drawing, then attaches its card', async () => {
+    const design = fakeDesign('Register');
+    const made = await seeded();
+    const studio = new DesktopStudio({ ...made.ports, openPencil: async () => design.ports });
+
+    const result = await studio.applyPlanActions('p1', [
+      { kind: 'link', summary: 'Link Register to Sign up', designName: 'Register', screenName: 'Sign up' },
+    ]);
+
+    expect(result.failed).toEqual([]);
+    expect(result.applied).toEqual(['Link Register to Sign up']);
+    expect(design.renamed).toEqual(['Sign up']);
+    expect(design.current()).toBe('Sign up');
+    const signup = result.board.cards.find((card) => card.title === 'Sign up');
+    expect(signup?.designRef).toBe('p1');
+  });
+});

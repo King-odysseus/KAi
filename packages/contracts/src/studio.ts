@@ -390,6 +390,114 @@ export const studioArtifactInputSchema = z
   .strict();
 export type StudioArtifactInput = z.infer<typeof studioArtifactInputSchema>;
 
+/**
+ * The artifacts to write in one go, chosen by the person. The dependency table still decides the order, and only
+ * the chosen kinds are written: picking "just the design" writes the style guide, tokens and pages without dragging
+ * the PRD and stories along. `pages` and `style-guide` fall back to the brief when an input they normally read has
+ * not been written, which is what makes a design-only plan possible.
+ */
+export const studioArtifactsGenerateSelectedInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    kinds: z.array(artifactKindSchema).min(1).max(ARTIFACT_KINDS.length),
+  })
+  .strict();
+export type StudioArtifactsGenerateSelectedInput = z.infer<typeof studioArtifactsGenerateSelectedInputSchema>;
+
+/** What a selective write did: the catalog as it now stands, what was written, and what could not be. */
+export const studioArtifactsGenerationResultSchema = z
+  .object({
+    artifacts: studioArtifactsSchema,
+    wrote: z.array(artifactKindSchema),
+    failed: z.array(z.object({ kind: artifactKindSchema, reason: z.string().max(2_000) }).strict()),
+  })
+  .strict();
+export type StudioArtifactsGenerationResult = z.infer<typeof studioArtifactsGenerationResultSchema>;
+
+// --- Studio chat: saying what a page is, and changing the plan -------------------------------------------------
+
+/**
+ * One change the Studio chat proposes, never one it has already made.
+ *
+ * The person approves a change set before anything is written, so every action is small enough to read and to
+ * refuse on its own. `summary` is the line the person sees; the other fields are what applying it uses.
+ *
+ * - `link` pairs a page drawn in open-pencil with the screen the plan already carries, under a different name. That
+ *   is the missing-route case: the planned card never got its design, and the drawn page looked unplanned.
+ * - `add` puts a new screen into `pages.md` and creates its board card. `designName` names a page already drawn in
+ *   open-pencil, when the new screen is the one the person just drew.
+ * - `remove` takes a screen out of the plan and off the board. The OpenPencil page is kept unless `deletePage` is set,
+ *   because deleting a drawing is not reversible from KAI.
+ * - `route` sets or corrects the route a card is checked at, and writes the same route into the pages heading.
+ * - `generate` rewrites the chosen artifacts, through the same dependency order and fallbacks a selective write uses.
+ */
+export const studioPlanActionSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('link'),
+    summary: z.string().trim().min(1).max(300),
+    designName: z.string().trim().min(1).max(300),
+    screenName: z.string().trim().min(1).max(300),
+  }).strict(),
+  z.object({
+    kind: z.literal('add'),
+    summary: z.string().trim().min(1).max(300),
+    title: z.string().trim().min(1).max(120),
+    route: z.string().trim().max(300).default(''),
+    purpose: z.string().trim().max(2_000).default(''),
+    designName: z.string().trim().max(300).nullable().default(null),
+  }).strict(),
+  z.object({
+    kind: z.literal('remove'),
+    summary: z.string().trim().min(1).max(300),
+    screenName: z.string().trim().min(1).max(300),
+    deletePage: z.boolean().default(false),
+  }).strict(),
+  z.object({
+    kind: z.literal('route'),
+    summary: z.string().trim().min(1).max(300),
+    screenName: z.string().trim().min(1).max(300),
+    route: z.string().trim().min(1).max(300),
+  }).strict(),
+  z.object({
+    kind: z.literal('generate'),
+    summary: z.string().trim().min(1).max(300),
+    artifacts: z.array(artifactKindSchema).min(1).max(ARTIFACT_KINDS.length),
+  }).strict(),
+]);
+export type StudioPlanAction = z.infer<typeof studioPlanActionSchema>;
+
+export const studioPlanChatInputSchema = z
+  .object({ projectId: z.string().min(1), message: z.string().trim().min(1).max(20_000) })
+  .strict();
+export type StudioPlanChatInput = z.infer<typeof studioPlanChatInputSchema>;
+
+/** The assistant's answer: what it understood, and the changes it proposes. It has written nothing yet. */
+export const studioPlanChatResultSchema = z
+  .object({
+    reply: z.string().trim().min(1).max(8_000),
+    actions: z.array(studioPlanActionSchema).max(24).default([]),
+  })
+  .strict();
+export type StudioPlanChatResult = z.infer<typeof studioPlanChatResultSchema>;
+
+export const studioPlanApplyInputSchema = z
+  .object({ projectId: z.string().min(1), actions: z.array(studioPlanActionSchema).min(1).max(24) })
+  .strict();
+export type StudioPlanApplyInput = z.infer<typeof studioPlanApplyInputSchema>;
+
+/** What applying a change set did. Every action that failed is named, so a partly applied set is never silent. */
+export const studioPlanApplyResultSchema = z
+  .object({
+    board: studioBoardSchema,
+    artifacts: studioArtifactsSchema,
+    design: studioDesignSchema,
+    pages: z.string(),
+    applied: z.array(z.string()).default([]),
+    failed: z.array(z.object({ summary: z.string().max(300), reason: z.string().max(2_000) }).strict()).default([]),
+  })
+  .strict();
+export type StudioPlanApplyResult = z.infer<typeof studioPlanApplyResultSchema>;
+
 /** The reference images for a project's look, with a small preview of each, and the description written from them. */
 export const studioStyleReferencesSchema = z
   .object({

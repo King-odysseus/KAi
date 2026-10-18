@@ -52,6 +52,12 @@ import {
   studioArtifactInputSchema,
   openPencilSaveInputSchema,
   studioArtifactSaveInputSchema,
+  studioArtifactsGenerateSelectedInputSchema,
+  studioArtifactsGenerationResultSchema,
+  studioPlanChatInputSchema,
+  studioPlanChatResultSchema,
+  studioPlanApplyInputSchema,
+  studioPlanApplyResultSchema,
   studioStyleReferenceAddInputSchema,
   studioStyleReferenceRemoveInputSchema,
   studioBoardCardInputSchema,
@@ -80,6 +86,12 @@ import {
   type OpenPencilStatus,
   type OpenPencilTestResult,
   type StudioArtifactSaveInput,
+  type StudioArtifactsGenerateSelectedInput,
+  type StudioArtifactsGenerationResult,
+  type StudioPlanChatInput,
+  type StudioPlanChatResult,
+  type StudioPlanApplyInput,
+  type StudioPlanApplyResult,
   type StudioStyleReferenceAddInput,
   type StudioStyleReferenceRemoveInput,
   type StudioStyleReferences,
@@ -522,6 +534,7 @@ export const ipcChannels = [
   'studio:style-refs-describe',
   'studio:artifacts-generate',
   'studio:artifacts-generate-all',
+  'studio:artifacts-generate-selected',
   'studio:artifacts-mark-edited',
   'studio:board-read',
   'studio:board-plan',
@@ -556,6 +569,8 @@ export const ipcChannels = [
   'studio:design-build-cancel',
   'studio:design-page-rename',
   'studio:design-page-delete',
+  'studio:plan-chat',
+  'studio:plan-apply',
   'team:start',
   'team:record',
   'team:clear-record',
@@ -861,6 +876,7 @@ export const ipcInputSchemas = {
   'studio:style-refs-describe': studioProjectInputSchema,
   'studio:artifacts-generate': studioArtifactInputSchema,
   'studio:artifacts-generate-all': studioProjectInputSchema,
+  'studio:artifacts-generate-selected': studioArtifactsGenerateSelectedInputSchema,
   'studio:artifacts-mark-edited': studioArtifactInputSchema,
   'studio:board-read': studioProjectInputSchema,
   'studio:board-plan': studioProjectInputSchema,
@@ -895,6 +911,8 @@ export const ipcInputSchemas = {
   'studio:design-build-cancel': studioDesignBuildCancelInputSchema,
   'studio:design-page-rename': studioDesignPageRenameInputSchema,
   'studio:design-page-delete': studioDesignPageDeleteInputSchema,
+  'studio:plan-chat': studioPlanChatInputSchema,
+  'studio:plan-apply': studioPlanApplyInputSchema,
   'team:start': teamStartInputSchema,
   'team:record': teamRecordQuerySchema,
   'team:clear-record': z.object({}).strict(),
@@ -1152,6 +1170,9 @@ export const recoveryRecapResponseSchema = recoveryRecapSchema;
 export const recoveryResumeResponseSchema = recoveryResumeSchema;
 export const stopAllRunsResponseSchema = stopAllRunsResultSchema;
 export const studioArtifactsResponseSchema = studioArtifactsSchema;
+export const studioArtifactsGenerationResponseSchema = studioArtifactsGenerationResultSchema;
+export const studioPlanChatResponseSchema = studioPlanChatResultSchema;
+export const studioPlanApplyResponseSchema = studioPlanApplyResultSchema;
 export const studioProjectSummariesResponseSchema = z.array(studioProjectSummarySchema);
 export const studioProjectFolderResponseSchema = studioProjectFolderResultSchema;
 export const studioProjectLaunchResponseSchema = studioProjectLaunchResultSchema;
@@ -1386,6 +1407,11 @@ export interface KaiDesktopBridge {
   generateStudioArtifact(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
   /** Generates every artifact that is missing or stale, in dependency order. Runs one model call per artifact. */
   generateStudioArtifacts(projectId: string): Promise<IpcResponse<StudioArtifacts>>;
+  /**
+   * Writes only the chosen artifacts, in dependency order. `pages` and `style-guide` fall back to the brief when
+   * `stories`, `flows` or `stack` have not been written, which is what makes "just the design" possible.
+   */
+  generateStudioArtifactsSelected(input: StudioArtifactsGenerateSelectedInput): Promise<IpcResponse<StudioArtifactsGenerationResult>>;
   /** Records a hand edit, so the artifacts that read this one are shown as stale rather than trusted. */
   markStudioArtifactEdited(input: StudioArtifactInput): Promise<IpcResponse<StudioArtifacts>>;
   /** The board of cards built from the stories. */
@@ -1474,6 +1500,13 @@ export interface KaiDesktopBridge {
   buildStudioDesignStep(projectId: string, prompt: string, stepId: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
   /** Sends a conversational correction to the Design agent, optionally with a screenshot. */
   chatWithStudioDesign(input: StudioDesignChatInput): Promise<IpcResponse<StudioDesignChatResult>>;
+  /**
+   * Explains what a drawn page is, or what is missing from the plan, and answers with a change set. Writes nothing:
+   * the person approves the set before `applyStudioPlanChanges` runs it.
+   */
+  chatWithStudioPlan(input: StudioPlanChatInput): Promise<IpcResponse<StudioPlanChatResult>>;
+  /** Applies the approved changes. Each action is independent, so one failure does not discard the rest. */
+  applyStudioPlanChanges(input: StudioPlanApplyInput): Promise<IpcResponse<StudioPlanApplyResult>>;
   /** Suggests routes using the page inventory, pulled Open Pencil pages, and project source context. Does not apply them. */
   suggestStudioRouteRepairs(projectId: string): Promise<IpcResponse<StudioRouteRepairResult>>;
   /** Stops the turn one design-build step started. Answers whether a turn was actually running to stop. */

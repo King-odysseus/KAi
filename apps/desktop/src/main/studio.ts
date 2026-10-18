@@ -1,15 +1,22 @@
 import {
   ARTIFACT_KINDS,
   STUDIO_STYLE_REFERENCE_NOTES_PATH,
+  appendPageSection,
+  boardCardSchema,
   cardsFromDraft,
   designComponentSchema,
   directDependencies,
   isUiCard,
+  newPageHeading,
+  parsePages,
+  removePageSection,
   renamePageHeading,
   renamedPageName,
   routeFromScreenName,
   screenTitleKey,
+  setPageRoute,
   studioBoardDraftSchema,
+  studioPlanActionSchema,
   type AppSettings,
   type ArtifactKind,
   type BoardCard,
@@ -18,9 +25,13 @@ import {
   type CardRun,
   type PersistedEvent,
   type StudioArtifacts,
+  type StudioArtifactsGenerationResult,
   type StudioBoard,
   type StudioDesign,
   type StudioDesignPull,
+  type StudioPlanAction,
+  type StudioPlanApplyResult,
+  type StudioPlanChatResult,
   type StudioReadiness,
   type StudioRouteRepairResult,
   type UiCheckResult,
@@ -226,16 +237,72 @@ export class DesktopStudio {
     return this.ports.artifacts.read(projectId);
   }
 
+  /**
+   * Generates the chosen artifacts only, in dependency order, and reports what it could not write instead of
+   * throwing on the first failure. This is what "just the design" is: style guide, tokens and pages, without the
+   * PRD and stories the person did not ask for.
+   */
+  async generateSelected(projectId: string, kinds: readonly ArtifactKind[]): Promise<StudioArtifactsGenerationResult> {
+    const readiness = await this.ports.interview.readiness();
+    if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
+    const selected = new Set(kinds);
+    const order = ARTIFACT_KINDS.filter((kind) => selected.has(kind) && MODEL_ARTIFACTS.includes(kind));
+    if (order.length === 0) throw new Error('Choose at least one artifact that a model writes.');
+    const failed = new Map<ArtifactKind, string>();
+    const wrote: ArtifactKind[] = [];
+    for (const kind of order) {
+      // A chosen artifact whose chosen input failed is reported as blocked rather than attempted on an empty input.
+      const blockedBy = directDependencies(kind).find((dependency) => selected.has(dependency) && failed.has(dependency));
+      if (blockedBy) {
+        failed.set(kind, `it is built from ${blockedBy}, which could not be written`);
+        continue;
+      }
+      try {
+        await this.generate(projectId, kind);
+        wrote.push(kind);
+      } catch (error) {
+        failed.set(kind, error instanceof Error ? error.message : String(error));
+      }
+    }
+    await this.refreshHandoff(projectId);
+    return {
+      artifacts: await this.ports.artifacts.read(projectId),
+      wrote,
+      failed: [...failed].map(([kind, reason]) => ({ kind, reason })),
+    };
+  }
+
   /** Generates one artifact from the artifacts it reads, then updates the catalog. */
   async generate(projectId: string, kind: ArtifactKind): Promise<StudioArtifacts> {
     const settings = await this.ports.settings();
     const root = await this.ports.projectRoot(projectId);
     const inputs: Record<string, string> = {};
+    // Design-only plans have no stories or stack. The pages and the style guide can still be written from the
+    // brief, so those two treat the missing input as absent rather than as a reason to refuse. Everything else
+    // keeps the strict rule: it is built from its inputs, not from a guess.
+    const fallbackDependencies = new Set<string>(kind === 'pages' ? ['stories', 'flows'] : kind === 'style-guide' ? ['stack'] : []);
+    const brief = fallbackDependencies.size > 0 ? (await this.ports.artifacts.readText(projectId, 'brief')) ?? '' : '';
     for (const dependency of directDependencies(kind)) {
-      inputs[dependency] = (await this.ports.artifacts.readText(projectId, dependency)) ?? '';
+      const text = (await this.ports.artifacts.readText(projectId, dependency)) ?? '';
+      if (!text.trim() && fallbackDependencies.has(dependency) && brief.trim()) {
+        inputs[dependency] = `(${dependency} has not been written. Build this from the brief alone, which follows.)\n\n${brief}`;
+      } else inputs[dependency] = text;
     }
     const missing = Object.entries(inputs).filter(([, text]) => !text.trim()).map(([name]) => name);
     if (missing.length > 0) throw new Error(`Write ${missing.join(', ')} first: ${kind} is built from it.`);
+    if (kind === 'pages') {
+      // Regenerating the inventory must not drop a screen that was added by hand, or one already drawn under a name
+      // the model would not invent. Both are given as inputs and named in the prompt as things to keep.
+      const existing = await this.ports.artifacts.readText(projectId, 'pages');
+      if (existing?.trim()) {
+        inputs['the current pages inventory (keep every screen it has and add anything missing)'] = existing;
+      }
+      const design = await this.ports.board.design(projectId);
+      const drawn = design.components.filter((component) => component.screen).map((component) => `- ${component.name}`);
+      if (drawn.length > 0) {
+        inputs['screens already drawn in open-pencil (keep these names in the inventory)'] = drawn.join('\n');
+      }
+    }
     // Reference images, once a model has described them, steer the look: the style guide and the tokens follow them.
     if (kind === 'style-guide' || kind === 'tokens') {
       const reference = await this.ports.artifacts.readSpecText(projectId, STUDIO_STYLE_REFERENCE_NOTES_PATH);
@@ -591,9 +658,12 @@ export class DesktopStudio {
   async renameDesignPage(projectId: string, currentName: string, name: string): Promise<StudioDesignPull> {
     const ports = await this.ports.openPencil?.();
     if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
-    const previous = await this.ports.board.design(projectId);
+    const stored = await this.ports.board.design(projectId);
     const key = screenTitleKey(currentName);
-    const page = previous.components.find((component) => component.screen && screenTitleKey(component.name) === key);
+    const findPage = (design: StudioDesign) => design.components.find((component) => component.screen && screenTitleKey(component.name) === key);
+    // A page drawn since the last pull is only in the editor. Falling back to a live read is what lets the Studio
+    // chat link the page the person just drew, without making them pull first.
+    const page = findPage(stored) ?? findPage(await this.currentDesign(projectId, stored));
     // The prefix follows the name the person is editing — the heading, or the page name for a stray — so a heading
     // that read `/sign-in — Sign in` keeps its `/sign-in —` and only the screen's name changes.
     const nextName = renamedPageName(currentName, name);
@@ -627,8 +697,9 @@ export class DesktopStudio {
   async deleteDesignPage(projectId: string, pageId: string): Promise<StudioDesignPull> {
     const ports = await this.ports.openPencil?.();
     if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
-    const previous = await this.ports.board.design(projectId);
-    const page = previous.components.find((component) => component.screen && component.id === pageId);
+    const stored = await this.ports.board.design(projectId);
+    const findPage = (design: StudioDesign) => design.components.find((component) => component.screen && component.id === pageId);
+    const page = findPage(stored) ?? findPage(await this.currentDesign(projectId, stored));
     if (!page) throw new Error('That screen is not part of this project\'s design. Pull the design again, then delete it.');
     try {
       await deletePageNode(ports, pageId);
@@ -686,10 +757,305 @@ export class DesktopStudio {
     return this.ports.runDesignAgent(prompt, root, stepId, onEvent, contextChips);
   }
 
+  /**
+   * The Studio chat: the person says what a drawn page is, or what is missing from the plan, and the model answers
+   * with a change set instead of writing anything. Approving the set is a separate call, so nothing is rewritten on
+   * the strength of a sentence the person did not mean.
+   */
+  async planChat(projectId: string, message: string): Promise<StudioPlanChatResult> {
+    const readiness = await this.ports.interview.readiness();
+    if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
+    const settings = await this.ports.settings();
+    const root = await this.ports.projectRoot(projectId);
+    const [pages, board, storedDesign, context] = await Promise.all([
+      this.ports.artifacts.readText(projectId, 'pages'),
+      this.ports.board.read(projectId),
+      this.ports.board.design(projectId),
+      loadProjectContext(root, undefined, 8_000).catch(() => null),
+    ]);
+    // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it.
+    const design = await this.currentDesign(projectId, storedDesign);
+    return this.ports.requester.structuredRequest(
+      settings.promptGuide,
+      NAMES,
+      planChatPrompt(message, pages ?? '', board, design, context),
+      'kai_studio_plan_chat',
+      PLAN_CHAT_SCHEMA,
+      parsePlanChatReply,
+      { maxOutputTokens: 8_000 },
+    );
+  }
+
+  /**
+   * The design as the editor holds it now, when open-pencil is reachable, and the stored pull when it is not.
+   *
+   * The Studio chat exists for the page that was drawn a moment ago, which the last pull cannot know about. Reading
+   * live is also why "that page is the sign-up screen" works without pulling first. A read that fails, or sees an
+   * empty document, leaves the stored design in place rather than replacing something trustworthy with nothing.
+   */
+  private async currentDesign(projectId: string, stored?: StudioDesign): Promise<StudioDesign> {
+    const previous = stored ?? await this.ports.board.design(projectId);
+    if (!this.ports.openPencil) return previous;
+    try {
+      const ports = await this.ports.openPencil();
+      if (!ports) return previous;
+      const read = await readDesign(ports);
+      const components = read.components.map((component) => designComponentSchema.parse(component));
+      return components.length > 0 ? { ...previous, components } : previous;
+    } catch {
+      return previous;
+    }
+  }
+
+  /**
+   * Applies an approved change set. Each action is independent: one that fails is reported and the rest still run,
+   * because a person who ticked five changes should not lose four of them to one stale name.
+   *
+   * The writes reuse the paths the rest of the Studio already trusts: `saveArtifact` for the pages inventory, the
+   * board's own writer for cards, and `renameDesignPage` for linking a drawn page to a planned screen. That is also
+   * why a link goes through the editor at all: renaming the page is what makes the checklist and the board agree.
+   */
+  async applyPlanActions(projectId: string, actions: readonly StudioPlanAction[]): Promise<StudioPlanApplyResult> {
+    let pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? '';
+    const applied: string[] = [];
+    const failed: Array<{ summary: string; reason: string }> = [];
+    for (const action of actions) {
+      try {
+        switch (action.kind) {
+          case 'link': {
+            const design = await this.currentDesign(projectId);
+            const page = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName));
+            if (!page) throw new Error(`No drawn OpenPencil page is called "${action.designName}". Pull the design, then try again.`);
+            const target = pageEntry(pages, action.screenName);
+            if (!target) throw new Error(`The plan has no screen called "${action.screenName}".`);
+            await this.renameDesignPage(projectId, page.name, target.name);
+            pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? pages;
+            break;
+          }
+          case 'add': {
+            const route = action.route.trim().startsWith('/') ? action.route.trim() : '';
+            // Idempotent on purpose: a set can contain "regenerate pages" alongside "add this screen", and the
+            // regenerated inventory may already carry it. The screen and its card are each created only if absent.
+            if (!pageEntry(pages, action.title)) {
+              pages = appendPageSection(pages, action.title, route, action.purpose);
+              await this.saveArtifact(projectId, 'pages', pages);
+            }
+            const board = await this.ports.board.read(projectId);
+            const key = screenTitleKey(action.title);
+            if (!board.cards.some((card) => card.kind === 'page' && screenTitleKey(card.title) === key)) {
+              const catalog = await this.ports.artifacts.read(projectId);
+              const now = this.ports.now();
+              const id = uniqueCardId(board.cards, `page-${slugFor(action.title)}`);
+              const card = boardCardSchema.parse({
+                id,
+                title: action.title,
+                kind: 'page',
+                story: action.purpose || `Added from the Studio chat: ${action.title}.`,
+                acceptance: ['It is reachable at its route.', 'It matches the design drawn for it.'],
+                route,
+                needsArtifacts: ['tokens'],
+                status: 'backlog',
+                createdAt: now,
+                updatedAt: now,
+              });
+              await this.ports.board.replace(projectId, [...board.cards, card], catalog.artifacts);
+            }
+            if (action.designName) {
+              const design = await this.currentDesign(projectId);
+              const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName!));
+              if (!drawn) throw new Error(`The screen was added, but no drawn OpenPencil page is called "${action.designName}".`);
+              await this.renameDesignPage(projectId, drawn.name, newPageHeading(action.title, route));
+              pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? pages;
+            }
+            break;
+          }
+          case 'remove': {
+            const key = screenTitleKey(action.screenName);
+            const removed = removePageSection(pages, key);
+            const board = await this.ports.board.read(projectId);
+            const remaining = board.cards.filter((card) => !(card.kind === 'page' && screenTitleKey(card.title) === key));
+            if (!removed.removed && remaining.length === board.cards.length) {
+              throw new Error(`No screen called "${action.screenName}" is in the plan or on the board.`);
+            }
+            if (removed.removed) {
+              pages = removed.markdown.trim() ? removed.markdown : `# Pages\n\nNo screens are planned yet.\n`;
+              await this.saveArtifact(projectId, 'pages', pages);
+            }
+            if (remaining.length !== board.cards.length) {
+              const catalog = await this.ports.artifacts.read(projectId);
+              await this.ports.board.replace(projectId, remaining, catalog.artifacts);
+            }
+            if (action.deletePage) {
+              const design = await this.currentDesign(projectId);
+              const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === key);
+              if (!drawn) throw new Error(`The screen was removed, but no drawn OpenPencil page is called "${action.screenName}".`);
+              await this.deleteDesignPage(projectId, drawn.id);
+            }
+            break;
+          }
+          case 'route': {
+            const key = screenTitleKey(action.screenName);
+            const board = await this.ports.board.read(projectId);
+            const card = board.cards.find((item) => item.kind === 'page' && screenTitleKey(item.title) === key);
+            const routed = setPageRoute(pages, key, action.route);
+            if (!card && !routed.changed) throw new Error(`No screen called "${action.screenName}" is in the plan or on the board.`);
+            if (card) await this.ports.board.setRoute(projectId, card.id, action.route);
+            if (routed.changed) {
+              pages = routed.markdown;
+              await this.saveArtifact(projectId, 'pages', pages);
+            }
+            break;
+          }
+          case 'generate': {
+            const written = await this.generateSelected(projectId, action.artifacts);
+            if (written.failed.length > 0) {
+              throw new Error(`Could not write ${written.failed.map((entry) => `${entry.kind} (${entry.reason})`).join(', ')}.`);
+            }
+            pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? pages;
+            break;
+          }
+        }
+        applied.push(action.summary);
+      } catch (error) {
+        failed.push({ summary: action.summary, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    await this.refreshHandoff(projectId);
+    const [board, artifacts, design] = await Promise.all([
+      this.ports.board.read(projectId),
+      this.ports.artifacts.read(projectId),
+      this.ports.board.design(projectId),
+    ]);
+    return { board, artifacts, design, pages, applied, failed };
+  }
+
   /** Stops the turn one design-build step is running. Answers false when it had already finished. */
   cancelDesignStep(stepId: string): boolean {
     return this.ports.cancelDesignAgent?.(stepId) ?? false;
   }
+}
+
+/** The pages-inventory entry whose name reduces to the same key, or null when the plan does not carry it. */
+function pageEntry(pages: string, name: string): { name: string } | null {
+  const key = screenTitleKey(name);
+  return parsePages(pages).find((page) => screenTitleKey(page.name) === key) ?? null;
+}
+
+/** A card id no card on this board already uses. */
+function uniqueCardId(cards: readonly BoardCard[], base: string): string {
+  const taken = new Set(cards.map((card) => card.id));
+  if (!taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
+function slugFor(value: string): string {
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return slug || 'screen';
+}
+
+/** The JSON shape the plan chat is asked for. Per-kind required fields are checked by the zod parser below. */
+const PLAN_ACTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['kind', 'summary'],
+  properties: {
+    kind: { type: 'string', enum: ['link', 'add', 'remove', 'route', 'generate'] },
+    summary: { type: 'string' },
+    designName: { type: 'string' },
+    screenName: { type: 'string' },
+    title: { type: 'string' },
+    route: { type: 'string' },
+    purpose: { type: 'string' },
+    deletePage: { type: 'boolean' },
+    artifacts: { type: 'array', items: { type: 'string', enum: ARTIFACT_KINDS } },
+  },
+} as const;
+
+const PLAN_CHAT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['reply', 'actions'],
+  properties: {
+    reply: { type: 'string' },
+    actions: { type: 'array', items: PLAN_ACTION_SCHEMA },
+  },
+} as const;
+
+/** Reads a plan-chat reply, dropping actions that do not validate rather than losing the whole answer. */
+export function parsePlanChatReply(raw: string): StudioPlanChatResult {
+  const parsed = parseJsonResponse(raw, 'Project Studio') as { reply?: unknown; actions?: unknown };
+  const reply = typeof parsed?.reply === 'string' ? parsed.reply.trim().slice(0, 8_000) : '';
+  if (!reply) throw new Error('The Studio chat reply had nothing to say.');
+  const actions: StudioPlanAction[] = [];
+  if (Array.isArray(parsed.actions)) {
+    for (const value of parsed.actions) {
+      if (!value || typeof value !== 'object') continue;
+      const raw = value as Record<string, unknown>;
+      // Keep only the fields the chosen action defines. A model that adds an extra key would otherwise fail the
+      // strict schema and lose a perfectly usable action.
+      const fields: Record<string, readonly string[]> = {
+        link: ['kind', 'summary', 'designName', 'screenName'],
+        add: ['kind', 'summary', 'title', 'route', 'purpose', 'designName'],
+        remove: ['kind', 'summary', 'screenName', 'deletePage'],
+        route: ['kind', 'summary', 'screenName', 'route'],
+        generate: ['kind', 'summary', 'artifacts'],
+      };
+      const allowed = fields[String(raw.kind)];
+      if (!allowed) continue;
+      const item: Record<string, unknown> = Object.fromEntries(allowed.filter((key) => key in raw).map((key) => [key, raw[key]]));
+      if (item.kind === 'add') {
+        if (typeof item.route !== 'string') item.route = '';
+        if (typeof item.purpose !== 'string') item.purpose = '';
+        if (typeof item.designName !== 'string') item.designName = null;
+      }
+      if (item.kind === 'remove' && typeof item.deletePage !== 'boolean') item.deletePage = false;
+      if (item.kind === 'generate') {
+        if (typeof item.artifacts === 'string') item.artifacts = item.artifacts.split(/[\s,]+/).filter(Boolean);
+        if (Array.isArray(item.artifacts)) item.artifacts = item.artifacts.filter((kind) => typeof kind === 'string');
+      }
+      const action = studioPlanActionSchema.safeParse(item);
+      if (action.success) actions.push(action.data);
+    }
+  }
+  return { reply, actions: actions.slice(0, 24) };
+}
+
+/** The chat's prompt: the plan as it stands, the drawn screens, and the rule that it proposes rather than writes. */
+export function planChatPrompt(
+  message: string,
+  pages: string,
+  board: StudioBoard,
+  design: StudioDesign,
+  context: string | null,
+): { system: string; user: string } {
+  const system = [
+    'You are the Studio assistant inside KAI. The person is telling you what a page drawn in open-pencil is, what is missing from the plan, or what changed. You answer with a small change set for them to approve. You have written nothing yet.',
+    'Return only JSON matching the schema.',
+    '',
+    'What each action means:',
+    '- "link": a page already drawn in open-pencil is the same screen as one the plan already carries, under a different name. designName is the drawn page name; screenName is the planned screen.',
+    '- "add": a screen that is not in the plan should be. title is short, route starts with "/" when known, and designName is the drawn page name when the person just drew it.',
+    '- "remove": a screen should leave the plan. Set deletePage only when the person explicitly asked to delete the drawing too.',
+    '- "route": a screen has no route or the wrong one. route starts with "/".',
+    '- "generate": artifacts that genuinely change. A new feature usually affects pages and stories. Never include brief. The person will untick anything they do not want.',
+    'Rules:',
+    '- Only propose changes the person asked for. Never invent a screen or a route they did not mention.',
+    '- If the message is a question or a request to inspect, return an empty actions list.',
+    '- "summary" is one short line the person reads before ticking the action.',
+    '- "reply" is one to three plain sentences: what you understood and what you propose. Do not use em dashes or en dashes.',
+    '- Match names the way a person would: case, punctuation and a leading route do not matter.',
+  ].join('\n');
+  const drawn = design.components.filter((component) => component.screen);
+  const user = [
+    `USER MESSAGE:\n${message}`,
+    `PAGES INVENTORY:\n${pages.trim() || '(none written)'}`,
+    `BOARD SCREENS:\n${board.cards.filter((card) => card.kind === 'page').map((card) => `${card.title} | route=${card.route || '(missing)'} | designRef=${card.designRef ?? '(none)'}`).join('\n') || '(none)'}`,
+    `DRAWN OPEN-PENCIL PAGES:\n${drawn.map((component) => `${component.name} | node=${component.id}`).join('\n') || '(none recorded)'}`,
+    context ? `PROJECT SNAPSHOT:\n${context}` : '',
+  ].filter(Boolean).join('\n\n');
+  return { system, user };
 }
 
 /** The prompt for one artifact: what it is for, and the artifacts it is built from. */

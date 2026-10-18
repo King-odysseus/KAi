@@ -124,3 +124,77 @@ export function renamePageHeading(markdown: string, key: string, nextName: strin
   }
   return { markdown, renamed: false };
 }
+
+/** The heading a new screen is written under. The route leads, as the pages brief writes it, so `routeFromScreenName`
+ * and `parsePages` agree on the route without a second copy in the body. */
+export function newPageHeading(title: string, route: string): string {
+  const name = plain(title).slice(0, 80);
+  const path = route.trim();
+  return path.startsWith('/') ? `${path} — ${name}`.slice(0, 120) : name;
+}
+
+/**
+ * Adds one screen to the pages inventory: a `##` section with the route in the heading and the purpose in the body.
+ * Appends, so every section already there keeps its text and its order. Answers the same shape `renamePageHeading`
+ * does, so a caller can tell an add that happened from one that had nothing to add to.
+ */
+export function appendPageSection(markdown: string, title: string, route: string, purpose: string): string {
+  const heading = newPageHeading(title, route);
+  const body = purpose.trim() || 'Added from the Studio chat.';
+  const routeLine = route.trim().startsWith('/') ? `Route: ${route.trim()}` : 'Route: (missing — set it on the board card)';
+  const section = `## ${heading}\n\n${routeLine}\n\n${body}\n`;
+  const trimmed = markdown.trimEnd();
+  return `${trimmed ? `${trimmed}\n\n` : ''}${section}`;
+}
+
+/**
+ * Removes the one `##` section whose name reduces to `key`, up to the next `##` heading. `###` sub-headings belong
+ * to the section and go with it. Answers whether a section was found, so a removal that matched nothing is not
+ * reported as a success.
+ */
+export function removePageSection(markdown: string, key: string): { markdown: string; removed: boolean } {
+  const lines = markdown.split(/\r?\n/);
+  let start = -1;
+  let end = lines.length;
+  for (let index = 0; index < lines.length; index += 1) {
+    const heading = /^##(?!#)\s+(.+?)\s*#*\s*$/.exec(lines[index]!);
+    if (!heading) continue;
+    if (start >= 0) { end = index; break; }
+    if (screenTitleKey(plain(heading[1]!).slice(0, 80)) === key) start = index;
+  }
+  if (start < 0) return { markdown, removed: false };
+  const next = [...lines.slice(0, start), ...lines.slice(end)];
+  return { markdown: next.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', removed: true };
+}
+
+/**
+ * Sets the route of one section, in both places the pages inventory carries it: the heading's leading `/<route> —`
+ * and a `Route:` line in the body. Replacing only the body would leave the old route in the heading, where
+ * `routeFromScreenName` reads it, so the plan would say two different things about the same screen.
+ */
+export function setPageRoute(markdown: string, key: string, route: string): { markdown: string; changed: boolean } {
+  const lines = markdown.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const heading = /^##(?!#)\s+(.+?)\s*#*\s*$/.exec(lines[index]!);
+    if (!heading) continue;
+    if (screenTitleKey(plain(heading[1]!).slice(0, 80)) !== key) continue;
+    let end = index + 1;
+    while (end < lines.length && !/^##(?!#)\s/.test(lines[end]!)) end += 1;
+    const body = lines.slice(index + 1, end);
+    const routeLine = `Route: ${route}`;
+    const existing = body.findIndex((line) => /^\s*(?:[-*]\s*)?(?:\*\*)?Route(?:\*\*)?\s*:/i.test(line));
+    if (existing >= 0) body[existing] = routeLine;
+    else body.unshift('', routeLine);
+    // Keep the name and replace the route it led with. A heading with no route gains one.
+    const current = plain(heading[1]!).slice(0, 80);
+    const display = current
+      .replace(/^.*?[—–]\s*/, '')
+      .replace(/(?:^|\s)\/[A-Za-z0-9\-_/:{}.]*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || current;
+    lines[index] = `## ${newPageHeading(display, route)}`;
+    const next = [...lines.slice(0, index + 1), ...body, ...lines.slice(end)];
+    return { markdown: next.join('\n'), changed: true };
+  }
+  return { markdown, changed: false };
+}
