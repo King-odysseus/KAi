@@ -37,6 +37,7 @@ import {
   LogIn,
   Minimize2,
   ImagePlus,
+  NotebookPen,
   Paperclip,
   Pause,
   Pencil,
@@ -172,6 +173,8 @@ interface WorkspaceViewProps {
   onUpdatePreferences: (preferences: ProjectPreferences) => Promise<void>;
   onUpdateConversation: (conversation: ConversationRecord) => Promise<void>;
   onChooseProject: () => void;
+  /** Takes the open project into the Project Studio and starts a plan attached to its folder. */
+  onPlanInStudio: () => void;
   onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
   onBranchTurn: (turnId: string) => void;
   onRewindTurn: (turnId: string) => void;
@@ -369,6 +372,7 @@ export function WorkspaceView({
   onUpdatePreferences,
   onUpdateConversation,
   onChooseProject,
+  onPlanInStudio,
   onCreateConversation,
   onBranchTurn,
   onRewindTurn,
@@ -1478,6 +1482,17 @@ export function WorkspaceView({
       <div className="workspace-header">
         <div><span className="eyebrow">{activeConversation ? 'Conversation' : 'Workspace'}</span><h1>{activeConversation?.title ?? activeProject?.name ?? 'Open a project'}</h1></div>
         <div className="workspace-status">
+          {activeProject && !activeProject.id.startsWith('studio_') && (
+            <button
+              type="button"
+              className="status-action"
+              onClick={onPlanInStudio}
+              disabled={running || busy}
+              title={`Take ${activeProject.name} into the Project Studio and start a plan attached to its folder`}
+            >
+              <NotebookPen size={13} /><span>Plan in Studio</span>
+            </button>
+          )}
           <button type="button" className={`status-action ${rawEventsOpen ? 'active' : ''}`} aria-pressed={rawEventsOpen} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw fallback events"><Braces size={13} /><span>Raw</span><small>{rawEvents.length}</small></button>
           <span className={`status-pill ${ready ? 'ready' : 'unavailable'}`}><Circle size={7} fill="currentColor" /> {apiRun ? 'API' : 'CLI'} {ready ? 'ready' : 'unavailable'}</span>
           <span className="status-pill lavender"><Sparkles size={13} /> {apiRun ? directApiCapability?.model || directApiCapability?.displayName || 'Direct API' : selectedCapability?.version ?? selectedCapability?.displayName ?? selectedAgent}</span>

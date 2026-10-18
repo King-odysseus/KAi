@@ -260,6 +260,9 @@ export function App(): ReactNode {
   const [appearance, setAppearanceState] = useState<Appearance>(loadAppearance);
   const [terminalCommand, setTerminalCommand] = useState<{ command: string; nonce: number } | null>(null);
   const [settingsDestination, setSettingsDestination] = useState<{ category: 'connections' | 'services'; nonce: number } | null>(null);
+  // The composer's "Plan in Studio" request. The nonce makes a second press work even for the same project: the
+  // Studio opens a fresh plan each time rather than treating the request as one it has already handled.
+  const [studioPlanRequest, setStudioPlanRequest] = useState<{ projectId: string; nonce: number } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(() => {
     try {
       return window.localStorage.getItem('kai.previewOpen') === 'true';
@@ -1046,6 +1049,17 @@ export function App(): ReactNode {
       if (destination !== 'stay') setView(destination);
     }
     return next ?? null;
+  }
+
+  /**
+   * Takes the open Composer project into the Project Studio and starts a plan attached to its folder. This is the
+   * entry point for a project that was started without a plan: the interview reads the code that is already there,
+   * and the plan is written under the project's own `.kai/spec`.
+   */
+  function planInStudio(): void {
+    if (!activeProject) return;
+    setStudioPlanRequest({ projectId: activeProject.id, nonce: Date.now() });
+    setView('studio');
   }
 
   async function openStudioProject(
@@ -2253,6 +2267,7 @@ export function App(): ReactNode {
             onUpdatePreferences={saveProjectPreferences}
             onUpdateConversation={saveConversationRecord}
             onChooseProject={() => void chooseProject()}
+            onPlanInStudio={planInStudio}
             onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
             onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
             onRewindTurn={(turnId) => { if (activeConversation) void rewindConversation(activeConversation.id, turnId); }}
@@ -2444,6 +2459,7 @@ export function App(): ReactNode {
                 <StudioView
                   activeProject={activeProject}
                   projects={bootstrap.projects}
+                  planRequest={studioPlanRequest}
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
                   onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}

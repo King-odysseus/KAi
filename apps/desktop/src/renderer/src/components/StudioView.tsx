@@ -87,9 +87,11 @@ type DesignBuildAction = { kind: 'redraw'; target: 'all' | string } | { kind: 'c
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, projects: desktopProjects, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard }: {
+export function StudioView({ activeProject, projects: desktopProjects, planRequest, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard }: {
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
+  /** Set by the composer's "Plan in Studio" button: open a fresh plan attached to this project's folder. */
+  planRequest?: { projectId: string; nonce: number } | null;
   onOpenSettings: () => void;
   onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate') => Promise<boolean>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
@@ -187,6 +189,8 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   const [buildEvents, setBuildEvents] = useState<PersistedEvent[]>([]);
   const buildStepId = useRef<string | null>(null);
   const designChatStepId = useRef<string | null>(null);
+  // The last composer request acted on, so a re-render does not open the new-project screen twice for one press.
+  const handledPlanRequest = useRef<number | null>(null);
   // Running spend for the build in progress, since a 30-screen run is 30-odd agent turns with no other visibility
   // into cost — unlike the composer, which tracks this per run already. The ref is the source of truth read inside
   // the loop itself (a long-running async function closes over the state value from whenever it started, not a
@@ -278,6 +282,18 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
   }, [projectId]);
 
   /**
+   * The composer's "Plan in Studio" button lands here. It opens a fresh plan with the open project's folder attached,
+   * so the interview and the design read the code that is already there. The nonce is what makes a second press do
+   * the same thing again, rather than looking like a request this screen has already handled.
+   */
+  useEffect(() => {
+    if (!planRequest || !activeProject || planRequest.projectId !== activeProject.id) return;
+    if (handledPlanRequest.current === planRequest.nonce || busy !== null) return;
+    handledPlanRequest.current = planRequest.nonce;
+    startNewProject(true);
+  }, [planRequest, activeProject, busy]);
+
+  /**
    * Where the project is, re-read whenever anything it reads has moved.
    *
    * `read` never calls a provider — it is the rules reading the board, the artifacts and the interview — so this can
@@ -319,13 +335,13 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
     setScreen('project');
   }
 
-  function startNewProject(): void {
+  function startNewProject(attachCurrentFolder = false): void {
     if (busy !== null) return;
     setError(null);
     setNotice(null);
     setViewedProjectId(null);
     setDraftProjectId(`studio_${crypto.randomUUID()}`);
-    setUseCurrentFolder(false);
+    setUseCurrentFolder(attachCurrentFolder && Boolean(currentFolder));
     setScreen('new');
   }
 
@@ -1942,7 +1958,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                 </button>
               )}
               {projects.length > 0 && (
-                <button type="button" className="primary-button" onClick={startNewProject}>
+                <button type="button" className="primary-button" onClick={() => startNewProject()}>
                   <Plus size={14} /> Plan a new project
                 </button>
               )}
@@ -2044,7 +2060,7 @@ export function StudioView({ activeProject, projects: desktopProjects, onOpenSet
                     : 'Describe the idea, answer a few quick questions, and Studio will save the brief here when the discussion starts.'}
                 </p>
                 {!showArchived && (
-                  <button type="button" className="primary-button" onClick={startNewProject}>
+                  <button type="button" className="primary-button" onClick={() => startNewProject()}>
                     <Plus size={14} /> Plan a new project
                   </button>
                 )}
