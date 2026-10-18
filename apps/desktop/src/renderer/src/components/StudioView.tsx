@@ -165,6 +165,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [planActions, setPlanActions] = useState<StudioPlanAction[] | null>(null);
   const [planSelected, setPlanSelected] = useState<boolean[]>([]);
   const [planDropped, setPlanDropped] = useState(0);
+  const [lastPlanRequest, setLastPlanRequest] = useState<string | null>(null);
   const [planIntent, setPlanIntent] = useState<'ask' | 'screen' | 'feature'>('feature');
   const [planHydrated, setPlanHydrated] = useState<string | null>(null);
   const [planOutcome, setPlanOutcome] = useState<{ applied: string[]; failed: Array<{ summary: string; reason: string }> } | null>(null);
@@ -336,6 +337,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         outcome?: { applied: string[]; failed: Array<{ summary: string; reason: string }> } | null;
         next?: { ready: number; undrawn: number; unrouted: number; cards: number } | null;
         dropped?: number;
+        lastRequest?: string | null;
       } | null;
       setPlanChatMessages(Array.isArray(saved?.messages) ? saved!.messages : []);
       setPlanActions(Array.isArray(saved?.actions) ? saved!.actions : null);
@@ -344,6 +346,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setPlanOutcome(saved?.outcome ?? null);
       setPlanNext(saved?.next ?? null);
       setPlanDropped(typeof saved?.dropped === 'number' ? saved.dropped : 0);
+      setLastPlanRequest(typeof saved?.lastRequest === 'string' ? saved.lastRequest : null);
     } catch {
       setPlanChatMessages([]);
       setPlanActions(null);
@@ -351,6 +354,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setPlanOutcome(null);
       setPlanNext(null);
       setPlanDropped(0);
+      setLastPlanRequest(null);
     }
     setPlanHydrated(projectId);
   }, [projectId]);
@@ -366,11 +370,12 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         outcome: planOutcome,
         next: planNext,
         dropped: planDropped,
+        lastRequest: lastPlanRequest,
       }));
     } catch {
       // Storage is optional; the conversation still works for this window.
     }
-  }, [projectId, planHydrated, planChatMessages, planActions, planSelected, planIntent, planOutcome, planNext, planDropped]);
+  }, [projectId, planHydrated, planChatMessages, planActions, planSelected, planIntent, planOutcome, planNext, planDropped, lastPlanRequest]);
 
   /**
    * Where the project is, re-read whenever anything it reads has moved.
@@ -1888,6 +1893,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     const message = (override ?? planChatText).trim();
     if (!message) return;
     const requestId = ++planRequestSeq.current;
+    setLastPlanRequest(message);
     setPlanChatMessages((items) => [...items, { role: 'user', text: message }]);
     setPlanChatText('');
     setPlanActions(null);
@@ -2974,11 +2980,16 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             )}
             {planActions && planActions.length === 0 && (
               <p className="studio-note" role="status">
-                {planDropped > 0
-                  ? `${planDropped} proposed change${planDropped === 1 ? '' : 's'} could not be read. Try again with simpler wording, or switch to Add a feature.`
-                  : planIntent === 'ask'
-                    ? 'No plan change was proposed. Switch to Add a feature or Change a screen if you wanted one.'
-                    : 'Studio did not return a usable change set. Try again, or name the screens and cards you want added.'}
+                <span>
+                  {planDropped > 0
+                    ? `${planDropped} proposed change${planDropped === 1 ? '' : 's'} could not be read. Try again with simpler wording, or switch to Add a feature.`
+                    : planIntent === 'ask'
+                      ? 'No plan change was proposed. Switch to Add a feature or Change a screen if you wanted one.'
+                      : 'Studio did not return a usable change set. Try again, or name the screens and cards you want added.'}
+                </span>
+                {lastPlanRequest && (
+                  <button type="button" className="secondary-button" onClick={() => void sendPlanChat(lastPlanRequest)} disabled={busy !== null}>Try again</button>
+                )}
               </p>
             )}
             {planOutcome && (

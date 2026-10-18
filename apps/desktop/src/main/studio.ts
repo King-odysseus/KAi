@@ -787,8 +787,8 @@ export class DesktopStudio {
       PLAN_CHAT_SCHEMA,
       parsePlanChatReply,
       // A feature set is a dozen actions with stories and acceptance criteria, and a reasoning model spends part
-      // of the budget thinking first. 8k was enough for one correction, not for a feature.
-      { maxOutputTokens: 16_000 },
+      // of the budget thinking first. The same budget the artifacts use gives a long feature room to finish.
+      { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
     );
     // Ask is allowed to answer without touching the plan. A screen correction or a feature is not: the model
     // sometimes describes the change in the reply and returns an empty list, so its own description is handed back
@@ -802,7 +802,7 @@ export class DesktopStudio {
         'kai_studio_plan_actions',
         PLAN_CHAT_SCHEMA,
         parsePlanChatReply,
-        { maxOutputTokens: 16_000 },
+        { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
       );
       return extracted.actions.length > 0
         ? { reply: first.reply, actions: extracted.actions, dropped: extracted.dropped }
@@ -1086,10 +1086,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
-/** A model's list field, whether it sent an array or one string of lines or comma-separated items. */
+/**
+ * A model's list field, whether it sent strings, objects with a name field, or one string of lines or comma
+ * separated items. Dependencies and acceptance criteria are commonly objects rather than plain strings.
+ */
 function stringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim());
-  if (typeof value === 'string') return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+  const one = (item: unknown): string | null => {
+    if (typeof item === 'string') return item.trim() || null;
+    if (item && typeof item === 'object') {
+      const object = item as Record<string, unknown>;
+      const name = object.title ?? object.name ?? object.id ?? object.kind ?? object.screenName ?? object.screen
+        ?? object.criterion ?? object.text ?? object.description;
+      return typeof name === 'string' && name.trim() ? name.trim() : null;
+    }
+    return null;
+  };
+  if (Array.isArray(value)) return value.map(one).filter((item): item is string => item !== null);
+  if (typeof value === 'string') return value.split(/\r?\n|,/).map(one).filter((item): item is string => item !== null);
   return [];
 }
 
@@ -1126,14 +1139,170 @@ const PLAN_CHAT_SCHEMA = {
   },
 } as const;
 
+const ACTION_KIND_ALIASES: Record<string, string> = {
+  create: 'add',
+  new: 'add',
+  add_card: 'add',
+  add_screen: 'add',
+  add_page: 'add',
+  screen: 'add',
+  page: 'add',
+  card: 'add',
+  add_story: 'story',
+  user_story: 'story',
+  update_route: 'route',
+  set_route: 'route',
+  reroute: 'route',
+  delete: 'remove',
+  remove_screen: 'remove',
+  delete_screen: 'remove',
+  drop: 'remove',
+  link_page: 'link',
+  link_screen: 'link',
+  connect: 'link',
+  regenerate: 'generate',
+  update_artifacts: 'generate',
+  write: 'generate',
+};
+
+/**
+ * The action list under any of the names a model reaches for, including one nested object deep.
+ */
+function actionList(parsed: Record<string, unknown>): unknown[] {
+  const combined: unknown[] = [];
+  // A story written as its own top-level object, beside the card list, is part of the set too.
+  const story = parsed.story;
+  if (typeof story === 'string' && story.trim()) combined.push({ kind: 'story', title: story.trim(), summary: story.trim() });
+  else if (story && typeof story === 'object' && !Array.isArray(story)) combined.push({ kind: 'story', ...(story as Record<string, unknown>) });
+
+  const keys = [
+    'actions', 'changes', 'steps', 'screens', 'pages', 'cards', 'stories', 'items',
+    'proposedChanges', 'proposed_changes', 'actionList', 'action_list', 'plan',
+    'features', 'newCards', 'new_cards', 'work', 'tasks', 'backlog',
+  ];
+  for (const key of keys) {
+    const value = parsed[key];
+    if (Array.isArray(value)) {
+      const named = value.map((item) => {
+        if (typeof item !== 'string' || !item.trim()) return item;
+        // A bare name in a stories, screens or pages list is still an actionable change.
+        if (key === 'stories') return { kind: 'story', title: item.trim(), summary: `Add the story "${item.trim()}"` };
+        if (key === 'screens' || key === 'pages') return { kind: 'add', cardKind: 'page', title: item.trim(), summary: `Add the page "${item.trim()}"` };
+        return item;
+      });
+      return [...combined, ...named];
+    }
+    if (value && typeof value === 'object') {
+      const nested = actionList(value as Record<string, unknown>);
+      if (nested.length > 0) return [...combined, ...nested];
+    }
+    if (typeof value === 'string' && value.trim().startsWith('[')) {
+      try {
+        const decoded = JSON.parse(value);
+        if (Array.isArray(decoded)) return [...combined, ...decoded];
+      } catch {
+        // Not JSON; the action-level parse will report it as dropped.
+      }
+    }
+  }
+  const single = parsed.action ?? parsed.change ?? parsed.operation;
+  if (single && typeof single === 'object' && !Array.isArray(single)) combined.push(single);
+  return combined;
+}
+
+/**
+ * One proposed change, normalized from the common ways a model writes it: a nested action object, an aliased kind,
+ * and field names such as name, path or dependencies.
+ */
+function actionRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = { ...(value as Record<string, unknown>) };
+  for (const key of ['action', 'operation', 'change']) {
+    const nested = source[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return actionRecord({ ...(nested as Record<string, unknown>), summary: source.summary ?? (nested as Record<string, unknown>).summary });
+    }
+  }
+  const rawKind = String(source.kind ?? source.type ?? source.action ?? source.op ?? source.operation ?? source.changeType ?? '').toLowerCase().trim();
+  const aliased = ACTION_KIND_ALIASES[rawKind] ?? rawKind;
+  if (['link', 'add', 'story', 'remove', 'route', 'generate'].includes(aliased)) source.kind = aliased;
+  else if ((CARD_KINDS as readonly string[]).includes(rawKind)) {
+    source.kind = 'add';
+    source.cardKind ??= rawKind;
+  } else if (rawKind) {
+    const found = ['story', 'link', 'remove', 'route', 'generate', 'add'].find((kind) => rawKind.includes(kind));
+    if (found) source.kind = found;
+  }
+  // An unrecognised kind that still carries a route or a screen is a route or a card, not a lost change.
+  if (!['link', 'add', 'story', 'remove', 'route', 'generate'].includes(String(source.kind))) {
+    if (typeof source.route === 'string' && typeof source.screenName === 'string') source.kind = 'route';
+    else if (typeof source.title === 'string' || typeof source.name === 'string') source.kind = 'add';
+  }
+  source.summary ??= source.title ?? source.name ?? source.screenName ?? source.screen ?? source.description ?? source.reason;
+  source.screenName ??= source.screen ?? source.pageName ?? source.page ?? source.name;
+  source.designName ??= source.designPage ?? source.design_page ?? source.drawnPage ?? source.drawing;
+  source.cardKind ??= source.cardType ?? source.card_type ?? source.type ?? source.card;
+  source.title ??= source.name ?? source.screenName;
+  source.route ??= source.path ?? source.url ?? source.href;
+  source.dependsOn ??= source.dependsOnTitles ?? source.depends_on ?? source.dependencies ?? source.blockedBy;
+  source.acceptance ??= source.acceptanceCriteria ?? source.acceptance_criteria ?? source.checks ?? source.criteria;
+  source.artifacts ??= source.documents ?? source.docs ?? source.files ?? source.artefacts;
+  if (typeof source.summary !== 'string' || !source.summary.trim()) source.summary = `${source.kind ?? 'plan'} change`;
+  return source;
+}
+
+/**
+ * A model sometimes answers with one "feature" object that contains the story, screens, cards and flows, rather
+ * than with the actions themselves. Flatten it, so the set inside is not lost as one unreadable change.
+ */
+function expandFeatures(items: unknown[]): unknown[] {
+  const cardKindFor: Record<string, string> = {
+    screens: 'page',
+    pages: 'page',
+    cards: 'page',
+    components: 'component',
+    endpoints: 'backend',
+    flows: 'flow',
+    chores: 'chore',
+  };
+  return items.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [item];
+    const object = item as Record<string, unknown>;
+    const kind = String(object.kind ?? object.type ?? '').toLowerCase();
+    if (!['feature', 'plan', 'group', 'phase', 'workstream'].includes(kind)) return [item];
+    const parts: unknown[] = [];
+    if (object.story) {
+      parts.push({
+        kind: 'story',
+        ...(typeof object.story === 'object' && !Array.isArray(object.story)
+          ? object.story as Record<string, unknown>
+          : { title: String(object.story) }),
+      });
+    }
+    for (const [key, cardKind] of Object.entries(cardKindFor)) {
+      const list = object[key];
+      if (!Array.isArray(list)) continue;
+      for (const part of list) {
+        if (typeof part === 'string') parts.push({ kind: 'add', cardKind, title: part });
+        else if (part && typeof part === 'object' && !Array.isArray(part)) parts.push({ kind: 'add', cardKind, ...(part as Record<string, unknown>) });
+        else parts.push(part);
+      }
+    }
+    for (const key of ['actions', 'changes', 'steps']) {
+      const list = object[key];
+      if (Array.isArray(list)) parts.push(...list);
+    }
+    return parts.length > 0 ? parts : [item];
+  });
+}
+
 /** Reads a plan-chat reply, dropping actions that do not validate rather than losing the whole answer. */
 export function parsePlanChatReply(raw: string): StudioPlanChatResult {
   const parsed = (parseJsonResponse(raw, 'Project Studio') ?? {}) as Record<string, unknown>;
   const reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 8_000) : '';
   // Models reach for a few different names for the list. Accept them all rather than showing an empty change set
   // for a reply that clearly described one.
-  const candidate = [parsed.actions, parsed.changes, parsed.steps, parsed.screens, parsed.cards]
-    .find((value) => Array.isArray(value)) as unknown[] | undefined ?? [];
+  const candidate = expandFeatures(actionList(parsed));
   // A reply with neither words nor actions is unusable. A reply that only carries actions is fine: the second
   // extraction pass is told not to repeat the description, and older models sometimes leave the sentence out.
   if (!reply && candidate.length === 0) throw new Error('The Studio chat reply had nothing to say.');
@@ -1141,14 +1310,9 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
   let dropped = 0;
   if (candidate.length > 0) {
     for (const value of candidate) {
-      if (!value || typeof value !== 'object') { dropped += 1; continue; }
-      const raw = { ...(value as Record<string, unknown>) };
-      // Accept the common aliases a model reaches for, so a usable action is not lost to a field name.
-      if (raw.kind === 'add') {
-        if (raw.cardKind === undefined) raw.cardKind = raw.cardType ?? raw.card_kind ?? raw.type;
-        if (raw.dependsOn === undefined) raw.dependsOn = raw.dependsOnTitles ?? raw.depends_on;
-        if (raw.story === undefined && typeof raw.storyText === 'string') raw.story = raw.storyText;
-      }
+      const raw = actionRecord(value);
+      if (!raw) { dropped += 1; continue; }
+      if (raw.kind === 'add' && raw.story === undefined && typeof raw.storyText === 'string') raw.story = raw.storyText;
       const fields: Record<string, readonly string[]> = {
         link: ['kind', 'summary', 'designName', 'screenName'],
         add: ['kind', 'summary', 'cardKind', 'title', 'route', 'purpose', 'story', 'acceptance', 'dependsOn', 'designName'],
@@ -1179,6 +1343,42 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
       if (item.kind === 'generate') {
         if (typeof item.artifacts === 'string') item.artifacts = item.artifacts.split(/[\s,]+/).filter(Boolean);
         if (Array.isArray(item.artifacts)) item.artifacts = item.artifacts.filter((kind) => typeof kind === 'string');
+      }
+      // Keep a long field from failing the whole action. The limits are the schema's own.
+      const clip = (value: unknown, max: number): unknown => (typeof value === 'string' ? value.slice(0, max) : value);
+      // Only clip fields that exist. Assigning undefined would add a key the strict action schema rejects.
+      const clipField = (key: string, max: number): void => { if (key in item) item[key] = clip(item[key], max); };
+      clipField('summary', 300);
+      clipField('title', 120);
+      clipField('screenName', 300);
+      clipField('designName', 300);
+      clipField('route', 300);
+      clipField('purpose', 2_000);
+      clipField('story', 4_000);
+      clipField('body', 4_000);
+      if (Array.isArray(item.acceptance)) {
+        item.acceptance = item.acceptance.map((value) => (typeof value === 'string' ? value.slice(0, 400) : value)).slice(0, 20);
+      }
+      if (Array.isArray(item.dependsOn)) {
+        item.dependsOn = item.dependsOn.map((value) => (typeof value === 'string' ? value.slice(0, 200) : value)).slice(0, 20);
+      }
+      if (item.kind === 'generate' && Array.isArray(item.artifacts)) {
+        const artifactAliases: Record<string, string[]> = {
+          design: ['style-guide', 'tokens'],
+          ui: ['style-guide', 'tokens'],
+          docs: ['decisions', 'architecture', 'conventions'],
+          documentation: ['decisions', 'architecture', 'conventions'],
+          db: ['stack'],
+          database: ['stack'],
+          routes: ['pages', 'flows'],
+          tests: ['acceptance'],
+          api: ['stack', 'architecture'],
+        };
+        item.artifacts = [...new Set((item.artifacts as unknown[]).flatMap((value) => {
+          if (typeof value !== 'string') return [];
+          const name = value.toLowerCase();
+          return (ARTIFACT_KINDS as readonly string[]).includes(name) ? [name] : artifactAliases[name] ?? [];
+        }))];
       }
       const action = studioPlanActionSchema.safeParse(item);
       if (action.success) actions.push(action.data);
@@ -1224,6 +1424,9 @@ export function planChatPrompt(
     '- A story action writes stories.md itself, so never also list stories in generate. An add page writes its own inventory section, so list pages in generate only when the rest of the inventory needs rewriting.',
     '- The reply says what will change and what the person does next: draw the new screens, apply, then start Autopilot or open Code.',
     '',
+    'Example of the required shape (use your own content, not this text):',
+    '{"reply":"Adding the parent portal. Apply the set, then draw the new page and start Autopilot.","actions":[{"kind":"story","summary":"Add the parent portal story","title":"Parent portal","body":"A parent signs in and sees each child.","acceptance":["The parent sees a report for every child."]},{"kind":"add","summary":"Add the Parent portal page","cardKind":"page","title":"Parent portal","route":"/parent","dependsOn":["Auth endpoint"],"acceptance":["The page lists each child."]}]}',
+    '',
     'Rules:',
     '- Only propose changes the person asked for. Never invent a screen, route or integration they did not mention.',
     '- If the message is a question or a request to inspect, return an empty actions list.',
@@ -1267,6 +1470,9 @@ export function planActionsPrompt(
     '- "remove": screenName, deletePage.',
     '- "route": screenName, route.',
     '- "generate": artifacts.',
+    '',
+    'Example of the required shape (use your own content, not this text):',
+    '{"reply":"Adding the feature.","actions":[{"kind":"story","summary":"Add the Zuri goal story","title":"Zuri unified assistant","body":"A person uses Zuri on the web and on Windows.","acceptance":["The same account works on both."]},{"kind":"add","summary":"Add the sync flow card","cardKind":"flow","title":"Sync flow","dependsOn":["Chat workspace"],"acceptance":["Changes appear on both clients."]}]}',
     '',
     `Intent: ${intent}.`,
     'Use titles from BOARD CARDS for dependencies, and titles from this set for new cards.',

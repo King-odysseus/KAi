@@ -180,6 +180,71 @@ describe('plan chat replies', () => {
     expect(result.actions).toHaveLength(1);
     expect(result.dropped).toBe(0);
   });
+
+  it('reads the shapes models actually return', () => {
+    const result = parsePlanChatReply(JSON.stringify({
+      reply: 'Adding it.',
+      proposedChanges: [
+        { type: 'create', name: 'Parent portal', path: '/parent', card_type: 'screen', dependencies: [{ title: 'Auth endpoint' }] },
+        { action: 'create_story', name: 'Parent portal story', acceptance_criteria: [{ criterion: 'A parent sees a report.' }] },
+      ],
+    }));
+
+    expect(result.actions.map((action) => action.kind)).toEqual(['add', 'story']);
+    const added = result.actions[0];
+    expect(added?.kind === 'add' && added.title).toBe('Parent portal');
+    expect(added?.kind === 'add' && added.cardKind).toBe('page');
+    expect(added?.kind === 'add' && added.dependsOn).toEqual(['Auth endpoint']);
+    const story = result.actions[1];
+    expect(story?.kind === 'story' && story.acceptance).toEqual(['A parent sees a report.']);
+  });
+
+  it('flattens a feature wrapper and clips an over-long field', () => {
+    const long = 'A'.repeat(200);
+    const result = parsePlanChatReply(JSON.stringify({
+      reply: 'Adding it.',
+      actions: [{
+        kind: 'feature',
+        title: long,
+        story: { title: 'Zuri everywhere', acceptance: ['The same account works on both.'] },
+        screens: [{ title: long }],
+        endpoints: [{ title: 'Sync endpoint', dependsOn: ['Chat workspace'] }],
+      }],
+    }));
+
+    expect(result.actions.map((action) => action.kind)).toEqual(['story', 'add', 'add']);
+    const story = result.actions[0];
+    expect(story?.kind === 'story' && story.title).toBe('Zuri everywhere');
+    const page = result.actions.find((action) => action.kind === 'add' && action.cardKind === 'page');
+    expect(page?.kind === 'add' && page.title.length).toBe(120);
+    const endpoint = result.actions.find((action) => action.kind === 'add' && action.cardKind === 'backend');
+    expect(endpoint?.kind === 'add' && endpoint.dependsOn).toEqual(['Chat workspace']);
+  });
+
+  it('maps artifact aliases onto the artifacts the plan has', () => {
+    const result = parsePlanChatReply(JSON.stringify({
+      reply: 'Writing the documents.',
+      actions: [{ kind: 'generate', summary: 'Write the design documents', artifacts: ['design', 'docs', 'routes'] }],
+    }));
+
+    const generated = result.actions[0];
+    expect(generated?.kind === 'generate' && generated.artifacts).toEqual([
+      'style-guide', 'tokens', 'decisions', 'architecture', 'conventions', 'pages', 'flows',
+    ]);
+  });
+
+  it('reads a top-level story and a bare screen list', () => {
+    const result = parsePlanChatReply(JSON.stringify({
+      reply: 'Adding the feature.',
+      story: { title: 'Zuri everywhere', body: 'A person uses Zuri on web and Windows.', acceptance: ['The same account works on both.'] },
+      screens: ['Parent portal', 'Account settings'],
+    }));
+
+    expect(result.actions.map((action) => action.kind)).toEqual(['story', 'add', 'add']);
+    const pages = result.actions.slice(1);
+    expect(pages.every((action) => action.kind === 'add' && action.cardKind === 'page')).toBe(true);
+    expect(pages.map((action) => action.kind === 'add' && action.title)).toEqual(['Parent portal', 'Account settings']);
+  });
 });
 
 describe('extracting actions', () => {
