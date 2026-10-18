@@ -266,6 +266,17 @@ describe('extracting actions', () => {
     expect(calls).toEqual(['kai_studio_plan_chat', 'kai_studio_plan_actions']);
   });
 
+  it('reports the stage of the turn as it runs', async () => {
+    const stages: string[] = [];
+    const { studio } = makeStudio({
+      kai_studio_plan_chat: JSON.stringify({ reply: 'Adding it.', actions: [{ kind: 'add', summary: 'Add a card', title: 'A card' }] }),
+    });
+
+    await studio.planChat('p1', 'Add a card.', 'feature', (stage) => stages.push(stage));
+
+    expect(stages).toEqual(['reading-plan', 'reading-design', 'asking-model', 'done']);
+  });
+
   it('does not second-guess Ask', async () => {
     const { studio, calls } = makeStudio({
       kai_studio_plan_chat: JSON.stringify({ reply: 'It is missing a reports screen.', actions: [] }),

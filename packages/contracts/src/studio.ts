@@ -513,6 +513,15 @@ export const studioPlanChatResultSchema = z
   .strict();
 export type StudioPlanChatResult = z.infer<typeof studioPlanChatResultSchema>;
 
+/** The parts of a Studio chat turn, reported as they happen so the thread can say what it is doing. */
+export const STUDIO_PLAN_STAGES = ['reading-plan', 'reading-design', 'asking-model', 'extracting-actions', 'done', 'failed'] as const;
+export const studioPlanStageSchema = z.enum(STUDIO_PLAN_STAGES);
+export type StudioPlanStage = z.infer<typeof studioPlanStageSchema>;
+export const studioPlanProgressSchema = z
+  .object({ projectId: z.string().min(1), stage: studioPlanStageSchema })
+  .strict();
+export type StudioPlanProgress = z.infer<typeof studioPlanProgressSchema>;
+
 export const studioPlanApplyInputSchema = z
   .object({ projectId: z.string().min(1), actions: z.array(studioPlanActionSchema).min(1).max(24) })
   .strict();

@@ -673,7 +673,10 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       if (context.windows.send(request.ownerWindowId, 'agents:event', payload)) return;
       context.windows.broadcast('agents:event', payload);
     }));
-  handle(context, 'studio:plan-chat', async ({ projectId, message, intent }) => context.studio.planChat(projectId, message, intent));
+  handle(context, 'studio:plan-chat', async ({ projectId, message, intent }) =>
+    context.studio.planChat(projectId, message, intent, (stage) => {
+      context.windows.broadcast('studio:plan-progress', { projectId, stage });
+    }));
   handle(context, 'studio:plan-apply', async ({ projectId, actions }) => {
     const applied = await context.studio.applyPlanActions(projectId, actions);
     announceBoard(context, projectId, applied.board);

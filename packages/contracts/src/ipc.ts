@@ -90,6 +90,7 @@ import {
   type StudioArtifactsGenerationResult,
   type StudioPlanChatInput,
   type StudioPlanChatResult,
+  type StudioPlanProgress,
   type StudioPlanApplyInput,
   type StudioPlanApplyResult,
   type StudioStyleReferenceAddInput,
@@ -1505,6 +1506,8 @@ export interface KaiDesktopBridge {
    * the person approves the set before `applyStudioPlanChanges` runs it.
    */
   chatWithStudioPlan(input: StudioPlanChatInput): Promise<IpcResponse<StudioPlanChatResult>>;
+  /** Which part of the chat turn is running: reading, asking, extracting or done. */
+  onStudioPlanProgress(listener: (payload: StudioPlanProgress) => void): () => void;
   /** Applies the approved changes. Each action is independent, so one failure does not discard the rest. */
   applyStudioPlanChanges(input: StudioPlanApplyInput): Promise<IpcResponse<StudioPlanApplyResult>>;
   /** Suggests routes using the page inventory, pulled Open Pencil pages, and project source context. Does not apply them. */

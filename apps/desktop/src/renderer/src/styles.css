@@ -12019,6 +12019,31 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .studio-chat-intents { display: flex; flex-wrap: wrap; gap: 6px; }
 .studio-chat-intents .secondary-button.selected { border-color: var(--accent); color: var(--accent); }
 .studio-plan-action { display: flex; flex-direction: column; gap: 3px; }
+.studio-plan-action-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.plan-action-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+.plan-action-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.plan-action-editor input,
+.plan-action-editor textarea,
+.plan-action-editor select { width: 100%; }
+.plan-action-editor textarea { resize: vertical; }
+.plan-action-artifacts { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; }
+.plan-action-artifacts label { flex-direction: row; align-items: center; gap: 4px; }
+.plan-action-editor label.plan-action-check { flex-direction: row; align-items: center; gap: 6px; }
 .studio-chat-message.user { border-left: 2px solid var(--accent); }
 .studio-chat-message.assistant { border-left: 2px solid var(--green); }
 .studio-route-review p { margin: 8px 0; }

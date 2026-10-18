@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
-import type { AgentRunEvent, AgentRunState, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, SharedDesktopState, TerminalEvent, UpdateState } from '@kai/contracts';
+import type { AgentRunEvent, AgentRunState, KaiDesktopBridge, OpenConversationEvent, ProxyLiveEvent, SharedDesktopState, StudioPlanProgress, TerminalEvent, UpdateState } from '@kai/contracts';
 
 const bridge: KaiDesktopBridge = {
   bootstrap: () => ipcRenderer.invoke('app:get-bootstrap', {}),
@@ -158,6 +158,11 @@ const bridge: KaiDesktopBridge = {
   buildStudioDesignStep: (projectId, prompt, stepId) => ipcRenderer.invoke('studio:design-build-step', { projectId, prompt, stepId }),
   chatWithStudioDesign: (input) => ipcRenderer.invoke('studio:design-chat', input),
   chatWithStudioPlan: (input) => ipcRenderer.invoke('studio:plan-chat', input),
+  onStudioPlanProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: StudioPlanProgress): void => listener(payload);
+    ipcRenderer.on('studio:plan-progress', handler);
+    return () => ipcRenderer.removeListener('studio:plan-progress', handler);
+  },
   applyStudioPlanChanges: (input) => ipcRenderer.invoke('studio:plan-apply', input),
   cancelStudioDesignStep: (projectId, stepId) => ipcRenderer.invoke('studio:design-build-cancel', { projectId, stepId }),
   onStudioBoardChanged: (listener) => {

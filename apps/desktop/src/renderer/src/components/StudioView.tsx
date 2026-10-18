@@ -6,6 +6,7 @@ import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, scree
 import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
 import { GuidePanel, GuideStrip } from './GuidePanel';
 import { NeedsYouBanner } from './NeedsYouBanner';
+import { PlanActionEditor } from './PlanActionEditor';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
 import { FlowDiagram } from './FlowDiagram';
 import { ImageCard } from './ImageAttachment';
@@ -41,6 +42,7 @@ import {
   type StudioGuideView,
   type StudioProjectSummary,
   type StudioPlanAction,
+  type StudioPlanStage,
   type StudioReadiness,
   type TeamPlanDraft,
 } from '@kai/contracts';
@@ -58,6 +60,16 @@ const BOARD_STATUS_LABEL: Record<BoardStatus, string> = {
   review: 'In review',
   done: 'Done',
   blocked: 'Blocked',
+};
+
+/** What the Studio chat says while each part of its turn is running. */
+const PLAN_STAGE_LABEL: Record<StudioPlanStage, string> = {
+  'reading-plan': 'Reading the plan...',
+  'reading-design': 'Checking the open-pencil design...',
+  'asking-model': 'Asking the model...',
+  'extracting-actions': 'The model described the change; turning it into actions...',
+  done: 'Done.',
+  failed: 'The request failed.',
 };
 
 /**
@@ -165,7 +177,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [planActions, setPlanActions] = useState<StudioPlanAction[] | null>(null);
   const [planSelected, setPlanSelected] = useState<boolean[]>([]);
   const [planDropped, setPlanDropped] = useState(0);
+  const [editingAction, setEditingAction] = useState<number | null>(null);
   const [lastPlanRequest, setLastPlanRequest] = useState<string | null>(null);
+  // Open-pencil pages the person has said are not product screens. They are not deleted; they stop appearing as
+  // "drawn but not planned" in this project.
+  const [ignoredDesignPages, setIgnoredDesignPages] = useState<Set<string>>(new Set());
   const [planIntent, setPlanIntent] = useState<'ask' | 'screen' | 'feature'>('feature');
   const [planHydrated, setPlanHydrated] = useState<string | null>(null);
   const [planOutcome, setPlanOutcome] = useState<{ applied: string[]; failed: Array<{ summary: string; reason: string }> } | null>(null);
@@ -175,6 +191,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   // What the chat is doing while it waits. The main composer shows a run as it happens; the Studio chat used to
   // show only a disabled button, which read as nothing happening at all.
   const [planPhase, setPlanPhase] = useState<'thinking' | 'applying' | null>(null);
+  const [planStage, setPlanStage] = useState<StudioPlanStage>('reading-plan');
   const [planElapsed, setPlanElapsed] = useState(0);
   // Artifacts ticked in the Artifacts tab, for "write only what I chose" rather than the whole set.
   const [selectedKinds, setSelectedKinds] = useState<Set<ArtifactKind>>(new Set());
@@ -323,6 +340,15 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     return () => clearInterval(timer);
   }, [planPhase]);
 
+  // The main process reports which part of the chat turn is running. Listening only while one is in flight keeps a
+  // late event from changing a thread the person has already moved on from.
+  useEffect(() => {
+    if (!projectId || planPhase !== 'thinking') return undefined;
+    return window.kaiDesktop.onStudioPlanProgress((payload) => {
+      if (payload.projectId === projectId) setPlanStage(payload.stage);
+    });
+  }, [projectId, planPhase]);
+
   // The conversation belongs to the Studio project, not to whichever tab happens to be open. It is kept per
   // project, bounded, and restored when the project is opened again.
   useEffect(() => {
@@ -338,6 +364,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         next?: { ready: number; undrawn: number; unrouted: number; cards: number } | null;
         dropped?: number;
         lastRequest?: string | null;
+        ignored?: string[];
       } | null;
       setPlanChatMessages(Array.isArray(saved?.messages) ? saved!.messages : []);
       setPlanActions(Array.isArray(saved?.actions) ? saved!.actions : null);
@@ -347,6 +374,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setPlanNext(saved?.next ?? null);
       setPlanDropped(typeof saved?.dropped === 'number' ? saved.dropped : 0);
       setLastPlanRequest(typeof saved?.lastRequest === 'string' ? saved.lastRequest : null);
+      setIgnoredDesignPages(new Set(Array.isArray(saved?.ignored) ? saved.ignored : []));
     } catch {
       setPlanChatMessages([]);
       setPlanActions(null);
@@ -355,6 +383,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setPlanNext(null);
       setPlanDropped(0);
       setLastPlanRequest(null);
+      setIgnoredDesignPages(new Set());
     }
     setPlanHydrated(projectId);
   }, [projectId]);
@@ -371,11 +400,12 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         next: planNext,
         dropped: planDropped,
         lastRequest: lastPlanRequest,
+        ignored: [...ignoredDesignPages],
       }));
     } catch {
       // Storage is optional; the conversation still works for this window.
     }
-  }, [projectId, planHydrated, planChatMessages, planActions, planSelected, planIntent, planOutcome, planNext, planDropped, lastPlanRequest]);
+  }, [projectId, planHydrated, planChatMessages, planActions, planSelected, planIntent, planOutcome, planNext, planDropped, lastPlanRequest, ignoredDesignPages]);
 
   /**
    * Where the project is, re-read whenever anything it reads has moved.
@@ -641,6 +671,69 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     () => screenRows(designPages, design?.components.filter((component) => component.screen).map((component) => component.name) ?? []),
     [designPages, design],
   );
+  // Drawn pages the plan does not carry, minus the ones the person has already said are not screens.
+  const unplannedDesignRows = useMemo(
+    () => designRows.filter((row) => !row.inPages && row.drawn && !ignoredDesignPages.has(screenTitleKey(row.name))),
+    [designRows, ignoredDesignPages],
+  );
+
+  /**
+   * What is wrong with the proposed set, checked against the plan as it stands. These are warnings, not refusals:
+   * an action that already exists is reused, a missing dependency is ignored, and the person can still apply.
+   */
+  const planWarnings = useMemo(() => {
+    const warnings = new Map<number, Array<{ code: string; message: string }>>();
+    if (!planActions) return warnings;
+    const pageKeys = new Set(designPages.map((page) => screenTitleKey(page.name)));
+    const cards = board?.cards ?? [];
+    const cardsByKey = new Map(cards.map((card) => [screenTitleKey(card.title), card]));
+    const proposedAdds = planActions.flatMap((action, index) => (action.kind === 'add' ? [{ action, index }] : []));
+    const proposedKeys = new Set(proposedAdds.map((entry) => screenTitleKey(entry.action.title)));
+    const routeOwners = new Map<string, string>();
+    for (const card of cards) if (card.route.trim()) routeOwners.set(card.route.trim(), card.title);
+    for (const entry of proposedAdds) if (entry.action.route.trim()) routeOwners.set(entry.action.route.trim(), entry.action.title);
+    const drawn = new Set((design?.components ?? []).filter((component) => component.screen).map((component) => screenTitleKey(component.name)));
+
+    planActions.forEach((action, index) => {
+      const found: Array<{ code: string; message: string }> = [];
+      if (action.kind === 'add') {
+        const key = screenTitleKey(action.title);
+        if (pageKeys.has(key) || cardsByKey.has(key)) {
+          found.push({ code: 'exists', message: `"${action.title}" already exists. Applying this reuses it rather than creating a second.` });
+        }
+        if (action.route.trim()) {
+          const owner = routeOwners.get(action.route.trim());
+          if (owner && owner !== action.title) found.push({ code: 'route', message: `Route ${action.route} is already used by "${owner}".` });
+        } else if (action.cardKind === 'page') {
+          found.push({ code: 'no-route', message: 'This page has no route, so the screen check cannot open it.' });
+        }
+        for (const dependency of action.dependsOn) {
+          const dependencyKey = screenTitleKey(dependency);
+          if (!cardsByKey.has(dependencyKey) && !proposedKeys.has(dependencyKey)) {
+            found.push({ code: `dep-${dependency}`, message: `No card called "${dependency}" exists, so that dependency will be ignored.` });
+          }
+        }
+        if (action.designName && !drawn.has(screenTitleKey(action.designName))) {
+          found.push({ code: 'design', message: `No drawn OpenPencil page called "${action.designName}" was found in the last pull.` });
+        }
+      }
+      if (action.kind === 'link') {
+        if (!drawn.has(screenTitleKey(action.designName))) found.push({ code: 'design', message: 'That drawn page is not in the last pull. Pull the design, then try again.' });
+        if (!pageKeys.has(screenTitleKey(action.screenName)) && !cardsByKey.has(screenTitleKey(action.screenName))) {
+          found.push({ code: 'screen', message: 'The plan has no screen with that name.' });
+        }
+      }
+      if (action.kind === 'route' && !cardsByKey.has(screenTitleKey(action.screenName)) && !pageKeys.has(screenTitleKey(action.screenName))) {
+        found.push({ code: 'screen', message: 'The plan has no screen with that name.' });
+      }
+      if (action.kind === 'remove' && !cardsByKey.has(screenTitleKey(action.screenName)) && !pageKeys.has(screenTitleKey(action.screenName))) {
+        found.push({ code: 'screen', message: 'The plan has no screen with that name.' });
+      }
+      if (found.length > 0) warnings.set(index, found);
+    });
+    return warnings;
+  }, [planActions, designPages, board, design]);
+
   const visibleRows = useMemo(() => filterScreens(designRows, screenQuery), [designRows, screenQuery]);
   // The screens the build still has to draw: in the pages list, not drawn yet, and not skipped by the user.
   const toDraw = useMemo(
@@ -1888,6 +1981,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setPlanSelected((current) => current.map((value, at) => (at === index ? !value : value)));
   }
 
+  /** One proposal, corrected in place. The edited action is what the apply call sends. */
+  function replacePlanAction(index: number, next: StudioPlanAction): void {
+    setPlanActions((current) => (current ? current.map((action, at) => (at === index ? next : action)) : current));
+  }
+
   async function sendPlanChat(override?: string): Promise<void> {
     if (!projectId || busy !== null) return;
     const message = (override ?? planChatText).trim();
@@ -1897,12 +1995,14 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setPlanChatMessages((items) => [...items, { role: 'user', text: message }]);
     setPlanChatText('');
     setPlanActions(null);
+    setEditingAction(null);
     setPlanSelected([]);
     setPlanOutcome(null);
     setPlanNext(null);
     setPlanDropped(0);
     setBusy('plan-chat');
     setPlanPhase('thinking');
+    setPlanStage('reading-plan');
     setError(null);
     try {
       const result = unwrap(await window.kaiDesktop.chatWithStudioPlan({ projectId, message, intent: planIntent }));
@@ -1939,10 +2039,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }]);
   }
 
-  async function applyPlanChanges(): Promise<void> {
+  async function applyPlanChanges(startAutopilotAfter = false): Promise<void> {
     if (!projectId || !planActions || busy !== null) return;
     const chosen = planActions.filter((_, index) => planSelected[index]);
     if (chosen.length === 0) return;
+    let readyCount = 0;
     setBusy('plan-chat');
     setPlanPhase('applying');
     setError(null);
@@ -1957,8 +2058,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       const drawnKeys = new Set(result.design.components.filter((component) => component.screen).map((component) => screenTitleKey(component.name)));
       const undrawn = pageList.filter((page) => !drawnKeys.has(screenTitleKey(page.name))).length;
       const unrouted = result.board.cards.filter((card) => (card.kind === 'page' || card.kind === 'component') && !card.route.trim()).length;
-      setPlanNext({ ready: readyCards(result.board).length, undrawn, unrouted, cards: result.board.cards.length });
+      readyCount = readyCards(result.board).length;
+      setPlanNext({ ready: readyCount, undrawn, unrouted, cards: result.board.cards.length });
       setPlanActions(null);
+      setEditingAction(null);
       setPlanSelected([]);
       const summary = [
         ...result.applied.map((line) => `Applied: ${line}`),
@@ -1973,6 +2076,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setPlanPhase(null);
       setBusy(null);
     }
+    // Applied and then started, in that order. The finally above has already released the busy state, which is what
+    // the Autopilot start checks before it will run.
+    if (startAutopilotAfter && readyCount > 0) await startPlanAutopilot();
   }
 
   /** The second line under a proposed action: what it will actually touch. */
@@ -2015,6 +2121,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     } finally {
       setBusy(null);
     }
+  }
+
+  /** A drawn page that is a component page or a working artboard, not a product screen. Kept in open-pencil. */
+  function ignoreDesignPage(name: string): void {
+    setIgnoredDesignPages((current) => new Set(current).add(screenTitleKey(name)));
   }
 
   /**
@@ -2659,8 +2770,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             <p className="studio-note">
               open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. Pull the design also launches the editor for you and reconnects KAI to whatever it reports, so there is nothing to start by hand.
             </p>
-            {designRows.some((row) => !row.inPages && row.drawn) && (() => {
-              const unplanned = designRows.filter((row) => !row.inPages && row.drawn).map((row) => row.name);
+            {unplannedDesignRows.length > 0 && (() => {
+              const unplanned = unplannedDesignRows.map((row) => row.name);
               return (
                 <p className="studio-notice warning" role="status">
                   <AlertTriangle size={14} />
@@ -2877,7 +2988,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               Uses {readiness?.displayName ?? 'the Prompt Guide'}{readiness?.model ? ` · ${readiness.model}` : ''}. No separate key.
             </p>
             {(() => {
-              const unplanned = designRows.filter((row) => !row.inPages && row.drawn);
+              const unplanned = unplannedDesignRows;
               if (unplanned.length === 0) return null;
               return (
                 <section>
@@ -2891,6 +3002,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                           <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'link')} disabled={busy !== null}>This is a planned screen</button>
                           <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'add')} disabled={busy !== null}>It is new</button>
                           <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'remove')} disabled={busy !== null}>Not needed</button>
+                          <button type="button" className="secondary-button" onClick={() => ignoreDesignPage(row.name)} disabled={busy !== null}>Not a screen</button>
                         </span>
                       </li>
                     ))}
@@ -2918,7 +3030,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     <Loader2 className="spin" size={13} />{' '}
                     {planPhase === 'applying'
                       ? 'Applying the changes...'
-                      : `Reading the plan and the design, then asking the model${planElapsed > 0 ? ` (${planElapsed}s)` : ''}...`}
+                      : `${PLAN_STAGE_LABEL[planStage]}${planElapsed > 0 ? ` (${planElapsed}s)` : ''}`}
                   </p>
                 )}
               </div>
@@ -2941,7 +3053,20 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     </button>
                   ))}
                 </div>
-                <textarea value={planChatText} onChange={(event) => setPlanChatText(event.target.value)} placeholder="Tell Studio what this page is, or what should change…" rows={3} disabled={busy !== null} />
+                <span className="studio-model">One or two model calls, usually under a minute.</span>
+                <textarea
+                  value={planChatText}
+                  onChange={(event) => setPlanChatText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendPlanChat();
+                    }
+                  }}
+                  placeholder="Tell Studio what this page is, or what should change…"
+                  rows={3}
+                  disabled={busy !== null}
+                />
                 <div className="page-actions">
                   <button type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</button>
                   {planPhase === 'thinking' && <button type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</button>}
@@ -2956,11 +3081,31 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   {planActions.map((action, index) => (
                     <li key={`${action.kind}-${index}`}>
                       <span className="studio-plan-action">
-                        <label>
-                          <input type="checkbox" checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
-                          {' '}{action.summary}
-                        </label>
+                        <span className="studio-plan-action-head">
+                          <label>
+                            <input type="checkbox" checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
+                            {' '}{action.summary}
+                          </label>
+                          <button
+                            type="button"
+                            className="composer-text-button"
+                            onClick={() => setEditingAction(editingAction === index ? null : index)}
+                            disabled={busy !== null}
+                          >
+                            {editingAction === index ? 'Done' : 'Edit'}
+                          </button>
+                        </span>
                         <span className="studio-note">{action.kind}: {planActionDetail(action)}</span>
+                        {editingAction === index && (
+                          <PlanActionEditor
+                            action={action}
+                            onChange={(next) => replacePlanAction(index, next)}
+                            disabled={busy !== null}
+                          />
+                        )}
+                        {(planWarnings.get(index) ?? []).map((warning) => (
+                          <span key={warning.code} className="studio-note"><AlertTriangle size={12} /> {warning.message}</span>
+                        ))}
                       </span>
                     </li>
                   ))}
@@ -2974,7 +3119,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <button type="button" className="primary-button" onClick={() => void applyPlanChanges()} disabled={busy !== null || !planSelected.some(Boolean)}>
                     {busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Apply selected ({planSelected.filter(Boolean).length})
                   </button>
-                  <button type="button" className="secondary-button" onClick={() => { setPlanActions(null); setPlanSelected([]); }} disabled={busy !== null}>Dismiss</button>
+                  <button type="button" className="secondary-button" onClick={() => void applyPlanChanges(true)} disabled={busy !== null || !planSelected.some(Boolean)}>
+                    <Play size={14} /> Apply and start Autopilot
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => { setPlanActions(null); setPlanSelected([]); setEditingAction(null); }} disabled={busy !== null}>Dismiss</button>
                 </div>
               </section>
             )}

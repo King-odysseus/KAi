@@ -36,6 +36,7 @@ import {
   type StudioPlanApplyResult,
   type StudioPlanChatResult,
   type StudioPlanIntent,
+  type StudioPlanStage,
   type StudioReadiness,
   type StudioRouteRepairResult,
   type UiCheckResult,
@@ -766,50 +767,81 @@ export class DesktopStudio {
    * with a change set instead of writing anything. Approving the set is a separate call, so nothing is rewritten on
    * the strength of a sentence the person did not mean.
    */
-  async planChat(projectId: string, message: string, intent: StudioPlanIntent = 'feature'): Promise<StudioPlanChatResult> {
-    const readiness = await this.ports.interview.readiness();
-    if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
-    const settings = await this.ports.settings();
-    const root = await this.ports.projectRoot(projectId);
-    const [pages, board, context] = await Promise.all([
-      this.ports.artifacts.readText(projectId, 'pages'),
-      this.ports.board.read(projectId),
-      loadProjectContext(root, undefined, 8_000).catch(() => null),
-    ]);
-    // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it. A live read
-    // that stalls must not stall the turn: `currentDesignSoon` falls back to the stored design after ten seconds.
-    const design = await this.currentDesignSoon(projectId);
-    const first = await this.ports.requester.structuredRequest(
-      settings.promptGuide,
-      NAMES,
-      planChatPrompt(message, pages ?? '', board, design, context, intent),
-      'kai_studio_plan_chat',
-      PLAN_CHAT_SCHEMA,
-      parsePlanChatReply,
-      // A feature set is a dozen actions with stories and acceptance criteria, and a reasoning model spends part
-      // of the budget thinking first. The same budget the artifacts use gives a long feature room to finish.
-      { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
-    );
-    // Ask is allowed to answer without touching the plan. A screen correction or a feature is not: the model
-    // sometimes describes the change in the reply and returns an empty list, so its own description is handed back
-    // in a second, narrower call that asks only for the actions.
-    if (first.actions.length > 0 || intent === 'ask') return first;
+  async planChat(
+    projectId: string,
+    message: string,
+    intent: StudioPlanIntent = 'feature',
+    onStage?: (stage: StudioPlanStage) => void,
+  ): Promise<StudioPlanChatResult> {
+    onStage?.('reading-plan');
     try {
-      const extracted = await this.ports.requester.structuredRequest(
+      const readiness = await this.ports.interview.readiness();
+      if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
+      const settings = await this.ports.settings();
+      const root = await this.ports.projectRoot(projectId);
+      const [pages, board, context, brief, stack, architecture, decisions] = await Promise.all([
+        this.ports.artifacts.readText(projectId, 'pages'),
+        this.ports.board.read(projectId),
+        loadProjectContext(root, undefined, 8_000).catch(() => null),
+        this.ports.artifacts.readText(projectId, 'brief'),
+        this.ports.artifacts.readText(projectId, 'stack'),
+        this.ports.artifacts.readText(projectId, 'architecture'),
+        this.ports.artifacts.readText(projectId, 'decisions'),
+      ]);
+      // The product intent and the technical choices are part of the plan. Without them the chat can wire a feature
+      // that contradicts the brief or the stack it has already committed to.
+      const documents = [
+        brief ? `BRIEF:\n${brief.slice(0, 3_000)}` : '',
+        stack ? `STACK:\n${stack.slice(0, 2_000)}` : '',
+        architecture ? `ARCHITECTURE:\n${architecture.slice(0, 2_000)}` : '',
+        decisions ? `DECISIONS:\n${decisions.slice(0, 2_000)}` : '',
+      ].filter(Boolean).join('\n\n');
+      // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it. A live read
+      // that stalls must not stall the turn: `currentDesignSoon` falls back to the stored design after ten seconds.
+      onStage?.('reading-design');
+      const design = await this.currentDesignSoon(projectId);
+      onStage?.('asking-model');
+      const first = await this.ports.requester.structuredRequest(
         settings.promptGuide,
         NAMES,
-        planActionsPrompt(message, first.reply, pages ?? '', board, design, context, intent),
-        'kai_studio_plan_actions',
+        planChatPrompt(message, pages ?? '', board, design, context, intent, documents),
+        'kai_studio_plan_chat',
         PLAN_CHAT_SCHEMA,
         parsePlanChatReply,
+        // A feature set is a dozen actions with stories and acceptance criteria, and a reasoning model spends part
+        // of the budget thinking first. The same budget the artifacts use gives a long feature room to finish.
         { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
       );
-      return extracted.actions.length > 0
-        ? { reply: first.reply, actions: extracted.actions, dropped: extracted.dropped }
-        : { ...first, dropped: first.dropped + extracted.dropped };
-    } catch {
-      // A failed second call keeps the first answer, which is still useful reading even without a change set.
-      return first;
+      // Ask is allowed to answer without touching the plan. A screen correction or a feature is not: the model
+      // sometimes describes the change in the reply and returns an empty list, so its own description is handed back
+      // in a second, narrower call that asks only for the actions.
+      if (first.actions.length > 0 || intent === 'ask') {
+        onStage?.('done');
+        return first;
+      }
+      onStage?.('extracting-actions');
+      try {
+        const extracted = await this.ports.requester.structuredRequest(
+          settings.promptGuide,
+          NAMES,
+          planActionsPrompt(message, first.reply, pages ?? '', board, design, context, intent, documents),
+          'kai_studio_plan_actions',
+          PLAN_CHAT_SCHEMA,
+          parsePlanChatReply,
+          { maxOutputTokens: STUDIO_MAX_OUTPUT_TOKENS },
+        );
+        onStage?.('done');
+        return extracted.actions.length > 0
+          ? { reply: first.reply, actions: extracted.actions, dropped: extracted.dropped }
+          : { ...first, dropped: first.dropped + extracted.dropped };
+      } catch {
+        // A failed second call keeps the first answer, which is still useful reading even without a change set.
+        onStage?.('done');
+        return first;
+      }
+    } catch (error) {
+      onStage?.('failed');
+      throw error;
     }
   }
 
@@ -1397,6 +1429,7 @@ export function planChatPrompt(
   design: StudioDesign,
   context: string | null,
   intent: StudioPlanIntent = 'feature',
+  documents = '',
 ): { system: string; user: string } {
   const intentRules: Record<StudioPlanIntent, string> = {
     ask: 'The person chose Ask. A conversational answer is allowed; return actions only when they clearly asked for a change.',
@@ -1433,6 +1466,7 @@ export function planChatPrompt(
     '- "summary" is one short line the person reads before ticking the action.',
     '- "reply" is two to four plain sentences: what you understood, what the set changes, and the next step. Do not use em dashes or en dashes.',
     '- Match names the way a person would: case, punctuation and a leading route do not matter.',
+    '- Respect the brief and the technical documents supplied. If the feature changes a documented decision, say so in the reply.',
   ].join('\n');
   const drawn = design.components.filter((component) => component.screen);
   const user = [
@@ -1441,6 +1475,7 @@ export function planChatPrompt(
     `PAGES INVENTORY:\n${pages.trim() || '(none written)'}`,
     `BOARD CARDS:\n${board.cards.map((card) => `${card.id} | ${card.kind} | ${card.title} | status=${card.status} | route=${card.route || '(missing)'} | dependsOn=${card.dependsOn.length > 0 ? card.dependsOn.join(', ') : '(none)'}`).join('\n') || '(none)'}`,
     `DRAWN OPEN-PENCIL PAGES:\n${drawn.map((component) => `${component.name} | node=${component.id}`).join('\n') || '(none recorded)'}`,
+    documents ? `PLAN DOCUMENTS:\n${documents}` : '',
     context ? `PROJECT SNAPSHOT:\n${context}` : '',
   ].filter(Boolean).join('\n\n');
   return { system, user };
@@ -1458,6 +1493,7 @@ export function planActionsPrompt(
   design: StudioDesign,
   context: string | null,
   intent: StudioPlanIntent,
+  documents = '',
 ): { system: string; user: string } {
   const system = [
     'You turn a described plan change into concrete Studio actions. A previous answer described the change but returned no actions; this call exists only to produce them.',
@@ -1477,6 +1513,7 @@ export function planActionsPrompt(
     `Intent: ${intent}.`,
     'Use titles from BOARD CARDS for dependencies, and titles from this set for new cards.',
     'Do not invent screens, routes or integrations the request does not imply.',
+    'Respect the brief and the technical documents supplied.',
     'The reply field is one short sentence; the description was already given in the previous answer.',
   ].join('\n');
   const drawn = design.components.filter((component) => component.screen);
@@ -1486,6 +1523,7 @@ export function planActionsPrompt(
     `PAGES INVENTORY:\n${pages.trim() || '(none written)'}`,
     `BOARD CARDS:\n${board.cards.map((card) => `${card.id} | ${card.kind} | ${card.title} | status=${card.status} | route=${card.route || '(missing)'}`).join('\n') || '(none)'}`,
     `DRAWN OPEN-PENCIL PAGES:\n${drawn.map((component) => `${component.name} | node=${component.id}`).join('\n') || '(none recorded)'}`,
+    documents ? `PLAN DOCUMENTS:\n${documents}` : '',
     context ? `PROJECT SNAPSHOT:\n${context}` : '',
   ].filter(Boolean).join('\n\n');
   return { system, user };
