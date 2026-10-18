@@ -199,6 +199,8 @@ describe('file actions', () => {
     await expect(fs.stat(path.join(root, 'src'))).rejects.toThrow();
     await expect(deleteProjectPath(root, '.git')).rejects.toThrow(/Git folder/);
     await expect(deleteProjectPath(root, '')).rejects.toThrow(/root/);
+    // A retried delete, or a double click, is not an error.
+    await expect(deleteProjectPath(root, 'missing.txt')).resolves.toBeUndefined();
   });
 
   it('renames a file and a folder, and refuses an existing destination', async () => {

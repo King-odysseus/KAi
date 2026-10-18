@@ -261,6 +261,16 @@
   background: var(--mint-soft);
 }
 
+/* The last clicked file or folder, separate from the file that is open: Delete and F2 act on this. */
+.code-tree:focus {
+  outline: none;
+}
+
+.code-tree-item.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .code-dirty {
   margin-left: auto;
   color: var(--amber);

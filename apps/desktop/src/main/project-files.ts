@@ -212,14 +212,31 @@ function refusalFor(relativePath: string): string | null {
   return null;
 }
 
-/** Deletes a file or folder, with everything inside it. The caller confirms before this is reached. */
+/**
+ * Deletes a file or folder, with everything inside it. The caller confirms before this is reached.
+ *
+ * Windows reports EBUSY or EPERM while another program is still closing a handle, which is common for caches and
+ * files an editor just had open. A few short retries turn that into a success instead of a fail the person has to
+ * repeat. A path that is already gone counts as deleted, so a double click or a retried action is not an error.
+ */
 export async function deleteProjectPath(projectRoot: string, relativePath: string): Promise<void> {
   const refusal = refusalFor(relativePath);
   if (refusal) throw new Error(refusal);
   const root = await fs.realpath(projectRoot);
   const target = await resolveInside(projectRoot, relativePath);
   if (target === root) throw new Error('The project root cannot be deleted.');
-  await fs.rm(target, { recursive: true, force: false });
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      await fs.rm(target, { recursive: true, force: false });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return;
+      if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES') throw error;
+      await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+    }
+  }
+  throw new Error('Some of those files are still open in another program. Close it, then try again.');
 }
 
 /** Renames or moves a file or folder inside the project. The destination must not already exist. */

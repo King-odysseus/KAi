@@ -257,6 +257,8 @@ export function CodeView({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Where the right-click menu is, and what it was opened on.
   const [fileMenu, setFileMenu] = useState<{ x: number; y: number; kind: 'file' | 'folder' | 'root'; path: string } | null>(null);
+  // The file or folder last clicked in the tree. Delete and F2 act on this, the way a desktop file list works.
+  const [selectedTree, setSelectedTree] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
   const [openPaths, setOpenPaths] = useState<string[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
@@ -1346,9 +1348,10 @@ export function CodeView({
     const affected = (candidate: string): boolean => candidate === target.path || candidate.startsWith(`${target.path}/`);
     const affectedPaths = openPaths.filter(affected);
     const unsaved = affectedPaths.some((candidate) => dirty[candidate]);
+    const planFolder = target.path === '.kai' || target.path.startsWith('.kai/');
     const confirmed = await confirmDialog({
       title: `Delete ${target.kind === 'folder' ? 'folder' : 'file'} "${target.path}"?`,
-      detail: `${target.kind === 'folder' ? 'Everything inside the folder is deleted. ' : ''}This cannot be undone from KAI.${unsaved ? ' Unsaved changes in the open files are lost.' : ''}`,
+      detail: `${planFolder ? 'This is inside KAI’s plan folder. Deleting it removes plan records from this project. ' : ''}${target.kind === 'folder' ? 'Everything inside the folder is deleted. ' : ''}This cannot be undone from KAI.${unsaved ? ' Unsaved changes in the open files are lost.' : ''}`,
       confirmLabel: 'Delete',
       destructive: true,
     });
@@ -1873,9 +1876,13 @@ export function CodeView({
       <button
         key={path}
         type="button"
-        className={`code-tree-item ${activePath === path ? 'active' : ''} ${change ? `git-${change.kind}` : ''}`}
+        className={`code-tree-item ${activePath === path ? 'active' : ''} ${selectedTree?.kind === 'file' && selectedTree.path === path ? 'selected' : ''} ${change ? `git-${change.kind}` : ''}`}
         style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={() => void openFile(path)}
+        aria-selected={selectedTree?.kind === 'file' && selectedTree.path === path}
+        onClick={() => {
+          setSelectedTree({ kind: 'file', path });
+          void openFile(path);
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -1901,15 +1908,19 @@ export function CodeView({
         <div key={child.path}>
           <button
             type="button"
-            className={`code-tree-item folder ${changedInside > 0 ? 'has-changes' : ''}`}
+            className={`code-tree-item folder ${selectedTree?.kind === 'folder' && selectedTree.path === child.path ? 'selected' : ''} ${changedInside > 0 ? 'has-changes' : ''}`}
             style={{ paddingLeft: 8 + depth * 12 }}
             aria-expanded={open}
-            onClick={() => setExpanded((current) => {
-              const next = new Set(current);
-              if (open) next.delete(child.path);
-              else next.add(child.path);
-              return next;
-            })}
+            aria-selected={selectedTree?.kind === 'folder' && selectedTree.path === child.path}
+            onClick={() => {
+              setSelectedTree({ kind: 'folder', path: child.path });
+              setExpanded((current) => {
+                const next = new Set(current);
+                if (open) next.delete(child.path);
+                else next.add(child.path);
+                return next;
+              });
+            }}
             onContextMenu={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -1988,6 +1999,17 @@ export function CodeView({
         </div>
         <div
           className="code-tree"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (!selectedTree) return;
+            if (event.key === 'Delete') {
+              event.preventDefault();
+              void deleteTarget(selectedTree);
+            } else if (event.key === 'F2') {
+              event.preventDefault();
+              void renameTarget(selectedTree);
+            }
+          }}
           onContextMenu={(event) => {
             if ((event.target as HTMLElement).closest('.code-tree-item')) return;
             event.preventDefault();
