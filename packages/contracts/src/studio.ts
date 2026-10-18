@@ -424,8 +424,11 @@ export type StudioArtifactsGenerationResult = z.infer<typeof studioArtifactsGene
  *
  * - `link` pairs a page drawn in open-pencil with the screen the plan already carries, under a different name. That
  *   is the missing-route case: the planned card never got its design, and the drawn page looked unplanned.
- * - `add` puts a new screen into `pages.md` and creates its board card. `designName` names a page already drawn in
- *   open-pencil, when the new screen is the one the person just drew.
+ * - `add` creates one piece of the feature: a page (with its pages section and route), or a component, endpoint,
+ *   flow or chore card. `dependsOn` names the cards it waits on, by title or id, so the new work is wired into the
+ *   board rather than dropped beside it. `designName` names a page already drawn in open-pencil, when the new screen
+ *   is the one the person just drew.
+ * - `story` adds the feature's story to `stories.md`, with its acceptance criteria.
  * - `remove` takes a screen out of the plan and off the board. The OpenPencil page is kept unless `deletePage` is set,
  *   because deleting a drawing is not reversible from KAI.
  * - `route` sets or corrects the route a card is checked at, and writes the same route into the pages heading.
@@ -441,10 +444,24 @@ export const studioPlanActionSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('add'),
     summary: z.string().trim().min(1).max(300),
+    /** The kind of card. A page also gets a section in the pages inventory. */
+    cardKind: z.enum(CARD_KINDS).default('page'),
     title: z.string().trim().min(1).max(120),
     route: z.string().trim().max(300).default(''),
     purpose: z.string().trim().max(2_000).default(''),
+    /** The story this card implements. A page's purpose is used when this is empty. */
+    story: z.string().trim().max(4_000).default(''),
+    acceptance: z.array(z.string().trim().min(1).max(400)).max(20).default([]),
+    /** Card titles or ids that must be done first. Resolved against the board after the whole set is applied. */
+    dependsOn: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
     designName: z.string().trim().max(300).nullable().default(null),
+  }).strict(),
+  z.object({
+    kind: z.literal('story'),
+    summary: z.string().trim().min(1).max(300),
+    title: z.string().trim().min(1).max(120),
+    body: z.string().trim().max(4_000).default(''),
+    acceptance: z.array(z.string().trim().min(1).max(400)).max(20).default([]),
   }).strict(),
   z.object({
     kind: z.literal('remove'),

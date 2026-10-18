@@ -1,9 +1,12 @@
 import {
   ARTIFACT_KINDS,
+  CARD_KINDS,
   STUDIO_STYLE_REFERENCE_NOTES_PATH,
   appendPageSection,
+  appendStorySection,
   boardCardSchema,
   cardsFromDraft,
+  defaultNeeds,
   designComponentSchema,
   directDependencies,
   isUiCard,
@@ -782,7 +785,9 @@ export class DesktopStudio {
       'kai_studio_plan_chat',
       PLAN_CHAT_SCHEMA,
       parsePlanChatReply,
-      { maxOutputTokens: 8_000 },
+      // A feature set is a dozen actions with stories and acceptance criteria, and a reasoning model spends part
+      // of the budget thinking first. 8k was enough for one correction, not for a feature.
+      { maxOutputTokens: 16_000 },
     );
   }
 
@@ -819,6 +824,9 @@ export class DesktopStudio {
     let pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? '';
     const applied: string[] = [];
     const failed: Array<{ summary: string; reason: string }> = [];
+    // A feature's cards are proposed by title, and some of them are created in the same change set. Dependencies are
+    // resolved after every action has run, so a card may name one that appears later in the set.
+    const pendingDependencies: Array<{ cardId: string; dependsOn: string[] }> = [];
     for (const action of actions) {
       try {
         switch (action.kind) {
@@ -833,40 +841,56 @@ export class DesktopStudio {
             break;
           }
           case 'add': {
+            const cardKind = action.cardKind;
             const route = action.route.trim().startsWith('/') ? action.route.trim() : '';
+            // A page owns an inventory section; a component, endpoint, flow or chore card only owns a board card.
             // Idempotent on purpose: a set can contain "regenerate pages" alongside "add this screen", and the
             // regenerated inventory may already carry it. The screen and its card are each created only if absent.
-            if (!pageEntry(pages, action.title)) {
+            if (cardKind === 'page' && !pageEntry(pages, action.title)) {
               pages = appendPageSection(pages, action.title, route, action.purpose);
               await this.saveArtifact(projectId, 'pages', pages);
             }
             const board = await this.ports.board.read(projectId);
             const key = screenTitleKey(action.title);
-            if (!board.cards.some((card) => card.kind === 'page' && screenTitleKey(card.title) === key)) {
+            let cardId = board.cards.find((card) => screenTitleKey(card.title) === key)?.id ?? null;
+            if (!cardId) {
               const catalog = await this.ports.artifacts.read(projectId);
               const now = this.ports.now();
-              const id = uniqueCardId(board.cards, `page-${slugFor(action.title)}`);
+              cardId = uniqueCardId(board.cards, `${cardKind}-${slugFor(action.title)}`);
+              const acceptance = action.acceptance.length > 0
+                ? action.acceptance
+                : cardKind === 'page'
+                  ? ['It is reachable at its route.', 'It matches the design drawn for it.']
+                  : ['It passes the check for this card.'];
               const card = boardCardSchema.parse({
-                id,
+                id: cardId,
                 title: action.title,
-                kind: 'page',
-                story: action.purpose || `Added from the Studio chat: ${action.title}.`,
-                acceptance: ['It is reachable at its route.', 'It matches the design drawn for it.'],
+                kind: cardKind,
+                story: action.story || action.purpose || `Added from the Studio chat: ${action.title}.`,
+                acceptance,
                 route,
-                needsArtifacts: ['tokens'],
+                needsArtifacts: defaultNeeds(cardKind),
                 status: 'backlog',
                 createdAt: now,
                 updatedAt: now,
               });
               await this.ports.board.replace(projectId, [...board.cards, card], catalog.artifacts);
             }
-            if (action.designName) {
+            if (action.dependsOn.length > 0) pendingDependencies.push({ cardId, dependsOn: action.dependsOn });
+            if (action.designName && cardKind === 'page') {
               const design = await this.currentDesign(projectId);
               const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName!));
               if (!drawn) throw new Error(`The screen was added, but no drawn OpenPencil page is called "${action.designName}".`);
               await this.renameDesignPage(projectId, drawn.name, newPageHeading(action.title, route));
               pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? pages;
             }
+            break;
+          }
+          case 'story': {
+            const stories = (await this.ports.artifacts.readText(projectId, 'stories')) ?? '';
+            const appended = appendStorySection(stories, action.title, action.body, action.acceptance);
+            // Already there is a success, not a duplicate section: a feature set may re-send its story.
+            if (appended.added) await this.saveArtifact(projectId, 'stories', appended.markdown);
             break;
           }
           case 'remove': {
@@ -920,6 +944,64 @@ export class DesktopStudio {
         failed.push({ summary: action.summary, reason: error instanceof Error ? error.message : String(error) });
       }
     }
+    // Resolve the feature's dependencies once every card exists. Titles are matched the way the rest of the Studio
+    // matches screens, and an id is accepted as-is. Unknown names are left out rather than making an action fail:
+    // the card the person asked for is still useful, and the next pass can wire what was missing.
+    if (pendingDependencies.length > 0) {
+      const board = await this.ports.board.read(projectId);
+      const ids = new Set(board.cards.map((card) => card.id));
+      const byTitle = new Map<string, string>();
+      for (const card of board.cards) {
+        const key = screenTitleKey(card.title);
+        if (key && !byTitle.has(key)) byTitle.set(key, card.id);
+      }
+      let changed = false;
+      let cards = board.cards.map((card) => {
+        const pending = pendingDependencies.filter((entry) => entry.cardId === card.id);
+        if (pending.length === 0) return card;
+        const wanted = [...card.dependsOn];
+        for (const entry of pending) {
+          for (const name of entry.dependsOn) {
+            const id = ids.has(name) ? name : byTitle.get(screenTitleKey(name));
+            if (id && id !== card.id && !wanted.includes(id)) wanted.push(id);
+          }
+        }
+        if (wanted.length === card.dependsOn.length) return card;
+        changed = true;
+        return { ...card, dependsOn: wanted, updatedAt: this.ports.now() };
+      });
+      // The cards were written before their dependencies were known, and `replace` promoted them because they had
+      // none at the time. Demote any ready card whose dependencies are still unfinished, to a fixed point, so a
+      // feature that waits on another feature's endpoint is not shown as workable.
+      for (let pass = 0; pass < cards.length; pass += 1) {
+        const current = new Map(cards.map((card) => [card.id, card]));
+        let moved = false;
+        cards = cards.map((card) => {
+          if (card.status !== 'ready') return card;
+          if (!card.dependsOn.some((id) => current.get(id)?.status !== 'done')) return card;
+          moved = true;
+          changed = true;
+          return { ...card, status: 'backlog' as const, updatedAt: this.ports.now() };
+        });
+        if (!moved) break;
+      }
+      if (changed) {
+        const catalog = await this.ports.artifacts.read(projectId);
+        await this.ports.board.replace(projectId, cards, catalog.artifacts);
+        // `replace` keeps the status a card already had, so a demotion has to go through `move` as well. Read the
+        // board back and settle any ready card with unfinished dependencies, repeating until nothing moves: moving
+        // one card can briefly re-promote another while its own dependency is still being put back.
+        for (let pass = 0; pass < board.cards.length; pass += 1) {
+          const current = await this.ports.board.read(projectId);
+          const byId = new Map(current.cards.map((card) => [card.id, card]));
+          const wrong = current.cards.filter((card) => card.status === 'ready' && card.dependsOn.some((id) => byId.get(id)?.status !== 'done'));
+          if (wrong.length === 0) break;
+          for (const card of wrong) {
+            await this.ports.board.move(projectId, card.id, 'backlog', 'Wired into a feature change set; it waits on unfinished work.', 'agent');
+          }
+        }
+      }
+    }
     await this.refreshHandoff(projectId);
     const [board, artifacts, design] = await Promise.all([
       this.ports.board.read(projectId),
@@ -955,19 +1037,31 @@ function slugFor(value: string): string {
   return slug || 'screen';
 }
 
+/** A model's list field, whether it sent an array or one string of lines or comma-separated items. */
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim());
+  if (typeof value === 'string') return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
 /** The JSON shape the plan chat is asked for. Per-kind required fields are checked by the zod parser below. */
 const PLAN_ACTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['kind', 'summary'],
   properties: {
-    kind: { type: 'string', enum: ['link', 'add', 'remove', 'route', 'generate'] },
+    kind: { type: 'string', enum: ['link', 'add', 'story', 'remove', 'route', 'generate'] },
     summary: { type: 'string' },
     designName: { type: 'string' },
     screenName: { type: 'string' },
+    cardKind: { type: 'string', enum: CARD_KINDS },
     title: { type: 'string' },
     route: { type: 'string' },
     purpose: { type: 'string' },
+    story: { type: 'string' },
+    body: { type: 'string' },
+    acceptance: { type: 'array', items: { type: 'string' } },
+    dependsOn: { type: 'array', items: { type: 'string' } },
     deletePage: { type: 'boolean' },
     artifacts: { type: 'array', items: { type: 'string', enum: ARTIFACT_KINDS } },
   },
@@ -992,12 +1086,17 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
   if (Array.isArray(parsed.actions)) {
     for (const value of parsed.actions) {
       if (!value || typeof value !== 'object') continue;
-      const raw = value as Record<string, unknown>;
-      // Keep only the fields the chosen action defines. A model that adds an extra key would otherwise fail the
-      // strict schema and lose a perfectly usable action.
+      const raw = { ...(value as Record<string, unknown>) };
+      // Accept the common aliases a model reaches for, so a usable action is not lost to a field name.
+      if (raw.kind === 'add') {
+        if (raw.cardKind === undefined) raw.cardKind = raw.cardType ?? raw.card_kind ?? raw.type;
+        if (raw.dependsOn === undefined) raw.dependsOn = raw.dependsOnTitles ?? raw.depends_on;
+        if (raw.story === undefined && typeof raw.storyText === 'string') raw.story = raw.storyText;
+      }
       const fields: Record<string, readonly string[]> = {
         link: ['kind', 'summary', 'designName', 'screenName'],
-        add: ['kind', 'summary', 'title', 'route', 'purpose', 'designName'],
+        add: ['kind', 'summary', 'cardKind', 'title', 'route', 'purpose', 'story', 'acceptance', 'dependsOn', 'designName'],
+        story: ['kind', 'summary', 'title', 'body', 'acceptance'],
         remove: ['kind', 'summary', 'screenName', 'deletePage'],
         route: ['kind', 'summary', 'screenName', 'route'],
         generate: ['kind', 'summary', 'artifacts'],
@@ -1006,9 +1105,19 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
       if (!allowed) continue;
       const item: Record<string, unknown> = Object.fromEntries(allowed.filter((key) => key in raw).map((key) => [key, raw[key]]));
       if (item.kind === 'add') {
+        const aliases: Record<string, string> = { screen: 'page', ui: 'component', endpoint: 'backend', api: 'backend', setup: 'chore', infra: 'chore' };
+        const named = typeof item.cardKind === 'string' ? item.cardKind.toLowerCase() : '';
+        item.cardKind = (CARD_KINDS as readonly string[]).includes(named) ? named : aliases[named] ?? 'page';
         if (typeof item.route !== 'string') item.route = '';
         if (typeof item.purpose !== 'string') item.purpose = '';
+        if (typeof item.story !== 'string') item.story = '';
         if (typeof item.designName !== 'string') item.designName = null;
+        item.acceptance = stringList(item.acceptance);
+        item.dependsOn = stringList(item.dependsOn);
+      }
+      if (item.kind === 'story') {
+        if (typeof item.body !== 'string') item.body = '';
+        item.acceptance = stringList(item.acceptance);
       }
       if (item.kind === 'remove' && typeof item.deletePage !== 'boolean') item.deletePage = false;
       if (item.kind === 'generate') {
@@ -1031,27 +1140,37 @@ export function planChatPrompt(
   context: string | null,
 ): { system: string; user: string } {
   const system = [
-    'You are the Studio assistant inside KAI. The person is telling you what a page drawn in open-pencil is, what is missing from the plan, or what changed. You answer with a small change set for them to approve. You have written nothing yet.',
+    'You are the Studio assistant inside KAI. The person is telling you what a page drawn in open-pencil is, what is missing from the plan, or what new feature the project needs. You answer with a complete change set for them to approve. You have written nothing yet.',
     'Return only JSON matching the schema.',
     '',
     'What each action means:',
+    '- "story": add the user story for the feature, with its acceptance criteria. One story per feature, not one per screen.',
+    '- "add": create one piece of work. cardKind is "page" for a screen, "component" for reusable UI, "backend" for an endpoint or data work, "flow" for tying screens together, and "chore" for setup. For a page, give a short title, its route and, when the person just drew it, designName. For any card, give the story it implements and its acceptance criteria. dependsOn names other cards by title or id, including cards created earlier in this same set.',
     '- "link": a page already drawn in open-pencil is the same screen as one the plan already carries, under a different name. designName is the drawn page name; screenName is the planned screen.',
-    '- "add": a screen that is not in the plan should be. title is short, route starts with "/" when known, and designName is the drawn page name when the person just drew it.',
     '- "remove": a screen should leave the plan. Set deletePage only when the person explicitly asked to delete the drawing too.',
     '- "route": a screen has no route or the wrong one. route starts with "/".',
-    '- "generate": artifacts that genuinely change. A new feature usually affects pages and stories. Never include brief. The person will untick anything they do not want.',
+    '- "generate": artifacts that genuinely change. Never include brief. The person will untick anything they do not want.',
+    '',
+    'When the message describes a new feature:',
+    '- Propose a complete feature set, not one edit. Include one "story" action, then one "add" action for every screen, shared component, endpoint and flow the feature needs, then "generate" only for documents that truly change (usually pages and stories; PRD, architecture, acceptance or risks when the feature changes them).',
+    '- Wire the work into the board. A page depends on the endpoints and shared components it uses; a flow depends on the pages it joins. Name dependencies with the titles shown in BOARD CARDS, or with the title of a card in this same set.',
+    '- Do not propose a card for work the board already has. Use "link" or "route" to fix an existing screen instead.',
+    '- Keep the set readable: at most 12 actions. Order it story first, then backend and component cards, then pages and flows, then generate.',
+    '- A story action writes stories.md itself, so never also list stories in generate. An add page writes its own inventory section, so list pages in generate only when the rest of the inventory needs rewriting.',
+    '- The reply says what will change and what the person does next: draw the new screens, apply, then start Autopilot or open Code.',
+    '',
     'Rules:',
-    '- Only propose changes the person asked for. Never invent a screen or a route they did not mention.',
+    '- Only propose changes the person asked for. Never invent a screen, route or integration they did not mention.',
     '- If the message is a question or a request to inspect, return an empty actions list.',
     '- "summary" is one short line the person reads before ticking the action.',
-    '- "reply" is one to three plain sentences: what you understood and what you propose. Do not use em dashes or en dashes.',
+    '- "reply" is two to four plain sentences: what you understood, what the set changes, and the next step. Do not use em dashes or en dashes.',
     '- Match names the way a person would: case, punctuation and a leading route do not matter.',
   ].join('\n');
   const drawn = design.components.filter((component) => component.screen);
   const user = [
     `USER MESSAGE:\n${message}`,
     `PAGES INVENTORY:\n${pages.trim() || '(none written)'}`,
-    `BOARD SCREENS:\n${board.cards.filter((card) => card.kind === 'page').map((card) => `${card.title} | route=${card.route || '(missing)'} | designRef=${card.designRef ?? '(none)'}`).join('\n') || '(none)'}`,
+    `BOARD CARDS:\n${board.cards.map((card) => `${card.id} | ${card.kind} | ${card.title} | status=${card.status} | route=${card.route || '(missing)'} | dependsOn=${card.dependsOn.length > 0 ? card.dependsOn.join(', ') : '(none)'}`).join('\n') || '(none)'}`,
     `DRAWN OPEN-PENCIL PAGES:\n${drawn.map((component) => `${component.name} | node=${component.id}`).join('\n') || '(none recorded)'}`,
     context ? `PROJECT SNAPSHOT:\n${context}` : '',
   ].filter(Boolean).join('\n\n');

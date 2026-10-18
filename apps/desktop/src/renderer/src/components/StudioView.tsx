@@ -22,6 +22,7 @@ import {
   interviewOpenOptions,
   interviewOpenQuestions,
   projectTitleFrom,
+  readyCards,
   STUDIO_EXTRA_QUESTIONS,
   STUDIO_MAX_EXTENSIONS,
   STUDIO_MAX_QUESTIONS,
@@ -164,6 +165,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [planActions, setPlanActions] = useState<StudioPlanAction[] | null>(null);
   const [planSelected, setPlanSelected] = useState<boolean[]>([]);
   const [planOutcome, setPlanOutcome] = useState<{ applied: string[]; failed: Array<{ summary: string; reason: string }> } | null>(null);
+  // What the board looks like after an applied change set, so the chat can say what to do next and offer the
+  // handoff to Autopilot or Code rather than stopping at "applied".
+  const [planNext, setPlanNext] = useState<{ ready: number; undrawn: number; unrouted: number; cards: number } | null>(null);
   // Artifacts ticked in the Artifacts tab, for "write only what I chose" rather than the whole set.
   const [selectedKinds, setSelectedKinds] = useState<Set<ArtifactKind>>(new Set());
   const [routeSuggestions, setRouteSuggestions] = useState<import('@kai/contracts').StudioRouteSuggestion[] | null>(null);
@@ -1816,6 +1820,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setPlanActions(null);
     setPlanSelected([]);
     setPlanOutcome(null);
+    setPlanNext(null);
     setBusy('plan-chat');
     setError(null);
     try {
@@ -1845,6 +1850,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setDesign(result.design);
       setPagesText(result.pages);
       setPlanOutcome({ applied: result.applied, failed: result.failed });
+      const pageList = parsePages(result.pages);
+      const drawnKeys = new Set(result.design.components.filter((component) => component.screen).map((component) => screenTitleKey(component.name)));
+      const undrawn = pageList.filter((page) => !drawnKeys.has(screenTitleKey(page.name))).length;
+      const unrouted = result.board.cards.filter((card) => (card.kind === 'page' || card.kind === 'component') && !card.route.trim()).length;
+      setPlanNext({ ready: readyCards(result.board).length, undrawn, unrouted, cards: result.board.cards.length });
       setPlanActions(null);
       setPlanSelected([]);
       const summary = [
@@ -1854,6 +1864,22 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setPlanChatMessages((items) => [...items, { role: 'assistant', text: summary || 'Nothing changed.' }]);
       if (result.failed.length > 0) setError(`${result.failed.length} change${result.failed.length === 1 ? '' : 's'} could not be applied.`);
       else setNotice(`Applied ${result.applied.length} change${result.applied.length === 1 ? '' : 's'}.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Hands the applied feature to Autopilot with the same defaults the Autopilot panel's own Start button uses. */
+  async function startPlanAutopilot(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('guide');
+    setError(null);
+    try {
+      await window.kaiDesktop.startAutopilot({ projectId, ...DEFAULT_AUTOPILOT_START }).then(unwrap);
+      setNotice('Autopilot started with the panel’s default settings. Open the Board tab to watch it.');
+      setTab('board');
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -2781,6 +2807,27 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <section className="studio-note" role="status">
                 {planOutcome.applied.map((line) => <p key={line}><Check size={13} /> {line}</p>)}
                 {planOutcome.failed.map((entry) => <p key={entry.summary} className="studio-fail"><AlertTriangle size={13} /> {entry.summary}: {entry.reason}</p>)}
+              </section>
+            )}
+            {planNext && (
+              <section className="studio-handoff">
+                <h3><Play size={15} /> What next</h3>
+                <p className="studio-note">
+                  {planNext.ready > 0 ? `${planNext.ready} card${planNext.ready === 1 ? ' is' : 's are'} ready to work.` : 'Nothing is ready to work yet.'}
+                  {planNext.undrawn > 0 ? ` ${planNext.undrawn} planned screen${planNext.undrawn === 1 ? '' : 's'} still need drawing.` : ''}
+                  {planNext.unrouted > 0 ? ` ${planNext.unrouted} card${planNext.unrouted === 1 ? '' : 's'} still need a route.` : ''}
+                </p>
+                <div className="page-actions">
+                  {planNext.ready > 0 && (
+                    <button type="button" className="primary-button" onClick={() => void startPlanAutopilot()} disabled={busy !== null}>
+                      {busy === 'guide' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start Autopilot
+                    </button>
+                  )}
+                  <button type="button" className="secondary-button" onClick={() => setTab('board')} disabled={busy !== null}>Review the board</button>
+                  <button type="button" className="secondary-button" onClick={() => { if (projectId) void launchProject(projectId, 'editor'); }} disabled={busy !== null}>Open in Code</button>
+                  {planNext.undrawn > 0 && <button type="button" className="secondary-button" onClick={() => setTab('design')} disabled={busy !== null}>Draw the screens</button>}
+                </div>
+                <p className="studio-note">Autopilot works the ready cards and stops each at Review. Code opens the project for a hand-run.</p>
               </section>
             )}
           </article>

@@ -138,7 +138,9 @@ describe('plan chat replies', () => {
       reply: 'I can link the drawn page and add the portal.',
       actions: [
         { kind: 'link', summary: 'Link Register to Sign up', designName: 'Register', screenName: 'Sign up' },
-        { kind: 'add', summary: 'Add the parent portal', title: 'Parent portal', route: '/parent' },
+        { kind: 'story', summary: 'Add the parent portal story', title: 'Parent portal', body: 'A parent sees their children.', acceptance: 'The parent sees each child.' },
+        { kind: 'add', summary: 'Add the parent portal', title: 'Parent portal', route: '/parent', cardKind: 'screen', dependsOn: 'Auth endpoint' },
+        { kind: 'add', summary: 'Add the report endpoint', title: 'Parent report endpoint', cardType: 'endpoint', story: 'A parent loads reports.', acceptance: ['It returns the reports.'], dependsOnTitles: ['Auth endpoint'] },
         { kind: 'add', summary: 'Broken add' },
         { kind: 'generate', summary: 'Write the pages and stories', artifacts: 'pages, stories' },
         { kind: 'invented', summary: 'Not a real action' },
@@ -146,11 +148,20 @@ describe('plan chat replies', () => {
     }));
 
     expect(result.reply).toContain('link');
-    expect(result.actions.map((action) => action.kind)).toEqual(['link', 'add', 'generate']);
-    const added = result.actions[1];
+    expect(result.actions.map((action) => action.kind)).toEqual(['link', 'story', 'add', 'add', 'generate']);
+    const story = result.actions[1];
+    expect(story?.kind === 'story' && story.title).toBe('Parent portal');
+    expect(story?.kind === 'story' && story.acceptance).toEqual(['The parent sees each child.']);
+    const added = result.actions[2];
     expect(added?.kind === 'add' && added.purpose).toBe('');
+    expect(added?.kind === 'add' && added.cardKind).toBe('page');
+    expect(added?.kind === 'add' && added.dependsOn).toEqual(['Auth endpoint']);
     expect(added?.kind === 'add' && added.designName).toBeNull();
-    const generated = result.actions[2];
+    const endpoint = result.actions[3];
+    expect(endpoint?.kind === 'add' && endpoint.cardKind).toBe('backend');
+    expect(endpoint?.kind === 'add' && endpoint.acceptance).toEqual(['It returns the reports.']);
+    expect(endpoint?.kind === 'add' && endpoint.dependsOn).toEqual(['Auth endpoint']);
+    const generated = result.actions[4];
     expect(generated?.kind === 'generate' && generated.artifacts).toEqual(['pages', 'stories']);
   });
 
@@ -178,11 +189,16 @@ describe('applying a plan change set', () => {
       'Replaced by the new home page.',
       '',
     ].join('\n'));
-    const card = (id: string, title: string, route: string) => boardCardSchema.parse({
-      id, title, kind: 'page', route, needsArtifacts: ['tokens'], createdAt: NOW, updatedAt: NOW,
+    await made.studio.saveArtifact('p1', 'stories', '# Stories\n\n## Sign in\n\nA person signs in.\n');
+    const card = (id: string, title: string, route: string, kind: 'page' | 'backend' = 'page') => boardCardSchema.parse({
+      id, title, kind, route, needsArtifacts: kind === 'backend' ? ['stack'] : ['tokens'], createdAt: NOW, updatedAt: NOW,
     });
     const catalog = await made.artifacts.read('p1');
-    await made.board.replace('p1', [card('signup', 'Sign up', '/sign-up'), card('dashboard', 'Old dashboard', '/dashboard')], catalog.artifacts);
+    await made.board.replace('p1', [
+      card('signup', 'Sign up', '/sign-up'),
+      card('dashboard', 'Old dashboard', '/dashboard'),
+      card('auth', 'Auth endpoint', '', 'backend'),
+    ], catalog.artifacts);
     return made;
   }
 
@@ -191,7 +207,7 @@ describe('applying a plan change set', () => {
     expect(calls).toEqual([]);
 
     const result = await studio.applyPlanActions('p1', [
-      { kind: 'add', summary: 'Add Reports', title: 'Reports', route: '/reports', purpose: 'Monthly numbers.', designName: null },
+      { kind: 'add', summary: 'Add Reports', cardKind: 'page', title: 'Reports', route: '/reports', purpose: 'Monthly numbers.', story: '', acceptance: [], dependsOn: [], designName: null },
       { kind: 'route', summary: 'Move Reports under /reports/monthly', screenName: 'Reports', route: '/reports/monthly' },
       { kind: 'remove', summary: 'Remove Old dashboard', screenName: 'Old dashboard', deletePage: false },
     ]);
@@ -208,6 +224,40 @@ describe('applying a plan change set', () => {
     const reports = cards.find((card) => card.title === 'Reports');
     expect(reports?.route).toBe('/reports/monthly');
     expect(cards.some((card) => card.title === 'Old dashboard')).toBe(false);
+  });
+
+  it('wires a whole feature into the stories, the pages and the board, with dependencies', async () => {
+    const { studio, board, artifacts } = await seeded();
+
+    const result = await studio.applyPlanActions('p1', [
+      { kind: 'story', summary: 'Add the parent portal story', title: 'Parent portal', body: 'A parent signs in and sees each child\'s report.', acceptance: ['A parent sees a report per child.'] },
+      { kind: 'add', summary: 'Add the report endpoint', cardKind: 'backend', title: 'Parent report endpoint', route: '', purpose: '', story: 'A parent loads reports.', acceptance: ['It returns reports for the parent\'s children.'], dependsOn: ['Auth endpoint'], designName: null },
+      { kind: 'add', summary: 'Add the parent portal screen', cardKind: 'page', title: 'Parent portal', route: '/parent', purpose: 'A parent sees their children.', story: '', acceptance: [], dependsOn: ['Parent report endpoint'], designName: null },
+      { kind: 'add', summary: 'Add the report card component', cardKind: 'component', title: 'Report card', route: '', purpose: '', story: 'A parent reads one child\'s report.', acceptance: ['It shows one child\'s report.'], dependsOn: ['Parent report endpoint'], designName: null },
+      { kind: 'add', summary: 'Add the portal flow', cardKind: 'flow', title: 'Parent portal flow', route: '', purpose: '', story: 'A parent moves from sign-in to a report.', acceptance: ['The flow reaches the report.'], dependsOn: ['Parent portal', 'Sign up'], designName: null },
+    ]);
+
+    expect(result.failed).toEqual([]);
+    expect(result.applied).toHaveLength(5);
+    const stories = await artifacts.readText('p1', 'stories');
+    expect(stories).toContain('## Parent portal');
+    expect(stories).toContain('A parent sees a report per child.');
+    const pages = await artifacts.readText('p1', 'pages');
+    expect(pages).toContain('## /parent — Parent portal');
+
+    const cards = (await board.read('p1')).cards;
+    const byTitle = new Map(cards.map((card) => [card.title, card]));
+    expect(byTitle.get('Parent report endpoint')?.kind).toBe('backend');
+    expect(byTitle.get('Parent portal')?.kind).toBe('page');
+    expect(byTitle.get('Report card')?.kind).toBe('component');
+    expect(byTitle.get('Parent portal flow')?.kind).toBe('flow');
+    // Dependencies resolve by title, including cards created earlier in the same set.
+    expect(byTitle.get('Parent report endpoint')?.dependsOn).toEqual(['auth']);
+    expect(byTitle.get('Parent portal')?.dependsOn).toEqual([byTitle.get('Parent report endpoint')?.id]);
+    expect(byTitle.get('Report card')?.dependsOn).toEqual([byTitle.get('Parent report endpoint')?.id]);
+    expect(byTitle.get('Parent portal flow')?.dependsOn).toEqual([byTitle.get('Parent portal')?.id, 'signup']);
+    // The work waits for what it depends on instead of appearing ready beside it.
+    expect(byTitle.get('Parent portal')?.status).toBe('backlog');
   });
 
   it('keeps going when one action fails, and names the one that did', async () => {

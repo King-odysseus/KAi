@@ -198,3 +198,34 @@ export function setPageRoute(markdown: string, key: string, route: string): { ma
   }
   return { markdown, changed: false };
 }
+
+/**
+ * Adds one story to the stories document, in the shape the stories artifact already uses: a `##` heading, the story
+ * itself, then its acceptance criteria. A section whose heading reduces to the same key is left alone, so a feature
+ * change set that re-sends the same story does not duplicate it.
+ */
+export function appendStorySection(
+  markdown: string,
+  title: string,
+  body: string,
+  acceptance: readonly string[],
+): { markdown: string; added: boolean } {
+  const key = screenTitleKey(title);
+  if (!key) return { markdown, added: false };
+  const existing = new Set<string>();
+  for (const line of markdown.split(/\r?\n/)) {
+    const heading = /^##(?!#)\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) existing.add(screenTitleKey(plain(heading[1]!).slice(0, 80)));
+  }
+  if (existing.has(key)) return { markdown, added: false };
+  const criteria = acceptance.map((item) => item.trim()).filter(Boolean);
+  const section = [
+    `## ${plain(title).slice(0, 120)}`,
+    '',
+    body.trim() || 'Added from the Studio chat.',
+    '',
+    ...(criteria.length > 0 ? ['**Acceptance criteria**', ...criteria.map((item) => `- ${item}`), ''] : []),
+  ].join('\n');
+  const trimmed = markdown.trimEnd();
+  return { markdown: `${trimmed ? `${trimmed}\n\n` : ''}${section}`, added: true };
+}
