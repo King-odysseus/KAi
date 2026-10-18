@@ -35,6 +35,7 @@ import {
   type StudioPlanAction,
   type StudioPlanApplyResult,
   type StudioPlanChatResult,
+  type StudioPlanIntent,
   type StudioReadiness,
   type StudioRouteRepairResult,
   type UiCheckResult,
@@ -765,7 +766,7 @@ export class DesktopStudio {
    * with a change set instead of writing anything. Approving the set is a separate call, so nothing is rewritten on
    * the strength of a sentence the person did not mean.
    */
-  async planChat(projectId: string, message: string): Promise<StudioPlanChatResult> {
+  async planChat(projectId: string, message: string, intent: StudioPlanIntent = 'feature'): Promise<StudioPlanChatResult> {
     const readiness = await this.ports.interview.readiness();
     if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
     const settings = await this.ports.settings();
@@ -778,10 +779,10 @@ export class DesktopStudio {
     // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it. A live read
     // that stalls must not stall the turn: `currentDesignSoon` falls back to the stored design after ten seconds.
     const design = await this.currentDesignSoon(projectId);
-    return this.ports.requester.structuredRequest(
+    const first = await this.ports.requester.structuredRequest(
       settings.promptGuide,
       NAMES,
-      planChatPrompt(message, pages ?? '', board, design, context),
+      planChatPrompt(message, pages ?? '', board, design, context, intent),
       'kai_studio_plan_chat',
       PLAN_CHAT_SCHEMA,
       parsePlanChatReply,
@@ -789,6 +790,27 @@ export class DesktopStudio {
       // of the budget thinking first. 8k was enough for one correction, not for a feature.
       { maxOutputTokens: 16_000 },
     );
+    // Ask is allowed to answer without touching the plan. A screen correction or a feature is not: the model
+    // sometimes describes the change in the reply and returns an empty list, so its own description is handed back
+    // in a second, narrower call that asks only for the actions.
+    if (first.actions.length > 0 || intent === 'ask') return first;
+    try {
+      const extracted = await this.ports.requester.structuredRequest(
+        settings.promptGuide,
+        NAMES,
+        planActionsPrompt(message, first.reply, pages ?? '', board, design, context, intent),
+        'kai_studio_plan_actions',
+        PLAN_CHAT_SCHEMA,
+        parsePlanChatReply,
+        { maxOutputTokens: 16_000 },
+      );
+      return extracted.actions.length > 0
+        ? { reply: first.reply, actions: extracted.actions, dropped: extracted.dropped }
+        : { ...first, dropped: first.dropped + extracted.dropped };
+    } catch {
+      // A failed second call keeps the first answer, which is still useful reading even without a change set.
+      return first;
+    }
   }
 
   /**
@@ -1106,13 +1128,20 @@ const PLAN_CHAT_SCHEMA = {
 
 /** Reads a plan-chat reply, dropping actions that do not validate rather than losing the whole answer. */
 export function parsePlanChatReply(raw: string): StudioPlanChatResult {
-  const parsed = parseJsonResponse(raw, 'Project Studio') as { reply?: unknown; actions?: unknown };
-  const reply = typeof parsed?.reply === 'string' ? parsed.reply.trim().slice(0, 8_000) : '';
-  if (!reply) throw new Error('The Studio chat reply had nothing to say.');
+  const parsed = (parseJsonResponse(raw, 'Project Studio') ?? {}) as Record<string, unknown>;
+  const reply = typeof parsed.reply === 'string' ? parsed.reply.trim().slice(0, 8_000) : '';
+  // Models reach for a few different names for the list. Accept them all rather than showing an empty change set
+  // for a reply that clearly described one.
+  const candidate = [parsed.actions, parsed.changes, parsed.steps, parsed.screens, parsed.cards]
+    .find((value) => Array.isArray(value)) as unknown[] | undefined ?? [];
+  // A reply with neither words nor actions is unusable. A reply that only carries actions is fine: the second
+  // extraction pass is told not to repeat the description, and older models sometimes leave the sentence out.
+  if (!reply && candidate.length === 0) throw new Error('The Studio chat reply had nothing to say.');
   const actions: StudioPlanAction[] = [];
-  if (Array.isArray(parsed.actions)) {
-    for (const value of parsed.actions) {
-      if (!value || typeof value !== 'object') continue;
+  let dropped = 0;
+  if (candidate.length > 0) {
+    for (const value of candidate) {
+      if (!value || typeof value !== 'object') { dropped += 1; continue; }
       const raw = { ...(value as Record<string, unknown>) };
       // Accept the common aliases a model reaches for, so a usable action is not lost to a field name.
       if (raw.kind === 'add') {
@@ -1129,7 +1158,7 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
         generate: ['kind', 'summary', 'artifacts'],
       };
       const allowed = fields[String(raw.kind)];
-      if (!allowed) continue;
+      if (!allowed) { dropped += 1; continue; }
       const item: Record<string, unknown> = Object.fromEntries(allowed.filter((key) => key in raw).map((key) => [key, raw[key]]));
       if (item.kind === 'add') {
         const aliases: Record<string, string> = { screen: 'page', ui: 'component', endpoint: 'backend', api: 'backend', setup: 'chore', infra: 'chore' };
@@ -1153,9 +1182,11 @@ export function parsePlanChatReply(raw: string): StudioPlanChatResult {
       }
       const action = studioPlanActionSchema.safeParse(item);
       if (action.success) actions.push(action.data);
+      else dropped += 1;
     }
   }
-  return { reply, actions: actions.slice(0, 24) };
+  const kept = actions.slice(0, 24);
+  return { reply: reply || 'Here is the change set.', actions: kept, dropped: dropped + (actions.length - kept.length) };
 }
 
 /** The chat's prompt: the plan as it stands, the drawn screens, and the rule that it proposes rather than writes. */
@@ -1165,9 +1196,16 @@ export function planChatPrompt(
   board: StudioBoard,
   design: StudioDesign,
   context: string | null,
+  intent: StudioPlanIntent = 'feature',
 ): { system: string; user: string } {
+  const intentRules: Record<StudioPlanIntent, string> = {
+    ask: 'The person chose Ask. A conversational answer is allowed; return actions only when they clearly asked for a change.',
+    screen: 'The person chose Change a screen. Return the smallest set that corrects that screen, and an empty list with a reason when nothing needs changing.',
+    feature: 'The person chose Add a feature. You must return at least one action. Build the complete feature set described below.',
+  };
   const system = [
     'You are the Studio assistant inside KAI. The person is telling you what a page drawn in open-pencil is, what is missing from the plan, or what new feature the project needs. You answer with a complete change set for them to approve. You have written nothing yet.',
+    intentRules[intent],
     'Return only JSON matching the schema.',
     '',
     'What each action means:',
@@ -1195,9 +1233,52 @@ export function planChatPrompt(
   ].join('\n');
   const drawn = design.components.filter((component) => component.screen);
   const user = [
+    `INTENT: ${intent}`,
     `USER MESSAGE:\n${message}`,
     `PAGES INVENTORY:\n${pages.trim() || '(none written)'}`,
     `BOARD CARDS:\n${board.cards.map((card) => `${card.id} | ${card.kind} | ${card.title} | status=${card.status} | route=${card.route || '(missing)'} | dependsOn=${card.dependsOn.length > 0 ? card.dependsOn.join(', ') : '(none)'}`).join('\n') || '(none)'}`,
+    `DRAWN OPEN-PENCIL PAGES:\n${drawn.map((component) => `${component.name} | node=${component.id}`).join('\n') || '(none recorded)'}`,
+    context ? `PROJECT SNAPSHOT:\n${context}` : '',
+  ].filter(Boolean).join('\n\n');
+  return { system, user };
+}
+
+/**
+ * The second pass. It runs only when the first answer described a change but returned no usable actions, so the
+ * person's request and the model's own description are handed back with one instruction: turn this into actions.
+ */
+export function planActionsPrompt(
+  message: string,
+  reply: string,
+  pages: string,
+  board: StudioBoard,
+  design: StudioDesign,
+  context: string | null,
+  intent: StudioPlanIntent,
+): { system: string; user: string } {
+  const system = [
+    'You turn a described plan change into concrete Studio actions. A previous answer described the change but returned no actions; this call exists only to produce them.',
+    'Return only JSON matching the schema. At least one action is required.',
+    '',
+    'Action fields:',
+    '- "story": title, body, acceptance. The feature story.',
+    '- "add": cardKind (page, component, backend, flow, chore), title, route for a page or routed component, purpose, story, acceptance, dependsOn (titles or ids). A page is also added to pages.md.',
+    '- "link": designName, screenName.',
+    '- "remove": screenName, deletePage.',
+    '- "route": screenName, route.',
+    '- "generate": artifacts.',
+    '',
+    `Intent: ${intent}.`,
+    'Use titles from BOARD CARDS for dependencies, and titles from this set for new cards.',
+    'Do not invent screens, routes or integrations the request does not imply.',
+    'The reply field is one short sentence; the description was already given in the previous answer.',
+  ].join('\n');
+  const drawn = design.components.filter((component) => component.screen);
+  const user = [
+    `THE PERSON ASKED:\n${message}`,
+    `THE DESCRIPTION ALREADY GIVEN:\n${reply}`,
+    `PAGES INVENTORY:\n${pages.trim() || '(none written)'}`,
+    `BOARD CARDS:\n${board.cards.map((card) => `${card.id} | ${card.kind} | ${card.title} | status=${card.status} | route=${card.route || '(missing)'}`).join('\n') || '(none)'}`,
     `DRAWN OPEN-PENCIL PAGES:\n${drawn.map((component) => `${component.name} | node=${component.id}`).join('\n') || '(none recorded)'}`,
     context ? `PROJECT SNAPSHOT:\n${context}` : '',
   ].filter(Boolean).join('\n\n');

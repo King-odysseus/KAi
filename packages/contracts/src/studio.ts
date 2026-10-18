@@ -483,16 +483,32 @@ export const studioPlanActionSchema = z.discriminatedUnion('kind', [
 ]);
 export type StudioPlanAction = z.infer<typeof studioPlanActionSchema>;
 
+/**
+ * What the person is asking for. `ask` may answer without changing anything; `screen` corrects one screen; `feature`
+ * must produce a change set. It is the Studio chat's equivalent of the Composer's intent control.
+ */
+export const studioPlanIntentSchema = z.enum(['ask', 'screen', 'feature']);
+export type StudioPlanIntent = z.infer<typeof studioPlanIntentSchema>;
+
 export const studioPlanChatInputSchema = z
-  .object({ projectId: z.string().min(1), message: z.string().trim().min(1).max(20_000) })
+  .object({
+    projectId: z.string().min(1),
+    message: z.string().trim().min(1).max(20_000),
+    intent: studioPlanIntentSchema.default('feature'),
+  })
   .strict();
 export type StudioPlanChatInput = z.infer<typeof studioPlanChatInputSchema>;
 
-/** The assistant's answer: what it understood, and the changes it proposes. It has written nothing yet. */
+/**
+ * The assistant's answer: what it understood, and the changes it proposes. It has written nothing yet.
+ * `dropped` counts proposed changes that did not match the action schema, so the UI can say a reply was partly
+ * unusable instead of quietly showing an empty change set.
+ */
 export const studioPlanChatResultSchema = z
   .object({
     reply: z.string().trim().min(1).max(8_000),
     actions: z.array(studioPlanActionSchema).max(24).default([]),
+    dropped: z.number().int().nonnegative().default(0),
   })
   .strict();
 export type StudioPlanChatResult = z.infer<typeof studioPlanChatResultSchema>;

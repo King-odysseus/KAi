@@ -164,6 +164,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [planChatMessages, setPlanChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
   const [planActions, setPlanActions] = useState<StudioPlanAction[] | null>(null);
   const [planSelected, setPlanSelected] = useState<boolean[]>([]);
+  const [planDropped, setPlanDropped] = useState(0);
+  const [planIntent, setPlanIntent] = useState<'ask' | 'screen' | 'feature'>('feature');
+  const [planHydrated, setPlanHydrated] = useState<string | null>(null);
   const [planOutcome, setPlanOutcome] = useState<{ applied: string[]; failed: Array<{ summary: string; reason: string }> } | null>(null);
   // What the board looks like after an applied change set, so the chat can say what to do next and offer the
   // handoff to Autopilot or Code rather than stopping at "applied".
@@ -318,6 +321,56 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     const timer = setInterval(() => setPlanElapsed(Math.floor((Date.now() - started) / 1000)), 1_000);
     return () => clearInterval(timer);
   }, [planPhase]);
+
+  // The conversation belongs to the Studio project, not to whichever tab happens to be open. It is kept per
+  // project, bounded, and restored when the project is opened again.
+  useEffect(() => {
+    setPlanHydrated(null);
+    if (!projectId) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(`kai.studio.planChat.${projectId}`) ?? 'null') as {
+        messages?: Array<{ role: 'user' | 'assistant'; text: string }>;
+        actions?: StudioPlanAction[] | null;
+        selected?: boolean[];
+        intent?: 'ask' | 'screen' | 'feature';
+        outcome?: { applied: string[]; failed: Array<{ summary: string; reason: string }> } | null;
+        next?: { ready: number; undrawn: number; unrouted: number; cards: number } | null;
+        dropped?: number;
+      } | null;
+      setPlanChatMessages(Array.isArray(saved?.messages) ? saved!.messages : []);
+      setPlanActions(Array.isArray(saved?.actions) ? saved!.actions : null);
+      setPlanSelected(Array.isArray(saved?.selected) ? saved!.selected : []);
+      setPlanIntent(saved?.intent === 'ask' || saved?.intent === 'screen' ? saved.intent : 'feature');
+      setPlanOutcome(saved?.outcome ?? null);
+      setPlanNext(saved?.next ?? null);
+      setPlanDropped(typeof saved?.dropped === 'number' ? saved.dropped : 0);
+    } catch {
+      setPlanChatMessages([]);
+      setPlanActions(null);
+      setPlanSelected([]);
+      setPlanOutcome(null);
+      setPlanNext(null);
+      setPlanDropped(0);
+    }
+    setPlanHydrated(projectId);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId || planHydrated !== projectId) return;
+    try {
+      localStorage.setItem(`kai.studio.planChat.${projectId}`, JSON.stringify({
+        messages: planChatMessages.slice(-40),
+        actions: planActions,
+        selected: planSelected,
+        intent: planIntent,
+        outcome: planOutcome,
+        next: planNext,
+        dropped: planDropped,
+      }));
+    } catch {
+      // Storage is optional; the conversation still works for this window.
+    }
+  }, [projectId, planHydrated, planChatMessages, planActions, planSelected, planIntent, planOutcome, planNext, planDropped]);
 
   /**
    * Where the project is, re-read whenever anything it reads has moved.
@@ -1841,15 +1894,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setPlanSelected([]);
     setPlanOutcome(null);
     setPlanNext(null);
+    setPlanDropped(0);
     setBusy('plan-chat');
     setPlanPhase('thinking');
     setError(null);
     try {
-      const result = unwrap(await window.kaiDesktop.chatWithStudioPlan({ projectId, message }));
+      const result = unwrap(await window.kaiDesktop.chatWithStudioPlan({ projectId, message, intent: planIntent }));
       if (planRequestSeq.current !== requestId) return;
       setPlanChatMessages((items) => [...items, { role: 'assistant', text: result.reply }]);
       setPlanActions(result.actions);
       setPlanSelected(result.actions.map(() => true));
+      setPlanDropped(result.dropped);
     } catch (caught) {
       if (planRequestSeq.current !== requestId) return;
       const text = messageOf(caught);
@@ -1911,6 +1966,32 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     } finally {
       setPlanPhase(null);
       setBusy(null);
+    }
+  }
+
+  /** The second line under a proposed action: what it will actually touch. */
+  function planActionDetail(action: StudioPlanAction): string {
+    switch (action.kind) {
+      case 'add': {
+        const parts = [
+          action.cardKind,
+          action.route ? `route ${action.route}` : '',
+          action.dependsOn.length > 0 ? `after ${action.dependsOn.join(', ')}` : '',
+        ];
+        return parts.filter(Boolean).join(' · ');
+      }
+      case 'story':
+        return action.acceptance.length > 0
+          ? `${action.acceptance.length} acceptance check${action.acceptance.length === 1 ? '' : 's'}`
+          : 'Adds the feature story';
+      case 'generate':
+        return `Writes ${action.artifacts.join(', ')}`;
+      case 'link':
+        return `${action.designName} becomes ${action.screenName}`;
+      case 'remove':
+        return action.deletePage ? `${action.screenName} and its drawing` : action.screenName;
+      case 'route':
+        return `${action.screenName} at ${action.route}`;
     }
   }
 
@@ -2781,10 +2862,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           )}
 
           {tab === 'chat' && (
-          <article className="studio-card">
+          <article className="studio-card studio-chat-shell">
             <h2><NotebookPen size={16} /> Studio chat</h2>
             <p className="studio-note">
-              Say what a drawn page is, what is missing, or what changed. Studio looks at the plan, the board and the design, then proposes the changes. Nothing is written until you tick the ones you want and apply them.
+              Ask about the plan, correct one screen, or add a whole feature. Studio reads the plan, the board and the design, then proposes the changes. Nothing is written until you tick the ones you want and apply them.
+            </p>
+            <p className="studio-model">
+              Uses {readiness?.displayName ?? 'the Prompt Guide'}{readiness?.model ? ` · ${readiness.model}` : ''}. No separate key.
             </p>
             {(() => {
               const unplanned = designRows.filter((row) => !row.inPages && row.drawn);
@@ -2809,9 +2893,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               );
             })()}
             <section className="studio-design-chat" aria-label="Studio chat">
-              <div className="studio-design-chat-thread" aria-live="polite">
+              <div className="studio-design-chat-thread studio-chat-thread-full" aria-live="polite">
                 {planChatMessages.length === 0 && (
-                  <p className="studio-note">For example: “Register is the sign-up screen, just named differently.” “Add a parent portal with a report card page.” “The old dashboard is not needed.”</p>
+                  <div className="studio-note">
+                    <p>Ask about the plan, correct one screen, or add a whole feature.</p>
+                    <div className="page-actions">
+                      <button type="button" className="secondary-button" onClick={() => setPlanIntent('feature')} disabled={busy !== null}>Add a feature</button>
+                      <button type="button" className="secondary-button" onClick={() => setPlanIntent('screen')} disabled={busy !== null}>Fix a screen</button>
+                      <button type="button" className="secondary-button" onClick={() => setPlanIntent('ask')} disabled={busy !== null}>Ask a question</button>
+                    </div>
+                    <p>For example: “Add a parent portal with a report card page.” “Register is the sign-up screen, just named differently.” “The old dashboard is not needed.”</p>
+                  </div>
                 )}
                 {planChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Studio'}</strong><br />{item.text}</p>)}
                 {planPhase && (
@@ -2824,11 +2916,31 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   </p>
                 )}
               </div>
-              <textarea value={planChatText} onChange={(event) => setPlanChatText(event.target.value)} placeholder="Tell Studio what this page is, or what should change…" rows={3} disabled={busy !== null} />
-              <div className="page-actions">
-                <button type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</button>
-                {planPhase === 'thinking' && <button type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</button>}
-                <span className="studio-model">It proposes; you decide what to apply.</span>
+              <div className="studio-chat-dock">
+                <div className="studio-chat-intents" role="group" aria-label="What do you want to do?">
+                  {([
+                    ['ask', 'Ask'],
+                    ['screen', 'Change a screen'],
+                    ['feature', 'Add a feature'],
+                  ] as const).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={planIntent === id ? 'secondary-button selected' : 'secondary-button'}
+                      aria-pressed={planIntent === id}
+                      onClick={() => setPlanIntent(id)}
+                      disabled={busy !== null}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <textarea value={planChatText} onChange={(event) => setPlanChatText(event.target.value)} placeholder="Tell Studio what this page is, or what should change…" rows={3} disabled={busy !== null} />
+                <div className="page-actions">
+                  <button type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</button>
+                  {planPhase === 'thinking' && <button type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</button>}
+                  <span className="studio-model">It proposes; you decide what to apply.</span>
+                </div>
               </div>
             </section>
             {planActions && planActions.length > 0 && (
@@ -2837,14 +2949,21 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 <ul className="studio-list">
                   {planActions.map((action, index) => (
                     <li key={`${action.kind}-${index}`}>
-                      <label>
-                        <input type="checkbox" checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
-                        {' '}{action.summary}
-                      </label>
-                      <span className="studio-kind">{action.kind}</span>
+                      <span className="studio-plan-action">
+                        <label>
+                          <input type="checkbox" checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
+                          {' '}{action.summary}
+                        </label>
+                        <span className="studio-note">{action.kind}: {planActionDetail(action)}</span>
+                      </span>
                     </li>
                   ))}
                 </ul>
+                {planDropped > 0 && (
+                  <p className="studio-note">
+                    <AlertTriangle size={13} /> {planDropped} proposed change{planDropped === 1 ? '' : 's'} could not be read. Try asking again with simpler wording.
+                  </p>
+                )}
                 <div className="page-actions">
                   <button type="button" className="primary-button" onClick={() => void applyPlanChanges()} disabled={busy !== null || !planSelected.some(Boolean)}>
                     {busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Apply selected ({planSelected.filter(Boolean).length})
@@ -2854,7 +2973,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               </section>
             )}
             {planActions && planActions.length === 0 && (
-              <p className="studio-note" role="status">Studio found no plan change to propose. Ask it to wire a page in, or to add a screen by name.</p>
+              <p className="studio-note" role="status">
+                {planDropped > 0
+                  ? `${planDropped} proposed change${planDropped === 1 ? '' : 's'} could not be read. Try again with simpler wording, or switch to Add a feature.`
+                  : planIntent === 'ask'
+                    ? 'No plan change was proposed. Switch to Add a feature or Change a screen if you wanted one.'
+                    : 'Studio did not return a usable change set. Try again, or name the screens and cards you want added.'}
+              </p>
             )}
             {planOutcome && (
               <section className="studio-note" role="status">

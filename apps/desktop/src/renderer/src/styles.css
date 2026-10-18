@@ -11994,6 +11994,31 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .studio-chat-message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 7px; background: var(--bg-input); margin: 0 0 8px; }
 .studio-chat-message:last-child { margin-bottom: 0; }
 .studio-chat-pending { color: var(--text-muted); }
+
+/* The Studio chat follows the composer's shape: a conversation that fills its space, with the intent and the input
+   docked underneath. */
+.studio-chat-shell { display: flex; flex-direction: column; }
+.studio-chat-thread-full {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 320px;
+  max-height: 52vh;
+  padding: 4px 2px;
+}
+.studio-chat-thread-full .studio-chat-message { max-width: 88%; }
+.studio-chat-thread-full .studio-chat-message.user { align-self: flex-end; }
+.studio-chat-thread-full .studio-chat-message.assistant { align-self: flex-start; }
+.studio-chat-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+.studio-chat-intents { display: flex; flex-wrap: wrap; gap: 6px; }
+.studio-chat-intents .secondary-button.selected { border-color: var(--accent); color: var(--accent); }
+.studio-plan-action { display: flex; flex-direction: column; gap: 3px; }
 .studio-chat-message.user { border-left: 2px solid var(--accent); }
 .studio-chat-message.assistant { border-left: 2px solid var(--green); }
 .studio-route-review p { margin: 8px 0; }

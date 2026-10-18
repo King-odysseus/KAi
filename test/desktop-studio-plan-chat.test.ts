@@ -149,6 +149,8 @@ describe('plan chat replies', () => {
 
     expect(result.reply).toContain('link');
     expect(result.actions.map((action) => action.kind)).toEqual(['link', 'story', 'add', 'add', 'generate']);
+    // The broken add and the invented kind are counted, not silently dropped.
+    expect(result.dropped).toBe(2);
     const story = result.actions[1];
     expect(story?.kind === 'story' && story.title).toBe('Parent portal');
     expect(story?.kind === 'story' && story.acceptance).toEqual(['The parent sees each child.']);
@@ -167,6 +169,48 @@ describe('plan chat replies', () => {
 
   it('refuses a reply with no words rather than showing an empty proposal', () => {
     expect(() => parsePlanChatReply(JSON.stringify({ actions: [] }))).toThrow();
+  });
+
+  it('reads a change list under another name', () => {
+    const result = parsePlanChatReply(JSON.stringify({
+      reply: 'Adding the portal.',
+      changes: [{ kind: 'add', summary: 'Add Parent portal', cardKind: 'page', title: 'Parent portal', route: '/parent' }],
+    }));
+
+    expect(result.actions).toHaveLength(1);
+    expect(result.dropped).toBe(0);
+  });
+});
+
+describe('extracting actions', () => {
+  it('runs a second pass when a feature reply has no actions', async () => {
+    const { studio, calls } = makeStudio({
+      kai_studio_plan_chat: JSON.stringify({ reply: 'The set adds a parent portal and its story.', actions: [] }),
+      kai_studio_plan_actions: JSON.stringify({
+        reply: 'Wired.',
+        actions: [
+          { kind: 'story', summary: 'Add the parent portal story', title: 'Parent portal', body: 'A parent sees reports.', acceptance: ['A parent sees a report.'] },
+          { kind: 'add', summary: 'Add the parent portal screen', cardKind: 'page', title: 'Parent portal', route: '/parent', dependsOn: ['Auth endpoint'] },
+        ],
+      }),
+    });
+
+    const result = await studio.planChat('p1', 'Add a parent portal feature.', 'feature');
+
+    expect(result.actions).toHaveLength(2);
+    expect(calls).toEqual(['kai_studio_plan_chat', 'kai_studio_plan_actions']);
+  });
+
+  it('does not second-guess Ask', async () => {
+    const { studio, calls } = makeStudio({
+      kai_studio_plan_chat: JSON.stringify({ reply: 'It is missing a reports screen.', actions: [] }),
+      kai_studio_plan_actions: JSON.stringify({ reply: 'Wired.', actions: [] }),
+    });
+
+    const result = await studio.planChat('p1', 'What is missing?', 'ask');
+
+    expect(result.actions).toEqual([]);
+    expect(calls).toEqual(['kai_studio_plan_chat']);
   });
 });
 
