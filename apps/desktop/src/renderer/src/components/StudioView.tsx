@@ -168,6 +168,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   // What the board looks like after an applied change set, so the chat can say what to do next and offer the
   // handoff to Autopilot or Code rather than stopping at "applied".
   const [planNext, setPlanNext] = useState<{ ready: number; undrawn: number; unrouted: number; cards: number } | null>(null);
+  // What the chat is doing while it waits. The main composer shows a run as it happens; the Studio chat used to
+  // show only a disabled button, which read as nothing happening at all.
+  const [planPhase, setPlanPhase] = useState<'thinking' | 'applying' | null>(null);
+  const [planElapsed, setPlanElapsed] = useState(0);
   // Artifacts ticked in the Artifacts tab, for "write only what I chose" rather than the whole set.
   const [selectedKinds, setSelectedKinds] = useState<Set<ArtifactKind>>(new Set());
   const [routeSuggestions, setRouteSuggestions] = useState<import('@kai/contracts').StudioRouteSuggestion[] | null>(null);
@@ -195,6 +199,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const designChatStepId = useRef<string | null>(null);
   // The last composer request acted on, so a re-render does not open the new-project screen twice for one press.
   const handledPlanRequest = useRef<number | null>(null);
+  // Identifies the Studio chat turn on screen. Stopping waiting bumps this, so a late answer from the provider is
+  // ignored instead of appearing under a message the person already gave up on.
+  const planRequestSeq = useRef(0);
   // Running spend for the build in progress, since a 30-screen run is 30-odd agent turns with no other visibility
   // into cost — unlike the composer, which tracks this per run already. The ref is the source of truth read inside
   // the loop itself (a long-running async function closes over the state value from whenever it started, not a
@@ -299,6 +306,18 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     if (existing) openProjectStudio(existing.id);
     else startNewProject(true);
   }, [planRequest, activeProject, busy, projectsBusy, projects]);
+
+  // The Studio chat's waiting line counts seconds, so a slow provider looks like something running rather than a
+  // control that did nothing.
+  useEffect(() => {
+    if (planPhase !== 'thinking') {
+      setPlanElapsed(0);
+      return undefined;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => setPlanElapsed(Math.floor((Date.now() - started) / 1000)), 1_000);
+    return () => clearInterval(timer);
+  }, [planPhase]);
 
   /**
    * Where the project is, re-read whenever anything it reads has moved.
@@ -1815,6 +1834,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     if (!projectId || busy !== null) return;
     const message = (override ?? planChatText).trim();
     if (!message) return;
+    const requestId = ++planRequestSeq.current;
     setPlanChatMessages((items) => [...items, { role: 'user', text: message }]);
     setPlanChatText('');
     setPlanActions(null);
@@ -1822,19 +1842,40 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setPlanOutcome(null);
     setPlanNext(null);
     setBusy('plan-chat');
+    setPlanPhase('thinking');
     setError(null);
     try {
       const result = unwrap(await window.kaiDesktop.chatWithStudioPlan({ projectId, message }));
+      if (planRequestSeq.current !== requestId) return;
       setPlanChatMessages((items) => [...items, { role: 'assistant', text: result.reply }]);
       setPlanActions(result.actions);
       setPlanSelected(result.actions.map(() => true));
     } catch (caught) {
+      if (planRequestSeq.current !== requestId) return;
       const text = messageOf(caught);
       setError(text);
       setPlanChatMessages((items) => [...items, { role: 'assistant', text }]);
     } finally {
-      setBusy(null);
+      // A newer turn, or Stop waiting, owns the state now; a late answer must not clear its spinner.
+      if (planRequestSeq.current === requestId) {
+        setPlanPhase(null);
+        setBusy(null);
+      }
     }
+  }
+
+  /**
+   * The composer has Stop; the Studio chat needs the same way out. The provider request cannot be cancelled from
+   * here, so this stops waiting for it and ignores whatever arrives later.
+   */
+  function stopPlanChat(): void {
+    planRequestSeq.current += 1;
+    setPlanPhase(null);
+    setBusy(null);
+    setPlanChatMessages((items) => [...items, {
+      role: 'assistant',
+      text: 'Stopped waiting. The request may still finish in the background; ask again if you want a fresh change set.',
+    }]);
   }
 
   async function applyPlanChanges(): Promise<void> {
@@ -1842,6 +1883,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     const chosen = planActions.filter((_, index) => planSelected[index]);
     if (chosen.length === 0) return;
     setBusy('plan-chat');
+    setPlanPhase('applying');
     setError(null);
     try {
       const result = unwrap(await window.kaiDesktop.applyStudioPlanChanges({ projectId, actions: chosen }));
@@ -1867,6 +1909,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
+      setPlanPhase(null);
       setBusy(null);
     }
   }
@@ -2771,10 +2814,20 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <p className="studio-note">For example: “Register is the sign-up screen, just named differently.” “Add a parent portal with a report card page.” “The old dashboard is not needed.”</p>
                 )}
                 {planChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Studio'}</strong><br />{item.text}</p>)}
+                {planPhase && (
+                  <p className="studio-chat-message assistant studio-chat-pending" role="status">
+                    <strong>Studio</strong><br />
+                    <Loader2 className="spin" size={13} />{' '}
+                    {planPhase === 'applying'
+                      ? 'Applying the changes...'
+                      : `Reading the plan and the design, then asking the model${planElapsed > 0 ? ` (${planElapsed}s)` : ''}...`}
+                  </p>
+                )}
               </div>
               <textarea value={planChatText} onChange={(event) => setPlanChatText(event.target.value)} placeholder="Tell Studio what this page is, or what should change…" rows={3} disabled={busy !== null} />
               <div className="page-actions">
                 <button type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</button>
+                {planPhase === 'thinking' && <button type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</button>}
                 <span className="studio-model">It proposes; you decide what to apply.</span>
               </div>
             </section>

@@ -11993,6 +11993,7 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .studio-design-chat-thread { max-height: 260px; overflow: auto; }
 .studio-chat-message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 7px; background: var(--bg-input); margin: 0 0 8px; }
 .studio-chat-message:last-child { margin-bottom: 0; }
+.studio-chat-pending { color: var(--text-muted); }
 .studio-chat-message.user { border-left: 2px solid var(--accent); }
 .studio-chat-message.assistant { border-left: 2px solid var(--green); }
 .studio-route-review p { margin: 8px 0; }

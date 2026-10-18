@@ -666,7 +666,7 @@ export class DesktopStudio {
     const findPage = (design: StudioDesign) => design.components.find((component) => component.screen && screenTitleKey(component.name) === key);
     // A page drawn since the last pull is only in the editor. Falling back to a live read is what lets the Studio
     // chat link the page the person just drew, without making them pull first.
-    const page = findPage(stored) ?? findPage(await this.currentDesign(projectId, stored));
+    const page = findPage(stored) ?? findPage(await this.currentDesignSoon(projectId));
     // The prefix follows the name the person is editing — the heading, or the page name for a stray — so a heading
     // that read `/sign-in — Sign in` keeps its `/sign-in —` and only the screen's name changes.
     const nextName = renamedPageName(currentName, name);
@@ -702,7 +702,7 @@ export class DesktopStudio {
     if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
     const stored = await this.ports.board.design(projectId);
     const findPage = (design: StudioDesign) => design.components.find((component) => component.screen && component.id === pageId);
-    const page = findPage(stored) ?? findPage(await this.currentDesign(projectId, stored));
+    const page = findPage(stored) ?? findPage(await this.currentDesignSoon(projectId));
     if (!page) throw new Error('That screen is not part of this project\'s design. Pull the design again, then delete it.');
     try {
       await deletePageNode(ports, pageId);
@@ -770,14 +770,14 @@ export class DesktopStudio {
     if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
     const settings = await this.ports.settings();
     const root = await this.ports.projectRoot(projectId);
-    const [pages, board, storedDesign, context] = await Promise.all([
+    const [pages, board, context] = await Promise.all([
       this.ports.artifacts.readText(projectId, 'pages'),
       this.ports.board.read(projectId),
-      this.ports.board.design(projectId),
       loadProjectContext(root, undefined, 8_000).catch(() => null),
     ]);
-    // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it.
-    const design = await this.currentDesign(projectId, storedDesign);
+    // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it. A live read
+    // that stalls must not stall the turn: `currentDesignSoon` falls back to the stored design after ten seconds.
+    const design = await this.currentDesignSoon(projectId);
     return this.ports.requester.structuredRequest(
       settings.promptGuide,
       NAMES,
@@ -813,6 +813,22 @@ export class DesktopStudio {
   }
 
   /**
+   * The live design only when open-pencil answers promptly, and the stored pull otherwise.
+   *
+   * The Studio chat runs before the model call, and an editor whose MCP has stopped answering used to hold the
+   * whole turn open with no timeout and no error: the button spun forever. Ten seconds is enough for a live read
+   * on a working editor and short enough that a stale one falls back to the design the project already has.
+   */
+  private async currentDesignSoon(projectId: string): Promise<StudioDesign> {
+    const stored = await this.ports.board.design(projectId);
+    try {
+      return await withTimeout(this.currentDesign(projectId, stored), 10_000, 'open-pencil did not answer in time.');
+    } catch {
+      return stored;
+    }
+  }
+
+  /**
    * Applies an approved change set. Each action is independent: one that fails is reported and the rest still run,
    * because a person who ticked five changes should not lose four of them to one stale name.
    *
@@ -831,7 +847,7 @@ export class DesktopStudio {
       try {
         switch (action.kind) {
           case 'link': {
-            const design = await this.currentDesign(projectId);
+            const design = await this.currentDesignSoon(projectId);
             const page = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName));
             if (!page) throw new Error(`No drawn OpenPencil page is called "${action.designName}". Pull the design, then try again.`);
             const target = pageEntry(pages, action.screenName);
@@ -878,7 +894,7 @@ export class DesktopStudio {
             }
             if (action.dependsOn.length > 0) pendingDependencies.push({ cardId, dependsOn: action.dependsOn });
             if (action.designName && cardKind === 'page') {
-              const design = await this.currentDesign(projectId);
+              const design = await this.currentDesignSoon(projectId);
               const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName!));
               if (!drawn) throw new Error(`The screen was added, but no drawn OpenPencil page is called "${action.designName}".`);
               await this.renameDesignPage(projectId, drawn.name, newPageHeading(action.title, route));
@@ -910,7 +926,7 @@ export class DesktopStudio {
               await this.ports.board.replace(projectId, remaining, catalog.artifacts);
             }
             if (action.deletePage) {
-              const design = await this.currentDesign(projectId);
+              const design = await this.currentDesignSoon(projectId);
               const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === key);
               if (!drawn) throw new Error(`The screen was removed, but no drawn OpenPencil page is called "${action.screenName}".`);
               await this.deleteDesignPage(projectId, drawn.id);
@@ -1035,6 +1051,17 @@ function uniqueCardId(cards: readonly BoardCard[], base: string): string {
 function slugFor(value: string): string {
   const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
   return slug || 'screen';
+}
+
+/** A promise with a deadline. The loser is still settled by the race, so a late rejection is not unhandled. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
 /** A model's list field, whether it sent an array or one string of lines or comma-separated items. */
