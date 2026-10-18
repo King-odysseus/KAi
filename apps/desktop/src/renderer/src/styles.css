@@ -14696,3 +14696,34 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .equalizer-severity.medium { border-color: var(--amber); color: var(--amber); }
 
 .equalizer-severity.low { color: var(--text-dim); }
+
+/* Right-click menus for files, folders and editor tabs. A portal keeps them out of scroll clipping, and the
+   component clamps their position to the window. */
+.context-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+.context-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.context-menu button:hover:not(:disabled) { background: var(--bg-hover); }
+.context-menu button.danger { color: var(--red); }
+.context-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
+.context-menu-separator { height: 1px; margin: 4px 6px; background: var(--border-soft); }

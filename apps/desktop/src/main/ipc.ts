@@ -111,7 +111,7 @@ import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
-import { FileConflictError, fileChangedOnDisk, listProjectFiles, readProjectFile, writeProjectFile } from './project-files';
+import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedOnDisk, listProjectFiles, readProjectFile, renameProjectPath, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
 import type { NotificationCenter } from './notification-rules';
 import { summarizeUsage } from './usage-budget';
@@ -904,6 +904,23 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       if (error instanceof FileConflictError) throw new ConflictError(error.message);
       throw error;
     }
+  });
+  handle(context, 'files:delete', async ({ projectId, path: filePath }) => {
+    await deleteProjectPath((await resolveProject(context, projectId, true)).path, filePath);
+    return { path: filePath };
+  });
+  handle(context, 'files:rename', async ({ projectId, from, to }) => {
+    await renameProjectPath((await resolveProject(context, projectId, true)).path, from, to);
+    return { path: to };
+  });
+  handle(context, 'files:folder', async ({ projectId, path: filePath }) => {
+    await createProjectFolder((await resolveProject(context, projectId, true)).path, filePath);
+    return { path: filePath };
+  });
+  handle(context, 'files:reveal', async ({ projectId, path: filePath }) => {
+    const project = await resolveProject(context, projectId, true);
+    shell.showItemInFolder(await resolveInside(project.path, filePath));
+    return { revealed: true };
   });
   handle(context, 'files:changed', async ({ projectId, path: filePath, expectedHash }) =>
     fileChangedOnDisk((await resolveProject(context, projectId, true)).path, filePath, expectedHash));

@@ -342,7 +342,7 @@ import {
 import { planSchema, type Plan } from './plan';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
-import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileReadInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
+import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileMutationResultSchema, filePathInputSchema, fileReadInputSchema, fileRenameInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileMutationResult, type FilePathInput, type FileRenameInput, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
 import {
   codeFormatInputSchema,
   codeInstallFormatterInputSchema,
@@ -467,6 +467,10 @@ export const ipcChannels = [
   'files:read',
   'files:write',
   'files:changed',
+  'files:delete',
+  'files:rename',
+  'files:folder',
+  'files:reveal',
   'editor:update-document',
   'editor:remove-document',
   'editor:update-window',
@@ -804,6 +808,10 @@ export const ipcInputSchemas = {
   'files:read': fileReadInputSchema,
   'files:write': fileWriteInputSchema,
   'files:changed': fileChangedInputSchema,
+  'files:delete': filePathInputSchema,
+  'files:rename': fileRenameInputSchema,
+  'files:folder': filePathInputSchema,
+  'files:reveal': filePathInputSchema,
   'editor:update-document': editorDocumentStateSchema,
   'editor:remove-document': editorDocumentRemoveSchema,
   'editor:update-window': editorWindowSnapshotSchema,
@@ -1309,6 +1317,14 @@ export interface KaiDesktopBridge {
   projectFileTree(projectId: string): Promise<IpcResponse<ProjectFileTree>>;
   readProjectFile(projectId: string, path: string): Promise<IpcResponse<OpenedFile>>;
   writeProjectFile(request: FileWriteInput): Promise<IpcResponse<WrittenFile>>;
+  /** Deletes one file or folder, after the renderer has confirmed it. */
+  deleteProjectPath(request: FilePathInput): Promise<IpcResponse<FileMutationResult>>;
+  /** Renames or moves a file or folder inside the project. */
+  renameProjectPath(request: FileRenameInput): Promise<IpcResponse<FileMutationResult>>;
+  /** Creates a folder, including any missing parents. */
+  createProjectFolder(request: FilePathInput): Promise<IpcResponse<FileMutationResult>>;
+  /** Shows the file or folder in the operating system's file manager. */
+  revealProjectPath(request: FilePathInput): Promise<IpcResponse<{ revealed: boolean }>>;
   projectFileChanged(projectId: string, path: string, expectedHash: string): Promise<IpcResponse<boolean>>;
   updateEditorDocument(document: EditorDocumentState): Promise<IpcResponse<boolean>>;
   removeEditorDocument(document: EditorDocumentRemove): Promise<IpcResponse<boolean>>;

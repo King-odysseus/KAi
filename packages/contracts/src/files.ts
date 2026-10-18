@@ -22,6 +22,19 @@ export const openedFileSchema = z
 
 export const fileReadInputSchema = z.object({ projectId: z.string().min(1), path: z.string().min(1) }).strict();
 
+/** A project-relative path, used by the file actions that do not read or write content. */
+export const filePathInputSchema = z.object({ projectId: z.string().min(1), path: z.string().min(1).max(2_000) }).strict();
+
+export const fileRenameInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    from: z.string().min(1).max(2_000),
+    to: z.string().min(1).max(2_000),
+  })
+  .strict();
+
+export const fileMutationResultSchema = z.object({ path: z.string().min(1) }).strict();
+
 export const fileWriteInputSchema = z
   .object({
     projectId: z.string().min(1),
@@ -92,6 +105,9 @@ export type ProjectFileEntry = z.infer<typeof projectFileEntrySchema>;
 export type ProjectFileTree = z.infer<typeof projectFileTreeSchema>;
 export type OpenedFile = z.infer<typeof openedFileSchema>;
 export type FileWriteInput = z.infer<typeof fileWriteInputSchema>;
+export type FilePathInput = z.infer<typeof filePathInputSchema>;
+export type FileRenameInput = z.infer<typeof fileRenameInputSchema>;
+export type FileMutationResult = z.infer<typeof fileMutationResultSchema>;
 export type WrittenFile = z.infer<typeof writtenFileSchema>;
 export type EditorDocumentState = z.infer<typeof editorDocumentStateSchema>;
 export type EditorDocumentRemove = z.infer<typeof editorDocumentRemoveSchema>;

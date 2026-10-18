@@ -2,14 +2,19 @@ import {
   Braces,
   ChevronDown,
   ChevronRight,
+  Copy,
+  ExternalLink,
   File as FileIcon,
   FilePlus,
   Folder,
+  FolderPlus,
   PanelRightOpen,
+  Pencil,
   RefreshCw,
   Save,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
@@ -50,6 +55,7 @@ import { projectLessons } from './learning-path';
 import { GuidedReviewPanel } from './GuidedReviewPanel';
 import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
 import { confirmDialog, promptDialog } from './AppDialog';
+import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
 interface TreeNode {
   name: string;
@@ -249,6 +255,8 @@ export function CodeView({
   const [truncated, setTruncated] = useState(false);
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Where the right-click menu is, and what it was opened on.
+  const [fileMenu, setFileMenu] = useState<{ x: number; y: number; kind: 'file' | 'folder' | 'root'; path: string } | null>(null);
   const [openPaths, setOpenPaths] = useState<string[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
@@ -1212,8 +1220,8 @@ export function CodeView({
     }
   }
 
-  async function closeFile(path: string): Promise<void> {
-    if (dirty[path] && !(await confirmDialog({
+  async function closeFile(path: string, force = false): Promise<void> {
+    if (!force && dirty[path] && !(await confirmDialog({
       title: 'Discard unsaved changes?',
       detail: `${path} has unsaved changes.`,
       confirmLabel: 'Discard',
@@ -1239,14 +1247,18 @@ export function CodeView({
     }
   }
 
-  async function createFile(): Promise<void> {
+  async function createFile(basePath = ''): Promise<void> {
     if (!projectId) return;
     const path = (await promptDialog({
       title: 'Create a file',
       label: 'Project-relative file path',
+      initialValue: basePath ? `${basePath}/` : '',
       placeholder: 'src/util.ts',
       confirmLabel: 'Create file',
-      validate: (value) => value.startsWith('/') || /^[A-Za-z]:/.test(value) ? 'Use a project-relative path.' : null,
+      validate: (value) => {
+        if (!value.trim()) return 'A file path is required.';
+        return value.startsWith('/') || /^[A-Za-z]:/.test(value) ? 'Use a project-relative path.' : null;
+      },
     }))?.trim();
     if (!path) return;
     const response = await window.kaiDesktop.writeProjectFile({ projectId, path, content: '', expectedHash: null, eol: 'lf', bom: false });
@@ -1256,6 +1268,100 @@ export function CodeView({
     }
     await loadTree();
     await openFile(path);
+  }
+
+  async function createFolder(basePath = ''): Promise<void> {
+    if (!projectId) return;
+    const path = (await promptDialog({
+      title: 'Create a folder',
+      label: 'Project-relative folder path',
+      initialValue: basePath ? `${basePath}/` : '',
+      placeholder: 'src/components',
+      confirmLabel: 'Create folder',
+      validate: (value) => {
+        if (!value.trim()) return 'A folder path is required.';
+        return value.startsWith('/') || /^[A-Za-z]:/.test(value) ? 'Use a project-relative path.' : null;
+      },
+    }))?.trim().replace(/\/+$/, '');
+    if (!path) return;
+    const response = await window.kaiDesktop.createProjectFolder({ projectId, path });
+    if (!response.ok) {
+      setNotice(response.error.message);
+      return;
+    }
+    await loadTree();
+    setExpanded((current) => {
+      const next = new Set(current);
+      next.add(path);
+      const parts = path.split('/');
+      for (let index = 1; index < parts.length; index += 1) next.add(parts.slice(0, index).join('/'));
+      return next;
+    });
+  }
+
+  async function renameTarget(target: { kind: 'file' | 'folder'; path: string }): Promise<void> {
+    if (!projectId) return;
+    if (target.kind === 'file' && dirty[target.path]) {
+      setNotice('Save this file before renaming it.');
+      return;
+    }
+    if (target.kind === 'folder' && openPaths.some((open) => (open === target.path || open.startsWith(`${target.path}/`)) && dirty[open])) {
+      setNotice('Save the open files in this folder before renaming it.');
+      return;
+    }
+    const to = (await promptDialog({
+      title: `Rename ${target.kind}`,
+      label: 'New project-relative path',
+      initialValue: target.path,
+      confirmLabel: 'Rename',
+      validate: (value) => {
+        const next = value.trim();
+        if (!next) return 'A new path is required.';
+        if (next === target.path) return 'That is the path it already has.';
+        return next.startsWith('/') || /^[A-Za-z]:/.test(next) ? 'Use a project-relative path.' : null;
+      },
+    }))?.trim();
+    if (!to || to === target.path) return;
+    const response = await window.kaiDesktop.renameProjectPath({ projectId, from: target.path, to });
+    if (!response.ok) {
+      setNotice(response.error.message);
+      return;
+    }
+    const affected = (candidate: string): boolean => candidate === target.path || candidate.startsWith(`${target.path}/`);
+    const mapped = (candidate: string): string => `${to}${candidate.slice(target.path.length)}`;
+    const reopened = activePath && affected(activePath) ? mapped(activePath) : null;
+    for (const open of openPaths.filter(affected)) await closeFile(open, true);
+    setOpenPaths((current) => current.map((open) => (affected(open) ? mapped(open) : open)));
+    if (reopened) {
+      setActivePath(reopened);
+      await openFile(reopened);
+    }
+    await loadTree();
+    void refreshGitChanges();
+    setNotice(`Renamed ${target.path} to ${to}.`);
+  }
+
+  async function deleteTarget(target: { kind: 'file' | 'folder'; path: string }): Promise<void> {
+    if (!projectId) return;
+    const affected = (candidate: string): boolean => candidate === target.path || candidate.startsWith(`${target.path}/`);
+    const affectedPaths = openPaths.filter(affected);
+    const unsaved = affectedPaths.some((candidate) => dirty[candidate]);
+    const confirmed = await confirmDialog({
+      title: `Delete ${target.kind === 'folder' ? 'folder' : 'file'} "${target.path}"?`,
+      detail: `${target.kind === 'folder' ? 'Everything inside the folder is deleted. ' : ''}This cannot be undone from KAI.${unsaved ? ' Unsaved changes in the open files are lost.' : ''}`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    const response = await window.kaiDesktop.deleteProjectPath({ projectId, path: target.path });
+    if (!response.ok) {
+      setNotice(response.error.message);
+      return;
+    }
+    for (const open of affectedPaths) await closeFile(open, true);
+    setNotice(`Deleted ${target.path}.`);
+    await loadTree();
+    void refreshGitChanges();
   }
 
   async function openLearningReference(filePath: string, startLine?: number, endLine?: number): Promise<void> {
@@ -1764,7 +1870,19 @@ export function CodeView({
   function renderFile(path: string, label: string, depth: number): ReactNode {
     const change = gitChanges.get(path);
     return (
-      <button key={path} type="button" className={`code-tree-item ${activePath === path ? 'active' : ''} ${change ? `git-${change.kind}` : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => void openFile(path)} title={path}>
+      <button
+        key={path}
+        type="button"
+        className={`code-tree-item ${activePath === path ? 'active' : ''} ${change ? `git-${change.kind}` : ''}`}
+        style={{ paddingLeft: 8 + depth * 12 }}
+        onClick={() => void openFile(path)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setFileMenu({ x: event.clientX, y: event.clientY, kind: 'file', path });
+        }}
+        title={path}
+      >
         <FileIcon size={12} /><span className="truncate">{label}</span>
         {dirty[path] && <span className="code-dirty" aria-label="Unsaved changes">●</span>}
         {change && <GitBadge change={change} />}
@@ -1781,12 +1899,23 @@ export function CodeView({
       const changedInside = changedInFolder.get(child.path) ?? 0;
       return (
         <div key={child.path}>
-          <button type="button" className={`code-tree-item folder ${changedInside > 0 ? 'has-changes' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} aria-expanded={open} onClick={() => setExpanded((current) => {
-            const next = new Set(current);
-            if (open) next.delete(child.path);
-            else next.add(child.path);
-            return next;
-          })}>
+          <button
+            type="button"
+            className={`code-tree-item folder ${changedInside > 0 ? 'has-changes' : ''}`}
+            style={{ paddingLeft: 8 + depth * 12 }}
+            aria-expanded={open}
+            onClick={() => setExpanded((current) => {
+              const next = new Set(current);
+              if (open) next.delete(child.path);
+              else next.add(child.path);
+              return next;
+            })}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setFileMenu({ x: event.clientX, y: event.clientY, kind: 'folder', path: child.path });
+            }}
+          >
             {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<Folder size={12} /><span className="truncate">{child.name}</span>
             {changedInside > 0 && <b className="files-folder-count" title={`${changedInside} changed file${changedInside === 1 ? '' : 's'} in this folder`}>{changedInside}</b>}
           </button>
@@ -1794,6 +1923,46 @@ export function CodeView({
         </div>
       );
     });
+  }
+
+  /** What a right-click on a file, folder or the tree background offers. */
+  function fileMenuItems(): ContextMenuItem[] {
+    if (!fileMenu || !projectId) return [];
+    const target = fileMenu;
+    const items: ContextMenuItem[] = [];
+    const parent = target.kind === 'folder' ? target.path : target.path.split('/').slice(0, -1).join('/');
+    if (target.kind === 'root') {
+      items.push({ label: 'New file', icon: <FilePlus size={13} />, onSelect: () => void createFile('') });
+      items.push({ label: 'New folder', icon: <FolderPlus size={13} />, onSelect: () => void createFolder('') });
+      items.push({ label: '', separator: true, onSelect: () => undefined });
+      items.push({ label: 'Refresh', icon: <RefreshCw size={13} />, onSelect: () => { void loadTree(); void refreshGitChanges(); } });
+      return items;
+    }
+    if (target.kind === 'file') {
+      items.push({ label: 'Open', icon: <FileIcon size={13} />, onSelect: () => void openFile(target.path) });
+      if (openPaths.includes(target.path)) {
+        items.push({ label: 'Close tab', icon: <X size={13} />, onSelect: () => void closeFile(target.path) });
+        if (openPaths.length > 1) {
+          items.push({
+            label: 'Close other tabs',
+            icon: <X size={13} />,
+            onSelect: () => { for (const open of openPaths.filter((path) => path !== target.path)) void closeFile(open); },
+          });
+        }
+      }
+    }
+    items.push({ label: 'New file', icon: <FilePlus size={13} />, onSelect: () => void createFile(parent) });
+    items.push({ label: 'New folder', icon: <FolderPlus size={13} />, onSelect: () => void createFolder(parent) });
+    items.push({ label: '', separator: true, onSelect: () => undefined });
+    const kind: 'file' | 'folder' = target.kind === 'folder' ? 'folder' : 'file';
+    items.push({ label: 'Rename', icon: <Pencil size={13} />, onSelect: () => void renameTarget({ kind, path: target.path }) });
+    items.push({ label: 'Delete', icon: <Trash2 size={13} />, danger: true, onSelect: () => void deleteTarget({ kind, path: target.path }) });
+    items.push({ label: '', separator: true, onSelect: () => undefined });
+    items.push({ label: 'Copy relative path', icon: <Copy size={13} />, onSelect: () => void navigator.clipboard?.writeText(target.path) });
+    const rootPath = activeProject?.path.replace(/[\\/]+$/, '') ?? '';
+    items.push({ label: 'Copy absolute path', icon: <Copy size={13} />, onSelect: () => void navigator.clipboard?.writeText(rootPath ? `${rootPath}/${target.path}` : target.path) });
+    items.push({ label: 'Reveal in Explorer', icon: <ExternalLink size={13} />, onSelect: () => void window.kaiDesktop.revealProjectPath({ projectId, path: target.path }) });
+    return items;
   }
 
   if (!activeProject) {
@@ -1817,7 +1986,14 @@ export function CodeView({
           <button type="button" className="icon-button compact" title="New file" aria-label="New file" onClick={() => void createFile()}><FilePlus size={14} /></button>
           <button type="button" className="icon-button compact" title="Refresh files" aria-label="Refresh files" onClick={() => { void loadTree(); void refreshGitChanges(); }}><RefreshCw size={14} /></button>
         </div>
-        <div className="code-tree">
+        <div
+          className="code-tree"
+          onContextMenu={(event) => {
+            if ((event.target as HTMLElement).closest('.code-tree-item')) return;
+            event.preventDefault();
+            setFileMenu({ x: event.clientX, y: event.clientY, kind: 'root', path: '' });
+          }}
+        >
           {filtered
             ? filtered.map((file) => renderFile(file.path, file.path, 0))
             : renderNode(root, 0)}
@@ -1844,7 +2020,16 @@ export function CodeView({
       <section className="code-main">
         <div className="code-tabs" role="tablist" aria-label="Open files">
           {openPaths.map((path) => (
-            <div key={path} className={`code-tab ${activePath === path ? 'active' : ''}`} role="tab" aria-selected={activePath === path}>
+            <div
+              key={path}
+              className={`code-tab ${activePath === path ? 'active' : ''}`}
+              role="tab"
+              aria-selected={activePath === path}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setFileMenu({ x: event.clientX, y: event.clientY, kind: 'file', path });
+              }}
+            >
               <button type="button" className="code-tab-name" onClick={() => void openFile(path)}><span className="truncate">{path.split('/').at(-1)}</span>{dirty[path] && <span className="code-dirty">●</span>}</button>
               <button type="button" className="icon-button compact" aria-label={`Close ${path}`} onClick={() => void closeFile(path)}><X size={11} /></button>
             </div>
@@ -2015,6 +2200,7 @@ export function CodeView({
           </div>
         </>
       )}
+      {fileMenu && <ContextMenu x={fileMenu.x} y={fileMenu.y} items={fileMenuItems()} onClose={() => setFileMenu(null)} />}
     </div>
   );
 }

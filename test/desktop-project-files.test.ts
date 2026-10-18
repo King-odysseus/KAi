@@ -6,9 +6,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { diffHunks, revertHunks, splitLines } from '../packages/contracts/src';
 import {
   FileConflictError,
+  createProjectFolder,
+  deleteProjectPath,
   fileChangedOnDisk,
   listProjectFiles,
   readProjectFile,
+  renameProjectPath,
   resolveInside,
   writeProjectFile,
 } from '../apps/desktop/src/main/project-files';
@@ -180,5 +183,41 @@ describe('hunk diff', () => {
     const hunks = diffHunks('a\nb', 'a\nb\n');
     expect(hunks).toHaveLength(1);
     expect(revertHunks('a\nb', 'a\nb\n', [0])).toBe('a\nb');
+  });
+});
+
+describe('file actions', () => {
+  it('deletes a file and a folder, and refuses the project root and .git', async () => {
+    const root = await project();
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, 'src', 'a.ts'), 'a');
+    await fs.writeFile(path.join(root, 'b.ts'), 'b');
+
+    await deleteProjectPath(root, 'b.ts');
+    await expect(fs.stat(path.join(root, 'b.ts'))).rejects.toThrow();
+    await deleteProjectPath(root, 'src');
+    await expect(fs.stat(path.join(root, 'src'))).rejects.toThrow();
+    await expect(deleteProjectPath(root, '.git')).rejects.toThrow(/Git folder/);
+    await expect(deleteProjectPath(root, '')).rejects.toThrow(/root/);
+  });
+
+  it('renames a file and a folder, and refuses an existing destination', async () => {
+    const root = await project();
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(root, 'src', 'a.ts'), 'a');
+    await fs.writeFile(path.join(root, 'b.ts'), 'b');
+
+    await renameProjectPath(root, 'src/a.ts', 'src/c.ts');
+    await expect(fs.readFile(path.join(root, 'src', 'c.ts'), 'utf8')).resolves.toBe('a');
+    await renameProjectPath(root, 'src', 'lib');
+    await expect(fs.readFile(path.join(root, 'lib', 'c.ts'), 'utf8')).resolves.toBe('a');
+    await expect(renameProjectPath(root, 'b.ts', 'lib/c.ts')).rejects.toThrow(/already exists/);
+  });
+
+  it('creates a folder, including parents, and refuses .git', async () => {
+    const root = await project();
+    await createProjectFolder(root, 'src/components/ui');
+    await expect(fs.stat(path.join(root, 'src', 'components', 'ui'))).resolves.toBeTruthy();
+    await expect(createProjectFolder(root, '.git/hooks')).rejects.toThrow(/Git folder/);
   });
 });

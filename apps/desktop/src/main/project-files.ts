@@ -203,3 +203,47 @@ export async function fileChangedOnDisk(projectRoot: string, relativePath: strin
     return true;
   }
 }
+
+/** Paths no context-menu action may touch. The editor is not a Git or project-root manager. */
+function refusalFor(relativePath: string): string | null {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!normalized) return 'The project root cannot be changed here.';
+  if (normalized === '.git' || normalized.startsWith('.git/')) return 'The Git folder cannot be changed from KAI.';
+  return null;
+}
+
+/** Deletes a file or folder, with everything inside it. The caller confirms before this is reached. */
+export async function deleteProjectPath(projectRoot: string, relativePath: string): Promise<void> {
+  const refusal = refusalFor(relativePath);
+  if (refusal) throw new Error(refusal);
+  const root = await fs.realpath(projectRoot);
+  const target = await resolveInside(projectRoot, relativePath);
+  if (target === root) throw new Error('The project root cannot be deleted.');
+  await fs.rm(target, { recursive: true, force: false });
+}
+
+/** Renames or moves a file or folder inside the project. The destination must not already exist. */
+export async function renameProjectPath(projectRoot: string, from: string, to: string): Promise<void> {
+  const refusal = refusalFor(from) ?? refusalFor(to);
+  if (refusal) throw new Error(refusal);
+  const root = await fs.realpath(projectRoot);
+  const source = await resolveInside(projectRoot, from);
+  const target = await resolveInside(projectRoot, to);
+  if (source === root || target === root) throw new Error('The project root cannot be renamed.');
+  await fs.access(source);
+  try {
+    await fs.access(target);
+    throw new Error('Something already exists at that path.');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await fs.rename(source, target);
+}
+
+/** Creates a folder inside the project, including any missing parents. */
+export async function createProjectFolder(projectRoot: string, relativePath: string): Promise<void> {
+  const refusal = refusalFor(relativePath);
+  if (refusal) throw new Error(refusal);
+  const target = await resolveInside(projectRoot, relativePath);
+  await fs.mkdir(target, { recursive: true });
+}
