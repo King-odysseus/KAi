@@ -288,10 +288,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
    */
   useEffect(() => {
     if (!planRequest || !activeProject || planRequest.projectId !== activeProject.id) return;
-    if (handledPlanRequest.current === planRequest.nonce || busy !== null) return;
+    // Wait for the plan list, so a project that already has a plan reopens it instead of gaining a duplicate.
+    if (handledPlanRequest.current === planRequest.nonce || busy !== null || projectsBusy) return;
     handledPlanRequest.current = planRequest.nonce;
-    startNewProject(true);
-  }, [planRequest, activeProject, busy]);
+    const existing = projects.find((project) => !project.archivedAt && project.linkedProjectId === activeProject.id);
+    if (existing) openProjectStudio(existing.id);
+    else startNewProject(true);
+  }, [planRequest, activeProject, busy, projectsBusy, projects]);
 
   /**
    * Where the project is, re-read whenever anything it reads has moved.
@@ -2148,10 +2151,16 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
       {/* The Studio keeps its own project, apart from the one in the top bar, and nothing said so: a person on one
           project saw another's brief, style guide and drawing run. Say it whenever the two names disagree. */}
-      {screen === 'project' && currentFolder && !projectTitle.toLowerCase().includes(currentFolder.name.toLowerCase()) && (
+      {screen === 'project' && currentFolder && state && state.linkedProjectId !== currentFolder.id && (
         <p className="studio-notice warning" role="status">
           <AlertTriangle size={14} />
-          <span>This Studio project is <strong>{projectTitle.split(/[,.:—-]/)[0]?.trim()}</strong>, not the open workspace <strong>{currentFolder.name}</strong>. Everything written or drawn here is for the Studio project.</span>
+          <span>
+            This Studio project is <strong>{projectTitle.split(/[,.:—-]/)[0]?.trim()}</strong>
+            {state.linkedProjectId
+              ? <> and writes to <strong>{desktopProjects.find((project) => project.id === state.linkedProjectId)?.name ?? 'another folder'}</strong></>
+              : ' and lives in the Studio workspace'}
+            , not the open project <strong>{currentFolder.name}</strong>. Everything written or drawn here is for the Studio project.
+          </span>
           <button type="button" className="composer-text-button" onClick={leaveProjectStudio} disabled={busy !== null}>Choose another project</button>
         </p>
       )}
