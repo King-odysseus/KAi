@@ -50,6 +50,15 @@ describe('handoff files', () => {
     expect(text.startsWith(AGENTS_MARKER)).toBe(true);
     expect(text).toContain('.kai/spec/prd.md');
     expect(text).not.toContain('.kai/spec/risks.md\n');
+    // An agent working in the project directly is told how to build a screen and to keep to one browser tab.
+    expect(text).toContain('## Building screens');
+    expect(text).toContain('bottom tab bar');
+    expect(text).toContain('## Using the browser');
+    expect(text).toContain('your own');
+    expect(text).toContain('browser_tabs');
+    // The headings stand in for the first line of each rule block, so it is not said twice.
+    expect(text).not.toContain('BUILDING THE SCREEN');
+    expect(text).not.toContain('USING THE BROWSER TOOLS');
   });
 
   it('writes both files, keeps the timestamp while nothing changed, and rewrites when the board moves', async () => {

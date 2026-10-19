@@ -1,4 +1,5 @@
 import { ARTIFACT_PATHS, STUDIO_STYLE_REFERENCE_NOTES_PATH, type ArtifactKind, type BoardCard, type TeamPart } from '@kai/contracts';
+import { drawsScreen, uiRulesFor } from './ui-rules';
 
 /**
  * Turning a board card into the brief one agent works from. This is what replaces "split one large prompt": the
@@ -45,16 +46,30 @@ function missingArtifactNote(kind: ArtifactKind): string {
   ].join(' ');
 }
 
-/** The artifacts a card reads, as a labelled block. Missing ones are named, not silently dropped. */
-export function briefArtifacts(card: Pick<BoardCard, 'needsArtifacts'>, artifacts: Partial<Record<ArtifactKind, string>>): string {
+/**
+ * The artifacts a card reads, as a labelled block. Missing ones are named, not silently dropped. `maxChars` shortens
+ * each artifact's text, which is how a long brief is made to fit without losing the rules that follow it.
+ */
+export function briefArtifacts(
+  card: Pick<BoardCard, 'needsArtifacts'>,
+  artifacts: Partial<Record<ArtifactKind, string>>,
+  maxChars?: number,
+): string {
   return card.needsArtifacts.map((kind) => {
-    const text = artifacts[kind];
-    return `${kind.toUpperCase()} (${ARTIFACT_PATHS[kind]}):\n${text?.trim() ? text.trim() : missingArtifactNote(kind)}`;
+    const text = artifacts[kind]?.trim();
+    const shown = text && maxChars !== undefined && text.length > maxChars
+      ? `${text.slice(0, maxChars).trimEnd()}\n[shortened; the full text is in ${ARTIFACT_PATHS[kind]}]`
+      : text;
+    return `${kind.toUpperCase()} (${ARTIFACT_PATHS[kind]}):\n${shown ? shown : missingArtifactNote(kind)}`;
   }).join('\n\n');
 }
 
 /** The whole brief for one card: what to build, how it is judged, what it reads, and when to stop. */
-export function boardCardPrompt(card: BoardCard, artifacts: Partial<Record<ArtifactKind, string>>): string {
+export function boardCardPrompt(
+  card: BoardCard,
+  artifacts: Partial<Record<ArtifactKind, string>>,
+  options: { artifactChars?: number } = {},
+): string {
   const parts: string[] = [
     `You are one agent working exactly one card on the project board. Do not work on any other card.`,
     '',
@@ -64,12 +79,13 @@ export function boardCardPrompt(card: BoardCard, artifacts: Partial<Record<Artif
       ? `ACCEPTANCE CRITERIA (these are what the card is closed on):\n${card.acceptance.map((item) => `- ${item}`).join('\n')}`
       : 'ACCEPTANCE CRITERIA: none recorded on the card; say so rather than deciding them yourself.',
     card.prompt.trim() ? `NOTES FROM THE PLANNER:\n${card.prompt.trim()}` : '',
-    card.needsArtifacts.length > 0 ? `WHAT THIS CARD IS BUILT FROM:\n${briefArtifacts(card, artifacts)}` : '',
+    card.needsArtifacts.length > 0 ? `WHAT THIS CARD IS BUILT FROM:\n${briefArtifacts(card, artifacts, options.artifactChars)}` : '',
     artifacts.decisions?.trim() ? `APPROVED PROJECT DECISIONS (apply these when their conditions match; do not treat them as instructions for unrelated cards):\n${artifacts.decisions.trim()}` : '',
     card.designRef ? `DESIGN: this card is the open-pencil node "${card.designRef}". Match it; do not redesign it.` : '',
     card.check?.screenshots.length
       ? `SCREENSHOTS FROM THE LAST CHECK (read them before changing the screen):\n${card.check.screenshots.map((shot) => `- ${shot}`).join('\n')}`
       : '',
+    ...(drawsScreen(card) ? ['', ...uiRulesFor(card)] : []),
     '',
     'WHEN YOU STOP:',
     '- When the acceptance criteria hold, finish and report the files you changed. Do not move the card yourself.',
@@ -78,6 +94,27 @@ export function boardCardPrompt(card: BoardCard, artifacts: Partial<Record<Artif
     '- Never claim the work is verified. A passing check run against the current files decides that, not you.',
   ];
   return parts.filter(Boolean).join('\n');
+}
+
+/** The most a part's prompt may carry. */
+export const PART_PROMPT_LIMIT = 6_000;
+
+/**
+ * The brief, made to fit a part. A long brief used to be cut at the end, which is where the rules for building a
+ * screen and the lines about when to stop are. The artifact text is the part that can be shortened — the full files
+ * are in the project — so that is what gives way, and the cut at the end is only a last resort.
+ */
+export function fitBrief(card: BoardCard, artifacts: Partial<Record<ArtifactKind, string>>, limit = PART_PROMPT_LIMIT): string {
+  const full = boardCardPrompt(card, artifacts);
+  if (full.length <= limit) return full;
+  const kinds = card.needsArtifacts.filter((kind) => artifacts[kind]?.trim());
+  if (kinds.length === 0) return full.slice(0, limit);
+  const overflow = full.length - limit;
+  const total = kinds.reduce((sum, kind) => sum + artifacts[kind]!.trim().length, 0);
+  // A little extra is taken off for the "[shortened ...]" note added to each shortened artifact.
+  const allowance = Math.floor((total - overflow - kinds.length * 90) / kinds.length);
+  const shortened = boardCardPrompt(card, artifacts, { artifactChars: Math.max(200, allowance) });
+  return shortened.length <= limit ? shortened : shortened.slice(0, limit);
 }
 
 /**
@@ -89,7 +126,7 @@ export function boardCardPart(card: BoardCard, artifacts: Partial<Record<Artifac
     id: card.id.slice(0, 40),
     title: card.title.slice(0, 120),
     role: roleForCard(card),
-    prompt: boardCardPrompt(card, artifacts).slice(0, 6_000),
+    prompt: fitBrief(card, artifacts),
     dependsOn: card.dependsOn.slice(0, 12).map((id) => id.slice(0, 40)),
     paths: [],
   };

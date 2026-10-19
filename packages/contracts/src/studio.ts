@@ -335,10 +335,15 @@ export type StudioBoardDraft = z.infer<typeof studioBoardDraftSchema>;
 
 // --- The visual check --------------------------------------------------------------------------------------
 
-/** The widths a UI card is captured at: a phone, and a desktop. A layout that only holds at one is not done. */
+/**
+ * The sizes a UI card is captured at: a phone, a laptop and a large monitor. A layout that only holds at one is not
+ * done. The wide size is there because a layout built and checked at 1280px can leave a third of a 1920px screen
+ * empty, and nothing looked at that width before.
+ */
 export const UI_CHECK_VIEWPORTS = [
-  { name: 'phone', width: 390 },
-  { name: 'desktop', width: 1280 },
+  { name: 'phone', width: 390, height: 844 },
+  { name: 'desktop', width: 1280, height: 800 },
+  { name: 'wide', width: 1920, height: 1080 },
 ] as const;
 export type UiCheckViewport = (typeof UI_CHECK_VIEWPORTS)[number];
 export const UI_CHECK_THEMES = ['light', 'dark'] as const;

@@ -4,11 +4,13 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
-import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
+import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
+import { realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
+import { startSharedBrowser } from './shared-browser';
 import { AgentTerminal } from './agent-terminal';
 import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
 import { DesktopConfigBackupStore } from './backups';
@@ -99,6 +101,8 @@ let serviceController: DesktopServiceController | null = null;
 let proxyRoutingRef: DesktopProxyRouting | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
 let terminalMcpHost: TerminalMcpHost | null = null;
+/** The one Playwright browser every agent shares, once it is answering. Ended with KAI. */
+let playwrightHost: PlaywrightHost | null = null;
 let remoteGateway: RemoteGateway | null = null;
 let shutdownPromise: Promise<void> | null = null;
 /**
@@ -296,6 +300,7 @@ app.on('before-quit', (event) => {
       process.platform === 'win32' ? Promise.resolve() : (mcpRuntime?.dispose() ?? Promise.resolve()),
       remoteGateway?.dispose() ?? Promise.resolve(),
       terminalMcpHost?.close() ?? Promise.resolve(),
+      playwrightHost?.close() ?? Promise.resolve(),
     ]))
     .then(() => undefined)
     .catch((error) => {
@@ -318,6 +323,7 @@ app.on('before-quit', (event) => {
       mcpRuntime = null;
       remoteGateway = null;
       terminalMcpHost = null;
+      playwrightHost = null;
       desktopShell?.dispose();
       endOwnProcessTree();
       app.exit(0);
@@ -574,6 +580,18 @@ async function startApplication(): Promise<void> {
     return linkedProject.path;
   };
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
+  // One Playwright browser for KAI and every agent. Started in the background so the app is not held waiting for a
+  // first download, and it changes nothing the agents or the checks rely on until it is answering.
+  void startSharedBrowser({
+    start: (onStopped) => startPlaywrightHost(realPlaywrightHostPorts(), { onStopped }),
+    updateSettings: (mutator) => settings.update(mutator),
+    reconnect: () => mcpRuntime?.invalidate(PLAYWRIGHT_MCP_SERVER_ID),
+    installShared: (endpoint) => installPlaywrightSharedMcpForAgents({ endpoint }),
+    // Back to the server each agent starts for itself. Only entries that were pointed at the shared one change.
+    installOwn: () => installPlaywrightMcpForAgents({ backups: false }),
+    info: (message, detail) => logger.info('internal', message, detail),
+    warn: (message, detail) => logger.warn('internal', message, detail),
+  }, () => { playwrightHost = null; }).then((host) => { playwrightHost = host; });
   const directApiOptions = {
     waitIfPaused: (conversationId: string, signal: AbortSignal) => runControl.waitIfPaused(conversationId, signal),
     // Rules and tool hooks are user-owned project preferences. A run only sees the project it is working in.

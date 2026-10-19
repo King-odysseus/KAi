@@ -33,6 +33,8 @@ export interface AgentMcpInstallResult {
 export interface AgentMcpInstallOptions {
   homeDirectory?: string;
   backupRootName?: string;
+  /** False writes the entry without first copying the file it is in. Default true. */
+  backups?: boolean;
 }
 
 export interface PlaywrightMcpPreparationOptions extends AgentMcpInstallOptions {
@@ -165,6 +167,54 @@ export async function installPlaywrightMcpForAgents(
   ], options);
 }
 
+/**
+ * Points every CLI at the one shared Playwright browser KAI runs, in place of the server each would start for itself.
+ * The entry keeps the name `playwright`, so the tools an agent sees and the prompts that mention them do not change;
+ * only where they connect to does. No token: the server answers on the loopback only, and the shared browser it
+ * drives is the one on screen. Rewritten without a backup — the entry is KAI's own, and the file it sits in is one a
+ * running agent also writes, so a copy of it on every launch would be a pile of stale ones.
+ */
+export async function installPlaywrightSharedMcpForAgents(
+  options: { endpoint: string } & AgentMcpInstallOptions,
+): Promise<AgentMcpInstallResult[]> {
+  const { endpoint } = options;
+  return installMcpForAgents(PLAYWRIGHT_CLI_SERVER_NAME, () => ({
+    claude: { type: 'http', url: endpoint },
+    qwen: { httpUrl: endpoint },
+    gemini: { httpUrl: endpoint },
+  }), [
+    `[mcp_servers.${PLAYWRIGHT_CLI_SERVER_NAME}]`,
+    `url = "${escapeTomlString(endpoint)}"`,
+  ], { ...options, backups: false });
+}
+
+/**
+ * KAI's own Playwright entry: the shared server when there is one, the per-process server it used to start when
+ * there is not. Going back matters as much as going forward: an entry left pointing at a server that failed to start
+ * would leave every screen check with a browser it cannot reach.
+ */
+export function withPlaywrightMcpEndpoint(
+  settings: AppSettings,
+  endpoint: string | null,
+  platform: NodeJS.Platform = process.platform,
+): { settings: AppSettings; changed: boolean } {
+  const index = settings.mcpServers.findIndex((server) => server.id === PLAYWRIGHT_MCP_SERVER_ID);
+  const existing = index >= 0 ? settings.mcpServers[index] : undefined;
+  const base = playwrightDesktopServer(platform);
+  // A person who turned the server off, or renamed it, keeps that choice whichever way it is pointed.
+  const kept = existing ? { name: existing.name, enabled: existing.enabled } : { name: base.name, enabled: base.enabled };
+  const desired: McpServerSettings = endpoint
+    ? { id: PLAYWRIGHT_MCP_SERVER_ID, ...kept, transport: 'http', url: endpoint, headerCredentialIds: {} }
+    : existing && existing.transport === 'stdio'
+      ? existing
+      : { ...base, ...kept };
+  if (existing && sameJson(existing, desired)) return { settings, changed: false };
+  const mcpServers = [...settings.mcpServers];
+  if (index >= 0) mcpServers[index] = desired;
+  else mcpServers.push(desired);
+  return { settings: { ...settings, mcpServers }, changed: true };
+}
+
 /** Keep the managed Cognitive1 HTTP MCP endpoint available to every supported CLI. */
 export async function installCognitive1McpForAgents(
   options: Cognitive1McpInstallOptions,
@@ -266,7 +316,7 @@ async function installMcpForAgents(
   options: AgentMcpInstallOptions,
 ): Promise<AgentMcpInstallResult[]> {
   const homeDirectory = options.homeDirectory ?? os.homedir();
-  const backupRootName = options.backupRootName ?? '.kai-backups';
+  const backupRootName = options.backups === false ? null : options.backupRootName ?? '.kai-backups';
   const jsonEntries = jsonEntry();
   return Promise.all([
     reconcileJsonMcp('claude', path.join(homeDirectory, '.claude.json'), serverName, jsonEntries.claude, backupRootName),
@@ -326,7 +376,7 @@ async function reconcileJsonMcp(
   configPath: string,
   serverName: string,
   desired: unknown,
-  backupRootName: string,
+  backupRootName: string | null,
 ): Promise<AgentMcpInstallResult> {
   try {
     const existing = await readOptional(configPath);
@@ -356,7 +406,7 @@ async function reconcileCodexMcp(
   configPath: string,
   serverName: string,
   entryLines: string[],
-  backupRootName: string,
+  backupRootName: string | null,
 ): Promise<AgentMcpInstallResult> {
   try {
     const existing = await readOptional(configPath);
@@ -438,9 +488,9 @@ async function writeText(filePath: string, content: string): Promise<void> {
 async function backupExisting(
   filePath: string,
   existing: string,
-  backupRootName: string,
+  backupRootName: string | null,
 ): Promise<string | undefined> {
-  if (!existing) return undefined;
+  if (!existing || backupRootName === null) return undefined;
   const backupDirectory = path.join(path.dirname(filePath), backupRootName);
   await fs.mkdir(backupDirectory, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');

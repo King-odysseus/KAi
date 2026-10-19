@@ -12,6 +12,7 @@ import {
 } from '@kai/contracts';
 import { resolveInside } from './project-files';
 import { SPEC_ROOT } from './spec-store';
+import { BROWSER_RULES, UI_BUILD_RULES } from './ui-rules';
 
 /**
  * The two files that let an agent or a person pick a project up cold: `.kai/spec/status.md` (what is done, what is
@@ -90,6 +91,14 @@ export function agentsMarkdown(catalog: StudioArtifacts): string {
     '- Never mark a card done yourself. A card reaches done only through a passing check, so hand it over for review instead.',
     '- Follow `.kai/spec/conventions.md` for naming, layout, tests and commands, and respect the decisions in `.kai/spec/decisions.md`: do not reverse one without saying why.',
     '- If the brief or an artifact is wrong or missing something, say so in your summary instead of quietly working around it.',
+    '',
+    // The same rules a board card's brief carries, so an agent working in the project directly builds screens the
+    // same way as one handed a card.
+    '## Building screens',
+    ...UI_BUILD_RULES.slice(1),
+    '',
+    '## Using the browser',
+    ...BROWSER_RULES.slice(1),
     '',
     '_This file is maintained by KAI while it carries the first line above. Delete that line to take it over._',
   ].join('\n') + '\n';
