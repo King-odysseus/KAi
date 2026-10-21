@@ -639,6 +639,101 @@ describe('desktop autopilot', () => {
       expect(h.prompts.some((prompt) => prompt.includes('FAIL: expected 1 to be 2'))).toBe(true);
     });
 
+    describe('cards that need another attempt', () => {
+      /** A check that fails for the first `failures` project-side checks of a card and passes after. */
+      const failingFirstCheck = (failures: number) => {
+        const seen = new Map<string, number>();
+        return { seen, check: (call: number) => call > failures };
+      };
+
+      it('send every card whose check failed round again together, not one after another', async () => {
+        // The in-copy check and the project check both call the check, so the first six calls fail: all three cards fail
+        // their early check and again their project check, then pass on the second round.
+        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, check: failingFirstCheck(6).check });
+        await start(h, { parallelCards: 3, attemptsPerCard: 3 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+        // Every agent run after the first round was in a copy of the project, none of them alone in the project.
+        expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(0);
+        expect(h.cwds.length).toBeGreaterThan(3);
+        expect(h.atOnce()).toBe(3);
+      });
+
+      it('retry together: the second round has all of the failed cards running at the same moment', async () => {
+        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, check: (call) => call > 6 });
+        const concurrent: number[] = [];
+        let running = 0;
+        const original = h.ports.runAgent;
+        h.ports.runAgent = async (request, owner, options) => {
+          running += 1;
+          concurrent.push(running);
+          try { return await original(request, owner, options); } finally { running -= 1; }
+        };
+        await start(h, { parallelCards: 3, attemptsPerCard: 3 });
+        await settled(h);
+        // Three at once in the first round and three at once again in the retry round.
+        expect(concurrent.filter((count) => count === 3).length).toBeGreaterThanOrEqual(2);
+      });
+
+      it('work a lone retry on its own in the project, since a copy gains it nothing', async () => {
+        // Only card a fails its project check; b and c pass, so a is the one card left to go round again.
+        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, check: () => true });
+        const ports = h.ports;
+        const originalCheck = ports.runCheck;
+        let projectChecks = 0;
+        ports.runCheck = async (projectId, command, signal, options) => {
+          if (options?.cwd) return originalCheck(projectId, command, signal, options);
+          projectChecks += 1;
+          // The first project check (card a's) fails once.
+          return projectChecks === 1
+            ? { passed: false, exitCode: 1, output: 'FAIL: expected 1 to be 2', runId: null }
+            : originalCheck(projectId, command, signal, options);
+        };
+        await start(h, { parallelCards: 3, attemptsPerCard: 3 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+        expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(1);
+        expect(h.prompts.some((prompt) => prompt.includes('FAIL: expected 1 to be 2'))).toBe(true);
+      });
+
+      it('park each card once its attempts are used up, and say it was blocked', async () => {
+        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, check: () => false });
+        // Different words each time, so only running out of attempts can stop them.
+        let n = 0;
+        h.ports.runCheck = async () => { n += 1; return { passed: false, exitCode: 1, output: `failure number ${n} ${'x'.repeat(n % 7)}`, runId: null }; };
+        await start(h, { parallelCards: 3, attemptsPerCard: 2 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.map((item) => item.status)).toEqual(['blocked', 'blocked', 'blocked']);
+        expect(final.cardsBlocked).toBe(3);
+        // Two attempts each, and each attempt is two agent runs because the check fails in the copy first and the agent
+        // gets one more go there. No card waited on another to be tried again.
+        expect(h.prompts).toHaveLength(12);
+        expect(h.kept.size).toBe(0);
+      });
+
+      it('stop at the second attempt when a card fails the same way twice, as a card on its own does', async () => {
+        const h = harness({ cards: [card('a'), card('b')], parallel: {}, check: () => false });
+        await start(h, { parallelCards: 2, attemptsPerCard: 3 });
+        await settled(h);
+        expect(h.board.cards.map((item) => item.status)).toEqual(['blocked', 'blocked']);
+        // Two attempts of two runs each (the in-copy retry counts), then parked: the third attempt is never spent.
+        expect(h.prompts).toHaveLength(8);
+        expect(h.board.cards[0]?.notes).toContain('the same failure each time');
+      });
+
+      it('leave a card held by the run until it is closed or parked, so a restart still finds it', async () => {
+        const h = harness({ cards: [card('a'), card('b')], parallel: {}, check: failingFirstCheck(4).check });
+        await start(h, { parallelCards: 2, attemptsPerCard: 3 });
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(h.board.cards.every((item) => item.claimedBy === 'Autopilot' || item.status === 'done')).toBe(true);
+        await settled(h);
+        expect(h.kept.size).toBe(0);
+      });
+    });
+
     it('rests once for a limit that hits both cards, instead of once each', async () => {
       const h = harness({
         cards: [card('a'), card('b')],
@@ -664,7 +759,7 @@ describe('desktop autopilot', () => {
       expect(started).toHaveLength(4);
       const gaps = started.slice(1).map((time, index) => time - started[index]!);
       expect(gaps.every((gap) => gap >= 400)).toBe(true);
-      expect(trace[0]).toContain('4 cards claimed');
+      expect(trace[0]).toContain('4 cards');
       expect(trace.filter((line) => line.includes('making its copy'))).toHaveLength(4);
       expect(trace.filter((line) => line.includes('starting the agent'))).toHaveLength(4);
     });
