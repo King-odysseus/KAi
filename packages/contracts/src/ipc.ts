@@ -113,6 +113,7 @@ import {
   type StudioDesignPageDeleteInput,
   type StudioDesignPageRenameInput,
   type StudioDesignPull,
+  type StudioDesignStatus,
   type StudioProjectInput,
   type StudioUiCheckResult,
   type BoardCard,
@@ -569,6 +570,7 @@ export const ipcChannels = [
   'auto:resume',
   'studio:design-pull',
   'studio:design-read',
+  'studio:design-status',
   'studio:design-build-step',
   'studio:design-chat',
   'studio:board-repair-routes',
@@ -915,6 +917,7 @@ export const ipcInputSchemas = {
   'auto:resume': autoConversationInputSchema,
   'studio:design-pull': studioDesignPullInputSchema,
   'studio:design-read': studioProjectInputSchema,
+  'studio:design-status': studioProjectInputSchema,
   'studio:design-build-step': studioDesignBuildStepInputSchema,
   'studio:design-chat': studioDesignChatInputSchema,
   'studio:board-repair-routes': studioRouteRepairInputSchema,
@@ -1496,6 +1499,7 @@ export interface KaiDesktopBridge {
   onAutoChanged(listener: (status: AutoStatus) => void): () => void;
   /** What KAI last read from open-pencil. */
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
+  studioDesignStatus(projectId: string): Promise<IpcResponse<StudioDesignStatus>>;
   /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */
   pullStudioDesign(projectId: string, adopt?: boolean): Promise<IpcResponse<StudioDesignPull>>;
   /**

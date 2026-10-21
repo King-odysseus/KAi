@@ -407,6 +407,26 @@ describe('pulling the design from open-pencil', () => {
     expect(await again.artifactText('p1', 'tokens')).toContain('--color-ink');
   });
 
+  it('reports whether open-pencil is running and whether it still holds the pages last pulled', async () => {
+    const editor = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.pullDesign('p1');
+    const pages = [{ id: 'p1', name: 'Sign in' }, { id: 'p2', name: 'Sign up' }];
+
+    const same = studio({}, { openPencilStatus: async () => ({ state: 'running' as const, pages }) }).studio;
+    expect(await same.designStatus('p1')).toMatchObject({ state: 'running', inSync: true, livePages: 2 });
+
+    // A design redrawn from scratch: the editor answers, with other pages.
+    const redrawn = studio({}, { openPencilStatus: async () => ({ state: 'running' as const, pages: [{ id: 'z1', name: 'Landing' }] }) }).studio;
+    expect(await redrawn.designStatus('p1')).toMatchObject({ state: 'running', inSync: false, livePages: 1 });
+
+    const closed = studio({}, { openPencilStatus: async () => ({ state: 'not-running' as const }) }).studio;
+    const status = await closed.designStatus('p1');
+    expect(status.state).toBe('not-running');
+    expect(status.inSync).toBeNull();
+    expect(status.message).toContain('not running');
+  });
+
   it('accepts a restarted design when told to, linking what matches and flagging what the new document lacks', async () => {
     const first = openPencil(DESIGN);
     const { studio: app } = studio({}, { openPencil: async () => first.ports });

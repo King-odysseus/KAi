@@ -16,6 +16,7 @@ import {
   renamePageHeading,
   renamedPageName,
   routeFromScreenName,
+  findScreen,
   screenTitleKey,
   setPageRoute,
   studioBoardDraftSchema,
@@ -31,6 +32,7 @@ import {
   type StudioArtifactsGenerationResult,
   type StudioBoard,
   type StudioDesign,
+  type StudioDesignStatus,
   type StudioDesignPull,
   type StudioPlanAction,
   type StudioPlanApplyResult,
@@ -150,6 +152,11 @@ export interface StudioPorts {
    * of failing: everything except the tokens and the design's own cards works without it.
    */
   openPencil?(): Promise<DesignPorts | null>;
+  /**
+   * A look at open-pencil that never launches it: whether it is running, whether KAI's connection is accepted, and the
+   * pages it holds. Optional so a test that never asks for the status can leave it out.
+   */
+  openPencilStatus?(): Promise<{ state: 'running'; pages: Array<{ id: string; name: string }> } | { state: 'not-running' | 'not-configured' | 'token-mismatch' | 'unreachable' }>;
   /**
    * Gets open-pencil running and KAI's connection to it fresh, launching the editor when it is not already open.
    * Optional so tests that only read the design (never build it) can leave it out.
@@ -577,6 +584,33 @@ export class DesktopStudio {
     return this.ports.artifacts.markEdited(projectId, kind);
   }
 
+  /**
+   * Whether open-pencil can be read, and whether it still holds the pages the last pull recorded. The Design tab shows
+   * it and pulls on its own when the editor changes, so a design redrawn in open-pencil is noticed without a button.
+   */
+  async designStatus(projectId: string): Promise<StudioDesignStatus> {
+    const stored = await this.ports.board.design(projectId);
+    const pulledAt = stored.components.length > 0 ? stored.pulledAt : null;
+    const seen = await this.ports.openPencilStatus?.() ?? { state: 'not-configured' as const };
+    const words: Record<string, string> = {
+      'not-running': 'open-pencil is not running. Start it, or press Pull the design and KAI will launch it.',
+      'not-configured': 'open-pencil is not set up. Add it under Settings, Design tools.',
+      'token-mismatch': 'open-pencil refused the token KAI holds. It was restarted; press Pull the design to reconnect.',
+      unreachable: 'open-pencil is open but is not answering.',
+    };
+    if (seen.state !== 'running') return { state: seen.state, message: words[seen.state]!, livePages: null, inSync: null, pulledAt };
+    const live = new Set(seen.pages.map((page) => `${page.id}|${page.name}`));
+    const recorded = new Set(stored.components.filter((component) => component.screen).map((component) => `${component.id}|${component.name}`));
+    const inSync = recorded.size === live.size && [...live].every((entry) => recorded.has(entry));
+    return {
+      state: 'running',
+      message: inSync ? 'open-pencil is running and matches the last pull.' : 'open-pencil holds different pages from the last pull.',
+      livePages: seen.pages.length,
+      inSync,
+      pulledAt,
+    };
+  }
+
   /** What KAI last read from open-pencil, for the UI to show when the design was last pulled. */
   design(projectId: string): Promise<StudioDesign> {
     return this.ports.board.design(projectId);
@@ -673,7 +707,7 @@ export class DesktopStudio {
     if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
     const stored = await this.ports.board.design(projectId);
     const key = screenTitleKey(currentName);
-    const findPage = (design: StudioDesign) => design.components.find((component) => component.screen && screenTitleKey(component.name) === key);
+    const findPage = (design: StudioDesign) => findScreen(design.components.filter((component) => component.screen), (component) => component.name, currentName);
     // A page drawn since the last pull is only in the editor. Falling back to a live read is what lets the Studio
     // chat link the page the person just drew, without making them pull first.
     const page = findPage(stored) ?? findPage(await this.currentDesignSoon(projectId));
@@ -807,7 +841,11 @@ export class DesktopStudio {
       // A page drawn a minute ago is what the chat is usually about, and the stored pull may predate it. A live read
       // that stalls must not stall the turn: `currentDesignSoon` falls back to the stored design after ten seconds.
       onStage?.('reading-design');
-      const design = await this.currentDesignSoon(projectId);
+      const source = await this.currentDesignSource(projectId);
+      const design = source.design;
+      // A model that works from the last pull must not look as if it read the editor: it would call a page missing
+      // that is on screen, or link to one that is gone. Said in the reply so the person reads it with the change set.
+      const staleNote = source.live ? '' : ' Note: open-pencil could not be read just now, so this used the design from the last pull. Open open-pencil and pull the design first if you drew or changed anything.';
       onStage?.('asking-model');
       const first = await this.ports.requester.structuredRequest(
         settings.promptGuide,
@@ -825,7 +863,7 @@ export class DesktopStudio {
       // in a second, narrower call that asks only for the actions.
       if (first.actions.length > 0 || intent === 'ask') {
         onStage?.('done');
-        return first;
+        return { ...first, reply: `${first.reply}${staleNote}`.slice(0, 8_000) };
       }
       onStage?.('extracting-actions');
       try {
@@ -840,12 +878,12 @@ export class DesktopStudio {
         );
         onStage?.('done');
         return extracted.actions.length > 0
-          ? { reply: first.reply, actions: extracted.actions, dropped: extracted.dropped }
-          : { ...first, dropped: first.dropped + extracted.dropped };
+          ? { reply: `${first.reply}${staleNote}`.slice(0, 8_000), actions: extracted.actions, dropped: extracted.dropped }
+          : { ...first, reply: `${first.reply}${staleNote}`.slice(0, 8_000), dropped: first.dropped + extracted.dropped };
       } catch {
         // A failed second call keeps the first answer, which is still useful reading even without a change set.
         onStage?.('done');
-        return first;
+        return { ...first, reply: `${first.reply}${staleNote}`.slice(0, 8_000) };
       }
     } catch (error) {
       onStage?.('failed');
@@ -860,17 +898,17 @@ export class DesktopStudio {
    * live is also why "that page is the sign-up screen" works without pulling first. A read that fails, or sees an
    * empty document, leaves the stored design in place rather than replacing something trustworthy with nothing.
    */
-  private async currentDesign(projectId: string, stored?: StudioDesign): Promise<StudioDesign> {
+  private async currentDesign(projectId: string, stored?: StudioDesign): Promise<{ design: StudioDesign; live: boolean }> {
     const previous = stored ?? await this.ports.board.design(projectId);
-    if (!this.ports.openPencil) return previous;
+    if (!this.ports.openPencil) return { design: previous, live: false };
     try {
       const ports = await this.ports.openPencil();
-      if (!ports) return previous;
+      if (!ports) return { design: previous, live: false };
       const read = await readDesign(ports);
       const components = read.components.map((component) => designComponentSchema.parse(component));
-      return components.length > 0 ? { ...previous, components } : previous;
+      return components.length > 0 ? { design: { ...previous, components }, live: true } : { design: previous, live: false };
     } catch {
-      return previous;
+      return { design: previous, live: false };
     }
   }
 
@@ -882,11 +920,16 @@ export class DesktopStudio {
    * on a working editor and short enough that a stale one falls back to the design the project already has.
    */
   private async currentDesignSoon(projectId: string): Promise<StudioDesign> {
+    return (await this.currentDesignSource(projectId)).design;
+  }
+
+  /** The same read, saying whether it came from the editor now or is the last pull standing in for it. */
+  private async currentDesignSource(projectId: string): Promise<{ design: StudioDesign; live: boolean }> {
     const stored = await this.ports.board.design(projectId);
     try {
       return await withTimeout(this.currentDesign(projectId, stored), 10_000, 'open-pencil did not answer in time.');
     } catch {
-      return stored;
+      return { design: stored, live: false };
     }
   }
 
@@ -910,7 +953,7 @@ export class DesktopStudio {
         switch (action.kind) {
           case 'link': {
             const design = await this.currentDesignSoon(projectId);
-            const page = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName));
+            const page = findScreen(design.components.filter((component) => component.screen), (component) => component.name, action.designName);
             if (!page) throw new Error(`No drawn OpenPencil page is called "${action.designName}". Pull the design, then try again.`);
             const target = pageEntry(pages, action.screenName);
             if (!target) throw new Error(`The plan has no screen called "${action.screenName}".`);
@@ -930,7 +973,7 @@ export class DesktopStudio {
             }
             const board = await this.ports.board.read(projectId);
             const key = screenTitleKey(action.title);
-            let cardId = board.cards.find((card) => screenTitleKey(card.title) === key)?.id ?? null;
+            let cardId = findScreen(board.cards, (card) => card.title, action.title)?.id ?? null;
             if (!cardId) {
               const catalog = await this.ports.artifacts.read(projectId);
               const now = this.ports.now();
@@ -957,7 +1000,7 @@ export class DesktopStudio {
             if (action.dependsOn.length > 0) pendingDependencies.push({ cardId, dependsOn: action.dependsOn });
             if (action.designName && cardKind === 'page') {
               const design = await this.currentDesignSoon(projectId);
-              const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === screenTitleKey(action.designName!));
+              const drawn = findScreen(design.components.filter((component) => component.screen), (component) => component.name, action.designName!);
               if (!drawn) throw new Error(`The screen was added, but no drawn OpenPencil page is called "${action.designName}".`);
               await this.renameDesignPage(projectId, drawn.name, newPageHeading(action.title, route));
               pages = (await this.ports.artifacts.readText(projectId, 'pages')) ?? pages;
@@ -972,10 +1015,11 @@ export class DesktopStudio {
             break;
           }
           case 'remove': {
-            const key = screenTitleKey(action.screenName);
+            const key = screenTitleKey(pageEntry(pages, action.screenName)?.name ?? action.screenName);
             const removed = removePageSection(pages, key);
             const board = await this.ports.board.read(projectId);
-            const remaining = board.cards.filter((card) => !(card.kind === 'page' && screenTitleKey(card.title) === key));
+            const doomed = findScreen(board.cards.filter((card) => card.kind === 'page'), (card) => card.title, action.screenName);
+            const remaining = board.cards.filter((card) => card !== doomed);
             if (!removed.removed && remaining.length === board.cards.length) {
               throw new Error(`No screen called "${action.screenName}" is in the plan or on the board.`);
             }
@@ -989,16 +1033,16 @@ export class DesktopStudio {
             }
             if (action.deletePage) {
               const design = await this.currentDesignSoon(projectId);
-              const drawn = design.components.find((component) => component.screen && screenTitleKey(component.name) === key);
+              const drawn = findScreen(design.components.filter((component) => component.screen), (component) => component.name, action.screenName);
               if (!drawn) throw new Error(`The screen was removed, but no drawn OpenPencil page is called "${action.screenName}".`);
               await this.deleteDesignPage(projectId, drawn.id);
             }
             break;
           }
           case 'route': {
-            const key = screenTitleKey(action.screenName);
+            const key = screenTitleKey(pageEntry(pages, action.screenName)?.name ?? action.screenName);
             const board = await this.ports.board.read(projectId);
-            const card = board.cards.find((item) => item.kind === 'page' && screenTitleKey(item.title) === key);
+            const card = findScreen(board.cards.filter((item) => item.kind === 'page'), (item) => item.title, action.screenName);
             const routed = setPageRoute(pages, key, action.route);
             if (!card && !routed.changed) throw new Error(`No screen called "${action.screenName}" is in the plan or on the board.`);
             if (card) await this.ports.board.setRoute(projectId, card.id, action.route);
@@ -1106,8 +1150,7 @@ export class DesktopStudio {
 
 /** The pages-inventory entry whose name reduces to the same key, or null when the plan does not carry it. */
 function pageEntry(pages: string, name: string): { name: string } | null {
-  const key = screenTitleKey(name);
-  return parsePages(pages).find((page) => screenTitleKey(page.name) === key) ?? null;
+  return findScreen(parsePages(pages), (page) => page.name, name) ?? null;
 }
 
 /** A card id no card on this board already uses. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parsePages, renamePageHeading, renamedPageName, type StudioDesign } from '../packages/contracts/src';
 import { drawnPageNames, foundationLanded, remainingScreens, rowsFromPull, screenLanded, screenPageId, screensToRedraw } from '../apps/desktop/src/renderer/src/design-build';
-import { screenRoutesFromPages } from '../packages/contracts/src';
+import { boardHousekeeping, findScreen, isNonScreenName, screenRoutesFromPages } from '../packages/contracts/src';
 import { withPlanRoutes } from '../apps/desktop/src/main/board';
 import { buildPagePrompt, screenRows, screenTitleKey, type DesignContext, type ScreenRow } from '../apps/desktop/src/renderer/src/flow-diagram';
 
@@ -245,5 +245,58 @@ describe('routes the plan gives each screen', () => {
     const card = (title: string, over: Record<string, unknown> = {}) => ({ id: title, title, kind: 'page', route: '', status: 'ready', ...over }) as never;
     const out = withPlanRoutes([card('Tray menu'), card('Sidebar list'), card('Pricing page', { route: '/custom' }), card('Done tray', { status: 'done' }), card('Elsewhere')], PLAN);
     expect(out.map((c) => [c.kind, c.route])).toEqual([['component', ''], ['page', '/'], ['page', '/custom'], ['page', ''], ['page', '']]);
+  });
+});
+
+describe('one answer to "is this the same screen"', () => {
+  const items = [
+    { name: 'Act-mode proposal — desktop automation step list' },
+    { name: 'Settings — providers and keys (/)' },
+    { name: 'Settings — appearance and layout (/)' },
+    { name: '/pricing — Pricing page' },
+    { name: 'Sidebar list' },
+  ];
+  const find = (name: string) => findScreen(items, (item) => item.name, name)?.name;
+
+  it('matches a name to the subtitled entry it is the stem of, and the other way round', () => {
+    expect(find('Act-mode proposal (/)')).toBe(items[0]!.name);
+    expect(find('Sidebar list — conversations')).toBe('Sidebar list');
+    expect(find('Act-mode proposal — something else')).toBeUndefined();
+    expect(find('Pricing page')).toBe(items[3]!.name);
+  });
+
+  it('refuses a stem that two entries share, rather than picking one', () => {
+    expect(find('Settings')).toBeUndefined();
+    expect(find('Settings — providers and keys')).toBe(items[1]!.name);
+  });
+
+  it('knows the pages that are not screens', () => {
+    expect(isNonScreenName('Design System')).toBe(true);
+    expect(isNonScreenName('Excluded screens')).toBe(true);
+    expect(isNonScreenName('Pricing page')).toBe(false);
+  });
+});
+
+describe('board housekeeping', () => {
+  const card = (over: Record<string, unknown>) => ({ id: 'x', title: 'Card', kind: 'page', status: 'ready', route: '/x', designRef: null, stale: false, ...over }) as never;
+  const PLAN = '## /home — Home\n\n## /pricing — Pricing page\n';
+
+  it('finds leftovers, non-screens, unplanned pages, dead design links, missing routes and stale cards', () => {
+    const findings = boardHousekeeping([
+      card({ id: 'a', title: 'ZZ probe', kind: 'component' }),
+      card({ id: 'b', title: 'Design System' }),
+      card({ id: 'c', title: 'Orphan screen' }),
+      card({ id: 'd', title: 'Home', designRef: 'gone' }),
+      card({ id: 'e', title: 'Pricing page', route: '' }),
+      card({ id: 'f', title: 'Home', stale: true, kind: 'component' }),
+      card({ id: 'g', title: 'Orphan done', status: 'done' }),
+    ], PLAN, ['n1']);
+    const byCode = Object.fromEntries(findings.map((finding) => [finding.code, finding.cards.map((item) => item.id)]));
+    expect(byCode).toEqual({ junk: ['a'], 'not-a-screen': ['b'], 'dead-design-link': ['d'], 'no-plan-entry': ['c'], 'no-route': ['e'], stale: ['f'] });
+  });
+
+  it('does not call a design link dead when no design was ever pulled', () => {
+    const findings = boardHousekeeping([card({ id: 'd', title: 'Home', designRef: 'gone' })], PLAN, null);
+    expect(findings).toEqual([]);
   });
 });

@@ -18,7 +18,7 @@ import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
 import { DesktopMcpRuntime } from './mcp-runtime';
-import { ensureOpenPencilRunning } from './open-pencil-launcher';
+import { ensureOpenPencilRunning, readOpenPencilDiscovery } from './open-pencil-launcher';
 import { DesktopChangeReviewer } from './change-review';
 import { configureCopyCheckpoints } from './copy-checkpoints';
 import { readPlan, writePlan } from './plan-store';
@@ -72,7 +72,7 @@ import { DesktopCodeGuideService } from './code-guide-service';
 import { writeHandoffFiles } from './handoff-files';
 import { StudioStyleReferenceStore } from './style-references';
 import { DesktopEqualizer, type EqualizerService } from './equalizer';
-import type { DesignPorts } from './design-source';
+import { DESIGN_TOOLS, pagesFromReply, type DesignPorts } from './design-source';
 import { createEqualizerPorts } from './equalizer-ports';
 import { SPEC_ROOT, SpecStore } from './spec-store';
 import { DesktopUiCheck, failureSummary, playwrightUiCheckPorts } from './ui-check';
@@ -1029,6 +1029,21 @@ async function startApplication(): Promise<void> {
     board: studioBoard,
     uiCheck,
     openPencil: openPencilPortsEnsuring,
+    // A look that never launches the editor and never switches its page: the discovery file, then `list_pages`.
+    openPencilStatus: async () => {
+      if (!(await readOpenPencilDiscovery())) return { state: 'not-running' as const };
+      const ports = await openPencilPorts();
+      if (!ports) return { state: 'not-configured' as const };
+      try {
+        const reply = await Promise.race([
+          ports.call(DESIGN_TOOLS.pages, {}),
+          new Promise<never>((_resolve, reject) => { setTimeout(() => reject(new Error('timed out')), 5_000); }),
+        ]);
+        return { state: 'running' as const, pages: pagesFromReply(reply) };
+      } catch (error) {
+        return { state: /401|unauthor/i.test(error instanceof Error ? error.message : String(error)) ? 'token-mismatch' as const : 'unreachable' as const };
+      }
+    },
     ensureOpenPencilRunning: ensureOpenPencilReady,
     runDesignAgent,
     cancelDesignAgent: (conversationId) => designBuildDirectApi.cancel(conversationId),

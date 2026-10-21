@@ -288,6 +288,14 @@ describe('extracting actions', () => {
     expect(result.actions).toEqual([]);
     expect(calls).toEqual(['kai_studio_plan_chat']);
   });
+
+  it('says so in the reply when open-pencil could not be read and the last pull stood in', async () => {
+    const { studio } = makeStudio({ kai_studio_plan_chat: JSON.stringify({ reply: 'It is missing a reports screen.', actions: [] }) });
+
+    const result = await studio.planChat('p1', 'What is missing?', 'ask');
+
+    expect(result.reply).toContain('open-pencil could not be read just now');
+  });
 });
 
 describe('applying a plan change set', () => {

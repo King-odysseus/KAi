@@ -10,6 +10,7 @@ import {
   needsScreenCheck,
   readyCards,
   routeFromScreenName,
+  isNonScreenName,
   screenRoutesFromPages,
   screenTitleKey,
   studioBoardSchema,
@@ -173,6 +174,8 @@ export function mergeDesign(
       merged[index] = { ...existing, designRef: component.id, route, updatedAt: at };
       continue;
     }
+    // The component sheet and scratch canvases are drawn pages but not screens; a card for one can never close.
+    if (component.screen && isNonScreenName(component.name)) continue;
     let id = idFor(component.id);
     let suffix = 2;
     while (taken.has(id)) id = `${idFor(component.id)}-${suffix++}`;

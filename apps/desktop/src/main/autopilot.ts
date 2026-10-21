@@ -351,7 +351,10 @@ export class DesktopAutopilot {
     this.record(projectId, owner, 'card', `Working on "${card.title}".`);
 
     let failure = '';
+    // How many attempts were actually made, which is fewer than the limit when the card is given up on early.
+    let attemptsMade = 0;
     for (let attempt = 1; attempt <= input.attemptsPerCard; attempt += 1) {
+      attemptsMade = attempt;
       state.attempt = attempt;
       this.phase(projectId, owner, 'working', `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
       const artifacts = await this.ports.artifactsFor(projectId).catch(() => ({}));
@@ -391,7 +394,12 @@ export class DesktopAutopilot {
 
       const verdict = await this.checkAndClose(projectId, owner, label, card, command, signal);
       if (!verdict.closed) {
+        // The same refusal twice, word for word, means the attempt changed nothing the check looks at. A third turn
+        // costs another ten minutes to hear it again — on 2026-10-19 one such refusal took three turns on each of
+        // twenty-eight cards — so the card is parked with the reason now.
+        const repeated = verdict.failure === failure;
         failure = verdict.failure;
+        if (repeated) break;
         continue;
       }
       state.cardsDone += 1;
@@ -402,12 +410,12 @@ export class DesktopAutopilot {
       return;
     }
 
-    await this.ports.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${input.attemptsPerCard} attempts. ${failure}`.slice(0, 3_900), 'agent');
+    await this.ports.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${attemptsMade < input.attemptsPerCard ? ', the same failure each time' : ''}. ${failure}`.slice(0, 3_900), 'agent');
     await this.forget(projectId);
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
     const explanation = explainBlocked(failure);
-    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${input.attemptsPerCard} attempts; moving on. ${explanation.ask}`);
+    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${attemptsMade < input.attemptsPerCard ? ' with the same failure each time' : ''}; moving on. ${explanation.ask}`);
   }
 
   /**

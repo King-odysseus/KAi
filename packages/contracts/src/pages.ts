@@ -74,6 +74,51 @@ export function screenRoutesFromPages(markdown: string): { routes: Map<string, s
 }
 
 /**
+ * The key of the text before a `—` that is a subtitle, not a route: `Act-mode proposal — steps` gives
+ * `act mode proposal`. Empty when the name has no such dash, or when what leads it is a route (`/pricing — Pricing`),
+ * which `screenTitleKey` already drops.
+ */
+export function subtitleStemKey(name: string): string {
+  const match = /^(.*?)\s*[—–]\s*\S/.exec(name.trim());
+  const head = match?.[1]?.trim() ?? '';
+  if (!head || head.startsWith('/')) return '';
+  return screenTitleKey(head);
+}
+
+/**
+ * The one answer to "is this the same screen", for the plan, the board, the drawing and the chat alike. Names are
+ * written in several places and drift, so the match is tried in a fixed order and each fallback must be unambiguous:
+ * the same key; the name is the stem of exactly one item's subtitled name; or the name carries a subtitle the item
+ * left off. `Settings — providers` and `Settings — appearance` share a stem, so neither is matched by `Settings`.
+ */
+export function findScreen<T>(items: readonly T[], nameOf: (item: T) => string, name: string): T | undefined {
+  const key = screenTitleKey(name);
+  if (!key) return undefined;
+  const exact = items.find((item) => screenTitleKey(nameOf(item)) === key);
+  if (exact) return exact;
+  const byItemStem = items.filter((item) => subtitleStemKey(nameOf(item)) === key);
+  if (byItemStem.length === 1) return byItemStem[0];
+  const own = subtitleStemKey(name);
+  if (own) {
+    const byOwnStem = items.filter((item) => screenTitleKey(nameOf(item)) === own);
+    if (byOwnStem.length === 1) return byOwnStem[0];
+  }
+  return undefined;
+}
+
+/**
+ * Pages a design holds or a plan lists that are not screens: the component sheet, a scratch canvas, the plan's own
+ * notes. They are real and worth keeping, but a card for one can never be built or checked, so none is made for them.
+ */
+const NON_SCREEN_PAGES = new Set([
+  'design system', 'components', 'component library', 'style guide', 'foundation', 'cover', 'scratch', 'playground',
+  'internal only canvas', 'page inventory', 'excluded screens',
+]);
+export function isNonScreenName(name: string): boolean {
+  return NON_SCREEN_PAGES.has(screenTitleKey(name));
+}
+
+/**
  * The route a screen's name carries, when it carries one.
  *
  * open-pencil pages are named the way the pages brief writes them — `/ — Marketing home (sharpsite.ng)`,

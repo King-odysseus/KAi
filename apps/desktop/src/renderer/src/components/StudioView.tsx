@@ -39,6 +39,8 @@ import {
   type StudioStyleReferences,
   type StudioBoard,
   type StudioDesign,
+  type StudioDesignStatus,
+  boardHousekeeping,
   type StudioGuideView,
   type StudioProjectSummary,
   type StudioPlanAction,
@@ -209,6 +211,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [design, setDesign] = useState<StudioDesign | null>(null);
+  const [designStatus, setDesignStatus] = useState<StudioDesignStatus | null>(null);
+  // One automatic pull per change: set when KAI pulls because the editor differs, cleared once they agree again.
+  const autoPullTried = useRef(false);
   // What the design-build loop is on right now, shown beside the button; the ref is read inside the loop itself,
   // since reading state there would only ever see the value the loop closed over, not a later click of Stop.
   const [buildingStep, setBuildingStep] = useState<string | null>(null);
@@ -242,6 +247,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   // detail; the banner needs it here because "is anything waiting on me right now" is a question about the run, not
   // about the board, and the board's own strip cannot answer it.
   const autopilot = useAutopilotStatus(projectId);
+  // Read by the Design tab's background look, which must not pull while the page is busy or Autopilot holds cards.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const autopilotActiveRef = useRef(false);
+  autopilotActiveRef.current = Boolean(autopilot && AUTOPILOT_ACTIVE.has(autopilot.phase));
   const viewedProject = projects.find((project) => project.id === viewedProjectId) ?? null;
   // A name, not the paragraph: the goal is a full statement of what "done" looks like, and using it whole is what
   // filled the header and every design prompt with the entire brief.
@@ -669,8 +679,43 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     if (conversationId === buildStepId.current || conversationId === designChatStepId.current) setBuildEvents((current) => [...current, event]);
   }), []);
 
+  // While the Design tab is open, look at open-pencil every 15 seconds. The look launches nothing and switches no page.
+  // When the editor holds different pages from the last pull — a design restarted or redrawn — pull once, on its own,
+  // unless something else is writing to the board. This is what makes a redrawn design get noticed without a button.
+  useEffect(() => {
+    if (tab !== 'design' || !projectId) return undefined;
+    let cancelled = false;
+    const look = async (): Promise<void> => {
+      if (document.hidden) return;
+      let status: StudioDesignStatus;
+      try { status = unwrap(await window.kaiDesktop.studioDesignStatus(projectId)); } catch { return; }
+      if (cancelled) return;
+      setDesignStatus(status);
+      if (status.state !== 'running' || status.inSync) { autoPullTried.current = false; return; }
+      if (autoPullTried.current || busyRef.current !== null || autopilotActiveRef.current) return;
+      autoPullTried.current = true;
+      try {
+        const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId));
+        if (cancelled) return;
+        setDifferentDocument(pulled.differentDocument);
+        setDesign(pulled.design);
+        setBoard(pulled.board);
+        if (pulled.differentDocument) setNotice('open-pencil holds a different document from the last pull of this project. Press Use this document if you restarted the design.');
+        else setNotice('open-pencil changed, so the design was pulled again and the board updated.');
+      } catch { /* The status line already says what is wrong; a failed background pull must not raise an error. */ }
+    };
+    void look();
+    const timer = window.setInterval(() => { void look(); }, 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [tab, projectId]);
+
   const flowJourneys = useMemo(() => (viewing === 'flows' && viewText ? parseFlows(viewText) : []), [viewing, viewText]);
   const designPages = useMemo(() => (pagesText ? parsePages(pagesText) : []), [pagesText]);
+
+  const housekeeping = useMemo(
+    () => boardHousekeeping(board?.cards ?? [], pagesText ?? '', design && design.components.length > 0 ? design.components.map((component) => component.id) : null),
+    [board, pagesText, design],
+  );
 
   const designRows = useMemo(
     () => screenRows(designPages, design?.components.filter((component) => component.screen).map((component) => component.name) ?? []),
@@ -2857,6 +2902,12 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 <p className="studio-note">
                   Build the design runs the whole list for you: the foundation first, then one screen at a time, checking after each step that open-pencil really holds the screen before moving on. Stop any time — the screens already drawn are kept and Resume carries on from the first one still missing. Copy prompt is still here for running a single step yourself.
                 </p>
+                {designStatus && (
+                  <p className="studio-note" role="status">
+                    {designStatus.message}
+                    {designStatus.pulledAt ? ` Last pulled ${designStatus.pulledAt.slice(0, 16).replace('T', ' ')}.` : ' Nothing has been pulled yet.'}
+                  </p>
+                )}
                 {buildOutcome && <p className="studio-note" role="status">{buildOutcome}</p>}
                 <div className="page-actions">
                   {busy === 'design-build' ? (
@@ -3226,6 +3277,20 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               </button>
             </h2>
             <p className="studio-note">Cards built from the stories. A card reaches done only through a passing check that still matches the working tree.</p>
+            {housekeeping.length > 0 && (
+              <details className="studio-note">
+                <summary>Board housekeeping: {housekeeping.reduce((total, finding) => total + finding.cards.length, 0)} cards to look at</summary>
+                {housekeeping.map((finding) => (
+                  <div key={finding.code}>
+                    <p><strong>{finding.heading}</strong> ({finding.cards.length}). {finding.hint}</p>
+                    <ul className="studio-list">
+                      {finding.cards.slice(0, 12).map((item) => <li key={item.id}>{item.title}</li>)}
+                      {finding.cards.length > 12 && <li>and {finding.cards.length - 12} more</li>}
+                    </ul>
+                  </div>
+                ))}
+              </details>
+            )}
             <div className="page-actions">
               <button type="button" className="primary-button" onClick={() => void plan()} disabled={busy !== null || !readiness?.ready}>
                 {busy === 'plan' ? <Loader2 className="spin" size={14} /> : <LayoutGrid size={14} />} {board?.cards.length ? 'Rebuild the board' : 'Build the board'}

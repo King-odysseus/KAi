@@ -59,7 +59,7 @@ export function parseFlows(markdown: string): FlowJourney[] {
 }
 
 export { parsePages, screenTitleKey, type PageEntry } from '@kai/contracts';
-import { screenTitleKey, type PageEntry } from '@kai/contracts';
+import { isNonScreenName, screenTitleKey, subtitleStemKey, type PageEntry } from '@kai/contracts';
 
 /** One row of the drawing checklist: a screen from the pages list, from open-pencil, or from both. */
 export interface ScreenRow {
@@ -95,20 +95,11 @@ export function screenRows(pages: readonly PageEntry[], drawnNames: readonly str
   const seen = new Set<string>();
   for (const name of drawnNames) {
     const key = screenTitleKey(name);
-    if (listed.has(key) || seen.has(key)) continue;
+    if (listed.has(key) || seen.has(key) || isNonScreenName(name)) continue;
     seen.add(key);
     rows.push({ name, route: '', details: '', inPages: false, drawn: true });
   }
   return rows;
-}
-
-/** The key of the text before a `—` that is a subtitle, not a route: `Act-mode proposal — steps` gives `act mode proposal`. */
-function subtitleStemKey(name: string): string {
-  const match = /^(.*?)\s*[—–]\s*\S/.exec(name.trim());
-  const head = match?.[1]?.trim() ?? '';
-  // A leading `/route —` is a route prefix, which `screenTitleKey` already drops.
-  if (!head || head.startsWith('/')) return '';
-  return screenTitleKey(head);
 }
 
 /** Rows whose name, route or description contains the search text. */

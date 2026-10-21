@@ -47,6 +47,7 @@ export * from './usage';
 export * from './workbench';
 export * from './equalizer';
 export * from './pages';
+export * from './housekeeping';
 export * from './studio-guide';
 export * from './code-guide';
 export * from './attention';

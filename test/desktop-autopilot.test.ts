@@ -190,6 +190,15 @@ describe('desktop autopilot', () => {
     expect(h.prompts).toHaveLength(4);
   });
 
+  it('parks a card the second time it fails in exactly the same way, instead of spending the third attempt', async () => {
+    const h = harness({ cards: [card('a')], check: () => false });
+    await start(h, { attemptsPerCard: 3 });
+    await settled(h);
+    expect(h.board.cards[0]?.status).toBe('blocked');
+    expect(h.prompts).toHaveLength(2);
+    expect(h.board.cards[0]?.notes).toContain('the same failure each time');
+  });
+
   it('puts a card in review rather than done when there is no check to run', async () => {
     const h = harness({ cards: [card('a')] });
     h.ports.suggestCheck = async () => null;

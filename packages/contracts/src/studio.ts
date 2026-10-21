@@ -690,6 +690,24 @@ export const studioDesignPullSchema = z
   .strict();
 export type StudioDesignPull = z.infer<typeof studioDesignPullSchema>;
 
+/**
+ * Whether open-pencil can be read right now, and whether what it holds is what the project last pulled. It is a cheap
+ * look, not a pull: it never launches the editor and never switches the page the person is drawing on.
+ */
+export const studioDesignStatusSchema = z
+  .object({
+    state: z.enum(['running', 'not-running', 'not-configured', 'token-mismatch', 'unreachable']),
+    /** One plain sentence for the Design tab. */
+    message: z.string(),
+    /** Screens the editor reports now, when it answered. */
+    livePages: z.number().int().nonnegative().nullable(),
+    /** Whether the editor's pages are the ones the last pull recorded; null when it could not be asked. */
+    inSync: z.boolean().nullable(),
+    pulledAt: z.string().nullable(),
+  })
+  .strict();
+export type StudioDesignStatus = z.infer<typeof studioDesignStatusSchema>;
+
 /** One prompt handed to a design-build step: the foundation, or one screen.
  * `stepId` is minted by the caller, before the step starts, so it can subscribe to that step's live tool-call
  * events (on the existing `agents:event` channel) ahead of making the call — the response alone would arrive too
