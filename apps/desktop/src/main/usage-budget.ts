@@ -192,7 +192,19 @@ export function summarizeUsage(
   conversationId?: string,
   externalRuns: readonly ExternalPaidRun[] = [],
 ): UsageSummary {
-  const runs = collectPaidRuns(conversations, externalRuns);
+  return summarizeUsageFromRuns(collectPaidRuns(conversations, externalRuns), budget, now, conversationId);
+}
+
+/**
+ * The same summary from paid runs already collected. This is what the usage ledger feeds: a run needs the figures, not
+ * the conversations they came out of, and loading every conversation to get them is what ran KAI out of memory.
+ */
+export function summarizeUsageFromRuns(
+  runs: readonly ExternalPaidRun[],
+  budget: UsageBudget,
+  now: Date,
+  conversationId?: string,
+): UsageSummary {
   const dayStart = startOfLocalDay(now);
   const monthStart = startOfLocalMonth(now);
 

@@ -114,7 +114,8 @@ import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTest
 import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedOnDisk, listProjectFiles, readProjectFile, renameProjectPath, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
 import type { NotificationCenter } from './notification-rules';
-import { summarizeUsage } from './usage-budget';
+import { collectPaidRuns, summarizeUsageFromRuns, type ExternalPaidRun } from './usage-budget';
+import type { UsageLedger } from './usage-ledger';
 import { sharedLoad } from './shared-load';
 
 /** How long runs that start together share one load of the saved conversations when checking the usage budget. */
@@ -194,6 +195,8 @@ export interface IpcContext {
   projects: ProjectStore;
   preferences: ProjectPreferenceStore;
   conversations: ConversationStore;
+  /** What the paid runs have cost, kept up to date as conversations are saved, so no run has to load them all to check the budget. */
+  usageLedger?: UsageLedger;
   credentials: CredentialVault;
   services: DesktopServiceController;
   cognitive1: Cognitive1Client;
@@ -375,7 +378,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       projectId,
       provider: readiness.provider,
       model: readiness.model,
-      conversations: await context.conversations.list(),
+      paidRuns: await conversationPaidRuns(context),
       budget: settings.usageBudget,
       estimatedInputTokens: Math.ceil((question.length + (conversationContext?.length ?? 0)) / 4) + 1_000,
       estimatedOutputTokens: 1_500,
@@ -883,13 +886,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return true;
   });
   handle(context, 'usage:summary', async ({ conversationId }) =>
-    summarizeUsage(
-      await context.conversations.list(),
-      (await context.settings.load()).usageBudget,
-      new Date(),
-      conversationId,
-      await context.learningUsage.runs(),
-    ));
+    summarizeUsageFromRuns(await paidRunsFor(context), (await context.settings.load()).usageBudget, new Date(), conversationId));
   handle(context, 'ui:report-view', async ({ view, conversationId }, request) => {
     const owner = request.ownerWindowId;
     const session = context.windows.get(owner);
@@ -964,7 +961,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       projectId,
       provider: readiness.provider,
       model: readiness.model,
-      conversations: await context.conversations.list(),
+      paidRuns: await conversationPaidRuns(context),
       budget: settings.usageBudget,
       estimatedInputTokens: Math.ceil((JSON.stringify(lesson.response).length + question.length + answer.length) / 4) + 600,
       estimatedOutputTokens: 1_000,
@@ -999,7 +996,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       projectId,
       provider: readiness.provider,
       model: readiness.model,
-      conversations: await context.conversations.list(),
+      paidRuns: await conversationPaidRuns(context),
       budget: settings.usageBudget,
       estimatedInputTokens: Math.ceil((JSON.stringify(lesson.response).length + question.length) / 4) + 500,
       estimatedOutputTokens: 800,
@@ -1040,7 +1037,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
         projectId: request.projectId,
         provider: readiness.provider,
         model: readiness.model,
-        conversations: await context.conversations.list(),
+        paidRuns: await conversationPaidRuns(context),
         budget: settings.usageBudget,
         estimatedInputTokens,
         estimatedOutputTokens: 6_000,
@@ -1087,7 +1084,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       projectId: learningProjectId,
       provider: readiness.provider,
       model: readiness.model,
-      conversations: await context.conversations.list(),
+      paidRuns: await conversationPaidRuns(context),
       budget: settings.usageBudget,
       estimatedInputTokens: Math.ceil((input.topic.length + (input.instructions?.length ?? 0) + (input.baseContent?.length ?? 0)) / 4) + 2_000,
       estimatedOutputTokens: 6_000,
@@ -1546,15 +1543,9 @@ export async function runConversationAgent(
   const executionMode = request.execution ?? 'cli';
   if (executionMode === 'api') {
     // Block mode refuses before anything is saved or sent, so the run never reaches the provider.
-    // Shared with every run starting at about the same time: loading all saved conversations once per run, for eight
-    // runs at once, is what ran KAI's main process out of memory. A figure ten seconds old is as good for a budget.
-    const usage = summarizeUsage(
-      await sharedLoad(context.conversations, () => context.conversations.list(), USAGE_SNAPSHOT_MS),
-      settings.usageBudget,
-      new Date(),
-      conversation.id,
-      await context.learningUsage.runs(),
-    );
+    // From the usage ledger, not from the conversations: loading every saved conversation for each run, with eight runs
+    // starting together, is what ran KAI's main process out of memory.
+    const usage = summarizeUsageFromRuns(await paidRunsFor(context), settings.usageBudget, new Date(), conversation.id);
     if (usage.blockedReason) {
       context.logger.info('internal', 'Direct API run blocked by usage budget', usage.blockedReason);
       return { conversation, status: 'failed', output: '', error: `${usage.blockedReason} Raise the limit or switch to warn mode in Settings to continue.` };
@@ -2099,13 +2090,7 @@ export async function runConversationAgent(
     ownerWindowId ?? undefined,
   );
   if (executionMode === 'api') {
-    const usage = summarizeUsage(
-      await context.conversations.list(),
-      settings.usageBudget,
-      new Date(),
-      conversation.id,
-      await context.learningUsage.runs(),
-    );
+    const usage = summarizeUsageFromRuns(await paidRunsFor(context), settings.usageBudget, new Date(), conversation.id);
     void context.notifications.notifyBudget(conversation.id, usage.limits);
   }
 
@@ -2241,6 +2226,21 @@ async function coordinationPreflight(context: IpcContext, projectId: string, fil
   } catch {
     return { checked: false, conflicts: [] };
   }
+}
+
+/**
+ * What the saved conversations have cost so far: the usage ledger's paid runs when there is one, so nothing is loaded.
+ * Without a ledger (a test, or a build that has not wired one) the conversations are read, once for everyone asking
+ * within a few seconds.
+ */
+async function conversationPaidRuns(context: IpcContext): Promise<ExternalPaidRun[]> {
+  if (context.usageLedger) return context.usageLedger.runs();
+  return collectPaidRuns(await sharedLoad(context.conversations, () => context.conversations.list(), USAGE_SNAPSHOT_MS));
+}
+
+/** Everything spent so far: the saved conversations plus Learning Mode's own usage. */
+async function paidRunsFor(context: IpcContext): Promise<ExternalPaidRun[]> {
+  return [...(await conversationPaidRuns(context)), ...(await context.learningUsage.runs())];
 }
 
 async function globalSearch(context: IpcContext, query: string) {

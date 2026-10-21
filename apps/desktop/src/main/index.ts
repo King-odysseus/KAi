@@ -11,6 +11,7 @@ import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
 import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
 import { installCrashRecord } from './crash-record';
+import { UsageLedger } from './usage-ledger';
 import { startSharedBrowser } from './shared-browser';
 import { AgentTerminal } from './agent-terminal';
 import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
@@ -284,6 +285,8 @@ app.on('before-quit', (event) => {
     .then(() => activeContext?.workflows.dispose())
     .then(() => activeContext?.autopilot.dispose())
     .then(() => activeContext?.auto.dispose())
+    // Written out now rather than on its timer. Nothing depends on it: it is rebuilt from the conversations if lost.
+    .then(() => activeContext?.usageLedger?.flush())
     .then(() => mirrorLoop?.stop())
     .then(() => { if (overwatchApprovalTimer) clearInterval(overwatchApprovalTimer); overwatchApprovalTimer = null; })
     .then(() => { if (routeHousekeepingTimer) clearInterval(routeHousekeepingTimer); routeHousekeepingTimer = null; })
@@ -375,6 +378,21 @@ async function startApplication(): Promise<void> {
   const preferences = new ProjectPreferenceStore(paths.preferences, fileSystem);
   const teamRecord = new TeamRecordStore(path.join(paths.root, 'team-record.json'), fileSystem);
   const conversations = new ConversationStore(paths.conversations, fileSystem);
+  // What the paid runs have cost, followed as conversations are saved. A run checks the budget against this instead of
+  // loading every saved conversation, which at eight runs starting together ran the main process out of memory.
+  const usageLedgerFile = path.join(paths.root, 'usage-ledger.json');
+  const usageLedger = new UsageLedger({
+    stamps: () => conversations.stamps(),
+    read: (id) => conversations.get(id),
+    load: () => readFile(usageLedgerFile, 'utf8').catch(() => null),
+    save: async (text) => { await writeFile(usageLedgerFile, text, 'utf8'); },
+  });
+  conversations.observe({
+    saved: (conversation, stamp) => usageLedger.noteSaved(conversation, stamp),
+    removed: (id) => usageLedger.noteRemoved(id),
+  });
+  // Built in the background on the first launch after this arrives (a few seconds), so no run is the one that waits.
+  void usageLedger.runs().catch((error: unknown) => logger.warn('internal', 'Could not build the usage ledger', messageOf(error)));
   const credentials = new CredentialVault(paths.credentials, fileSystem);
   await repairProviderSettings(settings, credentials);
   const playwrightMcp = await preparePlaywrightMcpSettings(await settings.load());
@@ -746,6 +764,7 @@ async function startApplication(): Promise<void> {
     evals,
     changeReviewer,
     conversations,
+    usageLedger,
     credentials,
     services: serviceController,
     cognitive1,

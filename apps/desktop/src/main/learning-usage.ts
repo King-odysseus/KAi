@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { learningProviderUsageSchema, type LearningProviderUsage } from '@kai/contracts';
 import { AtomicJsonStore, type NodeFileSystem } from '@kai/runtime';
 import type { ConversationRecord, UsageBudget } from '@kai/contracts';
-import { estimateCostUsd, summarizeUsage, type ExternalPaidRun } from './usage-budget';
+import { estimateCostUsd, summarizeUsage, summarizeUsageFromRuns, type ExternalPaidRun } from './usage-budget';
 
 const learningUsageEntrySchema = z
   .object({
@@ -93,7 +93,10 @@ export class LearningBudgetGuard {
     projectId: string;
     provider: string;
     model: string;
-    conversations: readonly ConversationRecord[];
+    /** The conversations the spend is counted from. Give `paidRuns` instead when the runs are already to hand. */
+    conversations?: readonly ConversationRecord[];
+    /** What the saved conversations have already cost, from the usage ledger: no conversation needs loading. */
+    paidRuns?: readonly ExternalPaidRun[];
     budget: UsageBudget;
     estimatedInputTokens: number;
     estimatedOutputTokens: number;
@@ -111,14 +114,11 @@ export class LearningBudgetGuard {
       outputTokens: input.estimatedOutputTokens,
       priced: estimated !== null,
     };
-    const summary = summarizeUsage(
-      input.conversations,
-      input.budget,
-      new Date(),
-      undefined,
-      // Include the prospective request so concurrent calls cannot all clear the same remaining budget.
-      [...(input.externalRuns ?? []), ...this.pending.values(), reservation],
-    );
+    // Include the prospective request so concurrent calls cannot all clear the same remaining budget.
+    const held = [...(input.externalRuns ?? []), ...this.pending.values(), reservation];
+    const summary = input.paidRuns
+      ? summarizeUsageFromRuns([...input.paidRuns, ...held], input.budget, new Date())
+      : summarizeUsage(input.conversations ?? [], input.budget, new Date(), undefined, held);
     if (summary.blockedReason) return { id: '', blockedReason: summary.blockedReason };
     const id = `reservation_${crypto.randomUUID()}`;
     this.pending.set(id, reservation);

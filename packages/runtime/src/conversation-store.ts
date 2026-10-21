@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   conversationRecordV1Schema,
@@ -9,10 +10,23 @@ import { NodeFileSystem } from './node-file-system';
 
 /** Conversation files read at the same time when listing them all. */
 const LIST_BATCH = 16;
+/** Conversation files looked at (not read) at the same time when taking their stamps. */
+const STAMP_BATCH = 32;
+
+/** Follows the conversations as they are saved and removed. */
+export interface ConversationObserver {
+  saved?(conversation: ConversationRecord, stamp: string | null): void;
+  removed?(id: string): void;
+}
+
+function stampFor(info: { mtimeMs: number; size: number }): string {
+  return `${Math.trunc(info.mtimeMs)}:${info.size}`;
+}
 
 export class ConversationStore implements ConversationStorePort {
   private readonly fileSystem: NodeFileSystem;
   private readonly writeTails = new Map<string, Promise<void>>();
+  private readonly observers: ConversationObserver[] = [];
 
   constructor(private readonly directory: string, fileSystem: NodeFileSystem = new NodeFileSystem()) {
     this.fileSystem = fileSystem;
@@ -44,14 +58,60 @@ export class ConversationStore implements ConversationStorePort {
   }
 
   async save(conversation: ConversationRecord): Promise<void> {
-    await this.serialiseWrite(conversation.id, () => this.storeFor(conversation.id).save(conversation));
+    await this.serialiseWrite(conversation.id, async () => {
+      await this.storeFor(conversation.id).save(conversation);
+      // Told inside the ordered write, so a later save of the same conversation is always told after this one.
+      if (this.observers.length > 0) {
+        const stamp = await this.stampOf(conversation.id);
+        for (const observer of this.observers) {
+          try { observer.saved?.(conversation, stamp); } catch { /* an observer must never fail a save */ }
+        }
+      }
+    });
   }
 
   async remove(id: string): Promise<void> {
     await this.serialiseWrite(id, async () => {
       const target = storePath(this.directory, id);
       if (await this.fileSystem.exists(target)) await this.fileSystem.remove(target);
+      for (const observer of this.observers) {
+        try { observer.removed?.(id); } catch { /* an observer must never fail a removal */ }
+      }
     });
+  }
+
+  /** Called after every save and removal, so something derived from the conversations can follow them without reading them all. */
+  observe(observer: ConversationObserver): void {
+    this.observers.push(observer);
+  }
+
+  /**
+   * A cheap fingerprint of one saved conversation: when its file was last written and how big it is. Null when there
+   * is no such file. It changes whenever the file does, which is what lets a derived index notice a change it was not
+   * told about, such as one made by an older build, without reading the file.
+   */
+  async stampOf(id: string): Promise<string | null> {
+    try {
+      return stampFor(await stat(storePath(this.directory, id)));
+    } catch {
+      return null;
+    }
+  }
+
+  /** The stamp of every saved conversation, by id, from the file system alone: nothing is opened or parsed. */
+  async stamps(): Promise<Map<string, string>> {
+    const entries = (await this.fileSystem.list(this.directory).catch(() => [])).filter((entry) => entry.endsWith('.json'));
+    const stamps = new Map<string, string>();
+    for (let start = 0; start < entries.length; start += STAMP_BATCH) {
+      await Promise.all(entries.slice(start, start + STAMP_BATCH).map(async (entry) => {
+        try {
+          stamps.set(path.basename(entry, '.json'), stampFor(await stat(path.join(this.directory, path.basename(entry)))));
+        } catch {
+          // Gone between the listing and now: it simply is not in the answer.
+        }
+      }));
+    }
+    return stamps;
   }
 
   private serialiseWrite(id: string, operation: () => Promise<void>): Promise<void> {
