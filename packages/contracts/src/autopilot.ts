@@ -24,6 +24,16 @@ export const autopilotStartInputSchema = z
     maxCards: z.number().int().min(1).max(500).default(100),
     /** Tries a card gets, the first one included, before it is parked as blocked and Autopilot moves on. */
     attemptsPerCard: z.number().int().min(1).max(5).default(3),
+    /**
+     * How many independent cards are worked side by side, each in its own copy of the project. One is the old,
+     * strictly serial loop. It falls back to one by itself when the project is not a git repository with a commit.
+     */
+    parallelCards: z.number().int().min(1).max(4).default(2),
+    /**
+     * A cheaper model for easy cards' first attempt (a component with no screen of its own, or setup nothing waits
+     * on). A retry, and every other card, uses `model`. Blank uses `model` for everything.
+     */
+    easyModel: z.string().trim().max(100).optional(),
     /** Stops once the run's estimated spend passes this many USD; zero means no limit. */
     maxCostUsd: z.number().min(0).max(10_000).default(0),
     /** Stops after this many hours, resting time included; zero means no limit. */
@@ -105,6 +115,8 @@ export const autopilotStatusSchema = z
     cardTitle: z.string().nullable(),
     /** The conversation the agent is working in right now, so the composer can show it. */
     conversationId: z.string().nullable().default(null),
+    /** Every card being worked at this moment. More than one while cards run side by side; `cardId` is the first. */
+    lanes: z.array(z.object({ cardId: z.string(), cardTitle: z.string(), conversationId: z.string().nullable() }).strict()).max(8).default([]),
     attempt: z.number().int().min(0),
     /** Set while resting: when work picks up again. */
     resumeAt: z.string().nullable(),
@@ -117,6 +129,13 @@ export const autopilotStatusSchema = z
     cardsTotal: z.number().int().min(0),
     /** Cards this run has taken on, counted against `maxCards`. */
     cardsWorked: z.number().int().min(0),
+    /**
+     * Where the run's time went, in milliseconds. Agent time is summed across cards, so with cards side by side it can
+     * exceed the run's own length; that is the point of running them side by side.
+     */
+    timing: z.object({ agentMs: z.number().min(0), checkMs: z.number().min(0), mergeMs: z.number().min(0), restMs: z.number().min(0) }).strict().default({ agentMs: 0, checkMs: 0, mergeMs: 0, restMs: 0 }),
+    /** Minutes left at the pace this run has kept, resting excluded; null until a card has finished. */
+    etaMinutes: z.number().min(0).nullable().default(null),
     costUsd: z.number().min(0),
     startedAt: z.string().nullable(),
     updatedAt: z.string().min(1),

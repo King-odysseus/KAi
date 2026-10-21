@@ -20,6 +20,7 @@ import type {
 } from '@kai/contracts';
 import { boardCardPrompt } from './board-brief';
 import { cooldownMs, detectRateLimit, RequestPacer, sleepAbortable } from './rate-limit';
+import type { ParallelSession } from './parallel-session';
 
 /** Who the board shows as holding a card Autopilot is working, so a restart can pick the same card back up. */
 export const AUTOPILOT_AGENT = 'Autopilot';
@@ -30,6 +31,66 @@ export const AUTOPILOT_AGENT = 'Autopilot';
 const MAX_REST_WITHOUT_PROGRESS_MS = 9 * 3_600_000;
 const LOG_LIMIT = 60;
 const TAIL_CHARS = 2_500;
+
+/** What a card's agent is told about helpers. A card is the unit of work; a helper is a way to finish one faster. */
+const HELPERS_CLI = 'HELPERS:\nIf this card has separate parts that do not touch the same files (for example a page, its tests and its styles), hand them to sub-agents with the Task tool so they run at once, then check their work together before you finish. Do not use helpers for a small card, and never for two parts that edit the same file.';
+const HELPERS_API = 'HELPERS:\nYou can start read-only helpers with the `task` tool to read or search the project in parallel while you work. They cannot edit, so you make every change yourself.';
+
+/** Files that nearly every card touches a little, so two cards naming one of them are likely to clash in a merge. */
+const SHARED_FILES = /\b(package\.json|package-lock\.json|app\.tsx?|main\.tsx?|router|routes?\.tsx?|layout\.tsx?|globals?\.css|index\.css|tailwind\.config|tsconfig\.json|vite\.config)\b/gi;
+const FILE_NAMES = /[\w./@-]+\.(?:tsx?|jsx?|css|scss|json|md|html|py|rs|go|vue|svelte)\b/gi;
+
+/** The files a card is likely to write: the ones its brief names, and the ones its earlier runs changed. */
+export function touchedPaths(card: BoardCard): Set<string> {
+  const text = [card.prompt, card.story, ...card.acceptance].join(' ');
+  const named = [...(text.match(FILE_NAMES) ?? []), ...(text.match(SHARED_FILES) ?? [])];
+  const before = card.runs.at(-1)?.files ?? [];
+  return new Set([...named, ...before].map((file) => file.toLowerCase().replace(/^\.?\//, '')));
+}
+
+/**
+ * The cards to work side by side, taken in queue order. A card joins only if it is not likely to touch a file one
+ * already chosen does: two cards that clash cost a rerun, which is slower than working them one after the other.
+ * A screen card with no route is left out; the serial path parks it without spending a lane on it.
+ */
+export function pickBatch(queue: readonly BoardCard[], lanes: number): BoardCard[] {
+  const chosen: BoardCard[] = [];
+  const taken = new Set<string>();
+  for (const card of queue) {
+    if (chosen.length >= lanes) break;
+    if (unclosableUiCard(card)) continue;
+    const paths = touchedPaths(card);
+    if ([...paths].some((file) => taken.has(file))) continue;
+    chosen.push(card);
+    for (const file of paths) taken.add(file);
+  }
+  return chosen;
+}
+
+/** Cards a cheaper model can take on a first try: a component that lives inside a page, or setup nothing waits on. */
+export function isEasyCard(card: BoardCard, board: readonly BoardCard[]): boolean {
+  if (card.kind === 'component') return card.route.trim() === '';
+  if (card.kind === 'chore') return !board.some((other) => other.dependsOn.includes(card.id));
+  return false;
+}
+
+/**
+ * Whether two check failures are the same complaint. Word for word is too strict: a build prints durations, run ids,
+ * line numbers and absolute paths that differ every time, so a card failing identically still looked like progress.
+ */
+export function sameFailure(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const shape = (text: string): string => text
+    .toLowerCase()
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27}\b/g, '#')
+    .replace(/[a-z]:[\\/][^\s:'"]+|\/[\w.-]+(?:\/[\w.@-]+)+/g, '<path>')
+    .replace(/\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds|m|min)\b/g, '<time>')
+    .replace(/:\d+(?::\d+)?/g, ':<n>')
+    .replace(/\d+/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return shape(a) === shape(b);
+}
 
 export interface AutopilotCheckResult {
   passed: boolean;
@@ -69,9 +130,19 @@ export interface AutopilotPorts {
   checkUi(projectId: string, card: BoardCard): Promise<{ passed: boolean; summary: string }>;
   /** Opens the conversation one card is worked in. `card` is passed so it can be marked as Autopilot's own. */
   createConversation(projectId: string, title: string, card: Pick<BoardCard, 'id' | 'title'>): Promise<ConversationRecord>;
-  runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;
+  /** `options.cwd` runs the agent in a separate copy of the project, which is how cards run side by side. */
+  runAgent(request: AgentRunRequest, ownerWindowId: number, options?: { cwd?: string }): Promise<AgentRunResult>;
   cancelAgent(conversationId: string): boolean;
-  runCheck(projectId: string, command: string, signal: AbortSignal): Promise<AutopilotCheckResult>;
+  /**
+   * Separate copies of the project for cards that run at once. Null from `prepare` when the project is not a git
+   * repository with a commit, and the run carries on one card at a time. Optional, so a test needs no git.
+   */
+  worktrees?: { prepare(projectId: string, key: string): Promise<ParallelSession | null> };
+  /**
+   * `options.cwd` runs the check in a copy of the project instead. Such a check is only an early filter: it is not
+   * filed as verification, and a card is still closed on the check that runs in the project itself.
+   */
+  runCheck(projectId: string, command: string, signal: AbortSignal, options?: { cwd?: string }): Promise<AutopilotCheckResult>;
   suggestCheck(projectId: string): Promise<string | null>;
   /**
    * Starts the project on its dev server and loads the given routes, once the board is finished.
@@ -100,7 +171,18 @@ export interface AutopilotPorts {
 interface ActiveRun {
   controller: AbortController;
   ownerWindowId: number;
-  conversationId: string | null;
+  /** Every conversation an agent is working in right now; more than one while cards run side by side. */
+  conversations: Set<string>;
+  /** When the shared rest ends. Every card waits for it, so a limit one card hit is rested once, not once per card. */
+  restUntil: number;
+  /** Cards this run holds on the board and has not finished with, which is what keeps the journal record alive. */
+  held: number;
+  /** Set once copies of the project could not be made, so the run stops trying and works one card at a time. */
+  serialOnly: boolean;
+  /** Waves run so far, only to give each wave's copies their own folder. */
+  waves: number;
+  /** Cards already done when the run began, so the pace is measured on this run's own work. */
+  doneAtStart: number;
   done: Promise<void>;
   /** The window has been taken to the composer once; it is not dragged back on every card. */
   opened: boolean;
@@ -154,7 +236,7 @@ export class DesktopAutopilot {
     await this.ports.preflight(input.projectId);
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
-    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversationId: null, done: Promise.resolve(), opened: false, blocked: [], completed: 0 };
+    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0 };
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
@@ -173,7 +255,7 @@ export class DesktopAutopilot {
     const active = this.runs.get(projectId);
     if (!active) return this.status(projectId);
     active.controller.abort(new Error('Autopilot was stopped.'));
-    if (active.conversationId) this.ports.cancelAgent(active.conversationId);
+    for (const conversationId of active.conversations) this.ports.cancelAgent(conversationId);
     await active.done;
     return this.status(projectId);
   }
@@ -212,14 +294,16 @@ export class DesktopAutopilot {
     const record = await this.ports.journal?.read(studioProjectId);
     if (!record) return false;
     const board = await this.ports.board(studioProjectId);
-    const card = board.cards.find((item) => item.id === record.cardId);
+    // Every card the run held, not only the one the record names: with cards side by side the record keeps the first,
+    // and the others would otherwise stay claimed by an Autopilot that no longer exists.
+    const held = board.cards.filter((item) => item.status === 'inProgress' && (item.id === record.cardId || item.claimedBy === AUTOPILOT_AGENT)).map((item) => item.id);
     // The record is cleared in the same breath as the card leaving the run's hands, but a close can land between the
     // two. A card the run actually finished is done, and moving it back would be undoing real work to tidy up a file.
-    if (!card || card.status !== 'inProgress') {
+    if (held.length === 0) {
       await this.forget(studioProjectId);
       return false;
     }
-    const restored = await this.putBack(studioProjectId, [record.cardId], 'Put back in the queue after an Autopilot run stopped holding it.');
+    const restored = await this.putBack(studioProjectId, held, 'Put back in the queue after an Autopilot run stopped holding it.');
     await this.forget(studioProjectId);
     return restored > 0;
   }
@@ -248,13 +332,21 @@ export class DesktopAutopilot {
         // review for a person and every card behind it waits on that.
         if (!command) command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
         if (command && (await this.settleReviewed(input, label, board, command, active))) continue;
-        const card = board.cards.find((item) => item.status === 'inProgress' && item.claimedBy === label) ?? readyCards(board)[0];
+        // Cards this run already holds come first, so a restart picks up every one of them, not only the first.
+        const queue = [...board.cards.filter((item) => item.status === 'inProgress' && item.claimedBy === label), ...readyCards(board)];
+        const card = queue[0];
         if (!card) {
           await this.proveDev(projectId, owner, board, active);
           const summary = this.boardSummary(board);
           const dev = this.state(projectId).devCheck;
           return this.settle(projectId, owner, 'finished', dev ? `${summary} ${dev.summary}` : summary);
         }
+
+        // Independent cards: everything in the queue is ready or already held, so none of them waits on another. A
+        // screen card with no route is left to the serial path, which parks it without spending a lane on it.
+        const lanes = this.ports.worktrees && !active.serialOnly ? Math.min(input.parallelCards, input.maxCards - state.cardsWorked) : 1;
+        const batch = lanes > 1 ? pickBatch(queue, lanes) : [];
+        if (batch.length > 1 && command && (await this.workWave(input, settings, label, batch, command, active))) continue;
 
         state.cardsWorked += 1;
         await this.workCard(input, settings, label, card, command, active);
@@ -319,7 +411,16 @@ export class DesktopAutopilot {
   }
 
   /** One card, from claim to done or blocked. Rests happen inside; they never use up one of the card's attempts. */
-  private async workCard(input: AutopilotStartInput, settings: AppSettings, label: string, card: BoardCard, command: string, active: ActiveRun): Promise<void> {
+  private async workCard(
+    input: AutopilotStartInput,
+    settings: AppSettings,
+    label: string,
+    card: BoardCard,
+    command: string,
+    active: ActiveRun,
+    /** Set when a wave already holds the card; `first` is its first attempt, run in a separate copy of the project. */
+    carried?: { first?: { conversationId: string; result: { failed: boolean; error: string } } },
+  ): Promise<void> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
     const signal = active.controller.signal;
@@ -333,22 +434,7 @@ export class DesktopAutopilot {
       this.record(projectId, owner, 'warn', `"${card.title}" is blocked: it is a screen card with no route, so its check can never pass.`);
       return;
     }
-    state.cardId = card.id;
-    state.cardTitle = card.title;
-    await this.ports.claimCard(projectId, card.id, label);
-    // Written before the log line, not after: the line's own `touch` would have nothing to attach itself to, and the
-    // report of an interrupted run would name the previous card's work for as long as this one took to say anything.
-    // From here until the card leaves the board, a close leaves a card in this run's hands — and this is what says so.
-    await this.keep((journal) => journal.begin({
-      studioProjectId: projectId,
-      cardId: card.id,
-      cardTitle: card.title,
-      startedAt: new Date(this.ports.now()).toISOString(),
-      updatedAt: new Date(this.ports.now()).toISOString(),
-      lastMessage: `Working on "${card.title}".`,
-      start: input,
-    }));
-    this.record(projectId, owner, 'card', `Working on "${card.title}".`);
+    if (!carried) await this.holdCard(input, label, card, active);
 
     let failure = '';
     // How many attempts were actually made, which is fewer than the limit when the card is given up on early.
@@ -356,23 +442,27 @@ export class DesktopAutopilot {
     for (let attempt = 1; attempt <= input.attemptsPerCard; attempt += 1) {
       attemptsMade = attempt;
       state.attempt = attempt;
-      this.phase(projectId, owner, 'working', `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
-      const artifacts = await this.ports.artifactsFor(projectId).catch(() => ({}));
-      const base = `${boardCardPrompt(card, artifacts)}\n\nAUTOPILOT BLOCKER POLICY:\n${input.blockerPolicy === 'continue-and-use-decisions'
-        ? 'If this card is blocked, read the approved project decisions above and apply one only when its conditions genuinely match. Report which decision you applied and continue independent cards.'
-        : 'If this card is blocked, report the exact blocker and a practical next step. Do not wait for the user; independent cards must continue.'}`;
-      const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
-      active.conversationId = conversation.id;
-      state.conversationId = conversation.id;
-      this.ports.announce(owner, state);
-      if (!active.opened) {
-        active.opened = true;
-        this.ports.openConversation(owner, conversation);
+      const prior = attempt === 1 ? carried?.first : undefined;
+      if (!prior) this.phase(projectId, owner, 'working', `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
+      let run: { failed: boolean; error: string };
+      if (prior) {
+        // The first attempt already ran, in a copy of the project, alongside the other cards of its wave.
+        run = prior.result;
+      } else {
+        const base = await this.cardPrompt(input, card);
+        const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
+        this.trackLane(active, card, conversation.id);
+        if (!active.opened) {
+          active.opened = true;
+          this.ports.openConversation(owner, conversation);
+        }
+        const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
+        try {
+          run = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, base, failure, active, model ? { model } : {}));
+        } finally {
+          this.untrackLane(active, card.id, conversation.id);
+        }
       }
-
-      const run = await this.runResting(input, settings, conversation.id, base, failure, active);
-      active.conversationId = null;
-      state.conversationId = null;
       await this.ports.recordCardRun(projectId, card.id, {
         agent: input.execution === 'api' ? 'api' : (input.agent ?? settings.defaultAgent),
         model: input.model ?? null,
@@ -386,7 +476,7 @@ export class DesktopAutopilot {
       }
       if (!command) {
         await this.ports.moveCard(projectId, card.id, 'review', NO_CHECK_NOTE, 'agent');
-        await this.forget(projectId);
+        await this.endCard(projectId, active);
         this.record(projectId, owner, 'warn', `"${card.title}" is in review: there is no check command.`);
         state.restStreak = 0;
         return;
@@ -397,25 +487,201 @@ export class DesktopAutopilot {
         // The same refusal twice, word for word, means the attempt changed nothing the check looks at. A third turn
         // costs another ten minutes to hear it again — on 2026-10-19 one such refusal took three turns on each of
         // twenty-eight cards — so the card is parked with the reason now.
-        const repeated = verdict.failure === failure;
+        const repeated = sameFailure(verdict.failure, failure);
         failure = verdict.failure;
         if (repeated) break;
         continue;
       }
       state.cardsDone += 1;
       state.restStreak = 0;
-      await this.forget(projectId);
+      await this.endCard(projectId, active);
       this.record(projectId, owner, 'card', `"${card.title}" is done.`);
       this.counts(projectId, await this.ports.board(projectId));
       return;
     }
 
     await this.ports.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${attemptsMade < input.attemptsPerCard ? ', the same failure each time' : ''}. ${failure}`.slice(0, 3_900), 'agent');
-    await this.forget(projectId);
+    await this.endCard(projectId, active);
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
     const explanation = explainBlocked(failure);
     this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${attemptsMade < input.attemptsPerCard ? ' with the same failure each time' : ''}; moving on. ${explanation.ask}`);
+  }
+
+  /** The cheaper model for an easy card's first attempt, when the run names one. Undefined means the run's own model. */
+  private async firstTryModel(input: AutopilotStartInput, card: BoardCard): Promise<string | undefined> {
+    if (!input.easyModel) return undefined;
+    const board = await this.ports.board(input.projectId).catch(() => null);
+    return board && isEasyCard(card, board.cards) ? input.easyModel : undefined;
+  }
+
+  /** The prompt a card's agent starts from: the card, the blocker policy, and how it may use helpers. */
+  private async cardPrompt(input: AutopilotStartInput, card: BoardCard): Promise<string> {
+    const artifacts = await this.ports.artifactsFor(input.projectId).catch(() => ({}));
+    return `${boardCardPrompt(card, artifacts)}\n\nAUTOPILOT BLOCKER POLICY:\n${input.blockerPolicy === 'continue-and-use-decisions'
+      ? 'If this card is blocked, read the approved project decisions above and apply one only when its conditions genuinely match. Report which decision you applied and continue independent cards.'
+      : 'If this card is blocked, report the exact blocker and a practical next step. Do not wait for the user; independent cards must continue.'}\n\n${input.execution === 'api' ? HELPERS_API : HELPERS_CLI}`;
+  }
+
+  /**
+   * Takes a card into this run's hands: claimed on the board, remembered in the journal, announced in the log.
+   *
+   * The journal holds one record per project, so only the first card held starts it; `held` is what keeps it on disk
+   * until the last card is let go, instead of the first card to finish wiping the record of the others.
+   */
+  private async holdCard(input: AutopilotStartInput, label: string, card: BoardCard, active: ActiveRun, alongside = 0): Promise<void> {
+    const { projectId } = input;
+    const state = this.state(projectId);
+    if (!state.cardId) {
+      state.cardId = card.id;
+      state.cardTitle = card.title;
+    }
+    await this.ports.claimCard(projectId, card.id, label);
+    active.held += 1;
+    // Written before the log line, not after: the line's own `touch` would have nothing to attach itself to, and the
+    // report of an interrupted run would name the previous card's work for as long as this one took to say anything.
+    // From here until the card leaves the board, a close leaves a card in this run's hands — and this is what says so.
+    if (active.held === 1) {
+      await this.keep((journal) => journal.begin({
+        studioProjectId: projectId,
+        cardId: card.id,
+        cardTitle: card.title,
+        startedAt: new Date(this.ports.now()).toISOString(),
+        updatedAt: new Date(this.ports.now()).toISOString(),
+        lastMessage: `Working on "${card.title}".`,
+        start: input,
+      }));
+    }
+    this.record(projectId, active.ownerWindowId, 'card', `Working on "${card.title}"${alongside > 0 ? `, alongside ${alongside} other card${alongside === 1 ? '' : 's'}` : ''}.`);
+  }
+
+  /** The card is out of this run's hands. The journal record goes only when the last held card does. */
+  private async endCard(projectId: string, active: ActiveRun): Promise<void> {
+    active.held = Math.max(0, active.held - 1);
+    if (active.held === 0) await this.forget(projectId);
+  }
+
+  /** Shows a card's conversation as one of the places an agent is working, and as the one to stop on Stop. */
+  private trackLane(active: ActiveRun, card: Pick<BoardCard, 'id' | 'title'>, conversationId: string): void {
+    const state = this.state(this.projectOf(active));
+    active.conversations.add(conversationId);
+    state.lanes = [...state.lanes.filter((lane) => lane.cardId !== card.id), { cardId: card.id, cardTitle: card.title, conversationId }];
+    state.cardId = state.lanes[0]?.cardId ?? card.id;
+    state.cardTitle = state.lanes[0]?.cardTitle ?? card.title;
+    state.conversationId = state.lanes[0]?.conversationId ?? conversationId;
+    this.ports.announce(active.ownerWindowId, state);
+  }
+
+  private untrackLane(active: ActiveRun, cardId: string, conversationId: string): void {
+    const state = this.state(this.projectOf(active));
+    active.conversations.delete(conversationId);
+    state.lanes = state.lanes.filter((lane) => lane.cardId !== cardId);
+    state.conversationId = state.lanes[0]?.conversationId ?? null;
+    this.ports.announce(active.ownerWindowId, state);
+  }
+
+  private projectOf(active: ActiveRun): string {
+    for (const [projectId, run] of this.runs) if (run === active) return projectId;
+    throw new Error('Autopilot has no project for this run.');
+  }
+
+  /**
+   * Works several independent cards at once. Each runs its first attempt in its own copy of the project, so they
+   * never write over one another; the copies are then merged into the project and the cards are checked one at a
+   * time, because a check needs the real project and one dev server. A card whose changes clashed with another's
+   * runs again on its own, on top of the merged work. Returns false when copies cannot be made, so the caller carries
+   * on one card at a time.
+   */
+  private async workWave(input: AutopilotStartInput, settings: AppSettings, label: string, cards: readonly BoardCard[], command: string, active: ActiveRun): Promise<boolean> {
+    const { projectId } = input;
+    const owner = active.ownerWindowId;
+    const state = this.state(projectId);
+    active.waves += 1;
+    let session: ParallelSession | null = null;
+    try {
+      session = (await this.ports.worktrees?.prepare(projectId, `autopilot-${projectId}-${active.waves}`)) ?? null;
+    } catch (error) {
+      this.record(projectId, owner, 'warn', `Cards will run one at a time: separate copies of the project could not be made (${error instanceof Error ? error.message : String(error)}).`);
+    }
+    if (!session) {
+      active.serialOnly = true;
+      this.record(projectId, owner, 'info', 'Cards run one at a time: working side by side needs a git project with at least one commit.');
+      return false;
+    }
+    const open = session;
+    const signal = active.controller.signal;
+    this.phase(projectId, owner, 'working', `Working on ${cards.length} cards side by side: ${cards.map((card) => `"${card.title}"`).join(', ')}.`);
+    state.cardsWorked += cards.length;
+
+    type Lane = { card: BoardCard; conversationId: string | null; result: { failed: boolean; error: string }; commit?: string };
+    const lanes: Lane[] = [];
+    const clashed = new Set<string>();
+    try {
+      const settled = await Promise.allSettled(cards.map(async (card): Promise<Lane> => {
+        await this.holdCard(input, label, card, active, cards.length - 1);
+        let folder: string;
+        try {
+          folder = await open.checkout(card.id);
+        } catch (error) {
+          // No copy for this card: it is worked on its own afterwards, in the project, like any other card.
+          return { card, conversationId: null, result: { failed: true, error: `A separate copy of the project could not be made: ${error instanceof Error ? error.message : String(error)}` } };
+        }
+        const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
+        this.trackLane(active, card, conversation.id);
+        if (!active.opened) {
+          active.opened = true;
+          this.ports.openConversation(owner, conversation);
+        }
+        try {
+          const prompt = await this.cardPrompt(input, card);
+          const model = await this.firstTryModel(input, card);
+          let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, '', active, { cwd: folder, ...(model ? { model } : {}) }));
+          // The build check, run in the card's own copy while the other cards are still working. A failure here is
+          // handed straight back to the agent, which is cheaper than finding out after the merge and the queue for the
+          // project's one check. It is a filter only: the card is still closed on the check that runs in the project.
+          for (let tried = 1; command && !result.failed && tried < Math.min(2, input.attemptsPerCard); tried += 1) {
+            const early = await this.timed(projectId, 'checkMs', () => this.ports.runCheck(projectId, command, signal, { cwd: folder })).catch(() => null);
+            if (!early || early.passed) break;
+            this.record(projectId, owner, 'check', `Check failed for "${card.title}" in its copy; trying again before merging.`);
+            const failure = `The check \`${command}\` failed${early.exitCode === null ? '' : ` (exit ${early.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${early.output.slice(-TAIL_CHARS)}`;
+            result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, failure, active, { cwd: folder }));
+          }
+          const commit = result.failed ? undefined : await open.commit(card.id, `Autopilot: ${card.title}`.slice(0, 120));
+          return { card, conversationId: conversation.id, result, ...(commit ? { commit } : {}) };
+        } finally {
+          this.untrackLane(active, card.id, conversation.id);
+        }
+      }));
+      // A Stop, or a provider that never recovered, ends the whole run: there is nothing left to merge it into.
+      for (const outcome of settled) if (outcome.status === 'rejected') throw outcome.reason;
+      for (const outcome of settled) if (outcome.status === 'fulfilled') lanes.push(outcome.value);
+
+      const finished = lanes.filter((lane) => lane.commit);
+      if (finished.length > 0) {
+        this.phase(projectId, owner, 'checking', `Merging the work of ${finished.length} card${finished.length === 1 ? '' : 's'} into the project.`);
+        try {
+          const merged = await this.timed(projectId, 'mergeMs', () => open.integrate(finished.map((lane) => ({ stepId: lane.card.id, commit: lane.commit ?? '' }))));
+          for (const conflict of merged.conflicts) clashed.add(conflict.stepId);
+          if (merged.skipped.length > 0) this.record(projectId, owner, 'warn', `${merged.skipped.length} file${merged.skipped.length === 1 ? ' was' : 's were'} changed in the project while the cards worked, so the project's version was kept: ${merged.skipped.slice(0, 5).join(', ')}.`);
+        } catch (error) {
+          // Nothing was applied, so every card that had work to merge does it again, one at a time, in the project.
+          this.record(projectId, owner, 'warn', `The cards' work could not be merged (${error instanceof Error ? error.message : String(error)}); each runs again on its own.`);
+          for (const lane of finished) clashed.add(lane.card.id);
+        }
+        if (clashed.size > 0) this.record(projectId, owner, 'info', `${clashed.size} card${clashed.size === 1 ? '' : 's'} changed the same files as another, so ${clashed.size === 1 ? 'it runs' : 'they run'} again on top of the merged work.`);
+      }
+    } finally {
+      await open.dispose().catch(() => undefined);
+    }
+
+    // The copies are gone and the project holds the merged work. Checks, retries and closing are one card at a time.
+    for (const lane of lanes) {
+      if (signal.aborted) break;
+      // A card with no copy, or one that clashed, has no first attempt to carry: it starts over in the project.
+      const first = lane.conversationId && !clashed.has(lane.card.id) ? { conversationId: lane.conversationId, result: lane.result } : undefined;
+      await this.workCard(input, settings, label, lane.card, command, active, first ? { first } : {});
+    }
+    return true;
   }
 
   /**
@@ -424,7 +690,7 @@ export class DesktopAutopilot {
    */
   private async checkAndClose(projectId: string, owner: number, label: string, card: BoardCard, command: string, signal: AbortSignal): Promise<{ closed: boolean; failure: string }> {
     this.phase(projectId, owner, 'checking', `Checking "${card.title}".`);
-    const check = await this.ports.runCheck(projectId, command, signal);
+    const check = await this.timed(projectId, 'checkMs', () => this.ports.runCheck(projectId, command, signal));
     if (!check.passed || !check.runId) {
       this.record(projectId, owner, 'check', `Check failed for "${card.title}".`);
       return { closed: false, failure: `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}` };
@@ -497,12 +763,16 @@ export class DesktopAutopilot {
     base: string,
     failure: string,
     active: ActiveRun,
+    options: { cwd?: string; model?: string } = {},
   ): Promise<{ failed: boolean; error: string }> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
     let interrupted = false;
     let restedMs = 0;
     for (;;) {
+      // A rest another card started is everyone's: the limit is the provider's, not the card's.
+      const shared = active.restUntil - this.ports.now();
+      if (shared > 0) await sleepAbortable(shared, active.controller.signal);
       const prompt = [
         base,
         failure ? `\n\nThe previous attempt did not pass.\n${failure}` : '',
@@ -519,8 +789,8 @@ export class DesktopAutopilot {
           route: settings.defaultRoute,
           autonomy: settings.defaultAutonomy,
           freshSession: !interrupted,
-          ...(input.model ? { model: input.model } : {}),
-        }, owner);
+          ...((options.model ?? input.model) ? { model: options.model ?? input.model } : {}),
+        }, owner, options.cwd ? { cwd: options.cwd } : undefined);
       } catch (error) {
         if (active.controller.signal.aborted) throw error;
         thrown = error;
@@ -537,6 +807,14 @@ export class DesktopAutopilot {
 
       interrupted = true;
       const state = this.state(projectId);
+      const now = this.ports.now();
+      if (active.restUntil > now) {
+        // Another card hit the same limit a moment ago and is already resting. Joining it keeps the streak, and so
+        // the length of the next rest, from growing once per card instead of once per limit.
+        restedMs += active.restUntil - now;
+        await sleepAbortable(active.restUntil - now, active.controller.signal);
+        continue;
+      }
       state.restStreak += 1;
       state.restsTotal += 1;
       const wait = cooldownMs(state.restStreak, limited.retryAfterMs, limited.window);
@@ -544,6 +822,7 @@ export class DesktopAutopilot {
       if (restedMs > MAX_REST_WITHOUT_PROGRESS_MS) {
         throw new Error(`The provider is still refusing after ${formatDuration(MAX_REST_WITHOUT_PROGRESS_MS)} of rest. It may be out of quota or credit. Check the account, then start Autopilot again; the board keeps its place.`);
       }
+      active.restUntil = now + wait;
       await this.rest(projectId, owner, state, wait, message, active.controller.signal);
     }
   }
@@ -585,9 +864,11 @@ export class DesktopAutopilot {
     const clock = resumeAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     this.phase(projectId, owner, 'cooling', `The provider's limit is reached. Resting until ${clock}, then carrying on with "${state.cardTitle ?? 'the card'}".`);
     this.record(projectId, owner, 'rest', `Rate limited. Resting ${formatDuration(ms)} (rest ${state.restStreak} in a row).`);
+    const began = this.ports.now();
     try {
       await sleepAbortable(ms, signal);
     } finally {
+      state.timing.restMs += Math.max(0, this.ports.now() - began);
       state.resumeAt = null;
       state.restReason = null;
     }
@@ -621,6 +902,9 @@ export class DesktopAutopilot {
       cardId: null,
       cardTitle: null,
       conversationId: null,
+      lanes: [],
+      timing: { agentMs: 0, checkMs: 0, mergeMs: 0, restMs: 0 },
+      etaMinutes: null,
       attempt: 0,
       resumeAt: null,
       restReason: null,
@@ -644,6 +928,33 @@ export class DesktopAutopilot {
     into.cardsTotal = board.cards.length;
     into.cardsDone = board.cards.filter((card) => card.status === 'done').length;
     into.cardsBlocked = board.cards.filter((card) => card.status === 'blocked').length;
+    into.etaMinutes = this.estimate(projectId, board, into);
+  }
+
+  /**
+   * Minutes left at the pace this run has actually kept. Wall-clock time with rests taken out, over the cards this run
+   * finished, so cards side by side count for what they bought. Null until a card is done, because one card's time
+   * says nothing about the rest, and null once nothing is left to do.
+   */
+  private estimate(projectId: string, board: StudioBoard, state: AutopilotStatus): number | null {
+    const active = this.runs.get(projectId);
+    if (!active || !state.startedAt) return null;
+    const finished = state.cardsDone - active.doneAtStart;
+    const remaining = board.cards.filter((card) => card.status === 'backlog' || card.status === 'ready' || card.status === 'inProgress').length;
+    if (finished < 1 || remaining < 1) return null;
+    const working = this.ports.now() - new Date(state.startedAt).getTime() - state.timing.restMs;
+    return Math.max(1, Math.round((working / finished) * remaining / 60_000));
+  }
+
+  /** Adds the time `work` took to one of the run's buckets, whether it finishes or throws. */
+  private async timed<T>(projectId: string, bucket: keyof AutopilotStatus['timing'], work: () => Promise<T>): Promise<T> {
+    const began = this.ports.now();
+    try {
+      return await work();
+    } finally {
+      const state = this.statuses.get(projectId);
+      if (state) state.timing[bucket] += Math.max(0, this.ports.now() - began);
+    }
   }
 
   private state(projectId: string): AutopilotStatus {
@@ -663,6 +974,7 @@ export class DesktopAutopilot {
     const state = this.state(projectId);
     state.cardId = null;
     state.cardTitle = null;
+    state.lanes = [];
     state.resumeAt = null;
     state.restReason = null;
     this.record(projectId, owner, phase === 'failed' ? 'warn' : 'info', message);

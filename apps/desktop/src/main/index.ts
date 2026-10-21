@@ -1160,9 +1160,17 @@ async function startApplication(): Promise<void> {
     // see the rest of the app around. And in the background: showing it switched the window to the conversation,
     // which closed the Studio under a design build that was drawing and cancelled it without a word.
     openConversation: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true, true),
-    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    runAgent: (request, ownerWindowId, options) => runConversationAgent(ipcContext!, request, ownerWindowId, options),
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
-    runCheck: async (projectId, command, signal) => {
+    // Cards that do not wait on one another run side by side, each in its own copy of the project.
+    worktrees: { prepare: async (projectId, key) => createParallelSession(await studioProjectRoot(projectId), key) },
+    runCheck: async (projectId, command, signal, options) => {
+      // In a card's own copy the check is an early filter only: it is not filed, because the board's done rule reads
+      // the verification run of the project itself.
+      if (options?.cwd) {
+        const early = await runCheckCommand(options.cwd, command, signal);
+        return { passed: early.exitCode === 0, exitCode: early.exitCode, output: early.output, runId: null };
+      }
       const projectPath = await studioProjectRoot(projectId);
       const check = await runCheckCommand(projectPath, command, signal);
       const run = await recordVerification(ipcContext!.verification, projectId, projectPath, check).catch(() => null);

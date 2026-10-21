@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type ArtifactKind, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type DevCheckResult, type StudioBoard } from '@kai/contracts';
-import { DesktopAutopilot, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
+import { DesktopAutopilot, isEasyCard, pickBatch, sameFailure, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
 
 const NOW = '2026-10-01T00:00:00.000Z';
 
@@ -21,6 +21,10 @@ interface Harness {
   kept: Map<string, AutopilotRunRecord>;
   /** Every dev proof the run asked for, in order, with the routes it was given. */
   devChecks: Array<{ routes: readonly string[] }>;
+  /** The folder each agent run was given, in order; undefined is the project itself. */
+  cwds: Array<string | undefined>;
+  /** The most agent runs that were in separate copies at the same moment. */
+  atOnce(): number;
 }
 
 function harness(options: {
@@ -31,7 +35,13 @@ function harness(options: {
   artifacts?: Partial<Record<ArtifactKind, string>>;
   /** The dev proof's answer. Defaults to "it came up", so the ordinary tests are not about this. */
   devCheck?: (routes: readonly string[]) => DevCheckResult;
+  /** Gives the run separate copies of the project, as a git project would. `clash` names the cards whose merge fails. */
+  parallel?: { clash?: string[]; unavailable?: boolean };
 }): Harness {
+  let conversationCount = 0;
+  const cwds: Array<string | undefined> = [];
+  let active = 0;
+  let mostAtOnce = 0;
   const board: StudioBoard = { schemaVersion: 1, cards: options.cards };
   const prompts: string[] = [];
   const devChecks: Array<{ routes: readonly string[] }> = [];
@@ -66,15 +76,36 @@ function harness(options: {
     setCheck: async (_p, id, check) => { find(id).check = check; return find(id); },
     moveCard: async (_p, id, status, note, by = 'agent') => { const item = find(id); item.status = status; item.notes = note; item.movedBy = by; item.claimedBy = null; promote(); return item; },
     checkUi: async () => ({ passed: true, summary: '' }),
-    createConversation: async () => ({ id: `conversation-${prompts.length}` }) as never,
-    runAgent: async (request) => {
+    createConversation: async () => ({ id: `conversation-${(conversationCount += 1)}` }) as never,
+    runAgent: async (request, _owner, runOptions) => {
       agentCalls += 1;
       prompts.push(request.prompt);
+      cwds.push(runOptions?.cwd);
       const outcome = options.agent?.(agentCalls, request) ?? {};
+      // Only the copies count as "at once": a card in the project is the serial path, whatever else is running.
+      if (runOptions?.cwd) {
+        active += 1;
+        mostAtOnce = Math.max(mostAtOnce, active);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        active -= 1;
+      }
       if (outcome instanceof Error) throw outcome;
       return { conversation: {} as never, status: 'completed', output: 'ok', ...outcome };
     },
     cancelAgent: () => true,
+    ...(options.parallel ? {
+      worktrees: {
+        prepare: async () => (options.parallel?.unavailable ? null : {
+          checkout: async (id: string) => `/copies/${id}`,
+          commit: async (id: string) => `commit-${id}`,
+          integrate: async (commits: ReadonlyArray<{ stepId: string }>) => ({
+            conflicts: commits.filter((item) => options.parallel?.clash?.includes(item.stepId)).map((item) => ({ stepId: item.stepId, files: ['src/shared.ts'] })),
+            applied: [], skipped: [], integrationCommit: 'merged',
+          }),
+          dispose: async () => undefined,
+        }),
+      },
+    } : {}),
     runCheck: async () => {
       checkCalls += 1;
       const passed = options.check?.(checkCalls) ?? true;
@@ -98,7 +129,7 @@ function harness(options: {
     journal,
     now: () => Date.now(),
   };
-  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept, devChecks };
+  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept, devChecks, cwds, atOnce: () => mostAtOnce };
 }
 
 const start = (h: Harness, overrides: Record<string, unknown> = {}) =>
@@ -474,5 +505,168 @@ describe('desktop autopilot', () => {
     const final = await settled(h);
     const opening = final.log.slice(0, 2).map((entry) => entry.text).join(' ');
     expect(opening).toContain('never commits and never deploys');
+  });
+
+  describe('cards at once', () => {
+    it('works independent cards side by side, each in its own copy, then closes them all', async () => {
+      const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {} });
+      await start(h, { parallelCards: 3 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.atOnce()).toBe(3);
+      expect(h.cwds.slice(0, 3).sort()).toEqual(['/copies/a', '/copies/b', '/copies/c']);
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+      // Each card's agent ran once: the first attempt carried into the check rather than being run again.
+      expect(h.prompts).toHaveLength(3);
+      expect(final.lanes).toEqual([]);
+      expect(h.kept.size).toBe(0);
+    });
+
+    it('never runs a card beside the card it waits on', async () => {
+      const h = harness({ cards: [card('a'), card('b', ['a']), card('c', ['b'])], parallel: {} });
+      await start(h, { parallelCards: 3 });
+      await settled(h);
+      expect(h.atOnce()).toBe(0);
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+    });
+
+    it('runs one card at a time when the setting is 1, even with copies available', async () => {
+      const h = harness({ cards: [card('a'), card('b')], parallel: {} });
+      await start(h, { parallelCards: 1 });
+      await settled(h);
+      expect(h.cwds.every((cwd) => cwd === undefined)).toBe(true);
+    });
+
+    it('falls back to one card at a time, and says why, when the project cannot be copied', async () => {
+      const h = harness({ cards: [card('a'), card('b')], parallel: { unavailable: true } });
+      await start(h, { parallelCards: 2 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.cwds.every((cwd) => cwd === undefined)).toBe(true);
+      expect(final.log.some((entry) => entry.text.includes('one at a time'))).toBe(true);
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+    });
+
+    it('runs a card again on its own when its changes clash with another card\'s', async () => {
+      const h = harness({ cards: [card('a'), card('b')], parallel: { clash: ['b'] } });
+      await start(h, { parallelCards: 2 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+      // a and b in copies, then b again in the project.
+      expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(1);
+      expect(h.prompts).toHaveLength(3);
+      expect(final.log.some((entry) => entry.text.includes('changed the same files'))).toBe(true);
+    });
+
+    it('retries a card whose check fails after the merge, with the failure in the prompt', async () => {
+      const h = harness({ cards: [card('a'), card('b')], parallel: {}, check: (call) => call !== 1 });
+      await start(h, { parallelCards: 2 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+      expect(h.prompts.some((prompt) => prompt.includes('FAIL: expected 1 to be 2'))).toBe(true);
+    });
+
+    it('rests once for a limit that hits both cards, instead of once each', async () => {
+      const h = harness({
+        cards: [card('a'), card('b')],
+        parallel: {},
+        agent: (call) => (call <= 2 ? { status: 'failed', output: '', error: 'Provider request failed (429): Too Many Requests The provider asked to wait 90s.' } : {}),
+      });
+      await start(h, { parallelCards: 2 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(final.restsTotal).toBe(1);
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+    });
+
+    it('stops every copy when Stop is pressed', async () => {
+      const h = harness({ cards: [card('a'), card('b')], parallel: {} });
+      const cancelled: string[] = [];
+      h.ports.cancelAgent = (id) => { cancelled.push(id); return true; };
+      await start(h, { parallelCards: 2 });
+      await vi.advanceTimersByTimeAsync(100);
+      const stopping = h.autopilot.stop('p1');
+      // The fake agent finishes on its own clock; a real one is cancelled by `cancelAgent`.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await stopping;
+      expect(cancelled).toHaveLength(2);
+      expect(h.autopilot.status('p1')?.phase).toBe('stopped');
+    });
+  });
+
+  describe('side-by-side extras', () => {
+    it('keeps two cards that name the same file out of one wave', () => {
+      const a = { ...card('a'), prompt: 'Edit src/router.tsx to add /a' };
+      const b = { ...card('b'), prompt: 'Edit src/router.tsx to add /b' };
+      const c = { ...card('c'), prompt: 'Write src/c.ts' };
+      expect(pickBatch([a, b, c], 3).map((item) => item.id)).toEqual(['a', 'c']);
+    });
+
+    it('treats a shared file named in only a card\'s brief as a clash, and a card\'s earlier files too', () => {
+      const a = { ...card('a'), story: 'Update package.json scripts' };
+      const b = { ...card('b'), acceptance: ['package.json has the dependency'] };
+      const c = { ...card('c'), runs: [{ agent: 'api', model: null, at: NOW, files: ['src/x.ts'] }] };
+      const d = { ...card('d'), prompt: 'Rework src/x.ts' };
+      expect(pickBatch([a, b], 2)).toHaveLength(1);
+      expect(pickBatch([c, d], 2)).toHaveLength(1);
+    });
+
+    it('calls a component with no route, and setup nothing waits on, easy', () => {
+      const cards = [{ ...card('s'), kind: 'chore' as const }, { ...card('t'), kind: 'chore' as const }, { ...card('u', ['t']) }, { ...card('v'), kind: 'component' as const }, { ...card('w'), kind: 'component' as const, route: '/w' }];
+      expect(cards.filter((item) => isEasyCard(item, cards)).map((item) => item.id)).toEqual(['s', 'v']);
+    });
+
+    it('uses the cheaper model for an easy first attempt and the main model for a retry', async () => {
+      const models: Array<string | undefined> = [];
+      const h = harness({
+        cards: [{ ...card('a'), kind: 'component' as const }],
+        check: (call) => call > 1,
+        agent: (_call, request) => { models.push(request.model); return {}; },
+      });
+      await start(h, { model: 'big', easyModel: 'small' });
+      await settled(h);
+      expect(models).toEqual(['small', 'big']);
+    });
+
+    it('checks a card in its own copy and hands a failure back before merging', async () => {
+      const h = harness({ cards: [card('a'), card('b')], parallel: {}, check: (call) => call > 2 });
+      await start(h, { parallelCards: 2 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+      // Both copies failed their first early check and were rerun there, before any merge.
+      expect(h.cwds.filter((cwd) => cwd !== undefined)).toHaveLength(4);
+      expect(h.prompts.filter((prompt) => prompt.includes('FAIL: expected 1 to be 2'))).toHaveLength(2);
+    });
+
+    it('reports where the time went and, once a card is done, how long is left', async () => {
+      const h = harness({ cards: [card('a'), card('b', ['a']), card('c', ['b'])], parallel: {} });
+      await start(h, { parallelCards: 1 });
+      const final = await settled(h);
+      expect(final.timing.agentMs + final.timing.checkMs).toBeGreaterThanOrEqual(0);
+      expect(final.etaMinutes).toBeNull();
+      expect(final.timing.restMs).toBe(0);
+    });
+
+    it('puts back every card an interrupted run held, not only the one its record names', async () => {
+      const h = harness({ cards: [card('a'), card('b')] });
+      for (const item of h.board.cards) { item.status = 'inProgress'; item.claimedBy = 'Autopilot'; }
+      h.kept.set('p1', { schemaVersion: 1, studioProjectId: 'p1', cardId: 'a', cardTitle: 'Card a', startedAt: NOW, updatedAt: NOW, lastMessage: '', start: autopilotStartInputSchema.parse({ projectId: 'p1' }) });
+      expect(await h.autopilot.releaseInterrupted('p1')).toBe(true);
+      expect(h.board.cards.map((item) => item.status)).not.toContain('inProgress');
+    });
+  });
+
+  describe('failure signature', () => {
+    it('treats the same failure with different times, paths and numbers as the same', () => {
+      expect(sameFailure('Check failed (exit 1) in 12.4s at C:\\a\\b.ts:10:5', 'Check failed (exit 1) in 9.8s at C:\\a\\b.ts:42:7')).toBe(true);
+    });
+
+    it('keeps genuinely different failures apart', () => {
+      expect(sameFailure('Type error: x is not a string', 'Cannot find module "react"')).toBe(false);
+      expect(sameFailure('', 'anything')).toBe(false);
+    });
   });
 });

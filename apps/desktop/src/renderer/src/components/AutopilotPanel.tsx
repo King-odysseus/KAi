@@ -33,12 +33,21 @@ export const DEFAULT_AUTOPILOT_START = {
   maxHours: 12,
   maxCostUsd: 0,
   attemptsPerCard: 3,
+  parallelCards: 2,
   minGapSeconds: 0,
   blockerPolicy: 'continue-and-report' as const,
 };
 
 function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Minutes as a short phrase: "40 min", "3 h 20 min". */
+function duration(minutes: number): string {
+  const whole = Math.max(0, Math.round(minutes));
+  if (whole < 60) return `${whole} min`;
+  const rest = whole % 60;
+  return `${Math.floor(whole / 60)} h${rest ? ` ${rest} min` : ''}`;
 }
 
 function remaining(iso: string, now: number): string {
@@ -60,6 +69,8 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
   const [maxHours, setMaxHours] = useState(DEFAULT_AUTOPILOT_START.maxHours);
   const [maxCostUsd, setMaxCostUsd] = useState(DEFAULT_AUTOPILOT_START.maxCostUsd);
   const [attemptsPerCard, setAttemptsPerCard] = useState(DEFAULT_AUTOPILOT_START.attemptsPerCard);
+  const [parallelCards, setParallelCards] = useState(DEFAULT_AUTOPILOT_START.parallelCards);
+  const [easyModel, setEasyModel] = useState('');
   const [minGapSeconds, setMinGapSeconds] = useState(DEFAULT_AUTOPILOT_START.minGapSeconds);
   const [blockerPolicy, setBlockerPolicy] = useState<'continue-and-report' | 'continue-and-use-decisions'>(() => {
     try {
@@ -115,7 +126,7 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
     setError(null);
     setNotice(null);
     try {
-      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: DEFAULT_AUTOPILOT_START.maxCards, maxHours, maxCostUsd, attemptsPerCard, minGapSeconds, blockerPolicy }).then(unwrap);
+      await window.kaiDesktop.startAutopilot({ projectId, execution, checkCommand, maxCards: DEFAULT_AUTOPILOT_START.maxCards, maxHours, maxCostUsd, attemptsPerCard, parallelCards, ...(easyModel.trim() ? { easyModel: easyModel.trim() } : {}), minGapSeconds, blockerPolicy }).then(unwrap);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -276,6 +287,16 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
               <input type="number" min={1} max={5} value={attemptsPerCard} onChange={(event) => setAttemptsPerCard(Math.min(5, Math.max(1, Number(event.target.value) || 1)))} />
             </label>
             <label>
+              <span>Cards at once</span>
+              <input type="number" min={1} max={4} value={parallelCards} onChange={(event) => setParallelCards(Math.min(4, Math.max(1, Number(event.target.value) || 1)))} />
+              <small>Cards that do not wait on each other run side by side, each in its own copy of the project. 1 works one card at a time. Needs a git project with a commit.</small>
+            </label>
+            <label>
+              <span>Cheaper model for easy cards</span>
+              <input value={easyModel} onChange={(event) => setEasyModel(event.target.value)} placeholder="Blank: one model for every card" />
+              <small>Used for the first try at a component inside a page, or setup nothing waits on. A retry uses the main model.</small>
+            </label>
+            <label>
               <span>Stop after (hours, 0 = never)</span>
               <input type="number" min={0} max={168} value={maxHours} onChange={(event) => setMaxHours(Math.min(168, Math.max(0, Number(event.target.value) || 0)))} />
             </label>
@@ -321,7 +342,23 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
             {status.cardsDone} of {status.cardsTotal} done{status.cardsBlocked > 0 ? ` · ${status.cardsBlocked} blocked` : ''}
             {status.restsTotal > 0 ? ` · ${status.restsTotal} rest${status.restsTotal === 1 ? '' : 's'}` : ''}
             {status.costUsd > 0 ? ` · about $${status.costUsd.toFixed(2)}` : ''}
+            {running && status.etaMinutes !== null ? ` · about ${duration(status.etaMinutes)} left at this pace` : ''}
           </p>
+          {/* One row per card being worked, so cards side by side can each be seen and opened. */}
+          {running && status.lanes.length > 1 && (
+            <ul className="autopilot-log" aria-label="Cards being worked">
+              {status.lanes.map((lane) => <li key={lane.cardId}>{lane.cardTitle}</li>)}
+            </ul>
+          )}
+          {/* Where the time went, once the run is over: the next bottleneck is measured, not guessed. */}
+          {!running && status.timing.agentMs + status.timing.checkMs + status.timing.mergeMs + status.timing.restMs > 0 && (
+            <p className="studio-note">
+              Time spent: agents {duration(status.timing.agentMs / 60_000)} (added up across cards)
+              {' · '}checks {duration(status.timing.checkMs / 60_000)}
+              {status.timing.mergeMs > 0 ? ` · merging ${duration(status.timing.mergeMs / 60_000)}` : ''}
+              {status.timing.restMs > 0 ? ` · resting ${duration(status.timing.restMs / 60_000)}` : ''}
+            </p>
+          )}
           {/* The dev proof, once the run has been far enough to take one. The URL is the point of it: a finished run
               that cannot be opened still has not given anyone what they walked away for. */}
           {status.devCheck && (

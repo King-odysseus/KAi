@@ -1638,6 +1638,7 @@ export function boardPrompt(brief: string, stories: string, stack: string, conte
     '- Order the work so the product runs locally first: the data model, the endpoints and the screens on a developer server, then shared components, then pages. A page card depends on the endpoint and component cards it needs.',
     '- Anything that only matters once the product is hosted comes LAST: deploying, containerising, a hosted or managed database, a release pipeline, domains and production secrets. Those cards depend on the work that makes the product run without them, so an agent reaches them only when everything else is done. Never put hosting or a managed database before the feature that uses it.',
     '- Each "acceptance" item is one checkable statement. These are what the card is closed on.',
+    '- Cards that do not need one another are worked at the same time, so list a dependency only where a card truly cannot be built without the other: it imports it, calls it, or needs its data. Do not chain cards just to give them an order, and do not make every card depend on the setup card when only a few use what it creates. Name the files a card will create or change in its prompt, so two cards that edit the same file are not worked together.',
   ].join('\n');
   const user = [
     `BRIEF:\n${brief}`,
@@ -1707,6 +1708,7 @@ export function arrangeBoardPrompt(board: StudioBoard, brief: string, stack: str
     '- Anything that only matters once the product is hosted comes LAST: deploying, containerising, a hosted or managed database, release pipelines, domains and production secrets. A managed database is never before the features that use it.',
     '- "dependsOn" lists the ids of the cards that must be finished before it, and only those. Use it so a card cannot be reached before what it needs. An empty list is normal for the cards that come first.',
     '- Use the ids exactly as given. Do not invent a card, do not leave one out, and do not rewrite any title.',
+    '- Cards that do not need one another are worked at the same time. Keep "dependsOn" to real needs (it imports it, calls it, or needs its data) and drop any that only expresses an order, so more cards can run side by side.',
   ].join('\n');
   const user = [
     `CARDS:\n${cards}`,
