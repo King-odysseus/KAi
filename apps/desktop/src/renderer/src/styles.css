@@ -6719,22 +6719,27 @@ code {
 }
 
 .setup-reminder {
-  position: absolute;
-  z-index: 45;
-  top: calc(var(--titlebar-height) + 8px);
-  right: 16px;
-  display: inline-flex;
+  position: relative;
+  z-index: 5;
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
-  padding: 6px 10px;
-  border: 1px solid rgba(102, 227, 189, 0.35);
-  border-radius: 7px;
+  min-height: 34px;
+  width: 100%;
+  padding: 6px 18px 6px 74px;
+  border: 0;
+  border-bottom: 1px solid rgba(102, 227, 189, 0.25);
+  border-radius: 0;
   color: var(--text);
   background: #112438;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  box-shadow: none;
   cursor: pointer;
+  text-align: left;
 }
+
+.setup-reminder:hover { background: #173047; }
+.setup-reminder:focus-visible { outline: 2px solid var(--mint); outline-offset: -2px; }
 
 .setup-reminder > svg {
   color: var(--mint);
@@ -11378,10 +11383,6 @@ button.tool-call-head:hover strong { color: var(--mint); }
   min-height: 0;
   padding: 20px clamp(18px, 2vw, 32px) 28px;
   overflow-y: auto;
-}
-
-.app-shell:has(.setup-reminder) .studio-view .studio-scroll {
-  padding-top: 64px;
 }
 
 .studio-scroll > * {

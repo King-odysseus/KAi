@@ -53,9 +53,9 @@ export const navigation: Array<{ id: ViewId; label: string; group: 'Work' | 'Lea
   { id: 'history', label: 'History', group: 'Work', icon: History },
   { id: 'tasks', label: 'Tasks', group: 'Work', icon: Kanban },
   { id: 'code', label: 'Learn & Code', group: 'Learn', icon: Code2 },
+  { id: 'commands', label: 'Terminal Commands', group: 'Learn', icon: SquareTerminal },
   { id: 'projects', label: 'Projects', group: 'Project', icon: FolderKanban },
   { id: 'git', label: 'Git', group: 'Project', icon: GitBranch },
-  { id: 'commands', label: 'Terminal Commands', group: 'Learn', icon: SquareTerminal },
   { id: 'brain', label: 'C1 Brain', group: 'Brain', icon: Brain },
   { id: 'rules', label: 'Execution Rules', group: 'Brain', icon: ListChecks },
   { id: 'proxy', label: 'Universal Proxy', group: 'Control', icon: Route },
@@ -75,9 +75,25 @@ export interface CommandPaletteItem {
 }
 
 export function NavigationRail({ view, version, versionTitle, serviceStatus, shortcuts, onChange }: { view: ViewId; version: string; /** The full version and build, for the tooltip; the rail shows the version. */ versionTitle?: string; serviceStatus: string; shortcuts: AppSettings['shortcuts']; onChange: (view: ViewId) => void }): ReactNode {
+  const [expanded, setExpanded] = useState(() => {
+    try { return window.localStorage.getItem('kai.navigationExpanded') === 'true'; }
+    catch { return false; }
+  });
+  const toggleExpanded = (): void => {
+    setExpanded((current) => {
+      const next = !current;
+      try { window.localStorage.setItem('kai.navigationExpanded', String(next)); }
+      catch { /* Navigation still works when storage is unavailable. */ }
+      return next;
+    });
+  };
   return (
-    <aside className="nav-rail" aria-label="Primary navigation">
+    <aside className={`nav-rail${expanded ? ' expanded' : ''}`} aria-label="Primary navigation">
       <div className="brand-mark" aria-label="KAI">K</div>
+      <button type="button" className="nav-expand-button" aria-label={expanded ? 'Collapse navigation labels' : 'Show navigation labels'} aria-expanded={expanded} title={expanded ? 'Collapse navigation labels' : 'Show navigation labels'} onClick={toggleExpanded}>
+        {expanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+        {expanded && <span>Collapse</span>}
+      </button>
       <nav className="nav-stack" aria-label="Workbench pages">
         {navigation.map((item, index) => {
           const Icon = item.icon;

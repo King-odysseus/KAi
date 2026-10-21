@@ -82,6 +82,7 @@ try {
     const bodyText = await page.locator('body').innerText().catch(() => '<body unavailable>');
     throw new Error(`Desktop workspace did not become ready: ${bodyText}`, { cause: error });
   }
+  await verifyNavigationAndSetupLayout(page);
   const agentCapabilities = await verifyAgentCapabilities(page);
   // The basic smoke profile intentionally starts without a project, so composer controls that depend on an
   // active workspace are only exercised by the profiles that provision the live smoke project.
@@ -280,6 +281,31 @@ try {
     console.log(`KAI smoke user data preserved at ${userDataDirectory}`);
   } else {
     await rm(userDataDirectory, { recursive: true, force: true });
+  }
+}
+
+async function verifyNavigationAndSetupLayout(page) {
+  const reminder = page.getByRole('button', { name: /Finish KAI setup/ });
+  if (await reminder.isVisible()) {
+    const reminderBox = await reminder.boundingBox();
+    const bodyBox = await page.locator('.app-body').boundingBox();
+    if (!reminderBox || !bodyBox || reminderBox.y + reminderBox.height > bodyBox.y + 1) {
+      throw new Error('The setup reminder overlaps the page content.');
+    }
+  }
+  const rail = page.locator('.nav-rail');
+  await page.getByRole('button', { name: 'Show navigation labels' }).click();
+  if (!await rail.getByText('Workspace', { exact: true }).isVisible()) {
+    throw new Error('Expanding navigation did not reveal page labels.');
+  }
+  if ((await rail.boundingBox())?.width < 150) {
+    throw new Error('Expanded navigation is too narrow for its labels.');
+  }
+  await page.mouse.move(800, 400);
+  await page.screenshot({ path: path.join(outputDirectory, 'navigation-expanded.png') });
+  await page.getByRole('button', { name: 'Collapse navigation labels' }).click();
+  if ((await rail.boundingBox())?.width > 80) {
+    throw new Error('Navigation did not return to its compact width.');
   }
 }
 

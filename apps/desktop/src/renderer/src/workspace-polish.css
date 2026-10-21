@@ -33,6 +33,34 @@
 html[data-theme]:root .nav-button.active { border-color: transparent; color: var(--text); background: var(--bg-hover); }
 html[data-theme]:root .nav-button.active::before { background: var(--mint); }
 .rail-footer { gap: 4px; }
+.nav-expand-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 38px;
+  min-height: 28px;
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.nav-expand-button:hover,
+.nav-expand-button:focus-visible { color: var(--text); background: var(--bg-hover); }
+.nav-rail.expanded { flex-basis: 180px; width: 180px; align-items: stretch; padding-inline: 8px; }
+.nav-rail.expanded .brand-mark { align-self: center; }
+.nav-rail.expanded .nav-expand-button { justify-content: flex-start; width: 100%; padding: 0 10px; }
+.nav-rail.expanded .nav-stack { align-items: stretch; }
+.nav-rail.expanded .nav-group-label { width: 100%; height: 24px; justify-content: start; padding-left: 10px; margin-top: 8px; }
+.nav-rail.expanded .nav-group-label span { display: block; color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
+.nav-rail.expanded .nav-group-label i { display: none; }
+.nav-rail.expanded .nav-button { display: flex; width: 100%; gap: 10px; justify-content: flex-start; padding: 0 10px; }
+.nav-rail.expanded .nav-button-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.nav-rail.expanded .nav-button.active::before { left: -8px; }
+.nav-rail.expanded .rail-footer { flex-direction: row; justify-content: center; }
 
 /* Reusable page framing for all destinations. */
 .page-view {
@@ -240,6 +268,15 @@ html[data-theme]:root .composer-model-select { max-width: 150px; color: var(--te
 .composer-advanced-toggle { min-height: 22px; padding: 2px 6px; color: var(--text-muted); font-size: 10px; }
 .composer-actions .send-button { width: 26px; height: 26px; border-radius: 4px; background: var(--mint-strong); }
 .send-button:hover:not(:disabled) { background: var(--mint); }
+@media (max-width: 1100px) {
+  .composer-toolbar { flex-wrap: wrap; row-gap: 5px; }
+  .composer-leading,
+  .composer-actions { width: 100%; }
+  .composer-actions { justify-content: flex-start; margin-left: 0; }
+  .composer-actions > .send-button:last-child { margin-left: auto; }
+  .composer-box textarea,
+  .composer textarea { min-height: 70px; }
+}
 .agent-setup-banner {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
