@@ -36,7 +36,7 @@ const TAIL_CHARS = 2_500;
 
 /** What a card's agent is told about helpers. A card is the unit of work; a helper is a way to finish one faster. */
 const HELPERS_CLI = 'HELPERS:\nIf this card has separate parts that do not touch the same files (for example a page, its tests and its styles), hand them to sub-agents with the Task tool so they run at once, then check their work together before you finish. Do not use helpers for a small card, and never for two parts that edit the same file.';
-const HELPERS_API = 'HELPERS:\nYou can start read-only helpers with the `task` tool to read or search the project in parallel while you work. They cannot edit, so you make every change yourself.';
+const HELPERS_API = 'HELPERS:\nYou can start helpers with the `task` tool and call it several times in one turn so they run at once. A helper reads and searches by default. Set write to true for a helper that writes code: give it separate files that no other helper touches (for example a page, its tests and its styles), and say which files it owns. Do not use helpers for a small card.';
 
 /** Files that nearly every card touches a little, so two cards naming one of them are likely to clash in a merge. */
 const SHARED_FILES = /\b(package\.json|package-lock\.json|app\.tsx?|main\.tsx?|router|routes?\.tsx?|layout\.tsx?|globals?\.css|index\.css|tailwind\.config|tsconfig\.json|vite\.config)\b/gi;

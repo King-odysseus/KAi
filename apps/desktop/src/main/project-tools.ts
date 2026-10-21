@@ -150,6 +150,8 @@ export const taskInputSchema = z
     prompt: z.string().trim().min(1).max(8_000),
     /** Optional model for the helper. Blank uses the parent run's model. */
     model: z.string().trim().min(1).max(100).optional(),
+    /** True for a helper that edits files. Several in one round each work in their own copy of the project. */
+    write: z.boolean().optional(),
   })
   .strict();
 
@@ -366,12 +368,13 @@ export const projectToolDefinitions = [
   {
     type: 'function',
     name: 'task',
-    description: 'Hand a self-contained side task to a read-only helper agent. The helper has its own context, reads and searches the project (and the web if enabled), and returns only its final answer. It cannot edit files, run commands, ask questions, or start its own helpers. Use it to keep a lot of exploratory reading out of your own context, or to use a cheaper model for a small job.',
+    description: 'Hand a self-contained side task to a helper agent with its own context. By default the helper is read-only: it reads and searches the project (and the web if enabled) and returns only its final answer. Set write to true for a helper that writes code: it can create and edit files, but still cannot run commands, ask questions, or start its own helpers. Call task several times in one turn and the helpers run at the same time; writing helpers each work in their own copy of the project, which is checked and merged back for you, and the result lists the files each one changed. Use helpers when a job has separate parts that do not touch the same files (a page, its tests and its styles; two unrelated modules), or to keep a lot of reading out of your own context. Do not use them for a small job, and never give two writing helpers the same file. Give each one everything it needs: it cannot see this conversation.',
     parameters: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'The task, with everything the helper needs to work on its own.' },
+        prompt: { type: 'string', description: 'The task, with everything the helper needs to work on its own, including which files it owns.' },
         model: { type: 'string', description: 'Optional model for the helper. Leave out to use the same model as this run.' },
+        write: { type: 'boolean', description: 'True if the helper should write or edit files. Needs Auto-edit or Full access. Leave out for a read-only helper.' },
       },
       required: ['prompt'],
       additionalProperties: false,

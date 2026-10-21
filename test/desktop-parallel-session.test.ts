@@ -95,6 +95,20 @@ describe('a side-by-side session on a real repository', () => {
     expect((await git(root, 'log', '--oneline')).trim().split('\n')).toHaveLength(1);
   });
 
+  it('names the files a part changed, and none for a part that changed nothing', async () => {
+    const root = await repository();
+    const session = (await createParallelSession(root, 'wave-files', await temporary('base')))!;
+    const edited = await session.checkout('edited');
+    const idle = await session.checkout('idle');
+    await writeFile(path.join(edited, 'app', 'src', 'ui.ts'), 'export const ui = 3;\n');
+    await writeFile(path.join(edited, 'app', 'src', 'new.ts'), 'export const added = 1;\n');
+
+    expect((await session.filesChanged(await session.commit('edited', 'edit'))).sort()).toEqual(['app/src/new.ts', 'app/src/ui.ts']);
+    expect(await session.filesChanged(await session.commit('idle', 'nothing'))).toEqual([]);
+    expect(idle).not.toBe(edited);
+    await session.dispose();
+  });
+
   it('reports a clash and applies only the part that merged', async () => {
     const root = await repository();
     const session = (await createParallelSession(root, 'wave-clash', await temporary('base')))!;

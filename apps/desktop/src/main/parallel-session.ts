@@ -30,6 +30,8 @@ export interface ParallelSession {
   checkout(stepId: string): Promise<string>;
   /** Records what the part changed; the snapshot itself when it changed nothing. */
   commit(stepId: string, message: string): Promise<string>;
+  /** The files a commit changed against the snapshot the wave started from, as paths from the repository root. */
+  filesChanged(commit: string): Promise<string[]>;
   /** Merges the parts' commits in the given order and copies the result into the real project. */
   integrate(commits: ReadonlyArray<{ stepId: string; commit: string }>): Promise<IntegrationResult>;
   /** Removes every checkout. Safe to call more than once. */
@@ -80,6 +82,11 @@ export async function createParallelSession(
       const folder = checkouts.get(stepId);
       if (!folder) throw new Error(`No checkout was made for "${stepId}".`);
       return commitWorktree(folder, message);
+    },
+
+    async filesChanged(commit) {
+      if (commit === snapshot) return [];
+      return (await changedFiles(repository.root, snapshot, commit)).map((change) => change.file);
     },
 
     async integrate(commits) {

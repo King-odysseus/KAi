@@ -98,6 +98,7 @@ function harness(options: {
         prepare: async () => (options.parallel?.unavailable ? null : {
           checkout: async (id: string) => `/copies/${id}`,
           commit: async (id: string) => `commit-${id}`,
+          filesChanged: async () => [],
           integrate: async (commits: ReadonlyArray<{ stepId: string }>) => ({
             conflicts: commits.filter((item) => options.parallel?.clash?.includes(item.stepId)).map((item) => ({ stepId: item.stepId, files: ['src/shared.ts'] })),
             applied: [], skipped: [], integrationCommit: 'merged',

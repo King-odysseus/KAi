@@ -43,6 +43,47 @@ import { applyPermissionRules } from './permission-rules';
 import type { ToolHookRunner } from './automation';
 import { RateLimitError, RequestPacer } from './rate-limit';
 import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, type RunGuard } from './run-guard';
+import { createParallelSession } from './parallel-session';
+import { runCheckCommand, suggestTestCommand } from './verification';
+import { describeOutcome, runWritingHelpers, type WritingBatchResult, type WritingTask } from './writing-helpers';
+
+/** What a helper run gives back to the model that started it. */
+type TaskResult = { answer: string; costUsd: number; provider?: string; model?: string };
+
+/**
+ * Starts one helper. `write` lets it edit files. `writeBatch` is present on a run that may start helpers: it runs a round
+ * of writing helpers in separate copies of the project and merges them. A nested helper has neither, so it cannot
+ * start helpers of its own.
+ */
+type TaskRun = ((prompt: string, model: string | undefined, options?: { write?: boolean }) => Promise<TaskResult>) & {
+  writeBatch?: (tasks: WritingTask[], signal: AbortSignal) => Promise<WritingBatchResult>;
+};
+
+/** What a writing helper is told before its task: where it works, what it may touch, and what to report. */
+const WRITING_HELPER_BRIEF = [
+  'You are a helper agent started by another agent to do one part of a larger job, and you write code.',
+  '- You work in your own copy of the project. Your changes are checked and merged back for you afterwards.',
+  '- Edit only the files your task needs. Other helpers are working on other parts at the same time, so do not touch files that belong to someone else\'s part.',
+  '- You cannot run commands or ask questions. If something needs a command (installing a package, running the app), say so in your answer.',
+  '- Finish the task completely, then answer with a short summary: the files you created or changed, and anything the caller still has to do.',
+].join('\n');
+
+/** Access levels at which a helper may edit without anyone being asked: a helper has nobody to ask. */
+const WRITING_HELPER_AUTONOMY: ReadonlySet<AutonomyMode> = new Set<AutonomyMode>(['autoEdit', 'full']);
+/** A writing helper reads, searches and edits. It runs no commands, deletes nothing and never asks or delegates. */
+const SUBAGENT_WRITER_TOOLS: ReadonlySet<string> = new Set([
+  'view_image',
+  'read_file',
+  'search_files',
+  'list_files',
+  'web_search',
+  'web_fetch',
+  'replace_in_file',
+  'create_file',
+  'multi_edit',
+  'write_file',
+  'move_file',
+]);
 
 function costFields(
   provider: string,
@@ -657,13 +698,27 @@ export class DesktopDirectProviderRuntime {
    * read-only tool list and no `task` of its own, so it cannot recurse or widen its access. Only its answer and the
    * cost of its calls come back; its intermediate reads stay in its own context.
    */
-  private taskRunner(request: AgentRunRequest, projectRoot: string, contextText: string | undefined) {
+  private taskRunner(request: AgentRunRequest, projectRoot: string, contextText: string | undefined): TaskRun {
     if (this.options.allowSubagents === false) {
-      return async (): Promise<{ answer: string; costUsd: number; provider?: string; model?: string }> => {
+      return async (): Promise<TaskResult> => {
         throw new Error('A helper cannot start another helper.');
       };
     }
-    return (prompt: string, model: string | undefined) => this.runTaskQuery(prompt, model, request, projectRoot, contextText);
+    const run: TaskRun = (prompt, model, options) => this.runTaskQuery(prompt, model, request, projectRoot, contextText, options?.write === true);
+    // The project's check is found once per round, and run in each helper's copy before anything is merged.
+    let command: Promise<string | null> | undefined;
+    run.writeBatch = (tasks, signal) => runWritingHelpers(tasks, {
+      prepare: () => createParallelSession(projectRoot, `helpers-${randomUUID()}`),
+      run: (prompt, model, folder) => this.runTaskQuery(prompt, model, request, folder ?? projectRoot, contextText, true),
+      check: async (folder, checkSignal) => {
+        command ??= suggestTestCommand(projectRoot).catch(() => null);
+        const found = await command;
+        if (!found) return null;
+        const result = await runCheckCommand(folder, found, checkSignal);
+        return { passed: result.exitCode === 0, output: result.output };
+      },
+    }, signal);
+    return run;
   }
 
   private async runTaskQuery(
@@ -672,19 +727,20 @@ export class DesktopDirectProviderRuntime {
     request: AgentRunRequest,
     projectRoot: string,
     contextText: string | undefined,
-  ): Promise<{ answer: string; costUsd: number; provider?: string; model?: string }> {
+    write = false,
+  ): Promise<TaskResult> {
     const nested = new DesktopDirectProviderRuntime(this.settings, this.credentials, this.externalTools, {
       ...this.options,
       allowSubagents: false,
-      allowedToolNames: SUBAGENT_READ_ONLY_TOOLS,
+      allowedToolNames: write ? SUBAGENT_WRITER_TOOLS : SUBAGENT_READ_ONLY_TOOLS,
     });
     const childRequest: AgentRunRequest = {
       ...request,
       conversationId: `sub_${request.conversationId}_${randomUUID()}`,
-      prompt,
+      prompt: write ? `${WRITING_HELPER_BRIEF}\n\nYOUR TASK:\n${prompt}` : prompt,
       execution: 'api',
       route: request.route,
-      autonomy: 'plan',
+      autonomy: write ? 'autoEdit' : 'plan',
       ...(model ? { model } : {}),
     };
     const result = await nested.run(childRequest, projectRoot, undefined, undefined, undefined, contextText);
@@ -2614,7 +2670,7 @@ async function executeTaskToolCall(
   argumentsValue: unknown,
   signal: AbortSignal,
   emit: (event: PersistedEvent) => void,
-  taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
+  taskRun: TaskRun,
   formatOutput: (callId: string, output: unknown) => unknown,
 ): Promise<unknown> {
   const parsed = taskInputSchema.safeParse(argumentsValue);
@@ -2624,24 +2680,57 @@ async function executeTaskToolCall(
     return formatOutput(callId, { error: message });
   }
   if (signal.aborted) throw new Error('Provider tool execution was cancelled.');
-  emit({
+  const refusal = writingRefusal(request, parsed.data.write === true);
+  if (refusal) {
+    toolRuntime.guard.noteToolOutcome(false);
+    emit(toolCallEvent(request, 'task', 'failed', argumentsValue, { error: refusal }, callId));
+    return formatOutput(callId, { error: refusal });
+  }
+  emit(helperNotice(request, parsed.data.prompt, parsed.data.write === true));
+  let output: (TaskResult & Record<string, unknown>) | { error: string };
+  try {
+    output = await taskRun(parsed.data.prompt, parsed.data.model, parsed.data.write ? { write: true } : undefined);
+  } catch (error) {
+    output = { error: error instanceof Error ? error.message : String(error) };
+  }
+  return reportTaskOutput(request, toolRuntime, callId, argumentsValue, output, 'costUsd' in output ? output : undefined, emit, formatOutput);
+}
+
+/** Why a helper may not write in this run, or null when it may. A helper cannot ask anyone, so edits must already be allowed. */
+function writingRefusal(request: AgentRunRequest, write: boolean): string | null {
+  if (!write || WRITING_HELPER_AUTONOMY.has(request.autonomy)) return null;
+  return `A helper that writes code needs Auto-edit or Full access, and this run is in ${request.autonomy} mode, where edits are approved one by one. Make the edit yourself, or use a read-only helper to look something up.`;
+}
+
+function helperNotice(request: AgentRunRequest, prompt: string, write: boolean): PersistedEvent {
+  return {
     schemaVersion: 1,
     id: eventId(),
     taskId: request.conversationId,
     timestamp: nowIso(),
     agent: request.agent,
     type: 'notice',
-    message: `KAI asked a helper agent to work on: ${parsed.data.prompt.slice(0, 200)}`,
-  });
-  let output: { answer: string; costUsd: number; provider?: string; model?: string } | { error: string };
-  try {
-    output = await taskRun(parsed.data.prompt, parsed.data.model);
-  } catch (error) {
-    output = { error: error instanceof Error ? error.message : String(error) };
-  }
-  if ('costUsd' in output && output.costUsd > 0) {
+    message: `KAI asked a ${write ? 'writing ' : ''}helper agent to work on: ${prompt.slice(0, 200)}`,
+  };
+}
+
+/**
+ * Counts a helper's spend against the run, records how the call ended, and hands the model its result. Shared by a
+ * single helper and by a round of writing helpers, so both emit the same events and account for the same spend.
+ */
+function reportTaskOutput(
+  request: AgentRunRequest,
+  toolRuntime: DesktopProjectToolRuntime,
+  callId: string,
+  argumentsValue: unknown,
+  output: Record<string, unknown>,
+  spend: { costUsd: number; provider?: string; model?: string } | undefined,
+  emit: (event: PersistedEvent) => void,
+  formatOutput: (callId: string, output: unknown) => unknown,
+): unknown {
+  if (spend && spend.costUsd > 0) {
     // The helper's spend belongs to this run: the per-run limit and the usage summary both count it.
-    toolRuntime.guard.noteExternalCost(output.costUsd);
+    toolRuntime.guard.noteExternalCost(spend.costUsd);
     emit({
       schemaVersion: 1,
       id: eventId(),
@@ -2649,9 +2738,9 @@ async function executeTaskToolCall(
       timestamp: nowIso(),
       agent: request.agent,
       type: 'cost.update',
-      amountUsd: output.costUsd,
-      ...(output.provider ? { provider: output.provider } : {}),
-      ...(output.model ? { model: output.model } : {}),
+      amountUsd: spend.costUsd,
+      ...(spend.provider ? { provider: spend.provider } : {}),
+      ...(spend.model ? { model: spend.model } : {}),
       estimateProvenance: 'estimated',
     });
   }
@@ -2667,39 +2756,87 @@ async function executeTaskBatch(
   calls: PendingToolCall[],
   signal: AbortSignal,
   emit: (event: PersistedEvent) => void,
-  taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
+  taskRun: TaskRun,
   formatOutput: (callId: string, output: unknown) => unknown,
 ): Promise<unknown[]> {
   const results: unknown[] = new Array(calls.length);
+  const entries = calls.map((call, index) => ({ call, index, callId: call.callId || `call_${randomUUID()}`, argumentsValue: undefined as unknown, ready: false }));
+
+  // Arguments first, so the round can be sorted into helpers that only read and helpers that write.
+  for (const entry of entries) {
+    try {
+      entry.argumentsValue = parseToolArguments(entry.call.argumentsText);
+      entry.ready = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toolRuntime.guard.noteToolOutcome(false);
+      emit(toolCallEvent(request, 'task', 'failed', undefined, { error: message }, entry.callId));
+      results[entry.index] = formatOutput(entry.callId, { error: message });
+    }
+  }
+
+  // Two or more writing helpers in one round must not share the project: each gets its own copy, and the copies are
+  // merged afterwards. One writing helper has nobody to clash with, so it takes the ordinary path below.
+  const writing = entries.filter((entry) => {
+    if (!entry.ready) return false;
+    const parsed = taskInputSchema.safeParse(entry.argumentsValue);
+    return parsed.success && parsed.data.write === true && writingRefusal(request, true) === null;
+  });
+  const batched = taskRun.writeBatch && writing.length >= 2 ? new Set(writing) : new Set<(typeof entries)[number]>();
+  const others = entries.filter((entry) => entry.ready && !batched.has(entry));
+
   let next = 0;
   // At most MAX_HELPERS_AT_ONCE run together and the rest wait their turn, so a model that asks for fifty helpers is
   // served, not refused. The number is Claude Code's own documented default for sub-agents running at once.
-  const workers = Array.from({ length: Math.min(MAX_HELPERS_AT_ONCE, calls.length) }, async () => {
-    while (next < calls.length) {
-      const index = next;
+  const workers = Array.from({ length: Math.min(MAX_HELPERS_AT_ONCE, others.length) }, async () => {
+    while (next < others.length) {
+      const entry = others[next];
       next += 1;
-      const call = calls[index];
-      if (!call) continue;
-      const callId = call.callId || `call_${randomUUID()}`;
-      let argumentsValue: unknown;
-      try {
-        argumentsValue = parseToolArguments(call.argumentsText);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        toolRuntime.guard.noteToolOutcome(false);
-        emit(toolCallEvent(request, 'task', 'failed', undefined, { error: message }, callId));
-        results[index] = formatOutput(callId, { error: message });
-        continue;
-      }
-      emit(toolCallEvent(request, 'task', 'started', argumentsValue, undefined, callId));
-      results[index] = await executeTaskToolCall(request, toolRuntime, callId, argumentsValue, signal, emit, taskRun, formatOutput);
+      if (!entry) continue;
+      emit(toolCallEvent(request, 'task', 'started', entry.argumentsValue, undefined, entry.callId));
+      results[entry.index] = await executeTaskToolCall(request, toolRuntime, entry.callId, entry.argumentsValue, signal, emit, taskRun, formatOutput);
     }
   });
-  await Promise.all(workers);
+
+  const writers = batched.size > 0 && taskRun.writeBatch
+    ? runWritingRound([...batched], taskRun.writeBatch)
+    : Promise.resolve();
+
+  async function runWritingRound(group: Array<(typeof entries)[number]>, writeBatch: NonNullable<TaskRun['writeBatch']>): Promise<void> {
+    const tasks: WritingTask[] = [];
+    for (const entry of group) {
+      const parsed = taskInputSchema.parse(entry.argumentsValue);
+      emit(toolCallEvent(request, 'task', 'started', entry.argumentsValue, undefined, entry.callId));
+      emit(helperNotice(request, parsed.prompt, true));
+      tasks.push({ id: `helper-${tasks.length + 1}`, prompt: parsed.prompt, model: parsed.model });
+    }
+    const batch = await writeBatch(tasks, signal).catch((error: unknown): WritingBatchResult => ({
+      outcomes: tasks.map((task) => ({
+        id: task.id, answer: '', costUsd: 0, files: [], check: 'not run', checkOutput: '', applied: false, reran: false,
+        error: error instanceof Error ? error.message : String(error),
+      })),
+      notice: null,
+    }));
+    if (batch.notice) {
+      emit({ schemaVersion: 1, id: eventId(), taskId: request.conversationId, timestamp: nowIso(), agent: request.agent, type: 'notice', message: batch.notice });
+    }
+    group.forEach((entry, position) => {
+      const outcome = batch.outcomes.find((item) => item.id === tasks[position]?.id);
+      const described = outcome ? describeOutcome(outcome) : { error: 'The helper did not report back.' };
+      const note = batch.notice && position === 0 ? { round_note: batch.notice } : {};
+      results[entry.index] = reportTaskOutput(
+        request, toolRuntime, entry.callId, entry.argumentsValue, { ...described, ...note },
+        outcome ? { costUsd: outcome.costUsd, ...(outcome.provider ? { provider: outcome.provider } : {}), ...(outcome.model ? { model: outcome.model } : {}) } : undefined,
+        emit, formatOutput,
+      );
+    });
+  }
+
+  await Promise.all([...workers, writers]);
   return results;
 }
 
-/** Read-only helpers one round may run together; more are queued behind them. */
+/** Read-only helpers one round may run together; more are queued behind them. Writing helpers have their own, lower limit. */
 const MAX_HELPERS_AT_ONCE = 20;
 
 async function executeToolCalls(
@@ -2713,7 +2850,7 @@ async function executeToolCalls(
   /** Runs a read-only helper's nested loop for `explore` and returns its answer. See `runExploreQuery`. */
   explore: (question: string) => Promise<string>,
   /** Runs a nested helper agent and reports its answer and what it cost. See `runTaskQuery`. */
-  taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
+  taskRun: TaskRun,
   formatOutput: (callId: string, output: unknown) => unknown = functionCallOutput,
 ): Promise<unknown[]> {
   // Helper tasks are independent, so a round made only of them runs concurrently. Mixed rounds stay sequential:

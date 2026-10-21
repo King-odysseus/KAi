@@ -1214,6 +1214,80 @@ data: {"type":"message_stop"}
     ]));
   });
 
+  describe('helpers that write code', () => {
+    const stop = '\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+    const toolUse = (index: number, id: string, name: string, input: unknown): string =>
+      `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index, content_block: { type: 'tool_use', id, name, input } })}\n\n`;
+    const text = (value: string): string =>
+      `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: value } })}${stop}`;
+
+    /** A provider that plays the main run and its writing helpers: the helpers are told apart by the tools they are offered. */
+    async function provider(mainCalls: Array<Record<string, unknown>>): Promise<{ baseUrl: string; bodies: Array<{ tools?: Array<{ name: string }>; messages: unknown[] }> }> {
+      const bodies: Array<{ tools?: Array<{ name: string }>; messages: unknown[] }> = [];
+      const server = http.createServer((request, response) => {
+        let raw = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => { raw += chunk; });
+        request.on('end', () => {
+          const body = JSON.parse(raw) as { tools?: Array<{ name: string }>; messages: unknown[] };
+          bodies.push(body);
+          const names = (body.tools ?? []).map((tool) => tool.name);
+          const answered = JSON.stringify(body.messages).includes('tool_result');
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (names.includes('task')) {
+            // The main run: ask for the helpers first, then sum up once their results are back.
+            response.end(answered ? text('All done.') : mainCalls.map((input, index) => toolUse(index, `toolu_${index}`, 'task', input)).join('') + stop.trimStart());
+            return;
+          }
+          // A writing helper: create the one file its task names, then report.
+          const file = /FILE:([\w.-]+)/.exec(JSON.stringify(body.messages))?.[1];
+          response.end(answered || !file ? text('Created the file.') : toolUse(0, 'toolu_write', 'create_file', { path: file, content: `made by ${file}` }) + stop.trimStart());
+        });
+      });
+      return { baseUrl: await listen(server), bodies };
+    }
+
+    it('refuses a writing helper while edits are approved one by one, and says why', async () => {
+      const { baseUrl, bodies } = await provider([{ prompt: 'FILE:a.txt', write: true }]);
+      const runtime = new DesktopDirectProviderRuntime(settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')), credentialPort('provider.anthropic', 'anthropic-secret'));
+
+      const result = await runtime.run(runRequest(), isolatedProjectRoot);
+
+      expect(result.status).toBe('completed');
+      // Only the main run's two turns: no helper was started.
+      expect(bodies).toHaveLength(2);
+      expect(JSON.stringify(bodies[1]!.messages)).toContain('needs Auto-edit or Full access');
+      await expect(readText(path.join(isolatedProjectRoot, 'a.txt'))).rejects.toThrow();
+    });
+
+    it('lets one writing helper create a file, with only the tools a writer should have', async () => {
+      const { baseUrl, bodies } = await provider([{ prompt: 'FILE:a.txt', write: true }]);
+      const runtime = new DesktopDirectProviderRuntime(settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')), credentialPort('provider.anthropic', 'anthropic-secret'));
+
+      const result = await runtime.run({ ...runRequest(), autonomy: 'autoEdit' }, isolatedProjectRoot);
+
+      expect(result.status).toBe('completed');
+      await expect(readText(path.join(isolatedProjectRoot, 'a.txt'))).resolves.toBe('made by a.txt');
+      const helperTools = bodies.find((body) => !(body.tools ?? []).some((tool) => tool.name === 'task'))?.tools?.map((tool) => tool.name) ?? [];
+      expect(helperTools).toContain('create_file');
+      for (const forbidden of ['run_command', 'task', 'explore', 'ask_user', 'delete_file']) expect(helperTools).not.toContain(forbidden);
+    });
+
+    it('runs two writing helpers one after the other when the project has no git history, and tells the model', async () => {
+      const { baseUrl, bodies } = await provider([{ prompt: 'FILE:a.txt', write: true }, { prompt: 'FILE:b.txt', write: true }]);
+      const runtime = new DesktopDirectProviderRuntime(settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')), credentialPort('provider.anthropic', 'anthropic-secret'));
+
+      const result = await runtime.run({ ...runRequest(), autonomy: 'autoEdit' }, isolatedProjectRoot);
+
+      expect(result.status).toBe('completed');
+      await expect(readText(path.join(isolatedProjectRoot, 'a.txt'))).resolves.toBe('made by a.txt');
+      await expect(readText(path.join(isolatedProjectRoot, 'b.txt'))).resolves.toBe('made by b.txt');
+      const final = JSON.stringify(bodies.at(-1)!.messages);
+      expect(final).toContain('one after another');
+      expect(result.events.filter((event) => event.type === 'tool.call' && event.name === 'task' && event.status === 'completed')).toHaveLength(2);
+    });
+  });
+
   it('fails a run whose every action was refused by the access level, rather than calling its prose a success', async () => {
     // Under Plan access the model cannot edit anything, so this is what a run that was asked to make a change looks
     // like: it tries, is refused, and then writes about it. Prose used to be enough for `completed`, which meant a
