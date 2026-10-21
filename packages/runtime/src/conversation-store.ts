@@ -7,6 +7,9 @@ import {
 import { AtomicJsonStore } from './atomic-json-store';
 import { NodeFileSystem } from './node-file-system';
 
+/** Conversation files read at the same time when listing them all. */
+const LIST_BATCH = 16;
+
 export class ConversationStore implements ConversationStorePort {
   private readonly fileSystem: NodeFileSystem;
   private readonly writeTails = new Map<string, Promise<void>>();
@@ -16,12 +19,15 @@ export class ConversationStore implements ConversationStorePort {
   }
 
   async list(): Promise<ConversationRecord[]> {
-    const entries = await this.fileSystem.list(this.directory).catch(() => []);
-    const conversations = await Promise.all(
-      entries
-        .filter((entry) => entry.endsWith('.json'))
-        .map((entry) => this.get(path.basename(entry, '.json'))),
-    );
+    const entries = (await this.fileSystem.list(this.directory).catch(() => [])).filter((entry) => entry.endsWith('.json'));
+    // A few files at a time. Reading all of them at once held every file's raw text and its parsed copy in memory
+    // together, which for a long history is several times the size of the result and was enough to run the app out.
+    const conversations: Array<ConversationRecord | null> = [];
+    for (let start = 0; start < entries.length; start += LIST_BATCH) {
+      conversations.push(...await Promise.all(
+        entries.slice(start, start + LIST_BATCH).map((entry) => this.get(path.basename(entry, '.json'))),
+      ));
+    }
     return conversations
       .filter((conversation): conversation is ConversationRecord => conversation !== null)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

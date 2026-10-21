@@ -115,6 +115,10 @@ import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedO
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
 import type { NotificationCenter } from './notification-rules';
 import { summarizeUsage } from './usage-budget';
+import { sharedLoad } from './shared-load';
+
+/** How long runs that start together share one load of the saved conversations when checking the usage budget. */
+const USAGE_SNAPSHOT_MS = 10_000;
 import type { WorkflowTemplateStore } from './workflow-templates';
 import type { DesktopConfigBackupStore } from './backups';
 import type { LearningProgressStore } from './learning-progress';
@@ -1542,8 +1546,10 @@ export async function runConversationAgent(
   const executionMode = request.execution ?? 'cli';
   if (executionMode === 'api') {
     // Block mode refuses before anything is saved or sent, so the run never reaches the provider.
+    // Shared with every run starting at about the same time: loading all saved conversations once per run, for eight
+    // runs at once, is what ran KAI's main process out of memory. A figure ten seconds old is as good for a budget.
     const usage = summarizeUsage(
-      await context.conversations.list(),
+      await sharedLoad(context.conversations, () => context.conversations.list(), USAGE_SNAPSHOT_MS),
       settings.usageBudget,
       new Date(),
       conversation.id,
