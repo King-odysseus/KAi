@@ -1,4 +1,4 @@
-import type { ResponseStyle } from '@kai/contracts';
+import { helperLimitOf, type HelperChoice, type ResponseStyle } from '@kai/contracts';
 
 /**
  * How KAI's agents are expected to work a task, as distinct from what they are allowed to do (that is
@@ -32,6 +32,39 @@ export function responseStyleBriefing(style: ResponseStyle = 'plain'): string {
     ],
   };
   return ['# How to write your reply', ...rules[style].map((rule) => '- ' + rule), '- This is about your wording only; code, commands and tool output stay exactly as they are.'].join('\n');
+}
+
+/**
+ * How the agent is told to use helper agents on this run, from the composer's Agents choice.
+ *
+ * Whether to use helpers used to be left to the agent alone, and an agent left alone mostly does not: a model tends to
+ * do a job itself unless it is told that splitting it is wanted. So "auto" says when it is wanted (a large job with
+ * separate parts), and a number says how many to use. Only the wording differs between an API run and a CLI run; a
+ * limit on an API run is also enforced where the helpers are started.
+ */
+export function helpersBriefing(choice: HelperChoice | undefined, execution: 'api' | 'cli'): string {
+  const how = execution === 'api'
+    ? 'Start a helper with the `task` tool, set write to true for a part that writes code, and make several `task` calls in the same turn so they run at once. Give each helper everything it needs and name the files it owns: it cannot see this conversation.'
+    : 'Start helpers as sub-agents (the Task tool, where you have one) in the same turn so they run at once. Give each one everything it needs and name the files it owns.';
+  const limit = helperLimitOf(choice);
+  if (limit === 0) {
+    return ['# Helpers', '- Do all the work yourself. Do not start helpers or sub-agents on this job.'].join('\n');
+  }
+  if (limit === null) {
+    return [
+      '# Helpers',
+      '- When the job is large and has separate parts that do not depend on each other (different files or modules, a feature and its tests, research and building), split it and start helpers for those parts at once, then check their work together before you finish.',
+      '- Do a small job, or one whose parts depend on each other, yourself. Never give two helpers the same file.',
+      `- ${how}`,
+    ].join('\n');
+  }
+  return [
+    '# Helpers',
+    `- Use up to ${limit} helper agents at once on this job. Split the work into up to ${limit} parts that do not depend on each other and start a helper for each, in the same turn.`,
+    '- If the job truly does not split that many ways, use as many as it does and say so in one line. Never give two helpers the same file.',
+    `- ${how}`,
+    '- Check the helpers\' work together before you finish.',
+  ].join('\n');
 }
 
 export function workingMethodBriefing(): string {

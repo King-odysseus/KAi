@@ -47,6 +47,44 @@ export const RESPONSE_STYLE_DESCRIPTION: Record<ResponseStyle, string> = {
   technical: 'Precise engineering language. Assumes you know the codebase.',
 };
 
+/**
+ * How many helper agents the agent may run alongside itself on a job.
+ * - auto: the agent decides. A large job with separate parts is split and given helpers; a small one is not.
+ * - a number: up to that many helpers at once. The agent is told to split the job into that many independent parts.
+ * - off: no helpers; the agent does all the work itself.
+ * A string, so the composer can offer it as a plain choice and keep it as one.
+ */
+export const HELPER_CHOICES = ['auto', 'off', '2', '3', '4', '5', '6', '8'] as const;
+export const helperChoiceSchema = z.enum(HELPER_CHOICES);
+export type HelperChoice = z.infer<typeof helperChoiceSchema>;
+
+export const HELPER_CHOICE_LABEL: Record<HelperChoice, string> = {
+  auto: 'Agents: auto',
+  off: 'Agents: 1',
+  '2': 'Agents: 2',
+  '3': 'Agents: 3',
+  '4': 'Agents: 4',
+  '5': 'Agents: 5',
+  '6': 'Agents: 6',
+  '8': 'Agents: 8',
+};
+
+export const HELPER_CHOICE_DESCRIPTION: Record<HelperChoice, string> = {
+  auto: 'It decides. A large job with separate parts gets helper agents; a small one does not.',
+  off: 'One agent does everything. No helpers.',
+  '2': 'Up to 2 helper agents at once, working side by side.',
+  '3': 'Up to 3 helper agents at once, working side by side.',
+  '4': 'Up to 4 helper agents at once, working side by side.',
+  '5': 'Up to 5 helper agents at once, working side by side.',
+  '6': 'Up to 6 helper agents at once, working side by side.',
+  '8': 'Up to 8 helper agents at once, working side by side.',
+};
+
+/** The most helpers a choice allows at once: null when the agent decides, 0 for none. */
+export function helperLimitOf(choice: HelperChoice | undefined): number | null {
+  if (!choice || choice === 'auto') return null;
+  return choice === 'off' ? 0 : Number(choice);
+}
 /** Thinking effort, in the words the CLIs themselves use. */
 export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const reasoningEffortSchema = z.enum(REASONING_EFFORTS);
@@ -69,6 +107,8 @@ export const agentRunRequestSchema = z
     model: cliModelNameSchema.optional(),
     // How the agent words its replies; without it the run uses plain words.
     responseStyle: responseStyleSchema.optional(),
+    // How many helper agents this run may use. Without it the agent decides.
+    helpers: helperChoiceSchema.optional(),
     // How hard the agent thinks on this run. Only agents that take an effort setting (see CLI_EFFORT_LEVELS) use it.
     reasoning: reasoningEffortSchema.optional(),
     // How heavy the work is, when the caller already knows (a workflow step judged on its own prompt). Without it,

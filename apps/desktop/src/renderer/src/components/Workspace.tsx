@@ -23,6 +23,7 @@ import {
   Download,
   Eye,
   Lightbulb,
+  Users,
   File,
   FileSearch,
   ExternalLink,
@@ -72,6 +73,7 @@ import type {
   ContextChip,
   ContextPreview,
   ReasoningEffort,
+  HelperChoice,
   ResponseStyle,
   ConversationTurn,
   DirectApiCapability,
@@ -91,7 +93,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -207,6 +209,9 @@ interface WorkspaceViewProps {
   /** How the agent words its replies; plain words unless the person changed it. */
   selectedStyle: ResponseStyle;
   onSelectStyle: (style: ResponseStyle) => void;
+  /** How many helper agents a run may use; auto lets the agent decide. */
+  selectedHelpers: HelperChoice;
+  onSelectHelpers: (helpers: HelperChoice) => void;
   /** The effort levels the selected agent's CLI accepts; empty hides the control. */
   reasoningLevels: readonly ReasoningEffort[];
   onSelectReasoning: (reasoning: ReasoningEffort | '') => void;
@@ -402,6 +407,8 @@ export function WorkspaceView({
   selectedReasoning,
   selectedStyle,
   onSelectStyle,
+  selectedHelpers,
+  onSelectHelpers,
   reasoningLevels,
   onSelectReasoning,
   interruptedRuns,
@@ -1989,6 +1996,7 @@ export function WorkspaceView({
               <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
               <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <SelectMenu ariaLabel="Reply style" className="composer-style-select" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
+              <SelectMenu ariaLabel="Agents" className="composer-style-select" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once. Auto lets the agent decide: a large job with separate parts gets helpers." value={selectedHelpers} />
               {helperAgentCount > 0 && (
                 <span
                   className="composer-helper-pill"

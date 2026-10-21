@@ -1288,6 +1288,75 @@ data: {"type":"message_stop"}
     });
   });
 
+  describe('the composer\'s Agents choice, enforced where helpers are started', () => {
+    const stop = '\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+    const toolUse = (index: number, id: string, name: string, input: unknown): string =>
+      `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index, content_block: { type: 'tool_use', id, name, input } })}\n\n`;
+    const text = (value: string): string =>
+      `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: value } })}${stop}`;
+
+    /** A provider whose main run asks for `count` read-only helpers at once, and whose helpers take a moment to answer. */
+    async function provider(count: number): Promise<{ baseUrl: string; peak: () => number; bodies: Array<{ tools?: Array<{ name: string }>; messages: unknown[] }> }> {
+      const bodies: Array<{ tools?: Array<{ name: string }>; messages: unknown[] }> = [];
+      let inFlight = 0;
+      let peak = 0;
+      const server = http.createServer((request, response) => {
+        let raw = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => { raw += chunk; });
+        request.on('end', () => {
+          const body = JSON.parse(raw) as { tools?: Array<{ name: string }>; messages: unknown[] };
+          bodies.push(body);
+          const names = (body.tools ?? []).map((tool) => tool.name);
+          const answered = JSON.stringify(body.messages).includes('tool_result');
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          if (names.includes('task')) {
+            response.end(answered ? text('All done.') : Array.from({ length: count }, (_, index) => toolUse(index, `toolu_${index}`, 'task', { prompt: `Look at part ${index}` })).join('') + stop.trimStart());
+            return;
+          }
+          // A helper: counted while it is being answered, so the most that were going at once can be read afterwards.
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          setTimeout(() => { inFlight -= 1; response.end(text('Found it.')); }, 150);
+        });
+      });
+      return { baseUrl: await listen(server), peak: () => peak, bodies };
+    }
+
+    it('refuses every helper when the choice is 1, and tells the model why', async () => {
+      const { baseUrl, bodies, peak } = await provider(2);
+      const runtime = new DesktopDirectProviderRuntime(settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')), credentialPort('provider.anthropic', 'anthropic-secret'));
+
+      const result = await runtime.run({ ...runRequest(), autonomy: 'autoEdit', helpers: 'off' }, isolatedProjectRoot);
+
+      expect(result.status).toBe('completed');
+      expect(peak()).toBe(0);
+      expect(bodies).toHaveLength(2);
+      expect(JSON.stringify(bodies[1]!.messages)).toContain('switched off');
+    });
+
+    it('runs no more helpers at once than the number chosen', async () => {
+      const { baseUrl, peak } = await provider(5);
+      const runtime = new DesktopDirectProviderRuntime(settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')), credentialPort('provider.anthropic', 'anthropic-secret'));
+
+      const result = await runtime.run({ ...runRequest(), autonomy: 'autoEdit', helpers: '2' }, isolatedProjectRoot);
+
+      expect(result.status).toBe('completed');
+      expect(peak()).toBe(2);
+      // All five were still done; the rest waited their turn.
+      expect(result.events.filter((event) => event.type === 'tool.call' && event.name === 'task' && event.status === 'completed')).toHaveLength(5);
+    });
+
+    it('lets an agent on auto run as many as it asks for, up to the ceiling', async () => {
+      const { baseUrl, peak } = await provider(5);
+      const runtime = new DesktopDirectProviderRuntime(settingsPort(directProviderSettings(baseUrl, 'anthropic', 'claude-sonnet-5')), credentialPort('provider.anthropic', 'anthropic-secret'));
+
+      await runtime.run({ ...runRequest(), autonomy: 'autoEdit', helpers: 'auto' }, isolatedProjectRoot);
+
+      expect(peak()).toBe(5);
+    });
+  });
+
   it('fails a run whose every action was refused by the access level, rather than calling its prose a success', async () => {
     // Under Plan access the model cannot edit anything, so this is what a run that was asked to make a change looks
     // like: it tries, is refused, and then writes about it. Prose used to be enough for `completed`, which meant a

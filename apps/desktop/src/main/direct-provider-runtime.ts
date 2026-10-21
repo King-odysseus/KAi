@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
-import { directProviderPreset, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, planIsUnfinished, type ProviderId } from '@kai/contracts';
+import { directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, planIsUnfinished, type ProviderId } from '@kai/contracts';
 import type {
   AppSettings,
   AgentRunRequest,
@@ -56,7 +56,7 @@ type TaskResult = { answer: string; costUsd: number; provider?: string; model?: 
  * start helpers of its own.
  */
 type TaskRun = ((prompt: string, model: string | undefined, options?: { write?: boolean }) => Promise<TaskResult>) & {
-  writeBatch?: (tasks: WritingTask[], signal: AbortSignal) => Promise<WritingBatchResult>;
+  writeBatch?: (tasks: WritingTask[], signal: AbortSignal, limit?: number) => Promise<WritingBatchResult>;
 };
 
 /** What a writing helper is told before its task: where it works, what it may touch, and what to report. */
@@ -707,7 +707,7 @@ export class DesktopDirectProviderRuntime {
     const run: TaskRun = (prompt, model, options) => this.runTaskQuery(prompt, model, request, projectRoot, contextText, options?.write === true);
     // The project's check is found once per round, and run in each helper's copy before anything is merged.
     let command: Promise<string | null> | undefined;
-    run.writeBatch = (tasks, signal) => runWritingHelpers(tasks, {
+    run.writeBatch = (tasks, signal, limit) => runWritingHelpers(tasks, {
       prepare: () => createParallelSession(projectRoot, `helpers-${randomUUID()}`),
       run: (prompt, model, folder) => this.runTaskQuery(prompt, model, request, folder ?? projectRoot, contextText, true),
       check: async (folder, checkSignal) => {
@@ -717,7 +717,7 @@ export class DesktopDirectProviderRuntime {
         const result = await runCheckCommand(folder, found, checkSignal);
         return { passed: result.exitCode === 0, output: result.output };
       },
-    }, signal);
+    }, signal, limit);
     return run;
   }
 
@@ -2680,6 +2680,12 @@ async function executeTaskToolCall(
     return formatOutput(callId, { error: message });
   }
   if (signal.aborted) throw new Error('Provider tool execution was cancelled.');
+  const switchedOff = helpersOffRefusal(request);
+  if (switchedOff) {
+    toolRuntime.guard.noteToolOutcome(false);
+    emit(toolCallEvent(request, 'task', 'failed', argumentsValue, { error: switchedOff }, callId));
+    return formatOutput(callId, { error: switchedOff });
+  }
   const refusal = writingRefusal(request, parsed.data.write === true);
   if (refusal) {
     toolRuntime.guard.noteToolOutcome(false);
@@ -2700,6 +2706,12 @@ async function executeTaskToolCall(
 function writingRefusal(request: AgentRunRequest, write: boolean): string | null {
   if (!write || WRITING_HELPER_AUTONOMY.has(request.autonomy)) return null;
   return `A helper that writes code needs Auto-edit or Full access, and this run is in ${request.autonomy} mode, where edits are approved one by one. Make the edit yourself, or use a read-only helper to look something up.`;
+}
+
+/** Why no helper may be started in this run, or null when helpers are allowed. The composer's Agents choice of 1 means none. */
+function helpersOffRefusal(request: AgentRunRequest): string | null {
+  if (helperLimitOf(request.helpers) !== 0) return null;
+  return 'Helpers are switched off for this run (the composer\'s Agents choice is 1). Do the work yourself.';
 }
 
 function helperNotice(request: AgentRunRequest, prompt: string, write: boolean): PersistedEvent {
@@ -2780,15 +2792,18 @@ async function executeTaskBatch(
   const writing = entries.filter((entry) => {
     if (!entry.ready) return false;
     const parsed = taskInputSchema.safeParse(entry.argumentsValue);
-    return parsed.success && parsed.data.write === true && writingRefusal(request, true) === null;
+    return parsed.success && parsed.data.write === true && writingRefusal(request, true) === null && helpersOffRefusal(request) === null;
   });
   const batched = taskRun.writeBatch && writing.length >= 2 ? new Set(writing) : new Set<(typeof entries)[number]>();
   const others = entries.filter((entry) => entry.ready && !batched.has(entry));
 
+  // The composer's Agents choice is also the most helpers that run at once, when it names a number.
+  const helperLimit = helperLimitOf(request.helpers);
+  const helperCeiling = helperLimit ? Math.min(MAX_HELPERS_AT_ONCE, helperLimit) : MAX_HELPERS_AT_ONCE;
   let next = 0;
   // At most MAX_HELPERS_AT_ONCE run together and the rest wait their turn, so a model that asks for fifty helpers is
   // served, not refused. The number is Claude Code's own documented default for sub-agents running at once.
-  const workers = Array.from({ length: Math.min(MAX_HELPERS_AT_ONCE, others.length) }, async () => {
+  const workers = Array.from({ length: Math.min(helperCeiling, others.length) }, async () => {
     while (next < others.length) {
       const entry = others[next];
       next += 1;
@@ -2810,7 +2825,7 @@ async function executeTaskBatch(
       emit(helperNotice(request, parsed.prompt, true));
       tasks.push({ id: `helper-${tasks.length + 1}`, prompt: parsed.prompt, model: parsed.model });
     }
-    const batch = await writeBatch(tasks, signal).catch((error: unknown): WritingBatchResult => ({
+    const batch = await writeBatch(tasks, signal, helperLimit ?? undefined).catch((error: unknown): WritingBatchResult => ({
       outcomes: tasks.map((task) => ({
         id: task.id, answer: '', costUsd: 0, files: [], check: 'not run', checkOutput: '', applied: false, reran: false,
         error: error instanceof Error ? error.message : String(error),

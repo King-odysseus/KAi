@@ -19,6 +19,7 @@ import type {
   ProjectPreferences,
   ReasoningEffort,
   RecoveryResume,
+  HelperChoice,
   ResponseStyle,
   RouteMode,
   SettingsUpdate,
@@ -27,7 +28,7 @@ import type {
   SkillSummary,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
+import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
@@ -100,6 +101,8 @@ interface ComposerSelection {
   reasoning?: ReasoningEffort | '';
   /** How the agent words its replies in this conversation. */
   style?: ResponseStyle;
+  /** How many helper agents this conversation's runs may use; auto lets the agent decide. */
+  helpers?: HelperChoice;
 }
 
 const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
@@ -184,6 +187,18 @@ function loadDefaultResponseStyle(): ResponseStyle {
     return parsed.success ? parsed.data : 'plain';
   } catch {
     return 'plain';
+  }
+}
+
+const HELPERS_KEY = 'kai.helpers.v1';
+
+/** The Agents choice a new conversation starts with: the one the person last chose, or auto. */
+function loadDefaultHelperChoice(): HelperChoice {
+  try {
+    const parsed = helperChoiceSchema.safeParse(window.localStorage.getItem(HELPERS_KEY));
+    return parsed.success ? parsed.data : 'auto';
+  } catch {
+    return 'auto';
   }
 }
 
@@ -402,6 +417,7 @@ export function App(): ReactNode {
   const selectionFits = activeComposerSelection?.agent === selectedAgent && activeComposerSelection?.execution === executionMode;
   const selectedWorkspaceModel = modelFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.model : modelChoices[`${executionMode}:${selectedAgent}`]);
   const selectedWorkspaceStyle: ResponseStyle = activeComposerSelection?.style ?? loadDefaultResponseStyle();
+  const selectedWorkspaceHelpers: HelperChoice = activeComposerSelection?.helpers ?? loadDefaultHelperChoice();
   const selectedWorkspaceReasoning = reasoningFor(selectedAgent, executionMode, selectionFits ? activeComposerSelection?.reasoning : '');
   const updateComposerDraft = useCallback((value: string) => {
     setComposerDrafts((current) => current[activeDraftKey] === value ? current : { ...current, [activeDraftKey]: value });
@@ -1355,6 +1371,7 @@ export function App(): ReactNode {
             return model ? { model } : {};
           })(),
           responseStyle: composerSelections[conversation.id]?.style ?? loadDefaultResponseStyle(),
+          helpers: composerSelections[conversation.id]?.helpers ?? loadDefaultHelperChoice(),
           ...(() => {
             const saved = composerSelections[conversation.id];
             const savedFits = saved?.agent === runAgentId && saved?.execution === runExecution;
@@ -2300,6 +2317,11 @@ export function App(): ReactNode {
               }
               setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }));
               updateComposerSelection({ model });
+            }}
+            selectedHelpers={selectedWorkspaceHelpers}
+            onSelectHelpers={(helpers) => {
+              try { window.localStorage.setItem(HELPERS_KEY, helpers); } catch { /* the choice still applies to this conversation */ }
+              updateComposerSelection({ helpers });
             }}
             selectedStyle={selectedWorkspaceStyle}
             onSelectStyle={(style) => {

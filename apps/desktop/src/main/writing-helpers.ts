@@ -114,7 +114,7 @@ export async function runWritingHelpers(
   const clashed = new Map<string, string[]>();
   let notice: string | null = null;
   try {
-    await pool(tasks, limit, async (task) => {
+    await pool(tasks, Math.min(limit, MAX_WRITING_HELPERS_AT_ONCE), async (task) => {
       const draft: Draft = { id: task.id, costUsd: 0, files: [], check: 'not run', checkOutput: '' };
       drafts.set(task.id, draft);
       try {

@@ -80,7 +80,7 @@ import { describeRunOutcome, outstandingLine } from './run-summary';
 import { planBriefingFor, readPlan } from './plan-store';
 import { MemoryBudget } from './memory-budget';
 import { buildTurnDigest } from './turn-digest';
-import { responseStyleBriefing, workingMethodBriefing } from './working-method';
+import { helpersBriefing, responseStyleBriefing, workingMethodBriefing } from './working-method';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
 import { buildHistoryNote } from './run-history';
 import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections, type InterjectionAttachment, type InterjectionExtras } from './interjections';
@@ -1746,7 +1746,9 @@ export async function runConversationAgent(
         // session already has it.
         !resumeSessionId,
       )).text;
-  let effectivePrompt = `${workingMethodBriefing()}\n\n${responseStyleBriefing(request.responseStyle)}\n\n${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
+  // Autopilot tells its own cards how to use helpers, so the composer's choice is not added to those runs.
+  const helpersNote = conversation.origin?.kind === 'autopilot' ? '' : `${helpersBriefing(request.helpers, executionMode)}\n\n`;
+  let effectivePrompt = `${workingMethodBriefing()}\n\n${responseStyleBriefing(request.responseStyle)}\n\n${helpersNote}${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
   if (activeGoal) effectivePrompt = buildGoalPrompt(activeGoal, effectivePrompt);
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
   const terminalTools = context.terminalMcp === true;
