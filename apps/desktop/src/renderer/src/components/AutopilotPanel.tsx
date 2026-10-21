@@ -33,7 +33,7 @@ export const DEFAULT_AUTOPILOT_START = {
   maxHours: 12,
   maxCostUsd: 0,
   attemptsPerCard: 3,
-  parallelCards: 2,
+  parallelCards: 3,
   minGapSeconds: 0,
   blockerPolicy: 'continue-and-report' as const,
 };
@@ -288,7 +288,7 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
             </label>
             <label>
               <span>Cards at once</span>
-              <input type="number" min={1} max={4} value={parallelCards} onChange={(event) => setParallelCards(Math.min(4, Math.max(1, Number(event.target.value) || 1)))} />
+              <input type="number" min={1} max={8} value={parallelCards} onChange={(event) => setParallelCards(Math.min(8, Math.max(1, Number(event.target.value) || 1)))} />
               <small>Cards that do not wait on each other run side by side, each in its own copy of the project. 1 works one card at a time. Needs a git project with a commit.</small>
             </label>
             <label>

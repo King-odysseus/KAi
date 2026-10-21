@@ -30,6 +30,8 @@ export const AUTOPILOT_AGENT = 'Autopilot';
  */
 const MAX_REST_WITHOUT_PROGRESS_MS = 9 * 3_600_000;
 const LOG_LIMIT = 60;
+/** A card's own request, and up to three read-only helper calls the model makes at once beside it. */
+const API_REQUESTS_PER_CARD = 4;
 const TAIL_CHARS = 2_500;
 
 /** What a card's agent is told about helpers. A card is the unit of work; a helper is a way to finish one faster. */
@@ -314,7 +316,11 @@ export class DesktopAutopilot {
     const startedAt = this.ports.now();
     const deadline = input.maxHours > 0 ? startedAt + input.maxHours * 3_600_000 : Infinity;
     // Pacing is only worth the bookkeeping for Direct API runs; a CLI agent paces itself.
-    if (input.execution === 'api') this.ports.setPacer(new RequestPacer({ maxConcurrent: 2, minGapMs: input.minGapSeconds * 1_000 }));
+    // No fixed number is guessed here. A provider's own limit is far above what a few cards need (DeepSeek documents
+    // hundreds of concurrent requests per account), and when one does push back with a 429 the pacer widens its gap and
+    // the run rests. So the room is what the run itself can ask for: each card's own request plus the read-only helpers
+    // it may start beside it.
+    if (input.execution === 'api') this.ports.setPacer(new RequestPacer({ maxConcurrent: Math.max(1, input.parallelCards) * API_REQUESTS_PER_CARD, minGapMs: input.minGapSeconds * 1_000 }));
     let command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
     if (!command) this.record(projectId, owner, 'warn', 'No check command is set and none was detected, so cards cannot be closed. They will stop in review.');
     await this.noteProvisionalDesign(projectId, owner);

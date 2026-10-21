@@ -200,7 +200,7 @@ export const teamStartInputSchema = z
     maxRounds: z.number().int().min(1).max(5).default(2),
     // Run parts that do not depend on each other at the same time, each in its own copy of the project.
     parallel: z.boolean().default(false),
-    maxConcurrent: z.number().int().min(2).max(4).default(3),
+    maxConcurrent: z.number().int().min(2).max(8).default(3),
   })
   .strict();
 

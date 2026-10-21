@@ -28,7 +28,7 @@ export const autopilotStartInputSchema = z
      * How many independent cards are worked side by side, each in its own copy of the project. One is the old,
      * strictly serial loop. It falls back to one by itself when the project is not a git repository with a commit.
      */
-    parallelCards: z.number().int().min(1).max(4).default(2),
+    parallelCards: z.number().int().min(1).max(8).default(3),
     /**
      * A cheaper model for easy cards' first attempt (a component with no screen of its own, or setup nothing waits
      * on). A retry, and every other card, uses `model`. Blank uses `model` for everything.

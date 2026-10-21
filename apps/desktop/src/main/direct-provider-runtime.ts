@@ -2670,21 +2670,37 @@ async function executeTaskBatch(
   taskRun: (prompt: string, model: string | undefined) => Promise<{ answer: string; costUsd: number; provider?: string; model?: string }>,
   formatOutput: (callId: string, output: unknown) => unknown,
 ): Promise<unknown[]> {
-  return Promise.all(calls.map(async (call) => {
-    const callId = call.callId || `call_${randomUUID()}`;
-    let argumentsValue: unknown;
-    try {
-      argumentsValue = parseToolArguments(call.argumentsText);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      toolRuntime.guard.noteToolOutcome(false);
-      emit(toolCallEvent(request, 'task', 'failed', undefined, { error: message }, callId));
-      return formatOutput(callId, { error: message });
+  const results: unknown[] = new Array(calls.length);
+  let next = 0;
+  // At most MAX_HELPERS_AT_ONCE run together and the rest wait their turn, so a model that asks for fifty helpers is
+  // served, not refused. The number is Claude Code's own documented default for sub-agents running at once.
+  const workers = Array.from({ length: Math.min(MAX_HELPERS_AT_ONCE, calls.length) }, async () => {
+    while (next < calls.length) {
+      const index = next;
+      next += 1;
+      const call = calls[index];
+      if (!call) continue;
+      const callId = call.callId || `call_${randomUUID()}`;
+      let argumentsValue: unknown;
+      try {
+        argumentsValue = parseToolArguments(call.argumentsText);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toolRuntime.guard.noteToolOutcome(false);
+        emit(toolCallEvent(request, 'task', 'failed', undefined, { error: message }, callId));
+        results[index] = formatOutput(callId, { error: message });
+        continue;
+      }
+      emit(toolCallEvent(request, 'task', 'started', argumentsValue, undefined, callId));
+      results[index] = await executeTaskToolCall(request, toolRuntime, callId, argumentsValue, signal, emit, taskRun, formatOutput);
     }
-    emit(toolCallEvent(request, 'task', 'started', argumentsValue, undefined, callId));
-    return executeTaskToolCall(request, toolRuntime, callId, argumentsValue, signal, emit, taskRun, formatOutput);
-  }));
+  });
+  await Promise.all(workers);
+  return results;
 }
+
+/** Read-only helpers one round may run together; more are queued behind them. */
+const MAX_HELPERS_AT_ONCE = 20;
 
 async function executeToolCalls(
   request: AgentRunRequest,

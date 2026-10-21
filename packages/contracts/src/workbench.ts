@@ -149,7 +149,7 @@ export const workflowSchema = z
     loopProgress: workflowLoopProgressSchema.optional(),
     teamCheck: workflowTeamCheckSchema.optional(),
     // Independent steps run at the same time, each in its own copy of the project, up to this many at once.
-    parallel: z.object({ maxConcurrent: z.number().int().min(2).max(4) }).strict().optional(),
+    parallel: z.object({ maxConcurrent: z.number().int().min(2).max(8) }).strict().optional(),
     // Why the workflow stopped when no single step explains it, for example files left alone after a merge.
     notice: z.string().max(2_000).optional(),
     status: workflowStatusSchema,
@@ -219,7 +219,7 @@ export const workflowStartInputSchema = z
     autonomy: autonomyModeSchema,
     loop: workflowLoopSettingsSchema.optional().default({ enabled: false, maxRounds: 3, maxCostUsd: 0, maxDurationMinutes: 30, checkCommand: '' }),
     teamCheck: z.object({ command: z.string().trim().min(1).max(1_000), maxRounds: z.number().int().min(1).max(5) }).strict().optional(),
-    parallel: z.object({ maxConcurrent: z.number().int().min(2).max(4) }).strict().optional(),
+    parallel: z.object({ maxConcurrent: z.number().int().min(2).max(8) }).strict().optional(),
   })
   .strict();
 

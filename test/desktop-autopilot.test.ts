@@ -530,6 +530,11 @@ describe('desktop autopilot', () => {
       expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
     });
 
+    it('accepts up to eight cards at once and no more', () => {
+      expect(autopilotStartInputSchema.parse({ projectId: 'p1', parallelCards: 8 }).parallelCards).toBe(8);
+      expect(() => autopilotStartInputSchema.parse({ projectId: 'p1', parallelCards: 9 })).toThrow();
+    });
+
     it('runs one card at a time when the setting is 1, even with copies available', async () => {
       const h = harness({ cards: [card('a'), card('b')], parallel: {} });
       await start(h, { parallelCards: 1 });

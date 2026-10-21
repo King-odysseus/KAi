@@ -444,7 +444,7 @@ export function TeamPanel({
                   <label className="workflow-field team-rounds">
                     <span>At most</span>
                     <Select aria-label="Parts at once" value={maxConcurrent} disabled={disabled} onChange={(event) => setMaxConcurrent(Number(event.target.value))}>
-                      {[2, 3, 4].map((count) => <option key={count} value={count}>{count} at once</option>)}
+                      {[2, 3, 4, 5, 6, 8].map((count) => <option key={count} value={count}>{count} at once</option>)}
                     </Select>
                   </label>
                   <small className="team-waves" aria-label="Run order">{waveSummary(draft.parts)}</small>

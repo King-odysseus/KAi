@@ -214,7 +214,9 @@ export class DesktopAutoSession {
       active.opened = true;
       this.ports.openConversation(ownerWindowId, conversation);
     }
-    this.ports.setPacer(new RequestPacer({ maxConcurrent: 2, minGapMs: input.minGapSeconds * 1_000 }));
+    // Room for the agent's own request and the read-only helpers it starts beside it. A provider that pushes back
+    // with a 429 slows the pacer by itself, so no smaller number is guessed here.
+    this.ports.setPacer(new RequestPacer({ maxConcurrent: 4, minGapMs: input.minGapSeconds * 1_000 }));
     active.done = this.drive(input, conversation.id, command, active).finally(() => {
       this.runs.delete(conversation.id);
       this.ports.setPacer(undefined);
