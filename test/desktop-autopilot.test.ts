@@ -531,6 +531,71 @@ describe('desktop autopilot', () => {
       expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
     });
 
+    it('claims the cards one at a time, and tries again when the board says it changed underneath the claim', async () => {
+      const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {} });
+      const original = h.ports.claimCard;
+      let inFlight = 0;
+      let most = 0;
+      let refusedOnce = false;
+      h.ports.claimCard = async (projectId, id, agent) => {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        if (id === 'b' && !refusedOnce) {
+          refusedOnce = true;
+          throw new Error('The Studio board changed while this update was pending (expected revision 4, found 5). Reload the board and try again.');
+        }
+        return original(projectId, id, agent);
+      };
+      await start(h, { parallelCards: 3 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(most).toBe(1);
+      expect(refusedOnce).toBe(true);
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+      expect(h.atOnce()).toBe(3);
+    });
+
+    it('leaves a card in the queue when it cannot be claimed, and still works the others', async () => {
+      const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {} });
+      const original = h.ports.claimCard;
+      let refusals = 0;
+      h.ports.claimCard = async (projectId, id, agent) => {
+        if (id === 'b' && refusals < 6) {
+          refusals += 1;
+          throw new Error('The Studio board changed while this update was pending (expected revision 4, found 5).');
+        }
+        return original(projectId, id, agent);
+      };
+      await start(h, { parallelCards: 3 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+      expect(final.log.some((entry) => entry.text.includes('could not be claimed'))).toBe(true);
+    });
+
+    it('does not lose the work of the cards that finished when one card\'s lane falls over', async () => {
+      const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {} });
+      const original = h.ports.createConversation;
+      let failed = false;
+      h.ports.createConversation = async (projectId, title, item) => {
+        if (item.id === 'b' && !failed) {
+          failed = true;
+          throw new Error('The conversation could not be saved.');
+        }
+        return original(projectId, title, item);
+      };
+      await start(h, { parallelCards: 3 });
+      const final = await settled(h);
+      expect(final.phase).toBe('finished');
+      expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+      expect(final.log.some((entry) => entry.text.includes('stopped while working in its copy'))).toBe(true);
+      // a and c were merged and checked; b ran again on its own afterwards.
+      expect(h.cwds.filter((cwd) => cwd !== undefined)).toHaveLength(2);
+      expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(1);
+    });
+
     it('accepts up to eight cards at once and no more', () => {
       expect(autopilotStartInputSchema.parse({ projectId: 'p1', parallelCards: 8 }).parallelCards).toBe(8);
       expect(() => autopilotStartInputSchema.parse({ projectId: 'p1', parallelCards: 9 })).toThrow();

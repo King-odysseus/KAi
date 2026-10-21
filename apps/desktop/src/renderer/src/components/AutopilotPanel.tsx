@@ -216,9 +216,15 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
               {busy ? <Loader2 className="spin" size={14} /> : <Square size={14} />} Stop
             </button>
           ) : (
+            <>
+              <label className="autopilot-quick" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0, whiteSpace: 'nowrap' }} title="Cards that do not wait on each other run side by side, each in its own copy of the project. 1 works one card at a time.">
+                <span>Cards at once</span>
+                <input type="number" min={1} max={8} value={parallelCards} disabled={busy} aria-label="Cards at once" style={{ width: '3.5rem' }} onChange={(event) => setParallelCards(Math.min(8, Math.max(1, Number(event.target.value) || 1)))} />
+              </label>
             <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedReason}>
               {busy ? <Loader2 className="spin" size={14} /> : <Plane size={14} />} {status?.phase === 'finished' || status?.phase === 'stopped' || status?.phase === 'failed' ? 'Run again' : 'Start Autopilot'}
             </button>
+            </>
           )}
           <button
             type="button"

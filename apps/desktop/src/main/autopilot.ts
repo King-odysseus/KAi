@@ -32,6 +32,8 @@ const MAX_REST_WITHOUT_PROGRESS_MS = 9 * 3_600_000;
 const LOG_LIMIT = 60;
 /** A card's own request, and up to three read-only helper calls the model makes at once beside it. */
 const API_REQUESTS_PER_CARD = 4;
+/** Tries at claiming a card when the board keeps reporting that it changed underneath the claim. */
+const CLAIM_ATTEMPTS = 6;
 const TAIL_CHARS = 2_500;
 
 /** What a card's agent is told about helpers. A card is the unit of work; a helper is a way to finish one faster. */
@@ -542,7 +544,7 @@ export class DesktopAutopilot {
       state.cardId = card.id;
       state.cardTitle = card.title;
     }
-    await this.ports.claimCard(projectId, card.id, label);
+    await this.claimWithRetry(projectId, card.id, label, active.controller.signal);
     active.held += 1;
     // Written before the log line, not after: the line's own `touch` would have nothing to attach itself to, and the
     // report of an interrupted run would name the previous card's work for as long as this one took to say anything.
@@ -559,6 +561,24 @@ export class DesktopAutopilot {
       }));
     }
     this.record(projectId, active.ownerWindowId, 'card', `Working on "${card.title}"${alongside > 0 ? `, alongside ${alongside} other card${alongside === 1 ? '' : 's'}` : ''}.`);
+  }
+
+  /**
+   * Claims a card, trying again when the board says it changed while the claim was pending. Anyone else writing the
+   * board in that moment — the Studio screen, a design sync, another claim — makes a claim fail through no fault of
+   * its own, and giving up on that would leave the card unworked for good.
+   */
+  private async claimWithRetry(projectId: string, cardId: string, label: string, signal: AbortSignal): Promise<void> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.ports.claimCard(projectId, cardId, label);
+        return;
+      } catch (error) {
+        const conflict = error instanceof Error && /changed while this update was pending/i.test(error.message);
+        if (!conflict || attempt >= CLAIM_ATTEMPTS) throw error;
+        await sleepAbortable(100 * attempt, signal);
+      }
+    }
   }
 
   /** The card is out of this run's hands. The journal record goes only when the last held card does. */
@@ -616,15 +636,32 @@ export class DesktopAutopilot {
     }
     const open = session;
     const signal = active.controller.signal;
-    this.phase(projectId, owner, 'working', `Working on ${cards.length} cards side by side: ${cards.map((card) => `"${card.title}"`).join(', ')}.`);
-    state.cardsWorked += cards.length;
+
+    // Claimed one at a time. The board takes one write at a time and refuses one that read an older version, so three
+    // claims at once make two of them fail, and a card nobody claimed would be worked as if it were held.
+    const claimed: BoardCard[] = [];
+    for (const card of cards) {
+      if (signal.aborted) break;
+      try {
+        await this.holdCard(input, label, card, active, cards.length - 1);
+        claimed.push(card);
+      } catch (error) {
+        this.record(projectId, owner, 'warn', `"${card.title}" could not be claimed (${error instanceof Error ? error.message : String(error)}); it stays in the queue.`);
+      }
+    }
+    if (claimed.length < 2) {
+      // Not enough to work side by side. What was claimed is held, so the loop picks it up first on its next pass.
+      await open.dispose().catch(() => undefined);
+      return claimed.length === 1;
+    }
+    this.phase(projectId, owner, 'working', `Working on ${claimed.length} cards side by side: ${claimed.map((card) => `"${card.title}"`).join(', ')}.`);
+    state.cardsWorked += claimed.length;
 
     type Lane = { card: BoardCard; conversationId: string | null; result: { failed: boolean; error: string }; commit?: string };
     const lanes: Lane[] = [];
     const clashed = new Set<string>();
     try {
-      const settled = await Promise.allSettled(cards.map(async (card): Promise<Lane> => {
-        await this.holdCard(input, label, card, active, cards.length - 1);
+      const settled = await Promise.allSettled(claimed.map(async (card): Promise<Lane> => {
         let folder: string;
         try {
           folder = await open.checkout(card.id);
@@ -658,9 +695,23 @@ export class DesktopAutopilot {
           this.untrackLane(active, card.id, conversation.id);
         }
       }));
-      // A Stop, or a provider that never recovered, ends the whole run: there is nothing left to merge it into.
-      for (const outcome of settled) if (outcome.status === 'rejected') throw outcome.reason;
-      for (const outcome of settled) if (outcome.status === 'fulfilled') lanes.push(outcome.value);
+      // A Stop ends the run. Anything else that stopped one card must not cost the others the work they finished: the
+      // card that failed is simply worked again, in the project, after the rest are merged.
+      if (signal.aborted) {
+        const stopped = settled.find((outcome) => outcome.status === 'rejected');
+        throw stopped?.status === 'rejected' ? stopped.reason : new Error('Autopilot was stopped.');
+      }
+      settled.forEach((outcome, position) => {
+        const card = claimed[position];
+        if (!card) return;
+        if (outcome.status === 'fulfilled') {
+          lanes.push(outcome.value);
+          return;
+        }
+        const error = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        this.record(projectId, owner, 'warn', `"${card.title}" stopped while working in its copy: ${error.slice(0, 200)}`);
+        lanes.push({ card, conversationId: null, result: { failed: true, error } });
+      });
 
       const finished = lanes.filter((lane) => lane.commit);
       if (finished.length > 0) {
