@@ -2,7 +2,6 @@ import { PLAYWRIGHT_MCP_SERVER_ID, STUDIO_DESIGN_PATH, type PreviewState } from 
 import { nodesFromReply, pagesFromReply, unwrapReply, type DesignPorts } from './design-source';
 import { PAGE_FACTS_SCRIPT, parsePageFacts, type CapturedPage, type EqualizerPorts } from './equalizer';
 import { waitForPreviewUrl } from './preview-runtime';
-import { parseWindowSize, WINDOW_SIZE_SCRIPT } from './ui-check';
 
 /**
  * Wires the Equalizer to the real things: the Playwright MCP KAI already installs for its agents (which opens the
@@ -106,10 +105,11 @@ export function createEqualizerPorts(
     },
 
     async openPage(url, width): Promise<CapturedPage> {
-      await browser('browser_navigate', { url });
-      // The page is fixed at the size asked for and would stay that size, so the window it was in is put back after.
-      const before = parseWindowSize(textOf(await browser('browser_evaluate', { function: WINDOW_SIZE_SCRIPT }).catch(() => null)));
+      // In a tab of its own, closed after: a resize pins the page at that size and it would stay pinned, so the tab
+      // someone is looking at is never the one resized.
+      const opened = await browser('browser_tabs', { action: 'new' }).then(() => true, () => false);
       try {
+        await browser('browser_navigate', { url });
         await browser('browser_resize', { width, height: BROWSER_HEIGHT });
         await runtime.sleep(SETTLE_MS);
         const shot = await browser('browser_take_screenshot', { type: 'png', fullPage: true }).catch(() => browser('browser_take_screenshot', { type: 'png' }));
@@ -123,7 +123,7 @@ export function createEqualizerPorts(
         }
         return { png: Buffer.from(data, 'base64'), facts };
       } finally {
-        if (before) await browser('browser_resize', before).catch(() => undefined);
+        if (opened) await browser('browser_tabs', { action: 'close' }).catch(() => undefined);
       }
     },
 

@@ -506,21 +506,6 @@ function textOf(blocks: unknown[] | null): string {
   }).join('');
 }
 
-/** Asks the page how big its window is. Read before any `browser_resize`, while the page still follows the window. */
-export const WINDOW_SIZE_SCRIPT = '() => [window.innerWidth, window.innerHeight]';
-
-/**
- * The window size out of a `browser_evaluate` result, which is the pair as JSON somewhere in a block of prose.
- * Null when there is no such pair, or one too small to be a window: a restore to a guess would do more harm than none.
- */
-export function parseWindowSize(text: string): { width: number; height: number } | null {
-  const match = /\[\s*(\d{2,5})\s*,\s*(\d{2,5})\s*\]/.exec(text);
-  if (!match) return null;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  return width >= 200 && height >= 200 ? { width, height } : null;
-}
-
 /** The image block's base64 payload, however the MCP server wrapped it. */
 function imageData(blocks: unknown[] | null): string | null {
   for (const block of blocks ?? []) {
@@ -540,30 +525,30 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
   };
 
   /**
-   * Runs `work` and then puts the browser's page back to the size of its window.
+   * Runs `work` in a tab of its own, and closes the tab afterwards.
    *
-   * `browser_resize` fixes the page at a size of its own, and it stays there: a check at 390px wide left the shared
-   * browser showing a phone-sized page in the corner of a large window, with the rest of it empty, for whoever looked
-   * next. The size is read before the first resize, while the page still follows its window, and restored after, even
-   * when the check threw. A size that cannot be read is left alone rather than guessed.
+   * `browser_resize` fixes the page at the size it is given, and the page then ignores its window: maximising the
+   * browser changes nothing in it. A check at 390px wide used to leave the tab someone was looking at pinned at a phone
+   * width, in the corner of a large window. The pin is on the tab, so a tab opened for the check and closed after takes
+   * the pin with it — and the colour-scheme override that goes with it — and the tab anyone else is using is never
+   * touched. If a tab cannot be opened the check carries on in the current one, as it always did.
    */
-  const keepingWindowSize = async <T>(work: () => Promise<T>): Promise<T> => {
-    const before = parseWindowSize(textOf(await mcpCall('browser_evaluate', { function: WINDOW_SIZE_SCRIPT }).catch(() => null)));
+  const inOwnTab = async <T>(work: () => Promise<T>): Promise<T> => {
+    const opened = await mcpCall('browser_tabs', { action: 'new' }).then(() => true, () => false);
     try {
       return await work();
     } finally {
-      if (before) await mcpCall('browser_resize', before).catch(() => undefined);
+      if (opened) await mcpCall('browser_tabs', { action: 'close' }).catch(() => undefined);
     }
   };
-
   return {
     async previewUrl(projectId, projectPath) {
       return waitForPreviewUrl(runtime.preview, projectId, projectPath, { sleep: runtime.sleep });
     },
 
     async capture({ url, viewport, theme, card }) {
-      await mcpCall('browser_navigate', { url });
-      return keepingWindowSize(async () => {
+      return inOwnTab(async () => {
+        await mcpCall('browser_navigate', { url });
         await mcpCall('browser_resize', { width: viewport.width, height: viewport.height });
         await mcpCall('browser_emulate_media', { colorScheme: theme });
         // The whole page, not the first screen of it. A long page used to be saved as its top 900px, so the agent and
@@ -579,8 +564,8 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
     },
 
     async layout({ url, viewport }) {
-      await mcpCall('browser_navigate', { url });
-      return keepingWindowSize(async () => {
+      return inOwnTab(async () => {
+        await mcpCall('browser_navigate', { url });
         await mcpCall('browser_resize', { width: viewport.width, height: viewport.height });
         const blocks = await mcpCall('browser_evaluate', { function: UI_LAYOUT_SCRIPT });
         return parseLayout(textOf(blocks));

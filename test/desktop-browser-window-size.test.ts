@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PLAYWRIGHT_MCP_SERVER_ID, boardCardSchema, type BoardCard } from '../packages/contracts/src';
-import { parseWindowSize, playwrightUiCheckPorts, UI_LAYOUT_SCRIPT, WINDOW_SIZE_SCRIPT, type UiCheckRuntime } from '../apps/desktop/src/main/ui-check';
+import { playwrightUiCheckPorts, UI_LAYOUT_SCRIPT, type UiCheckRuntime } from '../apps/desktop/src/main/ui-check';
 import { BROWSER_RULES } from '../apps/desktop/src/main/ui-rules';
 
 const NOW = '2026-10-21T00:00:00.000Z';
@@ -11,22 +11,40 @@ const card = (): BoardCard => boardCardSchema.parse({
 });
 
 interface Call { tool: string; input: Record<string, unknown> }
+interface Tab { name: string; /** null while the tab follows its window; a size once something has pinned it with a resize. */ pinned: { width: number; height: number } | null; scheme: string | null }
 
-/** A Playwright MCP that follows a window of the given size and fixes the page at whatever a resize asks for. */
-function browser(window: { width: number; height: number }, options: { failScreenshot?: boolean; unreadable?: boolean } = {}): { runtime: UiCheckRuntime; calls: Call[]; page: () => { width: number; height: number } } {
+/**
+ * A Playwright MCP with tabs. A tab follows its window until `browser_resize` pins it, and stays pinned until it is
+ * closed; `browser_tabs` opens a fresh, unpinned tab and makes it the current one, and closes the current one.
+ */
+function browser(options: { failScreenshot?: boolean; cannotOpenTabs?: boolean } = {}): { runtime: UiCheckRuntime; calls: Call[]; tabs: Tab[]; current: () => Tab | undefined } {
   const calls: Call[] = [];
-  let page = { ...window };
+  const tabs: Tab[] = [{ name: 'the one the person is looking at', pinned: null, scheme: null }];
+  let index = 0;
+  let opened = 0;
   const runtime: UiCheckRuntime = {
     mcp: {
       callServerTool: async (serverId, tool, input) => {
         expect(serverId).toBe(PLAYWRIGHT_MCP_SERVER_ID);
         calls.push({ tool, input });
-        if (tool === 'browser_resize') { page = { width: Number(input.width), height: Number(input.height) }; return [{ type: 'text', text: 'ok' }]; }
-        if (tool === 'browser_evaluate' && input.function === WINDOW_SIZE_SCRIPT) {
-          return [{ type: 'text', text: options.unreadable ? 'nothing useful' : `### Result\n[${page.width},${page.height}]\n` }];
+        if (tool === 'browser_tabs') {
+          if (input.action === 'new') {
+            if (options.cannotOpenTabs) throw new Error('no new tabs');
+            opened += 1;
+            tabs.push({ name: `check tab ${opened}`, pinned: null, scheme: null });
+            index = tabs.length - 1;
+          } else if (input.action === 'close') {
+            tabs.splice(index, 1);
+            index = Math.max(0, tabs.length - 1);
+          }
+          return [{ type: 'text', text: 'ok' }];
         }
+        const tab = tabs[index]!;
+        if (tool === 'browser_resize') { tab.pinned = { width: Number(input.width), height: Number(input.height) }; return [{ type: 'text', text: 'ok' }]; }
+        if (tool === 'browser_emulate_media') { tab.scheme = String(input.colorScheme); return [{ type: 'text', text: 'ok' }]; }
         if (tool === 'browser_evaluate' && input.function === UI_LAYOUT_SCRIPT) {
-          return [{ type: 'text', text: JSON.stringify({ measured: true, innerWidth: page.width, innerHeight: page.height, scrollWidth: page.width, clientWidth: page.width, hasViewportMeta: true, contentLeft: 0, contentRight: page.width, headerLeft: 0, headerRight: page.width, headerBacked: true, scrollable: false, navCount: 0, navVisibleAtTop: false, navVisibleAtBottom: false, fixedNavTop: 0, contentBottomAtScrollEnd: 0 }) }];
+          const width = tab.pinned?.width ?? 1745;
+          return [{ type: 'text', text: JSON.stringify({ measured: true, innerWidth: width, innerHeight: tab.pinned?.height ?? 1232, scrollWidth: width, clientWidth: width, hasViewportMeta: true, contentLeft: 0, contentRight: width, headerLeft: 0, headerRight: width, headerBacked: true, scrollable: false, navCount: 0, navVisibleAtTop: false, navVisibleAtBottom: false, fixedNavTop: 0, contentBottomAtScrollEnd: 0 }) }];
         }
         if (tool === 'browser_take_screenshot') {
           if (options.failScreenshot) throw new Error('no screenshot');
@@ -40,62 +58,72 @@ function browser(window: { width: number; height: number }, options: { failScree
     writeFile: async () => undefined,
     sleep: async () => undefined,
   };
-  return { runtime, calls, page: () => page };
+  return { runtime, calls, tabs, current: () => tabs[index] };
 }
 
 const phone = { name: 'phone', width: 390, height: 844 } as const;
+const original = (tabs: Tab[]): Tab | undefined => tabs.find((tab) => tab.name === 'the one the person is looking at');
 
-describe('putting the browser window back after a check', () => {
-  it('reads a size out of whatever the server wrapped around it, and refuses a guess', () => {
-    expect(parseWindowSize('### Result\n[1745,1232]\n### Ran Playwright code')).toEqual({ width: 1745, height: 1232 });
-    expect(parseWindowSize('[ 1920 , 1080 ]')).toEqual({ width: 1920, height: 1080 });
-    expect(parseWindowSize('nothing here')).toBeNull();
-    expect(parseWindowSize('[0,0]')).toBeNull();
-    expect(parseWindowSize('[12,9]')).toBeNull();
-  });
+describe('keeping the shared browser\'s window usable after a check', () => {
+  it('does its resizing in a tab of its own and leaves nothing pinned behind', async () => {
+    const b = browser();
+    await playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://127.0.0.1:5173', viewport: phone, theme: 'dark', card: card() });
 
-  it('leaves the page the size of its window after a screenshot at phone width', async () => {
-    const b = browser({ width: 1745, height: 1232 });
-    const ports = playwrightUiCheckPorts(b.runtime, () => NOW);
-
-    await ports.capture({ url: 'http://127.0.0.1:5173', viewport: phone, theme: 'dark', card: card() });
-
-    expect(b.calls.filter((call) => call.tool === 'browser_resize').map((call) => call.input)).toEqual([
-      { width: 390, height: 844 },
-      { width: 1745, height: 1232 },
+    expect(b.tabs).toHaveLength(1);
+    expect(original(b.tabs)).toEqual({ name: 'the one the person is looking at', pinned: null, scheme: null });
+    expect(b.calls.map((call) => call.tool === 'browser_tabs' ? `tabs:${String(call.input.action)}` : call.tool)).toEqual([
+      'tabs:new', 'browser_navigate', 'browser_resize', 'browser_emulate_media', 'browser_take_screenshot', 'tabs:close',
     ]);
-    expect(b.page()).toEqual({ width: 1745, height: 1232 });
   });
 
-  it('reads the window before the first resize, not after it', async () => {
-    const b = browser({ width: 1745, height: 1232 });
+  it('never resizes the tab that was already open', async () => {
+    const b = browser();
+    const seen: string[] = [];
+    const call = b.runtime.mcp.callServerTool;
+    b.runtime.mcp.callServerTool = async (serverId, tool, input) => {
+      if (tool === 'browser_resize') seen.push(b.current()!.name);
+      return call(serverId, tool, input);
+    };
     await playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://x', viewport: phone, theme: 'light', card: card() });
-    const order = b.calls.map((call) => call.tool);
-    expect(order.indexOf('browser_evaluate')).toBeLessThan(order.indexOf('browser_resize'));
+    expect(seen).toEqual(['check tab 1']);
   });
 
-  it('puts the window back even when the screenshot fails', async () => {
-    const b = browser({ width: 1745, height: 1232 }, { failScreenshot: true });
+  it('closes its tab even when the screenshot fails', async () => {
+    const b = browser({ failScreenshot: true });
     await expect(playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://x', viewport: phone, theme: 'light', card: card() })).rejects.toThrow('no screenshot');
-    expect(b.page()).toEqual({ width: 1745, height: 1232 });
+    expect(b.tabs).toHaveLength(1);
+    expect(original(b.tabs)?.pinned).toBeNull();
   });
 
-  it('restores after the layout measurement too, and still returns the measurement', async () => {
-    const b = browser({ width: 1745, height: 1232 });
+  it('measures the layout in a tab of its own too, and still returns the measurement', async () => {
+    const b = browser();
     const facts = await playwrightUiCheckPorts(b.runtime, () => NOW).layout!({ url: 'http://x', viewport: phone });
     expect(facts).toMatchObject({ innerWidth: 390 });
-    expect(b.page()).toEqual({ width: 1745, height: 1232 });
+    expect(b.tabs).toHaveLength(1);
+    expect(original(b.tabs)?.pinned).toBeNull();
   });
 
-  it('leaves the size alone, rather than guessing, when the window cannot be read', async () => {
-    const b = browser({ width: 1745, height: 1232 }, { unreadable: true });
-    await playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://x', viewport: phone, theme: 'light', card: card() });
-    expect(b.calls.filter((call) => call.tool === 'browser_resize')).toHaveLength(1);
+  it('opens a fresh tab for each of several checks and closes every one', async () => {
+    const b = browser();
+    const ports = playwrightUiCheckPorts(b.runtime, () => NOW);
+    for (const theme of ['light', 'dark'] as const) await ports.capture({ url: 'http://x', viewport: phone, theme, card: card() });
+    expect(b.calls.filter((call) => call.tool === 'browser_tabs' && call.input.action === 'new')).toHaveLength(2);
+    expect(b.tabs).toHaveLength(1);
   });
 
-  it('tells agents to note the window size before they resize and to put it back after', () => {
-    const rule = BROWSER_RULES.find((line) => line.includes('window.innerWidth'));
+  it('carries on in the current tab, as it always did, when a new one cannot be opened', async () => {
+    const b = browser({ cannotOpenTabs: true });
+    const data = await playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://x', viewport: phone, theme: 'light', card: card() });
+    expect(data).toBe('AAAA');
+    // Nothing was opened, so nothing is closed: the tab the person is looking at is not closed out from under them.
+    expect(b.calls.some((call) => call.tool === 'browser_tabs' && call.input.action === 'close')).toBe(false);
+    expect(b.tabs).toHaveLength(1);
+  });
+
+  it('tells agents to resize only in a tab of their own and to close it, which removes the fixed size', () => {
+    const rule = BROWSER_RULES.find((line) => line.includes('browser_resize fixes a tab'));
     expect(rule).toBeDefined();
-    expect(rule).toContain('browser_resize again');
+    expect(rule).toContain('maximising the browser changes nothing');
+    expect(rule).toContain('action "close"');
   });
 });
