@@ -652,12 +652,30 @@ describe('desktop autopilot', () => {
       expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
     });
 
+    it('starts the cards of a wave a little apart, and leaves a line in the app log at each step', async () => {
+      const h = harness({ cards: [card('a'), card('b'), card('c'), card('d')], parallel: {} });
+      const started: number[] = [];
+      const trace: string[] = [];
+      const original = h.ports.runAgent;
+      h.ports.runAgent = async (request, owner, options) => { if (options?.cwd) started.push(Date.now()); return original(request, owner, options); };
+      h.ports.trace = (message) => { trace.push(message); };
+      await start(h, { parallelCards: 4 });
+      await settled(h);
+      expect(started).toHaveLength(4);
+      const gaps = started.slice(1).map((time, index) => time - started[index]!);
+      expect(gaps.every((gap) => gap >= 400)).toBe(true);
+      expect(trace[0]).toContain('4 cards claimed');
+      expect(trace.filter((line) => line.includes('making its copy'))).toHaveLength(4);
+      expect(trace.filter((line) => line.includes('starting the agent'))).toHaveLength(4);
+    });
+
     it('stops every copy when Stop is pressed', async () => {
       const h = harness({ cards: [card('a'), card('b')], parallel: {} });
       const cancelled: string[] = [];
       h.ports.cancelAgent = (id) => { cancelled.push(id); return true; };
       await start(h, { parallelCards: 2 });
-      await vi.advanceTimersByTimeAsync(100);
+      // Long enough for the second card, which starts a moment after the first, to have its own agent running.
+      await vi.advanceTimersByTimeAsync(600);
       const stopping = h.autopilot.stop('p1');
       // The fake agent finishes on its own clock; a real one is cancelled by `cancelAgent`.
       await vi.advanceTimersByTimeAsync(2_000);

@@ -10,6 +10,7 @@ import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
 import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
+import { installCrashRecord } from './crash-record';
 import { startSharedBrowser } from './shared-browser';
 import { AgentTerminal } from './agent-terminal';
 import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
@@ -207,6 +208,7 @@ function refreshJumpList(): void {
 }
 
 if (process.platform === 'win32' && app.isPackaged) app.setAppUserModelId('ai.kai.desktop');
+installCrashRecord();
 app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
@@ -1184,6 +1186,7 @@ async function startApplication(): Promise<void> {
     setPacer: (pacer) => directApi.setPacer(pacer),
     announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'autopilot:changed', status),
     journal: new AutopilotRunStore(path.join(paths.root, 'autopilot')),
+    trace: (message) => logger.info('internal', message),
     now: () => Date.now(),
   });
   ipcContext.autopilot = autopilot;

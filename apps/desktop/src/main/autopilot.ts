@@ -32,6 +32,8 @@ const MAX_REST_WITHOUT_PROGRESS_MS = 9 * 3_600_000;
 const LOG_LIMIT = 60;
 /** A card's own request, and up to three read-only helper calls the model makes at once beside it. */
 const API_REQUESTS_PER_CARD = 4;
+/** How much later each further card of a wave starts than the one before it. */
+const LANE_STAGGER_MS = 400;
 /** Tries at claiming a card when the board keeps reporting that it changed underneath the claim. */
 const CLAIM_ATTEMPTS = 6;
 const TAIL_CHARS = 2_500;
@@ -169,6 +171,8 @@ export interface AutopilotPorts {
   openConversation(ownerWindowId: number, conversation: ConversationRecord): void;
   /** Remembers a run for the whole time it holds a card. Optional, so a test needs no disk. */
   journal?: AutopilotJournal;
+  /** A line for the app's own log at the steps where a side-by-side wave can go wrong, so an abrupt end shows where. */
+  trace?(message: string): void;
   now(): number;
 }
 
@@ -661,7 +665,13 @@ export class DesktopAutopilot {
     const lanes: Lane[] = [];
     const clashed = new Set<string>();
     try {
-      const settled = await Promise.allSettled(claimed.map(async (card): Promise<Lane> => {
+      this.ports.trace?.(`Autopilot wave ${active.waves}: ${claimed.length} cards claimed, starting their copies.`);
+      const settled = await Promise.allSettled(claimed.map(async (card, position): Promise<Lane> => {
+        // Started a little apart rather than in the same instant. Eight copies, eight conversations and eight agent
+        // runs beginning together is eight times the work of one at the moment the app is busiest, and KAI ended
+        // abruptly twice when that was asked of it.
+        if (position > 0) await sleepAbortable(position * LANE_STAGGER_MS, signal).catch(() => undefined);
+        this.ports.trace?.(`Autopilot lane "${card.title}": making its copy.`);
         let folder: string;
         try {
           folder = await open.checkout(card.id);
@@ -675,6 +685,7 @@ export class DesktopAutopilot {
           active.opened = true;
           this.ports.openConversation(owner, conversation);
         }
+        this.ports.trace?.(`Autopilot lane "${card.title}": copy and conversation ready, starting the agent.`);
         try {
           const prompt = await this.cardPrompt(input, card);
           const model = await this.firstTryModel(input, card);
