@@ -46,9 +46,12 @@ describe('what the agent is told about helpers', () => {
     expect(helpersBriefing(undefined, 'api')).toBe(text);
   });
 
-  it('tells an agent that was given a number to use up to that many, in one turn', () => {
+  it('tells an agent that was given a number to keep that many busy, listing every part even when there are more', () => {
     const text = helpersBriefing('4', 'api');
-    expect(text).toContain('up to 4 helper agents at once');
+    expect(text).toContain('4 helper agents at once');
+    expect(text).toContain('keep them all busy');
+    expect(text).toContain('more parts than 4');
+    expect(text).toContain('start as soon as one of the 4 finishes');
     expect(text).toContain('in the same turn');
     expect(text).toContain('Check the helpers');
   });

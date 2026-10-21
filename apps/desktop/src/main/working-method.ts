@@ -60,8 +60,9 @@ export function helpersBriefing(choice: HelperChoice | undefined, execution: 'ap
   }
   return [
     '# Helpers',
-    `- Use up to ${limit} helper agents at once on this job. Split the work into up to ${limit} parts that do not depend on each other and start a helper for each, in the same turn.`,
-    '- If the job truly does not split that many ways, use as many as it does and say so in one line. Never give two helpers the same file.',
+    `- Use ${limit} helper agents at once on this job, and keep them all busy until the work runs out.`,
+    `- List every separate part of the job that does not depend on another, and start a helper for each in the same turn. There can be more parts than ${limit}: the extra helpers wait their turn and start as soon as one of the ${limit} finishes, so list them all rather than stopping at ${limit}.`,
+    '- If the job has fewer parts than that, use as many as it has and say so in one line. Never give two helpers the same file.',
     `- ${how}`,
     '- Check the helpers\' work together before you finish.',
   ].join('\n');
