@@ -41,6 +41,7 @@ export const BROWSER_RULES: readonly string[] = [
   '- Start with browser_tabs, action "list". If it shows tabs you did not open, other agents are using this browser: open your own with browser_tabs, action "new", and work only in it. Never navigate, resize or close a tab that is not yours. If it shows a single blank tab, use that one.',
   `- Stay in that one tab. Navigate it with browser_navigate and change its size with browser_resize (${PHONE}, 768, ${DESKTOP} and ${WIDE} wide) to look at each size. Do not open a second tab or window to compare sizes, do not open links in a new window, and do not start another browser.`,
   `- At ${PHONE}px wide, scroll to the bottom and confirm the navigation is still visible and the last item is not covered. At ${WIDE}px wide, confirm no large strip of the screen is empty.`,
+  '- Before your first browser_resize, run browser_evaluate with the function () => [window.innerWidth, window.innerHeight] and note the two numbers. A resize fixes the page at that size and it stays there, so when you finish looking at sizes, call browser_resize again with the numbers you noted. That leaves the window filled instead of stuck at a phone width.',
   '- When you finish, close the tab you opened with browser_tabs, action "close". Do not call browser_close: the browser is shared and will refuse.',
 ];
 

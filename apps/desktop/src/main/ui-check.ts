@@ -498,6 +498,29 @@ export interface UiCheckRuntime {
   sleep(ms: number): Promise<void>;
 }
 
+/** The text of an MCP tool result: every text block, joined. */
+function textOf(blocks: unknown[] | null): string {
+  return (blocks ?? []).flatMap((block) => {
+    const record = block as Record<string, unknown> | null;
+    return record && record.type === 'text' && typeof record.text === 'string' ? [record.text] : [];
+  }).join('');
+}
+
+/** Asks the page how big its window is. Read before any `browser_resize`, while the page still follows the window. */
+export const WINDOW_SIZE_SCRIPT = '() => [window.innerWidth, window.innerHeight]';
+
+/**
+ * The window size out of a `browser_evaluate` result, which is the pair as JSON somewhere in a block of prose.
+ * Null when there is no such pair, or one too small to be a window: a restore to a guess would do more harm than none.
+ */
+export function parseWindowSize(text: string): { width: number; height: number } | null {
+  const match = /\[\s*(\d{2,5})\s*,\s*(\d{2,5})\s*\]/.exec(text);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width >= 200 && height >= 200 ? { width, height } : null;
+}
+
 /** The image block's base64 payload, however the MCP server wrapped it. */
 function imageData(blocks: unknown[] | null): string | null {
   for (const block of blocks ?? []) {
@@ -516,6 +539,23 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
     return blocks;
   };
 
+  /**
+   * Runs `work` and then puts the browser's page back to the size of its window.
+   *
+   * `browser_resize` fixes the page at a size of its own, and it stays there: a check at 390px wide left the shared
+   * browser showing a phone-sized page in the corner of a large window, with the rest of it empty, for whoever looked
+   * next. The size is read before the first resize, while the page still follows its window, and restored after, even
+   * when the check threw. A size that cannot be read is left alone rather than guessed.
+   */
+  const keepingWindowSize = async <T>(work: () => Promise<T>): Promise<T> => {
+    const before = parseWindowSize(textOf(await mcpCall('browser_evaluate', { function: WINDOW_SIZE_SCRIPT }).catch(() => null)));
+    try {
+      return await work();
+    } finally {
+      if (before) await mcpCall('browser_resize', before).catch(() => undefined);
+    }
+  };
+
   return {
     async previewUrl(projectId, projectPath) {
       return waitForPreviewUrl(runtime.preview, projectId, projectPath, { sleep: runtime.sleep });
@@ -523,28 +563,28 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
 
     async capture({ url, viewport, theme, card }) {
       await mcpCall('browser_navigate', { url });
-      await mcpCall('browser_resize', { width: viewport.width, height: viewport.height });
-      await mcpCall('browser_emulate_media', { colorScheme: theme });
-      // The whole page, not the first screen of it. A long page used to be saved as its top 900px, so the agent and
-      // the reviewer both saw a page that ended where the window did. The screenshot of one element cannot be
-      // combined with a full page, so it is the second choice rather than the first.
-      const filename = uiShotName(viewport, theme);
-      const blocks = await mcpCall('browser_take_screenshot', { type: 'png', filename, fullPage: true })
-        .catch(() => mcpCall('browser_take_screenshot', { type: 'png', filename }));
-      const data = imageData(blocks);
-      if (!data) throw new Error(`The Playwright MCP returned no image for ${card.id} at ${viewport.name}/${theme}.`);
-      return data;
+      return keepingWindowSize(async () => {
+        await mcpCall('browser_resize', { width: viewport.width, height: viewport.height });
+        await mcpCall('browser_emulate_media', { colorScheme: theme });
+        // The whole page, not the first screen of it. A long page used to be saved as its top 900px, so the agent and
+        // the reviewer both saw a page that ended where the window did. The screenshot of one element cannot be
+        // combined with a full page, so it is the second choice rather than the first.
+        const filename = uiShotName(viewport, theme);
+        const blocks = await mcpCall('browser_take_screenshot', { type: 'png', filename, fullPage: true })
+          .catch(() => mcpCall('browser_take_screenshot', { type: 'png', filename }));
+        const data = imageData(blocks);
+        if (!data) throw new Error(`The Playwright MCP returned no image for ${card.id} at ${viewport.name}/${theme}.`);
+        return data;
+      });
     },
 
     async layout({ url, viewport }) {
       await mcpCall('browser_navigate', { url });
-      await mcpCall('browser_resize', { width: viewport.width, height: viewport.height });
-      const blocks = await mcpCall('browser_evaluate', { function: UI_LAYOUT_SCRIPT });
-      const text = (blocks ?? []).flatMap((block) => {
-        const record = block as Record<string, unknown> | null;
-        return record && record.type === 'text' && typeof record.text === 'string' ? [record.text] : [];
-      }).join('');
-      return parseLayout(text);
+      return keepingWindowSize(async () => {
+        await mcpCall('browser_resize', { width: viewport.width, height: viewport.height });
+        const blocks = await mcpCall('browser_evaluate', { function: UI_LAYOUT_SCRIPT });
+        return parseLayout(textOf(blocks));
+      });
     },
 
     async probe({ url }) {

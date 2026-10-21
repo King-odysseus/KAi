@@ -2,6 +2,7 @@ import { PLAYWRIGHT_MCP_SERVER_ID, STUDIO_DESIGN_PATH, type PreviewState } from 
 import { nodesFromReply, pagesFromReply, unwrapReply, type DesignPorts } from './design-source';
 import { PAGE_FACTS_SCRIPT, parsePageFacts, type CapturedPage, type EqualizerPorts } from './equalizer';
 import { waitForPreviewUrl } from './preview-runtime';
+import { parseWindowSize, WINDOW_SIZE_SCRIPT } from './ui-check';
 
 /**
  * Wires the Equalizer to the real things: the Playwright MCP KAI already installs for its agents (which opens the
@@ -106,18 +107,24 @@ export function createEqualizerPorts(
 
     async openPage(url, width): Promise<CapturedPage> {
       await browser('browser_navigate', { url });
-      await browser('browser_resize', { width, height: BROWSER_HEIGHT });
-      await runtime.sleep(SETTLE_MS);
-      const shot = await browser('browser_take_screenshot', { type: 'png', fullPage: true }).catch(() => browser('browser_take_screenshot', { type: 'png' }));
-      const data = findImage(shot);
-      if (!data) throw new Error(`The browser returned no picture of ${url}.`);
-      let facts = null;
+      // The page is fixed at the size asked for and would stay that size, so the window it was in is put back after.
+      const before = parseWindowSize(textOf(await browser('browser_evaluate', { function: WINDOW_SIZE_SCRIPT }).catch(() => null)));
       try {
-        facts = parsePageFacts(textOf(await browser('browser_evaluate', { function: PAGE_FACTS_SCRIPT })));
-      } catch {
-        // The picture still compares; only the measured differences are lost.
+        await browser('browser_resize', { width, height: BROWSER_HEIGHT });
+        await runtime.sleep(SETTLE_MS);
+        const shot = await browser('browser_take_screenshot', { type: 'png', fullPage: true }).catch(() => browser('browser_take_screenshot', { type: 'png' }));
+        const data = findImage(shot);
+        if (!data) throw new Error(`The browser returned no picture of ${url}.`);
+        let facts = null;
+        try {
+          facts = parsePageFacts(textOf(await browser('browser_evaluate', { function: PAGE_FACTS_SCRIPT })));
+        } catch {
+          // The picture still compares; only the measured differences are lost.
+        }
+        return { png: Buffer.from(data, 'base64'), facts };
+      } finally {
+        if (before) await browser('browser_resize', before).catch(() => undefined);
       }
-      return { png: Buffer.from(data, 'base64'), facts };
     },
 
     async drawnScreens(root) {
