@@ -774,9 +774,11 @@ html[data-theme="code"]:root .error-banner {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
 }
 html[data-theme="code"]:root .setup-reminder {
-  border: 1px solid rgba(53, 164, 255, 0.35);
+  border-bottom: 1px solid rgba(53, 164, 255, 0.25);
   background: #2f2f2f;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+html[data-theme="code"]:root .setup-reminder:hover {
+  background: #3b3b3b;
 }
 html[data-theme="code"]:root .setup-overlay {
   background: rgba(15, 15, 15, 0.78);
@@ -2046,9 +2048,11 @@ html[data-theme="purple"]:root .error-banner {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
 }
 html[data-theme="purple"]:root .setup-reminder {
-  border: 1px solid rgba(251, 205, 0, 0.35);
+  border-bottom: 1px solid rgba(251, 205, 0, 0.25);
   background: #212040;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+html[data-theme="purple"]:root .setup-reminder:hover {
+  background: #2a294f;
 }
 html[data-theme="purple"]:root .setup-overlay {
   background: rgba(10, 10, 24, 0.78);
@@ -3318,9 +3322,11 @@ html[data-theme="navy"]:root .error-banner {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
 }
 html[data-theme="navy"]:root .setup-reminder {
-  border: 1px solid rgba(109, 187, 255, 0.35);
+  border-bottom: 1px solid rgba(109, 187, 255, 0.25);
   background: #13254d;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+html[data-theme="navy"]:root .setup-reminder:hover {
+  background: #1a2f5f;
 }
 html[data-theme="navy"]:root .setup-overlay {
   background: rgba(4, 12, 31, 0.78);
