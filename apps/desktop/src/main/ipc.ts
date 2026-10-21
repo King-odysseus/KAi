@@ -650,8 +650,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'auto:pause', async ({ conversationId }) => context.auto.pause(conversationId));
   handle(context, 'auto:resume', async ({ conversationId }) => context.auto.resume(conversationId));
   handle(context, 'studio:design-read', async ({ projectId }) => context.studio.design(projectId));
-  handle(context, 'studio:design-pull', async ({ projectId }) => {
-    const pulled = await context.studio.pullDesign(projectId);
+  handle(context, 'studio:design-pull', async ({ projectId, adopt }) => {
+    const pulled = await context.studio.pullDesign(projectId, { adopt });
     announceBoard(context, projectId, pulled.board);
     return pulled;
   });

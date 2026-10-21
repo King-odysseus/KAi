@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { parsePages, renamePageHeading, renamedPageName, type StudioDesign } from '../packages/contracts/src';
 import { drawnPageNames, foundationLanded, remainingScreens, rowsFromPull, screenLanded, screenPageId, screensToRedraw } from '../apps/desktop/src/renderer/src/design-build';
-import { buildPagePrompt, screenTitleKey, type DesignContext, type ScreenRow } from '../apps/desktop/src/renderer/src/flow-diagram';
+import { screenRoutesFromPages } from '../packages/contracts/src';
+import { withPlanRoutes } from '../apps/desktop/src/main/board';
+import { buildPagePrompt, screenRows, screenTitleKey, type DesignContext, type ScreenRow } from '../apps/desktop/src/renderer/src/flow-diagram';
 
 /**
  * What the design build loop decides between steps.
@@ -91,6 +93,18 @@ describe('the name two sides are compared by', () => {
 
   it('leaves a plain heading alone, so two genuinely different screens stay different', () => {
     expect(screenTitleKey('Dashboard')).not.toBe(screenTitleKey('Dashboard admin'));
+  });
+
+  it('counts a drawn page as the plan entry whose subtitle it left off, unless the stem is ambiguous', () => {
+    const pages = [
+      { name: 'Act-mode proposal — desktop automation step list', route: '', details: '' },
+      { name: 'Settings — providers and keys (/)', route: '', details: '' },
+      { name: 'Settings — appearance and layout (/)', route: '', details: '' },
+    ];
+    const rows = screenRows(pages, ['Act-mode proposal (/)', 'Settings (/)']);
+    expect(rows.filter((row) => !row.inPages).map((row) => row.name)).toEqual(['Settings (/)']);
+    expect(rows[0]!.drawn).toBe(true);
+    expect(rows[1]!.drawn).toBe(false);
   });
 });
 
@@ -204,5 +218,32 @@ describe('the page a checklist row stands for', () => {
     expect(screenPageId(design, '/pricing — Pricing page /pricing')).toBe('p0');
     expect(screenPageId(design, 'Sign in')).toBeNull();
     expect(screenPageId(null, 'Pricing page')).toBeNull();
+  });
+});
+
+describe('routes the plan gives each screen', () => {
+  const PLAN = [
+    '## Tray menu',
+    '- **Route:** OS tray icon registered in `src/main/main.js`.',
+    '## Open app confirmation',
+    '- **Route:** modal raised from `src/renderer/ui/steps.js` for `openApp` / `openUrl`.',
+    '## Sidebar list',
+    '- **Route:** the aside column inside `/`, module `src/renderer/ui/shell.js`.',
+    '## Pricing page',
+    '- **Route:** `/pricing`',
+    '## No route line',
+    'Just text.',
+  ].join('\n');
+
+  it('reads a named path, and calls a screen routeless only when its line names none', () => {
+    const { routes, routeless } = screenRoutesFromPages(PLAN);
+    expect(Object.fromEntries(routes)).toEqual({ 'sidebar list': '/', 'pricing page': '/pricing' });
+    expect([...routeless].sort()).toEqual(['open app confirmation', 'tray menu']);
+  });
+
+  it('gives a routeless card the plan route, or makes a page with none a component, and leaves the rest alone', () => {
+    const card = (title: string, over: Record<string, unknown> = {}) => ({ id: title, title, kind: 'page', route: '', status: 'ready', ...over }) as never;
+    const out = withPlanRoutes([card('Tray menu'), card('Sidebar list'), card('Pricing page', { route: '/custom' }), card('Done tray', { status: 'done' }), card('Elsewhere')], PLAN);
+    expect(out.map((c) => [c.kind, c.route])).toEqual([['component', ''], ['page', '/'], ['page', '/custom'], ['page', ''], ['page', '']]);
   });
 });

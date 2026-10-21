@@ -156,7 +156,7 @@ const bridge: KaiDesktopBridge = {
     return () => ipcRenderer.removeListener('auto:changed', handler);
   },
   studioDesign: (projectId) => ipcRenderer.invoke('studio:design-read', { projectId }),
-  pullStudioDesign: (projectId) => ipcRenderer.invoke('studio:design-pull', { projectId }),
+  pullStudioDesign: (projectId, adopt) => ipcRenderer.invoke('studio:design-pull', { projectId, ...(adopt ? { adopt } : {}) }),
   renameStudioDesignPage: (input) => ipcRenderer.invoke('studio:design-page-rename', input),
   deleteStudioDesignPage: (input) => ipcRenderer.invoke('studio:design-page-delete', input),
   buildStudioDesignStep: (projectId, prompt, stepId) => ipcRenderer.invoke('studio:design-build-step', { projectId, prompt, stepId }),

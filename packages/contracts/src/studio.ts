@@ -390,6 +390,9 @@ export type UiCheckResult = z.infer<typeof uiCheckResultSchema>;
 export const studioProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type StudioProjectInput = z.infer<typeof studioProjectInputSchema>;
 
+/** `adopt` accepts the document the editor holds even when it shares nothing with the one last pulled. */
+export const studioDesignPullInputSchema = z.object({ projectId: z.string().min(1), adopt: z.boolean().optional() }).strict();
+
 export const studioArtifactInputSchema = z
   .object({ projectId: z.string().min(1), kind: artifactKindSchema })
   .strict();

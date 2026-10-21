@@ -44,7 +44,7 @@ import {
 import { loadProjectContext, parseJsonResponse, ReplyShapeError } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
 import type { StudioArtifacts as ArtifactStore } from './artifacts';
-import type { StudioBoardStore } from './board';
+import { withPlanRoutes, type StudioBoardStore } from './board';
 import { changedNodes, designErrorMessage, readDesign, type DesignPorts, type DesignRead } from './design-source';
 import { deletePageNode, renamePageNode } from './design-ops';
 import { failureSummary, type DesktopUiCheck } from './ui-check';
@@ -516,6 +516,11 @@ export class DesktopStudio {
       at: this.ports.now(),
       visual: result.passed ? 'passed' : 'failed',
       screenshots: result.screenshots,
+      // `setCheck` replaces the whole record, so leaving this out dropped the evidence the build check had just
+      // recorded for every criterion. The board then refused to close each page whose screen check passed ("lacks
+      // passing evidence: It matches the design node it was drawn from"), and Autopilot spent three attempts a card
+      // on work that was already done before parking it.
+      ...(card.check?.acceptanceEvidence ? { acceptanceEvidence: card.check.acceptanceEvidence } : {}),
     });
     const moved = await this.ports.board.move(
       projectId,
@@ -582,7 +587,7 @@ export class DesktopStudio {
    * components and pages get their cards, and every card holding a node that changed goes stale. Tokens are pulled
    * from the editor rather than written by a model — the design is the source of truth, so a model never invents one.
    */
-  async pullDesign(projectId: string): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean }> {
+  async pullDesign(projectId: string, options: { adopt?: boolean } = {}): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean }> {
     const ports = await this.ports.openPencil?.();
     if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then pull the design again.');
     const previous = await this.ports.board.design(projectId);
@@ -610,7 +615,9 @@ export class DesktopStudio {
       previous.components.filter((component) => component.screen).map((component) => component.name),
       read.components.filter((component) => component.screen).map((component) => component.name),
     );
-    if (previousPages.size > 0 && currentPages.length > 0 && !idsOverlap && !sameByName) {
+    // `adopt` is the person saying the editor's document is the one they mean now — a design restarted from scratch has
+    // new ids and often new names, and without a way to accept it every pull was refused for good.
+    if (!options.adopt && previousPages.size > 0 && currentPages.length > 0 && !idsOverlap && !sameByName) {
       return {
         design: previous,
         board: await this.ports.board.read(projectId),
@@ -623,7 +630,8 @@ export class DesktopStudio {
     }
     // Hashes are keyed by node id, so a document that was renumbered has nothing to compare against: every node would
     // read as changed and every card as stale. The cards are matched to the new ids by name just below instead.
-    const changed = sameByName ? [] : changedNodes(previous.hashes, read.hashes);
+    const adopting = Boolean(options.adopt) && previousPages.size > 0 && !idsOverlap;
+    const changed = sameByName || adopting ? [] : changedNodes(previous.hashes, read.hashes);
     const tokens = `${JSON.stringify(read.tokens, null, 2)}\n`;
     // Only a real change writes: pulling the same design twice must not bump the artifact's version.
     const hadTokens = await this.ports.artifacts.readText(projectId, 'tokens');
@@ -643,7 +651,7 @@ export class DesktopStudio {
       components: read.components.map((component) => designComponentSchema.parse(component)),
     });
     const pages = await this.ports.artifacts.readText(projectId, 'pages');
-    const board = await this.ports.board.applyDesign(projectId, read.components, changed, pages ?? '');
+    const board = await this.ports.board.applyDesign(projectId, read.components, changed, pages ?? '', adopting);
     return { design, board, changed, tokensChanged, tokenCount: read.tokenCount, tokensPreserved: wouldWipe, differentDocument: false };
   }
 
@@ -1071,6 +1079,15 @@ export class DesktopStudio {
           }
         }
       }
+    }
+    // The plan may have changed under the cards (a route set, a screen added, a feature written), so the cards are
+    // brought into line with it now rather than at the next pull: a screen the plan gives a route to takes it, and a
+    // page the plan gives none becomes a component. Without this the chat updated `pages.md` and left the board behind.
+    const before = await this.ports.board.read(projectId);
+    const aligned = withPlanRoutes(before.cards, pages);
+    if (aligned.some((card, index) => card !== before.cards[index])) {
+      const catalog = await this.ports.artifacts.read(projectId);
+      await this.ports.board.replace(projectId, aligned, catalog.artifacts);
     }
     await this.refreshHandoff(projectId);
     const [board, artifacts, design] = await Promise.all([

@@ -42,6 +42,38 @@ export function screenTitleKey(name: string): string {
 }
 
 /**
+ * What the plan says each screen's route is, read from the `Route:` line of its section.
+ *
+ * `routes` has the path the line names, whether it stands alone (`/settings`), sits in backticks or brackets (`` `/` ``,
+ * `(/)`) or ends a phrase ("inside `/`"). `routeless` has the screens whose line names no path at all — a modal raised
+ * from a view, a popover, the OS tray menu — which are drawn but cannot be opened at an address. A file path such as
+ * `src/main/main.js` is not a route, and neither is a lone slash between two words, as in "`openApp` / `openUrl`".
+ * A section with no `Route:` line says nothing either way. Keys match `screenTitleKey`, so a card finds its section by name.
+ */
+export function screenRoutesFromPages(markdown: string): { routes: Map<string, string>; routeless: Set<string> } {
+  const routes = new Map<string, string>();
+  const routeless = new Set<string>();
+  let name = '';
+  for (const line of markdown.split(/\r?\n/)) {
+    const heading = /^##(?!#)\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) { name = plain(heading[1]!).slice(0, 80); continue; }
+    if (!name) continue;
+    const route = /^\s*(?:[-*]\s*)?\**Route\**\s*:\s*\**\s*(.*)$/i.exec(line);
+    if (!route) continue;
+    const key = screenTitleKey(name);
+    const named = /[`(](\/[A-Za-z0-9\-_/:{}.]*)[`)]/.exec(route[1]!)?.[1]
+      ?? /(?:^|\s)(\/[A-Za-z0-9\-_:{}.][A-Za-z0-9\-_/:{}.]*)/.exec(route[1]!)?.[1];
+    if (key) {
+      const clean = named?.replace(/[.,;:]+$/, '').replace(/\/+$/, '');
+      if (named && !named.includes('*')) routes.set(key, clean || '/');
+      else if (!named) routeless.add(key);
+    }
+    name = '';
+  }
+  return { routes, routeless };
+}
+
+/**
  * The route a screen's name carries, when it carries one.
  *
  * open-pencil pages are named the way the pages brief writes them — `/ — Marketing home (sharpsite.ng)`,

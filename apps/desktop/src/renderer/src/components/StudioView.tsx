@@ -217,6 +217,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   // `stepId` is minted before the step starts and carried in the request, so this can filter to just this step.
   const [buildEvents, setBuildEvents] = useState<PersistedEvent[]>([]);
   const buildStepId = useRef<string | null>(null);
+  // Set while a whole-design restart runs: it draws into whatever document is open, so that document is the project's
+  // now, and a pull must accept it instead of refusing it for sharing no page with the one drawn before.
+  const adoptPulls = useRef(false);
+  // The last pull was refused because the editor holds a different document; offers "Use this document".
+  const [differentDocument, setDifferentDocument] = useState(false);
   const designChatStepId = useRef<string | null>(null);
   // The last composer request acted on, so a re-render does not open the new-project screen twice for one press.
   const handledPlanRequest = useRef<number | null>(null);
@@ -1331,8 +1336,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
 
   /** The read itself, shared by the manual "Pull the design" button and each step of the build loop below — the
    * loop needs it without the button's own busy/notice handling, since it has its own for the whole run. */
-  async function refreshDesign(): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean; artifacts: StudioArtifacts }> {
-    const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!));
+  async function refreshDesign(adopt = adoptPulls.current): Promise<{ design: StudioDesign; board: StudioBoard; changed: string[]; tokensChanged: boolean; tokenCount: number; tokensPreserved: boolean; differentDocument: boolean; artifacts: StudioArtifacts }> {
+    const pulled = unwrap(await window.kaiDesktop.pullStudioDesign(projectId!, adopt));
+    setDifferentDocument(pulled.differentDocument);
     setDesign(pulled.design);
     setBoard(pulled.board);
     const artifacts = unwrap(await window.kaiDesktop.studioArtifacts(projectId!));
@@ -1351,6 +1357,31 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }
   }
 
+  /**
+   * Accepts the document open-pencil holds as this project's, after a pull refused it for sharing no page with the
+   * one drawn before. This is what a design restarted from scratch looks like. Cards whose screen is not in the new
+   * document are flagged to be drawn again, and the ones that match by name are linked to the new pages.
+   */
+  async function useThisDocument(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    const confirmed = await confirmDialog({
+      title: 'Use the document open in open-pencil?',
+      detail: 'Its pages replace the ones this project was drawn from. Cards whose screen is in it are linked to the new pages; cards whose screen is not are marked to draw again. Nothing in open-pencil changes.',
+      confirmLabel: 'Use this document',
+      destructive: false,
+    });
+    if (!confirmed) return;
+    setBusy('design'); setError(null);
+    try {
+      const pulled = await refreshDesign(true);
+      setNotice(`Now using the open-pencil document: ${pulled.design.components.filter((component) => component.screen).length} pages read, ${pulled.tokenCount} tokens.`);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** Reads the design from open-pencil: the tokens go to `.kai/spec`, and a changed node restales its card. */
   async function pullDesign(): Promise<void> {
     if (!projectId) return;
@@ -1361,7 +1392,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setNotice(
         // Said first of all: the editor is on another project's file, so none of this belongs to this project.
         pulled.differentDocument
-          ? 'The editor is open on a different document, so nothing was pulled into this project. Its pages share no id, and not enough names, with the ones this project was drawn from. Open the document this project belongs to, then pull again.'
+          ? 'The editor is open on a different document, so nothing was pulled into this project. Its pages share no id, and not enough names, with the ones this project was drawn from. Open the document this project belongs to and pull again, or press Use this document if you restarted the design.'
           // Said next, because it means the pull read the wrong document: the editor is open on something that has
           // no variables, or on a blank page. The token file was left as it was rather than emptied.
           : pulled.tokensPreserved
@@ -1448,6 +1479,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   async function buildDesign(action?: DesignBuildAction): Promise<void> {
     if (!projectId || busy !== null) return;
     buildCancelled.current = false;
+    adoptPulls.current = action?.kind === 'redraw' && action.target === 'all';
     setBusy('design-build');
     setError(null);
     setNotice(null);
@@ -1517,6 +1549,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       setError(messageOf(caught));
       setBuildOutcome(`Stopped: ${messageOf(caught)}`);
     } finally {
+      adoptPulls.current = false;
       buildStepId.current = null;
       setBuildingStep(null);
       setBusy(null);
@@ -2838,6 +2871,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
                   </button>
+                  {differentDocument && (
+                    <button type="button" className="primary-button" onClick={() => void useThisDocument()} disabled={busy !== null} title="The editor holds a document with none of this project's pages, which is what a restarted design looks like.">
+                      <Check size={14} /> Use this document
+                    </button>
+                  )}
                   <button type="button" className="secondary-button" onClick={() => void reconcileDesignPages()} disabled={busy !== null || designRows.length === 0} title="Read the current Open Pencil document and match its existing pages to the project screen list.">
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Reconcile pages
                   </button>

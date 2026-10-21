@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import * as net from 'node:net';
 import * as path from 'node:path';
 
 /**
@@ -39,6 +40,20 @@ async function readDiscovery(file: string): Promise<OpenPencilDiscovery | null> 
   }
 }
 
+/** Whether something is accepting connections on the port the discovery file names. */
+export function portIsListening(port: number, timeoutMs = 1_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    const finish = (listening: boolean): void => {
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}
+
 export interface OpenPencilConnection {
   endpoint: string;
   /** Null when the editor is running with auth off — callers should send no Authorization header at all, not a
@@ -50,11 +65,20 @@ export interface OpenPencilConnection {
  * written yet). */
 export async function readOpenPencilDiscovery(
   localAppData = process.env.LOCALAPPDATA,
+  /**
+   * Decides whether a discovery file describes a server that is really there. The editor does not always remove its
+   * file when it exits, so one left behind by a closed or crashed editor (the baseline folder's sat there for a month,
+   * naming a dead process) read as "running" — nothing was launched, every pull hit ECONNREFUSED, and the Design tab
+   * saw no design. Defaults to a connect to the port; the unit tests pass their own.
+   */
+  isLive: (port: number) => Promise<boolean> = portIsListening,
 ): Promise<OpenPencilConnection | null> {
   if (!localAppData) return null;
   for (const file of candidatePaths(localAppData, 'mcp.json')) {
     const discovery = await readDiscovery(file);
-    if (discovery) return { endpoint: `http://127.0.0.1:${discovery.httpPort}/mcp`, token: discovery.authToken };
+    if (discovery && await isLive(discovery.httpPort)) {
+      return { endpoint: `http://127.0.0.1:${discovery.httpPort}/mcp`, token: discovery.authToken };
+    }
   }
   return null;
 }
@@ -64,12 +88,13 @@ export async function readOpenPencilDiscovery(
  * itself decides when it is ready by writing the discovery file, which is what this polls for.
  */
 export async function ensureOpenPencilRunning(
-  options: { localAppData?: string; timeoutMs?: number; pollMs?: number } = {},
+  options: { localAppData?: string; timeoutMs?: number; pollMs?: number; isLive?: (port: number) => Promise<boolean> } = {},
 ): Promise<OpenPencilConnection> {
   const localAppData = options.localAppData ?? process.env.LOCALAPPDATA;
   const timeoutMs = options.timeoutMs ?? 30_000;
   const pollMs = options.pollMs ?? 750;
-  const existing = await readOpenPencilDiscovery(localAppData);
+  const isLive = options.isLive ?? portIsListening;
+  const existing = await readOpenPencilDiscovery(localAppData, isLive);
   if (existing) return existing;
 
   if (!localAppData) {
@@ -85,7 +110,7 @@ export async function ensureOpenPencilRunning(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await new Promise((resolve) => { setTimeout(resolve, pollMs); });
-    const discovery = await readOpenPencilDiscovery(localAppData);
+    const discovery = await readOpenPencilDiscovery(localAppData, isLive);
     if (discovery) return discovery;
   }
   throw new Error('open-pencil did not finish starting within 30 seconds. Open it yourself and try again.');

@@ -331,6 +331,20 @@ describe('pulling the design from open-pencil', () => {
     expect([...new Set(editor.calls)].sort()).toEqual(['design_to_tokens', 'get_components', 'get_page_tree', 'list_pages', 'switch_page']);
   });
 
+  it('keeps the acceptance evidence a build check recorded when the screen check files its result', async () => {
+    const editor = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => editor.ports });
+    await app.pullDesign('p1');
+    await app.setCardRoute('p1', 'p2', '/sign-up');
+    const evidence = [{ criterion: 'It matches the design node it was drawn from.', status: 'passed' as const, evidence: 'Verification run run_1 passed: npm test' }];
+    await app.setCheck('p1', 'p2', { runId: 'run_1', at: NOW, visual: null, screenshots: [], acceptanceEvidence: evidence });
+
+    const { card } = await app.checkUi('p1', 'p2');
+
+    // `setCheck` replaces the record whole; losing this made the board refuse every page whose screen check passed.
+    expect(card.check?.acceptanceEvidence).toEqual(evidence);
+  });
+
   it('leaves the project tokens alone when the editor has none, and says the pull was empty', async () => {
     // What an editor open on a blank document, or the wrong one, looks like. This used to write `{}` over the tokens
     // the foundation prompt reads — and the artifact then counted as written by open-pencil, so regenerating all
@@ -391,6 +405,31 @@ describe('pulling the design from open-pencil', () => {
     expect(pulled.board.cards.map((card) => card.id)).toEqual(['c1', 'p1', 'p2']);
     // And nothing was written: the tokens are still this project's.
     expect(await again.artifactText('p1', 'tokens')).toContain('--color-ink');
+  });
+
+  it('accepts a restarted design when told to, linking what matches and flagging what the new document lacks', async () => {
+    const first = openPencil(DESIGN);
+    const { studio: app } = studio({}, { openPencil: async () => first.ports });
+    await app.pullDesign('p1');
+
+    const restarted = openPencil({
+      ...DESIGN,
+      list_pages: '{"current":"Landing","pages":[{"id":"z9","name":"Landing"},{"id":"z8","name":"Sign in"}]}',
+    });
+    const { studio: again } = studio({}, { openPencil: async () => restarted.ports });
+    expect((await again.pullDesign('p1')).differentDocument).toBe(true);
+
+    const adopted = await again.pullDesign('p1', { adopt: true });
+
+    expect(adopted.differentDocument).toBe(false);
+    const byTitle = new Map(adopted.board.cards.map((card) => [card.title, card]));
+    // "Sign in" is in the new document under a new id, so its card follows it there.
+    expect(byTitle.get('Sign in')?.designRef).toBe('z8');
+    expect(byTitle.get('Landing')?.designRef).toBe('z9');
+    // "Sign up" was drawn in the old document only: it no longer claims a page, and says to draw it again.
+    expect(byTitle.get('Sign up')?.designRef).toBeNull();
+    expect(byTitle.get('Sign up')?.stale).toBe(true);
+    expect(adopted.design.components.filter((component) => component.screen).map((component) => component.id)).toEqual(['z9', 'z8']);
   });
 
   it('recognises the same pages under new ids as the same document, and keeps the board it built', async () => {

@@ -10,6 +10,7 @@ import {
   needsScreenCheck,
   readyCards,
   routeFromScreenName,
+  screenRoutesFromPages,
   screenTitleKey,
   studioBoardSchema,
   studioDesignSchema,
@@ -193,6 +194,29 @@ export function mergeDesign(
   return [...merged, ...added];
 }
 
+/**
+ * Brings the board's UI cards into line with what the plan says about each screen's route.
+ *
+ * A page is always closed on a passing screen check, and a check needs an address to open, so a card without a route
+ * could never be closed: Autopilot parked it as "no route" and everything waiting on it waited too. Two cases, both only
+ * for a card with no route that is not done:
+ * - The plan names a path ("inside `/`"): the card takes it. The plan had the route all along; only the board lacked it.
+ * - The plan gives the screen no path (a modal, a popover, the tray menu): a page card becomes a component card. A
+ *   component with no route is seen through the page that raises it and closes on the build check alone.
+ * A route a person or the design already set is never touched.
+ */
+export function withPlanRoutes(cards: readonly BoardCard[], pages: string): BoardCard[] {
+  const { routes, routeless } = screenRoutesFromPages(pages);
+  if (routes.size === 0 && routeless.size === 0) return [...cards];
+  return cards.map((card) => {
+    if (!isUiCard(card) || card.status === 'done' || card.route.trim()) return card;
+    const key = screenTitleKey(card.title);
+    const route = routes.get(key);
+    if (route) return { ...card, route };
+    return card.kind === 'page' && routeless.has(key) ? { ...card, kind: 'component' as const } : card;
+  });
+}
+
 /** A card id from an open-pencil node id, so the same node always yields the same card. */
 export function designCardId(nodeId: string): string {
   const slug = nodeId.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
@@ -332,7 +356,7 @@ export class StudioBoardStore {
    * design's components and pages get their cards. Nothing here can move a card forward — staleness and new cards
    * only, so a redesign never marks work done.
    */
-  async applyDesign(projectId: string, components: readonly DesignComponent[], changedNodes: readonly string[], pages = ''): Promise<StudioBoard> {
+  async applyDesign(projectId: string, components: readonly DesignComponent[], changedNodes: readonly string[], pages = '', dropMissingRefs = false): Promise<StudioBoard> {
     const board = await this.read(projectId);
     const at = this.ports.now();
     // Reconcile a page that Open Pencil confirms exists to its story card even when the AI's titles differ slightly.
@@ -361,7 +385,15 @@ export class StudioBoardStore {
       if (fromInventoryIndex >= 0) matchedInventoryPages.add(fromInventoryIndex);
       return exact ? { ...card, designRef: exact.id, route: card.route || fromInventory?.route || card.route } : card;
     });
-    const withDesign = mergeDesign(cards, components, at);
+    let withDesign = withPlanRoutes(mergeDesign(cards, components, at), pages);
+    if (dropMissingRefs) {
+      // A document adopted after a restart: a card still pointing at a node the new document does not have was drawn
+      // in the old one. It reads "not drawn" and is flagged, instead of claiming a screen that is no longer there.
+      const present = new Set(components.map((component) => component.id));
+      withDesign = withDesign.map((card) => (card.designRef && !present.has(card.designRef)
+        ? boardCardSchema.parse({ ...card, designRef: null, stale: true, staleReason: 'The design was restarted in open-pencil and this screen is not in the new document. Draw it again.', updatedAt: at })
+        : card));
+    }
     return this.save(projectId, { schemaVersion: 1, revision: board.revision, cards: promoteReady(withDesign) });
   }
 

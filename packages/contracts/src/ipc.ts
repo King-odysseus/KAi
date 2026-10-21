@@ -76,6 +76,7 @@ import {
   studioDesignPageRenameInputSchema,
   studioDesignPullSchema,
   studioDesignSchema,
+  studioDesignPullInputSchema,
   studioProjectInputSchema,
   studioArtifactsSchema,
   studioBoardSchema,
@@ -912,7 +913,7 @@ export const ipcInputSchemas = {
   'auto:status': autoConversationInputSchema,
   'auto:pause': autoConversationInputSchema,
   'auto:resume': autoConversationInputSchema,
-  'studio:design-pull': studioProjectInputSchema,
+  'studio:design-pull': studioDesignPullInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'studio:design-build-step': studioDesignBuildStepInputSchema,
   'studio:design-chat': studioDesignChatInputSchema,
@@ -1496,7 +1497,7 @@ export interface KaiDesktopBridge {
   /** What KAI last read from open-pencil. */
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
   /** Reads the design from open-pencil: tokens, components, pages, and staleness for the cards it moved. */
-  pullStudioDesign(projectId: string): Promise<IpcResponse<StudioDesignPull>>;
+  pullStudioDesign(projectId: string, adopt?: boolean): Promise<IpcResponse<StudioDesignPull>>;
   /**
    * Renames one screen in `pages.md` and, when it is drawn, in open-pencil too, so the checklist goes on matching it.
    * The route is left as it was. Answers with the design as it now stands, so the caller need not pull again.

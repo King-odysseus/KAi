@@ -76,8 +76,22 @@ export interface ScreenRow {
  */
 export function screenRows(pages: readonly PageEntry[], drawnNames: readonly string[]): ScreenRow[] {
   const drawn = new Set(drawnNames.map(screenTitleKey));
-  const rows: ScreenRow[] = pages.map((page) => ({ ...page, inPages: true, drawn: drawn.has(screenTitleKey(page.name)) }));
+  // A plan heading can carry a subtitle (`Act-mode proposal — desktop automation step list`) that the drawn page left
+  // off (`Act-mode proposal (/)`). `screenTitleKey` keeps the subtitle half, so the two never matched and the page
+  // showed up as drawn-but-unplanned beside a screen still "to draw". The part before the dash is accepted as well,
+  // but only when no other plan entry shares it: `Settings — providers` and `Settings — appearance` must stay apart.
+  const stems = new Map<string, number>();
+  for (const page of pages) {
+    const stem = subtitleStemKey(page.name);
+    if (stem) stems.set(stem, (stems.get(stem) ?? 0) + 1);
+  }
+  const claimedByStem = (page: PageEntry): boolean => {
+    const stem = subtitleStemKey(page.name);
+    return Boolean(stem) && stems.get(stem) === 1 && drawn.has(stem);
+  };
+  const rows: ScreenRow[] = pages.map((page) => ({ ...page, inPages: true, drawn: drawn.has(screenTitleKey(page.name)) || claimedByStem(page) }));
   const listed = new Set(pages.map((page) => screenTitleKey(page.name)));
+  for (const page of pages) if (claimedByStem(page)) listed.add(subtitleStemKey(page.name));
   const seen = new Set<string>();
   for (const name of drawnNames) {
     const key = screenTitleKey(name);
@@ -86,6 +100,15 @@ export function screenRows(pages: readonly PageEntry[], drawnNames: readonly str
     rows.push({ name, route: '', details: '', inPages: false, drawn: true });
   }
   return rows;
+}
+
+/** The key of the text before a `—` that is a subtitle, not a route: `Act-mode proposal — steps` gives `act mode proposal`. */
+function subtitleStemKey(name: string): string {
+  const match = /^(.*?)\s*[—–]\s*\S/.exec(name.trim());
+  const head = match?.[1]?.trim() ?? '';
+  // A leading `/route —` is a route prefix, which `screenTitleKey` already drops.
+  if (!head || head.startsWith('/')) return '';
+  return screenTitleKey(head);
 }
 
 /** Rows whose name, route or description contains the search text. */
