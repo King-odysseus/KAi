@@ -30,6 +30,8 @@ interface Harness {
 function harness(options: {
   cards: BoardCard[];
   agent?: (call: number, request: AgentRunRequest) => Partial<AgentRunResult> | Error;
+  /** How long an agent run in a copy takes, by its prompt. Defaults to a second. */
+  agentMs?: (prompt: string) => number;
   check?: (call: number) => boolean;
   /** The artifact kinds the project has actually written. Empty stands for a project with no design yet. */
   artifacts?: Partial<Record<ArtifactKind, string>>;
@@ -39,6 +41,7 @@ function harness(options: {
   parallel?: { clash?: string[]; unavailable?: boolean };
 }): Harness {
   let conversationCount = 0;
+  const clashedAlready = new Set<string>();
   const cwds: Array<string | undefined> = [];
   let active = 0;
   let mostAtOnce = 0;
@@ -86,7 +89,7 @@ function harness(options: {
       if (runOptions?.cwd) {
         active += 1;
         mostAtOnce = Math.max(mostAtOnce, active);
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await new Promise((resolve) => setTimeout(resolve, options.agentMs?.(request.prompt) ?? 1_000));
         active -= 1;
       }
       if (outcome instanceof Error) throw outcome;
@@ -100,7 +103,7 @@ function harness(options: {
           commit: async (id: string) => `commit-${id}`,
           filesChanged: async () => [],
           integrate: async (commits: ReadonlyArray<{ stepId: string }>) => ({
-            conflicts: commits.filter((item) => options.parallel?.clash?.includes(item.stepId)).map((item) => ({ stepId: item.stepId, files: ['src/shared.ts'] })),
+            conflicts: commits.filter((item) => options.parallel?.clash?.includes(item.stepId) && !clashedAlready.has(item.stepId) && clashedAlready.add(item.stepId)).map((item) => ({ stepId: item.stepId, files: ['src/shared.ts'] })),
             applied: [], skipped: [], integrationCommit: 'merged',
           }),
           dispose: async () => undefined,
@@ -618,16 +621,18 @@ describe('desktop autopilot', () => {
       expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
     });
 
-    it('runs a card again on its own when its changes clash with another card\'s', async () => {
+    it('runs a card again on top of the merged work when its changes met something else\'s, without spending an attempt', async () => {
       const h = harness({ cards: [card('a'), card('b')], parallel: { clash: ['b'] } });
-      await start(h, { parallelCards: 2 });
+      await start(h, { parallelCards: 2, attemptsPerCard: 1 });
       const final = await settled(h);
       expect(final.phase).toBe('finished');
       expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
-      // a and b in copies, then b again in the project.
-      expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(1);
+      // a and b in copies, then b again in a fresh copy that has what is in the project now. With one attempt allowed,
+      // the second go is the clash rerun, which is not an attempt.
+      expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(0);
       expect(h.prompts).toHaveLength(3);
-      expect(final.log.some((entry) => entry.text.includes('changed the same files'))).toBe(true);
+      expect(h.prompts.some((prompt) => prompt.includes('on top of theirs'))).toBe(true);
+      expect(final.log.some((entry) => entry.text.includes('runs again on top of what is in the project now'))).toBe(true);
     });
 
     it('retries a card whose check fails after the merge, with the failure in the prompt', async () => {
@@ -676,28 +681,101 @@ describe('desktop autopilot', () => {
         expect(concurrent.filter((count) => count === 3).length).toBeGreaterThanOrEqual(2);
       });
 
-      it('work a lone retry on its own in the project, since a copy gains it nothing', async () => {
-        // Only card a fails its project check; b and c pass, so a is the one card left to go round again.
-        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, check: () => true });
-        const ports = h.ports;
-        const originalCheck = ports.runCheck;
-        let projectChecks = 0;
-        ports.runCheck = async (projectId, command, signal, options) => {
-          if (options?.cwd) return originalCheck(projectId, command, signal, options);
-          projectChecks += 1;
-          // The first project check (card a's) fails once.
-          return projectChecks === 1
-            ? { passed: false, exitCode: 1, output: 'FAIL: expected 1 to be 2', runId: null }
-            : originalCheck(projectId, command, signal, options);
+      it('takes the next card the moment a place frees, not when the batch is over', async () => {
+        // a finishes quickly and b slowly. c must start while b is still going, not after it.
+        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, agentMs: (prompt) => (prompt.includes('Card b') ? 5_000 : 500) });
+        const times = new Map<string, { start: number; end: number }>();
+        const original = h.ports.runAgent;
+        h.ports.runAgent = async (request, owner, options) => {
+          const name = (/Card ([abc])/.exec(request.prompt) ?? [])[1] ?? '?';
+          const start = Date.now();
+          try { return await original(request, owner, options); } finally { times.set(name, { start, end: Date.now() }); }
         };
-        await start(h, { parallelCards: 3, attemptsPerCard: 3 });
+        await start(h, { parallelCards: 2 });
         const final = await settled(h);
         expect(final.phase).toBe('finished');
         expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
-        expect(h.cwds.filter((cwd) => cwd === undefined)).toHaveLength(1);
-        expect(h.prompts.some((prompt) => prompt.includes('FAIL: expected 1 to be 2'))).toBe(true);
+        expect(times.get('c')!.start).toBeLessThan(times.get('b')!.end);
+        expect(times.get('c')!.start).toBeGreaterThanOrEqual(times.get('a')!.end);
       });
 
+      it('keeps every place filled until there is nothing left to start', async () => {
+        const h = harness({ cards: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l'].map((id) => card(id)), parallel: {} });
+        let running = 0;
+        const idleWhileWaiting: number[] = [];
+        const original = h.ports.runAgent;
+        h.ports.runAgent = async (request, owner, options) => {
+          running += 1;
+          idleWhileWaiting.push(running);
+          try { return await original(request, owner, options); } finally { running -= 1; }
+        };
+        await start(h, { parallelCards: 4 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.every((item) => item.status === 'done')).toBe(true);
+        expect(h.atOnce()).toBe(4);
+        // Every agent after the first four started while the others were going, so no place sat empty between cards.
+        expect(idleWhileWaiting.slice(4).every((count) => count >= 2)).toBe(true);
+        expect(final.lanes).toEqual([]);
+        expect(h.kept.size).toBe(0);
+      });
+
+      it('fills a place from the cards that become ready as others are closed', async () => {
+        // b and c wait on a; d waits on b. Two places: after a is closed both b and c can run together.
+        const h = harness({ cards: [card('a'), card('b', ['a']), card('c', ['a']), card('d', ['b'])], parallel: {} });
+        await start(h, { parallelCards: 2 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done', 'done']);
+        expect(h.atOnce()).toBe(2);
+      });
+
+      it('keeps the cards in hand to the places plus a short wait for the check, never more agents than places', async () => {
+        const h = harness({ cards: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((id) => card(id)), parallel: {} });
+        let heldMost = 0;
+        const original = h.ports.claimCard;
+        h.ports.claimCard = async (projectId, id, agent) => {
+          const claimed = await original(projectId, id, agent);
+          heldMost = Math.max(heldMost, h.board.cards.filter((item) => item.claimedBy === 'Autopilot').length);
+          return claimed;
+        };
+        await start(h, { parallelCards: 3 });
+        await settled(h);
+        // Three places, and at most two more cards finished and waiting for their check.
+        expect(heldMost).toBeLessThanOrEqual(5);
+        expect(h.atOnce()).toBeLessThanOrEqual(3);
+      });
+
+      it('lets the next agent start while another card is still being checked', async () => {
+        // The project check takes five seconds. If a place stayed taken until its card was checked, c would wait for it.
+        const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, agentMs: () => 500 });
+        const checkEnds: number[] = [];
+        const starts: number[] = [];
+        const originalCheck = h.ports.runCheck;
+        h.ports.runCheck = async (projectId, command, signal, options) => {
+          if (options?.cwd) return originalCheck(projectId, command, signal, options);
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+          const result = await originalCheck(projectId, command, signal, options);
+          checkEnds.push(Date.now());
+          return result;
+        };
+        const originalAgent = h.ports.runAgent;
+        h.ports.runAgent = async (request, owner, options) => { if (options?.cwd) starts.push(Date.now()); return originalAgent(request, owner, options); };
+        await start(h, { parallelCards: 2 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done', 'done']);
+        expect(starts).toHaveLength(3);
+        expect(starts[2]!).toBeLessThan(checkEnds[0]!);
+      });
+      it('stops starting cards at the card limit, and lets the ones going finish', async () => {
+        const h = harness({ cards: ['a', 'b', 'c', 'd', 'e'].map((id) => card(id)), parallel: {} });
+        await start(h, { parallelCards: 3, maxCards: 3 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(final.message).toContain('3 cards');
+        expect(h.board.cards.filter((item) => item.status === 'done')).toHaveLength(3);
+      });
       it('park each card once its attempts are used up, and say it was blocked', async () => {
         const h = harness({ cards: [card('a'), card('b'), card('c')], parallel: {}, check: () => false });
         // Different words each time, so only running out of attempts can stop them.
@@ -759,7 +837,6 @@ describe('desktop autopilot', () => {
       expect(started).toHaveLength(4);
       const gaps = started.slice(1).map((time, index) => time - started[index]!);
       expect(gaps.every((gap) => gap >= 400)).toBe(true);
-      expect(trace[0]).toContain('4 cards');
       expect(trace.filter((line) => line.includes('making its copy'))).toHaveLength(4);
       expect(trace.filter((line) => line.includes('starting the agent'))).toHaveLength(4);
     });
