@@ -7,6 +7,8 @@ import type { ToolHookRunner } from './automation';
 import { FileConflictError, readProjectFile, writeProjectFile } from './project-files';
 import { RunGuard } from './run-guard';
 import { writePlan } from './plan-store';
+import { isParallelCopy } from './parallel-session';
+import { BACKGROUND_REFUSAL, launchesBackgroundProcess } from './process-cleanup';
 import { findGitBash } from './terminal';
 import { WEB_TOOLS, WebToolRuntime, webFetchToolInputSchema, webSearchToolInputSchema, webToolDefinitionsFor } from './web-tools';
 
@@ -903,6 +905,12 @@ export class DesktopProjectToolRuntime {
     const cwd = await this.resolveInsideProject(input.cwd ?? '.', true);
     const stat = await fs.stat(cwd);
     if (!stat.isDirectory()) throw new Error(`${input.cwd ?? '.'} is not a directory.`);
+
+    // A card's copy of the project is deleted when the card is done. Anything left running in it holds the folder, so a
+    // server or a background command is refused there; the project's check starts and stops what it needs.
+    if (isParallelCopy(cwd) && (launchesBackgroundProcess(input.command) || isDevServerCommand(input.command))) {
+      return commandFailure(BACKGROUND_REFUSAL, '', '', undefined);
+    }
 
     // Dev servers deliberately do not exit. Waiting for one makes the normal
     // command timeout kill it and leaves the agent turn looking frozen.

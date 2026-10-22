@@ -1150,3 +1150,51 @@ describe('which files a card is thought to touch', () => {
     expect(pickBatch(queue, 2).map((item) => item.id)).toEqual(['a', 'b']);
   });
 });
+
+describe('autopilot when copies of the project cannot be made for a moment', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const prepareWith = (h: Harness, fails: (call: number) => boolean) => {
+    const original = h.ports.worktrees!.prepare;
+    let calls = 0;
+    h.ports.worktrees!.prepare = async (...args) => {
+      calls += 1;
+      if (fails(calls)) throw new Error("EBUSY: resource busy or locked, rmdir 'C:\\Temp\\kai-parallel\\wave-11'");
+      return original(...args);
+    };
+    return () => calls;
+  };
+
+  it('carries on side by side after one failed attempt instead of giving up for the whole run', async () => {
+    const h = harness({ cards: ['a', 'b', 'c', 'd'].map((id) => card(id, [], 'ready')), parallel: {} });
+    prepareWith(h, (call) => call === 1);
+    await start(h, { parallelCards: 4 });
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.cardsDone).toBe(4);
+    expect(h.atOnce()).toBeGreaterThan(1);
+    expect(final.log.map((entry) => entry.text).join('\n')).not.toContain('copies of the project could not be made several times');
+  });
+
+  it('works one card at a time, and says why, only when copies keep failing', async () => {
+    const h = harness({ cards: ['a', 'b', 'c', 'd'].map((id) => card(id, [], 'ready')), parallel: {} });
+    prepareWith(h, () => true);
+    await start(h, { parallelCards: 4 });
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.cardsDone).toBe(4);
+    expect(h.atOnce()).toBe(0);
+    expect(final.log.map((entry) => entry.text).join('\n')).toContain('copies of the project could not be made several times in a row');
+  });
+
+  it('names every card being worked, not only one, when others are in hand', async () => {
+    const h = harness({ cards: ['a', 'b', 'c'].map((id) => card(id, [], 'ready')), parallel: {}, agentMs: () => 5_000 });
+    await start(h, { parallelCards: 3 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const message = h.autopilot.status('p1')!.message;
+    expect(message).toContain('3 of 3 agents');
+    for (const id of ['a', 'b', 'c']) expect(message).toContain(`Card ${id}`);
+    await settled(h);
+  });
+});

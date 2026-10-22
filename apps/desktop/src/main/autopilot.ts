@@ -41,6 +41,8 @@ const MAX_AUTO_RESTARTS = 2;
 const RESTART_PAUSE_MS = 20_000;
 /** Cards in a row that hit a problem of their own, with none finishing between, before the run stops. */
 const MAX_PROBLEM_STREAK = 5;
+/** Copies of the project that cannot be made in a row before the run stops trying and works one card at a time. */
+const MAX_COPY_FAILURES = 3;
 /** A card's recorded list of changed files longer than this is the whole project's uncommitted files, not the card's. */
 const TRUSTED_FILE_LIST = 15;
 
@@ -293,8 +295,10 @@ interface ActiveRun {
   restUntil: number;
   /** Cards this run holds on the board and has not finished with, which is what keeps the journal record alive. */
   held: number;
-  /** Set once copies of the project could not be made, so the run stops trying and works one card at a time. */
+  /** Set once copies of the project can never be made (not a git project), or keep failing, so the run works one card at a time. */
   serialOnly: boolean;
+  /** Copies that could not be made in a row. One failure is a locked folder; several in a row is the project. */
+  copyFailures: number;
   /** Waves run so far, only to give each wave's copies their own folder. */
   waves: number;
   /** Cards already done when the run began, so the pace is measured on this run's own work. */
@@ -352,6 +356,7 @@ export function copyRules(folder: string): string {
     '- Run the project\'s check once, when you believe the card is done, and fix what it reports. Do not run the smoke or self-test scripts after every change; KAI runs the check again before the card is closed.',
     '- Put new tests, styles and modules in new files named after this card where the project allows it, and connect them with as small an edit as possible to any file most cards also change. Small edits to shared files combine cleanly with the other cards\' work; large ones clash and are redone.',
     '- Throwaway files (probes, notes, logs) go in the system temp folder, not the project, and are deleted when you finish. Never start Electron on a probe script: an error in it opens a dialog that waits for a person who is not there.',
+    '- Do not start servers or anything in the background (a trailing &, nohup, start, a dev or preview server). Your copy is deleted when the card is done, and a process left running in it keeps the folder and its port locked; the run_command tool refuses such commands. The project\'s check starts and stops what it needs.',
     '- Close any browser tab you opened before you finish.',
   ].join('\n');
 }
@@ -492,7 +497,7 @@ export class DesktopAutopilot {
     await this.ports.preflight(input.projectId);
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
-    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0, spend: new Map(), closedSpends: [], restarts: 0, problemStreak: 0, preflighted: false };
+    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, copyFailures: 0, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0, spend: new Map(), closedSpends: [], restarts: 0, problemStreak: 0, preflighted: false };
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
@@ -766,7 +771,13 @@ export class DesktopAutopilot {
       attemptsMade = attempt;
       state.attempt = attempt;
       const prior = attempt === 1 ? carried?.first : undefined;
-      if (!prior) this.phase(projectId, owner, 'working', `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
+      if (!prior) {
+        // With other cards in hand the line names them all: it said one card's name while eight were being worked.
+        const others = state.lanes.filter((lane) => lane.cardId !== card.id);
+        this.phase(projectId, owner, 'working', others.length > 0
+          ? `Working on ${others.length + 1} cards side by side: ${[card.title, ...others.map((lane) => lane.cardTitle)].map((title) => `"${title}"`).join(', ')}.`.slice(0, 560)
+          : `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
+      }
       let run: { failed: boolean; error: string };
       if (prior) {
         // The first attempt already ran, in a copy of the project, alongside the other cards of its wave.
@@ -947,8 +958,11 @@ export class DesktopAutopilot {
   private async copiesFor(input: AutopilotStartInput, active: ActiveRun): Promise<ParallelSession | null> {
     active.waves += 1;
     try {
-      return (await this.ports.worktrees?.prepare(input.projectId, `autopilot-${input.projectId}-${active.waves}`)) ?? null;
+      const session = (await this.ports.worktrees?.prepare(input.projectId, `autopilot-${input.projectId}-${active.waves}`)) ?? null;
+      if (session) active.copyFailures = 0;
+      return session;
     } catch (error) {
+      active.copyFailures += 1;
       this.record(input.projectId, active.ownerWindowId, 'warn', `Cards will run one at a time: separate copies of the project could not be made (${error instanceof Error ? error.message : String(error)}).`);
       return null;
     }
@@ -1239,8 +1253,13 @@ export class DesktopAutopilot {
     // Whether there can be copies at all, asked once before any card is claimed.
     const probe = await this.copiesFor(input, active);
     if (!probe) {
-      active.serialOnly = true;
-      this.record(projectId, owner, 'info', 'Cards run one at a time: working side by side needs a git project with at least one commit.');
+      // Giving up for the whole run over one failed attempt is what dropped a run of twelve cards to one at a time, because
+      // a folder was locked for a moment. A copy that could not be made is tried again; only a project that cannot have
+      // copies at all (no error, just no git history), or one that keeps failing, works one card at a time.
+      if (active.copyFailures === 0 || active.copyFailures >= MAX_COPY_FAILURES) {
+        active.serialOnly = true;
+        this.record(projectId, owner, 'info', active.copyFailures === 0 ? 'Cards run one at a time: working side by side needs a git project with at least one commit.' : 'Cards run one at a time: copies of the project could not be made several times in a row.');
+      }
       return false;
     }
     await probe.dispose().catch(() => undefined);

@@ -14,6 +14,7 @@ import {
   repositoryFor,
   snapshotWorkingTree,
 } from './git-worktrees';
+import { stopProcessesInFolders } from './process-cleanup';
 
 export interface IntegrationResult {
   /** Parts whose changes clashed with an earlier part's; their work was not applied. */
@@ -68,6 +69,62 @@ export function isParallelCopy(folder: string): boolean {
 }
 
 /**
+ * Removes a copy, stopping whatever is still running in it when Windows will not let go of the folder. An agent that
+ * started a preview server in its copy and left it running kept the folder locked for hours: removing it threw EBUSY,
+ * and a run that could not make its next copy gave up on working side by side.
+ */
+async function removeFolder(folder: string): Promise<void> {
+  const options = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 };
+  try {
+    await fs.rm(folder, options);
+    return;
+  } catch {
+    /* held open: find what holds it */
+  }
+  await stopProcessesInFolders([folder]);
+  await fs.rm(folder, options);
+}
+
+/**
+ * Removes copies earlier waves left in the temp folder, when they are old enough that no wave is still using them.
+ * Best effort: a folder something still holds open is left where it is, and says nothing.
+ */
+export async function cleanStaleParallelCopies(baseDirectory = path.join(os.tmpdir(), 'kai-parallel'), olderThanMs = 30 * 60_000): Promise<number> {
+  let names: string[];
+  try {
+    names = await fs.readdir(baseDirectory);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  const held: string[] = [];
+  for (const name of names) {
+    const folder = path.join(baseDirectory, name);
+    if (activeDirectories.has(path.resolve(folder))) continue;
+    const stat = await fs.stat(folder).catch(() => null);
+    if (!stat || Date.now() - stat.mtimeMs < olderThanMs) continue;
+    try {
+      await fs.rm(folder, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 });
+      removed += 1;
+    } catch {
+      held.push(folder);
+    }
+  }
+  // What still holds them is a process a card left running. Stopped in one go, then the folders are tried again.
+  if (held.length > 0 && (await stopProcessesInFolders(held)) >= 0) {
+    for (const folder of held) {
+      try {
+        await fs.rm(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        removed += 1;
+      } catch {
+        /* still locked: left where it is */
+      }
+    }
+  }
+  return removed;
+}
+
+/**
  * Starts a wave for a project: a snapshot of its working tree now, and a folder of checkouts outside the project.
  * Null when the project is not a git repository with at least one commit, in which case parts run one at a time.
  */
@@ -78,12 +135,20 @@ export async function createParallelSession(
 ): Promise<ParallelSession | null> {
   const repository = await repositoryFor(projectPath);
   if (!repository) return null;
-  const directory = path.join(baseDirectory, safeName(key));
+  // Older waves that no one cleaned up are cleared in the background; whatever is still locked is left alone.
+  void cleanStaleParallelCopies(baseDirectory);
+  let directory = path.join(baseDirectory, safeName(key));
+  try {
+    // A wave that crashed before cleaning up may have left its checkouts behind; start from nothing.
+    await removeFolder(directory);
+  } catch {
+    // A leftover that Windows still holds (a browser or Electron from a run that was killed keeps a handle in it) made
+    // this throw EBUSY, and the whole run then gave up on side-by-side work. Working beside it costs a folder in temp.
+    directory = path.join(baseDirectory, `${safeName(key)}-${Math.random().toString(36).slice(2, 6)}`);
+  }
   activeDirectories.add(path.resolve(directory));
   let snapshot: string;
   try {
-    // A wave that crashed before cleaning up may have left its checkouts behind; start from nothing.
-    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     snapshot = await snapshotWorkingTree(repository.root);
   } catch (error) {
     activeDirectories.delete(path.resolve(directory));
@@ -153,7 +218,7 @@ export async function createParallelSession(
     async dispose() {
       for (const folder of checkouts.values()) await removeWorktree(repository.root, folder).catch(() => undefined);
       checkouts.clear();
-      await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
+      await removeFolder(directory).catch(() => undefined);
       activeDirectories.delete(path.resolve(directory));
     },
   };
