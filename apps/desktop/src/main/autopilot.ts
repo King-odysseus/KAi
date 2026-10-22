@@ -32,6 +32,8 @@ const MAX_REST_WITHOUT_PROGRESS_MS = 9 * 3_600_000;
 const LOG_LIMIT = 60;
 /** A card's own request, and up to three read-only helper calls the model makes at once beside it. */
 const API_REQUESTS_PER_CARD = 4;
+/** Different cards in a row failing the same way before the project's own check is looked at. */
+const BASELINE_SAMPLE = 3;
 /** Times a card is run again on top of what is in the project when its changes met something else's. */
 const MAX_CLASH_RERUNS = 2;
 /** How much later each further card of a wave starts than the one before it. */
@@ -229,6 +231,16 @@ const NO_CHECK_NOTE = 'Autopilot finished the work but has no check command, so 
 /** A page with nowhere to point can never pass its screen check, and the board never closes it. */
 export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
   return card.kind === 'page' && card.route.trim() === '';
+}
+
+/** The last few cards to fail their check, for telling a broken project from a few broken cards. */
+interface FailureWatch {
+  recent: Array<{ cardId: string; failure: string }>;
+}
+
+/** How a failed check is put to the agent, and compared between cards. */
+function checkFailureText(command: string, check: { exitCode: number | null; output: string }): string {
+  return `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}`;
 }
 
 /** An attempt at a card, made in a copy of the project and waiting to be merged. The copy is still open. */
@@ -477,8 +489,10 @@ export class DesktopAutopilot {
         await this.workCard(input, settings, label, card, command, active);
       }
     } catch (error) {
-      if (active.controller.signal.aborted) return this.settle(projectId, owner, 'stopped', 'Autopilot was stopped.');
-      const message = error instanceof Error ? error.message : String(error);
+      const reason: unknown = active.controller.signal.reason;
+      const endedForAReason = reason instanceof Error && reason.message !== 'Autopilot was stopped.';
+      if (active.controller.signal.aborted && !endedForAReason) return this.settle(projectId, owner, 'stopped', 'Autopilot was stopped.');
+      const message = endedForAReason ? reason.message : error instanceof Error ? error.message : String(error);
       this.record(projectId, owner, 'warn', message);
       return this.settle(projectId, owner, 'failed', message);
     }
@@ -760,6 +774,8 @@ export class DesktopAutopilot {
     failure: string,
     command: string,
     active: ActiveRun,
+    /** The commit this card's previous attempt made, put back into the new copy so the attempt builds on it. */
+    carry?: string,
   ): Promise<CopyAttempt | null> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
@@ -770,6 +786,10 @@ export class DesktopAutopilot {
     let conversationId: string | null = null;
     try {
       const folder = await session.checkout(card.id);
+      // The previous attempt's changes, where they still apply on top of what the project holds now. A retry used to
+      // start from nothing once the failed attempt was taken back out, and paid for the same work twice.
+      const carried = carry && session.carry ? await session.carry(card.id, carry).catch(() => false) : false;
+      const told = carried ? `${failure}\n\nYour previous attempt's changes are already in this copy of the project. Build on them and fix what failed; do not start over.` : failure;
       const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
       conversationId = conversation.id;
       this.trackLane(active, card, conversation.id);
@@ -780,7 +800,7 @@ export class DesktopAutopilot {
       this.ports.trace?.(`Autopilot lane "${card.title}": copy and conversation ready, starting the agent.`);
       const prompt = await this.cardPrompt(input, card);
       const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
-      let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, failure, active, { cwd: folder, ...(model ? { model } : {}) }));
+      let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, told, active, { cwd: folder, ...(model ? { model } : {}) }));
       // The build check, run in the card's own copy while the other cards are still working. A failure here is handed
       // straight back to the agent, which is cheaper than finding out after the merge and the wait for the project's one
       // check. It is a filter only: the card is still closed on the check that runs in the project.
@@ -808,17 +828,20 @@ export class DesktopAutopilot {
    * Merges one card's copy into the project. The files it could not apply, because another card or another editor
    * changed them since the copy was made, or an empty list when the merge itself failed; null when all of it went in.
    */
-  private async mergeOne(input: AutopilotStartInput, session: ParallelSession, card: BoardCard, commit: string, active: ActiveRun): Promise<string[] | null> {
+  private async mergeOne(input: AutopilotStartInput, session: ParallelSession, card: BoardCard, commit: string, active: ActiveRun): Promise<{ clash: string[] | null; undo?: () => Promise<void> }> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
     this.phase(projectId, owner, 'checking', `Merging the work on "${card.title}" into the project.`);
     try {
       const merged = await this.timed(projectId, 'mergeMs', () => session.integrate([{ stepId: card.id, commit }]));
-      if (merged.conflicts.length === 0 && merged.skipped.length === 0) return null;
-      return [...new Set([...merged.conflicts.flatMap((conflict) => conflict.files), ...merged.skipped])];
+      if (merged.merged?.length) this.ports.trace?.(`Autopilot lane "${card.title}": combined its changes with the project's in ${merged.merged.join(', ')}.`);
+      const clash = merged.conflicts.length === 0 && merged.skipped.length === 0
+        ? null
+        : [...new Set([...merged.conflicts.flatMap((conflict) => conflict.files), ...merged.skipped])];
+      return { clash, ...(merged.undo ? { undo: merged.undo } : {}) };
     } catch (error) {
       this.record(projectId, owner, 'warn', `The work on "${card.title}" could not be merged (${error instanceof Error ? error.message : String(error)}).`);
-      return [];
+      return { clash: [] };
     }
   }
 
@@ -838,6 +861,7 @@ export class DesktopAutopilot {
     active: ActiveRun,
     gate: Gate,
     slots: Slots,
+    watch: FailureWatch,
     alongside: number,
     startDelayMs: number,
   ): Promise<boolean> {
@@ -855,6 +879,7 @@ export class DesktopAutopilot {
     let failure = '';
     let attemptsMade = 0;
     let reruns = 0;
+    let carry: string | undefined;
     for (let attempt = 1; attempt <= input.attemptsPerCard; attempt += 1) {
       attemptsMade = attempt;
       this.state(projectId).attempt = attempt;
@@ -871,7 +896,7 @@ export class DesktopAutopilot {
             return false;
           }
         }
-        made = await this.attemptInCopy(input, settings, card, attempt, failure, command, active);
+        made = await this.attemptInCopy(input, settings, card, attempt, failure, command, active, carry);
       } finally {
         release();
       }
@@ -884,11 +909,27 @@ export class DesktopAutopilot {
       try {
         step = await gate.run(async () => {
           try {
+            let undo: (() => Promise<void>) | undefined;
             if (made.commit) {
-              const clash = await this.mergeOne(input, made.session, card, made.commit, active);
-              if (clash && reruns < MAX_CLASH_RERUNS) return { clash };
+              const merge = await this.mergeOne(input, made.session, card, made.commit, active);
+              undo = merge.undo;
+              if (merge.clash && reruns < MAX_CLASH_RERUNS) {
+                // What did go in comes back out, so the next go starts from a project without half of this card in it.
+                await undo?.().catch(() => undefined);
+                return { clash: merge.clash };
+              }
             }
-            return { settled: await this.settleAttempt(input, settings, label, card, command, active, made.result, failure) };
+            const settled = await this.settleAttempt(input, settings, label, card, command, active, made.result, failure);
+            if (settled.outcome === 'retry' && undo) {
+              // A card that failed its check does not stay in the project. Left in, its broken changes failed every other
+              // card's check as well, and the cards behind it went round again for a fault that was not theirs.
+              await undo().catch(() => undefined);
+              this.record(projectId, owner, 'info', `"${card.title}" did not pass, so its changes were taken back out of the project and it tries again from them in its own copy.`);
+              await this.guardBaseline(input, card, settled.failure, command, active, watch);
+            } else if (settled.outcome === 'done') {
+              watch.recent.length = 0;
+            }
+            return { settled };
           } finally {
             await made.session.dispose().catch(() => undefined);
           }
@@ -901,7 +942,8 @@ export class DesktopAutopilot {
         reruns += 1;
         const named = step.clash.slice(0, 4).join(', ');
         this.record(projectId, owner, 'info', `"${card.title}" changed files that something else changed while it worked${named ? ` (${named})` : ''}, so it runs again on top of what is in the project now.`);
-        failure = `Something else changed some of the same files while you worked${named ? ` (${named})` : ''}, and its work is in the project now. Look at those files first and make your change on top of theirs instead of replacing it.`;
+        failure = `Something else changed some of the same lines while you worked${named ? ` (${named})` : ''}, and its work is in the project now. Look at those files first and make your change on top of theirs instead of replacing it.`;
+        carry = made.commit;
         attempt -= 1;
         attemptsMade = attempt;
         continue;
@@ -909,11 +951,35 @@ export class DesktopAutopilot {
       const settled = step.settled;
       if (settled.outcome !== 'retry') return true;
       failure = settled.failure;
+      carry = made.commit;
       // The same refusal twice, word for word, means the attempt changed nothing the check looks at: parked now.
       if (settled.repeated) break;
     }
     await gate.run(() => this.blockCard(input, active, card, attemptsMade, failure));
     return true;
+  }
+
+  /**
+   * Ends the run when the project's own check is what keeps failing.
+   *
+   * When several different cards in a row fail their check in the same way, the likeliest cause is not any of them
+   * but the project: a test that was already broken, a missing dependency. Every further card would fail the same
+   * way and be paid for. So the check is run on the project as it is, with none of those cards in it, and if it fails
+   * there too the run stops and says so, instead of working the rest of the board into the same wall.
+   */
+  private async guardBaseline(input: AutopilotStartInput, card: BoardCard, failure: string, command: string, active: ActiveRun, watch: FailureWatch): Promise<void> {
+    const { projectId } = input;
+    watch.recent.push({ cardId: card.id, failure });
+    if (watch.recent.length > BASELINE_SAMPLE) watch.recent.shift();
+    const recent = watch.recent;
+    if (recent.length < BASELINE_SAMPLE || new Set(recent.map((entry) => entry.cardId)).size < BASELINE_SAMPLE) return;
+    if (!recent.every((entry) => sameFailure(entry.failure, recent[0]!.failure))) return;
+    this.phase(projectId, active.ownerWindowId, 'checking', 'Several cards failed their check the same way; checking the project on its own.');
+    const check = await this.timed(projectId, 'checkMs', () => this.ports.runCheck(projectId, command, active.controller.signal));
+    watch.recent.length = 0;
+    if (check.passed) return;
+    const tail = check.output.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' | ').slice(0, 300);
+    throw new Error(`The project's own check (${command}) fails with none of the cards' changes in it, so no card can pass${tail ? `: ${tail}` : ''}. Fix the check or the code it tests, then start Autopilot again; the board keeps its place.`);
   }
 
   /**
@@ -945,6 +1011,7 @@ export class DesktopAutopilot {
 
     const gate = new Gate(signal);
     const slots = new Slots(lanes, signal);
+    const watch: FailureWatch = { recent: [] };
     // More cards can be in hand than agents are working: a card that has finished its agent waits for the gate while
     // the next ones take its place. Not unboundedly, so the checks falling behind cannot pile up finished copies.
     const inFlight = lanes + Math.max(2, Math.ceil(lanes / 2));
@@ -982,7 +1049,7 @@ export class DesktopAutopilot {
           const alongside = running.size;
           const delay = startedNow * LANE_STAGGER_MS;
           startedNow += 1;
-          const done = this.workCardInCopy(input, settings, label, next, command, active, gate, slots, alongside, delay).then(
+          const done = this.workCardInCopy(input, settings, label, next, command, active, gate, slots, watch, alongside, delay).then(
             (claimed) => {
               if (claimed) worked += 1;
               else unclaimable.add(next.id);
@@ -997,6 +1064,13 @@ export class DesktopAutopilot {
       await Promise.race([...running.values()].map((entry) => entry.done));
       if (failures.length > 0) break;
       announce();
+    }
+    // A run that cannot go on (the project's own check broken, a provider that never came back) stops the other
+    // cards too, rather than letting them spend on work that cannot be closed.
+    if (failures.length > 0 && !signal.aborted) {
+      const reason = failures[0] instanceof Error ? failures[0] : new Error(String(failures[0]));
+      active.controller.abort(reason);
+      for (const conversationId of active.conversations) this.ports.cancelAgent(conversationId);
     }
     // Whatever is still going finishes, or stops, before this returns.
     await Promise.all([...running.values()].map((entry) => entry.done));
@@ -1013,7 +1087,7 @@ export class DesktopAutopilot {
     const check = await this.timed(projectId, 'checkMs', () => this.ports.runCheck(projectId, command, signal));
     if (!check.passed || !check.runId) {
       this.record(projectId, owner, 'check', `Check failed for "${card.title}".`);
-      return { closed: false, failure: `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}` };
+      return { closed: false, failure: checkFailureText(command, check) };
     }
     await this.board.setCheck(projectId, card.id, {
       runId: check.runId,

@@ -25,6 +25,12 @@ interface Harness {
   cwds: Array<string | undefined>;
   /** The most agent runs that were in separate copies at the same moment. */
   atOnce(): number;
+  /** Cards whose merge was taken back out of the project, in order. */
+  undone: string[];
+  /** Earlier attempts carried into a card's next copy. */
+  carried: Array<{ card: string; commit: string }>;
+  /** Whether any card's changes are in the project right now, as far as the fake merge knows. */
+  merged(): boolean;
 }
 
 function harness(options: {
@@ -42,6 +48,9 @@ function harness(options: {
 }): Harness {
   let conversationCount = 0;
   const clashedAlready = new Set<string>();
+  const undone: string[] = [];
+  const carried: Array<{ card: string; commit: string }> = [];
+  const inProject = new Set<string>();
   const cwds: Array<string | undefined> = [];
   let active = 0;
   let mostAtOnce = 0;
@@ -102,10 +111,15 @@ function harness(options: {
           checkout: async (id: string) => `/copies/${id}`,
           commit: async (id: string) => `commit-${id}`,
           filesChanged: async () => [],
-          integrate: async (commits: ReadonlyArray<{ stepId: string }>) => ({
-            conflicts: commits.filter((item) => options.parallel?.clash?.includes(item.stepId) && !clashedAlready.has(item.stepId) && clashedAlready.add(item.stepId)).map((item) => ({ stepId: item.stepId, files: ['src/shared.ts'] })),
-            applied: [], skipped: [], integrationCommit: 'merged',
-          }),
+          integrate: async (commits: ReadonlyArray<{ stepId: string }>) => {
+            for (const item of commits) inProject.add(item.stepId);
+            return {
+              conflicts: commits.filter((item) => options.parallel?.clash?.includes(item.stepId) && !clashedAlready.has(item.stepId) && clashedAlready.add(item.stepId)).map((item) => ({ stepId: item.stepId, files: ['src/shared.ts'] })),
+              applied: [], skipped: [], integrationCommit: 'merged',
+              undo: async () => { for (const item of commits) { undone.push(item.stepId); inProject.delete(item.stepId); } },
+            };
+          },
+          carry: async (stepId: string, commit: string) => { carried.push({ card: stepId, commit }); return true; },
           dispose: async () => undefined,
         }),
       },
@@ -133,7 +147,7 @@ function harness(options: {
     journal,
     now: () => Date.now(),
   };
-  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept, devChecks, cwds, atOnce: () => mostAtOnce };
+  return { autopilot: new DesktopAutopilot(ports), board, prompts, ports, kept, devChecks, cwds, atOnce: () => mostAtOnce, undone, carried, merged: () => inProject.size > 0 };
 }
 
 const start = (h: Harness, overrides: Record<string, unknown> = {}) =>
@@ -635,6 +649,70 @@ describe('desktop autopilot', () => {
       expect(final.log.some((entry) => entry.text.includes('runs again on top of what is in the project now'))).toBe(true);
     });
 
+    describe('a card that fails its check after the merge', () => {
+      /** Checks in a copy always pass; the project's check fails while any card's changes are in it, per `broken`. */
+      const projectCheck = (h: Harness, broken: (call: number) => boolean) => {
+        let calls = 0;
+        h.ports.runCheck = async (_projectId, _command, _signal, options) => {
+          if (options?.cwd) return { passed: true, exitCode: 0, output: '', runId: null };
+          calls += 1;
+          const fails = broken(calls);
+          return fails ? { passed: false, exitCode: 1, output: 'FAIL: expected 1 to be 2', runId: null } : { passed: true, exitCode: 0, output: '', runId: `run-${calls}` };
+        };
+      };
+
+      it('is taken back out of the project, and tries again from its own work in a fresh copy', async () => {
+        const h = harness({ cards: [card('a'), card('b')], parallel: {} });
+        projectCheck(h, (call) => call === 1);
+        await start(h, { parallelCards: 2, attemptsPerCard: 3 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.board.cards.map((item) => item.status)).toEqual(['done', 'done']);
+        expect(h.undone).toHaveLength(1);
+        const failed = h.undone[0]!;
+        expect(h.carried).toEqual([{ card: failed, commit: `commit-${failed}` }]);
+        expect(h.prompts.some((prompt) => prompt.includes('previous attempt\'s changes are already in this copy'))).toBe(true);
+        expect(final.log.some((entry) => entry.text.includes('taken back out of the project'))).toBe(true);
+      });
+
+      it('stops the run, and says why, when the project\'s own check is what fails', async () => {
+        const h = harness({ cards: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => card(id)), parallel: {} });
+        projectCheck(h, () => true);
+        await start(h, { parallelCards: 3, attemptsPerCard: 3 });
+        const final = await settled(h);
+        expect(final.phase).toBe('failed');
+        expect(final.message).toContain('own check');
+        expect(final.message).toContain('FAIL: expected 1 to be 2');
+        // Stopped after three cards failed the same way, not after every card had used every attempt.
+        expect(h.prompts.length).toBeLessThan(6 * 3);
+        expect(h.merged()).toBe(false);
+      });
+
+      it('carries on when the project\'s own check passes, because then it is the cards that are wrong', async () => {
+        const h = harness({ cards: ['a', 'b', 'c'].map((id) => card(id)), parallel: {} });
+        // Fails whenever a card's changes are in the project, passes when none are.
+        let calls = 0;
+        h.ports.runCheck = async (_projectId, _command, _signal, options) => {
+          if (options?.cwd) return { passed: true, exitCode: 0, output: '', runId: null };
+          calls += 1;
+          return h.merged() ? { passed: false, exitCode: 1, output: 'FAIL: expected 1 to be 2', runId: null } : { passed: true, exitCode: 0, output: '', runId: `run-${calls}` };
+        };
+        await start(h, { parallelCards: 3, attemptsPerCard: 2 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(final.message).not.toContain('own check');
+        expect(h.board.cards.every((item) => item.status === 'blocked')).toBe(true);
+      });
+
+      it('leaves nothing of a clashed card in the project before it goes again', async () => {
+        const h = harness({ cards: [card('a'), card('b')], parallel: { clash: ['b'] } });
+        await start(h, { parallelCards: 2 });
+        const final = await settled(h);
+        expect(final.phase).toBe('finished');
+        expect(h.undone).toContain('b');
+        expect(h.carried.some((entry) => entry.card === 'b')).toBe(true);
+      });
+    });
     it('retries a card whose check fails after the merge, with the failure in the prompt', async () => {
       const h = harness({ cards: [card('a'), card('b')], parallel: {}, check: (call) => call !== 1 });
       await start(h, { parallelCards: 2 });

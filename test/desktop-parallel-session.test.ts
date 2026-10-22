@@ -150,6 +150,84 @@ describe('a side-by-side session on a real repository', () => {
     }
   });
 
+  describe('when the project changed a file the part also changed', () => {
+    const lines = (count: number): string => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join('\n') + '\n';
+
+    async function shared(): Promise<string> {
+      const root = await temporary('shared');
+      await git(root, 'init', '-q');
+      await writeFile(path.join(root, 'styles.css'), lines(20));
+      await git(root, 'add', '-A');
+      await git(root, 'commit', '-q', '-m', 'initial');
+      return root;
+    }
+
+    it('combines the two when they changed different lines, as git would', async () => {
+      const root = await shared();
+      const session = (await createParallelSession(root, 'wave-combine', await temporary('base')))!;
+      const folder = await session.checkout('card');
+      // The card adds at the end; meanwhile another card's work changed the top of the same file in the project.
+      await writeFile(path.join(folder, 'styles.css'), lines(20) + '.card { color: blue; }\n');
+      await writeFile(path.join(root, 'styles.css'), '.other { color: red; }\n' + lines(20));
+      const result = await session.integrate([{ stepId: 'card', commit: await session.commit('card', 'card') }]);
+
+      expect(result.skipped).toEqual([]);
+      expect(result.merged).toEqual(['styles.css']);
+      const text = await readFile(path.join(root, 'styles.css'), 'utf8');
+      expect(text.startsWith('.other { color: red; }\n')).toBe(true);
+      expect(text.endsWith('.card { color: blue; }\n')).toBe(true);
+      await session.dispose();
+    });
+
+    it('leaves the project\'s version alone when both changed the same line', async () => {
+      const root = await shared();
+      const session = (await createParallelSession(root, 'wave-same-line', await temporary('base')))!;
+      const folder = await session.checkout('card');
+      await writeFile(path.join(folder, 'styles.css'), lines(20).replace('line 5\n', 'line five from the card\n'));
+      await writeFile(path.join(root, 'styles.css'), lines(20).replace('line 5\n', 'line five from the project\n'));
+      const result = await session.integrate([{ stepId: 'card', commit: await session.commit('card', 'card') }]);
+
+      expect(result.skipped).toEqual(['styles.css']);
+      expect(await readFile(path.join(root, 'styles.css'), 'utf8')).toContain('line five from the project');
+      await session.dispose();
+    });
+
+    it('takes a merge back out exactly, new files included, so a card that failed its check leaves nothing behind', async () => {
+      const root = await shared();
+      const before = await readFile(path.join(root, 'styles.css'), 'utf8');
+      const session = (await createParallelSession(root, 'wave-undo', await temporary('base')))!;
+      const folder = await session.checkout('card');
+      await writeFile(path.join(folder, 'styles.css'), before + '.card {}\n');
+      await writeFile(path.join(folder, 'new.ts'), 'export const added = 1;\n');
+      const result = await session.integrate([{ stepId: 'card', commit: await session.commit('card', 'card') }]);
+      expect(await exists(path.join(root, 'new.ts'))).toBe(true);
+
+      await result.undo!();
+      expect(await readFile(path.join(root, 'styles.css'), 'utf8')).toBe(before);
+      expect(await exists(path.join(root, 'new.ts'))).toBe(false);
+      await session.dispose();
+    });
+
+    it('carries an earlier attempt into a fresh copy, on top of what the project holds now', async () => {
+      const root = await shared();
+      const first = (await createParallelSession(root, 'wave-first', await temporary('base')))!;
+      const firstFolder = await first.checkout('card');
+      await writeFile(path.join(firstFolder, 'styles.css'), lines(20) + '.card { color: blue; }\n');
+      const earlier = await first.commit('card', 'first attempt');
+      await first.dispose();
+
+      // Another card's work reached the project in between.
+      await writeFile(path.join(root, 'styles.css'), '.other {}\n' + lines(20));
+      const second = (await createParallelSession(root, 'wave-second', await temporary('base')))!;
+      const secondFolder = await second.checkout('card');
+      expect(await second.carry!('card', earlier)).toBe(true);
+      const text = await readFile(path.join(secondFolder, 'styles.css'), 'utf8');
+      expect(text.startsWith('.other {}\n')).toBe(true);
+      expect(text.endsWith('.card { color: blue; }\n')).toBe(true);
+      await second.dispose();
+    });
+  });
+
   it('is not available for a folder that is not a git project', async () => {
     expect(await createParallelSession(await temporary('plain'), 'wave', await temporary('base'))).toBeNull();
   });

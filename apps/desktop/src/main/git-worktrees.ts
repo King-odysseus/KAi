@@ -141,8 +141,50 @@ export async function attemptDiff(directory: string, snapshot: string, commit: s
 
 export interface ApplyResult {
   applied: string[];
-  /** Files the user changed after the snapshot; these are left exactly as the user has them. */
+  /**
+   * Files changed in the project after the snapshot, whose changes could not be combined with the part's (the same
+   * lines changed both ways, or a file that is not text). These are left exactly as the project has them.
+   */
   skipped: string[];
+  /** Files changed both in the project and by the part, in different places, and combined. Also in `applied`. */
+  merged: string[];
+}
+
+/**
+ * Combines two changes to one file the way git does: the base the two started from, the project's version and the
+ * part's. Null when the same lines were changed both ways, or either side is not text, so nothing is guessed.
+ *
+ * Without this every file two cards both touched was refused outright, and on a project where every card adds to
+ * the same stylesheet and the same test script, most cards' work was thrown away and redone.
+ */
+export async function mergeFileThreeWay(current: Buffer, base: Buffer, theirs: Buffer): Promise<Buffer | null> {
+  if ([current, base, theirs].some((content) => content.includes(0))) return null;
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-merge-'));
+  try {
+    const [ours, original, other] = ['project', 'base', 'part'].map((name) => path.join(folder, name));
+    await Promise.all([fs.writeFile(ours!, current), fs.writeFile(original!, base), fs.writeFile(other!, theirs)]);
+    return await new Promise<Buffer | null>((resolve) => {
+      execFile('git', ['merge-file', '-p', '-L', 'project', '-L', 'base', '-L', 'part', ours!, original!, other!], { encoding: 'buffer', maxBuffer: MAX_BUFFER, windowsHide: true }, (error, stdout) => {
+        // Exit 0 is a clean merge; a positive exit is the number of conflicts, and anything else is a failure.
+        resolve(error ? null : stdout);
+      });
+    });
+  } finally {
+    await fs.rm(folder, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Puts a commit's changes into a worktree without committing them, on top of whatever the worktree holds now. Used
+ * to carry a card's previous attempt into the fresh copy its next attempt starts from. False, and the worktree left
+ * as it was, when the changes do not apply cleanly.
+ */
+export async function carryCommit(directory: string, commit: string): Promise<boolean> {
+  const picked = await runGit(directory, ['cherry-pick', '--no-commit', commit]);
+  if (picked.code === 0) return true;
+  await runGit(directory, ['cherry-pick', '--abort']);
+  await runGit(directory, ['reset', '--hard', '-q']);
+  return false;
 }
 
 /**
@@ -152,6 +194,7 @@ export interface ApplyResult {
 export async function applyToWorkingTree(root: string, snapshot: string, integration: string, changes: readonly FileChange[]): Promise<ApplyResult> {
   const applied: string[] = [];
   const skipped: string[] = [];
+  const merged: string[] = [];
   for (const change of changes) {
     if (isDependencyPath(change.file)) continue;
     const live = path.join(root, change.file);
@@ -168,7 +211,16 @@ export async function applyToWorkingTree(root: string, snapshot: string, integra
       continue;
     }
     if (!unchanged) {
-      skipped.push(change.file);
+      // Changed in the project since the snapshot. Two changes to different lines are combined; anything else is left
+      // as the project has it, which protects a person's own edit as much as another card's.
+      const combined = current !== null && base !== null && result !== null ? await mergeFileThreeWay(current, base, result) : null;
+      if (!combined) {
+        skipped.push(change.file);
+        continue;
+      }
+      await fs.writeFile(live, combined);
+      applied.push(change.file);
+      merged.push(change.file);
       continue;
     }
     if (change.status === 'deleted') {
@@ -179,7 +231,7 @@ export async function applyToWorkingTree(root: string, snapshot: string, integra
     }
     applied.push(change.file);
   }
-  return { applied, skipped };
+  return { applied, skipped, merged };
 }
 
 /**
