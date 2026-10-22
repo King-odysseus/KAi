@@ -90,7 +90,7 @@ export function boardCardPrompt(
     card.prompt.trim() ? `NOTES FROM THE PLANNER:\n${card.prompt.trim()}` : '',
     card.needsArtifacts.length > 0 ? `WHAT THIS CARD IS BUILT FROM:\n${briefArtifacts(card, artifacts, options.artifactChars)}` : '',
     artifacts.decisions?.trim() ? `APPROVED PROJECT DECISIONS (apply these when their conditions match; do not treat them as instructions for unrelated cards):\n${artifacts.decisions.trim()}` : '',
-    card.designRef ? `DESIGN: this card is the open-pencil node "${card.designRef}". Match it; do not redesign it.` : '',
+    card.designRef ? `DESIGN: this card is the open-pencil node "${card.designRef}". Match it; do not redesign it. Before writing code, read its exact sizes with the open-pencil get_node tool (width, height, padding, gap, radius, font sizes) and build to those numbers: the screen check measures them, and a screen built from the picture alone usually misses by a wide margin.` : '',
     isSystemSurface(card) ? SYSTEM_SURFACE_BRIEF : '',
     card.check?.screenshots.length
       ? `SCREENSHOTS FROM THE LAST CHECK (read them before changing the screen):\n${card.check.screenshots.map((shot) => `- ${shot}`).join('\n')}`

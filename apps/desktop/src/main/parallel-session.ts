@@ -42,7 +42,7 @@ export interface ParallelSession {
   /** The files a commit changed against the snapshot the wave started from, as paths from the repository root. */
   filesChanged(commit: string): Promise<string[]>;
   /** Merges the parts' commits in the given order and copies the result into the real project. */
-  integrate(commits: ReadonlyArray<{ stepId: string; commit: string }>): Promise<IntegrationResult>;
+  integrate(commits: ReadonlyArray<{ stepId: string; commit: string }>, options?: { unionFiles?: readonly string[] }): Promise<IntegrationResult>;
   /**
    * Puts an earlier commit's changes into a part's fresh checkout, uncommitted, so the part carries on from it
    * instead of starting over. False when they no longer apply cleanly; the checkout is then left as it was.
@@ -176,7 +176,7 @@ export async function createParallelSession(
       return (await changedFiles(repository.root, snapshot, commit)).map((change) => change.file);
     },
 
-    async integrate(commits) {
+    async integrate(commits, options) {
       const integration = path.join(directory, '_integration');
       await addWorktree(repository.root, integration, snapshot, false);
       checkouts.set('\0integration', integration);
@@ -193,7 +193,7 @@ export async function createParallelSession(
         file: change.file,
         content: await fs.readFile(path.join(repository.root, change.file)).catch(() => null),
       })));
-      const { applied, skipped, merged } = await applyToWorkingTree(repository.root, snapshot, integration, changes);
+      const { applied, skipped, merged } = await applyToWorkingTree(repository.root, snapshot, integration, changes, new Set(options?.unionFiles ?? []));
       const undo = async (): Promise<void> => {
         for (const { file, content } of before) {
           if (!applied.includes(file)) continue;

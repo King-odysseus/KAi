@@ -212,7 +212,7 @@ export function mergeDesign(
       continue;
     }
     // The component sheet and scratch canvases are drawn pages but not screens; a card for one can never close.
-    if (component.screen && isNonScreenName(component.name)) continue;
+    if (isNonScreenName(component.name)) continue;
     let id = idFor(component.id);
     let suffix = 2;
     while (taken.has(id)) id = `${idFor(component.id)}-${suffix++}`;

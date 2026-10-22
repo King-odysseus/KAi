@@ -114,8 +114,12 @@ const NON_SCREEN_PAGES = new Set([
   'design system', 'components', 'component library', 'style guide', 'foundation', 'cover', 'scratch', 'playground',
   'internal only canvas', 'page inventory', 'excluded screens',
 ]);
+/** Test probes and scratch pages left in a design: a card for one is work that does not exist. */
+const PROBE_NAME = /^zz\b|^(?:probe|sandbox|playground)$|\bprobe$/i;
+
 export function isNonScreenName(name: string): boolean {
-  return NON_SCREEN_PAGES.has(screenTitleKey(name));
+  const key = screenTitleKey(name);
+  return NON_SCREEN_PAGES.has(key) || PROBE_NAME.test(key);
 }
 
 /**

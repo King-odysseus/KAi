@@ -156,15 +156,19 @@ export interface ApplyResult {
  *
  * Without this every file two cards both touched was refused outright, and on a project where every card adds to
  * the same stylesheet and the same test script, most cards' work was thrown away and redone.
+ *
+ * `union` keeps both sides where they changed the same lines, which is right for a file every card only adds to (a test
+ * script, a stylesheet): it was the same few files that clashed again and again, and each clash was a whole agent
+ * attempt run again. A wrong combination is caught by the check, which costs what a clash cost.
  */
-export async function mergeFileThreeWay(current: Buffer, base: Buffer, theirs: Buffer): Promise<Buffer | null> {
+export async function mergeFileThreeWay(current: Buffer, base: Buffer, theirs: Buffer, union = false): Promise<Buffer | null> {
   if ([current, base, theirs].some((content) => content.includes(0))) return null;
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-merge-'));
   try {
     const [ours, original, other] = ['project', 'base', 'part'].map((name) => path.join(folder, name));
     await Promise.all([fs.writeFile(ours!, current), fs.writeFile(original!, base), fs.writeFile(other!, theirs)]);
     return await new Promise<Buffer | null>((resolve) => {
-      execFile('git', ['merge-file', '-p', '-L', 'project', '-L', 'base', '-L', 'part', ours!, original!, other!], { encoding: 'buffer', maxBuffer: MAX_BUFFER, windowsHide: true }, (error, stdout) => {
+      execFile('git', ['merge-file', '-p', ...(union ? ['--union'] : []), '-L', 'project', '-L', 'base', '-L', 'part', ours!, original!, other!], { encoding: 'buffer', maxBuffer: MAX_BUFFER, windowsHide: true }, (error, stdout) => {
         // Exit 0 is a clean merge; a positive exit is the number of conflicts, and anything else is a failure.
         resolve(error ? null : stdout);
       });
@@ -191,7 +195,7 @@ export async function carryCommit(directory: string, commit: string): Promise<bo
  * Copies a wave's result into the real working tree. A file is only written when it still matches the snapshot the
  * wave started from, so nothing the user (or another agent) did meanwhile is ever overwritten.
  */
-export async function applyToWorkingTree(root: string, snapshot: string, integration: string, changes: readonly FileChange[]): Promise<ApplyResult> {
+export async function applyToWorkingTree(root: string, snapshot: string, integration: string, changes: readonly FileChange[], unionFiles: ReadonlySet<string> = new Set()): Promise<ApplyResult> {
   const applied: string[] = [];
   const skipped: string[] = [];
   const merged: string[] = [];
@@ -213,7 +217,8 @@ export async function applyToWorkingTree(root: string, snapshot: string, integra
     if (!unchanged) {
       // Changed in the project since the snapshot. Two changes to different lines are combined; anything else is left
       // as the project has it, which protects a person's own edit as much as another card's.
-      const combined = current !== null && base !== null && result !== null ? await mergeFileThreeWay(current, base, result) : null;
+      let combined = current !== null && base !== null && result !== null ? await mergeFileThreeWay(current, base, result) : null;
+      if (!combined && unionFiles.has(change.file) && current !== null && base !== null && result !== null) combined = await mergeFileThreeWay(current, base, result, true);
       if (!combined) {
         skipped.push(change.file);
         continue;

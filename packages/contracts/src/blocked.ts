@@ -30,6 +30,13 @@ export interface BlockedExplanation {
  */
 const PATTERNS: ReadonlyArray<{ need: BlockedNeed; match: RegExp; ask: string }> = [
   {
+    // Before the approval rule on purpose: Windows says "Permission denied" for a folder another process holds, and that
+    // sent five cards to a person with "allow the action it asked for" when nothing had asked for anything.
+    need: 'a-fix',
+    match: /\b(EPERM|EBUSY|EACCES|ENOTEMPTY|EMFILE|EADDRINUSE)\b/,
+    ask: 'A file, folder or port on this machine was locked, which is not the code. Put the card back in the queue; if it happens again, close whatever is holding it.',
+  },
+  {
     need: 'your-approval',
     match: /\b(approv|permission|denied|not allowed|forbidden|401|403)\b/i,
     ask: 'It was stopped for approval. Allow the action it asked for, then put this card back in the queue.',

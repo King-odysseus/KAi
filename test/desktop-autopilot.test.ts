@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type ArtifactKind, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type DevCheckResult, type StudioBoard } from '@kai/contracts';
-import { DesktopAutopilot, isEasyCard, isEnvironmentalFailure, pickBatch, sameFailure, touchedPaths, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
+import { autopilotStartInputSchema, explainBlocked, isNonScreenName, type AgentRunRequest, type AgentRunResult, type ArtifactKind, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type DevCheckResult, type StudioBoard } from '@kai/contracts';
+import { copyRules, DesktopAutopilot, hotFiles, isEasyCard, isEnvironmentalFailure, pickBatch, sameFailure, spendSummary, touchedPaths, unionableFiles, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
+import { mergeFileThreeWay } from '../apps/desktop/src/main/git-worktrees';
 
 const NOW = '2026-10-01T00:00:00.000Z';
 
@@ -1196,5 +1197,89 @@ describe('autopilot when copies of the project cannot be made for a moment', () 
     expect(message).toContain('3 cards side by side (up to 3 agents at once)');
     for (const id of ['a', 'b', 'c']) expect(message).toContain(`Card ${id}`);
     await settled(h);
+  });
+});
+
+describe('a card that cost a lot is visible, and a locked file is not an approval', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('says what a card cost when it is done, and sums up the run', async () => {
+    const h = harness({ cards: [card('a'), card('b')], agent: (call) => ({ costUsd: call === 1 ? 0.12 : 0.3 }) });
+    await start(h);
+    const final = await settled(h);
+    const text = final.log.map((entry) => entry.text).join('\n');
+    expect(text).toContain('"Card a" is done. It cost about $0.12.');
+    expect(text).toContain('Spent about $0.42 across 2 cards. The costliest: "Card b" $0.30, "Card a" $0.12.');
+  });
+
+  it('keeps both cards\' added lines in a file that keeps clashing, instead of running a card again', async () => {
+    const h = harness({ cards: ['a', 'b', 'c', 'd', 'e'].map((id) => card(id, [], 'ready')), parallel: { clash: ['a', 'b'] } });
+    const seen: Array<readonly string[] | undefined> = [];
+    const prepare = h.ports.worktrees!.prepare;
+    h.ports.worktrees!.prepare = async (...args) => {
+      const session = await prepare(...args);
+      if (!session) return session;
+      const integrate = session.integrate.bind(session);
+      return { ...session, integrate: async (commits, options) => { seen.push(options?.unionFiles); return integrate(commits, options); } };
+    };
+    await start(h, { parallelCards: 5 });
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    // Two clashes on src/shared.ts make it a shared file, so the merges after that are told to combine it.
+    expect(seen.some((files) => files?.includes('src/shared.ts'))).toBe(true);
+    expect(seen[0]).toBeUndefined();
+  });
+});
+
+describe('what a run learns about its shared files and its spend', () => {
+  it('calls a file shared once it has clashed twice, and offers only text files for combining', () => {
+    const clashes = new Map([['scripts/smoke.js', 3], ['src/styles/tokens.css', 2], ['package.json', 2], ['src/a.ts', 1]]);
+    expect(hotFiles(clashes)).toEqual(['package.json', 'scripts/smoke.js', 'src/styles/tokens.css']);
+    expect(unionableFiles(hotFiles(clashes))).toEqual(['scripts/smoke.js', 'src/styles/tokens.css']);
+  });
+
+  it('tells the agent which files are shared, and nothing when none are', () => {
+    expect(copyRules('C:\\x\\copy', ['scripts/smoke.js', 'src/tokens.css'])).toContain('clashed between cards in this run: scripts/smoke.js, src/tokens.css');
+    expect(copyRules('C:\\x\\copy')).not.toContain('clashed between cards');
+  });
+
+  it('sums up spend by card, costliest first, and says nothing when nothing was spent', () => {
+    const titles = new Map([['a', 'Login'], ['b', 'Signup'], ['c', 'Reset'], ['d', 'Billing']]);
+    expect(spendSummary(new Map([['a', 0.1], ['b', 0.5], ['c', 0.2], ['d', 0.05]]), titles))
+      .toBe('Spent about $0.85 across 4 cards. The costliest: "Signup" $0.50, "Reset" $0.20, "Login" $0.10.');
+    expect(spendSummary(new Map(), titles)).toBeNull();
+    expect(spendSummary(new Map([['a', 0.001]]), titles)).toBeNull();
+  });
+
+  it('keeps both sides of a file two cards both added to the end of', async () => {
+    const base = Buffer.from('one\ntwo\nthree\n');
+    const project = Buffer.from('one\ntwo\nthree\nfrom card A\n');
+    const card = Buffer.from('one\ntwo\nthree\nfrom card B\n');
+    // Without the option the same lines changed both ways is a clash, as before.
+    expect(await mergeFileThreeWay(project, base, card)).toBeNull();
+    const combined = (await mergeFileThreeWay(project, base, card, true))?.toString('utf8');
+    expect(combined).toContain('from card A');
+    expect(combined).toContain('from card B');
+    expect(combined?.startsWith('one\ntwo\nthree\n')).toBe(true);
+  });
+});
+
+describe('telling a locked file from a request for approval', () => {
+  it('does not ask the person to allow anything when Windows says permission denied about a folder', () => {
+    const asked = explainBlocked("note: could not remove C:\\Temp\\zuri-profile: EPERM, Permission denied: \\\\?\\C:\\Temp\\zuri-profile");
+    expect(asked.need).toBe('a-fix');
+    expect(asked.ask).toContain('locked');
+  });
+
+  it('still asks for approval when an action really was refused', () => {
+    expect(explainBlocked('The tool was not allowed at this access level.').need).toBe('your-approval');
+  });
+});
+
+describe('design nodes that are not work', () => {
+  it('leaves out test probes and scratch pages as well as the component sheet', () => {
+    for (const name of ['ZZ probe', 'Probe', 'Sandbox', 'Page inventory', 'Excluded screens', 'Internal Only Canvas']) expect(isNonScreenName(name), name).toBe(true);
+    for (const name of ['Tasks page', 'Button / Primary', 'Probe results view', 'Zuri AI Brand']) expect(isNonScreenName(name), name).toBe(false);
   });
 });

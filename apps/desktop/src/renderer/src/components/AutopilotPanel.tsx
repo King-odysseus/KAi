@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Loader2, Moon, Plane, Square } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AutopilotAuditEntry, AutopilotRunRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { useRunPanelCollapsed } from './run-panel-collapse';
@@ -58,6 +58,9 @@ function remaining(iso: string, now: number): string {
 }
 
 /** Autopilot: hand the board to the agents and let it run, resting when the provider says it has had enough. */
+/** An interrupted run this recent is carried on by itself when the board is opened. */
+const AUTO_RESUME_WITHIN_MS = 15 * 60_000;
+
 export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked, unchecked = 0, disabled }: Props): ReactNode {
   const status = useAutopilotStatus(projectId);
   const [busy, setBusy] = useState(false);
@@ -82,6 +85,8 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
   });
   const [collapsed, toggleCollapsed] = useRunPanelCollapsed('autopilot');
   const [interrupted, setInterrupted] = useState<AutopilotRunRecord | null>(null);
+  /** Runs this panel has already carried on by itself, so a failed resume is not tried again in a loop. */
+  const resumedByItself = useRef(new Set<string>());
   const [audit, setAudit] = useState<AutopilotAuditEntry[]>([]);
 
   useEffect(() => {
@@ -108,7 +113,20 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
     if (running) return undefined;
     let cancelled = false;
     void window.kaiDesktop.autopilotInterrupted().then(unwrap)
-      .then((runs) => { if (!cancelled) setInterrupted(runs.find((record) => record.studioProjectId === projectId) ?? null); })
+      .then((runs) => {
+        if (cancelled) return;
+        const record = runs.find((item) => item.studioProjectId === projectId) ?? null;
+        setInterrupted(record);
+        // A run that stopped a few minutes ago was cut off by a restart or a crash, not put down by the person, so it carries
+        // on by itself. An older one is left for them to decide.
+        if (record && Date.now() - Date.parse(record.updatedAt) < AUTO_RESUME_WITHIN_MS && !resumedByItself.current.has(record.studioProjectId)) {
+          resumedByItself.current.add(record.studioProjectId);
+          setInterrupted(null);
+          void window.kaiDesktop.resumeInterruptedAutopilot({ studioProjectId: record.studioProjectId }).then(unwrap)
+            .then(() => setNotice('Autopilot was cut off a moment ago, so it carried on by itself.'))
+            .catch((caught: unknown) => { setInterrupted(record); setError(caught instanceof Error ? caught.message : String(caught)); });
+        }
+      })
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [projectId, running]);

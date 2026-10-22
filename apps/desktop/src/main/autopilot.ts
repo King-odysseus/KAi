@@ -208,6 +208,29 @@ export function baselineStopMessage(command: string, reason: string): string {
   return `The project's own check (${command}) fails with none of the cards' changes in it, so no card can pass${reason ? `: ${reason}` : ''}. An agent tried to fix it and could not. Fix the check or the code it tests, then start Autopilot again; the board keeps its place.`;
 }
 
+/** A file that has clashed this many times in one run is one every card changes, and gets its added lines combined. */
+const HOT_FILE_CLASHES = 2;
+/** Text files whose added lines can be kept from both sides. JSON and anything else is left to be run again. */
+const UNION_EXTENSIONS = /\.(?:[cm]?[jt]sx?|css|scss|html|md)$/i;
+
+/** The files that have clashed often enough in this run to be called shared. */
+export function hotFiles(clashes: ReadonlyMap<string, number>): string[] {
+  return [...clashes].filter(([, count]) => count >= HOT_FILE_CLASHES).map(([file]) => file).sort();
+}
+
+/** Of those, the ones where keeping both sides' added lines is a reasonable way to combine two cards' work. */
+export function unionableFiles(files: readonly string[]): string[] {
+  return files.filter((file) => UNION_EXTENSIONS.test(file));
+}
+
+/** One line on what a run cost and where, so the cards that burn credits can be seen. Null when nothing was spent. */
+export function spendSummary(spend: ReadonlyMap<string, number>, titles: ReadonlyMap<string, string>): string | null {
+  const total = [...spend.values()].reduce((sum, cost) => sum + cost, 0);
+  if (total < 0.005) return null;
+  const costliest = [...spend].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, cost]) => `"${titles.get(id) ?? id}" $${cost.toFixed(2)}`);
+  return `Spent about $${total.toFixed(2)} across ${spend.size} card${spend.size === 1 ? '' : 's'}. The costliest: ${costliest.join(', ')}.`;
+}
+
 export interface AutopilotCheckResult {
   passed: boolean;
   exitCode: number | null;
@@ -312,6 +335,10 @@ interface ActiveRun {
   completed: number;
   /** What each card has cost this run so far, across its attempts. */
   spend: Map<string, number>;
+  /** Card titles by id, for the cost summary. */
+  titles: Map<string, string>;
+  /** How many times each file has clashed when a card was merged this run. */
+  clashFiles: Map<string, number>;
   /** What the cards this run closed cost, which is what a card that keeps failing is measured against. */
   closedSpends: number[];
   /** Times the run started itself again after an unexpected problem. */
@@ -348,7 +375,7 @@ export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'> & Parti
  * round trip that sends the whole conversation again), ran the full test suites after every change, and left probe
  * files behind, one of which started Electron and opened an error dialog nobody was there to close.
  */
-export function copyRules(folder: string): string {
+export function copyRules(folder: string, sharedFiles: readonly string[] = []): string {
   return [
     'WORKING IN YOUR OWN COPY OF THE PROJECT:',
     `- Your copy is ${folder}. Run every command there with run_command. Do not cd outside it and do not touch the project's own folder: other agents are working beside you, and your changes reach the project only when KAI merges your copy.`,
@@ -357,6 +384,7 @@ export function copyRules(folder: string): string {
     '- Put new tests, styles and modules in new files named after this card where the project allows it, and connect them with as small an edit as possible to any file most cards also change. Small edits to shared files combine cleanly with the other cards\' work; large ones clash and are redone.',
     '- Throwaway files (probes, notes, logs) go in the system temp folder, not the project, and are deleted when you finish. Never start Electron on a probe script: an error in it opens a dialog that waits for a person who is not there.',
     '- Do not start servers or anything in the background (a trailing &, nohup, start, a dev or preview server). Your copy is deleted when the card is done, and a process left running in it keeps the folder and its port locked; the run_command tool refuses such commands. The project\'s check starts and stops what it needs.',
+    ...(sharedFiles.length > 0 ? [`- These files have clashed between cards in this run: ${sharedFiles.slice(0, 8).join(', ')}. Every card changes them. Change them only by adding a few lines, at the end or where nothing else is, and never reformat, reorder or rename what is already there. KAI keeps added lines from both cards, but only when the rest of the file is left alone.`] : []),
     '- Close any browser tab you opened before you finish.',
   ].join('\n');
 }
@@ -497,7 +525,7 @@ export class DesktopAutopilot {
     await this.ports.preflight(input.projectId);
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
-    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, copyFailures: 0, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0, spend: new Map(), closedSpends: [], restarts: 0, problemStreak: 0, preflighted: false };
+    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, copyFailures: 0, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0, spend: new Map(), titles: new Map(), clashFiles: new Map(), closedSpends: [], restarts: 0, problemStreak: 0, preflighted: false };
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
@@ -792,7 +820,7 @@ export class DesktopAutopilot {
         }
         const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
         try {
-          run = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, base, failure, active, { cardId: card.id, ...(model ? { model } : {}) }));
+          run = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, base, failure, active, { cardId: card.id, cardTitle: card.title, ...(model ? { model } : {}) }));
         } finally {
           this.untrackLane(active, card.id, conversation.id);
         }
@@ -855,7 +883,8 @@ export class DesktopAutopilot {
     state.cardsDone += 1;
     state.restStreak = 0;
     await this.endCard(projectId, active);
-    this.record(projectId, owner, 'card', `"${card.title}" is done.`);
+    const cost = active.spend.get(card.id);
+    this.record(projectId, owner, 'card', `"${card.title}" is done.${cost ? ` It cost about $${cost.toFixed(2)}.` : ''}`);
     this.counts(projectId, await this.ports.board(projectId));
     return { outcome: 'done', failure: '', repeated: false, costly: false };
   }
@@ -874,7 +903,7 @@ export class DesktopAutopilot {
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
     const explanation = explainBlocked(failure);
-    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${why}; moving on. ${explanation.ask}`);
+    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${why}${active.spend.get(card.id) ? ` (it cost about $${active.spend.get(card.id)!.toFixed(2)})` : ''}; moving on. ${explanation.ask}`);
   }
 
   /** The cheaper model for an easy card's first attempt, when the run names one. Undefined means the run's own model. */
@@ -1005,9 +1034,9 @@ export class DesktopAutopilot {
         this.ports.openConversation(owner, conversation);
       }
       this.ports.trace?.(`Autopilot lane "${card.title}": copy and conversation ready, starting the agent.`);
-      const prompt = `${await this.cardPrompt(input, card)}\n\n${copyRules(folder)}`;
+      const prompt = `${await this.cardPrompt(input, card)}\n\n${copyRules(folder, hotFiles(active.clashFiles))}`;
       const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
-      let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, told, active, { cwd: folder, cardId: card.id, ...(model ? { model } : {}) }));
+      let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, told, active, { cwd: folder, cardId: card.id, cardTitle: card.title, ...(model ? { model } : {}) }));
       // The build check, run in the card's own copy while the other cards are still working. A failure here is handed
       // straight back to the agent, which is cheaper than finding out after the merge and the wait for the project's one
       // check. It is a filter only: the card is still closed on the check that runs in the project.
@@ -1016,7 +1045,7 @@ export class DesktopAutopilot {
         if (!early || early.passed) break;
         this.record(projectId, owner, 'check', `Check failed for "${card.title}" in its copy; trying again before merging.`);
         const earlyFailure = `The check \`${command}\` failed${early.exitCode === null ? '' : ` (exit ${early.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${early.output.slice(-TAIL_CHARS)}`;
-        result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, earlyFailure, active, { cwd: folder, cardId: card.id }));
+        result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, earlyFailure, active, { cwd: folder, cardId: card.id, cardTitle: card.title }));
       }
       const commit = result.failed ? undefined : await session.commit(card.id, `Autopilot: ${card.title}`.slice(0, 120));
       return { session, result, ...(commit ? { commit } : {}) };
@@ -1040,11 +1069,14 @@ export class DesktopAutopilot {
     const owner = active.ownerWindowId;
     this.phase(projectId, owner, 'checking', `Merging the work on "${card.title}" into the project.`);
     try {
-      const merged = await this.timed(projectId, 'mergeMs', () => session.integrate([{ stepId: card.id, commit }]));
+      // Files that keep clashing have their added lines kept from both cards instead of the card being run again.
+      const union = unionableFiles(hotFiles(active.clashFiles));
+      const merged = await this.timed(projectId, 'mergeMs', () => session.integrate([{ stepId: card.id, commit }], union.length > 0 ? { unionFiles: union } : undefined));
       if (merged.merged?.length) this.ports.trace?.(`Autopilot lane "${card.title}": combined its changes with the project's in ${merged.merged.join(', ')}.`);
       const clash = merged.conflicts.length === 0 && merged.skipped.length === 0
         ? null
         : [...new Set([...merged.conflicts.flatMap((conflict) => conflict.files), ...merged.skipped])];
+      for (const file of clash ?? []) active.clashFiles.set(file, (active.clashFiles.get(file) ?? 0) + 1);
       return { clash, ...(merged.undo ? { undo: merged.undo } : {}) };
     } catch (error) {
       this.record(projectId, owner, 'warn', `The work on "${card.title}" could not be merged (${error instanceof Error ? error.message : String(error)}).`);
@@ -1424,7 +1456,7 @@ export class DesktopAutopilot {
     base: string,
     failure: string,
     active: ActiveRun,
-    options: { cwd?: string; model?: string; cardId?: string } = {},
+    options: { cwd?: string; model?: string; cardId?: string; cardTitle?: string } = {},
   ): Promise<{ failed: boolean; error: string }> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
@@ -1458,7 +1490,10 @@ export class DesktopAutopilot {
       }
       if (result?.costUsd) {
         this.state(projectId).costUsd += result.costUsd;
-        if (options.cardId) active.spend.set(options.cardId, (active.spend.get(options.cardId) ?? 0) + result.costUsd);
+        if (options.cardId) {
+          active.spend.set(options.cardId, (active.spend.get(options.cardId) ?? 0) + result.costUsd);
+          if (options.cardTitle) active.titles.set(options.cardId, options.cardTitle);
+        }
       }
 
       const failed = thrown !== null || result?.status === 'failed' || Boolean(result?.error);
@@ -1641,6 +1676,9 @@ export class DesktopAutopilot {
     state.lanes = [];
     state.resumeAt = null;
     state.restReason = null;
+    const active = this.runs.get(projectId);
+    const summary = active ? spendSummary(active.spend, active.titles) : null;
+    if (summary) this.record(projectId, owner, 'info', summary);
     this.record(projectId, owner, phase === 'failed' ? 'warn' : 'info', message);
     this.phase(projectId, owner, phase, message);
   }
