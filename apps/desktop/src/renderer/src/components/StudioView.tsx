@@ -124,6 +124,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [projects, setProjects] = useState<StudioProjectSummary[]>([]);
   const [projectsBusy, setProjectsBusy] = useState(true);
   const [projectsVersion, setProjectsVersion] = useState(0);
+  const [detailVersion, setDetailVersion] = useState(0);
   const [showArchived, setShowArchived] = useState(false);
   const [readiness, setReadiness] = useState<StudioReadiness | null>(null);
   const [state, setState] = useState<InterviewState | null>(null);
@@ -320,7 +321,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       if (!cancelled) setBusy(null);
     });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, detailVersion]);
 
   // The board is shared work: an agent, or the other window, can move a card while this screen is open.
   useEffect(() => {
@@ -2494,7 +2495,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         <div className="studio-project-picker">
           <span className="studio-project-icon"><NotebookPen size={17} /></span>
           <div>
-            <span className="studio-project-label">{screen === 'new' ? 'New project' : state?.status === 'done' ? 'Brief ready' : 'In discussion'}</span>
+            <span className="studio-project-label">{screen === 'new' ? 'New project' : busy === 'load' ? 'Loading project' : error && !state ? 'Project unavailable' : state?.status === 'done' ? 'Brief ready' : 'In discussion'}</span>
             <strong title={projectTitle}>{projectTitle}</strong>
             <small className="studio-workspace-note">
               <FolderOpen size={11} />
@@ -2523,7 +2524,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         </div>
       </div>
 
-      {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /> {error}</p>}
+      {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /><span>{error}</span>{screen === 'project' && <button type="button" className="secondary-button" onClick={() => { setError(null); setDetailVersion((version) => version + 1); }}>Retry</button>}</p>}
       {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
       {/* The Studio keeps its own project, apart from the one in the top bar, and nothing said so: a person on one
           project saw another's brief, style guide and drawing run. Say it whenever the two names disagree. */}

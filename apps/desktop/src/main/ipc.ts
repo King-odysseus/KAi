@@ -571,7 +571,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:project-archive', async (input) => context.interview.setArchived(input));
   handle(context, 'studio:project-remove', async ({ projectId }) => {
     await context.interview.remove({ projectId });
-    if (/^studio_[0-9a-f-]{36}$/i.test(projectId)) {
+    if (/^studio_(?:[0-9a-f]{32}|[0-9a-f-]{36})$/i.test(projectId)) {
       await removeProject(context, projectId, null);
       await fs.rm(path.join(context.paths.studio, 'projects', projectId), { recursive: true, force: true });
     }

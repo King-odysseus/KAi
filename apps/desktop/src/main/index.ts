@@ -570,7 +570,8 @@ async function startApplication(): Promise<void> {
   const interviewStore = new InterviewStore(path.join(paths.studio, 'interviews.json'), fileSystem);
   // Studio discussions get their own app-owned workspace until the user chooses to connect them to a code folder.
   const studioDiscussionRoot = async (projectId: string): Promise<string> => {
-    if (!/^studio_[0-9a-f-]{36}$/i.test(projectId)) throw new Error('Project not found.');
+    // Older Studio plans may use UUIDs without dashes. Keep their workspace reachable after upgrades.
+    if (!/^studio_(?:[0-9a-f]{32}|[0-9a-f-]{36})$/i.test(projectId)) throw new Error('Project not found.');
     const root = path.join(paths.studio, 'projects', projectId);
     await mkdir(root, { recursive: true });
     return root;
