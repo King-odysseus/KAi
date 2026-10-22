@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { autopilotStartInputSchema, type AgentRunRequest, type AgentRunResult, type ArtifactKind, type AutopilotRunRecord, type AutopilotStatus, type BoardCard, type BoardStatus, type DevCheckResult, type StudioBoard } from '@kai/contracts';
-import { DesktopAutopilot, isEasyCard, pickBatch, sameFailure, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
+import { DesktopAutopilot, isEasyCard, isEnvironmentalFailure, pickBatch, sameFailure, touchedPaths, type AutopilotJournal, type AutopilotPorts } from '../apps/desktop/src/main/autopilot';
 
 const NOW = '2026-10-01T00:00:00.000Z';
 
@@ -1009,5 +1009,144 @@ describe('desktop autopilot', () => {
       expect(sameFailure('Type error: x is not a string', 'Cannot find module "react"')).toBe(false);
       expect(sameFailure('', 'anything')).toBe(false);
     });
+  });
+});
+
+describe('autopilot recovering from what goes wrong, without a person', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const done = (id: string): BoardCard => ({ ...card(id), status: 'done' });
+  const outputOf = (passed: boolean, output: string, n: number) => ({ passed, exitCode: passed ? 0 : 1, output: passed ? '' : output, runId: passed ? `run-${n}` : null });
+  const logText = (status: AutopilotStatus): string => status.log.map((entry) => entry.text).join('\n');
+
+  it("has an agent fix the project's own check before the first card, then carries on", async () => {
+    const h = harness({ cards: [done('d'), card('a')] });
+    let calls = 0;
+    h.ports.runCheck = async () => { calls += 1; return outputOf(calls > 1, 'FAIL the Attach file dialog matches node 0:3779: the dialog width is 1185, the node uses 480', calls); };
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(h.board.cards.find((item) => item.id === 'a')?.status).toBe('done');
+    expect(h.prompts[0]).toContain("Fix the project's own check");
+    expect(h.prompts[0]).toContain('the dialog width is 1185');
+  });
+
+  it("stops, naming the failing assertion, when the project's own check cannot be fixed", async () => {
+    const h = harness({ cards: [done('d'), card('a')] });
+    let calls = 0;
+    h.ports.runCheck = async () => outputOf(false, ['PASS a thing', 'FAIL the Attach file dialog matches node 0:3779: wrong width', 'FAIL smoke: 1 assertion(s) failed', 'note: could not remove C:\\Temp\\zuri-profile: EPERM'].join('\n'), (calls += 1));
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('failed');
+    expect(final.message).toContain('FAIL the Attach file dialog matches node 0:3779: wrong width');
+    expect(final.message).not.toContain('could not remove');
+    expect(h.board.cards.find((item) => item.id === 'a')?.status).not.toBe('done');
+    // The agent was given the failure twice, and no card was spent on it.
+    expect(h.prompts).toHaveLength(2);
+  });
+
+  it('runs a check again before blaming the card when it failed on the machine, not on an assertion', async () => {
+    const h = harness({ cards: [card('a')] });
+    let calls = 0;
+    h.ports.runCheck = async () => { calls += 1; return outputOf(calls > 1, 'note: could not remove C:\\Temp\\zuri-profile-J2gvop: EPERM, Permission denied', calls); };
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.cardsDone).toBe(1);
+    expect(h.prompts).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+
+  it('does not run a check again for a real assertion failure', async () => {
+    const h = harness({ cards: [card('a')], check: () => false });
+    await start(h, { attemptsPerCard: 1 });
+    await settled(h);
+    expect(h.board.cards[0]?.status).toBe('blocked');
+  });
+
+  it('parks a card that hit a problem of its own and carries on with the rest of the board', async () => {
+    const h = harness({ cards: [card('a'), card('b')] });
+    const record = h.ports.recordCardRun;
+    h.ports.recordCardRun = async (projectId, id, run) => { if (id === 'a') throw new Error('disk full'); return record(projectId, id, run); };
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(h.board.cards.find((item) => item.id === 'a')?.status).toBe('blocked');
+    expect(h.board.cards.find((item) => item.id === 'b')?.status).toBe('done');
+    expect(logText(final)).toContain('hit a problem and was parked: disk full');
+  });
+
+  it('stops when card after card hits a problem, because the cause is then shared', async () => {
+    const h = harness({ cards: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => card(id)) });
+    h.ports.recordCardRun = async () => { throw new Error('disk full'); };
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('failed');
+    expect(final.message).toContain('5 cards in a row hit problems of their own');
+    expect(h.board.cards.filter((item) => item.status === 'blocked')).toHaveLength(4);
+  });
+
+  it('starts itself again after an unexpected problem and finishes the board', async () => {
+    const h = harness({ cards: [card('a'), card('b')] });
+    const original = h.ports.board;
+    let calls = 0;
+    h.ports.board = async (projectId) => { calls += 1; if (calls === 3) throw new Error('socket hang up'); return original(projectId); };
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('finished');
+    expect(final.cardsDone).toBe(2);
+    expect(logText(final)).toContain('starting itself again (1 of 2)');
+  });
+
+  it('gives up after starting itself again twice, and says what went wrong', async () => {
+    const h = harness({ cards: [card('a')] });
+    const original = h.ports.board;
+    let calls = 0;
+    h.ports.board = async (projectId) => { calls += 1; if (calls >= 3) throw new Error('socket hang up'); return original(projectId); };
+    await start(h);
+    const final = await settled(h);
+    expect(final.phase).toBe('failed');
+    expect(final.message).toContain('socket hang up');
+    expect(logText(final)).toContain('2 of 2');
+  });
+
+  it('is not restarted when the person pressed Stop', async () => {
+    const h = harness({ cards: [card('a'), card('b')] });
+    await start(h);
+    await h.autopilot.stop('p1');
+    expect(h.autopilot.status('p1')?.phase).toBe('stopped');
+    expect(logText(h.autopilot.status('p1')!)).not.toContain('starting itself again');
+  });
+});
+
+describe('telling a failed check from a flaky machine', () => {
+  it('calls a failure with nothing but a locked folder environmental', () => {
+    expect(isEnvironmentalFailure('note: could not remove C:\\Temp\\zuri-profile: EPERM, Permission denied')).toBe(true);
+    expect(isEnvironmentalFailure('expected 1 to be 2')).toBe(false);
+  });
+
+  it('does not, when an assertion failed as well', () => {
+    expect(isEnvironmentalFailure('FAIL the Attach file dialog matches node 0:3779: wrong width\nnote: could not remove C:\\x: EPERM')).toBe(false);
+  });
+});
+
+describe('which files a card is thought to touch', () => {
+  const run = (files: string[]) => ({ agent: 'claude', model: null, at: NOW, files }) as never;
+
+  it("trusts a short list of changed files from the card's last run", () => {
+    const touched = touchedPaths({ ...card('a'), runs: [run(['src/a.ts', 'src/b.ts'])] });
+    expect([...touched].sort()).toEqual(['src/a.ts', 'src/b.ts']);
+  });
+
+  it("does not trust a list that is every uncommitted file in the project", () => {
+    const files = Array.from({ length: 40 }, (_, index) => `src/file-${index}.ts`);
+    expect(touchedPaths({ ...card('a'), runs: [run(files)] }).size).toBe(0);
+  });
+
+  it("lets two cards that both recorded the whole project's files still be worked side by side", () => {
+    const files = Array.from({ length: 40 }, (_, index) => `src/file-${index}.ts`);
+    const queue = [{ ...card('a', [], 'ready'), runs: [run(files)] }, { ...card('b', [], 'ready'), runs: [run(files)] }];
+    expect(pickBatch(queue, 2).map((item) => item.id)).toEqual(['a', 'b']);
   });
 });

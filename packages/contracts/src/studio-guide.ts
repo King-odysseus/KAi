@@ -55,6 +55,8 @@ export const guideActionSchema = z.enum([
   'draw-screens',
   'run-autopilot',
   'requeue-blocked',
+  /** Match routes from the design and project, and offer what is left to the reader to confirm. */
+  'repair-routes',
   'open-board',
   'open-design',
 ]);

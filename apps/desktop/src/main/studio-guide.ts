@@ -210,7 +210,7 @@ function workDetail(facts: GuideFacts): string {
 function workAction(facts: GuideFacts): StudioGuideStep['action'] {
   const { board } = facts;
   if (board.done === board.total && board.total > 0) return null;
-  if (board.noRoute > 0) return 'open-board';
+  if (board.noRoute > 0) return 'repair-routes';
   if (board.parked > 0) return 'requeue-blocked';
   if (board.ready > 0 || board.inProgress > 0) return 'run-autopilot';
   if (board.review > 0) return 'open-board';
@@ -220,7 +220,7 @@ function workAction(facts: GuideFacts): StudioGuideStep['action'] {
 function workActionLabel(facts: GuideFacts): string | null {
   const { board } = facts;
   if (board.done === board.total && board.total > 0) return null;
-  if (board.noRoute > 0) return 'Set the routes on the board';
+  if (board.noRoute > 0) return 'Find the routes';
   if (board.parked > 0) return 'Put them back in the queue';
   if (board.ready > 0 || board.inProgress > 0) return 'Start Autopilot';
   if (board.review > 0) return 'Look at what is in review';

@@ -115,8 +115,8 @@ describe('the studio guide decides by rules', () => {
     const work = steps.find((step) => step.id === 'work');
 
     expect(work?.state).toBe('blocked');
-    expect(work?.action).toBe('open-board');
-    expect(work?.actionLabel).toBe('Set the routes on the board');
+    expect(work?.action).toBe('repair-routes');
+    expect(work?.actionLabel).toBe('Find the routes');
     expect(work?.detail).toContain('no route');
   });
 

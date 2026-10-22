@@ -138,8 +138,8 @@ export function studioAttention(input: StudioAttentionInput): StudioAttention | 
       'needs-you',
       `${plural(noRoute.length, 'screen has', 'screens have')} no route`,
       'A screen card cannot pass its screen check without a route to open, so it and everything behind it wait for good. Give each one the path it lives at, then put it back in the queue.',
-      'open-board',
-      'Set the routes on the board',
+      'repair-routes',
+      'Find the routes',
       noRoute.map((card) => card.id),
     );
   }

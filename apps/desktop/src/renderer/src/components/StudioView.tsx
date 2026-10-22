@@ -47,6 +47,7 @@ import {
   type StudioPlanStage,
   type StudioReadiness,
   type TeamPlanDraft,
+  lacksRoute,
 } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
@@ -1841,6 +1842,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   async function runGuideAction(action: GuideAction): Promise<void> {
     if (!projectId) return;
     if (action === 'open-board') { setTab('board'); return; }
+    // Switching to the board did nothing for a person already on it, which is where this button is shown. It matches the
+    // routes it can from the design and the project and lists what is left to confirm, as the toolbar button does.
+    if (action === 'repair-routes') { setTab('board'); await suggestRoutes(); return; }
     if (action === 'open-design') { setTab('design'); return; }
     setError(null);
     setNotice(null);
@@ -1951,7 +1955,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       // Route repair also reconciles explicit routes from the pulled design. Refresh here so that work is visible
       // immediately, including cases where the provider cannot suggest anything further.
       const updated = unwrap(await window.kaiDesktop.studioBoard(projectId));
-      const stillMissing = new Set(updated.cards.filter((card) => card.kind === 'page' && !card.route.trim()).map((card) => card.id));
+      const stillMissing = new Set(updated.cards.filter(lacksRoute).map((card) => card.id));
       const suggestions = result.suggestions.filter((item) => stillMissing.has(item.cardId));
       const unresolved = updated.cards.filter((card) => stillMissing.has(card.id)).map((card) => card.id);
       setBoard(updated);
@@ -1970,7 +1974,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
       const applied = routeSuggestions.length;
       for (const suggestion of routeSuggestions) await window.kaiDesktop.setStudioCardRoute({ projectId, cardId: suggestion.cardId, route: suggestion.route }).then(unwrap);
       const updated = unwrap(await window.kaiDesktop.studioBoard(projectId));
-      const unresolved = updated.cards.filter((card) => card.kind === 'page' && !card.route.trim()).map((card) => card.id);
+      const unresolved = updated.cards.filter(lacksRoute).map((card) => card.id);
       setBoard(updated);
       setRouteSuggestions([]);
       setRouteUnresolved(unresolved);
@@ -3307,7 +3311,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <button type="button" className="secondary-button" onClick={() => void arrange()} disabled={busy !== null || !board?.cards.length} title="Puts the cards in the order they should be built, so the product runs on your machine before anything is hosted. Status, runs and checks are kept.">
                 {busy === 'arrange' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Arrange with AI
               </button>
-              {!!board?.cards.some((card) => card.kind === 'page' && !card.route.trim()) && <button type="button" className="secondary-button" onClick={() => void suggestRoutes()} disabled={busy !== null} title="Match routes from the page inventory and pulled design, then suggest any remaining routes from project context.">{busy === 'card' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Suggest route fixes</button>}
+              {!!board?.cards.some(lacksRoute) && <button type="button" className="secondary-button" onClick={() => void suggestRoutes()} disabled={busy !== null} title="Match routes from the page inventory and pulled design, then suggest any remaining routes from project context.">{busy === 'card' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Suggest route fixes</button>}
             </div>
             {syncOutcome && (
               <section className="studio-route-review studio-sync-result" role="status" aria-label="OpenPencil sync result">

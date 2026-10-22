@@ -76,7 +76,7 @@ describe('studioAttention', () => {
     const said = studioAttention(input({
       cards: [parked(), card({ id: 'page', kind: 'page', status: 'ready', route: '  ' })],
     }));
-    expect(said?.action).toBe('open-board');
+    expect(said?.action).toBe('repair-routes');
     expect(said?.headline).toContain('no route');
     expect(said?.cardIds).toEqual(['page']);
   });

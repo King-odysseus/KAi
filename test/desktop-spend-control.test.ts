@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { idlePlacesNote, isCostOutlier } from '../apps/desktop/src/main/autopilot';
+import { baselineReason, idlePlacesNote, isCostOutlier } from '../apps/desktop/src/main/autopilot';
 import { estimateCostUsd } from '../apps/desktop/src/main/usage-budget';
 
 describe('pricing the part of a prompt the provider served from its cache', () => {
@@ -64,5 +64,22 @@ describe('saying why fewer agents are working than were asked for', () => {
 
   it('has nothing to say when nothing is left to run', () => {
     expect(idlePlacesNote({ lanes: 8, running: 2, clashing: [], waitingOnOthers: 0 })).toBe('');
+  });
+});
+
+describe('naming what a failed project check is about', () => {
+  it('picks the failing assertion, not the summary and the clean-up note after it', () => {
+    const output = [
+      'PASS the Button / Icon matches node 0:18',
+      'FAIL the Attach file dialog matches node 0:3779: dark: the dialog width is 1185, the node uses 480',
+      'PASS no console errors during load',
+      'FAIL smoke: 1 assertion(s) failed',
+      'note: could not remove C:\Temp\zuri-profile-J2gvop: EPERM, Permission denied',
+    ].join('\n');
+    expect(baselineReason(output)).toBe('FAIL the Attach file dialog matches node 0:3779: dark: the dialog width is 1185, the node uses 480');
+  });
+
+  it('falls back to the last lines when nothing says FAIL', () => {
+    expect(baselineReason('one\ntwo\nthree\nfour')).toBe('two | three | four');
   });
 });
