@@ -609,7 +609,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return card;
   });
   handle(context, 'studio:board-route', async (input) => {
-    const card = await context.studio.setCardRoute(input.projectId, input.cardId, input.route);
+    const card = input.notAScreen ? await context.studio.markCardNotAScreen(input.projectId, input.cardId) : await context.studio.setCardRoute(input.projectId, input.cardId, input.route);
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));
     return card;
   });

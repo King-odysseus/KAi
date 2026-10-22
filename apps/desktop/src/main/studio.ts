@@ -445,6 +445,10 @@ export class DesktopStudio {
     return this.ports.board.setRoute(projectId, cardId, route);
   }
 
+  async markCardNotAScreen(projectId: string, cardId: string): Promise<BoardCard> {
+    return this.ports.board.markNotAScreen(projectId, cardId);
+  }
+
   /** Suggests missing routes by reconciling the pages artifact, pulled design metadata and implementation snapshot. */
   async suggestRouteRepairs(projectId: string): Promise<StudioRouteRepairResult> {
     const board = await this.ports.board.read(projectId);

@@ -1967,6 +1967,19 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     finally { setBusy(null); }
   }
 
+  async function markNotAScreen(cardId: string): Promise<void> {
+    if (!projectId) return;
+    setBusy('card'); setError(null);
+    try {
+      await window.kaiDesktop.setStudioCardRoute({ projectId, cardId, route: '', notAScreen: true }).then(unwrap);
+      const updated = unwrap(await window.kaiDesktop.studioBoard(projectId));
+      setBoard(updated);
+      setRouteUnresolved((current) => current.filter((id) => id !== cardId));
+      setNotice('Marked as not a screen: it needs no route and no screen check.');
+    } catch (caught) { setError(messageOf(caught)); }
+    finally { setBusy(null); }
+  }
+
   async function applyRouteSuggestions(): Promise<void> {
     if (!projectId || !routeSuggestions?.length) return;
     setBusy('card'); setError(null);
@@ -3323,7 +3336,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               <h3>Review route suggestions</h3>
               <p className="studio-note">Routes found in the page inventory or screen name are marked high confidence. Model suggestions need your review before they are saved.</p>
               {routeSuggestions.map((suggestion) => { const card = board?.cards.find((item) => item.id === suggestion.cardId); return <p key={suggestion.cardId}><strong>{card?.title ?? suggestion.cardId}</strong> → <code>{suggestion.route}</code> <span className="studio-kind">{suggestion.confidence} confidence · {suggestion.reason}</span></p>; })}
-              {routeUnresolved.length > 0 && <p className="studio-note">Still unresolved: {routeUnresolved.map((id) => board?.cards.find((card) => card.id === id)?.title ?? id).join(', ')}. Add a route on each card; dialogs and panels can use their parent screen’s route.</p>}
+              {routeUnresolved.length > 0 && <div className="studio-note">
+                <p>Still without a route. Give each one a route, or say it is not a screen of its own (a label, a note, or a dialog drawn inside another screen) so it needs none.</p>
+                {routeUnresolved.map((id) => <p key={id}><strong>{board?.cards.find((card) => card.id === id)?.title ?? id}</strong> <button type="button" className="secondary-button" onClick={() => void markNotAScreen(id)} disabled={busy !== null}>Needs no route</button></p>)}
+              </div>}
               <div className="page-actions"><button type="button" className="primary-button" onClick={() => void applyRouteSuggestions()} disabled={busy !== null || routeSuggestions.length === 0}>Apply reviewed routes</button><button type="button" className="secondary-button" onClick={() => setRouteSuggestions(null)} disabled={busy !== null}>Dismiss</button></div>
             </section>}
             {projectId && board && board.cards.length > 0 && (

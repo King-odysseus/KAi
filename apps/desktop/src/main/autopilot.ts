@@ -1195,11 +1195,17 @@ export class DesktopAutopilot {
     for (let attempt = 1; attempt <= BASELINE_REPAIR_ATTEMPTS; attempt += 1) {
       this.phase(projectId, owner, 'working', `Fixing the project's own check before the other cards go on${attempt > 1 ? ` (attempt ${attempt})` : ''}.`);
       const conversation = await this.ports.createConversation(projectId, "Autopilot: fix the project's own check", card);
-      active.conversations.add(conversation.id);
+      // Shown as a place an agent is working, and the window taken to it, so the person can watch the repair instead of
+      // seeing a status line and waiting.
+      this.trackLane(active, card, conversation.id);
+      if (!active.opened) {
+        active.opened = true;
+        this.ports.openConversation(owner, conversation);
+      }
       try {
         await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, base, last, active, {}));
       } finally {
-        active.conversations.delete(conversation.id);
+        this.untrackLane(active, card.id, conversation.id);
       }
       if (signal.aborted) throw new Error('Autopilot was stopped.');
       const check = await this.timed(projectId, 'checkMs', () => this.steadyCheck(projectId, command, signal));

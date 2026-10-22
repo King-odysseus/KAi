@@ -316,6 +316,17 @@ describe('board store', () => {
     await expect(store.setRoute('p1', 'b', '/x')).rejects.toThrow(/not a component or page/);
   });
 
+  it('lets a person say a card is not a screen, so it needs no route and nothing waits on one', async () => {
+    const store = new StudioBoardStore(ports());
+    await store.replace('p1', [card({ id: 'a', kind: 'page', status: 'ready', route: '' })], []);
+
+    const marked = await store.markNotAScreen('p1', 'a');
+    expect(marked.kind).toBe('component');
+    expect(marked.route).toBe('');
+    // The status and the board's rules are untouched; only what the card is changes.
+    expect(marked.status).toBe('ready');
+  });
+
   it('refuses ready while a dependency is not done, and keeps work when the board is regenerated', async () => {
     const store = new StudioBoardStore(ports());
     await store.replace('p1', [card({ id: 'a', status: 'done', check: null }), card({ id: 'b', status: 'backlog', dependsOn: ['a'] })], []);

@@ -392,6 +392,19 @@ export class StudioBoardStore {
     return next;
   }
 
+  /**
+   * Says a card is not a screen of its own, so it needs no route and no screenshot check: a label, a note, a dialog
+   * drawn inside another screen. Without this a card the planner called a page could only be given a made-up route,
+   * or wait for good with everything behind it.
+   */
+  async markNotAScreen(projectId: string, cardId: string): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    const next = boardCardSchema.parse({ ...card, kind: 'component', route: '', updatedAt: this.ports.now() });
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => (item.id === cardId ? next : item)) });
+    return next;
+  }
+
   /** The next card an agent should pick up, or null when nothing is ready. */
   async next(projectId: string): Promise<BoardCard | null> {
     return readyCards(await this.read(projectId))[0] ?? null;
