@@ -1280,7 +1280,7 @@ export class DesktopAutopilot {
     const announce = (): void => {
       const cards = [...running.values()].map((entry) => entry.card);
       if (cards.length === 0) return;
-      const names = cards.length === 1 ? `Working on "${cards[0]?.title}".` : `Working on ${cards.length} of ${lanes} agents' cards side by side: ${cards.map((card) => `"${card.title}"`).join(', ')}.`;
+      const names = cards.length === 1 ? `Working on "${cards[0]?.title}".` : `Working on ${cards.length} cards side by side (up to ${lanes} agents at once): ${cards.map((card) => `"${card.title}"`).join(', ')}.`;
       this.phase(projectId, owner, 'working', (idleNote ? `${idleNote} ${names}` : names).slice(0, 560));
     };
 

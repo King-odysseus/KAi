@@ -1193,7 +1193,7 @@ describe('autopilot when copies of the project cannot be made for a moment', () 
     await start(h, { parallelCards: 3 });
     await vi.advanceTimersByTimeAsync(2_000);
     const message = h.autopilot.status('p1')!.message;
-    expect(message).toContain('3 of 3 agents');
+    expect(message).toContain('3 cards side by side (up to 3 agents at once)');
     for (const id of ['a', 'b', 'c']) expect(message).toContain(`Card ${id}`);
     await settled(h);
   });
