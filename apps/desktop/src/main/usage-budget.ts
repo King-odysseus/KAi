@@ -22,7 +22,7 @@ const EXACT_PRICES: Readonly<Record<string, ModelPrice>> = {
   'gpt-5.6-sol': { input: 4, output: 20 },
   'gpt-5.6-terra': { input: 2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, output: 1.2 },
-  // DeepSeek peak (cache-miss) rates, so spend is never understated.
+  // DeepSeek peak (cache-miss) rates; tokens served from its cache are charged at a tenth of these.
   'deepseek-chat': { input: 0.27, output: 1.1 },
   'deepseek-reasoner': { input: 0.55, output: 2.19 },
   'deepseek-flash': { input: 0.3, output: 1.2 },
@@ -61,11 +61,22 @@ export function priceForModel(model: string): ModelPrice | null {
   return FAMILY_PRICES.find(([prefix]) => id.startsWith(prefix))?.[1] ?? null;
 }
 
-/** USD for a run, or null when the model has no known price. */
-export function estimateCostUsd(model: string, inputTokens = 0, outputTokens = 0): number | null {
+/**
+ * What a prompt token read back from the provider's cache costs, as a share of a fresh one. DeepSeek charges about a
+ * tenth (0.028 against 0.27 dollars a million) and so does Anthropic. An agent run sends the same long prompt every
+ * round, so almost all of its input is cache reads; pricing them in full put the estimate several times over the bill.
+ */
+export const CACHE_READ_PRICE_SHARE = 0.1;
+
+/**
+ * USD for a run, or null when the model has no known price. `cachedInputTokens` are the part of `inputTokens` that the
+ * provider served from its cache, which is charged at a fraction of the price.
+ */
+export function estimateCostUsd(model: string, inputTokens = 0, outputTokens = 0, cachedInputTokens = 0): number | null {
   const price = priceForModel(model);
   if (!price) return null;
-  return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
+  const cached = Math.min(Math.max(cachedInputTokens, 0), inputTokens);
+  return ((inputTokens - cached) * price.input + cached * price.input * CACHE_READ_PRICE_SHARE + outputTokens * price.output) / 1_000_000;
 }
 
 export const WARNING_RATIO = 0.8;

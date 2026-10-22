@@ -89,6 +89,23 @@ export function pickNextCard(queue: readonly BoardCard[], running: readonly Boar
   return queue.find((card) => ![...touchedPaths(card)].some((file) => taken.has(file)));
 }
 
+/**
+ * Why fewer agents are working than the run was given, in one short sentence, or an empty string when every place is
+ * in use or nothing explains it. Without it a run asked for eight agents and showing two looks broken; it is usually
+ * waiting on cards that others depend on, or holding back cards that would edit the same files as the ones running.
+ */
+export function idlePlacesNote(input: { lanes: number; running: number; clashing: readonly BoardCard[]; waitingOnOthers: number }): string {
+  const free = input.lanes - input.running;
+  if (free <= 0) return '';
+  const places = `${free} place${free === 1 ? ' is' : 's are'} free`;
+  if (input.clashing.length > 0) {
+    const names = input.clashing.slice(0, 2).map((card) => `"${card.title}"`).join(', ');
+    return `${places}: ${names}${input.clashing.length > 2 ? ' and others' : ''} would edit the same files as the cards running, so ${input.clashing.length === 1 ? 'it waits' : 'they wait'}.`;
+  }
+  if (input.waitingOnOthers > 0) return `${places}: ${input.waitingOnOthers} card${input.waitingOnOthers === 1 ? ' waits' : 's wait'} for cards that are not done yet.`;
+  return '';
+}
+
 /** Cards a cheaper model can take on a first try: a component that lives inside a page, or setup nothing waits on. */
 export function isEasyCard(card: BoardCard, board: readonly BoardCard[]): boolean {
   if (card.kind === 'component') return card.route.trim() === '';
@@ -113,6 +130,24 @@ export function sameFailure(a: string, b: string): boolean {
     .trim();
   return shape(a) === shape(b);
 }
+
+/**
+ * Whether a card that has just failed has cost far more than a card usually does in this run, which means more
+ * attempts are likely to be money spent on a card that is stuck. Judged against the cards this run has closed, not a
+ * fixed number, so a run of cheap cards stops a runaway one early and a run of dear ones is left alone. With fewer
+ * than three closed cards to compare with there is nothing to judge by, so nothing is stopped.
+ */
+export function isCostOutlier(spentUsd: number, closedCardCosts: readonly number[]): boolean {
+  if (closedCardCosts.length < OUTLIER_MIN_SAMPLES) return false;
+  const sorted = [...closedCardCosts].sort((a, b) => a - b);
+  const typical = sorted[Math.floor(sorted.length / 2)] ?? 0;
+  return spentUsd > Math.max(typical * OUTLIER_TIMES, OUTLIER_FLOOR_USD);
+}
+
+const OUTLIER_MIN_SAMPLES = 3;
+const OUTLIER_TIMES = 4;
+/** Below this a card is cheap whatever the others cost, so it is never worth stopping for. */
+const OUTLIER_FLOOR_USD = 0.25;
 
 export interface AutopilotCheckResult {
   passed: boolean;
@@ -214,6 +249,10 @@ interface ActiveRun {
   blocked: Array<{ id: string; reason: string }>;
   /** Cards this run actually closed. Any at all means the setup works and a block is about that card. */
   completed: number;
+  /** What each card has cost this run so far, across its attempts. */
+  spend: Map<string, number>;
+  /** What the cards this run closed cost, which is what a card that keeps failing is measured against. */
+  closedSpends: number[];
 }
 
 /**
@@ -390,7 +429,7 @@ export class DesktopAutopilot {
     await this.ports.preflight(input.projectId);
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
-    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0 };
+    const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0, spend: new Map(), closedSpends: [] };
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
@@ -601,6 +640,7 @@ export class DesktopAutopilot {
     let failure = carried?.failure ?? '';
     // How many attempts were actually made, which is fewer than the limit when the card is given up on early.
     let attemptsMade = 0;
+    let costly = false;
     for (let attempt = carried?.startAttempt ?? 1; attempt <= input.attemptsPerCard; attempt += 1) {
       attemptsMade = attempt;
       state.attempt = attempt;
@@ -620,7 +660,7 @@ export class DesktopAutopilot {
         }
         const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
         try {
-          run = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, base, failure, active, model ? { model } : {}));
+          run = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, base, failure, active, { cardId: card.id, ...(model ? { model } : {}) }));
         } finally {
           this.untrackLane(active, card.id, conversation.id);
         }
@@ -632,9 +672,10 @@ export class DesktopAutopilot {
       // costs another ten minutes to hear it again — on 2026-10-19 one such refusal took three turns on each of
       // twenty-eight cards — so the card is parked with the reason now.
       if (settled.repeated) break;
+      if (settled.costly) { costly = true; break; }
     }
 
-    await this.blockCard(input, active, card, attemptsMade, failure);
+    await this.blockCard(input, active, card, attemptsMade, failure, costly ? active.spend.get(card.id) : undefined);
   }
 
   /**
@@ -650,7 +691,7 @@ export class DesktopAutopilot {
     active: ActiveRun,
     run: { failed: boolean; error: string },
     previousFailure: string,
-  ): Promise<{ outcome: 'done' | 'review' | 'retry'; failure: string; repeated: boolean }> {
+  ): Promise<{ outcome: 'done' | 'review' | 'retry'; failure: string; repeated: boolean; costly: boolean }> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
     const state = this.state(projectId);
@@ -660,38 +701,45 @@ export class DesktopAutopilot {
       at: new Date(this.ports.now()).toISOString(),
       files: await this.ports.changedFilesFor(projectId).catch(() => []),
     });
+    const costly = (): boolean => isCostOutlier(active.spend.get(card.id) ?? 0, active.closedSpends);
     if (run.failed) {
       this.record(projectId, owner, 'warn', `"${card.title}" failed: ${run.error.slice(0, 200)}`);
-      return { outcome: 'retry', failure: `The last attempt ended with an error: ${run.error}`, repeated: false };
+      return { outcome: 'retry', failure: `The last attempt ended with an error: ${run.error}`, repeated: false, costly: costly() };
     }
     if (!command) {
       await this.board.moveCard(projectId, card.id, 'review', NO_CHECK_NOTE, 'agent');
       await this.endCard(projectId, active);
       this.record(projectId, owner, 'warn', `"${card.title}" is in review: there is no check command.`);
       state.restStreak = 0;
-      return { outcome: 'review', failure: '', repeated: false };
+      return { outcome: 'review', failure: '', repeated: false, costly: false };
     }
     const verdict = await this.checkAndClose(projectId, owner, label, card, command, active.controller.signal);
-    if (!verdict.closed) return { outcome: 'retry', failure: verdict.failure, repeated: sameFailure(verdict.failure, previousFailure) };
+    if (!verdict.closed) return { outcome: 'retry', failure: verdict.failure, repeated: sameFailure(verdict.failure, previousFailure), costly: costly() };
+    const closedFor = active.spend.get(card.id);
+    if (closedFor) active.closedSpends.push(closedFor);
     state.cardsDone += 1;
     state.restStreak = 0;
     await this.endCard(projectId, active);
     this.record(projectId, owner, 'card', `"${card.title}" is done.`);
     this.counts(projectId, await this.ports.board(projectId));
-    return { outcome: 'done', failure: '', repeated: false };
+    return { outcome: 'done', failure: '', repeated: false, costly: false };
   }
 
   /** Parks a card that could not be got through, with the reason on it, and moves on. */
-  private async blockCard(input: AutopilotStartInput, active: ActiveRun, card: BoardCard, attemptsMade: number, failure: string): Promise<void> {
+  /** `costlyUsd` is set when the card was given up on for what it had cost, not for the failure repeating. */
+  private async blockCard(input: AutopilotStartInput, active: ActiveRun, card: BoardCard, attemptsMade: number, failure: string, costlyUsd?: number): Promise<void> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
     const state = this.state(projectId);
-    await this.board.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${attemptsMade < input.attemptsPerCard ? ', the same failure each time' : ''}. ${failure}`.slice(0, 3_900), 'agent');
+    const why = costlyUsd !== undefined
+      ? `, after it had cost about $${costlyUsd.toFixed(2)}, far more than the cards that did pass`
+      : attemptsMade < input.attemptsPerCard ? ', the same failure each time' : '';
+    await this.board.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${why}. ${failure}`.slice(0, 3_900), 'agent');
     await this.endCard(projectId, active);
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
     const explanation = explainBlocked(failure);
-    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${attemptsMade < input.attemptsPerCard ? ' with the same failure each time' : ''}; moving on. ${explanation.ask}`);
+    this.record(projectId, owner, 'warn', `"${card.title}" is blocked after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${why}; moving on. ${explanation.ask}`);
   }
 
   /** The cheaper model for an easy card's first attempt, when the run names one. Undefined means the run's own model. */
@@ -821,7 +869,7 @@ export class DesktopAutopilot {
       this.ports.trace?.(`Autopilot lane "${card.title}": copy and conversation ready, starting the agent.`);
       const prompt = `${await this.cardPrompt(input, card)}\n\n${copyRules(folder)}`;
       const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
-      let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, told, active, { cwd: folder, ...(model ? { model } : {}) }));
+      let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, told, active, { cwd: folder, cardId: card.id, ...(model ? { model } : {}) }));
       // The build check, run in the card's own copy while the other cards are still working. A failure here is handed
       // straight back to the agent, which is cheaper than finding out after the merge and the wait for the project's one
       // check. It is a filter only: the card is still closed on the check that runs in the project.
@@ -830,7 +878,7 @@ export class DesktopAutopilot {
         if (!early || early.passed) break;
         this.record(projectId, owner, 'check', `Check failed for "${card.title}" in its copy; trying again before merging.`);
         const earlyFailure = `The check \`${command}\` failed${early.exitCode === null ? '' : ` (exit ${early.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${early.output.slice(-TAIL_CHARS)}`;
-        result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, earlyFailure, active, { cwd: folder }));
+        result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, earlyFailure, active, { cwd: folder, cardId: card.id }));
       }
       const commit = result.failed ? undefined : await session.commit(card.id, `Autopilot: ${card.title}`.slice(0, 120));
       return { session, result, ...(commit ? { commit } : {}) };
@@ -899,6 +947,7 @@ export class DesktopAutopilot {
     let claimed = false;
     let failure = '';
     let attemptsMade = 0;
+    let costly = false;
     let reruns = 0;
     let carry: string | undefined;
     for (let attempt = 1; attempt <= input.attemptsPerCard; attempt += 1) {
@@ -975,8 +1024,9 @@ export class DesktopAutopilot {
       carry = made.commit;
       // The same refusal twice, word for word, means the attempt changed nothing the check looks at: parked now.
       if (settled.repeated) break;
+      if (settled.costly) { costly = true; break; }
     }
-    await gate.run(() => this.blockCard(input, active, card, attemptsMade, failure));
+    await gate.run(() => this.blockCard(input, active, card, attemptsMade, failure, costly ? active.spend.get(card.id) : undefined));
     return true;
   }
 
@@ -1041,11 +1091,13 @@ export class DesktopAutopilot {
     const failures: unknown[] = [];
     let worked = 0;
 
+    // Why places are free, kept for the status line; refreshed each time the queue is looked at.
+    let idleNote = '';
     const announce = (): void => {
       const cards = [...running.values()].map((entry) => entry.card);
       if (cards.length === 0) return;
-      const message = cards.length === 1 ? `Working on "${cards[0]?.title}".` : `Working on ${cards.length} cards side by side: ${cards.map((card) => `"${card.title}"`).join(', ')}.`;
-      this.phase(projectId, owner, 'working', message.slice(0, 560));
+      const names = cards.length === 1 ? `Working on "${cards[0]?.title}".` : `Working on ${cards.length} of ${lanes} agents' cards side by side: ${cards.map((card) => `"${card.title}"`).join(', ')}.`;
+      this.phase(projectId, owner, 'working', (idleNote ? `${idleNote} ${names}` : names).slice(0, 560));
     };
 
     for (;;) {
@@ -1079,7 +1131,14 @@ export class DesktopAutopilot {
           ).finally(() => { running.delete(next.id); });
           running.set(next.id, { card: next, done });
         }
-        if (startedNow > 0) announce();
+        const before = idleNote;
+        idleNote = idlePlacesNote({
+          lanes,
+          running: running.size,
+          clashing: queue,
+          waitingOnOthers: board.cards.filter((card) => card.status === 'backlog').length,
+        });
+        if (startedNow > 0 || idleNote !== before) announce();
       }
       if (running.size === 0) break;
       await Promise.race([...running.values()].map((entry) => entry.done));
@@ -1178,7 +1237,7 @@ export class DesktopAutopilot {
     base: string,
     failure: string,
     active: ActiveRun,
-    options: { cwd?: string; model?: string } = {},
+    options: { cwd?: string; model?: string; cardId?: string } = {},
   ): Promise<{ failed: boolean; error: string }> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
@@ -1210,7 +1269,10 @@ export class DesktopAutopilot {
         if (active.controller.signal.aborted) throw error;
         thrown = error;
       }
-      if (result?.costUsd) this.state(projectId).costUsd += result.costUsd;
+      if (result?.costUsd) {
+        this.state(projectId).costUsd += result.costUsd;
+        if (options.cardId) active.spend.set(options.cardId, (active.spend.get(options.cardId) ?? 0) + result.costUsd);
+      }
 
       const failed = thrown !== null || result?.status === 'failed' || Boolean(result?.error);
       if (!failed) return { failed: false, error: '' };

@@ -103,10 +103,11 @@ function costFields(
   model: string,
   inputTokens: number | undefined,
   outputTokens: number | undefined,
+  cachedInputTokens?: number,
 ): { provider: string; model?: string; amountUsd?: number } {
   // A model on the user's own machine costs nothing, whatever its name looks like: without this a local
   // "gpt-oss" would be priced as a paid GPT and count against the budget.
-  const amountUsd = isLocalProvider(provider as ProviderId) ? 0 : model ? estimateCostUsd(model, inputTokens, outputTokens) : null;
+  const amountUsd = isLocalProvider(provider as ProviderId) ? 0 : model ? estimateCostUsd(model, inputTokens, outputTokens, cachedInputTokens) : null;
   return {
     provider,
     ...(model ? { model } : {}),
@@ -554,12 +555,13 @@ export class DesktopDirectProviderRuntime {
     inputTokens: number | undefined,
     outputTokens: number | undefined,
     approvals: DirectApiApprovalPort | undefined,
+    cachedInputTokens?: number,
   ): Promise<void> {
     if (inputTokens === undefined && outputTokens === undefined && toolRuntime.guard.externalCostUsd === 0) return;
     const limitUsd = toolRuntime.guard.maxCostLimitUsd;
     if (limitUsd <= 0) return;
     // Helper agents report their own spend, so the parent's limit covers the whole tree of work.
-    const costUsd = (costFields(capability.provider, capability.model, inputTokens, outputTokens).amountUsd ?? 0)
+    const costUsd = (costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens).amountUsd ?? 0)
       + toolRuntime.guard.externalCostUsd;
     if (costUsd < limitUsd) return;
     toolRuntime.guard.setMaxCost(0);
@@ -1568,6 +1570,8 @@ export class DesktopDirectProviderRuntime {
     const controller = new AbortController();
     this.activeRuns.set(request.conversationId, controller);
     const messages = anthropicMessages(request, history);
+    // The part of the prompt the provider served from its cache, which costs a fraction of a fresh one.
+    let cachedReadTokens = 0;
     const outputParts: string[] = [];
     const errors: string[] = [];
     let inputTokens: number | undefined;
@@ -1584,7 +1588,7 @@ export class DesktopDirectProviderRuntime {
     try {
       for (let providerRound = 0; providerRound < toolRoundLimit + PROVIDER_ROUND_HEADROOM; providerRound += 1) {
         await this.waitIfPaused(request.conversationId, controller.signal);
-        await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals);
+        await this.checkRunSpend(toolRuntime, capability, inputTokens, outputTokens, approvals, cachedReadTokens);
 
         // Something the person said while this run was going. It is put to the model at its next turn, so it
         // answers — or takes the correction — and carries on, rather than the run being cancelled and started
@@ -1635,6 +1639,7 @@ export class DesktopDirectProviderRuntime {
             // Cached prompt tokens are reported separately; count them so budgets never undercount the prompt.
             const cachedTokens = (integerValue(usage?.cache_read_input_tokens) ?? 0) + (integerValue(usage?.cache_creation_input_tokens) ?? 0);
             if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens + cachedTokens;
+            cachedReadTokens += integerValue(usage?.cache_read_input_tokens) ?? 0;
             continue;
           }
           if (type === 'content_block_start') {
@@ -1791,6 +1796,7 @@ export class DesktopDirectProviderRuntime {
       outputParts,
       errors,
       inputTokens,
+      cachedInputTokens: cachedReadTokens,
       outputTokens,
       aborted,
       guard: toolRuntime.guard,
@@ -2406,11 +2412,13 @@ function finishProviderRun(input: {
   outputParts: string[];
   errors: string[];
   inputTokens?: number;
+  /** The part of `inputTokens` the provider served from its cache, which is charged at a fraction. */
+  cachedInputTokens?: number;
   outputTokens?: number;
   aborted: boolean;
   guard: RunGuard;
 }): AgentExecutionResult {
-  const { request, capability, events, emit, outputParts, errors, inputTokens, outputTokens, aborted, guard } = input;
+  const { request, capability, events, emit, outputParts, errors, inputTokens, cachedInputTokens, outputTokens, aborted, guard } = input;
   const output = outputParts.join('').trim();
   const { failed, error } = runFailure({
     aborted,
@@ -2433,7 +2441,7 @@ function finishProviderRun(input: {
       inputTokens,
       outputTokens,
       estimateProvenance: 'measured',
-      ...costFields(capability.provider, capability.model, inputTokens, outputTokens),
+      ...costFields(capability.provider, capability.model, inputTokens, outputTokens, cachedInputTokens),
     });
   }
   if (error) {
