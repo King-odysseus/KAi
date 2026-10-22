@@ -342,7 +342,7 @@ import {
   type TerminalSession,
 } from './terminal';
 import { planSchema, type Plan } from './plan';
-import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
+import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileMutationResultSchema, filePathInputSchema, fileReadInputSchema, fileRenameInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileMutationResult, type FilePathInput, type FileRenameInput, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
 import {
@@ -681,6 +681,8 @@ export const ipcChannels = [
   'git:create-repository',
   'git:github-status',
   'git:sync',
+  'git:pull-team-branch',
+  'git:clone-team-repository',
   'git:diff',
   'review:change',
   'review:changes',
@@ -1043,6 +1045,8 @@ export const ipcInputSchemas = {
   'git:create-repository': gitCreateRepositoryInputSchema,
   'git:github-status': z.object({ projectId: z.string().min(1) }).strict(),
   'git:sync': gitSyncInputSchema,
+  'git:pull-team-branch': gitTeamBranchInputSchema,
+  'git:clone-team-repository': gitTeamCloneInputSchema,
   'git:diff': gitDiffInputSchema,
   'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
   'review:changes': reviewChangesInputSchema,
@@ -1676,6 +1680,8 @@ export interface KaiDesktopBridge {
    */
   gitGithubStatus(projectId: string): Promise<IpcResponse<GitGithubState>>;
   gitSync(projectId: string, action: GitSyncAction): Promise<IpcResponse<GitActionResult>>;
+  gitPullTeamBranch(projectId: string, repository: string, branch: string): Promise<IpcResponse<GitActionResult>>;
+  gitCloneTeamRepository(repository: string): Promise<IpcResponse<{ projectId: string; path: string } | null>>;
   gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
   reviewChange(request: string, diff: string, mode: 'novice' | 'intermediate' | 'expert'): Promise<IpcResponse<string | null>>;
   /** Reads the diffs of several changed files and returns findings that each name their file. */

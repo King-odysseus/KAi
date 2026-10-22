@@ -111,7 +111,7 @@ import { availableShells, terminalBriefing } from './agent-terminal';
 import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
-import { gitCheckout, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitStage, gitSync } from './git-tools';
+import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedOnDisk, listProjectFiles, readProjectFile, renameProjectPath, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
@@ -1158,6 +1158,18 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'git:github-status', async ({ projectId }) => githubCliStatus(await projectPath(projectId)));
   // Pushing sends work off this machine, so the renderer confirms it with the user before calling this.
   handle(context, 'git:sync', async ({ projectId, action }) => gitSync(await projectPath(projectId), action));
+  handle(context, 'git:pull-team-branch', async ({ projectId, repository, branch }) => gitPullTeamBranch(await projectPath(projectId), repository, branch));
+  handle(context, 'git:clone-team-repository', async ({ repository }, request) => {
+    const options: OpenDialogOptions = { title: `Choose where to clone ${repository}`, buttonLabel: 'Clone here', properties: ['openDirectory', 'createDirectory'] };
+    const owner = request.session?.window ?? context.getMainWindow();
+    const choice = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+    if (choice.canceled || !choice.filePaths[0]) return null;
+    const destination = await gitCloneTeamRepository(path.resolve(choice.filePaths[0]), repository);
+    const now = new Date().toISOString();
+    const stored = await context.projects.upsert({ schemaVersion: 1, id: `project_${crypto.randomUUID()}`, name: path.basename(destination), path: destination, createdAt: now, lastOpenedAt: now });
+    await broadcastSharedState(context);
+    return { projectId: stored.id, path: destination };
+  });
   handle(context, 'git:diff', async ({ projectId, path: filePath, staged }) => gitDiffFile(await projectPath(projectId), filePath, staged));
   handle(context, 'review:change', async ({ request: reviewRequest, diff, mode }) => context.changeReviewer.review(reviewRequest, diff, mode));
   handle(context, 'review:changes', async ({ projectId, paths, request: reviewRequest, mode }) => {

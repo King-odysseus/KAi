@@ -5,6 +5,7 @@ import { deriveAgentActivity } from './AgentActivity';
 import { drawnPageNames, foundationLanded, remainingScreens, screenLanded, screenPageId, screensToRedraw } from '../design-build';
 import { AutopilotPanel, DEFAULT_AUTOPILOT_START } from './AutopilotPanel';
 import { GuidePanel, GuideStrip } from './GuidePanel';
+import { StudioTeamPanel } from './StudioTeamPanel';
 import { NeedsYouBanner } from './NeedsYouBanner';
 import { PlanActionEditor } from './PlanActionEditor';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
@@ -163,7 +164,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [boardFull, setBoardFull] = useState(false);
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
-  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide'>('interview');
+  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide' | 'team'>('interview');
   // How the last design build ended, shown beside the buttons that start it. The page's own banner is at the very top,
   // a long way above the build controls, and a build that stopped there looked like one that had not said anything.
   const [buildOutcome, setBuildOutcome] = useState<string | null>(null);
@@ -2363,54 +2364,67 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     <div className="studio-project-card-actions">
                       {!project.archivedAt && project.status === 'done' ? (
                         <>
-                          <button type="button" className="primary-button" onClick={() => void launchProject(project.id, 'composer')} disabled={busy !== null}>
-                            {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />}
-                            <span>Start on composer</span>
-                          </button>
-                          <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'generate')} disabled={busy !== null}>
-                            <Play size={14} />
-                            <span>Start generating</span>
-                          </button>
-                          <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
-                            <Code2 size={14} />
-                            <span>Open in code editor</span>
-                          </button>
-                          {!project.linkedProjectId && (
-                            <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(project.id)} disabled={busy !== null}>
-                              {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />}
-                              <span>Create folder</span>
+                          <div className="studio-project-action-row">
+                            <button type="button" className="primary-button" onClick={() => void launchProject(project.id, 'composer')} disabled={busy !== null}>
+                              {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />}
+                              <span>Start on composer</span>
                             </button>
-                          )}
+                            <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'generate')} disabled={busy !== null}>
+                              <Play size={14} />
+                              <span>Start generating</span>
+                            </button>
+                          </div>
+                          <div className="studio-project-action-row">
+                            <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
+                              <Code2 size={14} />
+                              <span>Open in code editor</span>
+                            </button>
+                            {!project.linkedProjectId ? (
+                              <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(project.id)} disabled={busy !== null}>
+                                {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />}
+                                <span>Create folder</span>
+                              </button>
+                            ) : <span aria-hidden="true" />}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="studio-project-action-row">
+                            <button type="button" className="primary-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null}>
+                              <Play size={14} />
+                              <span>Open Studio</span>
+                            </button>
+                          </div>
+                          <div className="studio-project-action-row" aria-hidden="true" />
+                        </>
+                      )}
+                      <div className="studio-project-action-tools">
+                        {!project.archivedAt && project.status === 'done' && (
                           <button type="button" className="icon-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null} title={`Open Studio for ${project.title}`} aria-label={`Open Studio for ${project.title}`}>
                             <LayoutGrid size={15} />
                           </button>
-                        </>
-                      ) : (
-                        <button type="button" className="primary-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null}>
-                          <Play size={14} />
-                          <span>Open Studio</span>
+                        )}
+                        <button
+                          type="button"
+                          className="icon-button"
+                          onClick={() => void toggleArchive(project)}
+                          disabled={busy !== null}
+                          title={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
+                          aria-label={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
+                        >
+                          {busy === 'archive' ? <Loader2 className="spin" size={15} /> : project.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        className="icon-button"
-                        onClick={() => void toggleArchive(project)}
-                        disabled={busy !== null}
-                        title={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
-                        aria-label={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
-                      >
-                        {busy === 'archive' ? <Loader2 className="spin" size={15} /> : project.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button danger"
-                        onClick={() => void deleteProject(project)}
-                        disabled={busy !== null}
-                        title={`Delete ${project.title}`}
-                        aria-label={`Delete ${project.title}`}
-                      >
-                        {busy === 'delete' ? <Loader2 className="spin" size={15} /> : <Trash2 size={15} />}
-                      </button>
+                        <button
+                          type="button"
+                          className="icon-button danger"
+                          onClick={() => void deleteProject(project)}
+                          disabled={busy !== null}
+                          title={`Delete ${project.title}`}
+                          aria-label={`Delete ${project.title}`}
+                        >
+                          {busy === 'delete' ? <Loader2 className="spin" size={15} /> : <Trash2 size={15} />}
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -2543,6 +2557,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             ['design', 'Design'],
             ['chat', 'Studio chat'],
             ['guide', 'Senior dev'],
+            ['team', 'Team'],
           ] as const).map(([id, label]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</button>
           ))}
@@ -3285,6 +3300,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               onAction={(action) => void runGuideAction(action)}
             />
           )}
+
+          {/* Keep the room connected while someone reviews another Studio tab. */}
+          {projectId && <div hidden={tab !== 'team'}>
+            <StudioTeamPanel projectId={projectId} projectTitle={projectTitle} linkedProjectId={state?.linkedProjectId ?? null} artifacts={artifacts} onArtifactsChanged={setArtifacts} />
+          </div>}
 
           {tab === 'board' && (
           <article className={`studio-card${boardFull ? ' studio-fullscreen' : ''}`}>

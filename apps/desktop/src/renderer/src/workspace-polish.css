@@ -21,7 +21,7 @@
   background: var(--bg-shell);
 }
 .brand-mark { width: 30px; height: 30px; border-radius: 6px; box-shadow: none; }
-.nav-stack { gap: 3px; padding-top: 10px; }
+.nav-stack { gap: 8px; padding-top: 12px; }
 .nav-group-label { height: 12px; margin-top: 3px; border-color: var(--border-soft); }
 .nav-group-label span { display: none; }
 .nav-group-label i { display: block; width: 16px; height: 1px; background: var(--border); }

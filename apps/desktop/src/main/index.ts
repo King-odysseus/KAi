@@ -1595,7 +1595,8 @@ async function createMainWindow(initialProjectId?: string | null): Promise<void>
 
 function installContentSecurityPolicy(): void {
   const devUrl = process.env.ELECTRON_RENDERER_URL;
-  const connectSources = devUrl ? `${devUrl} ws://localhost:* http://localhost:*` : "'self' http://127.0.0.1:*";
+  // Team sessions discover peers through secure signaling relays; project data travels over WebRTC.
+  const connectSources = devUrl ? `${devUrl} ws://localhost:* http://localhost:* wss:` : "'self' http://127.0.0.1:* wss:";
   const scriptSources = devUrl ? "'self' 'unsafe-inline' 'unsafe-eval'" : "'self'";
   const policy = [
     "default-src 'self'",

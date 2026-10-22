@@ -9,6 +9,8 @@ export const gitBranchNameSchema = z
   .regex(/^[A-Za-z0-9][\w./-]*$/, 'Use letters, numbers, dots, dashes, underscores and slashes.')
   .refine((name) => !name.includes('..') && !name.endsWith('/') && !name.endsWith('.lock') && !name.includes('//'), 'That is not a valid branch name.');
 
+export const githubRepositoryRefSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'Use a GitHub owner/repository name.');
+
 /**
  * A repository name reaches the `gh` command line, so it may not start with a dash. GitHub itself refuses names
  * ending in a dot or in ".git", and so does this, so the person hears it here rather than from the API.
@@ -81,6 +83,9 @@ export const gitCommitInputSchema = z.object({ ...projectInput, message: z.strin
 export const gitCheckoutInputSchema = z.object({ ...projectInput, branch: gitBranchNameSchema }).strict();
 export const gitCreateBranchInputSchema = z.object({ ...projectInput, name: gitBranchNameSchema, checkout: z.boolean() }).strict();
 export const gitSyncInputSchema = z.object({ ...projectInput, action: z.enum(['fetch', 'pull', 'push']) }).strict();
+export const gitTeamBranchInputSchema = z.object({ ...projectInput, repository: githubRepositoryRefSchema, branch: gitBranchNameSchema }).strict();
+export const gitTeamCloneInputSchema = z.object({ repository: githubRepositoryRefSchema }).strict();
+export const gitTeamCloneResultSchema = z.object({ projectId: z.string().min(1), path: z.string().min(1) }).strict();
 export const gitDiffInputSchema = z.object({ ...projectInput, path: z.string().min(1).max(1_000), staged: z.boolean() }).strict();
 export const gitPullRequestInputSchema = z
   .object({ ...projectInput, title: z.string().trim().min(1).max(256), body: z.string().max(20_000) })

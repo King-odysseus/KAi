@@ -1,7 +1,10 @@
 import { execFile } from 'node:child_process';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   gitBranchNameSchema,
+  githubRepositoryRefSchema,
   githubRepoNameSchema,
   type GitActionResult,
   type GitBranch,
@@ -207,6 +210,34 @@ export async function gitSync(cwd: string, action: GitSyncAction): Promise<GitAc
   if (!branch) throw new GitCommandError('Switch to a branch before pushing.');
   const hasUpstream = (await git(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '')).trim() !== '';
   return { output: await git(cwd, hasUpstream ? ['push'] : ['push', '-u', 'origin', branch], NETWORK_TIMEOUT_MS) };
+}
+
+/** Bring a teammate's published branch into a clean checkout of the same GitHub repository. */
+export async function gitPullTeamBranch(cwd: string, repository: string, branch: string): Promise<GitActionResult> {
+  githubRepositoryRefSchema.parse(repository);
+  gitBranchNameSchema.parse(branch);
+  const origin = parseGithubRepository(await git(cwd, ['remote', 'get-url', 'origin']));
+  if (origin?.toLowerCase() !== repository.toLowerCase()) throw new GitCommandError('This folder is linked to a different GitHub repository.');
+  if ((await git(cwd, ['status', '--porcelain', '--untracked-files=all'])).trim()) throw new GitCommandError('Commit or stash local changes before switching branches.');
+  await git(cwd, ['fetch', '--prune', 'origin', branch], NETWORK_TIMEOUT_MS);
+  await git(cwd, ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`]);
+  const local = await git(cwd, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false);
+  if (local && !(await git(cwd, ['merge-base', '--is-ancestor', `refs/heads/${branch}`, `refs/remotes/origin/${branch}`]).then(() => true, () => false))) {
+    throw new GitCommandError('The local branch has diverged from the teammate’s branch. Review it in Git before switching.');
+  }
+  await git(cwd, local ? ['switch', branch] : ['switch', '--track', '-c', branch, `origin/${branch}`]);
+  const output = await git(cwd, ['merge', '--ff-only', `origin/${branch}`]);
+  return { output: output || `Switched to ${branch} and brought it up to date.` };
+}
+
+/** Clone a named GitHub repository into a new folder beneath the directory the user chose. */
+export async function gitCloneTeamRepository(parent: string, repository: string): Promise<string> {
+  githubRepositoryRefSchema.parse(repository);
+  const name = repository.split('/')[1]!;
+  const destination = join(parent, name);
+  if (await access(destination).then(() => true, () => false)) throw new GitCommandError(`A folder named ${name} already exists there. Choose another parent folder.`);
+  await git(parent, ['clone', `https://github.com/${repository}.git`, name], NETWORK_TIMEOUT_MS);
+  return destination;
 }
 
 export async function gitDiffFile(cwd: string, filePath: string, staged: boolean): Promise<GitActionResult> {
