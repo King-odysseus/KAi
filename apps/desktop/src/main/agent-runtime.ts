@@ -186,7 +186,12 @@ export interface CliProxyAccess {
 }
 
 /** Environment-only routing keeps the CLI's own configuration and credentials untouched. */
-export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess, model?: string): NodeJS.ProcessEnv {
+/**
+ * `taskId` names the run to the proxy, which puts it on every live event the run causes. Without it a model switch
+ * the proxy made mid-run (a fallback) could not be matched to the conversation that was running, because the event
+ * carried only the agent. Claude Code sends custom headers from the environment; the other agents have no such hook.
+ */
+export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess, model?: string, taskId?: string): NodeJS.ProcessEnv {
   const baseUrl = `${access.endpoint.replace(/\/+$/, '')}/a/${agent}`;
   if (agent === 'claude') {
     return {
@@ -194,6 +199,7 @@ export function cliProxyEnvironment(agent: AgentId, access: CliProxyAccess, mode
       ANTHROPIC_BASE_URL: baseUrl,
       ANTHROPIC_AUTH_TOKEN: access.token,
       ANTHROPIC_API_KEY: access.token,
+      ...(taskId && /^[\w.:-]{1,80}$/.test(taskId) ? { ANTHROPIC_CUSTOM_HEADERS: `x-proxy-task-id: ${taskId}` } : {}),
     };
   }
   if (agent === 'codex') {

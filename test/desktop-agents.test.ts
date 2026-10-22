@@ -784,3 +784,12 @@ function fakeAgentScript(options: {
     });
   `;
 }
+
+describe('naming the run to the proxy', () => {
+  it('sends a claude run\'s id as a header, and nothing for an id that is not safe to send', () => {
+    const access = { endpoint: 'http://127.0.0.1:8083', token: 't' };
+    expect(cliProxyEnvironment('claude', access, undefined, 'conv-123').ANTHROPIC_CUSTOM_HEADERS).toBe('x-proxy-task-id: conv-123');
+    expect(cliProxyEnvironment('claude', access, undefined, 'bad id\nx-evil: 1').ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
+    expect(cliProxyEnvironment('claude', access).ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
+  });
+});

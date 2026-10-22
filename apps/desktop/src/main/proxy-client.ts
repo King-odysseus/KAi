@@ -123,6 +123,8 @@ const modelsResponseSchema = z
 const historyDetailResponseSchema = z.object({
   id: z.string().min(1),
   agentId: z.string(),
+  /** The run the request belonged to, when the client named one. */
+  taskId: z.string().optional(),
   timestamp: z.number(),
   route: z.enum(['direct', 'proxy', 'misconfigured']),
   upstreamProvider: z.string(),
