@@ -233,6 +233,26 @@ export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boole
   return card.kind === 'page' && card.route.trim() === '';
 }
 
+/**
+ * How a card's agent is told to work in its copy of the project.
+ *
+ * Read from an overnight run that spent 3.8 billion input tokens on 21 finished cards: agents ran commands in the
+ * project's own folder instead of their copy, paged through 250 KB test scripts a few lines at a time (every read is a
+ * round trip that sends the whole conversation again), ran the full test suites after every change, and left probe
+ * files behind, one of which started Electron and opened an error dialog nobody was there to close.
+ */
+export function copyRules(folder: string): string {
+  return [
+    'WORKING IN YOUR OWN COPY OF THE PROJECT:',
+    `- Your copy is ${folder}. Run every command there with run_command. Do not cd outside it and do not touch the project's own folder: other agents are working beside you, and your changes reach the project only when KAI merges your copy.`,
+    '- To find something in a large file, search for it, then read that part once in a generous range. Do not page through a file a few lines at a time: each read sends the whole conversation again, and it is the most expensive thing you can do.',
+    '- Run the project\'s check once, when you believe the card is done, and fix what it reports. Do not run the smoke or self-test scripts after every change; KAI runs the check again before the card is closed.',
+    '- Put new tests, styles and modules in new files named after this card where the project allows it, and connect them with as small an edit as possible to any file most cards also change. Small edits to shared files combine cleanly with the other cards\' work; large ones clash and are redone.',
+    '- Throwaway files (probes, notes, logs) go in the system temp folder, not the project, and are deleted when you finish. Never start Electron on a probe script: an error in it opens a dialog that waits for a person who is not there.',
+    '- Close any browser tab you opened before you finish.',
+  ].join('\n');
+}
+
 /** The last few cards to fail their check, for telling a broken project from a few broken cards. */
 interface FailureWatch {
   recent: Array<{ cardId: string; failure: string }>;
@@ -798,7 +818,7 @@ export class DesktopAutopilot {
         this.ports.openConversation(owner, conversation);
       }
       this.ports.trace?.(`Autopilot lane "${card.title}": copy and conversation ready, starting the agent.`);
-      const prompt = await this.cardPrompt(input, card);
+      const prompt = `${await this.cardPrompt(input, card)}\n\n${copyRules(folder)}`;
       const model = attempt === 1 ? await this.firstTryModel(input, card) : undefined;
       let result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, told, active, { cwd: folder, ...(model ? { model } : {}) }));
       // The build check, run in the card's own copy while the other cards are still working. A failure here is handed

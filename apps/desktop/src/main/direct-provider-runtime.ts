@@ -43,9 +43,22 @@ import { applyPermissionRules } from './permission-rules';
 import type { ToolHookRunner } from './automation';
 import { RateLimitError, RequestPacer } from './rate-limit';
 import { DEFAULT_MAX_RUN_COST_USD, maxRunCostFromEnvironment, REPEAT_STOP_MESSAGE, REPEAT_WARNING, type RunGuard } from './run-guard';
-import { createParallelSession } from './parallel-session';
+import { createParallelSession, isParallelCopy } from './parallel-session';
 import { runCheckCommand, suggestTestCommand } from './verification';
 import { describeOutcome, runWritingHelpers, type WritingBatchResult, type WritingTask } from './writing-helpers';
+
+/** KAI's terminal tools, by the names an MCP tool is given here. */
+const TERMINAL_TOOL = /^mcp_kai[-_]terminal_/;
+
+/** The same outside tools without KAI's terminal: not offered, and refused if a model asks for one anyway. */
+export function withoutTerminalTools(port: ExternalToolPort): ExternalToolPort {
+  const refusal = 'KAI\'s terminal is not available while you work in a copy of the project: it runs in the project\'s own folder. Use run_command, which runs in your copy.';
+  return {
+    definitions: async () => (await port.definitions()).filter((definition) => !TERMINAL_TOOL.test(String((definition as { name?: unknown }).name ?? ''))),
+    policy: (name, autonomy) => (TERMINAL_TOOL.test(name) ? { decision: 'deny', reason: refusal } : port.policy(name, autonomy)),
+    execute: (name, input, signal) => (TERMINAL_TOOL.test(name) ? Promise.resolve<ProjectToolExecution>({ ok: false, output: { error: refusal } }) : port.execute(name, input, signal)),
+  };
+}
 
 /** What a helper run gives back to the model that started it. */
 type TaskResult = { answer: string; costUsd: number; provider?: string; model?: string };
@@ -698,6 +711,15 @@ export class DesktopDirectProviderRuntime {
    * read-only tool list and no `task` of its own, so it cannot recurse or widen its access. Only its answer and the
    * cost of its calls come back; its intermediate reads stay in its own context.
    */
+  /**
+   * The outside tools a run is offered. A run working in a copy of the project (a card or a writing helper beside
+   * others) does not get KAI's terminal: its sessions open in the project's own folder, so agents in copies used it
+   * to run builds and edit files in the project itself, under the other agents' feet and outside the merge.
+   */
+  private externalFor(projectRoot: string): ExternalToolPort | undefined {
+    return this.externalTools && isParallelCopy(projectRoot) ? withoutTerminalTools(this.externalTools) : this.externalTools;
+  }
+
   private taskRunner(request: AgentRunRequest, projectRoot: string, contextText: string | undefined): TaskRun {
     if (this.options.allowSubagents === false) {
       return async (): Promise<TaskResult> => {
@@ -958,7 +980,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1143,7 +1165,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalTools,
+          this.externalFor(projectRoot),
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           this.taskRunner(request, projectRoot, contextText),
@@ -1227,7 +1249,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1419,7 +1441,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalTools,
+          this.externalFor(projectRoot),
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           this.taskRunner(request, projectRoot, contextText),
@@ -1532,7 +1554,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1742,7 +1764,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalTools,
+          this.externalFor(projectRoot),
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           this.taskRunner(request, projectRoot, contextText),
@@ -1789,7 +1811,7 @@ export class DesktopDirectProviderRuntime {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
-      externalToolDefinitions = await this.externalTools?.definitions() ?? [];
+      externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
     } catch {
       // A broken optional tool provider must not prevent built-in project tools from running.
     }
@@ -1950,7 +1972,7 @@ export class DesktopDirectProviderRuntime {
           toolCalls,
           controller.signal,
           approvals,
-          this.externalTools,
+          this.externalFor(projectRoot),
           emit,
           (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
           this.taskRunner(request, projectRoot, contextText),

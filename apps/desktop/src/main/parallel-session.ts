@@ -58,6 +58,15 @@ export function activeParallelDirectories(): string[] {
   return [...activeDirectories];
 }
 
+/** Whether a folder is inside one of the copies a running wave made, which is where a part or a card works. */
+export function isParallelCopy(folder: string): boolean {
+  const resolved = path.resolve(folder).toLowerCase();
+  return [...activeDirectories].some((directory) => {
+    const root = directory.toLowerCase();
+    return resolved === root || resolved.startsWith(root + path.sep);
+  });
+}
+
 /**
  * Starts a wave for a project: a snapshot of its working tree now, and a folder of checkouts outside the project.
  * Null when the project is not a git repository with at least one commit, in which case parts run one at a time.

@@ -537,6 +537,8 @@ describe('desktop autopilot', () => {
       // Each card's agent ran once: the first attempt carried into the check rather than being run again.
       expect(h.prompts).toHaveLength(3);
       expect(final.lanes).toEqual([]);
+      // Each card is told where its copy is and how to work in it.
+      for (const id of ['a', 'b', 'c']) expect(h.prompts.some((prompt) => prompt.includes('WORKING IN YOUR OWN COPY') && prompt.includes(`/copies/${id}`))).toBe(true);
       expect(h.kept.size).toBe(0);
     });
 
