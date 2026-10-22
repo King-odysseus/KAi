@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { BACKGROUND_REFUSAL, launchesBackgroundProcess, processCleanupScript, stopProcessesInFolders } from '../apps/desktop/src/main/process-cleanup';
+import { BACKGROUND_REFUSAL, closeWhatARunOpened, launchesBackgroundProcess, processCleanupScript, stopProcessesInFolders } from '../apps/desktop/src/main/process-cleanup';
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -93,5 +93,67 @@ describe('stopping what a card left running in its copy', () => {
       keep.kill();
       held.kill();
     }
+  });
+});
+
+describe('closing what a finished run opened', () => {
+  async function setup() {
+    const parent = await mkdtemp(path.join(os.tmpdir(), 'kai-close-'));
+    const project = path.join(parent, 'project');
+    await mkdir(project, { recursive: true });
+    // A program called chrome.exe, so it looks like a browser window to the clean-up.
+    const bin = path.join(parent, 'bin');
+    await mkdir(bin, { recursive: true });
+    const browserLike = path.join(bin, 'chrome.exe');
+    await copyFile(process.execPath, browserLike);
+    const start = (program: string) => spawn(program, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: project, stdio: 'ignore', windowsHide: true });
+    const alive = (child: ReturnType<typeof spawn>) => child.exitCode === null && child.signalCode === null;
+    const pause = (ms = 600) => new Promise((resolve) => setTimeout(resolve, ms));
+    return { parent, project, browserLike, start, alive, pause };
+  }
+
+  it.skipIf(process.platform !== 'win32')('closes a browser the run opened in the project, and leaves a server and an older window alone', async () => {
+    const { parent, project, browserLike, start, alive, pause } = await setup();
+    const older = start(browserLike);
+    await pause(3000);
+    const runStartedAt = Date.now();
+    await pause(2500);
+    const browser = start(browserLike);
+    const server = start(process.execPath);
+    try {
+      await pause();
+      await closeWhatARunOpened(project, runStartedAt, false);
+      await pause();
+      expect(alive(browser)).toBe(false);
+      expect(alive(server)).toBe(true);
+      expect(alive(older)).toBe(true);
+    } finally {
+      for (const child of [older, browser, server]) child.kill();
+      await rm(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
+    }
+  });
+
+  it.skipIf(process.platform !== 'win32')('closes everything still running in a copy of the project', async () => {
+    const { parent, project, browserLike, start, alive, pause } = await setup();
+    const copy = path.join(parent, 'kai-parallel', 'wave-1', 'card');
+    await mkdir(copy, { recursive: true });
+    const inCopy = spawn(browserLike, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: copy, stdio: 'ignore', windowsHide: true });
+    const server = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: copy, stdio: 'ignore', windowsHide: true });
+    const inProject = start(process.execPath);
+    try {
+      await pause();
+      await closeWhatARunOpened(copy, Date.now(), true);
+      await pause();
+      expect(alive(inCopy)).toBe(false);
+      expect(alive(server)).toBe(false);
+      expect(alive(inProject)).toBe(true);
+    } finally {
+      for (const child of [inCopy, server, inProject]) child.kill();
+      await rm(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
+    }
+  });
+
+  it('does nothing outside Windows or with nothing named', async () => {
+    expect(await stopProcessesInFolders([], { windowsOnly: true })).toBe(0);
   });
 });

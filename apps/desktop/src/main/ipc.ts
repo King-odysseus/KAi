@@ -93,6 +93,8 @@ import type { DesktopExecutionRules } from './execution-rules';
 import type { DesktopMcpRuntime } from './mcp-runtime';
 import type { Cognitive1Client } from './cognitive1-client';
 import { dataLocations, type DesktopPaths } from './paths';
+import { isParallelCopy } from './parallel-session';
+import { closeWhatARunOpened } from './process-cleanup';
 import type { UniversalProxyClient } from './proxy-client';
 import type { DesktopProxyRouting } from './proxy-routing';
 import { proxyAgentBaseUrl } from './proxy-routing';
@@ -1485,6 +1487,9 @@ function announceRunState(context: IpcContext, conversationId: string, status: A
   context.windows.broadcast('agents:run-state', { conversationId, status } satisfies AgentRunState);
 }
 
+/** How many agent runs are working in each folder, so the last one out is the one that closes what was opened. */
+const runsWorkingIn = new Map<string, number>();
+
 export async function runConversationAgent(
   context: IpcContext,
   request: AgentRunRequest,
@@ -1853,6 +1858,9 @@ export async function runConversationAgent(
   // that takes it up fetches a record that already holds the request.
   announceRunState(context, conversation.id, 'started');
   context.notifications.runStarted(conversation.id);
+  const runOpenedFrom = Date.now();
+  const inACopy = options.cwd !== undefined || isParallelCopy(workRoot);
+  runsWorkingIn.set(workRoot, (runsWorkingIn.get(workRoot) ?? 0) + 1);
   const recordDeliveredInterjections = (): number => {
     const messages = takeDeliveredInterjections(conversation.id);
     // The transcript shows what the person typed and the images they attached, not the context built for the model.
@@ -1910,6 +1918,11 @@ export async function runConversationAgent(
   } finally {
     context.notifications.runEnded(conversation.id);
     context.runControl.forget(conversation.id);
+    // What the run opened is closed before anything else touches the folder: a card's check starts its own app in the
+    // copy next, and would be closed too if this ran later. In the project itself it waits for the last run there.
+    const stillWorking = (runsWorkingIn.get(workRoot) ?? 1) - 1;
+    if (stillWorking > 0) runsWorkingIn.set(workRoot, stillWorking); else runsWorkingIn.delete(workRoot);
+    if (inACopy || stillWorking === 0) await closeWhatARunOpened(workRoot, runOpenedFrom, inACopy).catch(() => 0);
     // Anything still waiting came too late to reach the run it was meant for, and handing it to the next one would be
     // answering a question nobody is asking any more.
     clearInterjections(conversation.id);

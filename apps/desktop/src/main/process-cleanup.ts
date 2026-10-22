@@ -74,10 +74,24 @@ public static class KaiCwd {
  * The PowerShell that stops every process whose command line names one of the folders, and everything those started.
  * It never stops itself or anything above it, so KAI is out of reach whatever its own command line says.
  */
-export function processCleanupScript(folders: readonly string[]): string {
+/** What to leave alone: with `windowsOnly`, only browsers and apps that were started at or after `since` are stopped. */
+export interface CleanupOptions {
+  /** Milliseconds since the epoch. Nothing started before this is touched. */
+  since?: number;
+  /** Only browsers and Electron apps, not servers or tools a person may have running in the project. */
+  windowsOnly?: boolean;
+}
+
+/** The programs that put a window on the desktop, the mess a finished test leaves behind. */
+const WINDOWED_PROGRAMS = '^(?:chrome|msedge|chromium|firefox|brave|electron)(?:\\.exe)?$';
+
+export function processCleanupScript(folders: readonly string[], options: CleanupOptions = {}): string {
   const needles = [...new Set(folders.flatMap(needlesFor))];
   return [
     `$needles = @(${needles.map(quote).join(', ')})`,
+    `$windowsOnly = ${options.windowsOnly ? '$true' : '$false'}`,
+    `$since = [DateTimeOffset]::FromUnixTimeMilliseconds(${Math.max(0, Math.floor(options.since ?? 0))}).LocalDateTime`,
+    `$windowed = ${quote(WINDOWED_PROGRAMS)}`,
     'Add-Type -TypeDefinition @"',
     WORKING_FOLDER_READER.trim(),
     '"@',
@@ -91,9 +105,12 @@ export function processCleanupScript(folders: readonly string[]): string {
     '  if ($keep.Contains([int]$p.ProcessId)) { continue }',
     '  $line = if ($p.CommandLine) { $p.CommandLine.ToLower() } else { "" }',
     '  $cwd = ([KaiCwd]::Get([int]$p.ProcessId)); $cwd = if ($cwd) { $cwd.ToLower() } else { "" }',
+    '  $hit = $false',
     '  foreach ($n in $needles) {',
-    "    if ($line.Contains($n + '\\') -or $line.Contains($n + '/') -or $line.EndsWith($n) -or $line.Contains($n + '\"') -or $line.Contains($n + \"'\") -or $cwd.Contains($n + '\\') -or $cwd.EndsWith($n)) { [void]$ids.Add([int]$p.ProcessId); break }",
+    "    if ($line.Contains($n + '\\') -or $line.Contains($n + '/') -or $line.EndsWith($n) -or $line.Contains($n + '\"') -or $line.Contains($n + \"'\") -or $cwd.Contains($n + '\\') -or $cwd.EndsWith($n)) { $hit = $true; break }",
     '  }',
+    '  if ($hit -and $windowsOnly) { $hit = ($p.Name -match $windowed) -and ($p.CreationDate -ge $since) }',
+    '  if ($hit) { [void]$ids.Add([int]$p.ProcessId) }',
     '}',
     '$grew = $true',
     'while ($grew) {',
@@ -106,12 +123,24 @@ export function processCleanupScript(folders: readonly string[]): string {
 }
 
 /**
+ * Closes what an agent run opened, once the run is over, so a day of testing does not leave the desktop covered in
+ * browser windows and half-started apps.
+ *
+ * In a copy of the project (a card in Autopilot) everything still running in that folder is the card's, and is stopped.
+ * In the project itself the folder is shared with the person, so only browsers and apps started since this run began
+ * are closed, and the caller does this only when no other run is working there. Windows only, and best effort.
+ */
+export function closeWhatARunOpened(folder: string, startedAt: number, inACopy: boolean): Promise<number> {
+  return stopProcessesInFolders([folder], inACopy ? {} : { since: startedAt - 2_000, windowsOnly: true });
+}
+
+/**
  * Stops whatever is still running inside these copies of the project, so Windows lets them be removed. Windows only,
  * and best effort: it returns how many processes it stopped, and zero when it could not tell.
  */
-export function stopProcessesInFolders(folders: readonly string[]): Promise<number> {
+export function stopProcessesInFolders(folders: readonly string[], options: CleanupOptions = {}): Promise<number> {
   if (process.platform !== 'win32' || folders.length === 0) return Promise.resolve(0);
-  const encoded = Buffer.from(processCleanupScript(folders), 'utf16le').toString('base64');
+  const encoded = Buffer.from(processCleanupScript(folders, options), 'utf16le').toString('base64');
   return new Promise((resolve) => {
     execFile(
       'powershell.exe',
