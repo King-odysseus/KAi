@@ -1265,6 +1265,30 @@ describe('what a run learns about its shared files and its spend', () => {
   });
 });
 
+describe('combining two cards\' changes to one file without ever doubling it', () => {
+  const numbered = (prefix: string, count: number): Buffer => Buffer.from(Array.from({ length: count }, (_, index) => `${prefix} ${index}`).join('\n') + '\n');
+
+  it('refuses to keep both sides when one card rewrote the whole file', async () => {
+    // The card changed every line, the project changed every line another way: all one clash, which keeping both sides turns
+    // into the file twice over. That is what happened to a 7,000-line smoke script.
+    const base = numbered('original', 400);
+    const project = numbered('project edit', 400);
+    const rewritten = numbered('card rewrite', 400);
+    expect(await mergeFileThreeWay(project, base, rewritten)).toBeNull();
+    expect(await mergeFileThreeWay(project, base, rewritten, true)).toBeNull();
+  });
+
+  it('still keeps both cards\' additions when each only added lines', async () => {
+    const base = numbered('line', 400);
+    const project = Buffer.concat([base, Buffer.from('added by the project\nand a second line\n')]);
+    const card = Buffer.concat([base, Buffer.from('added by the card\n')]);
+    const combined = (await mergeFileThreeWay(project, base, card, true))?.toString('utf8');
+    expect(combined).toContain('added by the project');
+    expect(combined).toContain('added by the card');
+    expect(combined?.split('\n').length).toBeLessThan(410);
+  });
+});
+
 describe('telling a locked file from a request for approval', () => {
   it('does not ask the person to allow anything when Windows says permission denied about a folder', () => {
     const asked = explainBlocked("note: could not remove C:\\Temp\\zuri-profile: EPERM, Permission denied: \\\\?\\C:\\Temp\\zuri-profile");

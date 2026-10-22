@@ -170,12 +170,27 @@ export async function mergeFileThreeWay(current: Buffer, base: Buffer, theirs: B
     return await new Promise<Buffer | null>((resolve) => {
       execFile('git', ['merge-file', '-p', ...(union ? ['--union'] : []), '-L', 'project', '-L', 'base', '-L', 'part', ours!, original!, other!], { encoding: 'buffer', maxBuffer: MAX_BUFFER, windowsHide: true }, (error, stdout) => {
         // Exit 0 is a clean merge; a positive exit is the number of conflicts, and anything else is a failure.
-        resolve(error ? null : stdout);
+        if (error) return resolve(null);
+        // Keeping both sides where they changed the same lines doubles a file when one side rewrote all of it: on 22 October
+        // a card that reformatted Zuri's smoke script came out as that script twice over, 14,580 lines of it, which could not
+        // start, and every check after it failed. What both sides legitimately add is the project's own length plus what the
+        // card added to the base; a result well past that is not a combination of two additions, so it is refused.
+        resolve(union && !plausibleUnion(current, base, theirs, stdout) ? null : stdout);
       });
     });
   } finally {
     await fs.rm(folder, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/** Slack for the few lines an honest combination can add beyond the two sides' own: a repeated closing brace, a blank line. */
+const UNION_SLACK_LINES = 12;
+
+/** Whether a union merge is about the size two sets of added lines make, and not one side's file stacked on the other's. */
+export function plausibleUnion(current: Buffer, base: Buffer, theirs: Buffer, result: Buffer): boolean {
+  const lines = (content: Buffer): number => content.toString('utf8').split('\n').length;
+  const addedByTheirs = Math.max(0, lines(theirs) - lines(base));
+  return lines(result) <= lines(current) + addedByTheirs + UNION_SLACK_LINES;
 }
 
 /**
