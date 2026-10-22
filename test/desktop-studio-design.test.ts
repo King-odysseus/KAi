@@ -6,7 +6,7 @@ import {
   type StudioBoard,
   type StudioDesign,
 } from '../packages/contracts/src';
-import { applyDesignStaleness, designCardId, mergeDesign } from '../apps/desktop/src/main/board';
+import { applyDesignStaleness, clearRenumberedStaleness, designCardId, mergeDesign } from '../apps/desktop/src/main/board';
 import {
   changedNodes,
   componentsFrom,
@@ -96,11 +96,25 @@ describe('reading open-pencil replies', () => {
     expect(changedNodes(before, after)).toEqual(['n2']);
   });
 
-  it('reports what a redesign changed and what it did not', () => {
+  it('reports what a redesign changed and what it did not, and a new node is no change to any card', () => {
     const before: StudioDesign = { ...createStudioDesign('http://127.0.0.1:7600/mcp'), hashes: { a: '1', b: '2' } };
     const after: StudioDesign = { ...createStudioDesign('http://127.0.0.1:7600/mcp'), hashes: { a: '1', b: '9', c: '3' } };
 
-    expect(changedNodes(before.hashes, after.hashes)).toEqual(['b', 'c']);
+    expect(changedNodes(before.hashes, after.hashes)).toEqual(['b']);
+  });
+
+  it('reports nothing when the document was renumbered: most of its nodes changing at once is not a redesign', () => {
+    const before: Record<string, string> = {};
+    const after: Record<string, string> = {};
+    for (let index = 0; index < 60; index += 1) {
+      before[`0:${index}`] = `node ${index}`;
+      // The same ids, handed to other nodes, as open-pencil does when a file is reopened.
+      after[`0:${index}`] = `node ${(index + 7) % 60}`;
+    }
+    expect(changedNodes(before, after)).toEqual([]);
+    // A handful of real changes among many is still reported.
+    const edited = { ...before, '0:3': 'renamed', '0:9': 'renamed' };
+    expect(changedNodes(before, edited)).toEqual(['0:3', '0:9']);
   });
 
   it('turns a 401 into something the user can act on, and leaves a real error alone', () => {
@@ -181,5 +195,55 @@ describe('cards from the design', () => {
   it('makes a readable id from a node id', () => {
     expect(designCardId('Page 1 / Primary Button')).toBe('page-1-primary-button');
     expect(designCardId('   ')).toBe('node');
+  });
+});
+
+describe('a document open-pencil renumbered', () => {
+  // What a real Zuri board showed: the ids were handed to other nodes, so 0:24, once Button / Light Danger, is now Button / Danger.
+  const renumbered = [
+    { id: '0:24', name: 'Button / Danger', page: 'Components', screen: false },
+    { id: '0:16', name: 'Button / Ghost', page: 'Components', screen: false },
+    { id: '0:30', name: 'Button / Light Danger', page: 'Components', screen: false },
+  ];
+
+  it('links each card to the node that carries its name, not to the node its old id now belongs to', () => {
+    const cards = [
+      card('danger', { title: 'Button / Danger', designRef: '0:12' }),
+      card('light-danger', { title: 'Button / Light Danger', designRef: '0:24' }),
+      card('ghost', { title: 'Button / Ghost', designRef: '0:10' }),
+      card('small', { title: 'Button / Small', designRef: '0:16' }),
+    ];
+    const merged = mergeDesign(cards, renumbered, AT);
+    const ref = (id: string) => merged.find((item) => item.id === id)?.designRef;
+    expect(ref('danger')).toBe('0:24');
+    expect(ref('light-danger')).toBe('0:30');
+    expect(ref('ghost')).toBe('0:16');
+    // Button / Small is not in the document any more: it lets go of the id another card now has, rather than sharing it.
+    expect(ref('small')).toBeNull();
+    expect(merged.filter((item) => item.designRef === '0:16')).toHaveLength(1);
+    // And no extra cards were made for nodes that already had one.
+    expect(merged).toHaveLength(4);
+  });
+
+  it('still follows a node the person renamed: same id, new name, and no card with the new name', () => {
+    const merged = mergeDesign([card('sign-up', { title: 'Sign up', designRef: 'p1', kind: 'page' })], [{ id: 'p1', name: 'Create account', page: 'Create account', screen: true }], AT);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.designRef).toBe('p1');
+  });
+
+  it('takes back staleness the renumbering put on a card once its node carries its name again, and on cards built on it', () => {
+    const cards = [
+      card('danger', { title: 'Button / Danger', designRef: '0:24', stale: true, staleReason: 'open-pencil node 0:24 changed since this card was written.' }),
+      card('form', { title: 'Delete form', dependsOn: ['danger'], stale: true, staleReason: 'Something this card is built on has to be redone for the new design.' }),
+      card('other', { title: 'Something else', designRef: '0:99', stale: true, staleReason: 'open-pencil node 0:99 changed since this card was written.' }),
+      card('person', { title: 'Manual', stale: true, staleReason: 'A person marked this to be redone.' }),
+    ];
+    const cleared = clearRenumberedStaleness(cards, renumbered, AT);
+    const stale = (id: string) => cleared.find((item) => item.id === id)?.stale;
+    expect(stale('danger')).toBe(false);
+    expect(stale('form')).toBe(false);
+    // A node not in the document, and a reason that is not the design's, are left as they are.
+    expect(stale('other')).toBe(true);
+    expect(stale('person')).toBe(true);
   });
 });

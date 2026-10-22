@@ -252,10 +252,24 @@ export function nodeHashes(nodes: readonly DesignNode[]): Record<string, string>
   return hashes;
 }
 
-/** Which of a card's design nodes changed since the hashes the card was built with. */
+/**
+ * Which design nodes changed since the hashes the cards were built with.
+ *
+ * Only nodes that were there before count: a node that is new changes no card. And when a large share of them
+ * changed at once, the document was renumbered rather than redesigned. Open-pencil gives the same pages new ids
+ * when a file is reopened or re-imported, and hands old ids to other nodes, so a pull reported every node as changed,
+ * marked dozens of finished cards stale and sent them back to be built again. Nothing is reported then; the cards
+ * are matched to their nodes by name instead.
+ */
 export function changedNodes(before: Record<string, string>, after: Record<string, string>): string[] {
-  return Object.keys(after).filter((id) => before[id] !== after[id]);
+  const common = Object.keys(after).filter((id) => id in before);
+  const differing = common.filter((id) => before[id] !== after[id]);
+  return differing.length > Math.max(RENUMBERED_AT_LEAST, common.length * RENUMBERED_SHARE) ? [] : differing;
 }
+
+/** More changed nodes than this, and more than this share of them, is a renumbered document, not a redesign. */
+const RENUMBERED_AT_LEAST = 10;
+const RENUMBERED_SHARE = 0.3;
 
 export function hashOf(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);

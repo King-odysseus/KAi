@@ -113,6 +113,34 @@ export function promoteReady(cards: readonly BoardCard[]): BoardCard[] {
 }
 
 /**
+ * Takes back the staleness a renumbered document put on cards. Such a card was marked because "its" node id changed
+ * hands, not because its screen did; once it is linked by name to a node that carries its own name again, the flag
+ * is wrong, and leaving it kept the card queued to be built again. Cards marked only because of one of those follow
+ * when nothing they are built on is still stale. A card's status is not touched: work it lost is not given back as done.
+ */
+export function clearRenumberedStaleness(cards: readonly BoardCard[], components: readonly DesignComponent[], at: string, flaggedNow: ReadonlySet<string> = new Set()): BoardCard[] {
+  const names = new Map(components.map((component) => [component.id, screenTitleKey(component.name)]));
+  const nodeChanged = /^open-pencil node \S+ changed since this card was written\.$/;
+  let next = cards.map((card) => {
+    // A card this pull itself found changed keeps its flag: only flags left by an earlier, renumbered pull are taken back.
+    if (!card.stale || flaggedNow.has(card.id) || !card.staleReason || !nodeChanged.test(card.staleReason) || !card.designRef) return card;
+    return names.get(card.designRef) === screenTitleKey(card.title) ? { ...card, stale: false, staleReason: null, updatedAt: at } : card;
+  });
+  const builtOn = 'Something this card is built on has to be redone for the new design.';
+  for (let pass = 0; pass < cards.length; pass += 1) {
+    const staleIds = new Set(next.filter((card) => card.stale).map((card) => card.id));
+    let cleared = false;
+    next = next.map((card) => {
+      if (!card.stale || flaggedNow.has(card.id) || card.staleReason !== builtOn || card.dependsOn.some((id) => staleIds.has(id))) return card;
+      cleared = true;
+      return { ...card, stale: false, staleReason: null, updatedAt: at };
+    });
+    if (!cleared) break;
+  }
+  return next;
+}
+
+/**
  * Cards holding a node the design changed go stale, and their dependents follow. A card with no `designRef` is not
  * touched: it was not drawn from the design, so a redesign cannot invalidate it.
  */
@@ -164,9 +192,18 @@ export function mergeDesign(
   const taken = new Set(cards.map((card) => card.id));
   const added: BoardCard[] = [];
   const merged = [...cards];
+  // Which card each node went to in this pull, so a card still pointing at a node another card took can let go of it.
+  const assigned = new Map<string, string>();
   for (const component of components) {
-    const existing = byNode.get(component.id) ?? byName.get(screenTitleKey(component.name));
+    const named = byName.get(screenTitleKey(component.name));
+    const held = byNode.get(component.id);
+    // An id now carried by a node with another name, while a card carries this node's name, is a renumbered document:
+    // open-pencil hands old ids to other nodes. The name wins; following the id linked "Button / Light Danger" to the
+    // node that is now "Button / Danger", and the board stopped matching what was drawn.
+    const renumbered = held && named && named !== held && screenTitleKey(held.title) !== screenTitleKey(component.name);
+    const existing = renumbered ? named : (held ?? named);
     if (existing) {
+      assigned.set(component.id, existing.id);
       const index = merged.findIndex((card) => card.id === existing.id);
       // A route the page's name already carries is filled in when the card has none — the backfill for cards written
       // before this existed. A route already on the card is the person's, and the design does not overwrite it.
@@ -193,6 +230,12 @@ export function mergeDesign(
       createdAt: at,
       updatedAt: at,
     }));
+  }
+  // A card still pointing at a node this pull gave to another card lets go of it: one card per node, the right one.
+  for (let index = 0; index < merged.length; index += 1) {
+    const card = merged[index]!;
+    const owner = card.designRef ? assigned.get(card.designRef) : undefined;
+    if (owner && owner !== card.id) merged[index] = { ...card, designRef: null, updatedAt: at };
   }
   return [...merged, ...added];
 }
@@ -365,6 +408,8 @@ export class StudioBoardStore {
     // Reconcile a page that Open Pencil confirms exists to its story card even when the AI's titles differ slightly.
     // The page inventory provides the route, and node id provides the durable identity after a match is established.
     let cards = applyDesignStaleness(board.cards, changedNodes);
+    const staleBefore = new Set(board.cards.filter((card) => card.stale).map((card) => card.id));
+    const flaggedNow = new Set(cards.filter((card) => card.stale && !staleBefore.has(card.id)).map((card) => card.id));
     const pageRoutes = routesFromPagesDocument(pages);
     const designPages = components.filter((component) => component.screen);
     const claimedNodes = new Set<string>();
@@ -388,7 +433,7 @@ export class StudioBoardStore {
       if (fromInventoryIndex >= 0) matchedInventoryPages.add(fromInventoryIndex);
       return exact ? { ...card, designRef: exact.id, route: card.route || fromInventory?.route || card.route } : card;
     });
-    let withDesign = withPlanRoutes(mergeDesign(cards, components, at), pages);
+    let withDesign = clearRenumberedStaleness(withPlanRoutes(mergeDesign(cards, components, at), pages), components, at, flaggedNow);
     if (dropMissingRefs) {
       // A document adopted after a restart: a card still pointing at a node the new document does not have was drawn
       // in the old one. It reads "not drawn" and is flagged, instead of claiming a screen that is no longer there.
