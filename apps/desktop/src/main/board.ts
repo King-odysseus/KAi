@@ -70,7 +70,7 @@ export interface DoneEvidence {
 }
 
 /** Null when the card may be marked `done`; otherwise the one rule that blocked it, for the caller to show. */
-export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'route' | 'check' | 'acceptance'>, evidence: DoneEvidence): string | null {
+export function doneBlockedBy(card: Pick<BoardCard, 'kind' | 'route' | 'check' | 'acceptance'> & Partial<Pick<BoardCard, 'title'>>, evidence: DoneEvidence): string | null {
   if (!card.check) return 'The card has no record of a passing check.';
   if (!evidence.run) return 'The check the card was closed on is no longer in the verification history.';
   if (!evidence.run.passed) return `The recorded check did not pass (${evidence.run.command} exited ${evidence.run.exitCode ?? 'unknown'}).`;

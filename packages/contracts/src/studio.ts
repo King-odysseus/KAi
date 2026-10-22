@@ -302,7 +302,30 @@ export function isUiCard(card: Pick<BoardCard, 'kind'>): boolean {
  * with none lives inside a page (the board's own prompt says to leave it empty), so it is seen through that page and
  * needs the build check alone. Asking it for a route it does not have left such cards unclosable.
  */
-export function needsScreenCheck(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
+/**
+ * Whether a card is a surface the operating system draws rather than a screen in the app: a Windows toast, the
+ * notification centre, the tray, the taskbar, a native file dialog.
+ *
+ * The board treated "Reminder notification (OS toasts)" as a page, and the screen check compared it with the design
+ * frame, which showed the toast on a mock-up of the Windows desktop. So the agent built a web page with a fake
+ * desktop, a fake taskbar and a fake notification centre, which is what the check rewarded, instead of raising a real
+ * notification. Judged by the title alone, so an in-app screen whose story merely mentions a notification is not
+ * caught by mistake.
+ */
+export function isSystemSurface(card: Partial<Pick<BoardCard, 'title'>>): boolean {
+  return SYSTEM_SURFACE.test(card.title ?? '');
+}
+
+const SYSTEM_SURFACE = /\b(?:os|system|windows|native)[ -](?:toasts?|notifications?|tray|taskbar|dialogs?|file pickers?|folder pickers?|menus?)\b|\bnotification cent(?:er|re)\b|\btray (?:icon|menu)s?\b|\btaskbar\b|\bjump ?lists?\b/i;
+
+/** A page the board still has to be told the address of. A system surface has none, so it never needs one. */
+export function lacksRoute(card: { kind: string; route: string; title?: string }): boolean {
+  return card.kind === 'page' && !card.route.trim() && !isSystemSurface(card);
+}
+
+export function needsScreenCheck(card: Pick<BoardCard, 'kind' | 'route'> & Partial<Pick<BoardCard, 'title'>>): boolean {
+  // The operating system draws it, so there is nothing in the app's window to photograph and compare.
+  if (isSystemSurface(card)) return false;
   return card.kind === 'page' || (card.kind === 'component' && card.route.trim() !== '');
 }
 

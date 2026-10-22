@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { explainBlocked, isUiCard, machineBlocked, needsScreenCheck, readyCards } from '@kai/contracts';
+import { explainBlocked, isSystemSurface, isUiCard, machineBlocked, needsScreenCheck, readyCards } from '@kai/contracts';
 import type {
   AgentRunRequest,
   AgentRunResult,
@@ -229,8 +229,9 @@ interface ActiveRun {
 const NO_CHECK_NOTE = 'Autopilot finished the work but has no check command, so a person has to close it.';
 
 /** A page with nowhere to point can never pass its screen check, and the board never closes it. */
-export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'>): boolean {
-  return card.kind === 'page' && card.route.trim() === '';
+export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'> & Partial<Pick<BoardCard, 'title'>>): boolean {
+  // A system surface has no route and no screen check, so a missing route does not make it unclosable.
+  return card.kind === 'page' && card.route.trim() === '' && !isSystemSurface(card);
 }
 
 /**

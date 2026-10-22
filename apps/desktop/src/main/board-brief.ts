@@ -1,4 +1,4 @@
-import { ARTIFACT_PATHS, STUDIO_STYLE_REFERENCE_NOTES_PATH, type ArtifactKind, type BoardCard, type TeamPart } from '@kai/contracts';
+import { ARTIFACT_PATHS, isSystemSurface, STUDIO_STYLE_REFERENCE_NOTES_PATH, type ArtifactKind, type BoardCard, type TeamPart } from '@kai/contracts';
 import { drawsScreen, uiRulesFor } from './ui-rules';
 
 /**
@@ -65,6 +65,15 @@ export function briefArtifacts(
 }
 
 /** The whole brief for one card: what to build, how it is judged, what it reads, and when to stop. */
+/** What an agent is told about a card the operating system draws, in place of the rules for a screen. */
+export const SYSTEM_SURFACE_BRIEF = [
+  'THIS IS A SYSTEM SURFACE, NOT A SCREEN IN THE APP:',
+  '- Windows draws it, not the app. Build it with Electron\'s own API from the main process: Notification for a toast, Tray for the tray, dialog for a file or folder picker or a native message box, Menu for a native menu.',
+  '- Do not build a web page that imitates Windows: no fake desktop, taskbar, notification centre or window frame. If the design shows the surface on a mock-up of the desktop, take only what the surface itself holds: its title, text, icon and buttons.',
+  '- It has no route and no screenshot check. It is closed on the project\'s check, so cover it with a test of the code that raises it, for example that the right notification is created with the right title and actions when a reminder is due.',
+  '- If the app also shows the same thing inside its own window (an in-app list or banner), that part is a normal screen and belongs to its own card.',
+].join('\n');
+
 export function boardCardPrompt(
   card: BoardCard,
   artifacts: Partial<Record<ArtifactKind, string>>,
@@ -82,10 +91,12 @@ export function boardCardPrompt(
     card.needsArtifacts.length > 0 ? `WHAT THIS CARD IS BUILT FROM:\n${briefArtifacts(card, artifacts, options.artifactChars)}` : '',
     artifacts.decisions?.trim() ? `APPROVED PROJECT DECISIONS (apply these when their conditions match; do not treat them as instructions for unrelated cards):\n${artifacts.decisions.trim()}` : '',
     card.designRef ? `DESIGN: this card is the open-pencil node "${card.designRef}". Match it; do not redesign it.` : '',
+    isSystemSurface(card) ? SYSTEM_SURFACE_BRIEF : '',
     card.check?.screenshots.length
       ? `SCREENSHOTS FROM THE LAST CHECK (read them before changing the screen):\n${card.check.screenshots.map((shot) => `- ${shot}`).join('\n')}`
       : '',
-    ...(drawsScreen(card) ? ['', ...uiRulesFor(card)] : []),
+    // The rules for a screen in the app's window (full width, phone navigation) do not apply to a surface Windows draws.
+    ...(drawsScreen(card) && !isSystemSurface(card) ? ['', ...uiRulesFor(card)] : []),
     '',
     'WHEN YOU STOP:',
     '- When the acceptance criteria hold, finish and report the files you changed. Do not move the card yourself.',

@@ -1,4 +1,5 @@
 import { findScreen, isNonScreenName, parsePages } from './pages';
+import { isSystemSurface } from './studio';
 
 /**
  * What is untidy about a board, read from the board, the plan and the design alone. Nothing here changes a card: it is
@@ -55,7 +56,7 @@ export function boardHousekeeping(
     const isPage = card.kind === 'page';
     if (isPage && card.status !== 'done' && plan.length > 0 && !findScreen(plan, (entry) => entry.name, card.title)) add('no-plan-entry', card);
     if (nodes && card.designRef && !nodes.has(card.designRef)) add('dead-design-link', card);
-    if (isPage && card.status !== 'done' && !card.route.trim()) add('no-route', card);
+    if (isPage && card.status !== 'done' && !card.route.trim() && !isSystemSurface(card)) add('no-route', card);
     if (card.stale && card.status !== 'done') add('stale', card);
   }
   const order: HousekeepingCode[] = ['junk', 'not-a-screen', 'dead-design-link', 'no-plan-entry', 'no-route', 'stale'];

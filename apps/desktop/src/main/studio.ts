@@ -42,6 +42,7 @@ import {
   type StudioReadiness,
   type StudioRouteRepairResult,
   type UiCheckResult,
+  lacksRoute,
 } from '@kai/contracts';
 import { loadProjectContext, parseJsonResponse, ReplyShapeError } from './learning-tutor';
 import type { StructuredRequester } from './prompt-guide';
@@ -447,14 +448,14 @@ export class DesktopStudio {
   /** Suggests missing routes by reconciling the pages artifact, pulled design metadata and implementation snapshot. */
   async suggestRouteRepairs(projectId: string): Promise<StudioRouteRepairResult> {
     const board = await this.ports.board.read(projectId);
-    const missing = board.cards.filter((card) => card.kind === 'page' && !card.route.trim());
+    const missing = board.cards.filter(lacksRoute);
     if (missing.length === 0) return { suggestions: [], unresolved: [] };
     const [pages, root] = await Promise.all([
       this.ports.artifacts.readText(projectId, 'pages'), this.ports.projectRoot(projectId),
     ]);
     const design = await this.ports.board.design(projectId);
     const reconciled = await this.ports.board.applyDesign(projectId, design.components, [], pages ?? '');
-    const refreshedMissing = reconciled.cards.filter((card) => card.kind === 'page' && !card.route.trim());
+    const refreshedMissing = reconciled.cards.filter(lacksRoute);
     const indexed = withRoutesFromPages(refreshedMissing, pages ?? '');
     const suggestions = indexed.filter((card) => card.route.trim()).map((card) => ({
       cardId: card.id, route: card.route, confidence: 'high' as const,

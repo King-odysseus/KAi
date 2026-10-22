@@ -1,5 +1,6 @@
 import {
   createStudioGuide,
+  lacksRoute,
   studioGuideSchema,
   studioGuideStepSchema,
   type BoardCard,
@@ -54,7 +55,7 @@ export function countableForFacts(board: { cards: readonly BoardCard[] }): Pick<
   const isScreen = (card: BoardCard): boolean => card.kind === 'component' || card.kind === 'page';
   return {
     parked: board.cards.filter((card) => card.status === 'blocked' && card.movedBy !== 'user').length,
-    noRoute: board.cards.filter((card) => card.kind === 'page' && !card.route.trim()).length,
+    noRoute: board.cards.filter(lacksRoute).length,
     screens: board.cards.filter(isScreen).length,
   };
 }

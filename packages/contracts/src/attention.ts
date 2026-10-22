@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { explainBlocked, machineBlocked } from './blocked';
 import { guideActionSchema, type GuideAction } from './studio-guide';
+import { lacksRoute } from './studio';
 
 /**
  * The one thing that needs the person, in one line, with the one button that does it.
@@ -131,7 +132,7 @@ export function studioAttention(input: StudioAttentionInput): StudioAttention | 
 
   // 4. Screen cards with nowhere to point can never pass a screen check, and hold every card behind them.
   // Only a page must say where it lives; a component with no route is seen through the page that holds it.
-  const noRoute = cards.filter((card) => card.kind === 'page' && !card.route.trim());
+  const noRoute = cards.filter(lacksRoute);
   if (noRoute.length > 0) {
     return attention(
       'needs-you',
