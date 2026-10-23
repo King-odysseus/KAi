@@ -628,7 +628,8 @@ export class DesktopAutopilot {
         // run began can have something by now. Looked for again, because without a check the scaffold card waits in
         // review for a person and every card behind it waits on that.
         if (!command) command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
-        if (await this.settleScreenPassed(projectId, owner, board, active)) continue;
+        if (!command) command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
+        if (await this.settleScreenPassed(projectId, owner, label, board, command, active)) continue;
         if (command && (await this.settleReviewed(input, label, board, command, active))) continue;
         // Cards this run already holds come first, so a restart picks up every one of them, not only the first.
         const queue = [...board.cards.filter((item) => item.status === 'inProgress' && item.claimedBy === label), ...readyCards(board)];
@@ -1432,21 +1433,42 @@ export class DesktopAutopilot {
    * it waited on a person Autopilot is meant never to wait for. The board still has the last word: a card whose check
    * no longer matches the working tree is refused and stays where it is, with the reason in the log.
    */
-  private async settleScreenPassed(projectId: string, owner: number, board: StudioBoard, active: ActiveRun): Promise<boolean> {
+  private async settleScreenPassed(projectId: string, owner: number, label: string, board: StudioBoard, command: string, active: ActiveRun): Promise<boolean> {
     const stranded = board.cards.filter((card) => card.status === 'review' && card.check?.visual === 'passed' && card.notes.includes(SCREEN_PASSED_NOTE));
-    let closed = false;
+    let changed = false;
     for (const card of stranded) {
       if (active.controller.signal.aborted) break;
+      let refusal = '';
       try {
         await this.board.moveCard(projectId, card.id, 'done', 'Autopilot: the build check and the screen check passed.', 'check');
         this.state(projectId).cardsDone += 1;
         this.record(projectId, owner, 'card', `"${card.title}" is done: both checks had passed and it was waiting in review.`);
-        closed = true;
+        changed = true;
+        continue;
       } catch (error) {
-        this.record(projectId, owner, 'warn', `"${card.title}" stays in review: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
+        refusal = error instanceof Error ? error.message : String(error);
       }
+      // The board would not take the old check, usually because the run it points at has left the verification
+      // history. The checks are run again now rather than trusted; a card that still fails them is sent back to be
+      // worked, since one left in review blocks every card behind it and nothing else would ever look at it.
+      if (command) {
+        const verdict = await this.checkAndClose(projectId, owner, label, card, command, active.controller.signal);
+        if (verdict.closed) {
+          this.state(projectId).cardsDone += 1;
+          this.record(projectId, owner, 'card', `"${card.title}" is done: its checks were run again and passed.`);
+          changed = true;
+          continue;
+        }
+        refusal = verdict.failure;
+      }
+      await this.board.moveCard(projectId, card.id, 'ready', `Autopilot sent this back to be worked again: ${refusal.slice(0, 400)}`, 'check')
+        .then(() => {
+          this.record(projectId, owner, 'warn', `"${card.title}" goes back to ready: ${refusal.slice(0, 200)}`);
+          changed = true;
+        })
+        .catch(() => this.record(projectId, owner, 'warn', `"${card.title}" stays in review: ${refusal.slice(0, 200)}`));
     }
-    return closed;
+    return changed;
   }
 
   /**
