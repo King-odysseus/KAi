@@ -361,6 +361,9 @@ interface ActiveRun {
  */
 const NO_CHECK_NOTE = 'Autopilot finished the work but has no check command, so a person has to close it.';
 
+/** What the screen check writes on a card it passed, which is how a later run finds the ones left in review. */
+const SCREEN_PASSED_NOTE = 'waiting for a person to approve the screenshots';
+
 /** A page with nowhere to point can never pass its screen check, and the board never closes it. */
 export function unclosableUiCard(card: Pick<BoardCard, 'kind' | 'route'> & Partial<Pick<BoardCard, 'title'>>): boolean {
   // A system surface has no route and no screen check, so a missing route does not make it unclosable.
@@ -625,6 +628,7 @@ export class DesktopAutopilot {
         // run began can have something by now. Looked for again, because without a check the scaffold card waits in
         // review for a person and every card behind it waits on that.
         if (!command) command = input.checkCommand.trim() || (await this.ports.suggestCheck(projectId).catch(() => null)) || '';
+        if (await this.settleScreenPassed(projectId, owner, board, active)) continue;
         if (command && (await this.settleReviewed(input, label, board, command, active))) continue;
         // Cards this run already holds come first, so a restart picks up every one of them, not only the first.
         const queue = [...board.cards.filter((item) => item.status === 'inProgress' && item.claimedBy === label), ...readyCards(board)];
@@ -1418,6 +1422,31 @@ export class DesktopAutopilot {
       return { closed: false, failure };
     }
     return { closed: true, failure: '' };
+  }
+
+  /**
+   * Closes the cards whose build check and screen check both passed but which were left in review.
+   *
+   * The screen check parks a passing card there with "waiting for a person to approve the screenshots", and Autopilot
+   * closes it in the same step. A run that ended between the two left the card behind, and every card that depends on
+   * it waited on a person Autopilot is meant never to wait for. The board still has the last word: a card whose check
+   * no longer matches the working tree is refused and stays where it is, with the reason in the log.
+   */
+  private async settleScreenPassed(projectId: string, owner: number, board: StudioBoard, active: ActiveRun): Promise<boolean> {
+    const stranded = board.cards.filter((card) => card.status === 'review' && card.check?.visual === 'passed' && card.notes.includes(SCREEN_PASSED_NOTE));
+    let closed = false;
+    for (const card of stranded) {
+      if (active.controller.signal.aborted) break;
+      try {
+        await this.board.moveCard(projectId, card.id, 'done', 'Autopilot: the build check and the screen check passed.', 'check');
+        this.state(projectId).cardsDone += 1;
+        this.record(projectId, owner, 'card', `"${card.title}" is done: both checks had passed and it was waiting in review.`);
+        closed = true;
+      } catch (error) {
+        this.record(projectId, owner, 'warn', `"${card.title}" stays in review: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
+      }
+    }
+    return closed;
   }
 
   /**
