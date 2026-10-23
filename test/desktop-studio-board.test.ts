@@ -13,7 +13,7 @@ import {
   type StudioArtifacts,
 } from '../packages/contracts/src';
 import { StudioArtifacts, applyWrite, ensureBrief, markUserEdited } from '../apps/desktop/src/main/artifacts';
-import { StudioBoardStore, applyStaleness, doneBlockedBy, mergeDesign, promoteReady, type BoardPorts } from '../apps/desktop/src/main/board';
+import { StudioBoardStore, applyStaleness, doneBlockedBy, mergeDesign, promoteReady, releaseOrphanedWaits, type BoardPorts } from '../apps/desktop/src/main/board';
 import { SpecStore } from '../apps/desktop/src/main/spec-store';
 import { hashFile } from '../apps/desktop/src/main/verification';
 
@@ -206,9 +206,33 @@ describe('board rules', () => {
     const done = card({ id: 'a', status: 'done' });
     const waiting = card({ id: 'b', status: 'backlog', dependsOn: ['a'] });
     const later = card({ id: 'c', status: 'backlog', dependsOn: ['missing'] });
-    const promoted = promoteReady([done, waiting, later]);
+    const open = card({ id: 'd', status: 'review' });
+    const behindOpen = card({ id: 'e', status: 'backlog', dependsOn: ['d'] });
+    const promoted = promoteReady([done, waiting, later, open, behindOpen]);
     expect(promoted.find((item) => item.id === 'b')?.status).toBe('ready');
-    expect(promoted.find((item) => item.id === 'c')?.status).toBe('backlog');
+    // A card that is not on the board cannot be waited on, so it does not hold anything back; an open one does.
+    expect(promoted.find((item) => item.id === 'c')?.status).toBe('ready');
+    expect(promoted.find((item) => item.id === 'e')?.status).toBe('backlog');
+  });
+
+  it('frees a card that waits only on a card that is gone, and leaves other backlog cards alone', () => {
+    const board = {
+      schemaVersion: 1 as const,
+      revision: 3,
+      cards: [
+        card({ id: 'a', status: 'done' }),
+        card({ id: 'orphaned', status: 'backlog', dependsOn: ['a', 'gone'] }),
+        card({ id: 'parked', status: 'backlog', dependsOn: ['a'] }),
+        card({ id: 'open', status: 'review' }),
+        card({ id: 'held', status: 'backlog', dependsOn: ['open', 'gone'] }),
+      ],
+    };
+    const healed = releaseOrphanedWaits(board);
+    const status = (id: string) => healed.cards.find((item) => item.id === id)?.status;
+    expect(status('orphaned')).toBe('ready');
+    expect(status('parked')).toBe('backlog');
+    expect(status('held')).toBe('backlog');
+    expect(releaseOrphanedWaits(healed)).toBe(healed);
   });
 });
 

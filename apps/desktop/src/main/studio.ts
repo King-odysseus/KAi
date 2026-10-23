@@ -42,6 +42,7 @@ import {
   type StudioReadiness,
   type StudioRouteRepairResult,
   type UiCheckResult,
+  dependencyBlocks,
   lacksRoute,
 } from '@kai/contracts';
 import { loadProjectContext, parseJsonResponse, ReplyShapeError } from './learning-tutor';
@@ -1105,7 +1106,7 @@ export class DesktopStudio {
         let moved = false;
         cards = cards.map((card) => {
           if (card.status !== 'ready') return card;
-          if (!card.dependsOn.some((id) => current.get(id)?.status !== 'done')) return card;
+          if (!card.dependsOn.some((id) => dependencyBlocks(id, current))) return card;
           moved = true;
           changed = true;
           return { ...card, status: 'backlog' as const, updatedAt: this.ports.now() };
@@ -1121,7 +1122,7 @@ export class DesktopStudio {
         for (let pass = 0; pass < board.cards.length; pass += 1) {
           const current = await this.ports.board.read(projectId);
           const byId = new Map(current.cards.map((card) => [card.id, card]));
-          const wrong = current.cards.filter((card) => card.status === 'ready' && card.dependsOn.some((id) => byId.get(id)?.status !== 'done'));
+          const wrong = current.cards.filter((card) => card.status === 'ready' && card.dependsOn.some((id) => dependencyBlocks(id, byId)));
           if (wrong.length === 0) break;
           for (const card of wrong) {
             await this.ports.board.move(projectId, card.id, 'backlog', 'Wired into a feature change set; it waits on unfinished work.', 'agent');

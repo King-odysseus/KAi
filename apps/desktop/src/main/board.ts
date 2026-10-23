@@ -8,6 +8,7 @@ import {
   defaultNeeds,
   isUiCard,
   needsScreenCheck,
+  dependencyBlocks,
   readyCards,
   routeFromScreenName,
   isNonScreenName,
@@ -102,12 +103,32 @@ export function applyStaleness(cards: readonly BoardCard[], artifacts: readonly 
   });
 }
 
+/**
+ * Frees a backlog card that was only waiting on a card that is not on the board.
+ *
+ * Promotion happens when the board is written, and a card whose dependency was renamed or merged away is not
+ * written again, so it sat in the backlog for good and the last card of a finished board never ran. Read-side and
+ * in memory only, and only for a card with such a dependency: a card someone moved to the backlog on purpose, with
+ * every dependency present and done, is left where it is. The next write saves it.
+ */
+export function releaseOrphanedWaits(board: StudioBoard): StudioBoard {
+  const byId = new Map(board.cards.map((card) => [card.id, card]));
+  let changed = false;
+  const cards = board.cards.map((card) => {
+    if (card.status !== 'backlog' || !card.dependsOn.some((id) => !byId.has(id))) return card;
+    if (card.dependsOn.some((id) => dependencyBlocks(id, byId))) return card;
+    changed = true;
+    return { ...card, status: 'ready' as BoardStatus };
+  });
+  return changed ? { ...board, cards } : board;
+}
+
 /** A backlog card becomes ready once everything it depends on is done. Blocked and in-flight cards are left alone. */
 export function promoteReady(cards: readonly BoardCard[]): BoardCard[] {
   const byId = new Map(cards.map((card) => [card.id, card]));
   return cards.map((card) => {
     if (card.status !== 'backlog') return card;
-    const ready = card.dependsOn.every((id) => byId.get(id)?.status === 'done');
+    const ready = !card.dependsOn.some((id) => dependencyBlocks(id, byId));
     return ready ? { ...card, status: 'ready' as BoardStatus } : card;
   });
 }
@@ -282,7 +303,7 @@ export class StudioBoardStore {
     try {
       const parsed = studioBoardSchema.safeParse(JSON.parse(raw));
       // A hand-edited board is reported as empty rather than repaired: these are the user's files.
-      return parsed.success ? parsed.data : createStudioBoard();
+      return parsed.success ? releaseOrphanedWaits(parsed.data) : createStudioBoard();
     } catch {
       return createStudioBoard();
     }
@@ -311,7 +332,7 @@ export class StudioBoardStore {
     if (!BOARD_STATUSES.includes(status)) throw new Error(`Unknown board status ${status}.`);
     if (status === 'ready') {
       const byId = new Map(board.cards.map((item) => [item.id, item]));
-      const unmet = card.dependsOn.filter((id) => byId.get(id)?.status !== 'done');
+      const unmet = card.dependsOn.filter((id) => dependencyBlocks(id, byId));
       if (unmet.length > 0) {
         // Named by title, with where each one stands: a person who dragged this card is reading the message, and an id
         // like "scaffold" says nothing about what is in the way or what would clear it.

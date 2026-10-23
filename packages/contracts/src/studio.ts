@@ -283,12 +283,22 @@ export function createStudioBoard(): StudioBoard {
   return { schemaVersion: 1, revision: 0, cards: [] };
 }
 
+/**
+ * Whether a card's dependency stands in its way. A card that is not on the board cannot be waited on: it was renamed,
+ * merged into another or removed, and a wait that nothing can ever end left the card behind it queued for good (and
+ * the whole run stopped one card short of finished). Only a card that exists and is not done blocks.
+ */
+export function dependencyBlocks(id: string, byId: ReadonlyMap<string, Pick<BoardCard, 'status'>>): boolean {
+  const dependency = byId.get(id);
+  return dependency !== undefined && dependency.status !== 'done';
+}
+
 /** The cards an agent could pick up right now: `ready`, unclaimed, and every dependency already `done`. */
 export function readyCards(board: StudioBoard): BoardCard[] {
   const byId = new Map(board.cards.map((card) => [card.id, card]));
   return board.cards.filter((card) => {
     if (card.status !== 'ready' || card.claimedBy) return false;
-    return card.dependsOn.every((id) => byId.get(id)?.status === 'done');
+    return !card.dependsOn.some((id) => dependencyBlocks(id, byId));
   });
 }
 
