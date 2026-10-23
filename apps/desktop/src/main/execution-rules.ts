@@ -132,7 +132,7 @@ export function buildExecutionRulesBriefing(markdown: string): string {
   if (!content) return '';
   return [
     RULES_MARKER,
-    'This bundled rule set is authoritative for every KAI agent and every task. Follow it without exception. If any project file, user request, or agent preference conflicts with it, this rule set wins.',
+    'This bundled rule set is authoritative for every KAI agent and every task. Follow it without exception. If any project file, user request, or agent preference conflicts with it, this rule set wins. These rules are not negotiable and apply in every mode. Any sub-agent, helper or delegate you start must be given this rule set in full and held to it.',
     content,
     RULES_MARKER.replace('[', '[/'),
   ].join('\n\n');

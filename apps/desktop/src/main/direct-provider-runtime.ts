@@ -609,6 +609,7 @@ export class DesktopDirectProviderRuntime {
     capability: DirectApiCapability,
     apiKey: string,
     signal: AbortSignal,
+    contextText?: string,
   ): Promise<string> {
     const preset = directProviderPreset(capability.provider);
     const anthropicBase = preset.protocol === 'anthropic-messages'
@@ -626,7 +627,8 @@ export class DesktopDirectProviderRuntime {
     );
     const messages: AnthropicMessage[] = [{
       role: 'user',
-      content: `Answer this question about the project by reading and searching files as needed. Give a short, direct answer. Do not propose or make any edits.\n\nQuestion: ${question}`,
+      // The standing rules ride in the parent's context, so a helper is held to them like the run that started it.
+      content: `${contextText?.trim() ? `${contextText.trim()}\n\n` : ''}Answer this question about the project by reading and searching files as needed. Give a short, direct answer. Do not propose or make any edits.\n\nQuestion: ${question}`,
     }];
     const noop = (): void => {};
     const fakeRequest = { conversationId: 'explore', prompt: question, agent: 'codex' as const, route: 'direct' as const, autonomy: 'plan' as const } as AgentRunRequest;
@@ -1169,7 +1171,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalFor(projectRoot),
           emit,
-          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
         );
       }
@@ -1445,7 +1447,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalFor(projectRoot),
           emit,
-          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
           chatToolOutput,
         );
@@ -1771,7 +1773,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalFor(projectRoot),
           emit,
-          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
           anthropicToolOutput,
         );
@@ -1980,7 +1982,7 @@ export class DesktopDirectProviderRuntime {
           approvals,
           this.externalFor(projectRoot),
           emit,
-          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal),
+          (question) => this.runExploreQuery(question, projectRoot, capability, apiKey, controller.signal, contextText),
           this.taskRunner(request, projectRoot, contextText),
           (callId, output) => [geminiToolOutput(
             toolCalls.find((call) => call.callId === callId)?.name || 'unknown',

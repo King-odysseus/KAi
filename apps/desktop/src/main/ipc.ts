@@ -1826,7 +1826,7 @@ export async function runConversationAgent(
     agent: request.agent,
     type: 'notice',
     message: carryRules
-      ? 'Standing execution rules (57 rules from Cognitive1) were included in this turn.'
+      ? `Standing execution rules (${(authoritativeRules.match(/^\d+\.\s+\*\*/gm) ?? []).length} rules from Cognitive1) were included in this turn.`
       : 'Standing execution rules are already carried in this turn’s context, so they were not sent twice.',
   };
   const apiHistory = executionMode === 'api' && historyTurns.length > 0
