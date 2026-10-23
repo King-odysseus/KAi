@@ -16,6 +16,8 @@ interface Props {
   blocked: number;
   /** Cards Autopilot finished but could not check, which it can close once the project has a check. */
   unchecked?: number;
+  /** Cards sitting in review, which the backlog may be waiting on. */
+  inReview?: number;
   /** Another action on the screen is running, so starting is held back. */
   disabled: boolean;
 }
@@ -61,7 +63,7 @@ function remaining(iso: string, now: number): string {
 /** An interrupted run this recent is carried on by itself when the board is opened. */
 const AUTO_RESUME_WITHIN_MS = 15 * 60_000;
 
-export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked, unchecked = 0, disabled }: Props): ReactNode {
+export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked, unchecked = 0, inReview = 0, disabled }: Props): ReactNode {
   const status = useAutopilotStatus(projectId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -218,7 +220,9 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
   // ready to start.", said the same nothing in a different place.
   const blockedReason = blocked > 0
     ? `No card is ready: ${blocked} card${blocked === 1 ? ' is' : 's are'} blocked, and the other ${waiting} wait ${blocked === 1 ? 'on it' : 'on them'}. Put the blocked ones back in the queue, then start.`
-    : 'No card is ready yet: every card is waiting on another card that is not done.';
+    : inReview > 0
+      ? `No card is ready: ${waiting} wait on ${inReview} card${inReview === 1 ? '' : 's'} in review. Approve ${inReview === 1 ? 'it' : 'them'} on the board (or send back), then start.`
+      : 'No card is ready yet: every card is waiting on another card that is not done.';
   // A stalled board is the one case where the screen has something to say and nothing else to show, so the reason
   // goes in the line itself rather than behind a hover. Behind it: the run's own last message, or an honest wait.
   const stalled = !running && !hasWork;

@@ -3389,6 +3389,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 inProgress={board.cards.filter((card) => card.status === 'inProgress').length}
                 waiting={board.cards.filter((card) => card.status === 'backlog').length}
                 blocked={board.cards.filter((card) => card.status === 'blocked').length}
+                inReview={board.cards.filter((card) => card.status === 'review').length}
                 unchecked={board.cards.filter((card) => card.status === 'review' && !card.check && card.notes.includes('has no check command')).length}
                 // Design work in the same Studio does not hold Autopilot back: drawing happens in open-pencil, and the board's writes are
                 // checked against its revision. Anything else that edits the board still does.

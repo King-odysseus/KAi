@@ -3167,21 +3167,31 @@ export async function fetchWithHeaderTimeout(
   init: RequestInit & { signal: AbortSignal },
   timeoutMs: number = RESPONSE_HEADERS_TIMEOUT_MS,
 ): Promise<Response> {
-  // Only the wait for the response headers is timed. The body streams for as long as the model needs, and the
-  // combined signal stays attached to it, so the caller's own abort still stops the stream.
-  const slow = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    slow.abort();
-  }, timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: AbortSignal.any([init.signal, slow.signal]) });
-  } catch (error) {
-    if (timedOut && !init.signal.aborted) throw new Error(`The provider did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
-    throw error;
-  } finally {
-    clearTimeout(timer);
+  // A dropped connection ("fetch failed": reset, DNS, an idle socket the provider closed) rejects before any headers
+  // arrive, so the model never saw the request and sending it again is safe. One such drop used to end a whole run.
+  for (let attempt = 0; ; attempt += 1) {
+    // Only the wait for the response headers is timed. The body streams for as long as the model needs, and the
+    // combined signal stays attached to it, so the caller's own abort still stops the stream.
+    const slow = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      slow.abort();
+    }, timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: AbortSignal.any([init.signal, slow.signal]) });
+    } catch (error) {
+      if (timedOut && !init.signal.aborted) throw new Error(`The provider did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
+      const dropped = error instanceof TypeError && /fetch failed/i.test(error.message);
+      if (!dropped || init.signal.aborted || attempt >= 2) throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise<void>((resolve) => {
+      const wait = setTimeout(resolve, 1_500 * (attempt + 1));
+      init.signal.addEventListener('abort', () => { clearTimeout(wait); resolve(); }, { once: true });
+    });
+    if (init.signal.aborted) throw init.signal.reason ?? new Error('Cancelled.');
   }
 }
 
