@@ -1,53 +1,25 @@
-import type { AgentId, AutonomyMode, ConversationRecord, ExecutionMode, RouteMode } from '@kai/contracts';
-import type { WorkspaceSendOptions } from './Workspace';
-
-export interface QueuedPrompt {
-  id: string;
-  conversationId: string;
-  text: string;
-  options: WorkspaceSendOptions & {
-    agent: AgentId;
-    execution: ExecutionMode;
-    route: RouteMode;
-    autonomy: AutonomyMode;
-    model?: string;
-  };
-  status: 'queued' | 'sending' | 'blocked';
-  error?: string;
-}
+import { composerQueueSchema, queuedPromptSchema, type ComposerQueue, type QueuedPrompt, type ConversationRecord } from '@kai/contracts';
+export type { QueuedPrompt } from '@kai/contracts';
 
 export const QUEUE_KEY = 'kai.composer.queuedPrompts';
 
-export function loadComposerQueue(): Record<string, QueuedPrompt[]> {
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(QUEUE_KEY) ?? '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const queues: Record<string, QueuedPrompt[]> = {};
-    for (const [conversationId, items] of Object.entries(parsed)) {
-      if (!Array.isArray(items)) continue;
-      queues[conversationId] = items.flatMap((item: unknown) => {
-        if (!item || typeof item !== 'object') return [];
-        const record = item as Partial<QueuedPrompt>;
-        if (typeof record.id !== 'string' || typeof record.text !== 'string' || !record.options || typeof record.options !== 'object') return [];
-        // Older queues did not store execution choices; the dispatcher uses the current composer choice for them.
-        return [{ ...record, conversationId, status: record.status === 'blocked' ? 'blocked' : 'queued' } as QueuedPrompt];
-      });
-    }
-    return queues;
-  } catch {
-    return {};
+export function loadComposerQueue(): ComposerQueue {
+  const raw = window.localStorage.getItem(QUEUE_KEY);
+  if (!raw) return {};
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('The saved composer queue is not a valid queue object. It has been left in browser storage for recovery.');
+  const recovered: Record<string, QueuedPrompt[]> = {};
+  for (const [conversationId, items] of Object.entries(parsed)) {
+    if (!Array.isArray(items)) throw new Error(`The saved composer queue for ${conversationId} is invalid. It has been left in browser storage for recovery.`);
+    recovered[conversationId] = items.map((rawItem) => {
+      if (!rawItem || typeof rawItem !== 'object') throw new Error('A saved queued prompt is invalid. It has been left in browser storage for recovery.');
+      const item = { ...rawItem as object, conversationId, status: (rawItem as { status?: unknown }).status === 'blocked' ? 'blocked' : 'queued' };
+      const result = queuedPromptSchema.safeParse(item);
+      if (!result.success) throw new Error('A saved queued prompt does not match the current format. It has been left in browser storage for recovery.');
+      return result.data;
+    });
   }
-}
-
-export function saveComposerQueue(queues: Record<string, QueuedPrompt[]>): boolean {
-  // Images are already saved under KAI's attachments directory. Keep their paths, not multi-megabyte data URLs,
-  // in browser storage so a queued turn still survives a restart without exhausting the storage quota.
-  try {
-    window.localStorage.setItem(QUEUE_KEY, JSON.stringify(queues, (key, value) => key === 'dataUrl' ? undefined : value));
-    return true;
-  } catch {
-    return false;
-  }
+  return composerQueueSchema.parse(recovered);
 }
 
 /** A persisted user turn is the commit point; a recovered queue must not send it again. */

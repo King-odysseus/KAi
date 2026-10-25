@@ -1,4 +1,4 @@
-import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type PermissionRule, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
+import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type EvalResult, type PermissionRule, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
 import { Check, Play, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
@@ -342,6 +342,8 @@ function EvalsCard({ projectId }: { projectId: string }): ReactNode {
   const [prompt, setPrompt] = useState('');
   const [check, setCheck] = useState('');
   const [agents, setAgents] = useState<Record<string, Agent>>({});
+  const [comparisonAgents, setComparisonAgents] = useState<Record<string, Agent>>({});
+  const [comparison, setComparison] = useState<{ caseId: string; left: EvalResult; right: EvalResult } | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -368,10 +370,38 @@ function EvalsCard({ projectId }: { projectId: string }): ReactNode {
   async function run(caseId: string): Promise<void> {
     setRunning(caseId);
     setError(null);
+    setComparison(null);
     try {
       unwrap(await window.kaiDesktop.runEval({ caseId, projectId, agent: agents[caseId] ?? 'claude', execution: 'cli', route: 'direct' }));
       await reload();
     } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setRunning(null);
+    }
+  }
+
+  async function compare(caseId: string): Promise<void> {
+    const leftAgent = agents[caseId] ?? 'claude';
+    const rightAgent = comparisonAgents[caseId] ?? (leftAgent === 'claude' ? 'codex' : 'claude');
+    if (leftAgent === rightAgent) {
+      setError('Choose two different agents to compare.');
+      return;
+    }
+    setRunning(caseId);
+    setError(null);
+    setComparison(null);
+    try {
+      const runAgent = async (agent: Agent): Promise<EvalResult> => unwrap(await window.kaiDesktop.runEval({
+        caseId, projectId, agent, execution: 'cli', route: 'direct',
+      }));
+      // Each replay uses the eval's same pinned commit and a fresh disposable worktree.
+      const left = await runAgent(leftAgent);
+      const right = await runAgent(rightAgent);
+      setComparison({ caseId, left, right });
+      await reload();
+    } catch (caught) {
+      await reload();
       setError(errorText(caught));
     } finally {
       setRunning(null);
@@ -408,9 +438,24 @@ function EvalsCard({ projectId }: { projectId: string }): ReactNode {
                 <Select value={agents[item.id] ?? 'claude'} onChange={(event) => setAgents({ ...agents, [item.id]: event.target.value as Agent })}>
                   {AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </Select>
+                <Select aria-label={`Second agent to compare on ${item.name}`} value={comparisonAgents[item.id] ?? ((agents[item.id] ?? 'claude') === 'claude' ? 'codex' : 'claude')} onChange={(event) => setComparisonAgents({ ...comparisonAgents, [item.id]: event.target.value as Agent })}>
+                  {AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </Select>
                 <button type="button" className="secondary-button compact" disabled={running !== null} onClick={() => void run(item.id)}><Play size={14} /><span>{running === item.id ? 'Running' : 'Run'}</span></button>
+                <button type="button" className="secondary-button compact" disabled={running !== null} onClick={() => void compare(item.id)}><span>{running === item.id ? 'Comparing' : 'Compare both'}</span></button>
                 <button type="button" className="icon-button danger-button" aria-label={`Delete ${item.name}`} onClick={() => void remove(item.id, item.name)}><Trash2 size={14} /></button>
               </div>
+              {comparison?.caseId === item.id && (
+                <div className="eval-comparison" aria-label={`Comparison for ${item.name}`}>
+                  {[comparison.left, comparison.right].map((result) => (
+                    <div className="eval-comparison-result" key={result.id}>
+                      <strong>{result.agent}</strong>
+                      <span className={result.passed ? 'pass' : 'fail'}>{result.passed ? 'Passed' : result.agentCompleted ? 'Failed' : 'Errored'}</span>
+                      <small>{formatDuration(result.durationMs)} · {result.filesChanged} files · {result.costUsd === undefined ? 'cost unavailable' : `$${result.costUsd.toFixed(2)}`}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -14,6 +14,24 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('app:shared-state', handler);
     return () => ipcRenderer.removeListener('app:shared-state', handler);
   },
+  playwrightViewportStatus: () => ipcRenderer.invoke('playwright:viewport-status', {}),
+  repairPlaywrightViewport: () => ipcRenderer.invoke('playwright:viewport-repair', {}),
+  onPlaywrightViewportStatus: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: import('@kai/contracts').PlaywrightViewportStatus): void => listener(status);
+    ipcRenderer.on('app:playwright-viewport', handler);
+    return () => ipcRenderer.removeListener('app:playwright-viewport', handler);
+  },
+  loadComposerQueue: (legacy) => ipcRenderer.invoke('composer-queue:load', legacy ? { legacy } : {}),
+  addQueuedPrompt: (item, first) => ipcRenderer.invoke('composer-queue:add', { item, first }),
+  claimQueuedPrompt: (conversationId, id) => ipcRenderer.invoke('composer-queue:claim', { conversationId, id }),
+  updateQueuedPrompt: (input) => ipcRenderer.invoke('composer-queue:update', input),
+  holdQueuedPrompts: (error) => ipcRenderer.invoke('composer-queue:hold-all', { error }),
+  removeQueuedConversation: (conversationId) => ipcRenderer.invoke('composer-queue:remove-conversation', { conversationId }),
+  onComposerQueueChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, queue: import('@kai/contracts').ComposerQueue): void => listener(queue);
+    ipcRenderer.on('app:composer-queue-changed', handler);
+    return () => ipcRenderer.removeListener('app:composer-queue-changed', handler);
+  },
   serviceStatus: () => ipcRenderer.invoke('services:status', {}),
   startService: (kind) => ipcRenderer.invoke('services:start', { kind }),
   stopService: (kind) => ipcRenderer.invoke('services:stop', { kind }),

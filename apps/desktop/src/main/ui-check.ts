@@ -94,6 +94,12 @@ export interface UiCheckPorts {
   now(): string;
 }
 
+type UiCheckStatus = 'passed' | 'failed' | 'unknown' | 'not-applicable';
+
+function outcome(id: string, label: string, status: UiCheckStatus, detail = ''): UiCheckOutcome {
+  return { id, label, status, passed: status === 'passed' || status === 'not-applicable', detail };
+}
+
 /** The screenshot request for one card: every width, every theme, so no combination is judged by eye alone. */
 export function uiCheckShots(card: BoardCard): Array<{ viewport: UiCheckViewport; theme: UiCheckTheme }> {
   return UI_CHECK_VIEWPORTS.flatMap((viewport) => UI_CHECK_THEMES.map((theme) => ({ viewport, theme })));
@@ -112,47 +118,49 @@ export function evaluateUiChecks(card: BoardCard, facts: UiDomFacts, tokens: Rec
   const outcomes: UiCheckOutcome[] = [];
 
   const missingStates = UI_REQUIRED_STATES.filter((state) => !facts.states.includes(state));
-  outcomes.push({
-    id: 'states',
-    label: 'Shows empty, loading, error and disabled states',
-    passed: missingStates.length === 0,
-    detail: missingStates.length === 0 ? '' : `Missing: ${missingStates.join(', ')}.`,
-  });
+  outcomes.push(outcome(
+    'states',
+    'Declares hooks for empty, loading, error and disabled states',
+    missingStates.length === 0 ? 'passed' : 'unknown',
+    missingStates.length === 0
+      ? 'State behavior was not exercised; this check only found the declared state hooks.'
+      : `Could not verify all required state hooks. Missing: ${missingStates.join(', ')}.`,
+  ));
 
   const tokenNames = tokens ? Object.keys(tokens) : [];
   const mismatched = tokenNames.filter((name) => facts.tokens[name] !== tokens![name]);
-  outcomes.push({
-    id: 'tokens',
-    label: 'Colours and spacing match the design tokens',
-    passed: mismatched.length === 0,
-    detail: mismatched.length === 0
-      ? ''
+  outcomes.push(outcome(
+    'tokens',
+    'Colours and spacing match the design tokens',
+    tokenNames.length === 0 ? 'unknown' : mismatched.length === 0 ? 'passed' : 'failed',
+    tokenNames.length === 0
+      ? 'Could not compare tokens because the project has no readable token definitions.'
       : mismatched.map((name) => `${name}: expected ${tokens![name]}, found ${facts.tokens[name] ?? 'nothing'}`).join('; '),
-  });
+  ));
 
-  const sideways = facts.phoneScrollWidth > facts.phoneClientWidth + 1;
-  outcomes.push({
-    id: 'phone-no-scroll',
-    label: 'No sideways scroll at phone width',
-    passed: !sideways,
-    detail: sideways ? `The page is ${facts.phoneScrollWidth}px wide in a ${facts.phoneClientWidth}px viewport.` : '',
-  });
+  const phoneLayout = facts.layouts?.phone;
+  const sideways = phoneLayout ? phoneLayout.scrollWidth > phoneLayout.clientWidth + 1 : false;
+  outcomes.push(outcome(
+    'phone-no-scroll',
+    'No sideways scroll at phone width',
+    !phoneLayout ? 'unknown' : sideways ? 'failed' : 'passed',
+    !phoneLayout
+      ? 'Could not verify sideways scrolling because no phone viewport measurement is available.'
+      : sideways ? `The page is ${phoneLayout.scrollWidth}px wide in a ${phoneLayout.clientWidth}px viewport.` : '',
+  ));
 
-  outcomes.push({
-    id: 'keyboard',
-    label: 'Reachable with the keyboard',
-    passed: facts.tabbables > 0,
-    detail: facts.tabbables > 0 ? '' : 'Tabbing through the screen reached no focusable element.',
-  });
+  outcomes.push(outcome(
+    'keyboard',
+    'Has visible keyboard focus targets',
+    facts.tabbables > 0 ? 'passed' : 'unknown',
+    facts.tabbables > 0
+      ? `Found ${facts.tabbables} potential focus targets; tab order and activation were not exercised.`
+      : 'Could not verify keyboard behavior because no visible focus targets were found.',
+  ));
 
   if (card.kind === 'page' || card.kind === 'flow') {
-    const followed = facts.landedRoute === route;
-    outcomes.push({
-      id: 'flow',
-      label: 'The route follows its flow',
-      passed: followed,
-      detail: followed ? '' : `Following the flow landed on ${facts.landedRoute || 'nowhere'}, not ${route}.`,
-    });
+    const loaded = facts.landedRoute === route;
+    outcomes.push(outcome('route', 'Requested route loads', loaded ? 'passed' : 'failed', loaded ? '' : `Opened ${route}, but observed ${facts.landedRoute || 'no route'}.`));
   }
 
   outcomes.push(...evaluateLayoutChecks(facts.layouts));
@@ -168,38 +176,44 @@ export function evaluateLayoutChecks(layouts: UiDomFacts['layouts']): UiCheckOut
   const phone = layouts?.phone;
   const wide = layouts?.wide;
 
+  if (!phone) outcomes.push(outcome('phone-layout', 'Phone layout was measured', 'unknown', 'No phone viewport measurements are available.'));
+  if (!wide) outcomes.push(outcome('wide-layout', 'Wide layout was measured', 'unknown', 'No wide viewport measurements are available.'));
+
   if (phone) {
-    outcomes.push({
-      id: 'viewport-meta',
-      label: 'Declares the viewport for phones',
-      passed: phone.hasViewportMeta,
-      detail: phone.hasViewportMeta ? '' : 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> to the page, or a phone shows a shrunken desktop layout.',
-    });
+    outcomes.push(outcome(
+      'viewport-meta',
+      'Declares the viewport for phones',
+      phone.hasViewportMeta ? 'passed' : 'failed',
+      phone.hasViewportMeta ? '' : 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> to the page, or a phone shows a shrunken desktop layout.',
+    ));
 
     // Only a page that has navigation can lose it. A sign-in screen with none is not failed for that.
     if (phone.navCount > 0) {
-      outcomes.push({
-        id: 'phone-nav',
-        label: 'Navigation stays visible on a phone',
-        passed: phone.navVisibleAtTop && phone.navVisibleAtBottom,
-        detail: phone.navVisibleAtTop && phone.navVisibleAtBottom
-          ? ''
-          : !phone.navVisibleAtTop
-            ? 'The navigation is hidden at phone width, behind a menu button or removed. Show a bottom tab bar of 3 to 5 items instead.'
-            : 'The navigation scrolls out of sight. Make the bar position: fixed or sticky at the bottom, and let the content scroll behind it.',
-      });
+      const visible = phone.navVisibleAtTop && phone.navVisibleAtBottom;
+      outcomes.push(outcome(
+        'phone-nav',
+        'Navigation stays visible on a phone',
+        visible ? 'passed' : 'failed',
+        visible ? '' : !phone.navVisibleAtTop
+          ? 'The navigation is hidden at phone width, behind a menu button or removed. Show a bottom tab bar of 3 to 5 items instead.'
+          : 'The navigation scrolls out of sight. Make the bar position: fixed or sticky at the bottom, and let the content scroll behind it.',
+      ));
+    } else {
+      outcomes.push(outcome('phone-nav', 'Navigation stays visible on a phone', 'not-applicable', 'No navigation landmark was found.'));
     }
 
     if (phone.fixedNavTop !== null && phone.contentBottomAtScrollEnd !== null) {
       const covered = phone.contentBottomAtScrollEnd > phone.fixedNavTop + 1;
-      outcomes.push({
-        id: 'phone-content-clear',
-        label: 'The last item is not covered by the bottom bar',
-        passed: !covered,
-        detail: covered
+      outcomes.push(outcome(
+        'phone-content-clear',
+        'The last item is not covered by the bottom bar',
+        covered ? 'failed' : 'passed',
+        covered
           ? `At the end of the scroll the content reaches ${Math.round(phone.contentBottomAtScrollEnd)}px but the bar starts at ${Math.round(phone.fixedNavTop)}px. Give the scrolling area padding-bottom of at least the bar height plus env(safe-area-inset-bottom).`
           : '',
-      });
+      ));
+    } else {
+      outcomes.push(outcome('phone-content-clear', 'The last item is not covered by the bottom bar', 'not-applicable', 'No fixed or sticky bottom navigation was found.'));
     }
   }
 
@@ -207,14 +221,16 @@ export function evaluateLayoutChecks(layouts: UiDomFacts['layouts']): UiCheckOut
     const leftGap = wide.headerLeft;
     const rightGap = wide.innerWidth - wide.headerRight;
     const short = !wide.headerBacked && (leftGap > wide.innerWidth * 0.03 || rightGap > wide.innerWidth * 0.03);
-    outcomes.push({
-      id: 'wide-header-spans',
-      label: `The top bar spans a ${wide.innerWidth}px screen`,
-      passed: !short,
-      detail: short
+    outcomes.push(outcome(
+      'wide-header-spans',
+      `The top bar spans a ${wide.innerWidth}px screen`,
+      short ? 'failed' : 'passed',
+      short
         ? `At ${wide.innerWidth}px wide the top bar runs from ${Math.round(wide.headerLeft)}px to ${Math.round(wide.headerRight)}px, leaving ${Math.round(leftGap)}px on the left and ${Math.round(rightGap)}px on the right bare. Make the header full width (width: 100%, no max-width on the bar itself) and put any max-width on the content inside it.`
         : '',
-    });
+    ));
+  } else if (wide) {
+    outcomes.push(outcome('wide-header-spans', 'The top bar spans the wide screen', 'not-applicable', 'No top bar was detected.'));
   }
 
   if (wide && wide.contentLeft !== null && wide.contentRight !== null) {
@@ -223,14 +239,16 @@ export function evaluateLayoutChecks(layouts: UiDomFacts['layouts']): UiCheckOut
     // A centred column has equal gaps and passes. A column against one edge leaves a strip on the other, and that
     // strip is what a large screen showed as unused space.
     const lopsided = rightGap > wide.innerWidth * 0.3 && rightGap > leftGap * 2 + 48;
-    outcomes.push({
-      id: 'wide-fills',
-      label: `Uses the width of a ${wide.innerWidth}px screen`,
-      passed: !lopsided,
-      detail: lopsided
+    outcomes.push(outcome(
+      'wide-fills',
+      `Uses the width of a ${wide.innerWidth}px screen`,
+      lopsided ? 'failed' : 'passed',
+      lopsided
         ? `At ${wide.innerWidth}px wide the content ends at ${Math.round(wide.contentRight)}px, leaving ${Math.round(rightGap)}px empty on the right and ${Math.round(leftGap)}px on the left. Centre it in a max-width container, or let the layout grow into columns.`
         : '',
-    });
+    ));
+  } else if (wide) {
+    outcomes.push(outcome('wide-fills', 'Uses the width of the wide screen', 'unknown', 'The probe could not locate visible page content at the wide viewport.'));
   }
 
   return outcomes;
@@ -261,7 +279,10 @@ export class DesktopUiCheck {
     return uiCheckResultSchema.parse({
       cardId: card.id,
       at,
-      passed: outcomes.every((outcome) => outcome.passed),
+      passed: outcomes.every((item) => {
+        const status = item.status ?? (item.passed ? 'passed' : 'failed');
+        return status === 'passed' || status === 'not-applicable';
+      }),
       route,
       outcomes,
       screenshots,
@@ -296,9 +317,12 @@ export function joinUrl(base: string, route: string): string {
 
 /** The one line a failed card is handed back with, so the agent knows what to repair rather than that it failed. */
 export function failureSummary(result: UiCheckResult): string {
-  const failed = result.outcomes.filter((outcome) => !outcome.passed);
+  const failed = result.outcomes.filter((item) => {
+    const status = item.status ?? (item.passed ? 'passed' : 'failed');
+    return status !== 'passed' && status !== 'not-applicable';
+  });
   if (failed.length === 0) return '';
-  return failed.map((outcome) => `${outcome.label}${outcome.detail ? ` — ${outcome.detail}` : ''}`).join('\n');
+  return failed.map((item) => `${item.status === 'unknown' ? 'Could not verify' : 'Failed'}: ${item.label}${item.detail ? ` — ${item.detail}` : ''}`).join('\n');
 }
 
 // --- Wiring the ports to the real browser -----------------------------------------------------------------
@@ -313,7 +337,13 @@ export const UI_PROBE_SCRIPT = `(() => {
   const tokens = {};
   const styles = getComputedStyle(document.documentElement);
   for (const name of (window.__KAI_TOKENS__ || [])) tokens[name] = styles.getPropertyValue(name).trim();
-  const tabbables = document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])').length;
+  const tabbables = [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return el.tabIndex >= 0 && !el.disabled && !el.closest('[inert], [aria-hidden="true"]') &&
+        style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+    }).length;
   return {
     route: location.pathname,
     states: [...new Set([...stateNodes, ...declared])].filter(Boolean),
@@ -531,14 +561,14 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
    * browser changes nothing in it. A check at 390px wide used to leave the tab someone was looking at pinned at a phone
    * width, in the corner of a large window. The pin is on the tab, so a tab opened for the check and closed after takes
    * the pin with it — and the colour-scheme override that goes with it — and the tab anyone else is using is never
-   * touched. If a tab cannot be opened the check carries on in the current one, as it always did.
+   * touched. If a tab cannot be opened, the check fails instead of resizing somebody else's tab.
    */
   const inOwnTab = async <T>(work: () => Promise<T>): Promise<T> => {
-    const opened = await mcpCall('browser_tabs', { action: 'new' }).then(() => true, () => false);
+    await mcpCall('browser_tabs', { action: 'new' });
     try {
       return await work();
     } finally {
-      if (opened) await mcpCall('browser_tabs', { action: 'close' }).catch(() => undefined);
+      await mcpCall('browser_tabs', { action: 'close' }).catch(() => undefined);
     }
   };
   return {
@@ -573,13 +603,15 @@ export function playwrightUiCheckPorts(runtime: UiCheckRuntime, now: () => strin
     },
 
     async probe({ url }) {
-      await mcpCall('browser_navigate', { url });
-      const blocks = await mcpCall('browser_evaluate', { function: UI_PROBE_SCRIPT });
-      const text = (blocks ?? []).flatMap((block) => {
-        const record = block as Record<string, unknown> | null;
-        return record && record.type === 'text' && typeof record.text === 'string' ? [record.text] : [];
-      }).join('');
-      return parseProbe(text);
+      return inOwnTab(async () => {
+        await mcpCall('browser_navigate', { url });
+        const blocks = await mcpCall('browser_evaluate', { function: UI_PROBE_SCRIPT });
+        const text = (blocks ?? []).flatMap((block) => {
+          const record = block as Record<string, unknown> | null;
+          return record && record.type === 'text' && typeof record.text === 'string' ? [record.text] : [];
+        }).join('');
+        return parseProbe(text);
+      });
     },
 
     async tokens(projectPath) {

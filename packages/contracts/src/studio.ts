@@ -205,7 +205,7 @@ export const cardCheckSchema = z
     runId: z.string().min(1),
     at: z.string().min(1),
     /** The visual check's pass, for `component` and `page` cards; null for the rest. */
-    visual: z.enum(['passed', 'failed', 'skipped']).nullable(),
+    visual: z.enum(['passed', 'failed', 'unknown', 'skipped']).nullable(),
     screenshots: z.array(z.string()).default([]),
     /** Evidence attached to each acceptance criterion. Optional for boards written before criterion evidence existed. */
     acceptanceEvidence: z.array(z.object({
@@ -399,6 +399,8 @@ export const uiCheckOutcomeSchema = z
     id: z.string().min(1).max(60),
     label: z.string().min(1).max(200),
     passed: z.boolean(),
+    /** Older saved results omit this; new checks distinguish failures from checks that were not run. */
+    status: z.enum(['passed', 'failed', 'unknown', 'not-applicable']).optional(),
     detail: z.string().max(600).default(''),
   })
   .strict();

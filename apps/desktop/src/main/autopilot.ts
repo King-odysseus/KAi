@@ -21,6 +21,7 @@ import type {
 import { boardCardPrompt } from './board-brief';
 import { cooldownMs, detectRateLimit, RequestPacer, sleepAbortable } from './rate-limit';
 import type { ParallelSession } from './parallel-session';
+import { stylesheetVerdict } from './stylesheet-guard';
 
 /** Who the board shows as holding a card Autopilot is working, so a restart can pick the same card back up. */
 export const AUTOPILOT_AGENT = 'Autopilot';
@@ -292,6 +293,11 @@ export interface AutopilotPorts {
    */
   checkDev(projectId: string, routes: readonly string[], signal: AbortSignal): Promise<DevCheckResult>;
   changedFilesFor(projectId: string): Promise<string[]>;
+  /**
+   * Every stylesheet in the project, as relative paths. The one-stylesheet rule is checked against two of these
+   * listings taken around a card's work. Optional, so a test needs no disk and a runner without it skips the check.
+   */
+  listStylesheets?(projectId: string): Promise<string[]>;
   /** Turns request pacing on for the Direct API runtime while a job runs, and off again after. */
   setPacer(pacer: RequestPacer | undefined): void;
   announce(ownerWindowId: number, status: AutopilotStatus): void;
@@ -484,6 +490,12 @@ class Slots {
 export class DesktopAutopilot {
   private readonly runs = new Map<string, ActiveRun>();
   private readonly statuses = new Map<string, AutopilotStatus>();
+  /**
+   * The stylesheets each card found when it started, so the ones it added can be told apart from the ones the project
+   * already had. Held per card because cards run side by side, and by the time a card is checked another card's work
+   * may already be in the project.
+   */
+  private readonly stylesheetsBefore = new Map<string, string[]>();
 
   constructor(private readonly ports: AutopilotPorts) {}
 
@@ -529,6 +541,8 @@ export class DesktopAutopilot {
     const settings = await this.ports.settings();
     const label = AUTOPILOT_AGENT;
     const active: ActiveRun = { controller: new AbortController(), ownerWindowId, conversations: new Set(), restUntil: 0, held: 0, serialOnly: false, copyFailures: 0, waves: 0, doneAtStart: board.cards.filter((item) => item.status === 'done').length, done: Promise.resolve(), opened: false, blocked: [], completed: 0, spend: new Map(), titles: new Map(), clashFiles: new Map(), closedSpends: [], restarts: 0, problemStreak: 0, preflighted: false };
+    // Baselines belong to the cards of this run; a card retried in a later run is measured against the project then.
+    this.stylesheetsBefore.clear();
     this.runs.set(input.projectId, active);
     const state = this.fresh(input.projectId, board);
     this.statuses.set(input.projectId, state);
@@ -795,6 +809,8 @@ export class DesktopAutopilot {
       return;
     }
     if (!carried) await this.holdCard(input, label, card, active);
+    // Taken before the agent's first turn, so the stylesheets it adds are the only difference later.
+    await this.noteStylesheets(projectId, card);
 
     let failure = carried?.failure ?? '';
     // How many attempts were actually made, which is fewer than the limit when the card is given up on early.
@@ -891,6 +907,7 @@ export class DesktopAutopilot {
     const cost = active.spend.get(card.id);
     this.record(projectId, owner, 'card', `"${card.title}" is done.${cost ? ` It cost about $${cost.toFixed(2)}.` : ''}`);
     this.counts(projectId, await this.ports.board(projectId));
+    this.stylesheetsBefore.delete(card.id);
     return { outcome: 'done', failure: '', repeated: false, costly: false };
   }
 
@@ -904,6 +921,7 @@ export class DesktopAutopilot {
       ? `, after it had cost about $${costlyUsd.toFixed(2)}, far more than the cards that did pass`
       : attemptsMade < input.attemptsPerCard ? ', the same failure each time' : '';
     await this.board.moveCard(projectId, card.id, 'blocked', `Autopilot gave up after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}${why}. ${failure}`.slice(0, 3_900), 'agent');
+    this.stylesheetsBefore.delete(card.id);
     await this.endCard(projectId, active);
     active.blocked.push({ id: card.id, reason: failure });
     state.cardsBlocked += 1;
@@ -1141,6 +1159,9 @@ export class DesktopAutopilot {
             return false;
           }
         }
+        // Taken once, before any attempt: a copy starts from the project, and a failed attempt is taken back out of it,
+        // so the listing from before the first turn stays the right one to compare against.
+        await this.noteStylesheets(projectId, card);
         made = await this.attemptInCopy(input, settings, card, attempt, failure, command, active, carry);
       } finally {
         release();
@@ -1382,11 +1403,39 @@ export class DesktopAutopilot {
     return worked > 0;
   }
 
+  /** The stylesheets the project holds now, remembered as the baseline for one card. Never overwrites an earlier one. */
+  private async noteStylesheets(projectId: string, card: BoardCard): Promise<void> {
+    if (!this.ports.listStylesheets || this.stylesheetsBefore.has(card.id)) return;
+    const before = await this.ports.listStylesheets(projectId).catch(() => null);
+    if (before) this.stylesheetsBefore.set(card.id, before);
+  }
+
+  /**
+   * What the one-stylesheet rule has to say about this card, in the words the agent is given back, or nothing.
+   *
+   * Read from the project rather than from the card's own copy: what matters is what the merge left behind. A card
+   * with no baseline is not judged — that is a card picked up from review after a restart, whose "before" is gone.
+   */
+  private async stylesheetFailure(projectId: string, card: BoardCard): Promise<string> {
+    const before = this.stylesheetsBefore.get(card.id);
+    if (!before || !this.ports.listStylesheets) return '';
+    const after = await this.ports.listStylesheets(projectId).catch(() => null);
+    if (!after) return '';
+    return stylesheetVerdict(before, after).message;
+  }
+
   /**
    * Runs the check for one card and, when it passes, closes the card: the build check, then the screen check for a
    * card that has a screen. The board has the last word, as ever: a card it will not close comes back with its reason.
    */
   private async checkAndClose(projectId: string, owner: number, label: string, card: BoardCard, command: string, signal: AbortSignal): Promise<{ closed: boolean; failure: string }> {
+    // Before the project's own check, which is the expensive part: a card that grew the stylesheet count is sent back
+    // with the reason now, and the next attempt starts from a copy that still holds its own work.
+    const stylesheet = await this.stylesheetFailure(projectId, card);
+    if (stylesheet) {
+      this.record(projectId, owner, 'check', `"${card.title}" added a stylesheet the project does not keep.`);
+      return { closed: false, failure: stylesheet };
+    }
     this.phase(projectId, owner, 'checking', `Checking "${card.title}".`);
     const check = await this.timed(projectId, 'checkMs', () => this.steadyCheck(projectId, command, signal));
     if (!check.passed || !check.runId) {

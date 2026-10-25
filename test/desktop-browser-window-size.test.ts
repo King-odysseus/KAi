@@ -103,6 +103,15 @@ describe('keeping the shared browser\'s window usable after a check', () => {
     expect(original(b.tabs)?.pinned).toBeNull();
   });
 
+  it('runs the DOM probe in its own tab without navigating the visible tab', async () => {
+    const b = browser();
+    await playwrightUiCheckPorts(b.runtime, () => NOW).probe({ url: 'http://x', card: card() });
+    expect(b.calls.map((call) => call.tool === 'browser_tabs' ? `tabs:${String(call.input.action)}` : call.tool)).toEqual([
+      'tabs:new', 'browser_navigate', 'browser_evaluate', 'tabs:close',
+    ]);
+    expect(b.tabs).toHaveLength(1);
+  });
+
   it('opens a fresh tab for each of several checks and closes every one', async () => {
     const b = browser();
     const ports = playwrightUiCheckPorts(b.runtime, () => NOW);
@@ -111,19 +120,17 @@ describe('keeping the shared browser\'s window usable after a check', () => {
     expect(b.tabs).toHaveLength(1);
   });
 
-  it('carries on in the current tab, as it always did, when a new one cannot be opened', async () => {
+  it('refuses to resize the current tab when a new one cannot be opened', async () => {
     const b = browser({ cannotOpenTabs: true });
-    const data = await playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://x', viewport: phone, theme: 'light', card: card() });
-    expect(data).toBe('AAAA');
-    // Nothing was opened, so nothing is closed: the tab the person is looking at is not closed out from under them.
-    expect(b.calls.some((call) => call.tool === 'browser_tabs' && call.input.action === 'close')).toBe(false);
+    await expect(playwrightUiCheckPorts(b.runtime, () => NOW).capture({ url: 'http://x', viewport: phone, theme: 'light', card: card() })).rejects.toThrow('no new tabs');
+    expect(b.calls.map((call) => call.tool)).toEqual(['browser_tabs']);
     expect(b.tabs).toHaveLength(1);
   });
 
   it('tells agents to resize only in a tab of their own and to close it, which removes the fixed size', () => {
-    const rule = BROWSER_RULES.find((line) => line.includes('browser_resize fixes a tab'));
+    const rule = BROWSER_RULES.find((line) => line.includes('browser_resize fixes the page viewport'));
     expect(rule).toBeDefined();
-    expect(rule).toContain('maximising the browser changes nothing');
-    expect(rule).toContain('action "close"');
+    expect(rule).toContain('Maximising Chrome will then leave empty space');
+    expect(rule).toContain('Never call browser_resize on the preview tab');
   });
 });

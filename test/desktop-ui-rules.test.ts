@@ -34,19 +34,19 @@ describe('the rules for building a screen', () => {
   it('give each agent a tab of its own in a shared browser, and keep it to that one tab', () => {
     const text = BROWSER_RULES.join('\n');
     expect(text).toContain('browser_tabs, action "list"');
-    expect(text).toMatch(/other agents are using this browser/);
+    expect(text).toMatch(/then open your own preview tab/);
     expect(text).toContain('action "new"');
     expect(text).toMatch(/Never navigate, resize or close a tab that is not yours/);
     expect(text).toContain('browser_resize');
-    expect(text).toMatch(/Do not open a second tab or window to compare sizes/);
+    expect(text).toMatch(/Check sizes one at a time/);
   });
 
-  it('tell an agent to close the tab it opened, and not to try to close the shared browser', () => {
+  it('keep the preview tab unresized and close temporary check tabs', () => {
     const text = BROWSER_RULES.join('\n');
-    expect(text).toMatch(/close the tab you opened/);
+    expect(text).toMatch(/Keep the preview tab unresized/);
+    expect(text).toMatch(/close every temporary resized tab/);
     expect(text).toContain('Do not call browser_close');
-    // The old advice, to leave the one tab open, would leave a tab behind for every card.
-    expect(text).not.toContain('Leave the single tab open');
+    expect(text).toMatch(/Leave that preview tab available for the person to inspect/);
   });
 
   it('apply to cards that draw something, and to no others', () => {

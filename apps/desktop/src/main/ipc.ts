@@ -158,6 +158,8 @@ import type { DesktopCodeGuideService } from './code-guide-service';
 import type { StudioStyleReferenceStore } from './style-references';
 import type { EqualizerService } from './equalizer';
 import { resolveInside } from './project-files';
+import { ComposerQueueStore } from './composer-queue-store';
+import type { PlaywrightViewportStatus } from '@kai/contracts';
 import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
 import { brainGitStatus, syncBrainGit } from './brain-git';
@@ -197,6 +199,9 @@ export interface IpcContext {
   projects: ProjectStore;
   preferences: ProjectPreferenceStore;
   conversations: ConversationStore;
+  composerQueue: ComposerQueueStore;
+  playwrightViewportStatus(): Promise<PlaywrightViewportStatus>;
+  repairPlaywrightViewport(): Promise<PlaywrightViewportStatus>;
   /** What the paid runs have cost, kept up to date as conversations are saved, so no run has to load them all to check the budget. */
   usageLedger?: UsageLedger;
   credentials: CredentialVault;
@@ -364,6 +369,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   };
 
   handle(context, 'app:get-bootstrap', async (_input, request) => createBootstrap(context, request.session));
+  handle(context, 'playwright:viewport-status', async () => context.playwrightViewportStatus());
+  handle(context, 'playwright:viewport-repair', async () => context.repairPlaywrightViewport());
   handle(context, 'projects:choose', async (_input, request) => chooseProject(context, request.session));
   handle(context, 'projects:open', async ({ id }, request) => openProject(context, id, request.session));
   handle(context, 'projects:remove', async ({ id }, request) => removeProject(context, id, request.session));
@@ -770,6 +777,36 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     return status;
   });
   handle(context, 'conversations:list', async () => context.conversations.list());
+  handle(context, 'composer-queue:load', async ({ legacy }) => {
+    const queue = await context.composerQueue.loadOrMigrate(legacy);
+    context.windows.broadcast('app:composer-queue-changed', queue);
+    return queue;
+  });
+  handle(context, 'composer-queue:add', async ({ item, first }) => {
+    const queue = await context.composerQueue.add(item, first);
+    context.windows.broadcast('app:composer-queue-changed', queue);
+    return queue;
+  });
+  handle(context, 'composer-queue:claim', async ({ conversationId, id }) => {
+    const result = await context.composerQueue.claim(conversationId, id);
+    if (result.claimed) context.windows.broadcast('app:composer-queue-changed', result.queue);
+    return result;
+  });
+  handle(context, 'composer-queue:update', async ({ conversationId, id, action, error }) => {
+    const queue = await context.composerQueue.update(conversationId, id, action, error);
+    context.windows.broadcast('app:composer-queue-changed', queue);
+    return queue;
+  });
+  handle(context, 'composer-queue:hold-all', async ({ error }) => {
+    const queue = await context.composerQueue.holdAll(error);
+    context.windows.broadcast('app:composer-queue-changed', queue);
+    return queue;
+  });
+  handle(context, 'composer-queue:remove-conversation', async ({ conversationId }) => {
+    const queue = await context.composerQueue.removeConversation(conversationId);
+    context.windows.broadcast('app:composer-queue-changed', queue);
+    return queue;
+  });
   handle(context, 'conversations:get', async ({ id }) => context.conversations.get(id));
   handle(context, 'conversations:create', async ({ projectId, firstPrompt }, request) => {
     const now = new Date().toISOString();
@@ -814,6 +851,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
       await finishMemorySession(context, id, `Session closed when conversation "${conversation.title}" was deleted.`);
     }
     await context.conversations.remove(id);
+    const queue = await context.composerQueue.removeConversation(id);
+    context.windows.broadcast('app:composer-queue-changed', queue);
   });
   handle(context, 'checkpoints:review', async ({ conversationId, turnId }) => reviewCheckpoint(context, conversationId, turnId));
   handle(context, 'checkpoints:reject', async ({ conversationId, turnId, filePath }) => rejectCheckpointFile(context, conversationId, turnId, filePath));

@@ -107,7 +107,7 @@ export function createEqualizerPorts(
     async openPage(url, width): Promise<CapturedPage> {
       // In a tab of its own, closed after: a resize pins the page at that size and it would stay pinned, so the tab
       // someone is looking at is never the one resized.
-      const opened = await browser('browser_tabs', { action: 'new' }).then(() => true, () => false);
+      await browser('browser_tabs', { action: 'new' });
       try {
         await browser('browser_navigate', { url });
         await browser('browser_resize', { width, height: BROWSER_HEIGHT });
@@ -123,7 +123,7 @@ export function createEqualizerPorts(
         }
         return { png: Buffer.from(data, 'base64'), facts };
       } finally {
-        if (opened) await browser('browser_tabs', { action: 'close' }).catch(() => undefined);
+        await browser('browser_tabs', { action: 'close' }).catch(() => undefined);
       }
     },
 

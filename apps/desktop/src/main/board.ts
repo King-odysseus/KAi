@@ -302,10 +302,15 @@ export class StudioBoardStore {
     if (raw === null) return createStudioBoard();
     try {
       const parsed = studioBoardSchema.safeParse(JSON.parse(raw));
-      // A hand-edited board is reported as empty rather than repaired: these are the user's files.
-      return parsed.success ? releaseOrphanedWaits(parsed.data) : createStudioBoard();
-    } catch {
-      return createStudioBoard();
+      if (!parsed.success) {
+        throw new Error(`The Studio board at ${STUDIO_BOARD_PATH} does not match the expected format (${parsed.error.issues[0]?.message ?? 'invalid board data'}). The file was left untouched.`);
+      }
+      return releaseOrphanedWaits(parsed.data);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(`The Studio board at ${STUDIO_BOARD_PATH} contains invalid JSON. The file was left untouched; restore or repair it before continuing.`);
+      }
+      throw error;
     }
   }
 

@@ -26,6 +26,7 @@ import type {
   SetupCheck,
   SetupStatus,
   SkillSummary,
+  PlaywrightViewportStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
 import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
@@ -72,7 +73,7 @@ import { rememberAgentChoice, rememberedAgentChoice, startupAgentChoice } from '
 import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
 import { matchingShortcutAction, shortcutLabel, shortcutsWithDefaults } from './shortcuts';
-import { loadComposerQueue, queuedPromptWasAccepted, saveComposerQueue, QUEUE_KEY, type QueuedPrompt } from './components/composer-queue';
+import { loadComposerQueue, queuedPromptWasAccepted, QUEUE_KEY, type QueuedPrompt } from './components/composer-queue';
 
 const emptyCredentials: CredentialStatus = { available: false, ids: [] };
 
@@ -349,7 +350,10 @@ export function App(): ReactNode {
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>(loadComposerDrafts);
   const [composerContexts, setComposerContexts] = useState<Record<string, ComposerContextDraft>>(loadComposerContexts);
   const [composerSelections, setComposerSelections] = useState<Record<string, ComposerSelection>>(loadComposerSelections);
-  const [queuedPromptsByConversation, setQueuedPromptsByConversation] = useState<Record<string, QueuedPrompt[]>>(loadComposerQueue);
+  const [queuedPromptsByConversation, setQueuedPromptsByConversation] = useState<Record<string, QueuedPrompt[]>>({});
+  const [composerQueueReady, setComposerQueueReady] = useState(false);
+  const [playwrightViewport, setPlaywrightViewport] = useState<PlaywrightViewportStatus | null>(null);
+  const [repairingPlaywrightViewport, setRepairingPlaywrightViewport] = useState(false);
   const dispatchingQueuedConversations = useRef(new Set<string>());
   const localRunsInFlight = useRef(new Set<string>());
   /**
@@ -431,24 +435,10 @@ export function App(): ReactNode {
     });
   };
   const queuePrompt = (item: QueuedPrompt, first = false): void => {
-    setQueuedPromptsByConversation((current) => {
-      const existing = current[item.conversationId] ?? [];
-      return { ...current, [item.conversationId]: first ? [item, ...existing] : [...existing, item] };
-    });
+    void window.kaiDesktop.addQueuedPrompt(item, first).then(unwrap).then(setQueuedPromptsByConversation).catch((caught) => setError(messageOf(caught)));
   };
   const updateQueuedPrompt = (conversationId: string, id: string, update: 'remove' | 'retry' | 'promote'): void => {
-    setQueuedPromptsByConversation((current) => {
-      const existing = current[conversationId] ?? [];
-      const item = existing.find((entry) => entry.id === id);
-      if (!item) return current;
-      const remaining = existing.filter((entry) => entry.id !== id);
-      return {
-        ...current,
-        [conversationId]: update === 'remove' ? remaining
-          : update === 'promote' ? [{ ...item, status: 'queued' }, ...remaining]
-            : existing.map((entry) => entry.id === id ? { ...entry, status: 'queued', error: undefined } : entry),
-      };
-    });
+    void window.kaiDesktop.updateQueuedPrompt({ conversationId, id, action: update }).then(unwrap).then(setQueuedPromptsByConversation).catch((caught) => setError(messageOf(caught)));
   };
   const updateComposerSelection = useCallback((patch: Partial<ComposerSelection>) => {
     setComposerSelections((current) => {
@@ -484,11 +474,6 @@ export function App(): ReactNode {
   }, [composerSelections]);
 
   useEffect(() => {
-    if (!saveComposerQueue(queuedPromptsByConversation)) {
-      setError('KAI could not save the message queue on this device. Keep the app open and retry delivery before closing it.');
-    }
-  }, [queuedPromptsByConversation]);
-  useEffect(() => {
     try { window.localStorage.setItem(COMPOSER_DRAFTS_KEY, JSON.stringify(composerDrafts)); } catch { /* Drafts remain available until the app closes. */ }
   }, [composerDrafts]);
   useEffect(() => {
@@ -496,13 +481,8 @@ export function App(): ReactNode {
       window.localStorage.setItem(COMPOSER_CONTEXTS_KEY, JSON.stringify(composerContexts, (key, value) => key === 'dataUrl' ? undefined : value));
     } catch { /* The selected context remains available until the app closes. */ }
   }, [composerContexts]);
-  useEffect(() => {
-    const refresh = (event: StorageEvent): void => {
-      if (event.key === QUEUE_KEY) setQueuedPromptsByConversation(loadComposerQueue());
-    };
-    window.addEventListener('storage', refresh);
-    return () => window.removeEventListener('storage', refresh);
-  }, []);
+  useEffect(() => window.kaiDesktop.onComposerQueueChanged(setQueuedPromptsByConversation), []);
+  useEffect(() => window.kaiDesktop.onPlaywrightViewportStatus(setPlaywrightViewport), []);
 
   useEffect(() => {
     const selection = composerSelections[activeDraftKey];
@@ -772,6 +752,18 @@ export function App(): ReactNode {
       setSelectedAutonomy(nextBootstrap.settings.defaultAutonomy);
       setAgentNotice(null);
       setError(null);
+      void window.kaiDesktop.playwrightViewportStatus().then(unwrap).then(setPlaywrightViewport).catch(() => undefined);
+      try {
+        const legacyQueue = loadComposerQueue();
+        const durableQueue = await window.kaiDesktop.loadComposerQueue(legacyQueue).then(unwrap);
+        setQueuedPromptsByConversation(durableQueue);
+        // Keep the migration source until the main process confirms a durable save.
+        window.localStorage.removeItem(QUEUE_KEY);
+        setComposerQueueReady(true);
+      } catch (queueError) {
+        setComposerQueueReady(false);
+        setError(`Queued messages could not be recovered, so KAI will not send them automatically: ${messageOf(queueError)}`);
+      }
       void refreshInterrupted();
     } catch (caught) {
       setError(messageOf(caught));
@@ -785,6 +777,29 @@ export function App(): ReactNode {
     started.current = true;
     void loadApplication();
   }, []);
+
+  async function repairPlaywrightBrowser(): Promise<void> {
+    if (runningConversationIdsRef.current.length > 0) {
+      setError('Wait for active agent runs to finish before resetting their shared browser.');
+      return;
+    }
+    if (!(await confirmDialog({
+      title: 'Reset the shared Playwright browser?',
+      detail: 'KAI will start a fresh maximized browser. If KAI owns the current browser, its open tabs will close. A browser owned by another process will be left running.',
+      confirmLabel: 'Reset browser',
+    }))) return;
+    setRepairingPlaywrightViewport(true);
+    try {
+      const status = await window.kaiDesktop.repairPlaywrightViewport().then(unwrap);
+      setPlaywrightViewport(status);
+      if (status.status === 'ok') setAgentNotice(status.message ?? 'Playwright browser reset. Desktop pages now follow the browser window.');
+      else setError(status.message ?? 'KAI could not confirm the Playwright browser reset.');
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setRepairingPlaywrightViewport(false);
+    }
+  }
 
   useEffect(() => {
     const theme = bootstrap?.settings.theme ?? 'dark';
@@ -1420,20 +1435,19 @@ export function App(): ReactNode {
 
   // The app owns delivery, so queued turns keep moving when the Workspace view is closed or another chat is open.
   useEffect(() => {
-    if (!bootstrap || busy) return;
+    if (!bootstrap || busy || !composerQueueReady) return;
     for (const [conversationId, items] of Object.entries(queuedPromptsByConversation)) {
       const next = items[0];
       if (!next || next.status !== 'queued' || runningConversationIds.includes(conversationId)
         || localRunsInFlight.current.has(conversationId)
         || dispatchingQueuedConversations.current.has(conversationId)) continue;
       dispatchingQueuedConversations.current.add(conversationId);
-      setQueuedPromptsByConversation((current) => ({
-        ...current,
-        [conversationId]: (current[conversationId] ?? []).map((item) => item.id === next.id
-          ? { ...item, status: 'sending' } : item),
-      }));
       void (async () => {
         try {
+          // The main process claims the head item under the store lock. A second window cannot deliver it too.
+          const claim = await window.kaiDesktop.claimQueuedPrompt(conversationId, next.id).then(unwrap);
+          setQueuedPromptsByConversation(claim.queue);
+          if (!claim.claimed) return;
           const latest = await window.kaiDesktop.getConversation(conversationId).then(unwrap);
           if (!latest) throw new Error('The conversation no longer exists.');
           if (!queuedPromptWasAccepted(latest, next.id)) {
@@ -1443,22 +1457,19 @@ export function App(): ReactNode {
           if (!updated || !queuedPromptWasAccepted(updated, next.id)) {
             throw new Error('KAI did not accept this message. Check the agent connection and retry.');
           }
-          setQueuedPromptsByConversation((current) => ({
-            ...current,
-            [conversationId]: (current[conversationId] ?? []).filter((item) => item.id !== next.id),
-          }));
+          const queue = await window.kaiDesktop.updateQueuedPrompt({ conversationId, id: next.id, action: 'accepted' }).then(unwrap);
+          setQueuedPromptsByConversation(queue);
         } catch (caught) {
-          setQueuedPromptsByConversation((current) => ({
-            ...current,
-            [conversationId]: (current[conversationId] ?? []).map((item) => item.id === next.id
-              ? { ...item, status: 'blocked', error: messageOf(caught) } : item),
-          }));
+          const queue = await window.kaiDesktop.updateQueuedPrompt({ conversationId, id: next.id, action: 'block', error: messageOf(caught) })
+            .then(unwrap).catch(() => null);
+          if (queue) setQueuedPromptsByConversation(queue);
+          else setError(messageOf(caught));
         } finally {
           dispatchingQueuedConversations.current.delete(conversationId);
         }
       })();
     }
-  }, [bootstrap, busy, conversations, queuedPromptsByConversation, runningConversationIds]);
+  }, [bootstrap, busy, composerQueueReady, conversations, queuedPromptsByConversation, runningConversationIds]);
 
   /** What Stop, Pause and Resume can act on for a conversation, read the same way the composer decides what to draw. */
   function controlStateFor(conversationId: string): RunControlState {
@@ -1538,14 +1549,10 @@ export function App(): ReactNode {
       // Every waiting instruction is held, not just the one caught mid-send. Clearing the flags above re-arms the
       // queue dispatcher, so leaving rows `queued` would start the next task the instant the person asked for
       // everything to stop. `blocked` rows are skipped by the dispatcher and keep their text for a retry.
-      const held = (items: QueuedPrompt[]): QueuedPrompt[] => items.map((item) => (
-        item.status === 'blocked' ? item : { ...item, status: 'blocked' as const, error: 'Stopped. Retry when you are ready.' }
-      ));
       const heldCount = Object.values(queuedPromptsByConversation)
         .reduce((total, items) => total + items.filter((item) => item.status !== 'blocked').length, 0);
-      setQueuedPromptsByConversation((current) => Object.fromEntries(
-        Object.entries(current).map(([conversationId, items]) => [conversationId, held(items)]),
-      ));
+      const queue = await window.kaiDesktop.holdQueuedPrompts('Stopped. Retry when you are ready.').then(unwrap);
+      setQueuedPromptsByConversation(queue);
       void refreshInterrupted();
       setAgentNotice(result.stoppedRuns === 0 && result.clearedRuns === 0
         ? 'Nothing was running.'
@@ -1747,11 +1754,8 @@ export function App(): ReactNode {
   async function deleteConversation(id: string): Promise<void> {
     const removed = await perform(() => window.kaiDesktop.deleteConversation(id).then(unwrap), 'Deleting conversation');
     if (removed === null) return;
-    setQueuedPromptsByConversation((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
+    const queue = await window.kaiDesktop.removeQueuedConversation(id).then(unwrap);
+    setQueuedPromptsByConversation(queue);
     setConversations((current) => {
       const next = current.filter((conversation) => conversation.id !== id);
       if (activeConversationId === id) setActiveConversationId(next[0]?.id ?? null);
@@ -2402,6 +2406,15 @@ export function App(): ReactNode {
       )}
       <UrgentBanner />
       <UpdateBanner onOpen={() => setView('settings')} />
+      {playwrightViewport?.status === 'needs-reset' && (
+        <div className="playwright-viewport-warning" role="status">
+          <AlertTriangle size={15} />
+          <span>{playwrightViewport.message ?? 'The Playwright page is narrower than its browser window, which can leave blank space to the right.'}</span>
+          <button type="button" className="secondary-button compact" disabled={repairingPlaywrightViewport || runningConversationIds.length > 0} title={runningConversationIds.length > 0 ? 'Wait for active agent runs to finish before resetting the shared browser' : 'Restart the shared browser with a responsive desktop viewport'} onClick={() => void repairPlaywrightBrowser()}>
+            {repairingPlaywrightViewport ? 'Resetting…' : 'Reset Playwright browser'}
+          </button>
+        </div>
+      )}
       {setupStatus && !setupStatus.complete && !setupOpen && (
         <button type="button" className="setup-reminder" onClick={() => setSetupOpen(true)}>
           <ShieldCheck size={15} />

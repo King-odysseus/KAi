@@ -12,6 +12,7 @@ import {
   injectRulesIntoProjects,
   RULES_MARKER,
   shouldCarryRules,
+  SINGLE_STYLESHEET_RULE,
   withAutopilotException,
 } from '../apps/desktop/src/main/execution-rules';
 
@@ -65,6 +66,24 @@ describe('desktop authoritative execution rules', () => {
  * Worth pinning because nothing else notices it: a file written under the wrong name, or one that stops carrying the
  * marker, would leave every project quietly unprotected and the button would still report success.
  */
+describe('the single stylesheet rule', () => {
+  it('reaches every briefing, inside the markers, and is plain ASCII', () => {
+    const briefing = buildExecutionRulesBriefing('# Cognitive1\n\n## Rules\n\n1. **No secrets** - Never commit keys.\n');
+
+    expect(briefing).toContain(SINGLE_STYLESHEET_RULE);
+    expect(briefing.indexOf(SINGLE_STYLESHEET_RULE)).toBeLessThan(briefing.indexOf('[/COGNITIVE1 STANDING INSTRUCTIONS]'));
+    expect(/^[\x09\x0a\x20-\x7e]*$/.test(SINGLE_STYLESHEET_RULE)).toBe(true);
+  });
+
+  it('names Flowbite for a React project, and keeps HeroUI only where the project already uses it', () => {
+    // The component library is the person's choice, and it is written down here so a new React project does not arrive
+    // with hand-written components beside a Tailwind setup.
+    expect(SINGLE_STYLESHEET_RULE).toContain('Flowbite');
+    expect(SINGLE_STYLESHEET_RULE).toContain('Tailwind');
+    expect(SINGLE_STYLESHEET_RULE).toContain('use HeroUI only where the project already uses it');
+  });
+});
+
 describe('the Autopilot exception to committing', () => {
   it('goes inside the authoritative text, after the rules, so the rule set that wins is the one that carries it', async () => {
     const rules = await new DesktopExecutionRules(bundledRulesPath).read();

@@ -37,7 +37,7 @@ export interface PlaywrightChild {
 }
 
 export interface PlaywrightHostPorts {
-  launch(port: number, extraArgs: readonly string[]): PlaywrightChild;
+  launch(port: number, extraArgs: readonly string[], environment?: Readonly<Record<string, string>>): PlaywrightChild;
   killTree(child: PlaywrightChild): Promise<void>;
   portIsFree(port: number): Promise<boolean>;
   anyFreePort(): Promise<number>;
@@ -52,6 +52,8 @@ export interface PlaywrightHostOptions {
   timeoutMs?: number;
   /** Extra server flags, for a test that should not open a window. */
   extraArgs?: readonly string[];
+  /** Per-server environment, used for a local MCP config without putting paths into a shell command. */
+  environment?: Readonly<Record<string, string>>;
   /** Told when a server KAI started stops after it was ready, so the loss is logged rather than silent. */
   onStopped?: (code: number | null) => void;
 }
@@ -95,7 +97,7 @@ export async function startPlaywrightHost(ports: PlaywrightHostPorts, options: P
 
   const port = (await ports.portIsFree(preferred)) ? preferred : await ports.anyFreePort();
   const endpoint = playwrightEndpoint(port);
-  const child = ports.launch(port, options.extraArgs ?? []);
+  const child = ports.launch(port, options.extraArgs ?? [], options.environment);
 
   let output = '';
   let exited: number | null | undefined;
@@ -131,10 +133,15 @@ function tail(output: string): string {
 
 export function realPlaywrightHostPorts(platform: NodeJS.Platform = process.platform): PlaywrightHostPorts {
   return {
-    launch(port, extraArgs) {
+    launch(port, extraArgs, environment) {
       const { command, args } = playwrightLaunchCommand(port, platform, extraArgs);
       // `windowsHide` hides the console of the launcher, not the browser the server opens: that window is the point.
-      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: platform !== 'win32' });
+      const child = spawn(command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        detached: platform !== 'win32',
+        ...(environment ? { env: { ...process.env, ...environment } } : {}),
+      });
       return {
         pid: child.pid,
         onExit: (listener) => { child.once('exit', listener); },

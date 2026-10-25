@@ -527,7 +527,9 @@ export class DesktopStudio {
     await this.ports.board.setCheck(projectId, cardId, {
       runId: card.check?.runId ?? 'visual-only',
       at: this.ports.now(),
-      visual: result.passed ? 'passed' : 'failed',
+      visual: result.outcomes.some((item) => item.status === 'failed' || (item.status === undefined && !item.passed))
+        ? 'failed'
+        : result.passed ? 'passed' : 'unknown',
       screenshots: result.screenshots,
       // `setCheck` replaces the whole record, so leaving this out dropped the evidence the build check had just
       // recorded for every criterion. The board then refused to close each page whose screen check passed ("lacks

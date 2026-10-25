@@ -93,7 +93,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, experienceProfile } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, estimateResponseCostUsd, experienceProfile } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -513,6 +513,17 @@ export function WorkspaceView({
   ];
   const hasImageAttachment = contextChips.some((chip) => chip.type === 'image');
   const canSendPrompt = Boolean(prompt.trim()) || hasImageAttachment;
+  const estimateModel = selectedModel || directApiCapability?.model || '';
+  const promptContextCharacters = allContextChips.reduce((total, chip) => total + (
+    chip.type === 'selection' || chip.type === 'terminal' ? chip.content?.length ?? 0
+      : chip.type === 'gitDiff' ? chip.stat.length
+        : chip.type === 'memory' ? chip.query.length + chip.summary.length
+          : chip.type === 'image' ? chip.name.length : chip.path.length
+  ), 0) + (activeGoal ? JSON.stringify(activeGoal).length : 0) + selectedSkills.reduce((total, skill) => total + skill.name.length, 0);
+  const estimatedInputTokens = estimateConversationTokens(activeConversation ?? { turns: [] })
+    + Math.ceil((prompt.length + promptContextCharacters) / 4) + 1_200;
+  const responseCostEstimate = apiRun && effectiveRoute === 'direct' && canSendPrompt
+    ? estimateResponseCostUsd(estimateModel, estimatedInputTokens) : null;
   const sendOptions: WorkspaceSendOptions | undefined = (activeGoal || selectedSkills.length || allContextChips.length)
     ? {
         ...(activeGoal ? { goal: activeGoal } : {}),
@@ -2034,6 +2045,12 @@ export function WorkspaceView({
             </div>
           </div>
         </div>
+        {responseCostEstimate && (
+          <p className="composer-cost-estimate" title={`Rough estimate for one model response on ${estimateModel}. Full agent runs can make multiple responses; context, caching, provider pricing, tools, and actual output change the bill.`}>
+            Roughly ${responseCostEstimate.low < 0.01 ? responseCostEstimate.low.toFixed(4) : responseCostEstimate.low.toFixed(2)}–${responseCostEstimate.high < 0.01 ? responseCostEstimate.high.toFixed(4) : responseCostEstimate.high.toFixed(2)} per response
+            <span> · full task may cost more</span>
+          </p>
+        )}
         {taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
           <p className="composer-task-guidance" role="note">
             <span>Auto works on its own, so it needs Edit files or Full access, and Access is lower than that.</span>{' '}

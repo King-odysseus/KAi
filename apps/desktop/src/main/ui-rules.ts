@@ -32,17 +32,16 @@ export const UI_BUILD_RULES: readonly string[] = [
 /**
  * How to use the browser tools without opening a window per question.
  *
- * KAI runs one browser that every agent shares, so there is one window and each agent works in a tab of its own. Two
- * agents on the same tab move each other's page, so the rule is to open a tab first, and to close it afterwards so
- * tabs do not pile up. When the agent has a browser to itself, the first line says to use the blank tab it starts with.
+ * KAI runs one browser that every agent shares. A preview tab must stay unresized so it follows the actual window.
+ * Viewport checks use a separate temporary tab, which is closed after the check. Two agents must never use the same tab.
  */
 export const BROWSER_RULES: readonly string[] = [
   'USING THE BROWSER TOOLS:',
-  '- Start with browser_tabs, action "list". If it shows tabs you did not open, other agents are using this browser: open your own with browser_tabs, action "new", and work only in it. Never navigate, resize or close a tab that is not yours. If it shows a single blank tab, use that one.',
-  `- Stay in that one tab. Navigate it with browser_navigate and change its size with browser_resize (${PHONE}, 768, ${DESKTOP} and ${WIDE} wide) to look at each size. Do not open a second tab or window to compare sizes, do not open links in a new window, and do not start another browser.`,
+  '- Start with browser_tabs, action "list", then open your own preview tab with browser_tabs, action "new". Navigate the preview to the page. Never navigate, resize or close a tab that is not yours.',
+  `- Keep the preview tab unresized so it follows the Chrome window and fills it when maximised. For each responsive check, open one temporary tab with browser_tabs, action "new", navigate it to the page, use browser_resize (${PHONE}, 768, ${DESKTOP} or ${WIDE} wide), inspect it, then close that temporary tab. Check sizes one at a time; do not start another browser or open another window.`,
   `- At ${PHONE}px wide, scroll to the bottom and confirm the navigation is still visible and the last item is not covered. At ${WIDE}px wide, confirm no large strip of the screen is empty.`,
-  '- browser_resize fixes a tab at that size, and the tab then ignores its window: maximising the browser changes nothing in it, and the rest of the window sits empty. So do all your resizing in a tab you opened yourself, never in a tab the person was already looking at, and close it when you finish with browser_tabs, action "close". Closing the tab removes the fixed size. If you used the single blank tab, close that one too.',
-  '- When you finish, close the tab you opened with browser_tabs, action "close". Do not call browser_close: the browser is shared and will refuse.',
+  '- browser_resize fixes the page viewport at that size, not the Chrome window. Maximising Chrome will then leave empty space beside a narrow page. Never call browser_resize on the preview tab. If a temporary tab cannot be opened, stop rather than resize an existing tab.',
+  '- When finished, close every temporary resized tab and select your unresized preview tab so the desktop page is visible at the window width. Leave that preview tab available for the person to inspect. Do not call browser_close: the browser is shared and will refuse.',
 ];
 
 /** The rules for one card, or nothing for a card that draws no screen. */

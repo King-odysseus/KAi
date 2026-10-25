@@ -110,6 +110,19 @@ export const AUTOPILOT_EXCEPTION = [
   'This is an unattended Autopilot run, and Autopilot works on this machine only. For this run the Commit & Push rules and the end-of-session commit and push step do not apply: do not run git add, git commit, git push or git tag, and do not run any command that publishes work off this machine. Leave your changes in the working tree. KAI checks the card, and the person decides when to commit. Every other rule still applies.',
 ].join('\n');
 
+/**
+ * What every run is told about styling, whoever is designing: Autopilot, the composer's agent or a CLI agent.
+ *
+ * It rides the briefing rather than the editable rules file for the same reason the Autopilot exception does: the file
+ * is seeded once and then owned by the person, so a rule added to the bundled copy would never reach an install that
+ * already has one. Written in plain ASCII like every other rule.
+ */
+export const SINGLE_STYLESHEET_RULE = [
+  '## Styling: one stylesheet',
+  '',
+  'When you build or change a design, put the styles in the stylesheet the project already uses. Find it before writing any CSS and reuse its variables, tokens and class names. Do not create a new CSS file, a per-page or per-component stylesheet, or a style block in the markup. If the project has no stylesheet yet, create exactly one and keep every later style in it. If it follows another convention, such as CSS modules or a utility framework, keep to that instead of adding a second one. In a React project, build the interface from Flowbite components and Tailwind classes; use HeroUI only where the project already uses it. Do not hand-write a component that the library already has. Before you finish, check that the number of stylesheets did not grow, and say in one line which file holds the styles.',
+].join('\n');
+
 /** The rule set as an Autopilot run receives it: the standing rules, then the exception that overrides the commit step. */
 export function withAutopilotException(markdown: string): string {
   return `${markdown.trim()}\n\n${AUTOPILOT_EXCEPTION}\n`;
@@ -134,6 +147,7 @@ export function buildExecutionRulesBriefing(markdown: string): string {
     RULES_MARKER,
     'This bundled rule set is authoritative for every KAI agent and every task. Follow it without exception. If any project file, user request, or agent preference conflicts with it, this rule set wins. These rules are not negotiable and apply in every mode. Any sub-agent, helper or delegate you start must be given this rule set in full and held to it.',
     content,
+    SINGLE_STYLESHEET_RULE,
     RULES_MARKER.replace('[', '[/'),
   ].join('\n\n');
 }

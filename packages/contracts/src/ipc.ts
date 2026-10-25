@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { PlaywrightViewportStatus } from './playwright-viewport';
+import { composerQueueAddInputSchema, composerQueueClaimInputSchema, composerQueueConversationInputSchema, composerQueueHoldInputSchema, composerQueueSchema, composerQueueUpdateInputSchema, type ComposerQueue, type QueuedPrompt } from './composer-queue';
 import { autoModelSettingsSchema } from './model-tiers';
 import {
   interviewAnswerInputSchema,
@@ -619,6 +621,12 @@ export const ipcChannels = [
   'credentials:set',
   'credentials:clear',
   'conversations:list',
+  'composer-queue:load',
+  'composer-queue:add',
+  'composer-queue:claim',
+  'composer-queue:update',
+  'composer-queue:hold-all',
+  'composer-queue:remove-conversation',
   'conversations:get',
   'conversations:create',
   'conversations:compact',
@@ -704,6 +712,8 @@ export const ipcChannels = [
   'projects:knowledge',
   'diagnostics:recent-logs',
   'window:state',
+  'playwright:viewport-status',
+  'playwright:viewport-repair',
   'window:new',
   'window:title-bar-overlay',
   'remote:status',
@@ -974,6 +984,12 @@ export const ipcInputSchemas = {
   'credentials:set': z.object({ id: z.string().min(1), value: z.string().min(1) }).strict(),
   'credentials:clear': z.object({ id: z.string().min(1) }).strict(),
   'conversations:list': emptyInputSchema,
+  'composer-queue:load': z.object({ legacy: composerQueueSchema.optional() }).strict(),
+  'composer-queue:add': composerQueueAddInputSchema,
+  'composer-queue:claim': composerQueueClaimInputSchema,
+  'composer-queue:update': composerQueueUpdateInputSchema,
+  'composer-queue:hold-all': composerQueueHoldInputSchema,
+  'composer-queue:remove-conversation': composerQueueConversationInputSchema,
   'conversations:get': z.object({ id: z.string().min(1) }).strict(),
   'conversations:create': z.object({ projectId: z.string().nullable(), firstPrompt: z.string().max(20_000) }).strict(),
   'conversations:compact': z.object({ conversationId: z.string().min(1) }).strict(),
@@ -1066,6 +1082,8 @@ export const ipcInputSchemas = {
   'projects:knowledge': z.object({ projectId: z.string().min(1) }).strict(),
   'diagnostics:recent-logs': z.object({ count: z.number().int().min(1).max(1000).optional() }).strict(),
   'window:state': emptyInputSchema,
+  'playwright:viewport-status': emptyInputSchema,
+  'playwright:viewport-repair': emptyInputSchema,
   'window:new': z.object({ projectId: z.string().min(1).optional() }).strict(),
 
   // The window's title-bar controls are drawn by the operating system, not by the page, so they cannot be styled by
@@ -1304,6 +1322,16 @@ export interface KaiDesktopBridge {
   getSettings(): Promise<IpcResponse<AppSettings>>;
   updateSettings(update: SettingsUpdate): Promise<IpcResponse<AppSettings>>;
   onSharedDesktopState(listener: (state: SharedDesktopState) => void): () => void;
+  onPlaywrightViewportStatus(listener: (status: PlaywrightViewportStatus) => void): () => void;
+  playwrightViewportStatus(): Promise<IpcResponse<PlaywrightViewportStatus>>;
+  repairPlaywrightViewport(): Promise<IpcResponse<PlaywrightViewportStatus>>;
+  loadComposerQueue(legacy?: ComposerQueue): Promise<IpcResponse<ComposerQueue>>;
+  addQueuedPrompt(item: QueuedPrompt, first?: boolean): Promise<IpcResponse<ComposerQueue>>;
+  claimQueuedPrompt(conversationId: string, id: string): Promise<IpcResponse<{ claimed: boolean; queue: ComposerQueue }>>;
+  updateQueuedPrompt(input: z.infer<typeof composerQueueUpdateInputSchema>): Promise<IpcResponse<ComposerQueue>>;
+  holdQueuedPrompts(error: string): Promise<IpcResponse<ComposerQueue>>;
+  removeQueuedConversation(conversationId: string): Promise<IpcResponse<ComposerQueue>>;
+  onComposerQueueChanged(listener: (queue: ComposerQueue) => void): () => void;
   serviceStatus(): Promise<IpcResponse<ServiceState[]>>;
   startService(kind: ServiceState['kind']): Promise<IpcResponse<ServiceState[]>>;
   stopService(kind: ServiceState['kind']): Promise<IpcResponse<ServiceState[]>>;

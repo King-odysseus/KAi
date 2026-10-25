@@ -4,21 +4,25 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
-import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
 import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
-import { realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
+import { PLAYWRIGHT_HOST_PORT, realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
 import { installCrashRecord } from './crash-record';
 import { UsageLedger } from './usage-ledger';
+import { ComposerQueueStore } from './composer-queue-store';
 import { startSharedBrowser } from './shared-browser';
+import type { SharedBrowserDeps } from './shared-browser';
+import { inspectPlaywrightViewport } from './playwright-viewport';
 import { AgentTerminal } from './agent-terminal';
 import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
 import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
 import { DesktopExecutionRules } from './execution-rules';
+import { listStylesheets } from './stylesheet-guard';
 import { DesktopMcpRuntime } from './mcp-runtime';
 import { ensureOpenPencilRunning, readOpenPencilDiscovery } from './open-pencil-launcher';
 import { DesktopChangeReviewer } from './change-review';
@@ -378,6 +382,7 @@ async function startApplication(): Promise<void> {
   const preferences = new ProjectPreferenceStore(paths.preferences, fileSystem);
   const teamRecord = new TeamRecordStore(path.join(paths.root, 'team-record.json'), fileSystem);
   const conversations = new ConversationStore(paths.conversations, fileSystem);
+  const composerQueue = new ComposerQueueStore(path.join(paths.root, 'composer-queue.json'), fileSystem);
   // What the paid runs have cost, followed as conversations are saved. A run checks the budget against this instead of
   // loading every saved conversation, which at eight runs starting together ran the main process out of memory.
   const usageLedgerFile = path.join(paths.root, 'usage-ledger.json');
@@ -601,18 +606,76 @@ async function startApplication(): Promise<void> {
     return linkedProject.path;
   };
   mcpRuntime = new DesktopMcpRuntime(settings, credentials, logger);
-  // One Playwright browser for KAI and every agent. Started in the background so the app is not held waiting for a
-  // first download, and it changes nothing the agents or the checks rely on until it is answering.
-  void startSharedBrowser({
-    start: (onStopped) => startPlaywrightHost(realPlaywrightHostPorts(), { onStopped }),
+  const playwrightConfigPath = path.join(paths.root, 'playwright-mcp-window.json');
+  let playwrightPortPreference = PLAYWRIGHT_HOST_PORT;
+  let repairingPlaywrightServer = false;
+  let playwrightViewportStatus: PlaywrightViewportStatus = {
+    status: 'unavailable', viewportWidth: null, windowWidth: null, screenWidth: null,
+    message: 'The Playwright browser has not started yet.',
+  };
+  const startConfiguredPlaywright: SharedBrowserDeps['start'] = async (onStopped) => {
+    await mkdir(paths.root, { recursive: true });
+    // A fixed browser viewport is disconnected from the native window size. When Chrome is maximized it can
+    // leave a wide white strip beside the page. A null viewport lets desktop tabs follow the real window; the
+    // responsive checker still makes its small measurements on tabs that it immediately closes.
+    await writeFile(playwrightConfigPath, JSON.stringify({
+      browser: {
+        launchOptions: { args: ['--start-maximized'] },
+        contextOptions: { viewport: null },
+      },
+      sharedBrowserContext: true,
+    }, null, 2), 'utf8');
+    return startPlaywrightHost(realPlaywrightHostPorts(), {
+      preferredPort: playwrightPortPreference,
+      onStopped: (code) => { if (!repairingPlaywrightServer) onStopped(code); },
+      environment: { PLAYWRIGHT_MCP_CONFIG: playwrightConfigPath },
+    });
+  };
+  const sharedBrowserDeps: SharedBrowserDeps = {
+    start: startConfiguredPlaywright,
     updateSettings: (mutator) => settings.update(mutator),
     reconnect: () => mcpRuntime?.invalidate(PLAYWRIGHT_MCP_SERVER_ID),
     installShared: (endpoint) => installPlaywrightSharedMcpForAgents({ endpoint }),
-    // Back to the server each agent starts for itself. Only entries that were pointed at the shared one change.
     installOwn: () => installPlaywrightMcpForAgents({ backups: false }),
     info: (message, detail) => logger.info('internal', message, detail),
     warn: (message, detail) => logger.warn('internal', message, detail),
-  }, () => { playwrightHost = null; }).then((host) => { playwrightHost = host; });
+  };
+  const playwrightServerLost = (): void => { playwrightHost = null; };
+  const repairPlaywrightViewport = async (): Promise<PlaywrightViewportStatus> => {
+    const previous = playwrightHost;
+    // Never terminate a server owned by another process. Move KAI's clients to a fresh configured instance instead.
+    if (previous?.adopted) playwrightPortPreference = await realPlaywrightHostPorts().anyFreePort();
+    repairingPlaywrightServer = true;
+    try {
+      await previous?.close();
+      playwrightHost = null;
+      const replacement = await startSharedBrowser(sharedBrowserDeps, playwrightServerLost);
+      if (!replacement) throw new Error('KAI could not start a fresh shared browser. Check the Playwright MCP server settings and try again.');
+      playwrightHost = replacement;
+      playwrightViewportStatus = await inspectPlaywrightViewport(mcpRuntime!);
+      if (playwrightViewportStatus.status === 'needs-reset') {
+        throw new Error(`The fresh browser still reports a narrow viewport (${playwrightViewportStatus.viewportWidth}px inside a ${playwrightViewportStatus.windowWidth}px window).`);
+      }
+      if (previous?.adopted && playwrightViewportStatus.status === 'ok') {
+        playwrightViewportStatus = { ...playwrightViewportStatus, message: 'KAI switched to a fresh browser. The older externally managed browser window was left running.' };
+      }
+      desktopWindows.broadcast('app:playwright-viewport', playwrightViewportStatus);
+      return playwrightViewportStatus;
+    } finally {
+      repairingPlaywrightServer = false;
+    }
+  };
+  // One Playwright browser for KAI and every agent. Started in the background so the app is not held waiting for a
+  // first download, and it changes nothing the agents or the checks rely on until it is answering.
+  void startSharedBrowser(sharedBrowserDeps, playwrightServerLost).then(async (host) => {
+    playwrightHost = host;
+    if (!host) return;
+    playwrightViewportStatus = await inspectPlaywrightViewport(mcpRuntime!);
+    if (playwrightViewportStatus.status === 'needs-reset') {
+      logger.warn('internal', 'Playwright browser viewport is narrower than its window', playwrightViewportStatus.message);
+    }
+    desktopWindows.broadcast('app:playwright-viewport', playwrightViewportStatus);
+  });
   const directApiOptions = {
     waitIfPaused: (conversationId: string, signal: AbortSignal) => runControl.waitIfPaused(conversationId, signal),
     // Rules and tool hooks are user-owned project preferences. A run only sees the project it is working in.
@@ -765,6 +828,9 @@ async function startApplication(): Promise<void> {
     evals,
     changeReviewer,
     conversations,
+    composerQueue,
+    playwrightViewportStatus: async () => playwrightViewportStatus,
+    repairPlaywrightViewport,
     usageLedger,
     credentials,
     services: serviceController,
@@ -1203,6 +1269,9 @@ async function startApplication(): Promise<void> {
     // claim Autopilot makes about the project running, and the only environment it can put the project in is dev.
     checkDev: async (projectId, routes, signal) => devCheck.run(projectId, await studioProjectRoot(projectId), routes, signal),
     changedFilesFor: async (projectId) => (await gitOverview(await studioProjectRoot(projectId))).changes.map((change) => change.path),
+    // The one-stylesheet rule, counted around a card's work. A listing rather than a count, so the card is told which
+    // file it added and where the styles belong.
+    listStylesheets: async (projectId) => listStylesheets(await studioProjectRoot(projectId)),
     setPacer: (pacer) => directApi.setPacer(pacer),
     announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'autopilot:changed', status),
     journal: new AutopilotRunStore(path.join(paths.root, 'autopilot')),
