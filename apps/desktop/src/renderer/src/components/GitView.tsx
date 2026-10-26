@@ -1,4 +1,13 @@
-import { ArrowDown, ArrowUp, Copy, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw, TerminalSquare } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowUp, CheckCircle2, Copy, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw, TerminalSquare } from 'lucide-react';
+import type { GitChecksState } from '@kai/contracts';
+
+/** A small icon and label for a pull request's rolled-up CI state. Nothing is shown for "none" — most PRs with no checks configured shouldn't imply one is missing. */
+function ChecksBadge({ state }: { state: GitChecksState }) {
+  if (state === 'none') return null;
+  if (state === 'passing') return <span className="pr-checks-badge pr-checks-passing" title="Checks passing"><CheckCircle2 size={12} /><span>Checks passing</span></span>;
+  if (state === 'failing') return <span className="pr-checks-badge pr-checks-failing" title="Checks failing"><AlertCircle size={12} /><span>Checks failing</span></span>;
+  return <span className="pr-checks-badge pr-checks-pending" title="Checks running"><Loader2 size={12} className="spin" /><span>Checks running</span></span>;
+}
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { GitChange, GitGithubState, GitOverview, GitRepositoryVisibility, GitSyncAction, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
@@ -398,7 +407,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
               </p>
               {!overview.github.signedInAs && overview.github.cliAvailable && signInActions}
               {overview.pullRequests.map((request) => (
-                <div key={request.number} className="ops-card-head"><span>#{request.number} {request.title} · {request.state}</span><button type="button" className="secondary-button" onClick={() => window.open(request.url)}><ExternalLink size={12} /><span>Open</span></button></div>
+                <div key={request.number} className="ops-card-head"><span>#{request.number} {request.title} · {request.state}</span><ChecksBadge state={request.checksState} /><button type="button" className="secondary-button" onClick={() => window.open(request.url)}><ExternalLink size={12} /><span>Open</span></button></div>
               ))}
               {overview.github.signedInAs && overview.branch && !onMain && overview.upstream && overview.pullRequests.length === 0 && (
                 <>

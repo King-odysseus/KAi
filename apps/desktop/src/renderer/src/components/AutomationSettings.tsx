@@ -1,5 +1,5 @@
 import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type EvalResult, type PermissionRule, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
-import { Check, Play, Plus, Trash2 } from 'lucide-react';
+import { Check, Play, Plus, Trash2, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
@@ -125,6 +125,33 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
   const [postTool, setPostTool] = useState(toolHooksToLines(automation?.hooks?.postTool));
   const [rules, setRules] = useState<RuleDraft[]>(rulesToDrafts(automation?.permissionRules));
   const [saved, setSaved] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestNote, setSuggestNote] = useState<string | null>(null);
+
+  async function suggestRules(): Promise<void> {
+    setSuggesting(true);
+    setSuggestNote(null);
+    try {
+      const suggested = unwrap(await window.kaiDesktop.suggestPermissionRules(project.id));
+      const already = new Set(rules.filter((rule) => rule.kind === 'command').map((rule) => rule.pattern.trim()));
+      const additions = suggested
+        .filter((rule) => !already.has(rule.commands[0] ?? ''))
+        .map((rule): RuleDraft => ({ id: rule.id, effect: rule.effect, kind: 'command', pattern: rule.commands[0] ?? '', note: rule.note ?? '' }));
+      if (additions.length === 0) {
+        setSuggestNote(suggested.length === 0
+          ? 'KAI could not find a test, lint or build command to suggest rules from in this project.'
+          : 'Every rule KAI could suggest from this project is already in the list below.');
+        return;
+      }
+      setRules((current) => [...current, ...additions]);
+      setSaved(null);
+      setSuggestNote(`Added ${additions.length} suggested rule${additions.length === 1 ? '' : 's'} from this project's own scripts. Review them below, then save.`);
+    } catch (error) {
+      setSuggestNote(errorText(error));
+    } finally {
+      setSuggesting(false);
+    }
+  }
 
   async function save(): Promise<void> {
     const hooks = {
@@ -201,6 +228,8 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
       )}
       <div className="button-row align-start">
         <button type="button" className="secondary-button" onClick={() => { setRules((current) => [...current, { id: crypto.randomUUID(), effect: 'ask', kind: 'command', pattern: '', note: '' }]); setSaved(null); }}><Plus size={15} /><span>Add rule</span></button>
+        <button type="button" className="secondary-button" disabled={suggesting} title="Reads this project's own test, lint and build scripts and proposes an allow rule for each" onClick={() => void suggestRules()}><Wand2 size={15} /><span>{suggesting ? 'Looking at the project…' : 'Suggest rules from this project'}</span></button>
+        {suggestNote && <span className="settings-feedback" role="status">{suggestNote}</span>}
       </div>
       <div className="button-row align-start">
         <button type="button" className="primary-button" disabled={busy} onClick={() => void save()}><Check size={16} /><span>Save automation</span></button>

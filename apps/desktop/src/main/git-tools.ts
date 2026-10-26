@@ -9,6 +9,7 @@ import {
   type GitActionResult,
   type GitBranch,
   type GitChange,
+  type GitChecksState,
   type GitCreateRepositoryResult,
   type GitOverview,
   type GitRepositoryVisibility,
@@ -107,6 +108,42 @@ export async function githubCliStatus(cwd: string): Promise<GitOverview['github'
   return githubState(cwd);
 }
 
+// One entry of `gh pr list --json statusCheckRollup`. A check run (from GitHub Actions) reports `status` and
+// `conclusion`; an older-style commit status reports `state` instead. A pull request can have either kind, or both.
+interface PullRequestCheckRollupEntry {
+  status?: string | null;
+  conclusion?: string | null;
+  state?: string | null;
+}
+
+/** Rolls up a pull request's individual checks into one state, the way GitHub's own PR page does. */
+export function rollUpChecksState(rollup: readonly PullRequestCheckRollupEntry[]): GitChecksState {
+  if (rollup.length === 0) return 'none';
+  let sawFailure = false;
+  let sawPending = false;
+  for (const entry of rollup) {
+    const status = entry.status?.toUpperCase();
+    const conclusion = entry.conclusion?.toUpperCase();
+    const state = entry.state?.toUpperCase();
+    if (status && status !== 'COMPLETED') {
+      sawPending = true;
+      continue;
+    }
+    if (conclusion) {
+      if (conclusion === 'FAILURE' || conclusion === 'TIMED_OUT' || conclusion === 'CANCELLED' || conclusion === 'ACTION_REQUIRED') sawFailure = true;
+      else if (conclusion !== 'SUCCESS' && conclusion !== 'NEUTRAL' && conclusion !== 'SKIPPED') sawPending = true;
+      continue;
+    }
+    if (state) {
+      if (state === 'FAILURE' || state === 'ERROR') sawFailure = true;
+      else if (state === 'PENDING') sawPending = true;
+    }
+  }
+  if (sawFailure) return 'failing';
+  if (sawPending) return 'pending';
+  return 'passing';
+}
+
 /**
  * Starts a repository in the project folder, and answers with the overview the Git page needs either way.
  *
@@ -151,8 +188,15 @@ export async function gitOverview(cwd: string): Promise<GitOverview> {
   let pullRequests: GitOverview['pullRequests'] = [];
   if (githubRepository && github.signedInAs && branch) {
     try {
-      const listed = await run('gh', cwd, ['pr', 'list', '--head', branch, '--json', 'number,title,url,state', '--limit', '5'], 30_000);
-      pullRequests = (JSON.parse(listed || '[]') as GitOverview['pullRequests']).map((pr) => ({ number: pr.number, title: pr.title, url: pr.url, state: pr.state }));
+      const listed = await run('gh', cwd, ['pr', 'list', '--head', branch, '--json', 'number,title,url,state,statusCheckRollup', '--limit', '5'], 30_000);
+      const parsed = JSON.parse(listed || '[]') as Array<{ number: number; title: string; url: string; state: string; statusCheckRollup?: PullRequestCheckRollupEntry[] | null }>;
+      pullRequests = parsed.map((pr) => ({
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        state: pr.state,
+        checksState: rollUpChecksState(pr.statusCheckRollup ?? []),
+      }));
     } catch {
       pullRequests = [];
     }

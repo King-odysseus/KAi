@@ -234,6 +234,7 @@ export function App(): ReactNode {
   const [projectPreferences, setProjectPreferences] = useState<ProjectPreferences | null>(null);
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null);
   const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(null);
+  const [workspaceFileLine, setWorkspaceFileLine] = useState<number | undefined>();
   const [workspaceFileDirty, setWorkspaceFileDirty] = useState(false);
   // The same hand-off for a board card, rather than a file. The card travels whole, because the Studio is the view
   // that holds the board: the Code view is pointed at the card rather than left to look it up in another project.
@@ -249,6 +250,7 @@ export function App(): ReactNode {
   // design build runs inside it, and leaving it used to cancel the build: a trip to the composer, or anywhere else,
   // ended a run that was drawing, and coming back found it idle. The Code view is kept the same way.
   const [studioKept, setStudioKept] = useState(false);
+  const [studioCardRequest, setStudioCardRequest] = useState<{ projectId: string; cardId: string; nonce: number } | null>(null);
   useEffect(() => { if (view === 'studio') setStudioKept(true); }, [view]);
   // The guided tour's progress is a per-viewer convenience, so it lives in this window's storage, not in settings.
   const [tourProgress, setTourProgress] = useState<TourProgress>(() => {
@@ -388,12 +390,13 @@ export function App(): ReactNode {
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
 
-  async function openWorkspaceFile(path: string): Promise<void> {
+  async function openWorkspaceFile(path: string, line?: number): Promise<void> {
     if (workspaceFileDirty && workspaceFilePath && path !== workspaceFilePath && !(await confirmDialog({
       title: 'Discard unsaved changes?', detail: `${workspaceFilePath} has unsaved changes.`, confirmLabel: 'Discard', destructive: true,
     }))) return;
     if (path !== workspaceFilePath) setWorkspaceFileDirty(false);
     setWorkspaceFilePath(path);
+    setWorkspaceFileLine(line);
     setView('workspace');
   }
 
@@ -402,9 +405,13 @@ export function App(): ReactNode {
       title: 'Discard unsaved changes?', detail: `${workspaceFilePath} has unsaved changes.`, confirmLabel: 'Discard', destructive: true,
     }))) return;
     setWorkspaceFileDirty(false);
+    setWorkspaceFileLine(undefined);
     setWorkspaceFilePath(null);
   }
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
+  // A side conversation is reached only from the side-question panel on the conversation it was asked from, never
+  // from the ordinary thread list or history — it would otherwise read as a second, unexplained conversation.
+  const visibleConversations = conversations.filter((conversation) => !conversation.sideOf);
   const activeRunning = Boolean(activeConversationId && runningConversationIds.includes(activeConversationId));
   const activePaused = Boolean(
     activeConversationId
@@ -688,8 +695,9 @@ export function App(): ReactNode {
   }
 
   async function resumeInterruptedRun(resume: RecoveryResume): Promise<void> {
-    const conversation = conversations.find((item) => item.id === resume.conversationId)
-      ?? unwrap(await window.kaiDesktop.getConversation(resume.conversationId));
+    const listed = conversations.find((item) => item.id === resume.conversationId);
+    const conversation = listed && !('__summary' in listed)
+      ? listed : unwrap(await window.kaiDesktop.getConversation(resume.conversationId));
     if (!conversation) throw new Error('The conversation for this run no longer exists.');
     setActiveConversationId(conversation.id);
     setView('workspace');
@@ -738,7 +746,12 @@ export function App(): ReactNode {
         { agent: nextBootstrap.settings.defaultAgent, route: nextBootstrap.settings.defaultRoute, execution: 'cli' },
       );
       setBootstrap(nextBootstrap);
-      setConversations(nextConversations);
+      const initial = startConversationId
+        ? await window.kaiDesktop.getConversation(startConversationId).then(unwrap)
+        : null;
+      setConversations(initial
+        ? nextConversations.map((item) => item.id === initial.id ? initial : item)
+        : nextConversations);
       setActiveConversationId(startConversationId);
       setCredentials(nextCredentials);
       setLogs(nextLogs);
@@ -985,7 +998,7 @@ export function App(): ReactNode {
       // whatever the person is in the middle of (a design build in the Studio, say) carries on undisturbed.
       if (background) {
         const loaded = await window.kaiDesktop.getConversation(conversationId).then(unwrap).catch(() => null);
-        if (loaded) setConversations((current) => (current.some((item) => item.id === conversationId) ? current : [loaded, ...current]));
+        if (loaded) setConversations((current) => [loaded, ...current.filter((item) => item.id !== conversationId)]);
         setOpenConversationIds((current) => (current.includes(conversationId) ? current : [...current, conversationId]));
         return;
       }
@@ -1238,7 +1251,7 @@ export function App(): ReactNode {
 
   async function openConversation(id: string): Promise<void> {
     const existing = conversations.find((conversation) => conversation.id === id);
-    if (existing) {
+    if (existing && !('__summary' in existing)) {
       setActiveConversationId(id);
       adoptConversationSettings(existing);
       // A failure from whatever chat was open before must not bleed into the one being switched to.
@@ -1259,6 +1272,17 @@ export function App(): ReactNode {
     setAgentNotice(null);
     setProxyContinuationAgent(null);
     setView('workspace');
+  }
+
+  /** A Studio card can point to a conversation in a different linked project, so open that project first. */
+  async function openLinkedRunConversation(id: string): Promise<void> {
+    const conversation = await perform(() => window.kaiDesktop.getConversation(id).then(unwrap), 'Loading run conversation');
+    if (!conversation) return;
+    if (conversation.projectId && conversation.projectId !== activeProjectIdRef.current) {
+      const opened = await openProjectRef.current(conversation.projectId, 'stay');
+      if (!opened) return;
+    }
+    await openConversation(id);
   }
 
   async function createConversation(prompt: string, options: WorkspaceSendOptions = {}): Promise<void> {
@@ -1764,7 +1788,8 @@ export function App(): ReactNode {
   }
 
   async function renameConversation(id: string, title: string): Promise<void> {
-    const conversation = conversations.find((item) => item.id === id) ?? await perform(
+    const listed = conversations.find((item) => item.id === id);
+    const conversation = (listed && !('__summary' in listed) ? listed : null) ?? await perform(
       () => window.kaiDesktop.getConversation(id).then(unwrap),
       'Loading conversation',
     );
@@ -1773,7 +1798,8 @@ export function App(): ReactNode {
   }
 
   async function archiveConversation(id: string, archived: boolean): Promise<void> {
-    const conversation = conversations.find((item) => item.id === id) ?? await perform(
+    const listed = conversations.find((item) => item.id === id);
+    const conversation = (listed && !('__summary' in listed) ? listed : null) ?? await perform(
       () => window.kaiDesktop.getConversation(id).then(unwrap),
       'Loading conversation',
     );
@@ -1922,6 +1948,44 @@ export function App(): ReactNode {
     setActiveConversationId(saved.id);
     setView('workspace');
     setAgentNotice('Opened a new tab that continues from a summary of the earlier conversation.');
+  }
+
+  /**
+   * A quick question asked off to the side of the open conversation, without touching that conversation's own
+   * turns or leaving the tab it is in. The first question opens a side conversation tagged to this one; every later
+   * question in the same panel continues that same side conversation, so it reads as one short back-and-forth
+   * rather than a fresh thread each time.
+   */
+  async function askSideQuestion(question: string): Promise<void> {
+    if (!bootstrap || !activeConversation) return;
+    const mainId = activeConversation.id;
+    let side = conversations.find((item) => item.sideOf === mainId) ?? null;
+    if (!side) {
+      const fresh = await perform(
+        () => window.kaiDesktop.createConversation(activeConversation.projectId, '').then(unwrap),
+        'Opening a side question',
+      );
+      if (!fresh) return;
+      const seeded: ConversationRecord = {
+        ...fresh,
+        title: 'Side question',
+        sideOf: mainId,
+        ...(activeConversation.activeAgent ? { activeAgent: activeConversation.activeAgent } : {}),
+        ...(activeConversation.execution ? { execution: activeConversation.execution } : {}),
+        ...(activeConversation.route ? { route: activeConversation.route } : {}),
+        ...(activeConversation.autonomy ? { autonomy: activeConversation.autonomy } : {}),
+      };
+      const saved = await perform(() => window.kaiDesktop.saveConversation(seeded).then(unwrap));
+      if (!saved) return;
+      side = saved;
+      setConversations((current) => [saved, ...current]);
+    }
+    await runConversation(side, question, {
+      ...(side.activeAgent ? { agent: side.activeAgent } : {}),
+      ...(side.execution ? { execution: side.execution } : {}),
+      ...(side.route ? { route: side.route } : {}),
+      ...(side.autonomy ? { autonomy: side.autonomy } : {}),
+    });
   }
 
   async function importBrain(): Promise<void> {
@@ -2153,7 +2217,7 @@ export function App(): ReactNode {
       case 'history':
         return (
           <HistoryView
-            conversations={conversations}
+            conversations={visibleConversations}
             activeId={activeConversationId}
             projects={bootstrap.projects}
             onOpen={(id) => void openConversation(id)}
@@ -2208,7 +2272,8 @@ export function App(): ReactNode {
           />
         );
       case 'workspace':
-      default:
+      default: {
+        const sideConversation = activeConversationId ? conversations.find((item) => item.sideOf === activeConversationId) ?? null : null;
         return (
           <WorkspaceView
             activeProject={activeProject}
@@ -2340,11 +2405,19 @@ export function App(): ReactNode {
             onOpenVerification={() => openOperations('verification')}
             onOpenRules={() => setView('rules')}
             onOpenWorkflows={() => setView('workflows')}
+            onOpenStudioCard={(projectId, cardId) => {
+              setStudioCardRequest({ projectId, cardId, nonce: Date.now() });
+              setView('studio');
+            }}
             onCompactConversation={() => void compactActiveConversation()}
             onContinueInNewTab={() => void continueInNewTab()}
-            onOpenFile={(href) => { if (activeProject) void openWorkspaceFile(projectFileLinkPath(href, activeProject.path)); }}
+            sideConversation={sideConversation}
+            sideConversationRunning={Boolean(sideConversation && runningConversationIds.includes(sideConversation.id))}
+            onAskSideQuestion={(question) => void askSideQuestion(question)}
+            onOpenFile={(href, line) => { if (activeProject) void openWorkspaceFile(projectFileLinkPath(href, activeProject.path), line); }}
           />
         );
+      }
     }
   }
 
@@ -2452,7 +2525,7 @@ export function App(): ReactNode {
           <>
             <div className="conversation-column" style={{ width: sidebarWidth }}>
               <ConversationSidebar
-                conversations={conversations}
+                conversations={visibleConversations}
                 activeId={activeConversationId}
                 projectId={activeProject?.id ?? null}
                 filesRefreshKey={`${activeConversation?.id ?? ''}:${activeConversation?.updatedAt ?? ''}`}
@@ -2487,7 +2560,7 @@ export function App(): ReactNode {
           <main className={`app-main view-${view}${view === 'workspace' && workspaceFilePath && activeProject ? ' file-preview-open' : ''}`}>
             {view !== 'code' && renderCurrentView()}
             {workspaceFilePath && activeProject && (
-              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} formatOnSave={bootstrap.settings.editor.formatOnSave} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
+              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} line={workspaceFileLine} formatOnSave={bootstrap.settings.editor.formatOnSave} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
             )}
             {(studioKept || view === 'studio') && (
               <div className={`persistent-studio-view ${view === 'studio' ? 'active' : ''}`} aria-hidden={view !== 'studio'}>
@@ -2495,9 +2568,11 @@ export function App(): ReactNode {
                   activeProject={activeProject}
                   projects={bootstrap.projects}
                   planRequest={studioPlanRequest}
+                  cardRequest={studioCardRequest}
                   onOpenSettings={() => setView('settings')}
                   onLaunchProject={openStudioProject}
                   onPlanForTeam={(plan) => { setIncomingTeamPlan(plan); setView('workflows'); }}
+                  onOpenConversation={(conversationId) => void openLinkedRunConversation(conversationId)}
                   onLearnCard={async (card, studioProjectId) => {
                     // The plan's own project is opened first: the card's board, its artifacts and the files its
                     // runs touched all live in that folder, so nothing else could read them for the tutor.

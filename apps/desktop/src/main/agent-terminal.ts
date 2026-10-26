@@ -15,6 +15,10 @@ export type AgentShell = 'gitbash' | 'powershell' | 'cmd';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT_CHARS = 30_000;
+const DEFAULT_WATCH_TIMEOUT_MS = 60_000;
+// A watch exists so a dev server or a build does not have to be polled turn by turn, so it is allowed to wait far
+// longer than an ordinary command: ten minutes, long enough for most installs and slow builds.
+const MAX_WATCH_TIMEOUT_MS = 600_000;
 
 /** The slice of the terminal manager this needs, so the logic is testable without a real PTY. */
 export interface AgentTerminalPort {
@@ -38,6 +42,11 @@ export interface RunResult {
   shell: AgentShell;
   exitCode: number | null;
   timedOut: boolean;
+  output: string;
+}
+
+export interface WatchResult {
+  matched: boolean;
   output: string;
 }
 
@@ -190,6 +199,46 @@ export class AgentTerminal {
     });
   }
 
+  /**
+   * Waits for a pattern to show up in a session's output — a dev server reporting it is ready, a build finishing —
+   * instead of making the agent read the session over and over on a guess. Checks what has already printed first,
+   * since the thing being waited for may have happened before this was called; only then does it wait on new
+   * output. Resolves either way: `matched: true` the moment the pattern appears, or `matched: false` once the
+   * timeout passes or the session exits without it, so the agent always gets an answer rather than hanging.
+   */
+  async watch(input: { sessionId: string; pattern: string; timeoutMs?: number }): Promise<WatchResult> {
+    if (!this.terminal.get(input.sessionId)) {
+      throw new Error(`There is no terminal session ${input.sessionId}. It may have exited; list the sessions or start a new one.`);
+    }
+    let pattern: RegExp;
+    try {
+      pattern = new RegExp(input.pattern, 'i');
+    } catch (error) {
+      throw new Error(`"${input.pattern}" is not a valid pattern: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? DEFAULT_WATCH_TIMEOUT_MS, 1_000), MAX_WATCH_TIMEOUT_MS);
+    let seen = stripAnsi(this.terminal.buffer(input.sessionId) ?? '');
+    if (pattern.test(seen)) return { matched: true, output: tail(seen, MAX_OUTPUT_CHARS) };
+    return new Promise<WatchResult>((resolve) => {
+      let finished = false;
+      const finish = (matched: boolean): void => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        stopOutput();
+        stopExit();
+        resolve({ matched, output: tail(stripAnsi(seen), MAX_OUTPUT_CHARS) });
+      };
+      const stopOutput = this.terminal.onOutput((id, data) => {
+        if (id !== input.sessionId) return;
+        seen += data;
+        if (pattern.test(stripAnsi(seen))) finish(true);
+      });
+      const stopExit = this.terminal.onExit((id) => { if (id === input.sessionId) finish(false); });
+      const timer = setTimeout(() => finish(false), timeoutMs);
+    });
+  }
+
   read(sessionId: string, maxChars = 8_000): string {
     const buffer = this.terminal.buffer(sessionId);
     if (buffer === null) throw new Error(`There is no terminal session ${sessionId}. It may have exited; list the sessions or start a new one.`);
@@ -247,13 +296,15 @@ export class AgentTerminal {
  */
 export function terminalBriefing(executionMode: 'cli' | 'api', available: readonly AgentShell[]): string {
   const shells = available.join(', ');
+  const toolList = '`terminal_run`, `terminal_start`, `terminal_read`, `terminal_watch`, `terminal_write`, `terminal_list`, `terminal_stop`';
   const toolNames = executionMode === 'cli'
-    ? 'the `kai-terminal` MCP server (`terminal_run`, `terminal_start`, `terminal_read`, `terminal_write`, `terminal_list`, `terminal_stop`)'
-    : 'the `kai-terminal` tools (`terminal_run`, `terminal_start`, `terminal_read`, `terminal_write`, `terminal_list`, `terminal_stop`)';
+    ? `the \`kai-terminal\` MCP server (${toolList})`
+    : `the \`kai-terminal\` tools (${toolList})`;
   return [
     '# KAI terminal',
     `KAI has its own terminal, offered through ${toolNames}. Commands run there happen in a session the person can watch in KAI's terminal dock and type into, and the session is reused so \`cd\` and exported variables carry over.`,
     `You may use it whenever it suits the work, and you may use any shell installed here (${shells}) — pick whichever fits the command rather than defaulting to one. Your own shell tool is fine too. Never open a separate terminal window, and never start a terminal application on the person's desktop.`,
     'A command that does not exit, such as a dev server, comes back with `timed_out: true` and keeps running; read it later with `terminal_read`, and stop it with `terminal_stop` when the work is done.',
+    'To know when a long-running session becomes ready, or a build in it finishes, use `terminal_watch` with a pattern to wait for instead of calling `terminal_read` over and over — it returns the moment the pattern appears, or once it times out.',
   ].join('\n');
 }

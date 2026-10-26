@@ -33,9 +33,11 @@ import {
   GitCompare,
   GitFork,
   Goal,
+  Hash,
   History,
   Loader2,
   LogIn,
+  MessageCircleQuestion,
   Minimize2,
   ImagePlus,
   NotebookPen,
@@ -86,6 +88,7 @@ import type {
   ProjectPreferences,
   ProjectRecord,
   PromptGuideReadiness,
+  PromptPreset,
   ReviewMode,
   RouteMode,
   ServiceState,
@@ -105,6 +108,7 @@ import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { AgentActivityStrip, deriveAgentActivity } from './AgentActivity';
+import { BlockedActionsStrip } from './BlockedActionsStrip';
 import type { QueuedPrompt } from './composer-queue';
 
 import { Select } from './ui/Select';
@@ -220,9 +224,14 @@ interface WorkspaceViewProps {
   onOpenVerification: () => void;
   onOpenRules: () => void;
   onOpenWorkflows: () => void;
+  onOpenStudioCard: (studioProjectId: string, cardId: string) => void;
   onCompactConversation: () => void;
   onContinueInNewTab: () => void;
-  onOpenFile: (path: string) => void;
+  /** The side question asked off this conversation, if one has been started. Null until the first question. */
+  sideConversation: ConversationRecord | null;
+  sideConversationRunning: boolean;
+  onAskSideQuestion: (question: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
@@ -416,11 +425,20 @@ export function WorkspaceView({
   onOpenVerification,
   onOpenRules,
   onOpenWorkflows,
+  onOpenStudioCard,
   onCompactConversation,
   onContinueInNewTab,
+  sideConversation,
+  sideConversationRunning,
+  onAskSideQuestion,
   onOpenFile,
 }: WorkspaceViewProps): ReactNode {
   const [prompt, setPrompt] = useState('');
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [presets, setPresets] = useState<PromptPreset[]>([]);
+  const [savingPresetSlot, setSavingPresetSlot] = useState<number | null>(null);
+  const [sideOpen, setSideOpen] = useState(false);
+  const [sideDraft, setSideDraft] = useState('');
   const [contextPickerOpen, setContextPickerOpen] = useState(false);
   const [fileQuery, setFileQuery] = useState('');
   const [fileResults, setFileResults] = useState<string[]>([]);
@@ -524,6 +542,10 @@ export function WorkspaceView({
     + Math.ceil((prompt.length + promptContextCharacters) / 4) + 1_200;
   const responseCostEstimate = apiRun && effectiveRoute === 'direct' && canSendPrompt
     ? estimateResponseCostUsd(estimateModel, estimatedInputTokens) : null;
+  // Independent of whatever is or isn't typed yet: what resuming this conversation costs before the next word is
+  // written, so the warning to compact a large idle conversation can also say what letting it ride will cost.
+  const resumeCostEstimate = activeConversation && apiRun && effectiveRoute === 'direct'
+    ? estimateResponseCostUsd(estimateModel, estimateConversationTokens(activeConversation) + 1_200) : null;
   const sendOptions: WorkspaceSendOptions | undefined = (activeGoal || selectedSkills.length || allContextChips.length)
     ? {
         ...(activeGoal ? { goal: activeGoal } : {}),
@@ -623,6 +645,17 @@ export function WorkspaceView({
       window.clearTimeout(timer);
     };
   }, [activeProject?.id, contextPickerOpen, fileQuery]);
+
+  useEffect(() => {
+    if (!presetsOpen) return;
+    let cancelled = false;
+    void window.kaiDesktop.listPromptPresets().then(unwrap).then((list) => {
+      if (!cancelled) setPresets(list);
+    }).catch((caught) => {
+      if (!cancelled) setWorkbenchNotice(messageOf(caught));
+    });
+    return () => { cancelled = true; };
+  }, [presetsOpen]);
 
   useEffect(() => {
     if (!commandRequest) return;
@@ -993,6 +1026,13 @@ export function WorkspaceView({
 
   /** A fix chosen in the Equalizer: the prompt goes into the composer for the user to read and send, as a Build. */
   function applyEqualizerFix(text: string): void {
+    rememberIntent('build');
+    setPrompt(text);
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }
+
+  /** Prepares a reviewed finding as a scoped build request for the person to inspect and send. */
+  function fixFinding(text: string): void {
     rememberIntent('build');
     setPrompt(text);
     window.setTimeout(() => promptRef.current?.focus(), 0);
@@ -1399,7 +1439,8 @@ export function WorkspaceView({
    * composer's Stop button uses.
    */
   const runActive = running || paused || awaitingApproval;
-  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} runActive={runActive} onAskKai={askKaiStable} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
+  const fixFindingStable = useLatestHandler(fixFinding);
+  const renderInlineEvent = (event: PersistedEvent, defaultExpanded: boolean): ReactNode => <RunEventCard key={event.id} event={event} originalRequest={event.type === 'turn.changes' ? activeConversation?.turns.find((turn) => turn.id === event.turnId)?.text ?? '' : ''} projectId={activeProject?.id ?? null} reviewMode={profile.reviewMode} defaultExpanded={defaultExpanded} runActive={runActive} onAskKai={askKaiStable} onFixFinding={fixFindingStable} onOpenFile={onOpenFile} onReview={reviewTurnChanges} onUndo={restoreTurnChanges} onOpenVerification={onOpenVerification} />;
   const renderInlineEvents = (events: readonly PersistedEvent[]): ReactNode => groupExecutableCommands(events).map((group) => group.kind === 'commands'
     ? <ExecutableCommandsGroup key={group.key} events={group.events} runActive={runActive}>{group.events.map((event) => renderInlineEvent(event, false))}</ExecutableCommandsGroup>
     : renderInlineEvent(group.event, false));
@@ -1549,9 +1590,21 @@ export function WorkspaceView({
           </div>
         )}
 
+        {autopilotOrigin && (
+          <div className="workbench-notice" role="status">
+            <span>Studio card: &ldquo;{autopilotOrigin.cardTitle}&rdquo;</span>
+            <button type="button" className="secondary-button" onClick={() => onOpenStudioCard(autopilotOrigin.studioProjectId, autopilotOrigin.cardId)}>Open card in Studio</button>
+          </div>
+        )}
+
         {activeConversation && !running && estimateConversationTokens(activeConversation) >= COMPACTION_WARNING_TOKENS && (
           <div className="workbench-notice compaction-banner" role="status">
-            <span>This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.</span>
+            <span>
+              This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.
+              {/* The size on its own says nothing about money; a large idle conversation resumed on a paid API model is exactly
+                  the moment a cost warning is worth having, before the first reply of the new session is sent. */}
+              {resumeCostEstimate && <> Resuming it costs roughly ${resumeCostEstimate.low < 0.01 ? resumeCostEstimate.low.toFixed(4) : resumeCostEstimate.low.toFixed(2)}–${resumeCostEstimate.high < 0.01 ? resumeCostEstimate.high.toFixed(4) : resumeCostEstimate.high.toFixed(2)} for the next response alone.</>}
+            </span>
             <button type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</button>
             <button type="button" className="secondary-button" disabled={busy} onClick={onContinueInNewTab} title="Summarise this conversation and carry on in a new tab">Continue in new tab</button>
           </div>
@@ -1784,6 +1837,7 @@ export function WorkspaceView({
           elapsedSeconds={elapsedSeconds}
           tokenEstimate={liveTokenEstimate}
         />}
+        {activeConversation && <BlockedActionsStrip events={activeConversation.events} />}
         {/* A missing CLI is explained even before a project is open, so the user knows how to get it. */}
         {(activeProject || (!apiRun && selectedCapability?.state === 'not_installed')) && !ready && (apiRun ? directApiCapability : selectedCapability) && (
           <div className="agent-setup-banner" role="status">
@@ -1919,6 +1973,95 @@ export function WorkspaceView({
           </div>
           </div>
         )}
+        {presetsOpen && (
+          <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Saved prompts">
+          <div className="context-picker skills-panel">
+            <div className="context-picker-head">
+              <div><strong>Saved prompts</strong><span>Reuse a prompt, or save the one you're writing into a slot</span></div>
+              <button type="button" className="icon-button compact" aria-label="Close saved prompts" onClick={() => setPresetsOpen(false)}><X size={14} /></button>
+            </div>
+            <div className="prompt-preset-list">
+              {Array.from({ length: 9 }, (_, index) => index + 1).map((slot) => {
+                const preset = presets.find((entry) => entry.slot === slot);
+                return (
+                  <div className="prompt-preset-row" key={slot}>
+                    <span className="prompt-preset-slot"><Hash size={11} />{slot}</span>
+                    {preset ? (
+                      <>
+                        <button type="button" className="prompt-preset-use" title={preset.text} onClick={() => { setPrompt(preset.text); setPresetsOpen(false); window.setTimeout(() => promptRef.current?.focus(), 0); }}>
+                          {preset.label}
+                        </button>
+                        <button type="button" className="icon-button compact" aria-label={`Delete preset ${slot}`} title="Delete this saved prompt" onClick={() => void window.kaiDesktop.deletePromptPreset(slot).then(unwrap).then(setPresets)}><Trash2 size={12} /></button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="prompt-preset-use empty"
+                        disabled={!prompt.trim() || savingPresetSlot === slot}
+                        title={prompt.trim() ? 'Save the current prompt into this slot' : 'Write a prompt first'}
+                        onClick={() => void (async () => {
+                          const label = await promptDialog({ title: 'Save prompt', label: 'Name', placeholder: 'What this prompt is for', validate: (value) => value.trim() ? null : 'Give it a short name.' });
+                          if (!label) return;
+                          setSavingPresetSlot(slot);
+                          try {
+                            const saved = unwrap(await window.kaiDesktop.savePromptPreset(slot, label.trim(), prompt));
+                            setPresets(saved);
+                          } catch (caught) {
+                            setWorkbenchNotice(messageOf(caught));
+                          } finally {
+                            setSavingPresetSlot(null);
+                          }
+                        })()}
+                      >
+                        Empty — save current prompt here
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          </div>
+        )}
+        {sideOpen && (
+          <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Side question">
+          <div className="context-picker skills-panel side-question-panel">
+            <div className="context-picker-head">
+              <div><strong>Side question</strong><span>Answered on its own, without changing this conversation</span></div>
+              <button type="button" className="icon-button compact" aria-label="Close side question" onClick={() => setSideOpen(false)}><X size={14} /></button>
+            </div>
+            {sideConversation && sideConversation.turns.length > 0 && (
+              <div className="side-question-transcript">
+                {sideConversation.turns.map((turn) => (
+                  <div key={turn.id} className={`side-question-turn ${turn.role}`}>
+                    {turn.role === 'assistant' ? <Markdown text={turn.text} /> : <p>{turn.text}</p>}
+                  </div>
+                ))}
+                {sideConversationRunning && <div className="side-question-turn assistant thinking"><Loader2 className="spin" size={12} /><span>Thinking…</span></div>}
+              </div>
+            )}
+            <div className="side-question-compose">
+              <textarea
+                rows={2}
+                value={sideDraft}
+                onChange={(event) => setSideDraft(event.target.value)}
+                placeholder="Ask something off to the side, then come back to this conversation"
+                disabled={sideConversationRunning}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    if (sideDraft.trim() && !sideConversationRunning) { onAskSideQuestion(sideDraft.trim()); setSideDraft(''); }
+                  }
+                }}
+              />
+              <button type="button" className="secondary-button" disabled={!sideDraft.trim() || sideConversationRunning} onClick={() => { onAskSideQuestion(sideDraft.trim()); setSideDraft(''); }}>
+                {sideConversationRunning ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
+                <span>Ask</span>
+              </button>
+            </div>
+          </div>
+          </div>
+        )}
         {goalEditor && (
           <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Goal">
           <div className="goal-editor skills-panel">
@@ -2004,6 +2147,10 @@ export function WorkspaceView({
           <div className="composer-toolbar">
             <div className="composer-leading">
               <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
+              <button type="button" className={`composer-icon-button ${presetsOpen ? 'active' : ''}`} onClick={() => setPresetsOpen((current) => !current)} title="Saved prompts" aria-label="Saved prompts"><Hash size={14} /></button>
+              {activeConversation && (
+                <button type="button" className={`composer-icon-button ${sideOpen ? 'active' : ''}`} onClick={() => setSideOpen((current) => !current)} title="Ask a quick question without derailing this conversation" aria-label="Side question"><MessageCircleQuestion size={14} /></button>
+              )}
               <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
               <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <SelectMenu ariaLabel="Reply style" className="composer-style-select" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
@@ -2298,8 +2445,9 @@ function MessageContent({ text, markdown = false, onOpenFile }: { text: string; 
   );
 }
 
-function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, runActive, onAskKai, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; projectId: string | null; reviewMode: ReviewMode; defaultExpanded: boolean; /** Whether the run this event belongs to is still going, which is the only way to tell a live tool call from one nothing is running. */ runActive: boolean; onAskKai: (text: string) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
+function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defaultExpanded, runActive, onAskKai, onFixFinding, onOpenFile, onReview, onUndo, onOpenVerification }: { event: PersistedEvent; originalRequest: string; projectId: string | null; reviewMode: ReviewMode; defaultExpanded: boolean; /** Whether the run this event belongs to is still going, which is the only way to tell a live tool call from one nothing is running. */ runActive: boolean; onAskKai: (text: string) => void; onFixFinding: (text: string) => void; onOpenFile: (path: string, line?: number) => void; onReview: (turnId: string) => Promise<void>; onUndo: (turnId: string) => Promise<void>; onOpenVerification: () => void }): ReactNode {
   const [changesExpanded, setChangesExpanded] = useState(false);
+  const [contextSnapshotExpanded, setContextSnapshotExpanded] = useState(false);
   const [explanation, setExplanation] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; result?: ChangeReviewResult; error?: string }>({ state: 'idle' });
   if (event.type === 'approval.request' && event.options) {
     return <article className="message assistant inline-question" aria-label="Question KAI asked"><div className="message-role">KAI asked</div><h3>{event.title}</h3>{event.detail && <p className="inline-question-context">{event.detail}</p>}</article>;
@@ -2341,6 +2489,25 @@ function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, runAc
   if (event.type === 'file.edit.applied' || event.type === 'file.change') {
     const path = event.type === 'file.edit.applied' ? event.filePath : event.path;
     return <div className="run-event diff"><span>Changed</span><strong>{path}</strong>{event.type === 'file.change' && <small>{event.action}</small>}</div>;
+  }
+  if (event.type === 'context.snapshot') {
+    return (
+      <details className="run-event context-snapshot" onToggle={(toggle) => setContextSnapshotExpanded(toggle.currentTarget.open)}>
+        <summary><span>Context sent</span><strong>{event.delivery.toUpperCase()} · ~{formatCompact(event.estimatedTokens)} tokens</strong></summary>
+        <small>{formatCompact(event.totalCharacters)} characters of project context. Token count is approximate; provider-managed system prompts and resumed session history are outside this record.</small>
+        {event.sections.map((section) => (
+          <div className="context-snapshot-section" key={section.kind}>
+            <strong>{section.label}</strong>
+            {section.note && <small>{section.note}</small>}
+            {section.items.map((item) => <small key={`${item.kind}:${item.source ?? item.label}`}>{item.source ?? item.label}{item.truncated ? ' · truncated' : ''}</small>)}
+            {section.items.length === 0 && !section.note && <small>None</small>}
+          </div>
+        ))}
+        {event.supplementalSources.length > 0 && <div className="context-snapshot-section"><strong>Additional inputs</strong>{event.supplementalSources.map((source) => <small key={source}>{source}</small>)}</div>}
+        {event.projectContextText !== undefined && event.projectContextText.length > 0 && <div className="context-snapshot-section"><strong>Project context text{event.projectContextTextTruncated ? ' · display capped' : ''}</strong>{contextSnapshotExpanded && <pre>{event.projectContextText}</pre>}</div>}
+        {event.projectContextText === undefined && <small>Project context text is unavailable for this saved snapshot.</small>}
+      </details>
+    );
   }
   if (event.type === 'memory.event') {
     return <div className="run-event memory"><span>Memory</span><strong>{event.action.replace('_', ' ')}</strong><small>{event.summary}</small></div>;
@@ -2414,7 +2581,23 @@ function RunEventCardBase({ event, projectId, reviewMode, defaultExpanded, runAc
           <div className="change-explanation" aria-live="polite">
             <strong>{explanation.result.findings.length === 0 ? 'Nothing needs your attention' : explanation.result.ok ? 'A few minor notes' : 'Worth a look before you keep this'}</strong>
             {explanation.result.summary && <p>{explanation.result.summary}</p>}
-            {explanation.result.findings.length > 0 && <ul>{explanation.result.findings.map((finding, index) => <li key={index}><span className={`review-chip ${finding.severity}`}>{finding.severity}</span><em>{finding.file}{finding.line ? `:${finding.line}` : ''}</em><p>{finding.note}</p></li>)}</ul>}
+            {explanation.result.findings.length > 0 && <ul>{explanation.result.findings.map((finding, index) => {
+              const location = `${finding.file}${finding.line ? `:${finding.line}` : ''}`;
+              const fixPrompt = [
+                `Fix this reviewed finding in ${finding.file}${finding.line ? ` at line ${finding.line}` : ''}.`,
+                ...(originalRequest ? [`Original request: ${originalRequest}`] : []),
+                `Finding (${finding.severity}): ${finding.note}`,
+                'Make the smallest appropriate change, then run the relevant checks and report what you verified.',
+              ].join('\n\n');
+              return (
+                <li key={index}>
+                  <span className={`review-chip ${finding.severity}`}>{finding.severity}</span>
+                  <button type="button" className="review-finding-file-button" title={`Open ${location}`} onClick={() => onOpenFile(finding.file, finding.line)}><File size={12} /><span>{location}</span></button>
+                  <p>{finding.note}</p>
+                  <button type="button" className="secondary-button compact" onClick={() => onFixFinding(fixPrompt)}><Wand2 size={12} /><span>Ask KAI to fix</span></button>
+                </li>
+              );
+            })}</ul>}
           </div>
         )}
       </section>
@@ -2431,6 +2614,7 @@ function isRunDetailEvent(event: PersistedEvent): boolean {
   return event.type === 'diff.proposal'
     || event.type === 'file.edit.applied'
     || event.type === 'file.change'
+    || event.type === 'context.snapshot'
     || event.type === 'memory.event'
     || event.type === 'cost.update'
     || event.type === 'plan.update'

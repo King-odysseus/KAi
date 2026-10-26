@@ -78,6 +78,27 @@ export function registerTerminalTools(server: McpServer, terminal: AgentTerminal
     }
   });
 
+  server.registerTool('terminal_watch', {
+    description: 'Wait for a pattern to appear in a session\'s output — a dev server reporting it is ready, a build finishing — instead of calling terminal_read over and over on a guess. Checks what has already printed first, then waits for new output. Returns matched: true the moment the pattern appears, or matched: false once the timeout passes or the session exits without it.',
+    inputSchema: {
+      session_id: z.string(),
+      pattern: z.string().describe('A regular expression to look for in the output, matched case-insensitively.'),
+      timeout_ms: z.number().int().min(1000).max(600_000).optional().describe('How long to wait, 60000 by default, 600000 (ten minutes) at most.'),
+    },
+    annotations: { readOnlyHint: true },
+  }, async ({ session_id, pattern, timeout_ms }) => {
+    try {
+      const result = await terminal.watch({
+        sessionId: session_id,
+        pattern,
+        ...(timeout_ms ? { timeoutMs: timeout_ms } : {}),
+      });
+      return text({ matched: result.matched, output: result.output });
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
   server.registerTool('terminal_write', {
     description: 'Type raw keystrokes into a session, for a prompt a command stopped on. End a line with \\r to press Enter; send \\u0003 for Ctrl+C.',
     inputSchema: { session_id: z.string(), input: z.string().max(100_000) },

@@ -158,7 +158,9 @@ import type { DesktopCodeGuideService } from './code-guide-service';
 import type { StudioStyleReferenceStore } from './style-references';
 import type { EqualizerService } from './equalizer';
 import { resolveInside } from './project-files';
+import { suggestPermissionRules } from './permission-setup';
 import { ComposerQueueStore } from './composer-queue-store';
+import type { PromptPresetStore } from './prompt-preset-store';
 import type { PlaywrightViewportStatus } from '@kai/contracts';
 import type { TeamRecordStore } from './team-record-store';
 import type { DesktopRunControl } from './run-control';
@@ -200,6 +202,7 @@ export interface IpcContext {
   preferences: ProjectPreferenceStore;
   conversations: ConversationStore;
   composerQueue: ComposerQueueStore;
+  promptPresets: PromptPresetStore;
   playwrightViewportStatus(): Promise<PlaywrightViewportStatus>;
   repairPlaywrightViewport(): Promise<PlaywrightViewportStatus>;
   /** What the paid runs have cost, kept up to date as conversations are saved, so no run has to load them all to check the budget. */
@@ -546,6 +549,10 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'skills:list', async ({ projectId }) => listSkills(context, projectId));
   handle(context, 'files:choose', async ({ projectId }) => chooseProjectFiles(context, projectId));
   handle(context, 'files:search', async ({ projectId, query }) => searchProjectFiles(context, projectId, query));
+  handle(context, 'permission-rules:suggest', async ({ projectId }) => {
+    const project = await resolveProject(context, projectId, true);
+    return suggestPermissionRules(await fs.realpath(project.path));
+  });
   handle(context, 'context:git-diff', async ({ projectId }) => gitDiffForProject(context, projectId));
   handle(context, 'attachments:save', async ({ name, dataUrl }) => saveAttachment(context, name, dataUrl));
   handle(context, 'workflows:list-templates', async ({ projectId }) => context.workflowTemplates.list(projectId));
@@ -776,7 +783,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     await broadcastSharedState(context);
     return status;
   });
-  handle(context, 'conversations:list', async () => context.conversations.list());
+  handle(context, 'conversations:list', async () => context.conversations.listSummaries());
   handle(context, 'composer-queue:load', async ({ legacy }) => {
     const queue = await context.composerQueue.loadOrMigrate(legacy);
     context.windows.broadcast('app:composer-queue-changed', queue);
@@ -807,6 +814,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     context.windows.broadcast('app:composer-queue-changed', queue);
     return queue;
   });
+  handle(context, 'prompt-presets:list', async () => context.promptPresets.list());
+  handle(context, 'prompt-presets:save', async ({ slot, label, text }) => context.promptPresets.save({ slot, label, text }));
+  handle(context, 'prompt-presets:delete', async ({ slot }) => context.promptPresets.delete(slot));
   handle(context, 'conversations:get', async ({ id }) => context.conversations.get(id));
   handle(context, 'conversations:create', async ({ projectId, firstPrompt }, request) => {
     const now = new Date().toISOString();
@@ -1660,7 +1670,7 @@ export async function runConversationAgent(
   conversation.turns.push(userTurn);
   writtenTurnId = userTurn.id;
 
-  const resumeSessionId = canResume && !conversation.compaction ? conversation.agentSessionId : undefined;
+  let resumeSessionId = canResume && !conversation.compaction ? conversation.agentSessionId : undefined;
   if (!resumeSessionId && conversation.compaction) delete conversation.agentSessionId;
   await context.conversations.save(conversation);
   if (stopped()) return stoppedResult();
@@ -1766,8 +1776,8 @@ export async function runConversationAgent(
       });
     }),
   };
-  const contextText = executionMode === 'api'
-    ? (await buildConversationContext(
+  const builtProjectContext = executionMode === 'api'
+    ? await buildConversationContext(
         context,
         workRoot,
         project.name,
@@ -1784,8 +1794,8 @@ export async function runConversationAgent(
         // What was recalled, said on the run. The event type has existed all along and was never emitted, so a run
         // gave no sign of whether it had memory behind it — including when it had none because the brain was slow.
         (summary) => memoryEvents.push(memoryEvent(conversation.id, request.agent, 'recall', summary)),
-      )).text
-    : (await buildConversationContext(
+      )
+    : await buildConversationContext(
         context,
         workRoot,
         project.name,
@@ -1801,7 +1811,20 @@ export async function runConversationAgent(
         // the agent starts from a map of the project instead of walking the whole tree to find its way. A resumed
         // session already has it.
         !resumeSessionId,
-      )).text;
+      );
+  const contextText = builtProjectContext.text;
+  let snapshotProjectContext = builtProjectContext;
+  const snapshotSupplementalSources = [
+    ...selectedSkills.map((skill) => `Skill: ${skill.name}`),
+    ...(request.contextChips ?? []).map((chip) => {
+      if (chip.type === 'file') return `File attachment: ${chip.path}`;
+      if (chip.type === 'selection') return `Selection: ${chip.path}:${chip.startLine}-${chip.endLine}`;
+      if (chip.type === 'image') return `Image: ${chip.name}`;
+      if (chip.type === 'memory') return `Memory attachment: ${chip.query}`;
+      if (chip.type === 'gitDiff') return 'Git diff attachment';
+      return 'Terminal selection attachment';
+    }),
+  ].slice(0, 120);
   // Autopilot tells its own cards how to use helpers, so the composer's choice is not added to those runs.
   const helpersNote = conversation.origin?.kind === 'autopilot' ? '' : `${helpersBriefing(request.helpers, executionMode)}\n\n`;
   let effectivePrompt = `${workingMethodBriefing()}\n\n${responseStyleBriefing(request.responseStyle)}\n\n${helpersNote}${longRunningCommandBriefing()}\n\n${buildSkillPrompt(selectedSkills, request.prompt)}`;
@@ -1810,6 +1833,7 @@ export async function runConversationAgent(
   const terminalTools = context.terminalMcp === true;
   if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing(executionMode, terminalTools)}\n\n${effectivePrompt}`;
   if (terminalTools) effectivePrompt = `${terminalBriefing(executionMode, availableShells())}\n\n${effectivePrompt}`;
+  const promptWithoutProjectContext = effectivePrompt;
   // A route/agent switch starts a fresh CLI session. Carry enough transcript
   // forward that the new provider treats this as a continuation, not a new task.
   if (executionMode === 'cli' && !canResume) {
@@ -1939,6 +1963,51 @@ export async function runConversationAgent(
         )
       : await context.agents.run(executionRequest, workRoot, resumeSessionId, emit, preferences?.customPermissions, chosenModel ?? autoPick?.model ?? settings.agentModels[request.agent], autoPick?.note, chipContext.imagePaths);
 
+    if (executionMode === 'cli' && resumeSessionId && isUnavailableCliSession(execution)) {
+      // Some CLIs remove or expire sessions outside KAI. If resume failed before the agent produced any work, start
+      // fresh with a handoff and the full static context instead of making the person retry manually.
+      const freshContext = await buildConversationContext(
+        context,
+        workRoot,
+        project.name,
+        project.id,
+        conversation,
+        request.prompt,
+        undefined,
+        selectedPaths,
+        conversation.compaction,
+        false,
+        true,
+        memoryBudget,
+      );
+      const handoff = renderConversationHandoff(conversation.turns.slice(0, -1));
+      const promptBody = planNote ? `${planNote}\n\n${promptWithoutProjectContext}` : promptWithoutProjectContext;
+      const freshPrompt = `${handoff ? `${handoff}\n\n` : ''}${freshContext.text}\n\n[USER REQUEST]\n${promptBody}`;
+      const freshRequest = { ...executionRequest, prompt: freshPrompt };
+      const retryRequest = carryRules ? applyExecutionRulesToRequest(freshRequest, rulesBriefing) : freshRequest;
+      snapshotProjectContext = freshContext;
+      resumeSessionId = undefined;
+      execution = await context.agents.run(
+        retryRequest,
+        workRoot,
+        undefined,
+        emit,
+        preferences?.customPermissions,
+        chosenModel ?? autoPick?.model ?? settings.agentModels[request.agent],
+        autoPick?.note,
+        chipContext.imagePaths,
+      );
+      execution.events.unshift({
+        schemaVersion: 1,
+        id: `evt_${crypto.randomUUID()}`,
+        taskId: conversation.id,
+        timestamp: new Date().toISOString(),
+        agent: request.agent,
+        type: 'notice',
+        message: 'The saved CLI session was unavailable, so KAI restarted with a conversation handoff and rebuilt project context.',
+      });
+    }
+
     // A CLI run is a single process, so an agent that stops with its plan unfinished simply stops — unlike the Direct
     // API path, which loops inside the run and can push it to carry on. The only way to continue here is to invoke the
     // agent again with the outstanding items, which is what this does.
@@ -1983,6 +2052,21 @@ export async function runConversationAgent(
     // Only when this level created it. An enclosing automation's controller outlives any one of its turns.
     if (ownedStop) automationRuns.delete(request.conversationId);
   }
+  memoryEvents.push({
+    schemaVersion: 1,
+    id: `evt_${crypto.randomUUID()}`,
+    taskId: conversation.id,
+    timestamp: new Date().toISOString(),
+    agent: request.agent,
+    type: 'context.snapshot',
+    delivery: executionMode,
+    totalCharacters: snapshotProjectContext.preview.totalCharacters,
+    estimatedTokens: snapshotProjectContext.preview.estimatedTokens,
+    projectContextText: snapshotProjectContext.text.slice(0, 2_000_000),
+    projectContextTextTruncated: snapshotProjectContext.text.length > 2_000_000,
+    sections: snapshotProjectContext.preview.sections,
+    supplementalSources: snapshotSupplementalSources,
+  });
   recordDeliveredInterjections();
   if (executionMode === 'api' && execution.status === 'failed') {
     // The session still has to be closed either way; only what the brain is told differs, because a run the person
@@ -2245,7 +2329,9 @@ async function fileRunLesson(
       operation: 'brain-auto-learn',
       payload: {
         source: 'session',
-        summary: lesson.summary,
+        // The first line remains the draft title; the marker follows it so C1 carries the run ID into its draft,
+        // learned entry and rejection record without needing a moving queue index.
+        summary: `${lesson.summary.slice(0, lesson.summary.indexOf('\n'))}\nKAI Run ID: ${run.conversationId}\n${lesson.summary.slice(lesson.summary.indexOf('\n') + 1)}`,
         files: lesson.files,
         project: await memoryProjectName(context, run.projectPath, run.projectName),
         agent: run.agent,
@@ -3422,6 +3508,16 @@ function memoryEvent(
     action,
     summary,
   };
+}
+
+function isUnavailableCliSession(execution: AgentExecutionResult): boolean {
+  if (execution.status !== 'failed' || execution.cancelled || execution.output.trim()) return false;
+  if (execution.events.some((event) => ['tool.call', 'file.change', 'file.edit.applied', 'diff.proposal', 'turn.changes'].includes(event.type))) return false;
+  const message = [
+    execution.error ?? '',
+    ...execution.events.flatMap((event) => event.type === 'error' ? [event.message] : []),
+  ].join('\n');
+  return /(?:session|thread|conversation).{0,100}(?:not found|does not exist|expired|invalid|unknown)|(?:not found|does not exist|expired|invalid|unknown).{0,100}(?:session|thread|conversation)/i.test(message);
 }
 
 /**

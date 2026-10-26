@@ -113,6 +113,85 @@ describe('agent terminal', () => {
   });
 });
 
+/** A terminal port whose buffer and output a test controls directly, for watching a session nothing writes to. */
+function watchPort(initialBuffer = ''): AgentTerminalPort & { emit: (id: string, data: string) => void; exit: (id: string) => void } {
+  const sessions = new Map<string, TerminalSession>();
+  const buffers = new Map<string, string>();
+  const output = new Set<(id: string, data: string) => void>();
+  const exits = new Set<(id: string) => void>();
+  let counter = 0;
+  return {
+    emit: (id, data) => {
+      buffers.set(id, `${buffers.get(id) ?? ''}${data}`);
+      for (const listener of output) listener(id, data);
+    },
+    exit: (id) => {
+      sessions.delete(id);
+      for (const listener of exits) listener(id);
+    },
+    start: (projectId, cwd, shell, cols, rows, _owner, options) => {
+      const session: TerminalSession = { id: `term_${++counter}`, projectId, shell, cwd, cols, rows, ...(options.agent ? { agent: true } : {}) };
+      sessions.set(session.id, session);
+      buffers.set(session.id, initialBuffer);
+      return session;
+    },
+    write: (id) => sessions.has(id),
+    stop: (id) => sessions.delete(id),
+    get: (id) => sessions.get(id) ?? null,
+    list: () => [...sessions.values()],
+    buffer: (id) => (sessions.has(id) ? buffers.get(id) ?? '' : null),
+    onOutput: (listener) => { output.add(listener); return () => output.delete(listener); },
+    onExit: (listener) => { exits.add(listener); return () => exits.delete(listener); },
+  };
+}
+
+describe('watching a session for a pattern', () => {
+  it('matches immediately when the pattern is already in what the session printed', async () => {
+    const port = watchPort('Compiling...\nready on http://localhost:3000\n');
+    const terminal = new AgentTerminal(port, context, () => ['gitbash']);
+    const session = await terminal.start({});
+    const result = await terminal.watch({ sessionId: session.id, pattern: 'ready on' });
+    expect(result).toMatchObject({ matched: true });
+    expect(result.output).toContain('ready on http://localhost:3000');
+  });
+
+  it('matches on output that arrives after the watch starts, case-insensitively', async () => {
+    const port = watchPort();
+    const terminal = new AgentTerminal(port, context, () => ['gitbash']);
+    const session = await terminal.start({});
+    const pending = terminal.watch({ sessionId: session.id, pattern: 'build succeeded' });
+    port.emit(session.id, 'Compiling...\n');
+    port.emit(session.id, 'BUILD SUCCEEDED in 4.2s\n');
+    await expect(pending).resolves.toMatchObject({ matched: true });
+  });
+
+  it('gives up once the timeout passes without a match', async () => {
+    const port = watchPort();
+    const terminal = new AgentTerminal(port, context, () => ['gitbash']);
+    const session = await terminal.start({});
+    port.emit(session.id, 'still compiling\n');
+    const result = await terminal.watch({ sessionId: session.id, pattern: 'ready', timeoutMs: 1_000 });
+    expect(result).toMatchObject({ matched: false, output: 'still compiling\n' });
+  });
+
+  it('gives up if the session exits before the pattern appears', async () => {
+    const port = watchPort();
+    const terminal = new AgentTerminal(port, context, () => ['gitbash']);
+    const session = await terminal.start({});
+    const pending = terminal.watch({ sessionId: session.id, pattern: 'ready', timeoutMs: 60_000 });
+    port.exit(session.id);
+    await expect(pending).resolves.toMatchObject({ matched: false });
+  });
+
+  it('refuses a session that does not exist, and a pattern that is not a valid regular expression', async () => {
+    const port = watchPort();
+    const terminal = new AgentTerminal(port, context, () => ['gitbash']);
+    await expect(terminal.watch({ sessionId: 'term_missing', pattern: 'ready' })).rejects.toThrow(/no terminal session/);
+    const session = await terminal.start({});
+    await expect(terminal.watch({ sessionId: session.id, pattern: '(unclosed' })).rejects.toThrow(/not a valid pattern/);
+  });
+});
+
 describe('clean output', () => {
   it('drops the echoed command, the prompt and however much of the typed marker line had arrived', () => {
     expect(cleanOutput('> echo hi\nhi\n> Write-Host "__KAI_DONE_ab12cd_', 'ab12cd', 'echo hi')).toBe('hi');
@@ -154,7 +233,7 @@ describe('KAI terminal MCP host', () => {
     const client = new Client({ name: 'test', version: '0.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(host.endpoint), { requestInit: { headers: { Authorization: host.authorization } } }));
     const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    expect(tools).toEqual(['terminal_list', 'terminal_read', 'terminal_run', 'terminal_start', 'terminal_stop', 'terminal_write']);
+    expect(tools).toEqual(['terminal_list', 'terminal_read', 'terminal_run', 'terminal_start', 'terminal_stop', 'terminal_watch', 'terminal_write']);
     const result = await client.callTool({ name: 'terminal_run', arguments: { command: 'echo hello', shell: 'powershell' } });
     expect(JSON.parse(((result.content as Array<{ text: string }>)[0]).text)).toMatchObject({ exit_code: 0, shell: 'powershell', output: 'hello' });
     const bad = await client.callTool({ name: 'terminal_run', arguments: { command: 'ls', shell: 'cmd', session_id: 'term_nope' } });

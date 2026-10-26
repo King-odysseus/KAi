@@ -32,6 +32,9 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('app:composer-queue-changed', handler);
     return () => ipcRenderer.removeListener('app:composer-queue-changed', handler);
   },
+  listPromptPresets: () => ipcRenderer.invoke('prompt-presets:list', {}),
+  savePromptPreset: (slot, label, text) => ipcRenderer.invoke('prompt-presets:save', { slot, label, text }),
+  deletePromptPreset: (slot) => ipcRenderer.invoke('prompt-presets:delete', { slot }),
   serviceStatus: () => ipcRenderer.invoke('services:status', {}),
   startService: (kind) => ipcRenderer.invoke('services:start', { kind }),
   stopService: (kind) => ipcRenderer.invoke('services:stop', { kind }),
@@ -53,6 +56,7 @@ const bridge: KaiDesktopBridge = {
   listSkills: (projectId) => ipcRenderer.invoke('skills:list', projectId ? { projectId } : {}),
   chooseFiles: (projectId) => ipcRenderer.invoke('files:choose', { projectId }),
   searchFiles: (request) => ipcRenderer.invoke('files:search', request),
+  suggestPermissionRules: (projectId) => ipcRenderer.invoke('permission-rules:suggest', { projectId }),
   projectFileTree: (projectId) => ipcRenderer.invoke('files:tree', { projectId }),
   readProjectFile: (projectId, path) => ipcRenderer.invoke('files:read', { projectId, path }),
   writeProjectFile: (request) => ipcRenderer.invoke('files:write', request),

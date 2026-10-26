@@ -13,9 +13,11 @@ import { PLAYWRIGHT_HOST_PORT, realPlaywrightHostPorts, startPlaywrightHost, typ
 import { installCrashRecord } from './crash-record';
 import { UsageLedger } from './usage-ledger';
 import { ComposerQueueStore } from './composer-queue-store';
+import { PromptPresetStore } from './prompt-preset-store';
 import { startSharedBrowser } from './shared-browser';
 import type { SharedBrowserDeps } from './shared-browser';
 import { inspectPlaywrightViewport } from './playwright-viewport';
+import { PLAYWRIGHT_WINDOW_SYNC_SCRIPT, withWindowSync } from './playwright-window-sync';
 import { AgentTerminal } from './agent-terminal';
 import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
 import { DesktopConfigBackupStore } from './backups';
@@ -80,7 +82,7 @@ import { StudioStyleReferenceStore } from './style-references';
 import { DesktopEqualizer, type EqualizerService } from './equalizer';
 import { DESIGN_TOOLS, pagesFromReply, type DesignPorts } from './design-source';
 import { createEqualizerPorts } from './equalizer-ports';
-import { SPEC_ROOT, SpecStore } from './spec-store';
+import { SPEC_ROOT, SpecStore, ensureSpecIgnore } from './spec-store';
 import { DesktopUiCheck, failureSummary, playwrightUiCheckPorts } from './ui-check';
 import { DesktopDevCheck, playwrightDevCheckPorts } from './dev-check';
 import { listProjectFiles, resolveInside } from './project-files';
@@ -383,6 +385,7 @@ async function startApplication(): Promise<void> {
   const teamRecord = new TeamRecordStore(path.join(paths.root, 'team-record.json'), fileSystem);
   const conversations = new ConversationStore(paths.conversations, fileSystem);
   const composerQueue = new ComposerQueueStore(path.join(paths.root, 'composer-queue.json'), fileSystem);
+  const promptPresets = new PromptPresetStore(path.join(paths.root, 'prompt-presets.json'), fileSystem);
   // What the paid runs have cost, followed as conversations are saved. A run checks the budget against this instead of
   // loading every saved conversation, which at eight runs starting together ran the main process out of memory.
   const usageLedgerFile = path.join(paths.root, 'usage-ledger.json');
@@ -611,24 +614,31 @@ async function startApplication(): Promise<void> {
   let repairingPlaywrightServer = false;
   let playwrightViewportStatus: PlaywrightViewportStatus = {
     status: 'unavailable', viewportWidth: null, windowWidth: null, screenWidth: null,
-    message: 'The Playwright browser has not started yet.',
+    message: 'The shared browser opens when an agent first uses it.',
   };
+  const playwrightWindowSyncPath = path.join(paths.root, 'playwright-window-sync.cjs');
   const startConfiguredPlaywright: SharedBrowserDeps['start'] = async (onStopped) => {
     await mkdir(paths.root, { recursive: true });
     // A fixed browser viewport is disconnected from the native window size. When Chrome is maximized it can
     // leave a wide white strip beside the page. A null viewport lets desktop tabs follow the real window; the
     // responsive checker still makes its small measurements on tabs that it immediately closes.
+    // Playwright's default `--disable-blink-features=AutomationControlled` makes Chrome show an "unsupported
+    // command-line flag" bar across the top of every page, which pushes the page down and is not KAI's to keep.
     await writeFile(playwrightConfigPath, JSON.stringify({
       browser: {
-        launchOptions: { args: ['--start-maximized'] },
+        launchOptions: { args: ['--start-maximized'], ignoreDefaultArgs: ['--disable-blink-features=AutomationControlled'] },
         contextOptions: { viewport: null },
       },
       sharedBrowserContext: true,
     }, null, 2), 'utf8');
+    await writeFile(playwrightWindowSyncPath, PLAYWRIGHT_WINDOW_SYNC_SCRIPT, 'utf8');
     return startPlaywrightHost(realPlaywrightHostPorts(), {
       preferredPort: playwrightPortPreference,
       onStopped: (code) => { if (!repairingPlaywrightServer) onStopped(code); },
-      environment: { PLAYWRIGHT_MCP_CONFIG: playwrightConfigPath },
+      environment: {
+        PLAYWRIGHT_MCP_CONFIG: playwrightConfigPath,
+        NODE_OPTIONS: withWindowSync(playwrightWindowSyncPath, process.env.NODE_OPTIONS),
+      },
     });
   };
   const sharedBrowserDeps: SharedBrowserDeps = {
@@ -665,16 +675,15 @@ async function startApplication(): Promise<void> {
       repairingPlaywrightServer = false;
     }
   };
-  // One Playwright browser for KAI and every agent. Started in the background so the app is not held waiting for a
-  // first download, and it changes nothing the agents or the checks rely on until it is answering.
-  void startSharedBrowser(sharedBrowserDeps, playwrightServerLost).then(async (host) => {
+  // One Playwright browser for KAI and every agent. The server starts here, silently and in the background, so the
+  // shared endpoint is answering before a run needs it — but nothing is opened. Playwright creates the browser when
+  // the first client connects to this server, which is when an agent (or a check) actually uses it. KAI used to probe
+  // the viewport here, and that probe was itself an MCP call: it connected a client at every launch, which launched
+  // a Chrome window nobody had asked for.
+  void startSharedBrowser(sharedBrowserDeps, playwrightServerLost).then((host) => {
     playwrightHost = host;
     if (!host) return;
-    playwrightViewportStatus = await inspectPlaywrightViewport(mcpRuntime!);
-    if (playwrightViewportStatus.status === 'needs-reset') {
-      logger.warn('internal', 'Playwright browser viewport is narrower than its window', playwrightViewportStatus.message);
-    }
-    desktopWindows.broadcast('app:playwright-viewport', playwrightViewportStatus);
+    logger.info('internal', 'The shared browser is ready, and opens when an agent first uses it', host.endpoint);
   });
   const directApiOptions = {
     waitIfPaused: (conversationId: string, signal: AbortSignal) => runControl.waitIfPaused(conversationId, signal),
@@ -829,6 +838,7 @@ async function startApplication(): Promise<void> {
     changeReviewer,
     conversations,
     composerQueue,
+    promptPresets,
     playwrightViewportStatus: async () => playwrightViewportStatus,
     repairPlaywrightViewport,
     usageLedger,
@@ -1068,6 +1078,7 @@ async function startApplication(): Promise<void> {
     },
     writeFile: async (projectPath, relativePath, base64) => {
       const target = await resolveInside(projectPath, path.join(SPEC_ROOT, relativePath));
+      await ensureSpecIgnore(projectPath);
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, Buffer.from(base64, 'base64'));
     },
@@ -1196,6 +1207,7 @@ async function startApplication(): Promise<void> {
     },
     writeSpec: async (root, relativePath, content) => {
       const target = await resolveInside(root, path.join(SPEC_ROOT, relativePath));
+      await ensureSpecIgnore(root);
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, content);
     },

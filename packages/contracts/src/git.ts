@@ -47,8 +47,12 @@ export const gitCommitSummarySchema = z
   .object({ hash: z.string().min(1), subject: z.string(), author: z.string(), date: z.string() })
   .strict();
 
+// The combined state of a pull request's CI checks, rolled up from however many checks GitHub ran.
+// "none" covers both a PR with no checks configured and one whose checks haven't started yet.
+export const gitChecksStateSchema = z.enum(['passing', 'failing', 'pending', 'none']);
+
 export const gitPullRequestSchema = z
-  .object({ number: z.number().int(), title: z.string(), url: z.string(), state: z.string() })
+  .object({ number: z.number().int(), title: z.string(), url: z.string(), state: z.string(), checksState: gitChecksStateSchema })
   .strict();
 
 /** Whether the GitHub CLI is installed, and who it is signed in as. Useful before a project has a GitHub remote. */
@@ -101,6 +105,8 @@ export const gitPullRequestResultSchema = z.object({ url: z.string() }).strict()
 export const gitCreateRepositoryResultSchema = z.object({ repository: z.string().min(1), url: z.string() }).strict();
 
 export type GitOverview = z.infer<typeof gitOverviewSchema>;
+export type GitPullRequest = z.infer<typeof gitPullRequestSchema>;
+export type GitChecksState = z.infer<typeof gitChecksStateSchema>;
 export type GitGithubState = z.infer<typeof gitGithubStateSchema>;
 export type GitChange = z.infer<typeof gitChangeSchema>;
 export type GitBranch = z.infer<typeof gitBranchSchema>;

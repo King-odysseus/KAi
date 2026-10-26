@@ -3025,7 +3025,7 @@ async function executeToolCalls(
       // The access level refused this, which is the one refusal that means "the run could not work", as opposed to
       // "the person said no" or "the call failed". See RunGuard.walledOffByPolicy.
       toolRuntime.guard.noteToolOutcome(false, true);
-      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason }, callId));
+      emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: policy.reason, blocked: true, blockedBy: 'policy' }, callId));
       results.push(formatOutput(callId, { error: policy.reason }));
       continue;
     }
@@ -3044,7 +3044,7 @@ async function executeToolCalls(
         if (hook.blocked) {
           const reason = `A project preTool hook blocked this call: ${hook.blocked}`;
           toolRuntime.guard.noteToolOutcome(false);
-          emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
+          emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason, blocked: true, blockedBy: 'hook' }, callId));
           results.push(formatOutput(callId, { error: reason }));
           continue;
         }
@@ -3053,7 +3053,7 @@ async function executeToolCalls(
         // A guard that cannot run must not silently let the call through.
         const reason = `The project's preTool hook could not run, so the call was refused: ${error instanceof Error ? error.message : String(error)}`;
         toolRuntime.guard.noteToolOutcome(false);
-        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason, blocked: true, blockedBy: 'hook' }, callId));
         results.push(formatOutput(callId, { error: reason }));
         continue;
       }
@@ -3085,7 +3085,7 @@ async function executeToolCalls(
         // A no from the person is an answer, not a wall: counted as an attempt that did not succeed, but never as a
         // policy blockage, so a run that asked and was told no is not then called a failure.
         toolRuntime.guard.noteToolOutcome(false);
-        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason }, callId));
+        emit(toolCallEvent(request, name, 'failed', argumentsValue, { error: reason, blocked: true, blockedBy: 'user' }, callId));
         results.push(formatOutput(callId, { error: reason }));
         continue;
       }

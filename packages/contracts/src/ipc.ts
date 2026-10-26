@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { PlaywrightViewportStatus } from './playwright-viewport';
 import { composerQueueAddInputSchema, composerQueueClaimInputSchema, composerQueueConversationInputSchema, composerQueueHoldInputSchema, composerQueueSchema, composerQueueUpdateInputSchema, type ComposerQueue, type QueuedPrompt } from './composer-queue';
+import { promptPresetDeleteInputSchema, promptPresetSaveInputSchema, type PromptPresetList } from './prompt-presets';
 import { autoModelSettingsSchema } from './model-tiers';
 import {
   interviewAnswerInputSchema,
@@ -168,6 +169,7 @@ import {
   type Schedule,
   type ScheduleInput,
 } from './automation';
+import { type PermissionRule } from './permission-rules';
 import {
   agentCapabilitySchema,
   agentApprovalResponseInputSchema,
@@ -464,6 +466,7 @@ export const ipcChannels = [
   'rules:get',
   'rules:save',
   'rules:inject-projects',
+  'permission-rules:suggest',
   'skills:list',
   'files:choose',
   'files:search',
@@ -627,6 +630,9 @@ export const ipcChannels = [
   'composer-queue:update',
   'composer-queue:hold-all',
   'composer-queue:remove-conversation',
+  'prompt-presets:list',
+  'prompt-presets:save',
+  'prompt-presets:delete',
   'conversations:get',
   'conversations:create',
   'conversations:compact',
@@ -816,6 +822,7 @@ export const ipcInputSchemas = {
   'rules:get': emptyInputSchema,
   'rules:save': executionRuleSaveInputSchema,
   'rules:inject-projects': emptyInputSchema,
+  'permission-rules:suggest': z.object({ projectId: z.string().min(1) }).strict(),
   'skills:list': z.object({ projectId: z.string().min(1).optional() }).strict(),
   'files:choose': z.object({ projectId: z.string().min(1) }).strict(),
   'files:search': contextSearchInputSchema,
@@ -990,6 +997,9 @@ export const ipcInputSchemas = {
   'composer-queue:update': composerQueueUpdateInputSchema,
   'composer-queue:hold-all': composerQueueHoldInputSchema,
   'composer-queue:remove-conversation': composerQueueConversationInputSchema,
+  'prompt-presets:list': emptyInputSchema,
+  'prompt-presets:save': promptPresetSaveInputSchema,
+  'prompt-presets:delete': promptPresetDeleteInputSchema,
   'conversations:get': z.object({ id: z.string().min(1) }).strict(),
   'conversations:create': z.object({ projectId: z.string().nullable(), firstPrompt: z.string().max(20_000) }).strict(),
   'conversations:compact': z.object({ conversationId: z.string().min(1) }).strict(),
@@ -1332,6 +1342,9 @@ export interface KaiDesktopBridge {
   holdQueuedPrompts(error: string): Promise<IpcResponse<ComposerQueue>>;
   removeQueuedConversation(conversationId: string): Promise<IpcResponse<ComposerQueue>>;
   onComposerQueueChanged(listener: (queue: ComposerQueue) => void): () => void;
+  listPromptPresets(): Promise<IpcResponse<PromptPresetList>>;
+  savePromptPreset(slot: number, label: string, text: string): Promise<IpcResponse<PromptPresetList>>;
+  deletePromptPreset(slot: number): Promise<IpcResponse<PromptPresetList>>;
   serviceStatus(): Promise<IpcResponse<ServiceState[]>>;
   startService(kind: ServiceState['kind']): Promise<IpcResponse<ServiceState[]>>;
   stopService(kind: ServiceState['kind']): Promise<IpcResponse<ServiceState[]>>;
@@ -1350,6 +1363,7 @@ export interface KaiDesktopBridge {
   listSkills(projectId?: string): Promise<IpcResponse<SkillSummary[]>>;
   chooseFiles(projectId: string): Promise<IpcResponse<string[]>>;
   searchFiles(request: ContextSearchInput): Promise<IpcResponse<string[]>>;
+  suggestPermissionRules(projectId: string): Promise<IpcResponse<PermissionRule[]>>;
   projectFileTree(projectId: string): Promise<IpcResponse<ProjectFileTree>>;
   readProjectFile(projectId: string, path: string): Promise<IpcResponse<OpenedFile>>;
   writeProjectFile(request: FileWriteInput): Promise<IpcResponse<WrittenFile>>;

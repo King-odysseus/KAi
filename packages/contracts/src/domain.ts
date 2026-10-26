@@ -478,6 +478,13 @@ export const conversationRecordV1Schema = z
     workflow: workflowSchema.nullable().optional(),
     origin: conversationOriginSchema.optional(),
     compaction: conversationCompactionSchema.optional(),
+    /**
+     * The conversation this is a side question off of, when it is one — a quick question asked without derailing
+     * that conversation's own thread. Set once, at creation, and never cleared: a side conversation stays attached
+     * to the one it was asked from for as long as both exist. It is kept out of the ordinary conversation list and
+     * tab bar; the one place it is shown is the side-question panel on the conversation named here.
+     */
+    sideOf: z.string().min(1).optional(),
     turns: z.array(conversationTurnSchema),
     events: z.array(persistedEventV1Schema),
   })

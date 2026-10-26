@@ -278,6 +278,27 @@ describe('desktop contracts', () => {
     }).origin).toEqual({ kind: 'autopilot', studioProjectId: 'studio_1', cardId: 'pricing', cardTitle: 'Pricing page' });
   });
 
+  it('reads a stored conversation that predates sideOf, and tags one asked as a side question', () => {
+    const now = new Date().toISOString();
+    const stored = {
+      schemaVersion: 1,
+      id: 'conv-old',
+      projectId: 'project-1',
+      title: 'Ordinary chat',
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+      unread: false,
+      activeAgent: 'codex',
+      route: 'direct',
+      autonomy: 'ask',
+      turns: [],
+      events: [],
+    };
+    expect(conversationRecordV1Schema.parse(stored).sideOf).toBeUndefined();
+    expect(conversationRecordV1Schema.parse({ ...stored, id: 'conv-side', sideOf: 'conv-old' }).sideOf).toBe('conv-old');
+  });
+
   it('validates and normalizes brain IPC requests', () => {
     expect(parseIpcInput('brain:search', { query: ' isolated ', type: 'patterns' })).toMatchObject({
       query: 'isolated',
