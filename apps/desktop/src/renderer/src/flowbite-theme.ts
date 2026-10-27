@@ -57,7 +57,10 @@ export const kaiFlowbiteTheme = createTheme({
     // Background only, never a ring: a focused/selected button (a dropdown's current option among them) gets a
     // tint, not a border box — the same choice every other active/selected state in the app makes (see
     // .kai-select-option.selected, .learning-tabs button.active, and the dropdown item's own focus style below).
-    base: 'relative inline-flex items-center justify-center gap-1.5 rounded-md border text-center font-medium focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
+    // Flowbite's default base carries `focus:ring-4` and its colors carry `focus:ring-gray-300` etc.; the theme merge
+    // only dedupes within a utility group, so they survive unless cancelled explicitly. That ring is the rounded box
+    // that stays on a button after a click.
+    base: 'relative inline-flex items-center justify-center gap-1.5 rounded-md border text-center font-medium ring-0 focus:ring-0 focus-visible:ring-0 focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
     size: { xs: 'min-h-6 px-2 text-xs', sm: 'min-h-7 px-2.5 text-xs', md: 'min-h-8 px-3 text-sm' },
     color: {
       default: 'border-transparent bg-[var(--mint)] text-[var(--bg-deep)] hover:bg-[var(--mint-strong)]',
@@ -89,11 +92,11 @@ export const kaiFlowbiteTheme = createTheme({
   // light box on this dark one. Only `color` was themed before, which recolors the checked mark but leaves the box
   // itself unthemed, which is what made every checkbox in the app look unstyled rather than merely unchecked.
   checkbox: {
-    base: 'h-4 w-4 shrink-0 appearance-none rounded border border-[var(--border)] bg-[var(--bg-input)] bg-[length:0.55em_0.55em] bg-center bg-no-repeat checked:border-transparent checked:bg-current checked:bg-check-icon focus:outline-none focus:ring-1 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50',
-    color: { default: 'text-[var(--mint)] focus:ring-[var(--mint)]' },
+    base: 'h-4 w-4 shrink-0 appearance-none rounded border border-[var(--border)] bg-[var(--bg-input)] bg-[length:0.55em_0.55em] bg-center bg-no-repeat checked:border-transparent checked:bg-current checked:bg-check-icon focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50',
+    color: { default: 'text-[var(--mint)]' },
   },
   radio: {
-    base: 'h-4 w-4 shrink-0 appearance-none rounded-full border border-[var(--border)] bg-[var(--bg-input)] checked:border-transparent checked:bg-current focus:outline-none focus:ring-1 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50',
-    color: { default: 'text-[var(--mint)] focus:ring-[var(--mint)]' },
+    base: 'h-4 w-4 shrink-0 appearance-none rounded-full border border-[var(--border)] bg-[var(--bg-input)] checked:border-transparent checked:bg-current focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50',
+    color: { default: 'text-[var(--mint)]' },
   },
 });

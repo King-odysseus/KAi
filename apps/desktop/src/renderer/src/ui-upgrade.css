@@ -73,9 +73,9 @@ html[data-theme]:root .history-search input {
 .nav-stack::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--border); }
 .nav-group-label { flex: 0 0 auto; }
 .nav-stack .nav-button { flex: 0 0 auto; }
-.nav-rail.expanded .nav-stack { gap: 2px; padding-top: 6px; }
-.nav-rail.expanded .nav-group-label { height: 20px; margin-top: 4px; }
-.nav-rail.expanded .nav-button { height: 31px; min-height: 31px; }
+.nav-rail.expanded .nav-stack { gap: 6px; padding-top: 10px; }
+.nav-rail.expanded .nav-group-label { height: 24px; margin-top: 14px; padding-top: 8px; }
+.nav-rail.expanded .nav-button { height: 36px; min-height: 36px; }
 .nav-bottom { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: auto; }
 .nav-rail.expanded .nav-bottom { align-items: stretch; }
 
