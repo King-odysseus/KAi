@@ -533,7 +533,6 @@ button:disabled {
 }
 
 .nav-button.active {
-  border-color: rgba(102, 227, 189, 0.2);
   color: var(--mint);
   background: var(--mint-soft);
 }

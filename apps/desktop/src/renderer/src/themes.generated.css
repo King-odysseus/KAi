@@ -36,9 +36,6 @@ html[data-theme="code"]:root .brand-mark, html[data-theme="code"]:root .boot-mar
 html[data-theme="code"]:root .nav-button {
   color: #878787;
 }
-html[data-theme="code"]:root .nav-button.active {
-  border-color: rgba(53, 164, 255, 0.2);
-}
 html[data-theme="code"]:root .status-dot.ready {
   box-shadow: 0 0 0 3px rgba(53, 164, 255, 0.1);
 }
@@ -68,26 +65,12 @@ html[data-theme="code"]:root .git-change-select {
 html[data-theme="code"]:root .app-tooltip::after {
   background: #242424;
 }
-html[data-theme="code"]:root .app-dialog-overlay {
-  background: rgba(17, 17, 17, 0.72);
-}
-html[data-theme="code"]:root .app-dialog {
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-}
 html[data-theme="code"]:root .app-dialog-icon {
   color: #181818;
 }
 html[data-theme="code"]:root .app-dialog-error {
   border: 1px solid rgba(242, 125, 135, 0.35);
   background: rgba(242, 125, 135, 0.08);
-}
-html[data-theme="code"]:root .approval-overlay {
-  background: rgba(17, 17, 17, 0.74);
-}
-html[data-theme="code"]:root .approval-dialog {
-  border: 1px solid rgba(246, 174, 95, 0.38);
-  background: #242424;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
 }
 html[data-theme="code"]:root .approval-dialog-head h2 {
   color: #f5f5f5;
@@ -688,9 +671,6 @@ html[data-theme="code"]:root .workflow-line span {
 html[data-theme="code"]:root .workflow-line div {
   background: #4c4c4c;
 }
-html[data-theme="code"]:root .history-head {
-  background: #212121;
-}
 html[data-theme="code"]:root .history-row {
   color: #cdcdcd;
 }
@@ -786,12 +766,6 @@ html[data-theme="code"]:root .setup-reminder {
 }
 html[data-theme="code"]:root .setup-reminder:hover {
   background: #3b3b3b;
-}
-html[data-theme="code"]:root .setup-overlay {
-  background: rgba(15, 15, 15, 0.78);
-}
-html[data-theme="code"]:root .setup-panel {
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
 }
 html[data-theme="code"]:root .setup-check {
   background: rgba(26, 26, 26, 0.52);
@@ -913,12 +887,6 @@ html[data-theme="code"]:root .shortcut-capture:focus {
 html[data-theme="code"]:root .shortcut-conflict {
   border: 1px solid rgba(242, 125, 135, 0.32);
   background: rgba(242, 125, 135, 0.08);
-}
-html[data-theme="code"]:root .shortcut-sheet-overlay {
-  background: rgba(15, 15, 15, 0.76);
-}
-html[data-theme="code"]:root .shortcut-sheet {
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
 }
 html[data-theme="code"]:root .field textarea:hover:not(:disabled), html[data-theme="code"]:root .brain-field-form textarea:hover:not(:disabled), html[data-theme="code"]:root .goal-editor textarea:hover:not(:disabled), html[data-theme="code"]:root .workflow-field textarea:hover:not(:disabled), html[data-theme="code"]:root .workflow-prompt-field textarea:hover:not(:disabled), html[data-theme="code"]:root .rule-editor textarea:hover:not(:disabled), html[data-theme="code"]:root .learning-composer textarea:hover:not(:disabled) {
   border-color: #535353;
@@ -1317,9 +1285,6 @@ html[data-theme="purple"]:root .brand-mark, html[data-theme="purple"]:root .boot
 html[data-theme="purple"]:root .nav-button {
   color: #7c7a93;
 }
-html[data-theme="purple"]:root .nav-button.active {
-  border-color: rgba(251, 205, 0, 0.2);
-}
 html[data-theme="purple"]:root .status-dot.ready {
   box-shadow: 0 0 0 3px rgba(251, 205, 0, 0.1);
 }
@@ -1349,26 +1314,12 @@ html[data-theme="purple"]:root .git-change-select {
 html[data-theme="purple"]:root .app-tooltip::after {
   background: #1e1d2f;
 }
-html[data-theme="purple"]:root .app-dialog-overlay {
-  background: rgba(12, 11, 26, 0.72);
-}
-html[data-theme="purple"]:root .app-dialog {
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-}
 html[data-theme="purple"]:root .app-dialog-icon {
   color: #111024;
 }
 html[data-theme="purple"]:root .app-dialog-error {
   border: 1px solid rgba(242, 125, 135, 0.35);
   background: rgba(242, 125, 135, 0.08);
-}
-html[data-theme="purple"]:root .approval-overlay {
-  background: rgba(12, 11, 26, 0.74);
-}
-html[data-theme="purple"]:root .approval-dialog {
-  border: 1px solid rgba(246, 178, 95, 0.38);
-  background: #1a1932;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
 }
 html[data-theme="purple"]:root .approval-dialog-head h2 {
   color: #f1f0fa;
@@ -1969,9 +1920,6 @@ html[data-theme="purple"]:root .workflow-line span {
 html[data-theme="purple"]:root .workflow-line div {
   background: #3e3c5d;
 }
-html[data-theme="purple"]:root .history-head {
-  background: #18162e;
-}
 html[data-theme="purple"]:root .history-row {
   color: #c4c3d6;
 }
@@ -2067,12 +2015,6 @@ html[data-theme="purple"]:root .setup-reminder {
 }
 html[data-theme="purple"]:root .setup-reminder:hover {
   background: #2a294f;
-}
-html[data-theme="purple"]:root .setup-overlay {
-  background: rgba(10, 10, 24, 0.78);
-}
-html[data-theme="purple"]:root .setup-panel {
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
 }
 html[data-theme="purple"]:root .setup-check {
   background: rgba(19, 18, 38, 0.52);
@@ -2194,12 +2136,6 @@ html[data-theme="purple"]:root .shortcut-capture:focus {
 html[data-theme="purple"]:root .shortcut-conflict {
   border: 1px solid rgba(242, 125, 135, 0.32);
   background: rgba(242, 125, 135, 0.08);
-}
-html[data-theme="purple"]:root .shortcut-sheet-overlay {
-  background: rgba(10, 10, 24, 0.76);
-}
-html[data-theme="purple"]:root .shortcut-sheet {
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
 }
 html[data-theme="purple"]:root .field textarea:hover:not(:disabled), html[data-theme="purple"]:root .brain-field-form textarea:hover:not(:disabled), html[data-theme="purple"]:root .goal-editor textarea:hover:not(:disabled), html[data-theme="purple"]:root .workflow-field textarea:hover:not(:disabled), html[data-theme="purple"]:root .workflow-prompt-field textarea:hover:not(:disabled), html[data-theme="purple"]:root .rule-editor textarea:hover:not(:disabled), html[data-theme="purple"]:root .learning-composer textarea:hover:not(:disabled) {
   border-color: #444264;
@@ -2598,9 +2534,6 @@ html[data-theme="navy"]:root .brand-mark, html[data-theme="navy"]:root .boot-mar
 html[data-theme="navy"]:root .nav-button {
   color: #717e9c;
 }
-html[data-theme="navy"]:root .nav-button.active {
-  border-color: rgba(109, 187, 255, 0.2);
-}
 html[data-theme="navy"]:root .status-dot.ready {
   box-shadow: 0 0 0 3px rgba(109, 187, 255, 0.1);
 }
@@ -2630,26 +2563,12 @@ html[data-theme="navy"]:root .git-change-select {
 html[data-theme="navy"]:root .app-tooltip::after {
   background: #151f37;
 }
-html[data-theme="navy"]:root .app-dialog-overlay {
-  background: rgba(5, 13, 33, 0.72);
-}
-html[data-theme="navy"]:root .app-dialog {
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-}
 html[data-theme="navy"]:root .app-dialog-icon {
   color: #08132d;
 }
 html[data-theme="navy"]:root .app-dialog-error {
   border: 1px solid rgba(242, 125, 135, 0.35);
   background: rgba(242, 125, 135, 0.08);
-}
-html[data-theme="navy"]:root .approval-overlay {
-  background: rgba(5, 13, 33, 0.74);
-}
-html[data-theme="navy"]:root .approval-dialog {
-  border: 1px solid rgba(246, 174, 95, 0.38);
-  background: #0f1d3c;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
 }
 html[data-theme="navy"]:root .approval-dialog-head h2 {
   color: #ecf1fe;
@@ -3250,9 +3169,6 @@ html[data-theme="navy"]:root .workflow-line span {
 html[data-theme="navy"]:root .workflow-line div {
   background: #2f416a;
 }
-html[data-theme="navy"]:root .history-head {
-  background: #0d1a38;
-}
 html[data-theme="navy"]:root .history-row {
   color: #bbc5de;
 }
@@ -3348,12 +3264,6 @@ html[data-theme="navy"]:root .setup-reminder {
 }
 html[data-theme="navy"]:root .setup-reminder:hover {
   background: #1a2f5f;
-}
-html[data-theme="navy"]:root .setup-overlay {
-  background: rgba(4, 12, 31, 0.78);
-}
-html[data-theme="navy"]:root .setup-panel {
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
 }
 html[data-theme="navy"]:root .setup-check {
   background: rgba(10, 21, 47, 0.52);
@@ -3475,12 +3385,6 @@ html[data-theme="navy"]:root .shortcut-capture:focus {
 html[data-theme="navy"]:root .shortcut-conflict {
   border: 1px solid rgba(242, 125, 135, 0.32);
   background: rgba(242, 125, 135, 0.08);
-}
-html[data-theme="navy"]:root .shortcut-sheet-overlay {
-  background: rgba(4, 12, 31, 0.76);
-}
-html[data-theme="navy"]:root .shortcut-sheet {
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
 }
 html[data-theme="navy"]:root .field textarea:hover:not(:disabled), html[data-theme="navy"]:root .brain-field-form textarea:hover:not(:disabled), html[data-theme="navy"]:root .goal-editor textarea:hover:not(:disabled), html[data-theme="navy"]:root .workflow-field textarea:hover:not(:disabled), html[data-theme="navy"]:root .workflow-prompt-field textarea:hover:not(:disabled), html[data-theme="navy"]:root .rule-editor textarea:hover:not(:disabled), html[data-theme="navy"]:root .learning-composer textarea:hover:not(:disabled) {
   border-color: #354771;
