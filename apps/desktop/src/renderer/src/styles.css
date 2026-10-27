@@ -124,12 +124,15 @@ select option:disabled,
   color: #66758b;
 }
 
-button:focus-visible,
+/* Buttons, selects and the custom listbox get their focus feedback from a background tint on the control itself
+   (set per-component — .icon-button.active, .nav-button.active, .kai-select-option, the shared Button theme's
+   focus-visible background, and so on) rather than this outline: a 2px box around a button or a dropdown trigger
+   was the exact "bordered active state" removed everywhere else in this pass, and it still fired here on any
+   click that leaves the control genuinely focused (not just hovered), including after a custom dropdown explicitly
+   refocuses its trigger once closed. Text fields keep the outline: there is no background-tint equivalent for
+   knowing where typed input is going, and nobody asked for that one removed. */
 input:focus-visible,
-select:focus-visible,
-.kai-select:focus-visible,
-textarea:focus-visible,
-[role="separator"]:focus-visible {
+textarea:focus-visible {
   outline: 2px solid var(--mint);
   outline-offset: 2px;
 }
@@ -13739,25 +13742,28 @@ button.tool-call-head:hover strong { color: var(--mint); }
 }
 
 /* The screens list used to render every row's seven actions inline, which read as a wall of buttons on a project
-   with more than a handful of screens. They now live behind one menu per row (see .studio-step-menu below), and the
-   whole list collapses behind this summary so a long project does not push the build controls above it off screen. */
-.studio-screens-collapse > summary {
+   with more than a handful of screens. They now live behind one menu per row (see .actions-menu-anchor below), and
+   the whole list collapses behind this toggle so a long project does not push the build controls above it off
+   screen. A plain button + state, not <details>/<summary>: this project can run to hundreds of screens, and the
+   toggle needs to read as an obvious control, not blend in as a quiet caption line. */
+.studio-screens-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 10px 0 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
   color: var(--text-muted);
+  background: var(--bg-input);
   font-size: 12px;
   font-weight: 600;
-  cursor: pointer;
-  list-style: none;
 }
-.studio-screens-collapse > summary::-webkit-details-marker { display: none; }
-.studio-screens-collapse > summary > svg { transition: transform 120ms ease; }
-.studio-screens-collapse[open] > summary > svg { transform: rotate(180deg); }
-.studio-screens-collapse > summary:hover { color: var(--text); }
+.studio-screens-toggle:hover { color: var(--text); background: var(--bg-hover); }
+.studio-screens-toggle svg { transition: transform 120ms ease; }
+.studio-screens-toggle svg.open { transform: rotate(180deg); }
 
-.studio-step-menu .icon-button.compact { width: 26px; height: 26px; }
+.actions-menu-anchor { display: inline-flex; flex: 0 0 auto; }
+.actions-menu-anchor .icon-button.compact { width: 26px; height: 26px; }
 
 .studio-steps > li {
   display: flex;

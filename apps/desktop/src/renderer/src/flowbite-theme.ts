@@ -85,6 +85,15 @@ export const kaiFlowbiteTheme = createTheme({
     base: 'block w-full rounded-md border p-2.5 text-sm focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
     colors: { gray: 'border-[var(--border)] bg-[var(--bg-input)] text-[var(--text)] placeholder:text-[var(--text-dim)] focus:border-[var(--mint)] focus:ring-[var(--mint)]' },
   },
-  checkbox: { color: { default: 'text-[var(--mint)] focus:ring-[var(--mint)]' } },
-  radio: { color: { default: 'text-[var(--mint)] focus:ring-[var(--mint)]' } },
+  // Flowbite's own checkbox/radio `base` is literal `border-gray-300 bg-gray-100` — fine on a white page, a glaring
+  // light box on this dark one. Only `color` was themed before, which recolors the checked mark but leaves the box
+  // itself unthemed, which is what made every checkbox in the app look unstyled rather than merely unchecked.
+  checkbox: {
+    base: 'h-4 w-4 shrink-0 appearance-none rounded border border-[var(--border)] bg-[var(--bg-input)] bg-[length:0.55em_0.55em] bg-center bg-no-repeat checked:border-transparent checked:bg-current checked:bg-check-icon focus:outline-none focus:ring-1 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50',
+    color: { default: 'text-[var(--mint)] focus:ring-[var(--mint)]' },
+  },
+  radio: {
+    base: 'h-4 w-4 shrink-0 appearance-none rounded-full border border-[var(--border)] bg-[var(--bg-input)] checked:border-transparent checked:bg-current focus:outline-none focus:ring-1 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50',
+    color: { default: 'text-[var(--mint)] focus:ring-[var(--mint)]' },
+  },
 });

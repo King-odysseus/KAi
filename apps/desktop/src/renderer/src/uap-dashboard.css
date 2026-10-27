@@ -180,11 +180,7 @@
   border-color: var(--u-focus);
 }
 
-.uap button:focus-visible,
-.uap input:focus-visible,
-.uap select:focus-visible,
-.uap .kai-select:focus-visible,
-.uap summary:focus-visible {
+.uap input:focus-visible {
   outline: 2px solid var(--u-focus);
   outline-offset: 1px;
 }

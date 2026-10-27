@@ -53,7 +53,8 @@ import {
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { UiButton } from './UiButton';
-import { Checkbox, Dropdown, DropdownItem, Textarea } from 'flowbite-react';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { ActionsMenu, type ActionsMenuItem } from './ui/ActionsMenu';
 import { UiTextInput } from './UiTextInput';
 import { UiNativeSelect } from './UiNativeSelect';
 
@@ -192,6 +193,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Starts collapsed on any project with more than a handful of screens — a project this card can run to hundreds
+  // of cards otherwise opens into a wall of rows before the build controls above them are even in view.
+  const [screensExpanded, setScreensExpanded] = useState<boolean | null>(null);
   // The Studio chat works on the plan, not on the drawing: it explains what a drawn page is or what changed, and
   // answers with a change set the person ticks before anything is written.
   const [planChatText, setPlanChatText] = useState('');
@@ -3105,13 +3109,65 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <Search size={13} />
                   <UiTextInput type="search" value={screenQuery} onChange={(event) => setScreenQuery(event.target.value)} placeholder="Search screens by name, route or what is on them" aria-label="Search screens" />
                 </label>
-                {designRows.length > 0 ? (
-                  <details className="studio-screens-collapse" open={visibleRows.length <= 8}>
-                    <summary><ChevronDown size={14} /> {visibleRows.length} screen{visibleRows.length === 1 ? '' : 's'}</summary>
+                {designRows.length > 0 ? (() => {
+                  const expanded = screensExpanded ?? visibleRows.length <= 8;
+                  return (
+                  <div className="studio-screens-collapse">
+                    <UiButton type="button" className="studio-screens-toggle" onClick={() => setScreensExpanded(!expanded)} aria-expanded={expanded}>
+                      <ChevronDown size={14} className={expanded ? 'open' : undefined} /> {visibleRows.length} screen{visibleRows.length === 1 ? '' : 's'}
+                    </UiButton>
+                    {expanded && (
                     <ul className="studio-steps">
                     {visibleRows.map((row) => {
                       const isSkipped = !row.drawn && skipped.has(screenTitleKey(row.name));
                       const pageId = screenPageId(design, row.name);
+                      const actions: ActionsMenuItem[] = [
+                        ...(row.inPages ? [{
+                          key: 'view',
+                          label: openPrompt === row.name ? 'Hide prompt' : 'View prompt',
+                          icon: <Eye size={14} />,
+                          onSelect: () => setOpenPrompt(openPrompt === row.name ? null : row.name),
+                        }] : []),
+                        ...(row.inPages ? [{
+                          key: 'copy',
+                          label: copiedPrompt === row.name ? 'Copied' : 'Copy prompt',
+                          icon: copiedPrompt === row.name ? <Check size={14} /> : <Send size={14} />,
+                          onSelect: () => void copyDrawPrompt(row.name),
+                        }] : []),
+                        ...(row.drawn ? [{
+                          key: 'preview',
+                          label: previewPage === row.name ? 'Hide preview' : 'Preview',
+                          icon: previewBusy && previewPage === row.name ? <Loader2 className="spin" size={14} /> : <Eye size={14} />,
+                          onSelect: () => void previewScreen(row.name),
+                        }] : []),
+                        ...(row.inPages ? (row.drawn ? [{
+                          key: 'redraw',
+                          label: 'Redraw',
+                          icon: <RotateCcw size={14} />,
+                          disabled: busy !== null || !readiness?.ready,
+                          onSelect: () => void buildDesign({ kind: 'redraw', target: row.name }),
+                        }] : [{
+                          key: 'skip',
+                          label: isSkipped ? 'Draw it anyway' : 'Skip',
+                          icon: <SkipForward size={14} />,
+                          onSelect: () => toggleSkip(row.name),
+                        }]) : []),
+                        ...(row.inPages ? [{
+                          key: 'fix',
+                          label: 'Fix & redraw',
+                          icon: <Wand2 size={14} />,
+                          disabled: busy !== null || !readiness?.ready,
+                          onSelect: () => void fixAndRedraw(row.name),
+                        }] : []),
+                        { key: 'rename', label: 'Rename', icon: <PencilLine size={14} />, disabled: busy !== null, onSelect: () => void renamePage(row.name) },
+                        ...(pageId !== null ? [{
+                          key: 'delete',
+                          label: 'Delete page',
+                          icon: <Trash2 size={14} />,
+                          disabled: busy !== null,
+                          onSelect: () => void deletePage(row.name, pageId),
+                        }] : []),
+                      ];
                       return (
                         <li key={row.name} className={row.drawn ? 'done' : undefined}>
                           <div className="studio-step-text">
@@ -3121,55 +3177,15 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                               {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
                             </small>
                           </div>
-                          <Dropdown
-                            className="studio-step-menu"
-                            placement="bottom-end"
-                            arrowIcon={false}
-                            label="Actions"
-                            renderTrigger={() => (
-                              <UiButton type="button" className="icon-button compact" title={`Actions for ${row.name}`} aria-label={`Actions for ${row.name}`}>
+                          <ActionsMenu
+                            ariaLabel={`Actions for ${row.name}`}
+                            items={actions}
+                            trigger={({ onClick, expanded: menuOpen }) => (
+                              <UiButton type="button" className="icon-button compact" title={`Actions for ${row.name}`} aria-label={`Actions for ${row.name}`} aria-expanded={menuOpen} onClick={onClick}>
                                 <Ellipsis size={15} />
                               </UiButton>
                             )}
-                          >
-                            {row.inPages && (
-                              <DropdownItem onClick={() => setOpenPrompt(openPrompt === row.name ? null : row.name)}>
-                                <Eye size={14} /> {openPrompt === row.name ? 'Hide prompt' : 'View prompt'}
-                              </DropdownItem>
-                            )}
-                            {row.inPages && (
-                              <DropdownItem onClick={() => void copyDrawPrompt(row.name)}>
-                                {copiedPrompt === row.name ? <Check size={14} /> : <Send size={14} />} {copiedPrompt === row.name ? 'Copied' : 'Copy prompt'}
-                              </DropdownItem>
-                            )}
-                            {row.drawn && (
-                              <DropdownItem onClick={() => void previewScreen(row.name)}>
-                                {previewBusy && previewPage === row.name ? <Loader2 className="spin" size={14} /> : <Eye size={14} />} {previewPage === row.name ? 'Hide preview' : 'Preview'}
-                              </DropdownItem>
-                            )}
-                            {row.inPages && (row.drawn ? (
-                              <DropdownItem disabled={busy !== null || !readiness?.ready} onClick={() => void buildDesign({ kind: 'redraw', target: row.name })}>
-                                <RotateCcw size={14} /> Redraw
-                              </DropdownItem>
-                            ) : (
-                              <DropdownItem onClick={() => toggleSkip(row.name)}>
-                                <SkipForward size={14} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
-                              </DropdownItem>
-                            ))}
-                            {row.inPages && (
-                              <DropdownItem disabled={busy !== null || !readiness?.ready} onClick={() => void fixAndRedraw(row.name)}>
-                                <Wand2 size={14} /> Fix & redraw
-                              </DropdownItem>
-                            )}
-                            <DropdownItem disabled={busy !== null} onClick={() => void renamePage(row.name)}>
-                              <PencilLine size={14} /> Rename
-                            </DropdownItem>
-                            {pageId !== null && (
-                              <DropdownItem disabled={busy !== null} onClick={() => void deletePage(row.name, pageId)}>
-                                <Trash2 size={14} /> Delete page
-                              </DropdownItem>
-                            )}
-                          </Dropdown>
+                          />
                           {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
                           {previewPage === row.name && (
                             <div className="studio-design-preview" role="status">
@@ -3187,8 +3203,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     })}
                     {visibleRows.length === 0 && <li className="studio-note">No screen matches "{screenQuery}".</li>}
                     </ul>
-                  </details>
-                ) : (
+                    )}
+                  </div>
+                  );
+                })() : (
                   <p className="studio-note">{pagesText === null ? 'No pages list yet. Write it, or generate all artifacts.' : 'The pages artifact has no screens in it yet.'}</p>
                 )}
               </article>
