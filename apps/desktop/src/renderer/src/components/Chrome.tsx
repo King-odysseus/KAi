@@ -41,6 +41,10 @@ import type { ViewId } from '../types';
 import { relativeTime } from '../types';
 import { shortcutLabel } from '../shortcuts';
 import { ProjectFilesPanel } from './ProjectFilesPanel';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
+import kaiIcon from '../../../../build/icon.png';
+import { Dropdown, DropdownItem } from 'flowbite-react';
 
 const themeLabel = (theme: ThemeMode): string => THEME_MODES.find((item) => item.id === theme)?.label ?? theme;
 const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.findIndex((item) => item.id === theme) + 1) % THEME_MODES.length]!.id;
@@ -76,8 +80,8 @@ export interface CommandPaletteItem {
 
 export function NavigationRail({ view, version, versionTitle, serviceStatus, shortcuts, onChange }: { view: ViewId; version: string; /** The full version and build, for the tooltip; the rail shows the version. */ versionTitle?: string; serviceStatus: string; shortcuts: AppSettings['shortcuts']; onChange: (view: ViewId) => void }): ReactNode {
   const [expanded, setExpanded] = useState(() => {
-    try { return window.localStorage.getItem('kai.navigationExpanded') === 'true'; }
-    catch { return false; }
+    try { return window.localStorage.getItem('kai.navigationExpanded') !== 'false'; }
+    catch { return true; }
   });
   const toggleExpanded = (): void => {
     setExpanded((current) => {
@@ -89,19 +93,18 @@ export function NavigationRail({ view, version, versionTitle, serviceStatus, sho
   };
   return (
     <aside className={`nav-rail${expanded ? ' expanded' : ''}`} aria-label="Primary navigation">
-      <div className="brand-mark" aria-label="KAI">K</div>
-      <button type="button" className="nav-expand-button" aria-label={expanded ? 'Collapse navigation labels' : 'Show navigation labels'} aria-expanded={expanded} title={expanded ? 'Collapse navigation labels' : 'Show navigation labels'} onClick={toggleExpanded}>
+      <img className="brand-mark" src={kaiIcon} alt="KAi" />
+      <UiButton type="button" className="nav-expand-button" aria-label={expanded ? 'Collapse navigation labels' : 'Show navigation labels'} aria-expanded={expanded} title={expanded ? 'Collapse navigation labels' : 'Show navigation labels'} onClick={toggleExpanded}>
         {expanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
         {expanded && <span>Collapse</span>}
-      </button>
+      </UiButton>
       <nav className="nav-stack" aria-label="Workbench pages">
         {navigation.map((item, index) => {
           const Icon = item.icon;
-          const previous = navigation[index - 1];
           return (
             <Fragment key={item.id}>
-              {(!previous || previous.group !== item.group) && <div className="nav-group-label" title={item.group} aria-label={`${item.group} section`}><span>{item.group}</span><i aria-hidden="true" /> </div>}
-              <button
+              {(index === 0 || navigation[index - 1]?.group !== item.group) && <div className="nav-group-label"><span>{item.group}</span><i aria-hidden="true">{item.group[0]}</i></div>}
+              <UiButton
                 type="button"
                 className={`nav-button ${view === item.id ? 'active' : ''}`}
                 onClick={() => onChange(item.id)}
@@ -111,12 +114,14 @@ export function NavigationRail({ view, version, versionTitle, serviceStatus, sho
               >
                 <Icon size={19} />
                 <span className="nav-button-label">{item.label}</span>
-              </button>
+              </UiButton>
             </Fragment>
           );
         })}
       </nav>
-      <div className="rail-footer"><div className={`status-dot ${serviceStatus}`} /><span title={versionTitle ?? version}>{version}</span></div>
+      <div className="nav-bottom">
+        <div className="rail-footer"><div className={`status-dot ${serviceStatus}`} /><span title={versionTitle ?? version}>{version}</span></div>
+      </div>
     </aside>
   );
 }
@@ -133,23 +138,23 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         <ProjectPicker projects={projects} activeProject={activeProject} onChoose={onChoose} onOpen={onOpenProject} onRemove={onRemoveProject} onClear={onClearProjects} />
       </div>
       <div className="titlebar-actions">
-        <button type="button" className="icon-button" title={`Command palette${searchShortcut ? ` (${searchShortcut})` : ''}`} aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></button>
-        <button type="button" className="icon-button" title={leftOpen ? `Hide threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}` : `Show threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}`} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>
+        <UiButton type="button" className="icon-button" title={`Command palette${searchShortcut ? ` (${searchShortcut})` : ''}`} aria-label="Open command palette" onClick={onOpenSearch}><Search size={17} /></UiButton>
+        <UiButton type="button" className="icon-button" title={leftOpen ? `Hide threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}` : `Show threads panel${threadsShortcut ? ` (${threadsShortcut})` : ''}`} aria-label={leftOpen ? 'Hide threads panel' : 'Show threads panel'} onClick={onToggleThreads}>
           {leftOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
-        </button>
-        <button type="button" className="icon-button" title={rightOpen ? `Hide context panel${contextShortcut ? ` (${contextShortcut})` : ''}` : `Show context panel${contextShortcut ? ` (${contextShortcut})` : ''}`} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
+        </UiButton>
+        <UiButton type="button" className="icon-button" title={rightOpen ? `Hide context panel${contextShortcut ? ` (${contextShortcut})` : ''}` : `Show context panel${contextShortcut ? ` (${contextShortcut})` : ''}`} aria-label={rightOpen ? 'Hide context panel' : 'Show context panel'} onClick={onToggleContext}>
           {rightOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
-        </button>
-        <button type="button" className={`icon-button ${previewOpen ? 'active' : ''}`} title={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-label={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-pressed={previewOpen} onClick={onTogglePreview}>
+        </UiButton>
+        <UiButton type="button" className={`icon-button ${previewOpen ? 'active' : ''}`} title={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-label={previewOpen ? 'Hide live preview pane' : 'Show live preview pane'} aria-pressed={previewOpen} onClick={onTogglePreview}>
           <MonitorPlay size={17} />
-        </button>
-        <button type="button" className={`icon-button ${terminalOpen ? 'active' : ''}`} title={terminalOpen ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)'} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} aria-pressed={terminalOpen} onClick={onToggleTerminal}>
+        </UiButton>
+        <UiButton type="button" className={`icon-button ${terminalOpen ? 'active' : ''}`} title={terminalOpen ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)'} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} aria-pressed={terminalOpen} onClick={onToggleTerminal}>
           <Terminal size={17} />
-        </button>
+        </UiButton>
         <MoreMenu
           items={[
             { label: 'New window', hint: newWindowShortcut, icon: <AppWindow size={15} />, onSelect: onNewWindow },
-            { label: `Theme: ${themeLabel(theme)}`, hint: `Switch to ${themeLabel(nextTheme(theme))}`, icon: <Palette size={15} />, onSelect: onToggleTheme, keepOpen: true },
+            { label: `Theme: ${themeLabel(theme)}`, hint: `Switch to ${themeLabel(nextTheme(theme))}`, icon: <Palette size={15} />, onSelect: onToggleTheme },
             { label: 'Guided tour and lessons', hint: '', icon: <GraduationCap size={15} />, onSelect: onOpenTour, active: tourListOpen },
             { label: 'Keyboard shortcuts', hint: sheetShortcut, icon: <Keyboard size={15} />, onSelect: onOpenShortcuts },
           ]}
@@ -159,68 +164,24 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
   );
 }
 
-interface MoreMenuItem { label: string; hint: string; icon: ReactNode; onSelect: () => void; /** Stay open so the theme can be stepped through without reopening the menu. */ keepOpen?: boolean; active?: boolean }
+interface MoreMenuItem { label: string; hint: string; icon: ReactNode; onSelect: () => void; active?: boolean }
 
 function MoreMenu({ items }: { items: MoreMenuItem[] }): ReactNode {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const [placement, setPlacement] = useState<{ left: number; top: number; width: number } | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const place = (): void => {
-      const rect = buttonRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = Math.min(400, window.innerWidth - 16);
-      setPlacement({
-        left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
-        top: Math.min(rect.bottom + 5, window.innerHeight - 8),
-        width,
-      });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent): void => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
   return (
-    <div className="titlebar-more" ref={wrapRef}>
-      <button ref={buttonRef} type="button" className={`icon-button ${open ? 'active' : ''}`} title="More" aria-label="More" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <Ellipsis size={17} />
-      </button>
-      {open && (
-        <div className="popover titlebar-more-popover" role="menu" style={placement ?? undefined}>
-          {items.map((item) => (
-            <button key={item.label} type="button" role="menuitem" className={item.active ? 'selected' : ''} onClick={() => { item.onSelect(); if (!item.keepOpen) setOpen(false); }}>
-              {item.icon}
-              <span className="truncate">{item.label}</span>
-              {item.hint && <small className="titlebar-more-hint">{item.hint}</small>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <Dropdown
+      className="titlebar-more-dropdown"
+      placement="bottom-end"
+      arrowIcon={false}
+      label="More"
+      renderTrigger={() => <UiButton type="button" className="icon-button" title="More" aria-label="More"><Ellipsis size={17} /></UiButton>}
+    >
+      {items.map((item) => (
+        <DropdownItem key={item.label} className={`titlebar-dropdown-item${item.active ? ' selected' : ''}`} onClick={item.onSelect}>
+          {item.icon}
+          <span className="titlebar-dropdown-copy"><span>{item.label}</span>{item.hint && <small>{item.hint}</small>}</span>
+        </DropdownItem>
+      ))}
+    </Dropdown>
   );
 }
 
@@ -301,7 +262,7 @@ export function CommandPalette({ items, onClose, onSearch }: { items: CommandPal
       <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
         <label className="command-palette-search">
           <Search size={17} />
-          <input
+          <UiTextInput
             autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -315,7 +276,7 @@ export function CommandPalette({ items, onClose, onSearch }: { items: CommandPal
           {visible.map((item, index) => (
             <Fragment key={item.id}>
             {item.group && item.group !== visible[index - 1]?.group && <div className="command-palette-group">{item.group}</div>}
-            <button
+            <UiButton
               type="button"
               role="option"
               aria-selected={index === selectedIndex}
@@ -325,7 +286,7 @@ export function CommandPalette({ items, onClose, onSearch }: { items: CommandPal
             >
               <span><strong>{item.label}</strong><small>{item.description}</small></span>
               {item.shortcut && <kbd>{item.shortcut}</kbd>}
-            </button>
+            </UiButton>
             </Fragment>
           ))}
           {searching && <div className="command-palette-empty">Searching…</div>}
@@ -340,11 +301,11 @@ function ProjectPicker({ projects, activeProject, onChoose, onOpen, onRemove, on
   const [open, setOpen] = useState(false);
   return (
     <div className="project-picker">
-      <button type="button" className="project-picker-button" onClick={() => setOpen((value) => !value)}>
+      <UiButton type="button" className="project-picker-button" onClick={() => setOpen((value) => !value)}>
         <span className="project-glyph">{activeProject ? activeProject.name.slice(0, 1).toUpperCase() : <FolderOpen size={15} />}</span>
         <span className="project-copy"><strong>{activeProject?.name ?? 'No project'}</strong><small>{activeProject?.path ?? 'Open a local repository'}</small></span>
         <ChevronDown size={15} />
-      </button>
+      </UiButton>
       {open && (
         <div className="popover project-popover">
           <div className="popover-label">Recent projects</div>
@@ -352,12 +313,12 @@ function ProjectPicker({ projects, activeProject, onChoose, onOpen, onRemove, on
               folder twice, or one renamed since, can be tidied without opening it first. */}
           {projects.map((project) => (
             <div key={project.id} className={`project-row${project.id === activeProject?.id ? ' selected' : ''}`}>
-              <button type="button" className="project-row-open" onClick={() => { onOpen(project.id); setOpen(false); }}>
+              <UiButton type="button" className="project-row-open" onClick={() => { onOpen(project.id); setOpen(false); }}>
                 <span className="project-glyph small">{project.name.slice(0, 1).toUpperCase()}</span>
                 <span className="truncate">{project.name}</span>
                 {project.id === activeProject?.id && <Check size={14} />}
-              </button>
-              <button
+              </UiButton>
+              <UiButton
                 type="button"
                 className="project-row-remove"
                 title={`Remove ${project.name} from the list`}
@@ -365,13 +326,13 @@ function ProjectPicker({ projects, activeProject, onChoose, onOpen, onRemove, on
                 onClick={() => onRemove(project.id)}
               >
                 <X size={13} />
-              </button>
+              </UiButton>
             </div>
           ))}
           <div className="popover-divider" />
-          <button type="button" onClick={() => { onChoose(); setOpen(false); }}><Plus size={15} /><span>Open project</span></button>
+          <UiButton type="button" onClick={() => { onChoose(); setOpen(false); }}><Plus size={15} /><span>Open project</span></UiButton>
           {projects.length > 0 && (
-            <button type="button" className="project-clear" onClick={() => { onClear(); setOpen(false); }}><Trash2 size={15} /><span>Clear list</span></button>
+            <UiButton type="button" className="project-clear" onClick={() => { onClear(); setOpen(false); }}><Trash2 size={15} /><span>Clear list</span></UiButton>
           )}
         </div>
       )}
@@ -403,12 +364,12 @@ export function ConversationSidebar({ conversations, activeId, projectId, filesR
     <aside className="conversation-sidebar">
       <div className="sidebar-heading">
         <div className="sidebar-tabs" role="tablist" aria-label="Left panel">
-          <button type="button" role="tab" aria-selected={tab === 'threads'} className={tab === 'threads' ? 'active' : ''} onClick={() => setTab('threads')}>Threads</button>
-          <button type="button" role="tab" aria-selected={tab === 'files'} className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')} title="Project files, including what changed and what Git does not track yet">Files</button>
+          <UiButton type="button" role="tab" aria-selected={tab === 'threads'} className={tab === 'threads' ? 'active' : ''} onClick={() => setTab('threads')}>Threads</UiButton>
+          <UiButton type="button" role="tab" aria-selected={tab === 'files'} className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')} title="Project files, including what changed and what Git does not track yet">Files</UiButton>
         </div>
         <div className="sidebar-heading-actions">
-          <button type="button" className="icon-button compact" onClick={onNew} title="New conversation" aria-label="New conversation"><Plus size={16} /></button>
-          <button type="button" className="icon-button compact" onClick={onCollapse} title="Hide threads panel (Ctrl+Shift+B)" aria-label="Hide threads panel"><PanelLeftClose size={15} /></button>
+          <UiButton type="button" className="icon-button compact" onClick={onNew} title="New conversation" aria-label="New conversation"><Plus size={16} /></UiButton>
+          <UiButton type="button" className="icon-button compact" onClick={onCollapse} title="Hide threads panel (Ctrl+Shift+B)" aria-label="Hide threads panel"><PanelLeftClose size={15} /></UiButton>
         </div>
       </div>
       {tab === 'files' && <ProjectFilesPanel projectId={projectId} refreshKey={filesRefreshKey} onOpenFile={onOpenFile} />}
@@ -416,11 +377,11 @@ export function ConversationSidebar({ conversations, activeId, projectId, filesR
         {conversations.length === 0 && <div className="empty-list">No conversations</div>}
         {conversations.map((conversation) => (
           <div key={conversation.id} className={`conversation-row ${conversation.id === activeId ? 'active' : ''}`}>
-            <button type="button" className="conversation-main" onClick={() => onOpen(conversation.id)}>
+            <UiButton type="button" className="conversation-main" onClick={() => onOpen(conversation.id)}>
               <span className="conversation-title truncate">{conversation.title}</span>
               <span className="conversation-meta"><Clock3 size={12} />{relativeTime(conversation.updatedAt)}</span>
-            </button>
-            <button type="button" className="row-action" title="Delete conversation" aria-label={`Delete ${conversation.title}`} onClick={() => onDelete(conversation.id)}><Trash2 size={13} /></button>
+            </UiButton>
+            <UiButton type="button" className="row-action" title="Delete conversation" aria-label={`Delete ${conversation.title}`} onClick={() => onDelete(conversation.id)}><Trash2 size={13} /></UiButton>
           </div>
         ))}
       </div>}

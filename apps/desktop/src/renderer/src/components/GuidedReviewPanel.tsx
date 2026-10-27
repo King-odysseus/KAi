@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { MAX_REVIEW_FILES, type ChangeReviewResult, type GitChange, type ReviewFinding } from '@kai/contracts';
 import { unwrap } from '../types';
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
 
 type ReviewMode = 'novice' | 'intermediate' | 'expert';
 type ReviewScope = 'changes' | 'active-file' | 'selection';
@@ -147,18 +149,18 @@ export function GuidedReviewPanel({
     : aiResult ? 'Review again' : `AI review ${scopedPaths.length} ${scopedPaths.length === 1 ? 'change' : 'changes'}`;
 
   return <aside className="guided-review-panel" aria-label="Guided code review">
-    <header className="guided-review-head"><div><strong>Guided Review</strong><small>{reviewed}/{scopedPaths.length} files reviewed</small></div><button type="button" className="icon-button compact" title="Copy review report" aria-label="Copy review report" onClick={copyReport}><ClipboardCopy size={13} /></button></header>
+    <header className="guided-review-head"><div><strong>Guided Review</strong><small>{reviewed}/{scopedPaths.length} files reviewed</small></div><UiButton type="button" className="icon-button compact" title="Copy review report" aria-label="Copy review report" onClick={copyReport}><ClipboardCopy size={13} /></UiButton></header>
     <div className="guided-review-progress" role="progressbar" aria-label="Files reviewed" aria-valuemin={0} aria-valuemax={scopedPaths.length} aria-valuenow={reviewed}><span style={{ width: `${percentDone}%` }} /></div>
     <div className="guided-review-controls">
       <label className="field"><span>Mode</span><Select value={mode} onChange={(event) => setMode(event.target.value as ReviewMode)}><option value="novice">Novice</option><option value="intermediate">Intermediate</option><option value="expert">Expert</option></Select></label>
       <label className="field"><span>Scope</span><Select value={scope} onChange={(event) => setScope(event.target.value as ReviewScope)}><option value="changes">Uncommitted changes</option><option value="active-file">Active file</option><option value="selection" disabled={!hasSelection}>Selected code</option></Select></label>
     </div>
     <p className="guided-review-guidance"><Sparkles size={13} />{guidance}</p>
-    {scopedPaths.length > 1 && <label className="guided-review-toggle"><input type="checkbox" checked={hideDone} onChange={(event) => setHideDone(event.target.checked)} /><span>Hide files I have reviewed</span></label>}
+    {scopedPaths.length > 1 && <label className="guided-review-toggle"><Checkbox checked={hideDone} onChange={(event) => setHideDone(event.target.checked)} /><span>Hide files I have reviewed</span></label>}
     {!scopedPaths.length ? <div className="guided-review-empty"><GitCompare size={16} /><strong>Nothing selected for review</strong><span>{scope === 'changes' ? 'Make or refresh Git changes, or choose Active file.' : 'Open a file and select code to review it here.'}</span></div> : <>
       <section className="guided-review-ai" aria-label="AI review">
         <div className="guided-review-actions">
-          <button type="button" className="primary-button" disabled={reviewing} onClick={() => void runAiReview()}><Sparkles size={13} />{reviewLabel}</button>
+          <UiButton type="button" className="primary-button" disabled={reviewing} onClick={() => void runAiReview()}><Sparkles size={13} />{reviewLabel}</UiButton>
         </div>
         {scopedPaths.length > MAX_REVIEW_FILES && <p className="guided-review-hint">Reviews the first {MAX_REVIEW_FILES} of {scopedPaths.length} files; review the rest in another pass.</p>}
         {!aiResult && !aiError && !reviewing && <p className="guided-review-hint">A second model reads every changed file together and lists what needs attention, with a button to open each file.</p>}
@@ -166,7 +168,7 @@ export function GuidedReviewPanel({
         {aiError && <div className="guided-review-ai-error" role="alert">
           <strong>The AI review could not run</strong>
           <p>{aiError}</p>
-          {onOpenSettings && <button type="button" className="secondary-button" onClick={onOpenSettings}>Open Settings</button>}
+          {onOpenSettings && <UiButton type="button" className="secondary-button" onClick={onOpenSettings}>Open Settings</UiButton>}
         </div>}
         {aiResult && <AiReviewResult
           result={aiResult}
@@ -176,20 +178,20 @@ export function GuidedReviewPanel({
           onFixAll={() => onCreateFollowup(`Work through these review findings:\n${aiResult.findings.map((finding, index) => `${index + 1}. ${fixPrompt(finding)}`).join('\n')}`)}
         />}
       </section>
-      {visiblePaths.length === 0 ? <div className="guided-review-empty"><CheckCircle2 size={16} /><strong>All {scopedPaths.length} files reviewed</strong><button type="button" className="secondary-button" onClick={() => setHideDone(false)}>Show them again</button></div> : <div className="guided-review-files">{visiblePaths.map((item) => {
+      {visiblePaths.length === 0 ? <div className="guided-review-empty"><CheckCircle2 size={16} /><strong>All {scopedPaths.length} files reviewed</strong><UiButton type="button" className="secondary-button" onClick={() => setHideDone(false)}>Show them again</UiButton></div> : <div className="guided-review-files">{visiblePaths.map((item) => {
         const count = findingsByFile.get(item)?.length ?? 0;
         const done = isDone(item);
-        return <button key={item} type="button" className={`${item === selectedPath ? 'active' : ''}${done ? ' done' : ''}`.trim()} onClick={() => select(item)}>
+        return <UiButton key={item} type="button" className={`${item === selectedPath ? 'active' : ''}${done ? ' done' : ''}`.trim()} onClick={() => select(item)}>
           {done ? <CheckCircle2 size={13} className="guided-review-done" aria-label="Reviewed" /> : <FileCode2 size={13} />}<span>{item}</span>
           {count > 0 ? <small className="guided-review-count">{count} {count === 1 ? 'finding' : 'findings'}</small> : <small>{isDeleted(item) ? 'deleted' : STATUS_LABEL[notes[item]?.status ?? 'unreviewed']}</small>}
           <ChevronRight size={13} />
-        </button>;
+        </UiButton>;
       })}</div>}
       {selectedPath && <section className="guided-review-detail">
         <div className="guided-review-nav">
-          <button type="button" className="secondary-button" disabled={visibleIndex <= 0} onClick={() => step(-1)} aria-label="Previous file">‹ Previous</button>
+          <UiButton type="button" className="secondary-button" disabled={visibleIndex <= 0} onClick={() => step(-1)} aria-label="Previous file">‹ Previous</UiButton>
           <span>{visibleIndex + 1} of {visiblePaths.length}</span>
-          <button type="button" className="secondary-button" disabled={visibleIndex < 0 || visibleIndex >= visiblePaths.length - 1} onClick={() => step(1)} aria-label="Next file">Next ›</button>
+          <UiButton type="button" className="secondary-button" disabled={visibleIndex < 0 || visibleIndex >= visiblePaths.length - 1} onClick={() => step(1)} aria-label="Next file">Next ›</UiButton>
         </div>
         <div className="guided-review-file-title"><FileCode2 size={14} /><strong>{selectedPath}</strong></div>
         <ReviewExplanation mode={mode} path={selectedPath} diff={diff} deleted={isDeleted(selectedPath)} added={(() => { const change = statusOf(selectedPath); return change?.worktree === '?' || change?.index === 'A'; })()} />
@@ -197,11 +199,11 @@ export function GuidedReviewPanel({
           <strong>AI review found</strong>
           <ul>{(findingsByFile.get(selectedPath) ?? []).map((finding, index) => <li key={index}><span className={`review-chip ${finding.severity}`}>{finding.severity}</span>{finding.line ? <em>line {finding.line}</em> : null}<p>{finding.note}</p></li>)}</ul>
         </div>}
-        <div className="guided-review-actions"><button type="button" className="secondary-button" disabled={isDeleted(selectedPath)} title={isDeleted(selectedPath) ? 'This file was deleted, so there is nothing to explain or open.' : undefined} onClick={() => void onExplainFile(selectedPath)}><BookOpen size={13} />Explain with KAI</button><button type="button" className="secondary-button" onClick={() => onCreateFollowup(`Review follow-up for ${selectedPath}: ${currentNote?.note || 'Investigate this change, address any risks, and explain the result.'}`)}><MessageSquareText size={13} />Create follow-up</button><button type="button" className="secondary-button" disabled={isDeleted(selectedPath)} title={isDeleted(selectedPath) ? 'This file was deleted.' : undefined} onClick={() => void onOpenFile(selectedPath)}>Open code</button></div>
+        <div className="guided-review-actions"><UiButton type="button" className="secondary-button" disabled={isDeleted(selectedPath)} title={isDeleted(selectedPath) ? 'This file was deleted, so there is nothing to explain or open.' : undefined} onClick={() => void onExplainFile(selectedPath)}><BookOpen size={13} />Explain with KAI</UiButton><UiButton type="button" className="secondary-button" onClick={() => onCreateFollowup(`Review follow-up for ${selectedPath}: ${currentNote?.note || 'Investigate this change, address any risks, and explain the result.'}`)}><MessageSquareText size={13} />Create follow-up</UiButton><UiButton type="button" className="secondary-button" disabled={isDeleted(selectedPath)} title={isDeleted(selectedPath) ? 'This file was deleted.' : undefined} onClick={() => void onOpenFile(selectedPath)}>Open code</UiButton></div>
         <details className="guided-review-diff"><summary>{loadingDiff ? 'Loading diff…' : 'View diff'}</summary><pre>{diff || 'No diff loaded.'}</pre></details>
-        <label className="guided-review-note">Review note<textarea value={noteText || currentNote?.note || ''} onChange={(event) => setNoteText(event.target.value)} placeholder="Decision, question, risk, or test to run" /></label>
-        <div className="guided-review-actions"><button type="button" className="primary-button" onClick={markReviewedAndNext}><CheckCircle2 size={13} />{nextUnreviewed(selectedPath) ? 'Mark reviewed and go to next' : 'Mark reviewed'}</button></div>
-        <div className="guided-review-statuses"><button type="button" className={`secondary-button${currentNote?.status === 'understood' ? ' active-button' : ''}`} onClick={() => update('understood')}>Understood</button><button type="button" className={`secondary-button${currentNote?.status === 'question' ? ' active-button' : ''}`} onClick={() => update('question')}>Question</button><button type="button" className={`secondary-button${currentNote?.status === 'needs-change' ? ' active-button' : ''}`} onClick={() => update('needs-change')}><ShieldAlert size={12} />Needs change</button><button type="button" className={`secondary-button${currentNote?.status === 'approved' ? ' active-button' : ''}`} onClick={() => update('approved')}><CheckCircle2 size={12} />Approve</button></div>
+        <label className="guided-review-note">Review note<Textarea value={noteText || currentNote?.note || ''} onChange={(event) => setNoteText(event.target.value)} placeholder="Decision, question, risk, or test to run" /></label>
+        <div className="guided-review-actions"><UiButton type="button" className="primary-button" onClick={markReviewedAndNext}><CheckCircle2 size={13} />{nextUnreviewed(selectedPath) ? 'Mark reviewed and go to next' : 'Mark reviewed'}</UiButton></div>
+        <div className="guided-review-statuses"><UiButton type="button" className={`secondary-button${currentNote?.status === 'understood' ? ' active-button' : ''}`} onClick={() => update('understood')}>Understood</UiButton><UiButton type="button" className={`secondary-button${currentNote?.status === 'question' ? ' active-button' : ''}`} onClick={() => update('question')}>Question</UiButton><UiButton type="button" className={`secondary-button${currentNote?.status === 'needs-change' ? ' active-button' : ''}`} onClick={() => update('needs-change')}><ShieldAlert size={12} />Needs change</UiButton><UiButton type="button" className={`secondary-button${currentNote?.status === 'approved' ? ' active-button' : ''}`} onClick={() => update('approved')}><CheckCircle2 size={12} />Approve</UiButton></div>
       </section>}
     </>}
   </aside>;
@@ -236,11 +238,11 @@ function AiReviewResult({ result, isDeleted, onOpen, onFix, onFixAll }: {
         <div className="review-finding-head"><span className={`review-chip ${finding.severity}`}>{SEVERITY_LABEL[finding.severity]}</span><span className="review-finding-file" title={finding.file}>{finding.file}{finding.line ? `:${finding.line}` : ''}</span></div>
         <p>{finding.note}</p>
         <div className="review-finding-actions">
-          <button type="button" className="secondary-button" disabled={isDeleted(finding.file)} title={isDeleted(finding.file) ? 'This file was deleted.' : undefined} onClick={() => onOpen(finding)}>{finding.line ? 'Open at line' : 'Open file'}</button>
-          <button type="button" className="secondary-button" onClick={() => onFix(finding)}>Fix with KAI</button>
+          <UiButton type="button" className="secondary-button" disabled={isDeleted(finding.file)} title={isDeleted(finding.file) ? 'This file was deleted.' : undefined} onClick={() => onOpen(finding)}>{finding.line ? 'Open at line' : 'Open file'}</UiButton>
+          <UiButton type="button" className="secondary-button" onClick={() => onFix(finding)}>Fix with KAI</UiButton>
         </div>
       </li>)}</ul>
-      {result.findings.length > 1 && <div className="guided-review-actions"><button type="button" className="secondary-button" onClick={onFixAll}>Send all {result.findings.length} to KAI</button></div>}
+      {result.findings.length > 1 && <div className="guided-review-actions"><UiButton type="button" className="secondary-button" onClick={onFixAll}>Send all {result.findings.length} to KAI</UiButton></div>}
     </>}
     {result.skippedFiles.length > 0 && <details className="guided-review-skipped"><summary>{result.skippedFiles.length} not read</summary><ul>{result.skippedFiles.map((skipped) => <li key={skipped.file}><span>{skipped.file}</span><small>{skipped.reason}</small></li>)}</ul></details>}
   </div>;

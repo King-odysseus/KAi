@@ -202,12 +202,13 @@ button:disabled {
   app-region: no-drag;
 }
 
-.titlebar-more { position: relative; display: flex; }
-.popover.titlebar-more-popover { position: fixed; left: 8px; top: 42px; width: min(400px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: calc(100vh - 50px); overflow-y: auto; box-sizing: border-box; -webkit-app-region: no-drag; }
-.titlebar-more-popover .truncate { min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
-.titlebar-more-popover > button { min-height: 40px; }
-@media (max-width: 440px) { .titlebar-more-popover .titlebar-more-hint { display: none; } }
-.titlebar-more-hint { margin-left: auto; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.titlebar-more-dropdown[data-testid="flowbite-dropdown"] { width: min(400px, calc(100vw - 16px)); max-height: calc(100vh - 50px); overflow-y: auto; -webkit-app-region: no-drag; }
+.titlebar-dropdown-item { min-height: 40px; }
+.titlebar-dropdown-copy { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: space-between; gap: 16px; }
+.titlebar-dropdown-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.titlebar-dropdown-copy small { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.titlebar-dropdown-item.selected { color: var(--mint); background: var(--mint-soft); }
+@media (max-width: 440px) { .titlebar-dropdown-copy small { display: none; } }
 
 .conversation-tab-strip { display: flex; align-items: end; gap: 2px; min-height: 34px; padding: 4px 10px 0 72px; border-bottom: 1px solid var(--border-soft); background: var(--bg-shell); overflow-x: auto; }
 .conversation-tab { display: flex; align-items: center; gap: 7px; min-width: 130px; max-width: 230px; height: 29px; padding: 0 8px; border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0; color: var(--text-dim); background: transparent; font: inherit; font-size: 11px; cursor: pointer; }
@@ -1104,25 +1105,17 @@ button:disabled {
   display: block;
 }
 
-.app-dialog-overlay {
-  position: fixed;
-  z-index: 120;
-  inset: 0;
-  display: grid;
-  padding: 24px;
-  place-items: center;
-  background: rgba(4, 10, 19, 0.72);
-  backdrop-filter: blur(5px);
-}
-
 .app-dialog {
-  width: min(520px, 100%);
-  max-height: calc(100vh - 48px);
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+  max-height: calc(100dvh - 32px);
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
 }
 
 .app-dialog header {
@@ -1172,19 +1165,6 @@ button:disabled {
   font-weight: 700;
 }
 
-.app-dialog-field input,
-.app-dialog-field textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  background: var(--bg-input);
-  font: inherit;
-  resize: vertical;
-}
-
 .app-dialog-error {
   margin: 0 16px 12px;
   padding: 8px 10px;
@@ -1229,26 +1209,17 @@ button:disabled {
   padding: 8px 16px 0;
 }
 
-.approval-overlay {
-  position: absolute;
-  z-index: 20;
-  inset: 0;
-  display: grid;
-  padding: 20px;
-  place-items: center;
-  background: rgba(4, 10, 19, 0.74);
-  backdrop-filter: blur(4px);
-}
-
 .approval-dialog {
-  width: min(640px, 100%);
-  max-height: calc(100% - 16px);
+  width: 100%;
+  max-width: 640px;
+  min-width: 0;
+  max-height: min(760px, calc(100dvh - 32px));
   padding: 18px;
   overflow: auto;
-  border: 1px solid rgba(246, 174, 95, 0.38);
-  border-radius: var(--radius);
-  background: #0d1a2a;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .approval-dialog-head {
@@ -6833,27 +6804,17 @@ code {
   font-size: 10px;
 }
 
-.setup-overlay {
-  position: fixed;
-  z-index: 100;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(3, 9, 17, 0.78);
-  backdrop-filter: blur(8px);
-}
-
 .setup-panel {
   display: flex;
-  width: min(760px, 100%);
-  max-height: min(760px, calc(100vh - 48px));
+  width: 100%;
+  max-width: 760px;
+  max-height: min(760px, calc(100dvh - 32px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-panel);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .setup-head {
@@ -9640,27 +9601,17 @@ button.tool-call-head:hover strong { color: var(--mint); }
   font-size: 10.5px;
 }
 
-.shortcut-sheet-overlay {
-  position: fixed;
-  z-index: 110;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(3, 9, 17, 0.76);
-  backdrop-filter: blur(7px);
-}
-
 .shortcut-sheet {
   display: flex;
-  width: min(700px, 100%);
-  max-height: min(720px, calc(100vh - 48px));
+  width: 100%;
+  max-width: 700px;
+  max-height: min(720px, calc(100dvh - 32px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-panel);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .shortcut-sheet-head {

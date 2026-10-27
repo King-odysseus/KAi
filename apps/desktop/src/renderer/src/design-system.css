@@ -1,0 +1,12 @@
+/* Tailwind utilities and Flowbite tokens are available to renderer components.
+   Existing resets stay in place while legacy screens move to shared primitives. */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+@plugin "flowbite/plugin";
+@plugin "flowbite-react/plugin/tailwindcss";
+@source "../../../../../node_modules/flowbite";
+@source "../../../../../node_modules/flowbite-react/dist";
+
+@theme {
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+}

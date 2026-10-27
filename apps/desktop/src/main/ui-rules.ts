@@ -40,7 +40,7 @@ export const BROWSER_RULES: readonly string[] = [
   '- Start with browser_tabs, action "list", then open your own preview tab with browser_tabs, action "new". Navigate the preview to the page. Never navigate, resize or close a tab that is not yours.',
   `- Keep the preview tab unresized so it follows the Chrome window and fills it when maximised. For each responsive check, open one temporary tab with browser_tabs, action "new", navigate it to the page, use browser_resize (${PHONE}, 768, ${DESKTOP} or ${WIDE} wide), inspect it, then close that temporary tab. Check sizes one at a time; do not start another browser or open another window.`,
   `- At ${PHONE}px wide, scroll to the bottom and confirm the navigation is still visible and the last item is not covered. At ${WIDE}px wide, confirm no large strip of the screen is empty.`,
-  '- browser_resize fixes the page viewport at that size, not the Chrome window. Maximising Chrome will then leave empty space beside a narrow page. Never call browser_resize on the preview tab. If a temporary tab cannot be opened, stop rather than resize an existing tab.',
+  '- browser_resize fixes that tab\'s page at the size given and sizes the Chrome window to match, so the person watching sees a phone, a tablet or a desktop. Closing the resized tab puts the window back. Never call browser_resize on the preview tab: it would stay fixed at that size. If a temporary tab cannot be opened, stop rather than resize an existing tab.',
   '- When finished, close every temporary resized tab and select your unresized preview tab so the desktop page is visible at the window width. Leave that preview tab available for the person to inspect. Do not call browser_close: the browser is shared and will refuse.',
 ];
 

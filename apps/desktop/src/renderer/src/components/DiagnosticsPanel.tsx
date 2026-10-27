@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { ProjectRecord, ServiceState } from '@kai/contracts';
 import { statusLabel, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 type CheckTool = 'doctor' | 'compliance_audit' | 'git_status' | 'wiki_status';
 
@@ -96,7 +98,7 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
           <div key={check.tool} className="diagnostic-check">
             <div className="ops-card-head">
               <span><strong>{check.label}</strong> <small>{check.hint}</small></span>
-              <button type="button" className="secondary-button" disabled={!c1Ready || running !== null} onClick={() => void tool(check.tool, check.tool === 'compliance_audit' ? { fix: false } : check.tool === 'git_status' && activeProject ? { project: activeProject.name } : {})}><RefreshCw size={13} /><span>{running === check.tool ? 'Running…' : 'Run'}</span></button>
+              <UiButton type="button" className="secondary-button" disabled={!c1Ready || running !== null} onClick={() => void tool(check.tool, check.tool === 'compliance_audit' ? { fix: false } : check.tool === 'git_status' && activeProject ? { project: activeProject.name } : {})}><RefreshCw size={13} /><span>{running === check.tool ? 'Running…' : 'Run'}</span></UiButton>
             </div>
             {results[check.tool] && <pre className="verify-output">{results[check.tool]}</pre>}
           </div>
@@ -106,13 +108,13 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
       <section className="settings-section">
         <div className="section-title"><span>Engine configuration</span></div>
         <div className="ops-actions">
-          <button type="button" className="secondary-button" disabled={!c1Ready || running !== null} onClick={() => void tool('config_get')}>Show settings</button>
+          <UiButton type="button" className="secondary-button" disabled={!c1Ready || running !== null} onClick={() => void tool('config_get')}>Show settings</UiButton>
         </div>
         {results.config_get && <pre className="verify-output">{results.config_get}</pre>}
         <div className="field-with-action two-fields">
-          <label className="field"><span>Setting name</span><input value={configKey} placeholder="logLevel" onChange={(event) => setConfigKey(event.target.value)} /></label>
-          <label className="field"><span>New value</span><input value={configValue} onChange={(event) => setConfigValue(event.target.value)} /></label>
-        <button type="button" className="primary-button" disabled={!c1Ready || !configKey.trim() || !configValue.trim() || running !== null} onClick={() => void confirmDialog({
+          <label className="field"><span>Setting name</span><UiTextInput value={configKey} placeholder="logLevel" onChange={(event) => setConfigKey(event.target.value)} /></label>
+          <label className="field"><span>New value</span><UiTextInput value={configValue} onChange={(event) => setConfigValue(event.target.value)} /></label>
+        <UiButton type="button" className="primary-button" disabled={!c1Ready || !configKey.trim() || !configValue.trim() || running !== null} onClick={() => void confirmDialog({
           title: 'Change Cognitive1 setting?',
           detail: `Change "${configKey.trim()}" to "${configValue.trim()}"? Cognitive1 validates the value and may need a restart to apply it.`,
           confirmLabel: 'Change setting',
@@ -122,7 +124,7 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
             .then(unwrap)
             .then((result) => { setMessage(textOf(result) || 'Setting saved.'); setConfigKey(''); setConfigValue(''); })
             .catch((caught) => setError(caught instanceof Error ? caught.message : 'The setting could not be changed.'));
-        })}>Change setting</button>
+        })}>Change setting</UiButton>
         </div>
       </section>
 
@@ -130,7 +132,7 @@ export function DiagnosticsPanel({ activeProject }: { activeProject: ProjectReco
         <div className="section-title"><span>Bug report</span></div>
         <p className="settings-note">Copies versions, service states, a settings summary and recent errors. Keys, tokens and your user name are removed.</p>
         <div className="ops-actions">
-          <button type="button" className="primary-button" onClick={() => void copyReport()}><ClipboardCopy size={14} /><span>Copy diagnostics report</span></button>
+          <UiButton type="button" className="primary-button" onClick={() => void copyReport()}><ClipboardCopy size={14} /><span>Copy diagnostics report</span></UiButton>
         </div>
         {report && <pre className="verify-output">{report}</pre>}
       </section>

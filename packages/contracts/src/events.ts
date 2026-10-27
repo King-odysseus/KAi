@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { agentIdSchema, autonomyModeSchema, routeModeSchema, schemaVersionSchema, timestampSchema } from './primitives';
+import { contextPreviewSectionSchema } from './context';
 
 const eventBaseSchema = z.object({
   schemaVersion: schemaVersionSchema,
@@ -117,6 +118,19 @@ export const memoryEventSchema = eventBaseSchema.extend({
   summary: z.string(),
 });
 
+/** A per-run record of the project context sources actually assembled for this turn. */
+export const contextSnapshotEventSchema = eventBaseSchema.extend({
+  type: z.literal('context.snapshot'),
+  delivery: z.enum(['api', 'cli']),
+  totalCharacters: z.number().int().nonnegative(),
+  estimatedTokens: z.number().int().nonnegative(),
+  /** The exact project-context block assembled for this run, capped to keep a transcript from growing without bound. */
+  projectContextText: z.string().max(2_000_000).optional(),
+  projectContextTextTruncated: z.boolean().optional(),
+  sections: z.array(contextPreviewSectionSchema),
+  supplementalSources: z.array(z.string().min(1).max(500)),
+});
+
 export const routeChangedEventSchema = eventBaseSchema.extend({
   type: z.literal('route.changed'),
   from: routeModeSchema,
@@ -182,6 +196,7 @@ export const persistedEventV1Schema = z.discriminatedUnion('type', [
   errorEventSchema,
   costUpdateEventSchema,
   memoryEventSchema,
+  contextSnapshotEventSchema,
   routeChangedEventSchema,
   agentLifecycleEventSchema,
   rawFallbackEventSchema,

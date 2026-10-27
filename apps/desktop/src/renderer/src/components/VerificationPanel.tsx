@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { FileVerificationState, ProjectRecord, VerificationOverview } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 const LABELS: Record<FileVerificationState, string> = {
   verified: 'Verified',
@@ -80,11 +82,11 @@ export function VerificationPanel({ activeProject }: { activeProject: ProjectRec
           </p>
         ) : <p className="settings-note">No check has been recorded for this project yet.</p>}
         <div className="field-grid">
-          <label className="field"><span>Check command</span><input value={command} placeholder="npm test" onChange={(event) => setCommand(event.target.value)} /></label>
+          <label className="field"><span>Check command</span><UiTextInput value={command} placeholder="npm test" onChange={(event) => setCommand(event.target.value)} /></label>
         </div>
         <div className="ops-actions">
-          <button type="button" className="primary-button" disabled={running || !command.trim()} onClick={() => void run()}><Play size={14} /><span>{running ? 'Running…' : stale ? 'Re-run checks' : 'Run checks'}</span></button>
-          <button type="button" className="secondary-button" onClick={() => void refresh()}><RefreshCw size={14} /><span>Refresh</span></button>
+          <UiButton type="button" className="primary-button" disabled={running || !command.trim()} onClick={() => void run()}><Play size={14} /><span>{running ? 'Running…' : stale ? 'Re-run checks' : 'Run checks'}</span></UiButton>
+          <UiButton type="button" className="secondary-button" onClick={() => void refresh()}><RefreshCw size={14} /><span>Refresh</span></UiButton>
         </div>
         {latest && !latest.passed && latest.outputTail && <pre className="verify-output">{latest.outputTail}</pre>}
       </section>

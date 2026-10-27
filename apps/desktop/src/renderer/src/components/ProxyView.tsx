@@ -1,6 +1,7 @@
 // Universal Agent Proxy dashboard. Mirrors the ClaudeCode-Proxy VS Code extension's "Proxy Control
 // Centre" (dashboard.html): the same header, the same five tabs, and the same sections in each tab.
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Circle, CircleAlert, CircleCheck, RefreshCw, X } from 'lucide-react';
 import type {
   AppSettings,
   CredentialStatus,
@@ -23,6 +24,7 @@ import type {
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { AdvancedTab, AgentsTab, KeyField, ModelSelect, ProvidersTab } from './ProxySettingsPanel';
+import { Pill } from './Pill';
 import {
   AGENTS,
   AGENT_KINDS,
@@ -42,6 +44,8 @@ import {
 } from './proxy-dashboard-data';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 type ProxyTab = 'overview' | 'agents' | 'providers' | 'traffic' | 'advanced';
 type StatusFilter = '' | '2xx' | '4xx' | '5xx';
 type CostPeriod = 'session' | 'daily' | 'weekly' | 'monthly';
@@ -286,7 +290,7 @@ export function ProxyPanel({
   async function testConnection(): Promise<void> {
     const result = await run('test-connection', () => window.kaiDesktop.testProxyConnection().then(unwrap));
     if (!result) return;
-    setActionResult(result.ok ? `✓ Upstream connection succeeded (${result.status ?? 200}).` : `✕ Connection failed: ${result.error ?? 'unknown error'}`);
+    setActionResult(result.ok ? `Upstream connection succeeded (${result.status ?? 200}).` : `Connection failed: ${result.error ?? 'unknown error'}`);
   }
 
   async function pingAll(): Promise<void> {
@@ -488,7 +492,7 @@ export function ProxyPanel({
       `Enabled: ${settings.proxy.enabled}`,
       `Port: ${settings.proxy.port}`,
       `Base URL: ${settings.proxy.targetBaseUrl || '(not set)'}`,
-      `API Key: ${credentialStatus.ids.includes(settings.proxy.credentialId) ? '✓ set' : '✗ not set'} (${settings.proxy.credentialId})`,
+      `API Key: ${credentialStatus.ids.includes(settings.proxy.credentialId) ? 'set' : 'not set'} (${settings.proxy.credentialId})`,
       `Default Model: ${settings.proxy.defaultModel || '(not set)'}`,
       '',
       '--- Status ---',
@@ -543,19 +547,21 @@ export function ProxyPanel({
           <h1>Proxy Control Centre</h1>
           <span className="header-subtitle">Route, inspect, and manage every coding agent from one place.</span>
         </div>
-        <span className={`status-chip ${chip.tone}`} role="status" aria-live="polite"><span aria-hidden="true">{chip.glyph}</span><span>{chip.label}</span></span>
+        <Pill tone={chip.tone === 'ok' ? 'success' : chip.tone === 'err' ? 'error' : chip.tone === 'warn' ? 'warning' : 'neutral'} className="proxy-status" role="status" aria-live="polite" aria-label={`Proxy ${chip.label}`}>
+          {chip.tone === 'ok' ? <CircleCheck size={13} /> : chip.tone === 'err' ? <CircleAlert size={13} /> : chip.tone === 'warn' ? <RefreshCw size={13} /> : <Circle size={13} />}{chip.label}
+        </Pill>
         <div className="header-btns">
-          <button type="button" className="btn sec" title="Reload dashboard" disabled={working || !ready} onClick={() => void refreshCore(true)}>↺ Refresh</button>
-          <button type="button" className="btn sec" title="Restart the proxy server" disabled={busy || !running} onClick={onRestart}>Restart</button>
+          <UiButton type="button" className="btn sec" title="Reload dashboard" disabled={working || !ready} onClick={() => void refreshCore(true)}><RefreshCw size={13} /> Refresh</UiButton>
+          <UiButton type="button" className="btn sec" title="Restart the proxy server" disabled={busy || !running} onClick={onRestart}>Restart</UiButton>
           {running
-            ? <button type="button" className="btn sec" disabled={busy} onClick={onStop}>Stop</button>
-            : <button type="button" className="btn" disabled={busy} onClick={onStart}>Start</button>}
+            ? <UiButton type="button" className="btn sec" disabled={busy} onClick={onStop}>Stop</UiButton>
+            : <UiButton type="button" className="btn" disabled={busy} onClick={onStart}>Start</UiButton>}
         </div>
       </div>
 
       <nav className="dashboard-tabs" role="tablist" aria-label="Dashboard sections">
         {tabs.map((item) => (
-          <button
+          <UiButton
             key={item.id}
             type="button"
             role="tab"
@@ -564,7 +570,7 @@ export function ProxyPanel({
             onClick={() => setTab(item.id)}
           >
             {item.label}
-          </button>
+          </UiButton>
         ))}
       </nav>
 
@@ -629,23 +635,23 @@ export function ProxyPanel({
           <section className="section">
             <div className="section-title-row"><h2>Quick actions</h2><span className="hint" role="status" aria-live="polite" style={{ margin: 0 }} /></div>
             <div className="quick-actions">
-              <button type="button" className="btn" disabled={working} onClick={() => void routeEvery('route')}>Route all</button>
-              <button type="button" className="btn sec" disabled={working} onClick={() => void routeEvery('direct')}>Direct all</button>
-              <button type="button" className="btn sec" disabled={working || !ready} onClick={() => void testConnection()}>Test connection</button>
-              <button type="button" className="btn sec" disabled={working || !ready} onClick={() => void pingAll()}>Ping all providers</button>
-              <button type="button" className="btn sec" onClick={() => setTab('traffic')}>View traffic</button>
+              <UiButton type="button" className="btn" disabled={working} onClick={() => void routeEvery('route')}>Route all</UiButton>
+              <UiButton type="button" className="btn sec" disabled={working} onClick={() => void routeEvery('direct')}>Direct all</UiButton>
+              <UiButton type="button" className="btn sec" disabled={working || !ready} onClick={() => void testConnection()}>Test connection</UiButton>
+              <UiButton type="button" className="btn sec" disabled={working || !ready} onClick={() => void pingAll()}>Ping all providers</UiButton>
+              <UiButton type="button" className="btn sec" onClick={() => setTab('traffic')}>View traffic</UiButton>
             </div>
             <p className="hint" role="status" aria-live="polite" style={{ margin: '8px 0 0', minHeight: '1.2em' }}>{actionResult}</p>
           </section>
 
-          <section className="section">
-            <h2>Diagnostics</h2>
+          <details className="section proxy-diagnostics">
+            <summary>Diagnostics</summary>
             <p className="hint lead">Routing controls live on the agent cards above. This panel holds the raw proxy log, provider pings, and live performance numbers.</p>
             {pingResults.length > 0 && (
               <div className="ping-list" role="status" aria-live="polite">
                 {pingResults.map((result) => (
                   <div key={`${result.provider}-${result.label}`}>
-                    <span className={result.ok ? 'ok-text' : 'err-text'}>{result.ok ? '✓' : '✕'}</span>{' '}
+                    <span className={result.ok ? 'ok-text' : 'err-text'}>{result.ok ? <CircleCheck size={13} /> : <CircleAlert size={13} />}</span>{' '}
                     <strong>{result.label || result.provider}</strong> · {result.status ?? 'no status'} · {formatLatency(result.latencyMs)}
                     {result.error ? ` · ${result.error}` : ''}
                   </div>
@@ -676,7 +682,7 @@ export function ProxyPanel({
                 </table>
               </div>
             )}
-          </section>
+          </details>
         </div>
       )}
 
@@ -724,18 +730,18 @@ export function ProxyPanel({
               {costClearArmed ? (
                 <span className="confirm-group">
                   <span>Clear session costs?</span>
-                  <button type="button" className="btn confirm" onClick={() => void clearCosts()}>Confirm</button>
-                  <button type="button" className="btn sec" onClick={() => setCostClearArmed(false)}>Cancel</button>
+                  <UiButton type="button" className="btn confirm" onClick={() => void clearCosts()}>Confirm</UiButton>
+                  <UiButton type="button" className="btn sec" onClick={() => setCostClearArmed(false)}>Cancel</UiButton>
                 </span>
               ) : (
-                <button type="button" className="btn danger small" title="Clear session cost data" disabled={working || !ready} onClick={() => setCostClearArmed(true)}>Clear</button>
+                <UiButton type="button" className="btn danger small" title="Clear session cost data" disabled={working || !ready} onClick={() => setCostClearArmed(true)}>Clear</UiButton>
               )}
             </div>
             <div className="cost-period-tabs">
               {(['session', 'daily', 'weekly', 'monthly'] as const).map((period) => (
-                <button key={period} type="button" className={`cost-period-tab ${costPeriod === period ? 'active' : ''}`} aria-pressed={costPeriod === period} onClick={() => setCostPeriod(period)}>
+                <UiButton key={period} type="button" className={`cost-period-tab ${costPeriod === period ? 'active' : ''}`} aria-pressed={costPeriod === period} onClick={() => setCostPeriod(period)}>
                   {{ session: 'Session', daily: 'Day', weekly: 'Week', monthly: 'Month' }[period]}
-                </button>
+                </UiButton>
               ))}
               {costLoading && <span className="hint" style={{ margin: '0 0 0 8px' }}>Loading…</span>}
             </div>
@@ -746,10 +752,10 @@ export function ProxyPanel({
             <div className="section-title-row">
               <h2>History</h2>
               <span className="spacer" />
-              <button type="button" className={`btn sec small ${liveActive ? 'active' : ''}`} disabled={working || !ready} onClick={() => void toggleLive()}>{liveActive ? 'Stop live tail' : 'Live tail'}</button>
+              <UiButton type="button" className={`btn sec small ${liveActive ? 'active' : ''}`} disabled={working || !ready} onClick={() => void toggleLive()}>{liveActive ? 'Stop live tail' : 'Live tail'}</UiButton>
             </div>
             <form className="filter-row" onSubmit={(event) => void searchHistory(event)}>
-              <input type="text" aria-label="Search history" placeholder="Search prompt, model, path…" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} />
+              <UiTextInput type="text" aria-label="Search history" placeholder="Search prompt, model, path…" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} />
               <Select aria-label="Filter history by agent" value={filters.agent} onChange={(event) => updateFilters({ agent: event.target.value as HistoryFilters['agent'] })}>
                 <option value="">All agents</option>
                 <option value="claude">Claude Code</option>
@@ -763,16 +769,16 @@ export function ProxyPanel({
                 <option value="4xx">4xx · Client error</option>
                 <option value="5xx">5xx · Upstream error</option>
               </Select>
-              <button type="submit" className="btn sec small" disabled={historyLoading}>Search</button>
+              <UiButton type="submit" className="btn sec small" disabled={historyLoading}>Search</UiButton>
               <span className="result-count" role="status" aria-live="polite">{historyLoading ? 'Loading…' : `${history.length} ${history.length === 1 ? 'request' : 'requests'}`}</span>
               {historyClearArmed ? (
                 <span className="confirm-group">
                   <span>Clear request history?</span>
-                  <button type="button" className="btn confirm" onClick={() => void clearHistory()}>Confirm</button>
-                  <button type="button" className="btn sec" onClick={() => setHistoryClearArmed(false)}>Cancel</button>
+                  <UiButton type="button" className="btn confirm" onClick={() => void clearHistory()}>Confirm</UiButton>
+                  <UiButton type="button" className="btn sec" onClick={() => setHistoryClearArmed(false)}>Cancel</UiButton>
                 </span>
               ) : (
-                <button type="button" className="btn danger small" title="Clear request history" disabled={working || history.length === 0} onClick={() => setHistoryClearArmed(true)}>Clear</button>
+                <UiButton type="button" className="btn danger small" title="Clear request history" disabled={working || history.length === 0} onClick={() => setHistoryClearArmed(true)}>Clear</UiButton>
               )}
             </form>
 
@@ -797,17 +803,17 @@ export function ProxyPanel({
               )}
             </div>
             <div className="pager">
-              <button type="button" className="btn sec small" disabled={page === 1 || historyLoading} aria-label="Previous request page" onClick={() => void changePage(page - 1)}>‹</button>
+              <UiButton type="button" className="btn sec small" disabled={page === 1 || historyLoading} aria-label="Previous request page" onClick={() => void changePage(page - 1)}>‹</UiButton>
               <span>Page {page}</span>
-              <button type="button" className="btn sec small" disabled={history.length < historyLimit || historyLoading} aria-label="Next request page" onClick={() => void changePage(page + 1)}>›</button>
+              <UiButton type="button" className="btn sec small" disabled={history.length < historyLimit || historyLoading} aria-label="Next request page" onClick={() => void changePage(page + 1)}>›</UiButton>
             </div>
 
             {liveActive && (
               <>
                 <div className="filter-row" style={{ marginTop: 8 }}>
-                  <button type="button" className="btn sec small" onClick={() => setLivePaused((paused) => !paused)}>{livePaused ? 'Resume' : 'Pause'}</button>
-                  <button type="button" className="btn sec small" disabled={history.length === 0} onClick={exportHistory}>Export JSON</button>
-                  <input type="text" aria-label="Live tail agent filter" placeholder="Agent filter" value={liveFilter} onChange={(event) => setLiveFilter(event.target.value)} />
+                  <UiButton type="button" className="btn sec small" onClick={() => setLivePaused((paused) => !paused)}>{livePaused ? 'Resume' : 'Pause'}</UiButton>
+                  <UiButton type="button" className="btn sec small" disabled={history.length === 0} onClick={exportHistory}>Export JSON</UiButton>
+                  <UiTextInput type="text" aria-label="Live tail agent filter" placeholder="Agent filter" value={liveFilter} onChange={(event) => setLiveFilter(event.target.value)} />
                 </div>
                 <LiveTail events={liveEvents} paused={livePaused} filter={liveFilter} />
               </>
@@ -929,7 +935,7 @@ function AgentCard({
       <div className="agent-card-head">
         <div className="agent-mark" aria-hidden="true">{AGENT_MARKS[agent]}</div>
         <div><div className="agent-name">{AGENT_LABELS[agent]}</div><div className="agent-kind">{AGENT_KINDS[agent]}</div></div>
-        <span className={`route-pill ${state}`} title={PILL_TITLES[state]}>{pillLabel}</span>
+        <Pill tone={state === 'proxy' ? 'success' : state === 'repair' ? 'warning' : state === 'unavailable' ? 'error' : 'neutral'} title={PILL_TITLES[state]}>{pillLabel}</Pill>
       </div>
       <div className="agent-route">{routeText}</div>
       <div className="agent-meta"><span>Status<strong>{status}</strong></span><span>Credential<strong>{credential}</strong></span></div>
@@ -955,15 +961,15 @@ function AgentCard({
         </div>
       </div>
       <div className="agent-actions">
-        <button type="button" className="btn" disabled={busy || unavailable} onClick={() => onRoute()}>Route</button>
-        {agent === 'claude' && <button type="button" className="btn sec" title="Route through the proxy for 5 hours, then revert to Direct" disabled={busy || unavailable} onClick={() => onRoute(5)}>5h</button>}
-        {agent === 'claude' && <button type="button" className="btn sec" title="Route through the proxy for 8 hours, then revert to Direct" disabled={busy || unavailable} onClick={() => onRoute(8)}>8h</button>}
-        <button type="button" className="btn sec" disabled={busy || unavailable} onClick={onDirect}>Direct</button>
-        <button type="button" className="btn sec" disabled={busy} onClick={onVerify}>Verify</button>
-        <button type="button" className="btn sec" disabled={busy} onClick={onRollback}>Rollback</button>
-        {agent === 'claude' && <button type="button" className="btn sec" disabled={busy} onClick={onLaunch}>Launch</button>}
-        {agent === 'codex' && <button type="button" className="btn sec" disabled={busy} onClick={onLaunch}>Open</button>}
-        {(agent === 'qwen' || agent === 'kimi') && <button type="button" className="btn sec" onClick={onConfigure}>Configure</button>}
+        <UiButton type="button" className="btn" disabled={busy || unavailable} onClick={() => onRoute()}>Route</UiButton>
+        {agent === 'claude' && <UiButton type="button" className="btn sec" title="Route through the proxy for 5 hours, then revert to Direct" disabled={busy || unavailable} onClick={() => onRoute(5)}>5h</UiButton>}
+        {agent === 'claude' && <UiButton type="button" className="btn sec" title="Route through the proxy for 8 hours, then revert to Direct" disabled={busy || unavailable} onClick={() => onRoute(8)}>8h</UiButton>}
+        <UiButton type="button" className="btn sec" disabled={busy || unavailable} onClick={onDirect}>Direct</UiButton>
+        <UiButton type="button" className="btn sec" disabled={busy} onClick={onVerify}>Verify</UiButton>
+        <UiButton type="button" className="btn sec" disabled={busy} onClick={onRollback}>Rollback</UiButton>
+        {agent === 'claude' && <UiButton type="button" className="btn sec" disabled={busy} onClick={onLaunch}>Launch</UiButton>}
+        {agent === 'codex' && <UiButton type="button" className="btn sec" disabled={busy} onClick={onLaunch}>Open</UiButton>}
+        {(agent === 'qwen' || agent === 'kimi') && <UiButton type="button" className="btn sec" onClick={onConfigure}>Configure</UiButton>}
       </div>
     </article>
   );
@@ -1097,8 +1103,8 @@ function RequestDetail({ detail, loading, replayPreview, replayResult, busy, onP
       {detail.errorMessage && <p className="err-text" style={{ margin: '0 0 8px' }}><strong>{detail.errorStage ?? 'error'}:</strong> {detail.errorMessage}</p>}
       {detail.promptSnippet && <p className="hint" style={{ margin: '0 0 8px' }}>{detail.promptSnippet}</p>}
       <div className="button-row">
-        <button type="button" className="btn sec small" disabled={busy} onClick={onPreview}>Preview replay</button>
-        <button type="button" className="btn small" disabled={busy || !replayPreview} onClick={onReplay}>Replay request</button>
+        <UiButton type="button" className="btn sec small" disabled={busy} onClick={onPreview}>Preview replay</UiButton>
+        <UiButton type="button" className="btn small" disabled={busy || !replayPreview} onClick={onReplay}>Replay request</UiButton>
       </div>
       {replayPreview && <pre className="logbox">{JSON.stringify(replayPreview, null, 2)}</pre>}
       {replayResult && (
@@ -1115,22 +1121,22 @@ function DetailField({ label, value, mono = false }: { label: string; value: str
 function Notice({ tone, title, children, onDismiss }: { tone: 'ok' | 'warn' | 'err'; title?: string; children: ReactNode; onDismiss?: () => void }): ReactNode {
   return (
     <div className={`notice ${tone}`} role={tone === 'err' ? 'alert' : 'status'}>
-      <span className="icon" aria-hidden="true">{tone === 'ok' ? '✓' : '⚠'}</span>
+      <span className="icon" aria-hidden="true">{tone === 'ok' ? <CircleCheck size={15} /> : <CircleAlert size={15} />}</span>
       <div className="body">{title && <div className="title">{title}</div>}{children}</div>
-      {onDismiss && <button type="button" className="dismiss" aria-label="Dismiss" onClick={onDismiss}>✕</button>}
+      {onDismiss && <UiButton type="button" className="dismiss" aria-label="Dismiss" onClick={onDismiss}><X size={15} /></UiButton>}
     </div>
   );
 }
 
-function statusChip(service: ServiceState): { tone: 'ok' | 'warn' | 'err' | 'idle'; glyph: string; label: string } {
+function statusChip(service: ServiceState): { tone: 'ok' | 'warn' | 'err' | 'idle'; label: string } {
   switch (service.status) {
-    case 'ready': return { tone: 'ok', glyph: '✓', label: 'Running' };
-    case 'starting': return { tone: 'warn', glyph: '…', label: 'Starting' };
-    case 'stopping': return { tone: 'warn', glyph: '…', label: 'Stopping' };
-    case 'degraded': return { tone: 'warn', glyph: '!', label: 'Degraded' };
-    case 'failed': return { tone: 'err', glyph: '✕', label: 'Error' };
-    case 'not_configured': return { tone: 'idle', glyph: '■', label: 'Not configured' };
-    default: return { tone: 'idle', glyph: '■', label: 'Stopped' };
+    case 'ready': return { tone: 'ok', label: 'Running' };
+    case 'starting': return { tone: 'warn', label: 'Starting' };
+    case 'stopping': return { tone: 'warn', label: 'Stopping' };
+    case 'degraded': return { tone: 'warn', label: 'Degraded' };
+    case 'failed': return { tone: 'err', label: 'Error' };
+    case 'not_configured': return { tone: 'idle', label: 'Not configured' };
+    default: return { tone: 'idle', label: 'Stopped' };
   }
 }
 

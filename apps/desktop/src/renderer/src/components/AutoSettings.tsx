@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import type { ExecutionMode } from '@kai/contracts';
 import { readAutoSettings, writeAutoSettings, type AutoSettings } from './auto-settings';
+import { UiTextInput } from './UiTextInput';
+import { UiNativeSelect } from './UiNativeSelect';
 
 interface Props {
   projectId: string | null;
@@ -44,32 +46,32 @@ export function AutoSettings({ projectId, execution, running }: Props): ReactNod
         <div className="autopilot-fields">
           <label>
             <span>Check command</span>
-            <input value={settings.checkCommand} onChange={(event) => update({ checkCommand: event.target.value })} placeholder="Blank: the project's test command, when it has one" />
+            <UiTextInput value={settings.checkCommand} onChange={(event) => update({ checkCommand: event.target.value })} placeholder="Blank: the project's test command, when it has one" />
           </label>
           {execution === 'cli' && (
             <label>
               <span>When the CLI window is spent</span>
-              <select value={settings.apiFallback ? 'api' : 'wait'} onChange={(event) => update({ apiFallback: event.target.value === 'api' })}>
+              <UiNativeSelect value={settings.apiFallback ? 'api' : 'wait'} onChange={(event) => update({ apiFallback: event.target.value === 'api' })}>
                 <option value="api">Carry on with the API provider, then return to the CLI</option>
                 <option value="wait">Wait for the CLI window to reopen</option>
-              </select>
+              </UiNativeSelect>
             </label>
           )}
           <label>
             <span>Most turns (0 = no limit)</span>
-            <input type="number" min={0} max={500} value={settings.maxTurns} onChange={(event) => update({ maxTurns: Math.min(500, Math.max(0, Number(event.target.value) || 0)) })} />
+            <UiTextInput type="number" min={0} max={500} value={settings.maxTurns} onChange={(event) => update({ maxTurns: Math.min(500, Math.max(0, Number(event.target.value) || 0)) })} />
           </label>
           <label>
             <span>Stop after (hours, 0 = never)</span>
-            <input type="number" min={0} max={168} value={settings.maxHours} onChange={(event) => update({ maxHours: Math.min(168, Math.max(0, Number(event.target.value) || 0)) })} />
+            <UiTextInput type="number" min={0} max={168} value={settings.maxHours} onChange={(event) => update({ maxHours: Math.min(168, Math.max(0, Number(event.target.value) || 0)) })} />
           </label>
           <label>
             <span>Stop at spend (USD, 0 = no limit)</span>
-            <input type="number" min={0} step={1} value={settings.maxCostUsd} onChange={(event) => update({ maxCostUsd: Math.max(0, Number(event.target.value) || 0) })} />
+            <UiTextInput type="number" min={0} step={1} value={settings.maxCostUsd} onChange={(event) => update({ maxCostUsd: Math.max(0, Number(event.target.value) || 0) })} />
           </label>
           <label>
             <span>Seconds between API requests</span>
-            <input type="number" min={0} max={120} value={settings.minGapSeconds} onChange={(event) => update({ minGapSeconds: Math.min(120, Math.max(0, Number(event.target.value) || 0)) })} />
+            <UiTextInput type="number" min={0} max={120} value={settings.minGapSeconds} onChange={(event) => update({ minGapSeconds: Math.min(120, Math.max(0, Number(event.target.value) || 0)) })} />
           </label>
         </div>
       )}

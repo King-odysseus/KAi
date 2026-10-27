@@ -1,10 +1,4 @@
-/*
- * Shared form controls, drawn after Flowbite's forms (rounded 8px fields, a soft focus ring, a chevron dropdown,
- * square checkboxes) but coloured by KAI's own theme tokens, so every theme follows.
- *
- * Baseline rules use :where() so they carry no specificity: a control that a page already styles keeps its
- * look, and one nobody styled stops falling back to the operating system's.
- */
+/* KAi-specific dropdown behavior and layout constraints around Flowbite React form controls. */
 
 /* ---------- Dropdown (components/ui/Select.tsx) ---------- */
 
@@ -114,49 +108,8 @@
 
 .kai-select-option:disabled { color: var(--text-dim); background: transparent; cursor: not-allowed; opacity: 0.6; }
 
-/* ---------- Baseline text inputs and textareas ---------- */
-
-:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"]), textarea) {
-  min-width: 0;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text);
-  background-color: var(--bg-input);
-  font-size: 12.5px;
-  line-height: 1.4;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-:where(input, textarea)::placeholder { color: var(--text-dim); opacity: 1; }
-
-:where(input:not([type="checkbox"], [type="radio"], [type="range"]), textarea):focus {
-  border-color: var(--mint);
-  outline: none;
-  box-shadow: 0 0 0 3px var(--mint-soft);
-}
-
-:where(input, textarea):disabled { cursor: not-allowed; opacity: 0.55; }
-
-/* A textarea starts at about three lines and grows only when the user drags it. */
-:where(textarea) {
-  min-height: 64px;
-  max-height: 40vh;
-  resize: vertical;
-}
-
-/* ---------- Checkboxes and radios ---------- */
-
-:where(input[type="checkbox"], input[type="radio"]) {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  flex: 0 0 auto;
-  accent-color: var(--mint);
-  cursor: pointer;
-}
-
-:where(input[type="range"]) { accent-color: var(--mint); }
+/* Text fields, textareas, checkboxes and radios use Flowbite React's themed components.
+   This file only owns custom KAi menu behavior and field layout constraints. */
 
 /* ---------- Typography inside field labels ---------- */
 

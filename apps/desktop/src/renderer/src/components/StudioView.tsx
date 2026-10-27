@@ -52,6 +52,10 @@ import {
 } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
+import { UiNativeSelect } from './UiNativeSelect';
 
 /**
  * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
@@ -104,11 +108,13 @@ type DesignBuildAction = { kind: 'redraw'; target: 'all' | string } | { kind: 'c
  * and `.kai/spec/brief.md` out. The artifacts, the board and the design layer all read that brief, so this screen
  * is the front door to the rest of the studio.
  */
-export function StudioView({ activeProject, projects: desktopProjects, planRequest, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard }: {
+export function StudioView({ activeProject, projects: desktopProjects, planRequest, cardRequest, onOpenSettings, onLaunchProject, onPlanForTeam, onLearnCard, onOpenConversation }: {
   activeProject: ProjectRecord | null;
   projects: ProjectRecord[];
   /** Set by the composer's "Plan in Studio" button: open a fresh plan attached to this project's folder. */
   planRequest?: { projectId: string; nonce: number } | null;
+  /** Follow a Studio-origin conversation back to the card it was created for. */
+  cardRequest?: { projectId: string; cardId: string; nonce: number } | null;
   onOpenSettings: () => void;
   onLaunchProject: (studioProjectId: string, destination: 'composer' | 'editor' | 'generate') => Promise<boolean>;
   onPlanForTeam: (plan: TeamPlanDraft) => void;
@@ -117,6 +123,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
    * board, the artifacts and the files the card's runs touched all live in that plan's own project folder.
    */
   onLearnCard: (card: BoardCard, studioProjectId: string) => void;
+  onOpenConversation: (conversationId: string) => void;
 }): ReactNode {
   const [screen, setScreen] = useState<'list' | 'project' | 'new'>('list');
   const [viewedProjectId, setViewedProjectId] = useState<string | null>(null);
@@ -233,6 +240,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const designChatStepId = useRef<string | null>(null);
   // The last composer request acted on, so a re-render does not open the new-project screen twice for one press.
   const handledPlanRequest = useRef<number | null>(null);
+  const handledCardRequest = useRef<number | null>(null);
+  const scrolledCardRequest = useRef<number | null>(null);
   // Identifies the Studio chat turn on screen. Stopping waiting bumps this, so a late answer from the provider is
   // ignored instead of appearing under a message the person already gave up on.
   const planRequestSeq = useRef(0);
@@ -345,6 +354,43 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     if (existing) openProjectStudio(existing.id);
     else startNewProject(true);
   }, [planRequest, activeProject, busy, projectsBusy, projects]);
+
+  useEffect(() => {
+    if (!cardRequest || handledCardRequest.current === cardRequest.nonce || projectsBusy || busy !== null) return;
+    if (!projects.some((project) => project.id === cardRequest.projectId)) {
+      handledCardRequest.current = cardRequest.nonce;
+      setError('The Studio project for this conversation is no longer available.');
+      return;
+    }
+    if (screen !== 'project' || viewedProjectId !== cardRequest.projectId) {
+      setError(null);
+      setNotice(null);
+      setViewedProjectId(cardRequest.projectId);
+      setDraftProjectId(null);
+      setScreen('project');
+      return;
+    }
+    if (busy === 'load' || !board) return;
+    if (!board.cards.some((card) => card.id === cardRequest.cardId)) {
+      handledCardRequest.current = cardRequest.nonce;
+      setNotice('This Studio card is no longer on the board.');
+      return;
+    }
+    handledCardRequest.current = cardRequest.nonce;
+    setTab('board');
+  }, [cardRequest, projectsBusy, busy, projects, screen, viewedProjectId, board]);
+
+  useEffect(() => {
+    if (!cardRequest || handledCardRequest.current !== cardRequest.nonce || tab !== 'board' || !board || screen !== 'project' || viewedProjectId !== cardRequest.projectId || scrolledCardRequest.current === cardRequest.nonce) return;
+    if (!board.cards.some((card) => card.id === cardRequest.cardId)) return;
+    scrolledCardRequest.current = cardRequest.nonce;
+    const frame = window.requestAnimationFrame(() => {
+      Array.from(document.querySelectorAll<HTMLElement>('[data-studio-card-id]'))
+        .find((element) => element.dataset.studioCardId === cardRequest.cardId)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [cardRequest, tab, board, screen, viewedProjectId]);
 
   // The Studio chat's waiting line counts seconds, so a slow provider looks like something running rather than a
   // control that did nothing.
@@ -2319,15 +2365,15 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </span>
               )}
               {projects.length > 0 && (
-                <button type="button" className="secondary-button" onClick={() => setShowArchived((current) => !current)}>
+                <UiButton type="button" className="secondary-button" onClick={() => setShowArchived((current) => !current)}>
                   {showArchived ? <NotebookPen size={14} /> : <Archive size={14} />}
                   {showArchived ? 'Active projects' : `Archived (${archivedProjects.length})`}
-                </button>
+                </UiButton>
               )}
               {projects.length > 0 && (
-                <button type="button" className="primary-button" onClick={() => startNewProject()}>
+                <UiButton type="button" className="primary-button" onClick={() => startNewProject()}>
                   <Plus size={14} /> Plan a new project
-                </button>
+                </UiButton>
               )}
             </div>
           </header>
@@ -2366,46 +2412,46 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       {!project.archivedAt && project.status === 'done' ? (
                         <>
                           <div className="studio-project-action-row">
-                            <button type="button" className="primary-button" onClick={() => void launchProject(project.id, 'composer')} disabled={busy !== null}>
+                            <UiButton type="button" className="primary-button" onClick={() => void launchProject(project.id, 'composer')} disabled={busy !== null}>
                               {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />}
                               <span>Start on composer</span>
-                            </button>
-                            <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'generate')} disabled={busy !== null}>
+                            </UiButton>
+                            <UiButton type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'generate')} disabled={busy !== null}>
                               <Play size={14} />
                               <span>Start generating</span>
-                            </button>
+                            </UiButton>
                           </div>
                           <div className="studio-project-action-row">
-                            <button type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
+                            <UiButton type="button" className="secondary-button" onClick={() => void launchProject(project.id, 'editor')} disabled={busy !== null}>
                               <Code2 size={14} />
                               <span>Open in code editor</span>
-                            </button>
+                            </UiButton>
                             {!project.linkedProjectId ? (
-                              <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(project.id)} disabled={busy !== null}>
+                              <UiButton type="button" className="secondary-button" onClick={() => void chooseProjectFolder(project.id)} disabled={busy !== null}>
                                 {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />}
                                 <span>Create folder</span>
-                              </button>
+                              </UiButton>
                             ) : <span aria-hidden="true" />}
                           </div>
                         </>
                       ) : (
                         <>
                           <div className="studio-project-action-row">
-                            <button type="button" className="primary-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null}>
+                            <UiButton type="button" className="primary-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null}>
                               <Play size={14} />
                               <span>Open Studio</span>
-                            </button>
+                            </UiButton>
                           </div>
                           <div className="studio-project-action-row" aria-hidden="true" />
                         </>
                       )}
                       <div className="studio-project-action-tools">
                         {!project.archivedAt && project.status === 'done' && (
-                          <button type="button" className="icon-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null} title={`Open Studio for ${project.title}`} aria-label={`Open Studio for ${project.title}`}>
+                          <UiButton type="button" className="icon-button" onClick={() => openProjectStudio(project.id)} disabled={busy !== null} title={`Open Studio for ${project.title}`} aria-label={`Open Studio for ${project.title}`}>
                             <LayoutGrid size={15} />
-                          </button>
+                          </UiButton>
                         )}
-                        <button
+                        <UiButton
                           type="button"
                           className="icon-button"
                           onClick={() => void toggleArchive(project)}
@@ -2414,8 +2460,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                           aria-label={project.archivedAt ? `Restore ${project.title}` : `Archive ${project.title}`}
                         >
                           {busy === 'archive' ? <Loader2 className="spin" size={15} /> : project.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-                        </button>
-                        <button
+                        </UiButton>
+                        <UiButton
                           type="button"
                           className="icon-button danger"
                           onClick={() => void deleteProject(project)}
@@ -2424,7 +2470,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                           aria-label={`Delete ${project.title}`}
                         >
                           {busy === 'delete' ? <Loader2 className="spin" size={15} /> : <Trash2 size={15} />}
-                        </button>
+                        </UiButton>
                       </div>
                     </div>
                   </article>
@@ -2440,9 +2486,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     : 'Describe the idea, answer a few quick questions, and Studio will save the brief here when the discussion starts.'}
                 </p>
                 {!showArchived && (
-                  <button type="button" className="primary-button" onClick={() => startNewProject()}>
+                  <UiButton type="button" className="primary-button" onClick={() => startNewProject()}>
                     <Plus size={14} /> Plan a new project
-                  </button>
+                  </UiButton>
                 )}
               </div>
             )}
@@ -2462,36 +2508,36 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         </div>
         <div className="page-actions">
           {readiness && <span className="studio-model">{readiness.ready ? `${readiness.displayName} · ${readiness.model}` : 'Needs setup'}</span>}
-          <button type="button" className="secondary-button" onClick={() => void reloadReadiness()} disabled={busy !== null}>
+          <UiButton type="button" className="secondary-button" onClick={() => void reloadReadiness()} disabled={busy !== null}>
             {busy === 'load' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Check connection
-          </button>
+          </UiButton>
           {state?.status === 'done' && projectId && !showHandoff && (
             <>
-              <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>
+              <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>
                 {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Start on composer
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
                 <Play size={14} /> Start generating
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
                 <Code2 size={14} /> Open in code editor
-              </button>
+              </UiButton>
             </>
           )}
           {state?.status === 'done' && projectId && !state.linkedProjectId && (
-            <button type="button" className="secondary-button" onClick={() => void chooseProjectFolder(projectId)} disabled={busy !== null}>
+            <UiButton type="button" className="secondary-button" onClick={() => void chooseProjectFolder(projectId)} disabled={busy !== null}>
               {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />} Create folder
-            </button>
+            </UiButton>
           )}
-          {state && <button type="button" className="secondary-button" onClick={() => void reset()} disabled={busy !== null}><RotateCcw size={14} /> Start over</button>}
+          {state && <UiButton type="button" className="secondary-button" onClick={() => void reset()} disabled={busy !== null}><RotateCcw size={14} /> Start over</UiButton>}
         </div>
       </header>
 
       <div className="studio-project-bar studio-project-bar-active">
-        <button type="button" className="secondary-button" onClick={leaveProjectStudio} disabled={busy !== null}>
+        <UiButton type="button" className="secondary-button" onClick={leaveProjectStudio} disabled={busy !== null}>
           <ArrowLeft size={14} />
           All projects
-        </button>
+        </UiButton>
         <div className="studio-project-picker">
           <span className="studio-project-icon"><NotebookPen size={17} /></span>
           <div>
@@ -2509,7 +2555,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             </small>
             {screen === 'project' && (
               <span className="studio-relink">
-                <select
+                <UiNativeSelect
                   aria-label="The folder this plan uses"
                   value={state?.linkedProjectId ?? ''}
                   disabled={busy !== null}
@@ -2517,14 +2563,14 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 >
                   <option value="">Independent (KAI's own folder)</option>
                   {desktopProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-                </select>
+                </UiNativeSelect>
               </span>
             )}
           </div>
         </div>
       </div>
 
-      {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /><span>{error}</span>{screen === 'project' && <button type="button" className="secondary-button" onClick={() => { setError(null); setDetailVersion((version) => version + 1); }}>Retry</button>}</p>}
+      {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /><span>{error}</span>{screen === 'project' && <UiButton type="button" className="secondary-button" onClick={() => { setError(null); setDetailVersion((version) => version + 1); }}>Retry</UiButton>}</p>}
       {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
       {/* The Studio keeps its own project, apart from the one in the top bar, and nothing said so: a person on one
           project saw another's brief, style guide and drawing run. Say it whenever the two names disagree. */}
@@ -2538,14 +2584,14 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               : ' and lives in the Studio workspace'}
             , not the open project <strong>{currentFolder.name}</strong>. Everything written or drawn here is for the Studio project.
           </span>
-          <button type="button" className="composer-text-button" onClick={leaveProjectStudio} disabled={busy !== null}>Choose another project</button>
+          <UiButton type="button" className="composer-text-button" onClick={leaveProjectStudio} disabled={busy !== null}>Choose another project</UiButton>
         </p>
       )}
       {readiness && !readiness.ready && (
         <p className="studio-notice warning" role="status">
           <AlertTriangle size={14} />
           <span>{readiness.reason ?? 'The Project Studio is not ready.'}</span>
-          <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} /> Open Settings</button>
+          <UiButton type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} /> Open Settings</UiButton>
         </p>
       )}
 
@@ -2560,7 +2606,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             ['guide', 'Senior dev'],
             ['team', 'Team'],
           ] as const).map(([id, label]) => (
-            <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</button>
+            <UiButton key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</UiButton>
           ))}
         </div>
       )}
@@ -2569,7 +2615,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           <h2><Loader2 className="spin" size={16} /> Preparing the project</h2>
           <p className="studio-note">{busy === 'generate' ? 'Writing the artifacts from the brief. Each one appears below as soon as it is written.' : 'Building the board from the stories…'}</p>
           {busy === 'generate' && progress && <GenerationProgress progress={progress} />}
-          <div className="studio-strip"><span className="done">✓ Brief</span><span className={busy === 'generate' ? 'now' : 'done'}>{busy === 'generate' ? '… Artifacts' : '✓ Artifacts'}</span><span className={busy === 'plan' ? 'now' : ''}>Board</span></div>
+          <div className="studio-strip"><span className="done"><Check size={12} /> Brief</span><span className={busy === 'generate' ? 'now' : 'done'}>{busy === 'generate' ? '… Artifacts' : <><Check size={12} /> Artifacts</>}</span><span className={busy === 'plan' ? 'now' : ''}>Board</span></div>
         </article>
       )}
       {showHandoff && tab === 'artifacts' && state && projectId && board && artifacts && (
@@ -2577,29 +2623,29 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           <h2><Check size={16} /> Project ready</h2>
           <p className="studio-goal">{state.goal || state.idea}</p>
           <div className="studio-strip">
-            <span className="done">✓ Brief</span>
-            <span className="done">✓ {artifacts.artifacts.length} artifacts</span>
-            <span className="done">✓ Board: {board.cards.length} cards, {board.cards.filter((card) => card.status === 'ready').length} ready</span>
+            <span className="done"><Check size={12} /> Brief</span>
+            <span className="done"><Check size={12} /> {artifacts.artifacts.length} artifacts</span>
+            <span className="done"><Check size={12} /> Board: {board.cards.length} cards, {board.cards.filter((card) => card.status === 'ready').length} ready</span>
           </div>
           <div className="studio-choices">
             <div className="studio-choice">
               <h3><Sparkles size={15} /> Generate with KAI</h3>
               <p className="studio-note">The agent builds from the brief and the board, starting on the first ready card. Each card stops at Review for you.</p>
-              <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
+              <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
                 {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start building
-              </button>
+              </UiButton>
             </div>
             <div className="studio-choice">
               <h3><Code2 size={15} /> Open code editor</h3>
               <p className="studio-note">Code it yourself. The learning AI sits beside the editor and reads this project's brief, decisions and conventions.</p>
-              <button type="button" className="primary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
+              <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
                 <Code2 size={14} /> Open editor
-              </button>
+              </UiButton>
             </div>
           </div>
           <div className="studio-actions">
-            <button type="button" className="secondary-button" onClick={dismissHandoff}>Review the artifacts and board first</button>
-            <button type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}><Send size={14} /> Start on composer</button>
+            <UiButton type="button" className="secondary-button" onClick={dismissHandoff}>Review the artifacts and board first</UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}><Send size={14} /> Start on composer</UiButton>
           </div>
           <p className="studio-note">A status file and an <code>AGENTS.md</code> in the project root keep any agent, KAI's or another, pointed at the right files as the board moves.</p>
         </article>
@@ -2658,9 +2704,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
                 <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of up to {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
                 {state.extraQuestions < STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS && (
-                  <button type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`New to this? KAI will ask ${STUDIO_EXTRA_QUESTIONS} more questions and explain the choices.`}>
+                  <UiButton type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`New to this? KAI will ask ${STUDIO_EXTRA_QUESTIONS} more questions and explain the choices.`}>
                     I am new to this: ask me {STUDIO_EXTRA_QUESTIONS} more
-                  </button>
+                  </UiButton>
                 )}
               </div>
               <div className="studio-thread" role="log" aria-live="polite">
@@ -2723,13 +2769,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     <div className="studio-correcting" role="status">
                       <PencilLine size={13} />
                       <span>Correcting: <strong>{correcting.question}</strong>. KAI asks again from here, so anything you answered after it is asked again too.</span>
-                      <button type="button" className="composer-text-button" onClick={cancelCorrection} disabled={busy !== null}>Cancel</button>
+                      <UiButton type="button" className="composer-text-button" onClick={cancelCorrection} disabled={busy !== null}>Cancel</UiButton>
                     </div>
                   )}
                   {!correcting && (openOptions[step] ?? []).length > 0 && (
                     <div className="command-chip-row studio-options" role="group" aria-label="Suggested answers">
                       {(openOptions[step] ?? []).map((option) => (
-                        <button key={option} type="button" className={draft === option ? 'active' : undefined} aria-pressed={draft === option} onClick={() => setDraft(option)} disabled={busy !== null}>{option}</button>
+                        <UiButton key={option} type="button" className={draft === option ? 'active' : undefined} aria-pressed={draft === option} onClick={() => setDraft(option)} disabled={busy !== null}>{option}</UiButton>
                       ))}
                     </div>
                   )}
@@ -2752,9 +2798,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                             <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy !== null} onChange={(event) => { void attachStyleImages(event.target.files); event.target.value = ''; }} />
                           </label>
                         )}
-                        <button type="button" className="composer-text-button" onClick={() => void submitStep('')} disabled={busy !== null} title={correcting ? 'Change this answer to a skip, and let the agents decide' : 'Leave this one to the agents'}>Skip</button>
+                        <UiButton type="button" className="composer-text-button" onClick={() => void submitStep('')} disabled={busy !== null} title={correcting ? 'Change this answer to a skip, and let the agents decide' : 'Leave this one to the agents'}>Skip</UiButton>
                         {!correcting && (
-                          <button type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</button>
+                          <UiButton type="button" className="composer-text-button" onClick={() => void submitStep(open[step] ? (openOptions[step]?.[0] ?? '') : '')} disabled={busy !== null || !openOptions[step]?.[0]} title="Let KAI choose the first suggestion">Decide for me</UiButton>
                         )}
                       </>
                     )}
@@ -2763,9 +2809,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </div>
               )}
               <div className="studio-actions">
-                <button type="button" className="secondary-button" onClick={() => void finish()} disabled={busy !== null}>
+                <UiButton type="button" className="secondary-button" onClick={() => void finish()} disabled={busy !== null}>
                   {busy === 'finish' ? <Loader2 className="spin" size={14} /> : <FileText size={14} />} Write the brief now
-                </button>
+                </UiButton>
               </div>
             </>
           )}
@@ -2782,21 +2828,21 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               One file each under <code>.kai/spec</code>. Regenerating one flags everything that reads it stale, so the board never trusts a document built on an old decision.
             </p>
             <div className="page-actions">
-              <button type="button" className="primary-button" onClick={() => void generate()} disabled={busy !== null || !readiness?.ready} title="Write the artifacts that are missing or stale">
+              <UiButton type="button" className="primary-button" onClick={() => void generate()} disabled={busy !== null || !readiness?.ready} title="Write the artifacts that are missing or stale">
                 {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} Generate all
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void regenerateAll()} disabled={busy !== null || !readiness?.ready} title="Rewrite every artifact from the brief, even the ones that are up to date">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void regenerateAll()} disabled={busy !== null || !readiness?.ready} title="Rewrite every artifact from the brief, even the ones that are up to date">
                 <RefreshCw size={14} /> Regenerate all
-              </button>
-              <button type="button" className="secondary-button" onClick={selectMissingKinds} disabled={busy !== null || !artifacts} title="Tick every artifact that is missing or stale">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={selectMissingKinds} disabled={busy !== null || !artifacts} title="Tick every artifact that is missing or stale">
                 Select missing &amp; stale
-              </button>
-              <button type="button" className="secondary-button" onClick={selectDesignKinds} disabled={busy !== null} title="Tick the style guide, tokens and pages: the design layer, without the PRD and stories">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={selectDesignKinds} disabled={busy !== null} title="Tick the style guide, tokens and pages: the design layer, without the PRD and stories">
                 Design only
-              </button>
-              <button type="button" className="primary-button" onClick={() => void generateSelectedKinds()} disabled={busy !== null || !readiness?.ready || selectedKinds.size === 0} title="Write only the ticked artifacts, in dependency order">
+              </UiButton>
+              <UiButton type="button" className="primary-button" onClick={() => void generateSelectedKinds()} disabled={busy !== null || !readiness?.ready || selectedKinds.size === 0} title="Write only the ticked artifacts, in dependency order">
                 {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} Generate selected ({selectedKinds.size})
-              </button>
+              </UiButton>
               {staleCount > 0 && <span className="studio-model">{staleCount} stale</span>}
             </div>
             {busy === 'generate' && progress && <GenerationProgress progress={progress} />}
@@ -2806,8 +2852,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 return (
                   <li key={kind} className={[entry?.stale ? 'stale' : '', progress?.current === kind && busy === 'generate' ? 'writing' : '', progress?.failed[kind] ? 'failed' : ''].filter(Boolean).join(' ') || undefined}>
                     {kind !== 'brief' && (
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={selectedKinds.has(kind)}
                         onChange={() => toggleSelectedKind(kind)}
                         onClick={(event) => event.stopPropagation()}
@@ -2824,9 +2869,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       {progress?.failed[kind] && busy !== 'generate' && <span className="studio-fail">{progress.failed[kind]}</span>}
                     </div>
                     {kind !== 'brief' && (
-                      <button type="button" className="secondary-button" onClick={() => void generateOne(kind)} disabled={busy !== null || !readiness?.ready}>
+                      <UiButton type="button" className="secondary-button" onClick={() => void generateOne(kind)} disabled={busy !== null || !readiness?.ready}>
                         {entry ? <RefreshCw size={13} /> : <Play size={13} />} {entry ? 'Regenerate' : 'Generate'}
-                      </button>
+                      </UiButton>
                     )}
                   </li>
                 );
@@ -2839,28 +2884,28 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <span className="studio-note"><code>{ARTIFACT_PATHS[viewing]}</code></span>
                   <span className="studio-viewer-actions">
                     {editText === null ? (
-                      <button type="button" className="secondary-button" onClick={() => setEditText(viewText ?? '')} disabled={viewText === null || busy !== null}>Edit</button>
+                      <UiButton type="button" className="secondary-button" onClick={() => setEditText(viewText ?? '')} disabled={viewText === null || busy !== null}>Edit</UiButton>
                     ) : (
                       <>
-                        <button type="button" className="primary-button" onClick={() => void saveArtifactEdit()} disabled={busy !== null || !editText.trim()}>
+                        <UiButton type="button" className="primary-button" onClick={() => void saveArtifactEdit()} disabled={busy !== null || !editText.trim()}>
                           {busy === 'card' ? <Loader2 className="spin" size={13} /> : <Check size={13} />} Save
-                        </button>
-                        <button type="button" className="secondary-button" onClick={() => setEditText(null)} disabled={busy !== null}>Cancel</button>
+                        </UiButton>
+                        <UiButton type="button" className="secondary-button" onClick={() => setEditText(null)} disabled={busy !== null}>Cancel</UiButton>
                       </>
                     )}
                     {viewing === 'flows' && flowJourneys.length > 0 && editText === null && (
-                      <button type="button" className="secondary-button" onClick={() => setViewMode(viewMode === 'diagram' ? 'text' : 'diagram')}>{viewMode === 'diagram' ? 'Show text' : 'Show diagram'}</button>
+                      <UiButton type="button" className="secondary-button" onClick={() => setViewMode(viewMode === 'diagram' ? 'text' : 'diagram')}>{viewMode === 'diagram' ? 'Show text' : 'Show diagram'}</UiButton>
                     )}
-                    <button type="button" className="secondary-button" onClick={() => setViewerFull((current) => !current)} aria-pressed={viewerFull} title={viewerFull ? 'Leave full screen (Esc)' : 'Show this artifact full screen'}>
+                    <UiButton type="button" className="secondary-button" onClick={() => setViewerFull((current) => !current)} aria-pressed={viewerFull} title={viewerFull ? 'Leave full screen (Esc)' : 'Show this artifact full screen'}>
                       {viewerFull ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {viewerFull ? 'Exit full screen' : 'Full screen'}
-                    </button>
-                    <button type="button" className="secondary-button" onClick={() => { setViewing(null); setEditText(null); setViewerFull(false); }}>Close</button>
+                    </UiButton>
+                    <UiButton type="button" className="secondary-button" onClick={() => { setViewing(null); setEditText(null); setViewerFull(false); }}>Close</UiButton>
                   </span>
                 </header>
                 {viewText === null ? (
                   <p className="studio-note"><Loader2 className="spin" size={13} /> Reading…</p>
                 ) : editText !== null ? (
-                  <textarea className="studio-viewer-edit" value={editText} onChange={(event) => setEditText(event.target.value)} spellCheck={false} aria-label={`Edit ${viewing}`} />
+                  <Textarea className="studio-viewer-edit" value={editText} onChange={(event) => setEditText(event.target.value)} spellCheck={false} aria-label={`Edit ${viewing}`} />
                 ) : !viewText.trim() ? (
                   <p className="studio-note">This artifact is empty.</p>
                 ) : viewing === 'flows' && flowJourneys.length > 0 && viewMode === 'diagram' ? (
@@ -2889,14 +2934,14 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <span>
                     {unplanned.length} drawn page{unplanned.length === 1 ? ' is' : 's are'} not in the plan: {unplanned.slice(0, 4).join(', ')}{unplanned.length > 4 ? ` and ${unplanned.length - 4} more` : ''}. Tell Studio what {unplanned.length === 1 ? 'it is' : 'they are'} so the plan, the board and the drawing agree.
                   </span>
-                  <button type="button" className="secondary-button" onClick={() => setTab('chat')}>Open Studio chat</button>
+                  <UiButton type="button" className="secondary-button" onClick={() => setTab('chat')}>Open Studio chat</UiButton>
                 </p>
               );
             })()}
             <div className="page-actions">
-              <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
+              <UiButton type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                 {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Palette size={14} />} Pull the design
-              </button>
+              </UiButton>
               {design?.pulledAt && design.pulledAt !== new Date(0).toISOString() && (
                 <span className="studio-model">{design.components.length} in the design · last pulled {design.pulledAt.slice(0, 16).replace('T', ' ')}</span>
               )}
@@ -2915,11 +2960,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 {designChatMessages.length === 0 && <p className="studio-note">For example: “Academic sessions and terms already exists at /admin/setup/terms. Please find the existing page and sync the board.”</p>}
                 {designChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Design AI'}</strong><br />{item.text}</p>)}
               </div>
-              {designChatImage && <p className="studio-note">Screenshot attached: {designChatImage.name} <button type="button" className="composer-text-button" onClick={() => setDesignChatImage(null)}>Remove</button></p>}
-              <textarea value={designChatText} onChange={(event) => setDesignChatText(event.target.value)} placeholder="Tell the design AI what is already there or what needs fixing…" rows={3} disabled={busy !== null} />
+              {designChatImage && <p className="studio-note">Screenshot attached: {designChatImage.name} <UiButton type="button" className="composer-text-button" onClick={() => setDesignChatImage(null)}>Remove</UiButton></p>}
+              <Textarea value={designChatText} onChange={(event) => setDesignChatText(event.target.value)} placeholder="Tell the design AI what is already there or what needs fixing…" rows={3} disabled={busy !== null} />
               <div className="page-actions">
                 <label className="secondary-button"><ImagePlus size={14} /> Attach screenshot<input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy !== null} onChange={(event) => { void selectDesignChatImage(event.target.files?.[0]); event.target.value = ''; }} /></label>
-                <button type="button" className="primary-button" onClick={() => void sendDesignChat()} disabled={busy !== null || (!designChatText.trim() && !designChatImage)}>{busy === 'design' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Send to design AI</button>
+                <UiButton type="button" className="primary-button" onClick={() => void sendDesignChat()} disabled={busy !== null || (!designChatText.trim() && !designChatImage)}>{busy === 'design' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Send to design AI</UiButton>
               </div>
             </section>
           </article>
@@ -2944,34 +2989,34 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 {buildOutcome && <p className="studio-note" role="status">{buildOutcome}</p>}
                 <div className="page-actions">
                   {busy === 'design-build' ? (
-                    <button type="button" className="secondary-button" onClick={stopBuildingDesign}>
+                    <UiButton type="button" className="secondary-button" onClick={stopBuildingDesign}>
                       <Square size={14} /> Stop
-                    </button>
+                    </UiButton>
                   ) : (
-                    <button type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || toDraw.length === 0}>
+                    <UiButton type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || toDraw.length === 0}>
                       <Wand2 size={14} /> {buildButtonLabel}
-                    </button>
+                    </UiButton>
                   )}
-                  <button type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
+                  <UiButton type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Pull the design
-                  </button>
+                  </UiButton>
                   {differentDocument && (
-                    <button type="button" className="primary-button" onClick={() => void useThisDocument()} disabled={busy !== null} title="The editor holds a document with none of this project's pages, which is what a restarted design looks like.">
+                    <UiButton type="button" className="primary-button" onClick={() => void useThisDocument()} disabled={busy !== null} title="The editor holds a document with none of this project's pages, which is what a restarted design looks like.">
                       <Check size={14} /> Use this document
-                    </button>
+                    </UiButton>
                   )}
-                  <button type="button" className="secondary-button" onClick={() => void reconcileDesignPages()} disabled={busy !== null || designRows.length === 0} title="Read the current Open Pencil document and match its existing pages to the project screen list.">
+                  <UiButton type="button" className="secondary-button" onClick={() => void reconcileDesignPages()} disabled={busy !== null || designRows.length === 0} title="Read the current Open Pencil document and match its existing pages to the project screen list.">
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Reconcile pages
-                  </button>
+                  </UiButton>
                   {designRows.some((row) => row.inPages) && (
-                    <button type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready} title="Start the whole design again, foundation included — after a failed run, or to apply a look you changed after drawing">
+                    <UiButton type="button" className="secondary-button" onClick={() => void redrawAll()} disabled={busy !== null || !readiness?.ready} title="Start the whole design again, foundation included — after a failed run, or to apply a look you changed after drawing">
                       <RotateCcw size={14} /> Restart all
-                    </button>
+                    </UiButton>
                   )}
                   {!pagesText && (
-                    <button type="button" className="secondary-button" onClick={() => void generateOne('pages')} disabled={busy !== null || !readiness?.ready}>
+                    <UiButton type="button" className="secondary-button" onClick={() => void generateOne('pages')} disabled={busy !== null || !readiness?.ready}>
                       {busy === 'generate' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Write the pages list
-                    </button>
+                    </UiButton>
                   )}
                   <span className="studio-model">{designRows.filter((row) => row.drawn).length} of {designRows.length} screens drawn</span>
                   {skipped.size > 0 && <span className="studio-model">{designRows.filter((row) => row.inPages && !row.drawn && skipped.has(screenTitleKey(row.name))).length} skipped</span>}
@@ -2989,7 +3034,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 <ul className="studio-steps">
                   <li className={foundationDone ? 'done' : undefined}>
                     <label className="studio-step-check">
-                      <input type="checkbox" checked={foundationDone} onChange={(event) => toggleFoundation(event.target.checked)} aria-label="Foundation step finished" />
+                      <Checkbox checked={foundationDone} onChange={(event) => toggleFoundation(event.target.checked)} aria-label="Foundation step finished" />
                       <span><strong>1 · Foundation</strong><small>Variables from the tokens, text styles and the shared components. No screens.</small></span>
                     </label>
                     <PromptButtons id="Foundation" openPrompt={openPrompt} copiedPrompt={copiedPrompt} onToggle={setOpenPrompt} onCopy={(key) => void copyDrawPrompt(key)} />
@@ -2998,7 +3043,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </ul>
                 <label className="studio-search">
                   <Search size={13} />
-                  <input type="search" value={screenQuery} onChange={(event) => setScreenQuery(event.target.value)} placeholder="Search screens by name, route or what is on them" aria-label="Search screens" />
+                  <UiTextInput type="search" value={screenQuery} onChange={(event) => setScreenQuery(event.target.value)} placeholder="Search screens by name, route or what is on them" aria-label="Search screens" />
                 </label>
                 {designRows.length > 0 ? (
                   <ul className="studio-steps">
@@ -3023,17 +3068,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                               onCopy={(key) => void copyDrawPrompt(key)}
                               extra={<>
                                 {row.drawn ? (
-                                  <button type="button" className="secondary-button" onClick={() => void buildDesign({ kind: 'redraw', target: row.name })} disabled={busy !== null || !readiness?.ready} aria-label={`Redraw ${row.name}`}>
+                                  <UiButton type="button" className="secondary-button" onClick={() => void buildDesign({ kind: 'redraw', target: row.name })} disabled={busy !== null || !readiness?.ready} aria-label={`Redraw ${row.name}`}>
                                     <RotateCcw size={13} /> Redraw
-                                  </button>
+                                  </UiButton>
                                 ) : (
-                                  <button type="button" className="secondary-button" onClick={() => toggleSkip(row.name)} aria-label={`${isSkipped ? 'Draw' : 'Skip'} ${row.name}`}>
+                                  <UiButton type="button" className="secondary-button" onClick={() => toggleSkip(row.name)} aria-label={`${isSkipped ? 'Draw' : 'Skip'} ${row.name}`}>
                                     <SkipForward size={13} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
-                                  </button>
+                                  </UiButton>
                                 )}
-                                <button type="button" className="secondary-button" onClick={() => void fixAndRedraw(row.name)} disabled={busy !== null || !readiness?.ready} aria-label={`Fix and redraw ${row.name}`} title="Ask an agent to clear whatever is blocking this screen in open-pencil — a duplicate, a leftover, a page named so nothing matches it — and draw it again">
+                                <UiButton type="button" className="secondary-button" onClick={() => void fixAndRedraw(row.name)} disabled={busy !== null || !readiness?.ready} aria-label={`Fix and redraw ${row.name}`} title="Ask an agent to clear whatever is blocking this screen in open-pencil — a duplicate, a leftover, a page named so nothing matches it — and draw it again">
                                   <Wand2 size={13} /> Fix & redraw
-                                </button>
+                                </UiButton>
                                 <PageButtons name={row.name} pageId={pageId} canRename disabled={busy !== null} onRename={(name) => void renamePage(name)} onDelete={(name, id) => void deletePage(name, id)} />
                               </>}
                             />
@@ -3061,9 +3106,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     <Plus size={14} /> Add images
                     <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy !== null} onChange={(event) => { void addReferenceImages(event.target.files); event.target.value = ''; }} />
                   </label>
-                  <button type="button" className="secondary-button" onClick={() => void describeReferences()} disabled={busy !== null || !styleRefs || styleRefs.images.length === 0 || !readiness?.ready}>
+                  <UiButton type="button" className="secondary-button" onClick={() => void describeReferences()} disabled={busy !== null || !styleRefs || styleRefs.images.length === 0 || !readiness?.ready}>
                     {busy === 'design' ? <Loader2 className="spin" size={14} /> : <Eye size={14} />} Describe the style
-                  </button>
+                  </UiButton>
                 </div>
                 {styleRefs && styleRefs.images.length > 0 ? (
                   <ul className="studio-refs">
@@ -3071,7 +3116,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       <li key={image.name}>
                         {image.preview ? <img src={image.preview} alt={image.name} /> : <span className="studio-note">No preview</span>}
                         <span className="studio-note">{image.name}</span>
-                        <button type="button" className="secondary-button" onClick={() => void removeReferenceImage(image.name)} disabled={busy !== null} aria-label={`Remove ${image.name}`}><Trash2 size={13} /></button>
+                        <UiButton type="button" className="secondary-button" onClick={() => void removeReferenceImage(image.name)} disabled={busy !== null} aria-label={`Remove ${image.name}`}><Trash2 size={13} /></UiButton>
                       </li>
                     ))}
                   </ul>
@@ -3085,9 +3130,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 )}
                 {designRows.some((row) => row.inPages && row.drawn) && (
                   <div className="page-actions">
-                    <button type="button" className="secondary-button" onClick={() => void applyStyleReference()} disabled={busy !== null || !readiness?.ready}>
+                    <UiButton type="button" className="secondary-button" onClick={() => void applyStyleReference()} disabled={busy !== null || !readiness?.ready}>
                       <Wand2 size={14} /> {hasStyleReference ? 'Apply the style reference' : 'Draw from open-pencil'}
-                    </button>
+                    </UiButton>
                     <span className="studio-model">
                       {hasStyleReference
                         ? 'Writes the style guide and tokens from your reference, then draws every screen again.'
@@ -3121,10 +3166,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       <li key={row.name}>
                         <strong>{row.name}</strong>
                         <span className="studio-step-buttons">
-                          <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'link')} disabled={busy !== null}>This is a planned screen</button>
-                          <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'add')} disabled={busy !== null}>It is new</button>
-                          <button type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'remove')} disabled={busy !== null}>Not needed</button>
-                          <button type="button" className="secondary-button" onClick={() => ignoreDesignPage(row.name)} disabled={busy !== null}>Not a screen</button>
+                          <UiButton type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'link')} disabled={busy !== null}>This is a planned screen</UiButton>
+                          <UiButton type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'add')} disabled={busy !== null}>It is new</UiButton>
+                          <UiButton type="button" className="secondary-button" onClick={() => void explainDrawnPage(row.name, 'remove')} disabled={busy !== null}>Not needed</UiButton>
+                          <UiButton type="button" className="secondary-button" onClick={() => ignoreDesignPage(row.name)} disabled={busy !== null}>Not a screen</UiButton>
                         </span>
                       </li>
                     ))}
@@ -3138,9 +3183,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <div className="studio-note">
                     <p>Ask about the plan, correct one screen, or add a whole feature.</p>
                     <div className="page-actions">
-                      <button type="button" className="secondary-button" onClick={() => setPlanIntent('feature')} disabled={busy !== null}>Add a feature</button>
-                      <button type="button" className="secondary-button" onClick={() => setPlanIntent('screen')} disabled={busy !== null}>Fix a screen</button>
-                      <button type="button" className="secondary-button" onClick={() => setPlanIntent('ask')} disabled={busy !== null}>Ask a question</button>
+                      <UiButton type="button" className="secondary-button" onClick={() => setPlanIntent('feature')} disabled={busy !== null}>Add a feature</UiButton>
+                      <UiButton type="button" className="secondary-button" onClick={() => setPlanIntent('screen')} disabled={busy !== null}>Fix a screen</UiButton>
+                      <UiButton type="button" className="secondary-button" onClick={() => setPlanIntent('ask')} disabled={busy !== null}>Ask a question</UiButton>
                     </div>
                     <p>For example: “Add a parent portal with a report card page.” “Register is the sign-up screen, just named differently.” “The old dashboard is not needed.”</p>
                   </div>
@@ -3163,7 +3208,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     ['screen', 'Change a screen'],
                     ['feature', 'Add a feature'],
                   ] as const).map(([id, label]) => (
-                    <button
+                    <UiButton
                       key={id}
                       type="button"
                       className={planIntent === id ? 'secondary-button selected' : 'secondary-button'}
@@ -3172,11 +3217,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       disabled={busy !== null}
                     >
                       {label}
-                    </button>
+                    </UiButton>
                   ))}
                 </div>
                 <span className="studio-model">One or two model calls, usually under a minute.</span>
-                <textarea
+                <Textarea
                   value={planChatText}
                   onChange={(event) => setPlanChatText(event.target.value)}
                   onKeyDown={(event) => {
@@ -3190,8 +3235,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   disabled={busy !== null}
                 />
                 <div className="page-actions">
-                  <button type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</button>
-                  {planPhase === 'thinking' && <button type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</button>}
+                  <UiButton type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</UiButton>
+                  {planPhase === 'thinking' && <UiButton type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</UiButton>}
                   <span className="studio-model">It proposes; you decide what to apply.</span>
                 </div>
               </div>
@@ -3205,17 +3250,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       <span className="studio-plan-action">
                         <span className="studio-plan-action-head">
                           <label>
-                            <input type="checkbox" checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
+                            <Checkbox checked={planSelected[index] ?? false} onChange={() => togglePlanAction(index)} disabled={busy !== null} />
                             {' '}{action.summary}
                           </label>
-                          <button
+                          <UiButton
                             type="button"
                             className="composer-text-button"
                             onClick={() => setEditingAction(editingAction === index ? null : index)}
                             disabled={busy !== null}
                           >
                             {editingAction === index ? 'Done' : 'Edit'}
-                          </button>
+                          </UiButton>
                         </span>
                         <span className="studio-note">{action.kind}: {planActionDetail(action)}</span>
                         {editingAction === index && (
@@ -3238,13 +3283,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   </p>
                 )}
                 <div className="page-actions">
-                  <button type="button" className="primary-button" onClick={() => void applyPlanChanges()} disabled={busy !== null || !planSelected.some(Boolean)}>
+                  <UiButton type="button" className="primary-button" onClick={() => void applyPlanChanges()} disabled={busy !== null || !planSelected.some(Boolean)}>
                     {busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Apply selected ({planSelected.filter(Boolean).length})
-                  </button>
-                  <button type="button" className="secondary-button" onClick={() => void applyPlanChanges(true)} disabled={busy !== null || !planSelected.some(Boolean)}>
+                  </UiButton>
+                  <UiButton type="button" className="secondary-button" onClick={() => void applyPlanChanges(true)} disabled={busy !== null || !planSelected.some(Boolean)}>
                     <Play size={14} /> Apply and start Autopilot
-                  </button>
-                  <button type="button" className="secondary-button" onClick={() => { setPlanActions(null); setPlanSelected([]); setEditingAction(null); }} disabled={busy !== null}>Dismiss</button>
+                  </UiButton>
+                  <UiButton type="button" className="secondary-button" onClick={() => { setPlanActions(null); setPlanSelected([]); setEditingAction(null); }} disabled={busy !== null}>Dismiss</UiButton>
                 </div>
               </section>
             )}
@@ -3258,7 +3303,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       : 'Studio did not return a usable change set. Try again, or name the screens and cards you want added.'}
                 </span>
                 {lastPlanRequest && (
-                  <button type="button" className="secondary-button" onClick={() => void sendPlanChat(lastPlanRequest)} disabled={busy !== null}>Try again</button>
+                  <UiButton type="button" className="secondary-button" onClick={() => void sendPlanChat(lastPlanRequest)} disabled={busy !== null}>Try again</UiButton>
                 )}
               </p>
             )}
@@ -3278,13 +3323,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 </p>
                 <div className="page-actions">
                   {planNext.ready > 0 && (
-                    <button type="button" className="primary-button" onClick={() => void startPlanAutopilot()} disabled={busy !== null}>
+                    <UiButton type="button" className="primary-button" onClick={() => void startPlanAutopilot()} disabled={busy !== null}>
                       {busy === 'guide' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Start Autopilot
-                    </button>
+                    </UiButton>
                   )}
-                  <button type="button" className="secondary-button" onClick={() => setTab('board')} disabled={busy !== null}>Review the board</button>
-                  <button type="button" className="secondary-button" onClick={() => { if (projectId) void launchProject(projectId, 'editor'); }} disabled={busy !== null}>Open in Code</button>
-                  {planNext.undrawn > 0 && <button type="button" className="secondary-button" onClick={() => setTab('design')} disabled={busy !== null}>Draw the screens</button>}
+                  <UiButton type="button" className="secondary-button" onClick={() => setTab('board')} disabled={busy !== null}>Review the board</UiButton>
+                  <UiButton type="button" className="secondary-button" onClick={() => { if (projectId) void launchProject(projectId, 'editor'); }} disabled={busy !== null}>Open in Code</UiButton>
+                  {planNext.undrawn > 0 && <UiButton type="button" className="secondary-button" onClick={() => setTab('design')} disabled={busy !== null}>Draw the screens</UiButton>}
                 </div>
                 <p className="studio-note">Autopilot works the ready cards and stops each at Review. Code opens the project for a hand-run.</p>
               </section>
@@ -3310,9 +3355,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           {tab === 'board' && (
           <article className={`studio-card${boardFull ? ' studio-fullscreen' : ''}`}>
             <h2><LayoutGrid size={16} /> Board
-              <button type="button" className="secondary-button studio-fullscreen-toggle" onClick={() => setBoardFull((current) => !current)} aria-pressed={boardFull} title={boardFull ? 'Leave full screen (Esc)' : 'Show the board full screen'}>
+              <UiButton type="button" className="secondary-button studio-fullscreen-toggle" onClick={() => setBoardFull((current) => !current)} aria-pressed={boardFull} title={boardFull ? 'Leave full screen (Esc)' : 'Show the board full screen'}>
                 {boardFull ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {boardFull ? 'Exit full screen' : 'Full screen'}
-              </button>
+              </UiButton>
             </h2>
             <p className="studio-note">Cards built from the stories. A card reaches done only through a passing check that still matches the working tree.</p>
             {housekeeping.length > 0 && (
@@ -3330,22 +3375,22 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               </details>
             )}
             <div className="page-actions">
-              <button type="button" className="primary-button" onClick={() => void plan()} disabled={busy !== null || !readiness?.ready}>
+              <UiButton type="button" className="primary-button" onClick={() => void plan()} disabled={busy !== null || !readiness?.ready}>
                 {busy === 'plan' ? <Loader2 className="spin" size={14} /> : <LayoutGrid size={14} />} {board?.cards.length ? 'Rebuild the board' : 'Build the board'}
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void planForTeam()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="One agent per ready card, reviewed on the Workflows page before anything runs">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void planForTeam()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="One agent per ready card, reviewed on the Workflows page before anything runs">
                 {busy === 'team' ? <Loader2 className="spin" size={14} /> : <Users size={14} />} Plan these for the team
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void syncDesignFromBoard()} disabled={busy !== null} title="Pull the current OpenPencil document, compare its screens with the board, and mark changed designs for rebuilding.">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void syncDesignFromBoard()} disabled={busy !== null} title="Pull the current OpenPencil document, compare its screens with the board, and mark changed designs for rebuilding.">
                 {busy === 'design' ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Sync OpenPencil designs
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void workCard()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="Runs the next ready card with one agent. The card stops at review; the board decides when it is done.">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void workCard()} disabled={busy !== null || !board?.cards.some((card) => card.status === 'ready')} title="Runs the next ready card with one agent. The card stops at review; the board decides when it is done.">
                 {busy === 'work' ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Work the next card
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void arrange()} disabled={busy !== null || !board?.cards.length} title="Puts the cards in the order they should be built, so the product runs on your machine before anything is hosted. Status, runs and checks are kept.">
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => void arrange()} disabled={busy !== null || !board?.cards.length} title="Puts the cards in the order they should be built, so the product runs on your machine before anything is hosted. Status, runs and checks are kept.">
                 {busy === 'arrange' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Arrange with AI
-              </button>
-              {!!board?.cards.some(lacksRoute) && <button type="button" className="secondary-button" onClick={() => void suggestRoutes()} disabled={busy !== null} title="Match routes from the page inventory and pulled design, then suggest any remaining routes from project context.">{busy === 'card' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Suggest route fixes</button>}
+              </UiButton>
+              {!!board?.cards.some(lacksRoute) && <UiButton type="button" className="secondary-button" onClick={() => void suggestRoutes()} disabled={busy !== null} title="Match routes from the page inventory and pulled design, then suggest any remaining routes from project context.">{busy === 'card' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Suggest route fixes</UiButton>}
             </div>
             {syncOutcome && (
               <section className="studio-route-review studio-sync-result" role="status" aria-label="OpenPencil sync result">
@@ -3359,9 +3404,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               {routeSuggestions.map((suggestion) => { const card = board?.cards.find((item) => item.id === suggestion.cardId); return <p key={suggestion.cardId}><strong>{card?.title ?? suggestion.cardId}</strong> → <code>{suggestion.route}</code> <span className="studio-kind">{suggestion.confidence} confidence · {suggestion.reason}</span></p>; })}
               {routeUnresolved.length > 0 && <div className="studio-note">
                 <p>Still without a route. Give each one a route, or say it is not a screen of its own (a label, a note, or a dialog drawn inside another screen) so it needs none.</p>
-                {routeUnresolved.map((id) => <p key={id}><strong>{board?.cards.find((card) => card.id === id)?.title ?? id}</strong> <button type="button" className="secondary-button" onClick={() => void markNotAScreen(id)} disabled={busy !== null}>Needs no route</button></p>)}
+                {routeUnresolved.map((id) => <p key={id}><strong>{board?.cards.find((card) => card.id === id)?.title ?? id}</strong> <UiButton type="button" className="secondary-button" onClick={() => void markNotAScreen(id)} disabled={busy !== null}>Needs no route</UiButton></p>)}
               </div>}
-              <div className="page-actions"><button type="button" className="primary-button" onClick={() => void applyRouteSuggestions()} disabled={busy !== null || routeSuggestions.length === 0}>Apply reviewed routes</button><button type="button" className="secondary-button" onClick={() => setRouteSuggestions(null)} disabled={busy !== null}>Dismiss</button></div>
+              <div className="page-actions"><UiButton type="button" className="primary-button" onClick={() => void applyRouteSuggestions()} disabled={busy !== null || routeSuggestions.length === 0}>Apply reviewed routes</UiButton><UiButton type="button" className="secondary-button" onClick={() => setRouteSuggestions(null)} disabled={busy !== null}>Dismiss</UiButton></div>
             </section>}
             {projectId && board && board.cards.length > 0 && (
               <NeedsYouBanner
@@ -3415,7 +3460,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       }}
                     >
                       <h3>{BOARD_STATUS_LABEL[status]} <span className="studio-count">{cards.length}</span></h3>
-                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} onRememberApproach={rememberBlockedApproach} onLearn={(chosen) => { if (projectId) onLearnCard(chosen, projectId); }} />)}
+                      {cards.map((card) => <BoardCardView key={card.id} card={card} busy={busy !== null} onMove={move} onCheckUi={checkUi} onSetRoute={setRoute} onRememberApproach={rememberBlockedApproach} onOpenConversation={onOpenConversation} onLearn={(chosen) => { if (projectId) onLearnCard(chosen, projectId); }} />)}
                       {cards.length === 0 && <p className="studio-note">Empty</p>}
                     </div>
                   );
@@ -3436,7 +3481,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             <div className="studio-folder-choice">
               <span className="studio-project-label">Project location</span>
               <div role="radiogroup" aria-label="Project location">
-                <button
+                <UiButton
                   type="button"
                   className={!useCurrentFolder ? 'selected' : undefined}
                   aria-pressed={!useCurrentFolder}
@@ -3444,9 +3489,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   disabled={busy !== null}
                 >
                   <NotebookPen size={13} /> Independent workspace
-                </button>
+                </UiButton>
                 {currentFolder && (
-                  <button
+                  <UiButton
                     type="button"
                     className={useCurrentFolder ? 'selected' : undefined}
                     aria-pressed={useCurrentFolder}
@@ -3454,7 +3499,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     disabled={busy !== null}
                   >
                     <FolderOpen size={13} /> Plan {currentFolder.name}
-                  </button>
+                  </UiButton>
                 )}
               </div>
               <small>{currentFolder ? 'Attach this plan to the open project, so the interview and the design read the code that is already there. The plan is written under that folder\'s .kai/spec.' : 'Plan first. You can create a project folder after the brief is ready.'}</small>
@@ -3514,7 +3559,7 @@ function CardRoute({ cardId, title, route, busy, onSetRoute }: { cardId: string;
   const changed = value.trim() !== route;
   return (
     <div className="studio-route">
-      <input
+      <UiTextInput
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && changed) void onSetRoute(cardId, value); }}
@@ -3522,16 +3567,59 @@ function CardRoute({ cardId, title, route, busy, onSetRoute }: { cardId: string;
         aria-label={`Route for ${title}`}
         disabled={busy}
       />
-      {changed && <button type="button" className="secondary-button" onClick={() => void onSetRoute(cardId, value)} disabled={busy}>Save route</button>}
+      {changed && <UiButton type="button" className="secondary-button" onClick={() => void onSetRoute(cardId, value)} disabled={busy}>Save route</UiButton>}
     </div>
   );
 }
 
-function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberApproach, onLearn }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void>; onRememberApproach: (card: BoardCard) => Promise<void>; onLearn: (card: BoardCard) => void }): ReactNode {
+function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberApproach, onLearn, onOpenConversation }: { card: BoardCard; busy: boolean; onMove: (id: string, status: BoardStatus) => Promise<void>; onCheckUi: (id: string) => Promise<void>; onSetRoute: (id: string, route: string) => Promise<void>; onRememberApproach: (card: BoardCard) => Promise<void>; onLearn: (card: BoardCard) => void; onOpenConversation: (conversationId: string) => void }): ReactNode {
+  const [lessonEvents, setLessonEvents] = useState<Record<string, string>>({});
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => {
+    if (!historyOpen) return;
+    let current = true;
+    const runs = card.runs.filter((run) => run.conversationId);
+    void Promise.all(runs.map(async (run) => {
+      try {
+        const conversation = unwrap(await window.kaiDesktop.getConversation(run.conversationId!));
+        if (!conversation) throw new Error('That conversation no longer exists.');
+        const lesson = conversation.events.find((event): event is Extract<PersistedEvent, { type: 'memory.event' }> => event.type === 'memory.event' && event.action === 'learn');
+        return { id: run.conversationId!, summary: lesson?.summary ?? null, error: false };
+      } catch {
+        return { id: run.conversationId!, summary: null, error: true };
+      }
+    })).then(async (records) => {
+      const linkedRuns = records.filter((record) => record.summary !== null);
+      let statuses: Record<string, string> = {};
+      if (linkedRuns.length > 0) {
+        try {
+          const response = unwrap(await window.kaiDesktop.cognitive1Operation({ operation: 'brain-draft-status', payload: { run_ids: linkedRuns.map((record) => record.id) } }));
+          const body = response && typeof response === 'object' ? response as { statuses?: unknown } : {};
+          if (body.statuses && typeof body.statuses === 'object' && !Array.isArray(body.statuses)) statuses = body.statuses as Record<string, string>;
+        } catch {
+          // The run's filed event stays useful while C1 is offline; only its live review state is unavailable.
+        }
+      }
+      const entries = records.map(({ id, summary, error }) => {
+        if (error) return [id, 'The source conversation could not be loaded.'] as const;
+        if (summary === null) return [id, 'No C1 lesson was recorded for this run.'] as const;
+        const state = statuses[id];
+        const label = state === 'pending' ? 'Pending review'
+          : state === 'approved' ? 'Approved'
+            : state === 'rejected' ? 'Rejected'
+              : state === 'not_found' ? 'No longer in the queue; decision unavailable'
+                : 'Review status unavailable';
+        return [id, `C1 ${label}. ${summary}`] as const;
+      });
+      if (current) setLessonEvents(Object.fromEntries(entries));
+    });
+    return () => { current = false; };
+  }, [card.runs, historyOpen]);
   const ui = card.kind === 'component' || card.kind === 'page';
   return (
     <div
       className={`studio-tile${card.stale ? ' stale' : ''}${busy ? '' : ' draggable'}`}
+      data-studio-card-id={card.id}
       draggable={!busy}
       onDragStart={(event) => { event.dataTransfer.setData('text/plain', card.id); event.dataTransfer.effectAllowed = 'move'; }}
     >
@@ -3548,7 +3636,7 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
       {card.status === 'blocked' && machineBlocked(card) && (
         <div className="page-actions">
           <p className="studio-note"><AlertTriangle size={12} /> This card is parked while other independent cards continue. Review the suggested next step above, then move it to Ready when you want Autopilot to try again.</p>
-          <button type="button" className="secondary-button" onClick={() => void onRememberApproach(card)} disabled={busy}>Remember an approach</button>
+          <UiButton type="button" className="secondary-button" onClick={() => void onRememberApproach(card)} disabled={busy}>Remember an approach</UiButton>
         </div>
       )}
       {card.claimedBy && <p className="studio-note"><Loader2 size={12} /> Held by {card.claimedBy}</p>}
@@ -3558,7 +3646,22 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
           moved {card.movedAt.slice(0, 16).replace('T', ' ')}
         </p>
       )}
-      {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots</p>}
+      {card.runs.length > 0 && (
+        <details className="studio-card-run-history" onToggle={(event) => setHistoryOpen(event.currentTarget.open)}>
+          <summary>Run history ({card.runs.length})</summary>
+          <ol>
+            {[...card.runs].reverse().map((run, index) => (
+              <li key={`${run.at}-${index}`}>
+                <div><strong>{run.agent}{run.model ? ` · ${run.model}` : ''}</strong><small>{relativeTime(run.at)}</small></div>
+                {run.files.length > 0 && <small className="studio-run-files">Changed: {run.files.join(', ')}</small>}
+                {run.conversationId && <small className="studio-run-lesson">C1: {lessonEvents[run.conversationId] ?? 'Checking lesson record…'}</small>}
+                {run.conversationId && <UiButton type="button" className="secondary-button compact" onClick={() => onOpenConversation(run.conversationId!)}>Open conversation</UiButton>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+      {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots · verification {card.check.runId}</p>}
       {card.acceptance.length > 0 && (
         <div className="studio-note studio-acceptance" aria-label={`Acceptance criteria for ${card.title}`}>
           <strong>Acceptance evidence</strong>
@@ -3579,18 +3682,18 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
         <p className="studio-note">This sits inside a page, so it is closed on the build check. Give it a route below only if it has its own screen.</p>
       )}
       {ui && (
-        <button type="button" className="secondary-button" onClick={() => void onCheckUi(card.id)} disabled={busy || !card.route}>
+        <UiButton type="button" className="secondary-button" onClick={() => void onCheckUi(card.id)} disabled={busy || !card.route}>
           <Eye size={13} /> {card.route ? 'Check the screen' : 'No route set'}
-        </button>
+        </UiButton>
       )}
       {ui && <CardRoute cardId={card.id} title={card.title} route={card.route} busy={busy} onSetRoute={onSetRoute} />}
       {/* The card, its acceptance criteria, its dependencies and the files its runs touched are exactly the context a
           tutor needs, and the board is where that context already lives — so it is offered from the card rather than
           re-described in the question box. It opens the tutor with the question written and waiting, not sent. */}
-      <button type="button" className="secondary-button" onClick={() => onLearn(card)} title={`Ask the tutor about "${card.title}"`}>
+      <UiButton type="button" className="secondary-button" onClick={() => onLearn(card)} title={`Ask the tutor about "${card.title}"`}>
         <Code2 size={13} /> Learn this card
-      </button>
-      <select
+      </UiButton>
+      <UiNativeSelect
         className="studio-move"
         value={card.status}
         onChange={(event) => void onMove(card.id, event.target.value as BoardStatus)}
@@ -3598,7 +3701,7 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
         aria-label={`Move ${card.title}`}
       >
         {BOARD_STATUSES.map((status) => <option key={status} value={status}>{BOARD_STATUS_LABEL[status]}</option>)}
-      </select>
+      </UiNativeSelect>
     </div>
   );
 }
@@ -3626,7 +3729,7 @@ function StudioComposer({ value, onChange, onSubmit, placeholder, ariaLabel, dis
   return (
     <>
       <div className="composer-box">
-        <textarea
+        <Textarea
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
@@ -3644,12 +3747,12 @@ function StudioComposer({ value, onChange, onSubmit, placeholder, ariaLabel, dis
         <div className="composer-toolbar">
           <div className="composer-leading">{extra}</div>
           <div className="composer-actions">
-            <button type="button" className={`composer-icon-button ${enhancing ? 'active' : ''}`} disabled={!value.trim() || disabled} onClick={onEnhance} title="Improve this with the Prompt Guide" aria-label="Enhance">
+            <UiButton type="button" className={`composer-icon-button ${enhancing ? 'active' : ''}`} disabled={!value.trim() || disabled} onClick={onEnhance} title="Improve this with the Prompt Guide" aria-label="Enhance">
               {enhancing ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}
-            </button>
-            <button type="button" className="send-button" disabled={!sendable || disabled} onClick={onSubmit} title={sendTitle ?? 'Send'} aria-label="Send">
+            </UiButton>
+            <UiButton type="button" className="send-button" disabled={!sendable || disabled} onClick={onSubmit} title={sendTitle ?? 'Send'} aria-label="Send">
               {sending ? <Loader2 className="spin" size={15} /> : <Send size={16} />}
-            </button>
+            </UiButton>
           </div>
         </div>
       </div>
@@ -3693,12 +3796,12 @@ function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy, extra }
   const open = openPrompt === id;
   return (
     <span className="studio-step-buttons">
-      <button type="button" className="secondary-button" onClick={() => onToggle(open ? null : id)} aria-expanded={open} aria-label={`${open ? 'Hide' : 'View'} the prompt for ${id}`}>
+      <UiButton type="button" className="secondary-button" onClick={() => onToggle(open ? null : id)} aria-expanded={open} aria-label={`${open ? 'Hide' : 'View'} the prompt for ${id}`}>
         <Eye size={13} /> {open ? 'Hide' : 'View'}
-      </button>
-      <button type="button" className="secondary-button" onClick={() => onCopy(id)} aria-label={`Copy the prompt for ${id}`}>
+      </UiButton>
+      <UiButton type="button" className="secondary-button" onClick={() => onCopy(id)} aria-label={`Copy the prompt for ${id}`}>
         {copiedPrompt === id ? <Check size={13} /> : <Send size={13} />} {copiedPrompt === id ? 'Copied' : 'Copy prompt'}
-      </button>
+      </UiButton>
       {extra}
     </span>
   );
@@ -3722,14 +3825,14 @@ function PageButtons({ name, pageId, canRename, disabled, onRename, onDelete }: 
   return (
     <>
       {canRename && (
-        <button type="button" className="secondary-button" onClick={() => onRename(name)} disabled={disabled} aria-label={`Rename ${name}`} title="Rename this screen in the pages list and, when it is drawn, in open-pencil too. The route is left as it is.">
+        <UiButton type="button" className="secondary-button" onClick={() => onRename(name)} disabled={disabled} aria-label={`Rename ${name}`} title="Rename this screen in the pages list and, when it is drawn, in open-pencil too. The route is left as it is.">
           <PencilLine size={13} /> Rename
-        </button>
+        </UiButton>
       )}
       {pageId !== null && (
-        <button type="button" className="secondary-button" onClick={() => onDelete(name, pageId)} disabled={disabled} aria-label={`Delete the open-pencil page for ${name}`} title="Delete this screen's page in open-pencil. It cannot be undone from KAI.">
+        <UiButton type="button" className="secondary-button" onClick={() => onDelete(name, pageId)} disabled={disabled} aria-label={`Delete the open-pencil page for ${name}`} title="Delete this screen's page in open-pencil. It cannot be undone from KAI.">
           <Trash2 size={13} /> Delete page
-        </button>
+        </UiButton>
       )}
     </>
   );
@@ -3740,10 +3843,10 @@ function PromptPanel({ text, copied, onCopy, onClose }: { text: string; copied: 
   return (
     <div className="studio-step-prompt">
       <p className="studio-note">{copied ? 'Copied to the clipboard.' : 'This is the prompt.'} Paste it into the Workspace composer for a KAI agent that has open-pencil connected, and let it finish before the next one. Build the design does this for you.</p>
-      <textarea readOnly value={text} rows={Math.min(14, text.split('\n').length + 1)} aria-label="The prompt" onFocus={(event) => event.currentTarget.select()} />
+      <Textarea readOnly value={text} rows={Math.min(14, text.split('\n').length + 1)} aria-label="The prompt" onFocus={(event) => event.currentTarget.select()} />
       <span className="studio-step-buttons">
-        <button type="button" className="secondary-button" onClick={onCopy}><Send size={13} /> Copy again</button>
-        <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+        <UiButton type="button" className="secondary-button" onClick={onCopy}><Send size={13} /> Copy again</UiButton>
+        <UiButton type="button" className="secondary-button" onClick={onClose}>Close</UiButton>
       </span>
     </div>
   );
@@ -3756,9 +3859,9 @@ function ThreadTurn({ question, answer, onEdit, disabled }: { question: string; 
       <div className={`studio-bubble user${answer ? '' : ' skipped'}`}>
         {answer || 'Skipped, you decide'}
         {onEdit && (
-          <button type="button" className="studio-answer-edit" onClick={onEdit} disabled={disabled} title="Change this answer; KAI asks again from here">
+          <UiButton type="button" className="studio-answer-edit" onClick={onEdit} disabled={disabled} title="Change this answer; KAI asks again from here">
             <PencilLine size={12} /> Edit
-          </button>
+          </UiButton>
         )}
       </div>
     </>

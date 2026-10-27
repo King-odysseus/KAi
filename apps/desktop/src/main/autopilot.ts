@@ -411,6 +411,7 @@ function checkFailureText(command: string, check: { exitCode: number | null; out
 /** An attempt at a card, made in a copy of the project and waiting to be merged. The copy is still open. */
 interface CopyAttempt {
   session: ParallelSession;
+  conversationId: string;
   result: { failed: boolean; error: string };
   commit?: string;
 }
@@ -828,12 +829,14 @@ export class DesktopAutopilot {
           : `Working on "${card.title}"${attempt > 1 ? ` (attempt ${attempt} of ${input.attemptsPerCard})` : ''}.`);
       }
       let run: { failed: boolean; error: string };
+      let runConversationId: string | undefined = prior?.conversationId;
       if (prior) {
         // The first attempt already ran, in a copy of the project, alongside the other cards of its wave.
         run = prior.result;
       } else {
         const base = await this.cardPrompt(input, card);
         const conversation = await this.ports.createConversation(projectId, `Autopilot: ${card.title}`.slice(0, 120), card);
+        runConversationId = conversation.id;
         this.trackLane(active, card, conversation.id);
         if (!active.opened) {
           active.opened = true;
@@ -846,7 +849,7 @@ export class DesktopAutopilot {
           this.untrackLane(active, card.id, conversation.id);
         }
       }
-      const settled = await this.settleAttempt(input, settings, label, card, command, active, run, failure);
+      const settled = await this.settleAttempt(input, settings, label, card, command, active, run, failure, undefined, runConversationId);
       if (settled.outcome !== 'retry') return;
       failure = settled.failure;
       // The same refusal twice, word for word, means the attempt changed nothing the check looks at. A third turn
@@ -874,6 +877,7 @@ export class DesktopAutopilot {
     previousFailure: string,
     /** What the card changed, when that is known (the files its own copy changed). Otherwise the project's changes are read. */
     changedFiles?: string[],
+    conversationId?: string,
   ): Promise<{ outcome: 'done' | 'review' | 'retry'; failure: string; repeated: boolean; costly: boolean }> {
     const { projectId } = input;
     const owner = active.ownerWindowId;
@@ -882,6 +886,7 @@ export class DesktopAutopilot {
       agent: input.execution === 'api' ? 'api' : (input.agent ?? settings.defaultAgent),
       model: input.model ?? null,
       at: new Date(this.ports.now()).toISOString(),
+      ...(conversationId ? { conversationId } : {}),
       files: changedFiles ?? (await this.ports.changedFilesFor(projectId).catch(() => [])),
     });
     const costly = (): boolean => isCostOutlier(active.spend.get(card.id) ?? 0, active.closedSpends);
@@ -1071,7 +1076,7 @@ export class DesktopAutopilot {
         result = await this.timed(projectId, 'agentMs', () => this.runResting(input, settings, conversation.id, prompt, earlyFailure, active, { cwd: folder, cardId: card.id, cardTitle: card.title }));
       }
       const commit = result.failed ? undefined : await session.commit(card.id, `Autopilot: ${card.title}`.slice(0, 120));
-      return { session, result, ...(commit ? { commit } : {}) };
+      return { session, conversationId: conversation.id, result, ...(commit ? { commit } : {}) };
     } catch (error) {
       await session.dispose().catch(() => undefined);
       // A Stop ends the run. Anything else that stopped this card must not stop the others: it carries on alone.
@@ -1186,7 +1191,7 @@ export class DesktopAutopilot {
               }
             }
             const own = made.commit ? await made.session.filesChanged(made.commit).catch(() => undefined) : undefined;
-            const settled = await this.settleAttempt(input, settings, label, card, command, active, made.result, failure, own);
+            const settled = await this.settleAttempt(input, settings, label, card, command, active, made.result, failure, own, made.conversationId);
             if (settled.outcome === 'retry' && undo) {
               // A card that failed its check does not stay in the project. Left in, its broken changes failed every other
               // card's check as well, and the cards behind it went round again for a fault that was not theirs.

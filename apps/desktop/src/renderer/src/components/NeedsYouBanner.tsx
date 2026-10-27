@@ -9,6 +9,7 @@ import {
   type StudioDesign,
   type StudioGuideView,
 } from '@kai/contracts';
+import { UiButton } from './UiButton';
 
 interface Props {
   board: StudioBoard | null;
@@ -55,9 +56,9 @@ export function NeedsYouBanner({ board, artifacts, design, guide, run, busy, onA
         {attention.detail && <p className="needs-you-detail">{attention.detail}</p>}
       </div>
       {attention.action && attention.actionLabel && (
-        <button type="button" className="secondary-button" onClick={() => onAction(attention.action as GuideAction)} disabled={busy}>
+        <UiButton type="button" className="secondary-button" onClick={() => onAction(attention.action as GuideAction)} disabled={busy}>
           {attention.actionLabel}
-        </button>
+        </UiButton>
       )}
     </div>
   );

@@ -1,0 +1,146 @@
+/* Shared renderer chrome. Tokens come from the active KAi theme. */
+.kai-pill {
+  max-width: 100%;
+  min-height: 22px;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+.kai-pill svg { flex: 0 0 auto; }
+.kai-pill > span { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+
+/* The active KAi theme feeds both Flowbite components and the remaining app-specific menu layouts. */
+.popover,
+.context-menu,
+.terminal-menu,
+.status-popover,
+.command-palette,
+.skills-panel,
+.tour-list,
+.tour-card {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--bg-panel);
+  box-shadow: 0 18px 44px color-mix(in srgb, var(--bg-deep) 70%, transparent);
+}
+.popover > button,
+.context-menu > button,
+.terminal-menu > button { color: var(--text-muted); }
+.popover > button:hover,
+.popover > button.selected,
+.context-menu > button:hover:not(:disabled),
+.terminal-menu > button:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+.app-dialog,
+.approval-dialog,
+.setup-panel,
+.shortcut-sheet { color: var(--text); }
+.command-palette-overlay,
+.skills-overlay { backdrop-filter: blur(6px); }
+.titlebar-more-dropdown[data-testid="flowbite-dropdown"] { color: var(--text); }
+html[data-theme]:root .popover,
+html[data-theme]:root .command-palette,
+html[data-theme]:root .context-menu,
+html[data-theme]:root .terminal-menu,
+html[data-theme]:root .status-popover,
+html[data-theme]:root .select-menu-popover,
+html[data-theme]:root .kai-select-list {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--bg-panel);
+}
+html[data-theme]:root .popover > button:hover,
+html[data-theme]:root .popover > button.selected,
+html[data-theme]:root .select-menu-option:hover,
+html[data-theme]:root .select-menu-option:focus-visible { background: var(--bg-hover); }
+html[data-theme]:root .select-menu-option.selected { color: var(--mint); background: var(--mint-soft); }
+
+.nav-rail { background: var(--bg-shell); }
+:root[data-density] .nav-rail.expanded { flex: 0 0 180px; width: 180px; }
+.nav-rail .brand-mark { display: block; object-fit: contain; border: 0; background: transparent; box-shadow: none; }
+.nav-rail.expanded .brand-mark { align-self: flex-start; }
+.nav-stack { width: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.nav-stack::-webkit-scrollbar { display: block; width: 4px; }
+.nav-stack::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--border); }
+.nav-group-label { flex: 0 0 auto; }
+.nav-stack .nav-button { flex: 0 0 auto; }
+.nav-rail.expanded .nav-stack { gap: 2px; padding-top: 6px; }
+.nav-rail.expanded .nav-group-label { height: 20px; margin-top: 4px; }
+.nav-rail.expanded .nav-button { height: 31px; min-height: 31px; }
+.nav-bottom { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: auto; }
+.nav-rail.expanded .nav-bottom { align-items: stretch; }
+
+.workspace-header { min-height: 64px; padding: 14px 20px; margin-bottom: 0; }
+.workspace-header h1,
+.page-header h1 { color: var(--text); font-size: 20px; }
+.workspace-status { align-items: center; max-width: 55%; }
+.workspace-status .kai-pill { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.workspace-notices { padding-top: 6px; }
+.workspace-notices:not(.expanded) > .workbench-notice ~ .workbench-notice { display: none; }
+.workspace-header-more { position: relative; }
+.workspace-header-more > summary { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 6px; color: var(--text-muted); cursor: pointer; list-style: none; }
+.workspace-header-more > summary::-webkit-details-marker { display: none; }
+.workspace-header-more > summary:hover,
+.workspace-header-more[open] > summary { color: var(--text); background: var(--bg-hover); }
+.workspace-header-more .popover { right: 0; left: auto; width: 190px; }
+.workspace-more-notices { align-self: flex-start; min-height: 24px; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.workspace-more-notices:hover { color: var(--text); }
+
+.composer { background: var(--bg-shell); }
+.composer-toolbar { gap: 8px; }
+.composer-advanced-options { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.composer-advanced-options .select-menu { background: var(--bg-panel); border-radius: 6px; }
+.kai-select-list { display: flex; flex-direction: column; }
+.kai-select-list > .kai-select-option { flex: 0 0 auto; width: 100%; }
+.kai-select-list > .kai-select-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-menu-popover { display: flex; flex-direction: column; }
+.select-menu-popover > .select-menu-option { flex: 0 0 auto; height: auto; min-height: 32px; justify-content: space-between; text-align: left; white-space: normal; }
+.composer-status-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 23px; margin-top: 4px; color: var(--text-dim); font-size: 10px; }
+.composer-status-line button { padding: 2px 4px; border: 0; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+.composer-status-line button { display: inline-flex; align-items: center; gap: 3px; }
+.composer-status-line button:hover { color: var(--text); }
+.composer-status-details { display: grid; gap: 2px; margin-top: 4px; }
+.composer-status-details .composer-cost-estimate,
+.composer-status-details .access-hint,
+.composer-status-details .composer-footer { margin: 0; }
+.command-chip-row.in-picker { padding: 8px 0 0; border-top: 1px solid var(--border-soft); }
+
+.page-view { width: 100%; max-width: none; }
+.page-header { align-items: center; }
+.page-view button.active,
+.page-view [aria-selected="true"] { box-shadow: none; }
+.uap .proxy-status { margin-left: auto; }
+.uap .proxy-diagnostics > summary { color: var(--text); font-size: 13px; font-weight: 650; cursor: pointer; }
+.uap .proxy-diagnostics[open] > summary { margin-bottom: 10px; }
+.uap .ping-list svg { display: inline-block; vertical-align: middle; }
+.cognitive1-about { margin-top: 6px; color: var(--text-muted); font-size: 11px; }
+.cognitive1-about summary { cursor: pointer; }
+.cognitive1-about p { margin: 6px 0 0; }
+.cognitive1-tabs .kai-pill { margin-left: 5px; }
+.studio-strip .done { display: inline-flex; align-items: center; gap: 3px; }
+.uap .btn:has(svg) { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Keep narrow side panels inside the window and allow their own content to scroll. */
+.code-sidebar,
+.code-side-panel,
+.learning-panel,
+.guided-review-panel,
+.right-pane { min-width: 0; min-height: 0; }
+.learning-panel { overflow: hidden; }
+.learning-scroll { min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto; overscroll-behavior: contain; }
+.learning-panel > .learning-composer { flex: 0 1 auto; min-width: 0; min-height: 0; max-height: 42%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.learning-composer header,
+.learning-composer footer,
+.learning-composer-body { min-width: 0; }
+.learning-composer-heading-actions { min-width: 0; max-width: 75%; }
+.learning-composer-scope { min-width: 0; }
+.learning-composer-scope .kai-select { max-width: 100%; }
+.learning-composer textarea { min-width: 0; max-width: 100%; }
+.learning-composer footer > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+.learning-composer footer > div > button { min-width: 0; width: 100%; justify-content: center; white-space: normal; }
+.learning-assistance button.active,
+.learning-tabs button.active { box-shadow: none; border-color: transparent; background: var(--mint-soft); }
+@media (max-height: 700px) {
+  .learning-panel-head { padding-block: 6px; }
+  .learning-actions { padding-block: 5px; }
+  .learning-scroll { padding: 6px 9px; }
+  .learning-panel > .learning-composer { margin-bottom: 6px; padding: 7px; max-height: 38%; }
+}

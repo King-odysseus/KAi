@@ -4,6 +4,7 @@ import { CoordinationPanel } from './CoordinationPanel';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { RecoveryPanel } from './RecoveryPanel';
 import { VerificationPanel } from './VerificationPanel';
+import { UiButton } from './UiButton';
 
 export type OperationsTab = 'recovery' | 'coordination' | 'verification' | 'diagnostics';
 
@@ -36,12 +37,12 @@ export function OperationsView({ initialTab, activeProject, onResume, onRecovery
         {/* In the header rather than on a tab, so the way out of a stuck run is reachable from every section. It is
             deliberately never disabled: whatever is wrong, this is the control that should still work. */}
         <div className="page-actions">
-          <button type="button" className="secondary-button" onClick={onStopEverything} title="End every run and clear what an interrupted run left behind">Stop everything</button>
+          <UiButton type="button" className="secondary-button" onClick={onStopEverything} title="End every run and clear what an interrupted run left behind">Stop everything</UiButton>
         </div>
       </header>
       <div className="ops-tabs" role="tablist" aria-label="Operations sections">
         {TABS.map((item) => (
-          <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={`ops-tab ${tab === item.id ? 'active' : ''}`} onClick={() => setTab(item.id)}>{item.label}</button>
+          <UiButton key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={`ops-tab ${tab === item.id ? 'active' : ''}`} onClick={() => setTab(item.id)}>{item.label}</UiButton>
         ))}
       </div>
       {tab === 'recovery' && <RecoveryPanel onResume={onResume} onChanged={onRecoveryChanged} />}

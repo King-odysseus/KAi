@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { RecoveryRecap, RecoveryRecord, RecoveryResume } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { UiButton } from './UiButton';
 
 export function RecoveryPanel({ onResume, onChanged }: { onResume: (resume: RecoveryResume) => Promise<void>; onChanged: () => void }): ReactNode {
   const [records, setRecords] = useState<RecoveryRecord[]>([]);
@@ -61,13 +62,13 @@ export function RecoveryPanel({ onResume, onChanged }: { onResume: (resume: Reco
           </div>
           <div className="settings-note">{record.agent} · {record.execution === 'api' ? `API (${record.route})` : 'CLI'} · {record.eventCount} events · last: {record.lastActivity}</div>
           <div className="ops-actions">
-            <button type="button" className="primary-button" disabled={working !== null} onClick={() => void act(record.conversationId, async () => {
+            <UiButton type="button" className="primary-button" disabled={working !== null} onClick={() => void act(record.conversationId, async () => {
               await onResume(unwrap(await window.kaiDesktop.resumeInterruptedRun(record.conversationId)));
-            })}><RotateCcw size={14} /><span>Resume</span></button>
-            <button type="button" className="secondary-button" disabled={working !== null} onClick={() => void act(record.conversationId, async () => {
+            })}><RotateCcw size={14} /><span>Resume</span></UiButton>
+            <UiButton type="button" className="secondary-button" disabled={working !== null} onClick={() => void act(record.conversationId, async () => {
               setRecap(unwrap(await window.kaiDesktop.interruptedRunRecap(record.conversationId)));
-            })}><FileText size={14} /><span>View recap</span></button>
-            <button type="button" className="secondary-button" disabled={working !== null} onClick={() => void confirmDialog({
+            })}><FileText size={14} /><span>View recap</span></UiButton>
+            <UiButton type="button" className="secondary-button" disabled={working !== null} onClick={() => void confirmDialog({
               title: 'Discard interrupted run?',
               detail: 'Discard this interrupted run? Its files stay as they are.',
               confirmLabel: 'Discard run',
@@ -77,7 +78,7 @@ export function RecoveryPanel({ onResume, onChanged }: { onResume: (resume: Reco
                 unwrap(await window.kaiDesktop.discardInterruptedRun(record.conversationId));
                 if (recap?.conversationId === record.conversationId) setRecap(null);
               });
-            })}><Trash2 size={14} /><span>Discard</span></button>
+            })}><Trash2 size={14} /><span>Discard</span></UiButton>
           </div>
           {recap?.conversationId === record.conversationId && (
             <div className="ops-recap">

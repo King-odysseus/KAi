@@ -1,10 +1,11 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { ChevronDown, Plus, X } from 'lucide-react';
+import { Check, ChevronDown, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import type { ProjectRecord, TerminalSession, TerminalShell } from '@kai/contracts';
 import { unwrap } from '../types';
+import { UiButton } from './UiButton';
 
 /** A real interactive PTY backed by xterm.js. The session survives page and panel navigation. */
 export function TerminalView({ activeProject, open, height, onClose, onResizeStart, commandRequest, onAgentSession }: {
@@ -247,33 +248,33 @@ export function TerminalView({ activeProject, open, height, onClose, onResizeSta
       <header className="terminal-head">
         <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
           <span className="terminal-title">Terminal</span>
-          <button type="button" role="tab" aria-selected={session?.id === userSessionRef.current?.id} disabled={!userSessionRef.current} title={activeProject ? `${activeProject.name} · ${status}` : 'Open a project to start a shell'} onClick={() => void showSession(userSessionRef.current)}>
+          <UiButton type="button" role="tab" aria-selected={session?.id === userSessionRef.current?.id} disabled={!userSessionRef.current} title={activeProject ? `${activeProject.name} · ${status}` : 'Open a project to start a shell'} onClick={() => void showSession(userSessionRef.current)}>
             {shellLabel(session?.shell ?? shell)}{status === 'exited' ? ' (exited)' : ''}
-          </button>
+          </UiButton>
           {agentSessions.map((item, index) => (
-            <button key={item.id} type="button" role="tab" aria-selected={session?.id === item.id} title={item.cwd} onClick={() => void showSession(item)}>
+            <UiButton key={item.id} type="button" role="tab" aria-selected={session?.id === item.id} title={item.cwd} onClick={() => void showSession(item)}>
               Agent {index + 1} · {shellLabel(item.shell)}
-            </button>
+            </UiButton>
           ))}
         </div>
         <div className="terminal-head-actions">
-          <button type="button" className="icon-button compact" aria-label="New terminal" title={status === 'running' ? 'Restart the terminal' : 'Start the terminal'} disabled={!activeProject || status === 'starting'} onClick={() => void restart()}><Plus size={14} /></button>
+          <UiButton type="button" className="icon-button compact" aria-label="New terminal" title={status === 'running' ? 'Restart the terminal' : 'Start the terminal'} disabled={!activeProject || status === 'starting'} onClick={() => void restart()}><Plus size={14} /></UiButton>
           <div className="terminal-menu-wrap">
-            <button type="button" className="icon-button compact" aria-label="Terminal options" aria-haspopup="menu" aria-expanded={menuOpen} title="More terminal actions" onClick={() => setMenuOpen((current) => !current)}><ChevronDown size={14} /></button>
+            <UiButton type="button" className="icon-button compact" aria-label="Terminal options" aria-haspopup="menu" aria-expanded={menuOpen} title="More terminal actions" onClick={() => setMenuOpen((current) => !current)}><ChevronDown size={14} /></UiButton>
             {menuOpen && (
               <div className="terminal-menu" role="menu" onMouseLeave={closeMenu}>
-                {session && status === 'running' && <button type="button" role="menuitem" onClick={() => { closeMenu(); void stop(); }}>Stop</button>}
-                <button type="button" role="menuitem" disabled={!activeProject || status === 'starting'} onClick={() => { closeMenu(); void restart(); }}>Restart</button>
-                <button type="button" role="menuitem" onClick={() => { closeMenu(); terminalRef.current?.clear(); }}>Clear</button>
+                {session && status === 'running' && <UiButton type="button" role="menuitem" onClick={() => { closeMenu(); void stop(); }}>Stop</UiButton>}
+                <UiButton type="button" role="menuitem" disabled={!activeProject || status === 'starting'} onClick={() => { closeMenu(); void restart(); }}>Restart</UiButton>
+                <UiButton type="button" role="menuitem" onClick={() => { closeMenu(); terminalRef.current?.clear(); }}>Clear</UiButton>
                 {isWindows && (['default', 'powershell', 'gitbash'] as const).map((choice) => (
-                  <button key={choice} type="button" role="menuitemradio" aria-checked={shell === choice} onClick={() => { closeMenu(); setShell(choice); if (activeProject) void startSessionWith(choice); }}>
-                    {shell === choice ? '✓ ' : ''}{choice === 'default' ? 'Command Prompt' : choice === 'powershell' ? 'PowerShell' : 'Git Bash'}
-                  </button>
+                  <UiButton key={choice} type="button" role="menuitemradio" aria-checked={shell === choice} onClick={() => { closeMenu(); setShell(choice); if (activeProject) void startSessionWith(choice); }}>
+                    {shell === choice && <Check size={13} />}{choice === 'default' ? 'Command Prompt' : choice === 'powershell' ? 'PowerShell' : 'Git Bash'}
+                  </UiButton>
                 ))}
               </div>
             )}
           </div>
-          <button type="button" className="icon-button compact" aria-label="Close terminal" title="Close (Ctrl+`)" onClick={onClose}><X size={14} /></button>
+          <UiButton type="button" className="icon-button compact" aria-label="Close terminal" title="Close (Ctrl+`)" onClick={onClose}><X size={14} /></UiButton>
         </div>
       </header>
       {error && <div className="workbench-error" role="alert">{error}</div>}

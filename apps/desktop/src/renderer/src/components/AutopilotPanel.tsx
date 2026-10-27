@@ -5,6 +5,8 @@ import { unwrap } from '../types';
 import { useRunPanelCollapsed } from './run-panel-collapse';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 interface Props {
   projectId: string;
@@ -234,21 +236,21 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
         <h3><Plane size={15} /> Autopilot</h3>
         <div className="autopilot-head-actions">
           {running ? (
-            <button type="button" className="secondary-button" onClick={() => void stop()} disabled={busy}>
+            <UiButton type="button" className="secondary-button" onClick={() => void stop()} disabled={busy}>
               {busy ? <Loader2 className="spin" size={14} /> : <Square size={14} />} Stop
-            </button>
+            </UiButton>
           ) : (
             <>
               <label className="autopilot-quick" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0, whiteSpace: 'nowrap' }} title="Cards that do not wait on each other run side by side, each in its own copy of the project. 1 works one card at a time.">
                 <span>Cards at once</span>
-                <input type="number" min={1} max={8} value={parallelCards} disabled={busy} aria-label="Cards at once" style={{ width: '3.5rem' }} onChange={(event) => setParallelCards(Math.min(8, Math.max(1, Number(event.target.value) || 1)))} />
+                <UiTextInput type="number" min={1} max={8} value={parallelCards} disabled={busy} aria-label="Cards at once" style={{ width: '3.5rem' }} onChange={(event) => setParallelCards(Math.min(8, Math.max(1, Number(event.target.value) || 1)))} />
               </label>
-            <button type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedReason}>
+            <UiButton type="button" className="primary-button" onClick={() => void start()} disabled={busy || disabled || !hasWork} title={hasWork ? 'Works every card on the board, one after another, and rests when a provider rate-limits' : blockedReason}>
               {busy ? <Loader2 className="spin" size={14} /> : <Plane size={14} />} {status?.phase === 'finished' || status?.phase === 'stopped' || status?.phase === 'failed' ? 'Run again' : 'Start Autopilot'}
-            </button>
+            </UiButton>
             </>
           )}
-          <button
+          <UiButton
             type="button"
             className="composer-icon-button"
             onClick={toggleCollapsed}
@@ -257,7 +259,7 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
             aria-label={collapsed ? 'Show Autopilot details' : 'Minimise Autopilot'}
           >
             {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-          </button>
+          </UiButton>
         </div>
       </div>
       {/* On a collapsed panel this line is the whole screen, so the way out of a stall lives in it. It used to be
@@ -266,7 +268,7 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
         <p className="studio-note run-panel-summary">
           {summary}{' '}
           {stalled && blocked > 0 && (
-            <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy}>Put them back in the queue</button>
+            <UiButton type="button" className="link-button" onClick={() => void requeue()} disabled={busy}>Put them back in the queue</UiButton>
           )}
         </p>
       )}
@@ -286,8 +288,8 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
         <div className="studio-note run-interrupted" role="status">
           <span>The board still has &ldquo;{interrupted.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.</span>
           <div className="run-interrupted-actions">
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => void carryOn()}>Carry on where it stopped</button>
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => void putBack()}>Put the card back</button>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void carryOn()}>Carry on where it stopped</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void putBack()}>Put the card back</UiButton>
           </div>
         </div>
       )}
@@ -307,34 +309,34 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
             </label>
             <label className="autopilot-field-wide">
               <span>Check command</span>
-              <input value={checkCommand} onChange={(event) => setCheckCommand(event.target.value)} placeholder="Blank: detect it (the project root, then frontend/ and backend/)" />
+              <UiTextInput value={checkCommand} onChange={(event) => setCheckCommand(event.target.value)} placeholder="Blank: detect it (the project root, then frontend/ and backend/)" />
               <small>Run after each card. A card closes only when it passes. For a project split into parts, for example: npm --prefix frontend run typecheck</small>
             </label>
             <label>
               <span>Attempts per card</span>
-              <input type="number" min={1} max={5} value={attemptsPerCard} onChange={(event) => setAttemptsPerCard(Math.min(5, Math.max(1, Number(event.target.value) || 1)))} />
+              <UiTextInput type="number" min={1} max={5} value={attemptsPerCard} onChange={(event) => setAttemptsPerCard(Math.min(5, Math.max(1, Number(event.target.value) || 1)))} />
             </label>
             <label>
               <span>Cards at once</span>
-              <input type="number" min={1} max={8} value={parallelCards} onChange={(event) => setParallelCards(Math.min(8, Math.max(1, Number(event.target.value) || 1)))} />
+              <UiTextInput type="number" min={1} max={8} value={parallelCards} onChange={(event) => setParallelCards(Math.min(8, Math.max(1, Number(event.target.value) || 1)))} />
               <small>Cards that do not wait on each other run side by side, each in its own copy of the project. 1 works one card at a time. Needs a git project with a commit.</small>
             </label>
             <label>
               <span>Cheaper model for easy cards</span>
-              <input value={easyModel} onChange={(event) => setEasyModel(event.target.value)} placeholder="Blank: one model for every card" />
+              <UiTextInput value={easyModel} onChange={(event) => setEasyModel(event.target.value)} placeholder="Blank: one model for every card" />
               <small>Used for the first try at a component inside a page, or setup nothing waits on. A retry uses the main model.</small>
             </label>
             <label>
               <span>Stop after (hours, 0 = never)</span>
-              <input type="number" min={0} max={168} value={maxHours} onChange={(event) => setMaxHours(Math.min(168, Math.max(0, Number(event.target.value) || 0)))} />
+              <UiTextInput type="number" min={0} max={168} value={maxHours} onChange={(event) => setMaxHours(Math.min(168, Math.max(0, Number(event.target.value) || 0)))} />
             </label>
             <label>
               <span>Stop at spend (USD, 0 = no limit)</span>
-              <input type="number" min={0} step={1} value={maxCostUsd} onChange={(event) => setMaxCostUsd(Math.max(0, Number(event.target.value) || 0))} />
+              <UiTextInput type="number" min={0} step={1} value={maxCostUsd} onChange={(event) => setMaxCostUsd(Math.max(0, Number(event.target.value) || 0))} />
             </label>
             <label>
               <span>Seconds between API requests</span>
-              <input type="number" min={0} max={120} value={minGapSeconds} onChange={(event) => setMinGapSeconds(Math.min(120, Math.max(0, Number(event.target.value) || 0)))} />
+              <UiTextInput type="number" min={0} max={120} value={minGapSeconds} onChange={(event) => setMinGapSeconds(Math.min(120, Math.max(0, Number(event.target.value) || 0)))} />
             </label>
             <label className="autopilot-field-wide">
               <span>Blocked-card policy</span>
@@ -352,7 +354,7 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
       {!running && blocked > 0 && (
         <p className="studio-note">
           {blocked} card{blocked === 1 ? ' is' : 's are'} blocked, and each one's reason is on the card.{' '}
-          <button type="button" className="link-button" onClick={() => void requeue()} disabled={busy} title="Every card an agent or a check parked. A card you blocked yourself is left where it is.">Put the ones an agent stopped on back in the queue</button>
+          <UiButton type="button" className="link-button" onClick={() => void requeue()} disabled={busy} title="Every card an agent or a check parked. A card you blocked yourself is left where it is.">Put the ones an agent stopped on back in the queue</UiButton>
         </p>
       )}
 

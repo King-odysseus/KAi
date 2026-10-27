@@ -1,6 +1,7 @@
 import { RotateCcw } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { COLOR_ROLES, applyColorOverrides, loadColorOverrides, resolveTokenHex, saveColorOverrides, type ColorOverrides, type ColorRole } from '../custom-colors';
+import { UiButton } from './UiButton';
 
 /**
  * Pick your own colours for the theme you are using. Changes show as you drag, are remembered for this theme only, and
@@ -56,19 +57,19 @@ export function ThemeColors({ theme, themeLabel }: { theme: string; themeLabel: 
             />
             <span className="theme-color-name"><strong>{role.label}</strong><small>{role.hint}</small></span>
             <code>{shown[role.id] ?? ''}</code>
-            <button
+            <UiButton
               type="button"
               className="icon-button compact"
               aria-label={`Reset ${role.label}`}
               title={overrides[role.id] ? 'Put back the theme colour' : 'Already the theme colour'}
               disabled={!overrides[role.id]}
               onClick={() => resetRole(role.id)}
-            ><RotateCcw size={13} /></button>
+            ><RotateCcw size={13} /></UiButton>
           </div>
         ))}
       </div>
       <div className="button-row">
-        <button type="button" className="secondary-button" disabled={customised === 0} onClick={() => change({})}>Reset all colours for this theme</button>
+        <UiButton type="button" className="secondary-button" disabled={customised === 0} onClick={() => change({})}>Reset all colours for this theme</UiButton>
       </div>
     </div>
   );

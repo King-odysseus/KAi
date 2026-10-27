@@ -75,5 +75,6 @@ export function workingMethodBriefing(): string {
     '2. Say what you are about to do before a stretch of several tool calls, in one short sentence, so the work is legible as it happens rather than only at the end.',
     '3. Verify before declaring something done. Run the check that exists for the change you made; if none exists, say so rather than reporting a guess as a fact.',
     '4. Finish with: what changed (files/commands), what was verified (and its result), and what is left, if anything. Skip sections that do not apply rather than padding them out.',
+    '5. Tell source from rough work before you stage anything. Screenshots, logs, build output and scratch captures belong in the repository only when its own conventions already keep them there; otherwise leave them local and extend the ignore file. When the repository already answers a question — its ignore rules, its folder layout, what it tracks — act on that answer instead of asking it.',
   ].join('\n');
 }

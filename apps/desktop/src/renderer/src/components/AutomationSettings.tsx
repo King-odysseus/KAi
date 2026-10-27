@@ -4,6 +4,10 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
+import { UiNativeSelect } from './UiNativeSelect';
 
 type Agent = ScheduleInput['agent'];
 
@@ -180,33 +184,33 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
       </p>
       <label className="toggle-row">
         <span><strong>Check my changes and fix failures</strong><small>After a run that edits files, run the check below and send any failure back to the agent</small></span>
-        <input type="checkbox" checked={checkEnabled} onChange={(event) => { setCheckEnabled(event.target.checked); setSaved(null); }} />
+        <Checkbox checked={checkEnabled} onChange={(event) => { setCheckEnabled(event.target.checked); setSaved(null); }} />
       </label>
       <div className="field-grid">
         <label className="field">
           <span>Check command</span>
-          <input value={command} placeholder="Blank uses what KAI detects, such as npm test" onChange={(event) => { setCommand(event.target.value); setSaved(null); }} />
+          <UiTextInput value={command} placeholder="Blank uses what KAI detects, such as npm test" onChange={(event) => { setCommand(event.target.value); setSaved(null); }} />
         </label>
         <label className="field">
           <span>Automatic fix attempts</span>
-          <input type="number" min={1} max={MAX_AUTO_FIX_ROUNDS} value={rounds} onChange={(event) => { setRounds(Number(event.target.value)); setSaved(null); }} />
+          <UiTextInput type="number" min={1} max={MAX_AUTO_FIX_ROUNDS} value={rounds} onChange={(event) => { setRounds(Number(event.target.value)); setSaved(null); }} />
         </label>
       </div>
       <label className="toggle-row">
         <span><strong>Review the change before calling it done</strong><small>A second model reads the diff against your request. Uses the Prompt Guide or Direct API connection</small></span>
-        <input type="checkbox" checked={review} onChange={(event) => { setReview(event.target.checked); setSaved(null); }} />
+        <Checkbox checked={review} onChange={(event) => { setReview(event.target.checked); setSaved(null); }} />
       </label>
       <div className="settings-subsection-title"><span>Hooks</span></div>
       <p className="settings-note">One command per line, run in the project folder. A failing beforeRun hook stops the run; what it prints is given to the agent. The others only report problems.</p>
-      <label className="field"><span>Before a run</span><textarea rows={2} value={beforeRun} onChange={(event) => { setBeforeRun(event.target.value); setSaved(null); }} /></label>
-      <label className="field"><span>After a run that edited files, for example a formatter</span><textarea rows={2} value={afterEdit} onChange={(event) => { setAfterEdit(event.target.value); setSaved(null); }} /></label>
-      <label className="field"><span>After every run</span><textarea rows={2} value={afterRun} onChange={(event) => { setAfterRun(event.target.value); setSaved(null); }} /></label>
+      <label className="field"><span>Before a run</span><Textarea rows={2} value={beforeRun} onChange={(event) => { setBeforeRun(event.target.value); setSaved(null); }} /></label>
+      <label className="field"><span>After a run that edited files, for example a formatter</span><Textarea rows={2} value={afterEdit} onChange={(event) => { setAfterEdit(event.target.value); setSaved(null); }} /></label>
+      <label className="field"><span>After every run</span><Textarea rows={2} value={afterRun} onChange={(event) => { setAfterRun(event.target.value); setSaved(null); }} /></label>
       <div className="settings-subsection-title"><span>Around each tool call</span></div>
       <p className="settings-note">
         One command per line, optionally written as <code>tool-glob :: command</code>. A failing preTool hook blocks the call; a postTool hook's output is added to the result. These apply in full to KAI's own API runs. Claude Code receives whole-tool denials where its flags can express them; the other CLIs keep their own tool handling.
       </p>
-      <label className="field"><span>Before a tool call</span><textarea rows={2} value={preTool} placeholder="run_command :: npm run lint" onChange={(event) => { setPreTool(event.target.value); setSaved(null); }} /></label>
-      <label className="field"><span>After a tool call</span><textarea rows={2} value={postTool} placeholder="write_file :: npm run format" onChange={(event) => { setPostTool(event.target.value); setSaved(null); }} /></label>
+      <label className="field"><span>Before a tool call</span><Textarea rows={2} value={preTool} placeholder="run_command :: npm run lint" onChange={(event) => { setPreTool(event.target.value); setSaved(null); }} /></label>
+      <label className="field"><span>After a tool call</span><Textarea rows={2} value={postTool} placeholder="write_file :: npm run format" onChange={(event) => { setPostTool(event.target.value); setSaved(null); }} /></label>
       <div className="settings-subsection-title"><span>Permission rules</span></div>
       <p className="settings-note">
         Rules sit on top of the access mode. A base refusal is never undone; otherwise Deny beats Ask, and Ask beats Allow. Tool and path patterns accept <code>*</code> and <code>**</code>; command patterns match the beginning of a command. They are enforced in full on KAI's API runs; Claude Code receives whole-tool denials where its flags can express them, and the other CLIs keep their own tool handling.
@@ -215,24 +219,24 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
         <div className="automation-stack">
           {rules.map((rule, index) => (
             <div className="field-grid" key={rule.id}>
-              <label className="field"><span>Effect</span><select value={rule.effect} onChange={(event) => { const effect = event.target.value as PermissionRule['effect']; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, effect } : item)); setSaved(null); }}><option value="deny">Deny</option><option value="ask">Ask</option><option value="allow">Allow</option></select></label>
-              <label className="field"><span>Matches</span><select value={rule.kind} onChange={(event) => { const kind = event.target.value as RuleKind; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, kind } : item)); setSaved(null); }}><option value="tool">Tool name</option><option value="command">Command starts with</option><option value="path">Project path</option></select></label>
-              <label className="field"><span>Pattern</span><input value={rule.pattern} placeholder={rule.kind === 'tool' ? 'mcp_*' : rule.kind === 'command' ? 'git push' : 'src/**'} onChange={(event) => { const pattern = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, pattern } : item)); setSaved(null); }} /></label>
-              <label className="field"><span>Reason shown when it applies</span><input value={rule.note} placeholder="Ask before publishing" onChange={(event) => { const note = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, note } : item)); setSaved(null); }} /></label>
+              <label className="field"><span>Effect</span><UiNativeSelect value={rule.effect} onChange={(event) => { const effect = event.target.value as PermissionRule['effect']; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, effect } : item)); setSaved(null); }}><option value="deny">Deny</option><option value="ask">Ask</option><option value="allow">Allow</option></UiNativeSelect></label>
+              <label className="field"><span>Matches</span><UiNativeSelect value={rule.kind} onChange={(event) => { const kind = event.target.value as RuleKind; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, kind } : item)); setSaved(null); }}><option value="tool">Tool name</option><option value="command">Command starts with</option><option value="path">Project path</option></UiNativeSelect></label>
+              <label className="field"><span>Pattern</span><UiTextInput value={rule.pattern} placeholder={rule.kind === 'tool' ? 'mcp_*' : rule.kind === 'command' ? 'git push' : 'src/**'} onChange={(event) => { const pattern = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, pattern } : item)); setSaved(null); }} /></label>
+              <label className="field"><span>Reason shown when it applies</span><UiTextInput value={rule.note} placeholder="Ask before publishing" onChange={(event) => { const note = event.target.value; setRules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, note } : item)); setSaved(null); }} /></label>
               <div className="button-row align-start">
-                <button type="button" className="icon-button danger-button" aria-label="Remove rule" onClick={() => { setRules((current) => current.filter((_item, itemIndex) => itemIndex !== index)); setSaved(null); }}><Trash2 size={14} /></button>
+                <UiButton type="button" className="icon-button danger-button" aria-label="Remove rule" onClick={() => { setRules((current) => current.filter((_item, itemIndex) => itemIndex !== index)); setSaved(null); }}><Trash2 size={14} /></UiButton>
               </div>
             </div>
           ))}
         </div>
       )}
       <div className="button-row align-start">
-        <button type="button" className="secondary-button" onClick={() => { setRules((current) => [...current, { id: crypto.randomUUID(), effect: 'ask', kind: 'command', pattern: '', note: '' }]); setSaved(null); }}><Plus size={15} /><span>Add rule</span></button>
-        <button type="button" className="secondary-button" disabled={suggesting} title="Reads this project's own test, lint and build scripts and proposes an allow rule for each" onClick={() => void suggestRules()}><Wand2 size={15} /><span>{suggesting ? 'Looking at the project…' : 'Suggest rules from this project'}</span></button>
+        <UiButton type="button" className="secondary-button" onClick={() => { setRules((current) => [...current, { id: crypto.randomUUID(), effect: 'ask', kind: 'command', pattern: '', note: '' }]); setSaved(null); }}><Plus size={15} /><span>Add rule</span></UiButton>
+        <UiButton type="button" className="secondary-button" disabled={suggesting} title="Reads this project's own test, lint and build scripts and proposes an allow rule for each" onClick={() => void suggestRules()}><Wand2 size={15} /><span>{suggesting ? 'Looking at the project…' : 'Suggest rules from this project'}</span></UiButton>
         {suggestNote && <span className="settings-feedback" role="status">{suggestNote}</span>}
       </div>
       <div className="button-row align-start">
-        <button type="button" className="primary-button" disabled={busy} onClick={() => void save()}><Check size={16} /><span>Save automation</span></button>
+        <UiButton type="button" className="primary-button" disabled={busy} onClick={() => void save()}><Check size={16} /><span>Save automation</span></UiButton>
         {saved && <span className="settings-feedback success" role="status">{saved}</span>}
       </div>
     </div>
@@ -335,29 +339,29 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
                 {schedule.lastSummary && <small className={schedule.lastStatus === 'failed' ? 'field-error' : ''}>{schedule.lastSummary}</small>}
               </div>
               <div className="automation-row-actions">
-                <label className="toggle-inline"><input type="checkbox" checked={schedule.enabled} onChange={() => void toggle(schedule)} /><span>On</span></label>
-                <button type="button" className="secondary-button compact" disabled={working !== null} onClick={() => void runNow(schedule)}><Play size={14} /><span>{working === schedule.id ? 'Running' : 'Run now'}</span></button>
-                <button type="button" className="icon-button danger-button" aria-label={`Delete ${schedule.name}`} onClick={() => void remove(schedule)}><Trash2 size={14} /></button>
+                <label className="toggle-inline"><Checkbox checked={schedule.enabled} onChange={() => void toggle(schedule)} /><span>On</span></label>
+                <UiButton type="button" className="secondary-button compact" disabled={working !== null} onClick={() => void runNow(schedule)}><Play size={14} /><span>{working === schedule.id ? 'Running' : 'Run now'}</span></UiButton>
+                <UiButton type="button" className="icon-button danger-button" aria-label={`Delete ${schedule.name}`} onClick={() => void remove(schedule)}><Trash2 size={14} /></UiButton>
               </div>
             </li>
           ))}
         </ul>
       )}
       <div className="field-grid">
-        <label className="field"><span>Name</span><input value={name} placeholder="Nightly test run" onChange={(event) => setName(event.target.value)} /></label>
+        <label className="field"><span>Name</span><UiTextInput value={name} placeholder="Nightly test run" onChange={(event) => setName(event.target.value)} /></label>
         <label className="field"><span>Agent</span><Select value={agent} onChange={(event) => setAgent(event.target.value as Agent)}>{AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label>
         <label className="field"><span>When</span><Select value={kind} onChange={(event) => setKind(event.target.value as 'interval' | 'daily')}><option value="daily">Every day</option><option value="interval">Every N minutes</option></Select></label>
         {kind === 'daily'
-          ? <label className="field"><span>Time</span><input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
-          : <label className="field"><span>Minutes (15 or more)</span><input type="number" min={15} max={10080} value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} /></label>}
+          ? <label className="field"><span>Time</span><UiTextInput type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
+          : <label className="field"><span>Minutes (15 or more)</span><UiTextInput type="number" min={15} max={10080} value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} /></label>}
         <label className="field"><span>Access</span><Select value={autonomy} onChange={(event) => setAutonomy(event.target.value as 'plan' | 'full')}><option value="plan">Plan (read only)</option><option value="full">Full access</option></Select></label>
       </div>
-      <label className="field"><span>What should the agent do?</span><textarea rows={3} value={prompt} placeholder="Run the test suite and summarise anything failing" onChange={(event) => setPrompt(event.target.value)} /></label>
-      <label className="toggle-row"><span><strong>Use the direct API instead of the agent CLI</strong><small>Runs on the model chosen under Settings, Direct API</small></span><input type="checkbox" checked={useApi} onChange={(event) => setUseApi(event.target.checked)} /></label>
-      <label className="toggle-row"><span><strong>Sign in directly</strong><small>Off sends the run through the Universal Proxy</small></span><input type="checkbox" checked={direct} onChange={(event) => setDirect(event.target.checked)} /></label>
+      <label className="field"><span>What should the agent do?</span><Textarea rows={3} value={prompt} placeholder="Run the test suite and summarise anything failing" onChange={(event) => setPrompt(event.target.value)} /></label>
+      <label className="toggle-row"><span><strong>Use the direct API instead of the agent CLI</strong><small>Runs on the model chosen under Settings, Direct API</small></span><Checkbox checked={useApi} onChange={(event) => setUseApi(event.target.checked)} /></label>
+      <label className="toggle-row"><span><strong>Sign in directly</strong><small>Off sends the run through the Universal Proxy</small></span><Checkbox checked={direct} onChange={(event) => setDirect(event.target.checked)} /></label>
       {autonomy === 'full' && <p className="settings-note">Full access lets this schedule edit files and run commands with nobody watching. Spend is still capped per run.</p>}
       <div className="button-row align-start">
-        <button type="button" className="primary-button" disabled={!ready || working !== null} onClick={() => void add()}><Plus size={16} /><span>Add schedule</span></button>
+        <UiButton type="button" className="primary-button" disabled={!ready || working !== null} onClick={() => void add()}><Plus size={16} /><span>Add schedule</span></UiButton>
       </div>
     </div>
   );
@@ -470,9 +474,9 @@ function EvalsCard({ projectId }: { projectId: string }): ReactNode {
                 <Select aria-label={`Second agent to compare on ${item.name}`} value={comparisonAgents[item.id] ?? ((agents[item.id] ?? 'claude') === 'claude' ? 'codex' : 'claude')} onChange={(event) => setComparisonAgents({ ...comparisonAgents, [item.id]: event.target.value as Agent })}>
                   {AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </Select>
-                <button type="button" className="secondary-button compact" disabled={running !== null} onClick={() => void run(item.id)}><Play size={14} /><span>{running === item.id ? 'Running' : 'Run'}</span></button>
-                <button type="button" className="secondary-button compact" disabled={running !== null} onClick={() => void compare(item.id)}><span>{running === item.id ? 'Comparing' : 'Compare both'}</span></button>
-                <button type="button" className="icon-button danger-button" aria-label={`Delete ${item.name}`} onClick={() => void remove(item.id, item.name)}><Trash2 size={14} /></button>
+                <UiButton type="button" className="secondary-button compact" disabled={running !== null} onClick={() => void run(item.id)}><Play size={14} /><span>{running === item.id ? 'Running' : 'Run'}</span></UiButton>
+                <UiButton type="button" className="secondary-button compact" disabled={running !== null} onClick={() => void compare(item.id)}><span>{running === item.id ? 'Comparing' : 'Compare both'}</span></UiButton>
+                <UiButton type="button" className="icon-button danger-button" aria-label={`Delete ${item.name}`} onClick={() => void remove(item.id, item.name)}><Trash2 size={14} /></UiButton>
               </div>
               {comparison?.caseId === item.id && (
                 <div className="eval-comparison" aria-label={`Comparison for ${item.name}`}>
@@ -507,12 +511,12 @@ function EvalsCard({ projectId }: { projectId: string }): ReactNode {
         </table>
       )}
       <div className="field-grid">
-        <label className="field"><span>Name</span><input value={name} placeholder="Fix the date parser" onChange={(event) => setName(event.target.value)} /></label>
-        <label className="field"><span>Check command (exit 0 passes)</span><input value={check} placeholder="npm test" onChange={(event) => setCheck(event.target.value)} /></label>
+        <label className="field"><span>Name</span><UiTextInput value={name} placeholder="Fix the date parser" onChange={(event) => setName(event.target.value)} /></label>
+        <label className="field"><span>Check command (exit 0 passes)</span><UiTextInput value={check} placeholder="npm test" onChange={(event) => setCheck(event.target.value)} /></label>
       </div>
-      <label className="field"><span>The task</span><textarea rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
+      <label className="field"><span>The task</span><Textarea rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
       <div className="button-row align-start">
-        <button type="button" className="primary-button" disabled={!name.trim() || !prompt.trim() || !check.trim()} onClick={() => void save()}><Plus size={16} /><span>Save from the current commit</span></button>
+        <UiButton type="button" className="primary-button" disabled={!name.trim() || !prompt.trim() || !check.trim()} onClick={() => void save()}><Plus size={16} /><span>Save from the current commit</span></UiButton>
       </div>
     </div>
   );

@@ -46,8 +46,12 @@ import type {
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { TeamPanel } from './TeamPanel';
+import { Pill } from './Pill';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 export function ProjectsView({
   projects,
   activeProjectId,
@@ -69,10 +73,10 @@ export function ProjectsView({
         title="Projects"
         detail={`${projects.length} local ${projects.length === 1 ? 'project' : 'projects'}`}
       >
-        <button type="button" className="primary-button" onClick={onChoose}>
+        <UiButton type="button" className="primary-button" onClick={onChoose}>
           <Plus size={16} />
           <span>Open project</span>
-        </button>
+        </UiButton>
       </PageHeader>
       <div className="project-grid">
         {projects.map((project) => (
@@ -81,21 +85,21 @@ export function ProjectsView({
             <div className="project-card-copy">
               <div className="project-card-title">
                 <strong>{project.name}</strong>
-                {project.id === activeProjectId && <span className="project-active-badge">Active</span>}
+                {project.id === activeProjectId && <Pill tone="info">Active</Pill>}
               </div>
               <span className="mono truncate">{project.path}</span>
               <small>Last opened {relativeTime(project.lastOpenedAt)}</small>
             </div>
             <div className="project-card-actions">
-              <button type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}>
+              <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}>
                 <MessageSquare size={14} />
                 <span>Composer</span>
-              </button>
-              <button type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}>
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}>
                 <Code2 size={14} />
                 <span>Editor</span>
-              </button>
-              <button
+              </UiButton>
+              <UiButton
                 type="button"
                 className="icon-button"
                 onClick={() => onOpenInNewWindow(project.id)}
@@ -103,8 +107,8 @@ export function ProjectsView({
                 aria-label={`Open ${project.name} in a new window`}
               >
                 <AppWindow size={15} />
-              </button>
-              <button
+              </UiButton>
+              <UiButton
                 type="button"
                 className="icon-button"
                 onClick={() => onRemove(project.id)}
@@ -112,7 +116,7 @@ export function ProjectsView({
                 aria-label="Remove project"
               >
                 <Trash2 size={15} />
-              </button>
+              </UiButton>
             </div>
           </article>
         ))}
@@ -156,25 +160,25 @@ export function ServiceView({
   return (
     <div className="page-view">
       <PageHeader title={title} detail={service.detail}>
-        <button type="button" className="secondary-button" onClick={onConfigure}>
+        <UiButton type="button" className="secondary-button" onClick={onConfigure}>
           <Settings size={15} />
           <span>Configure</span>
-        </button>
+        </UiButton>
         {running ? (
-          <button type="button" className="secondary-button" disabled={busy} onClick={onStop}>
+          <UiButton type="button" className="secondary-button" disabled={busy} onClick={onStop}>
             <Square size={13} />
             <span>Stop</span>
-          </button>
+          </UiButton>
         ) : (
-          <button type="button" className="primary-button" disabled={busy} onClick={onStart}>
+          <UiButton type="button" className="primary-button" disabled={busy} onClick={onStart}>
             <Play size={14} />
             <span>Start</span>
-          </button>
+          </UiButton>
         )}
-        <button type="button" className="secondary-button" disabled={busy || !running} onClick={onRestart}>
+        <UiButton type="button" className="secondary-button" disabled={busy || !running} onClick={onRestart}>
           <RotateCcw size={14} />
           <span>Restart</span>
-        </button>
+        </UiButton>
       </PageHeader>
       <div className="service-hero">
         <div className="service-icon">
@@ -198,7 +202,7 @@ export function ServiceView({
         <Metric label="Updated" value={relativeTime(service.updatedAt)} icon={<Clock3 size={15} />} />
       </div>
       <div className="service-access-actions">
-        <button
+        <UiButton
           type="button"
           className="secondary-button"
           disabled={busy || !service.tokenStored}
@@ -206,11 +210,11 @@ export function ServiceView({
         >
           <Copy size={14} />
           <span>Copy access token</span>
-        </button>
-        <button type="button" className="secondary-button" disabled={busy} onClick={onRotateToken}>
+        </UiButton>
+        <UiButton type="button" className="secondary-button" disabled={busy} onClick={onRotateToken}>
           <RefreshCw size={14} />
           <span>Rotate access token</span>
-        </button>
+        </UiButton>
       </div>
       {children}
     </div>
@@ -517,13 +521,13 @@ export function WorkflowsView({
   return (
     <div className="page-view">
       <PageHeader title="Workflows" detail="Build, save, and run sequential multi-agent work">
-        <button type="button" className="secondary-button" disabled={busy || running || !steps.some((step) => step.prompt.trim())} onClick={() => void saveTemplate()}><Save size={15} /><span>Save template</span></button>
+        <UiButton type="button" className="secondary-button" disabled={busy || running || !steps.some((step) => step.prompt.trim())} onClick={() => void saveTemplate()}><Save size={15} /><span>Save template</span></UiButton>
         {running ? (
-          <button type="button" className="secondary-button" disabled={busy} onClick={() => void stopWorkflow()}><Square size={13} /><span>Stop</span></button>
+          <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void stopWorkflow()}><Square size={13} /><span>Stop</span></UiButton>
         ) : resumable ? (
-          <button type="button" className="secondary-button" disabled={busy} onClick={() => void resumeWorkflow()}><RotateCcw size={14} /><span>Resume</span></button>
+          <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void resumeWorkflow()}><RotateCcw size={14} /><span>Resume</span></UiButton>
         ) : null}
-        <button type="button" className="primary-button" disabled={busy || running || !activeProject || !steps.some((step) => step.prompt.trim())} onClick={() => void startWorkflow()}><Play size={15} /><span>{running ? 'Running' : 'Run workflow'}</span></button>
+        <UiButton type="button" className="primary-button" disabled={busy || running || !activeProject || !steps.some((step) => step.prompt.trim())} onClick={() => void startWorkflow()}><Play size={15} /><span>{running ? 'Running' : 'Run workflow'}</span></UiButton>
       </PageHeader>
       {error && <div className="rules-error"><span>{error}</span></div>}
       {blockedStep?.verdict && (
@@ -536,8 +540,8 @@ export function WorkflowsView({
             {blockedStep.output && <details><summary>Read the full review</summary><pre>{blockedStep.output}</pre></details>}
           </div>
           <div className="team-decision-actions">
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => void stopWorkflow()}><Square size={13} /><span>Stop the job</span></button>
-            <button type="button" className="primary-button" disabled={busy} onClick={() => void resumeWorkflow()}><Play size={14} /><span>Continue anyway</span></button>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void stopWorkflow()}><Square size={13} /><span>Stop the job</span></UiButton>
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => void resumeWorkflow()}><Play size={14} /><span>Continue anyway</span></UiButton>
           </div>
         </section>
       )}
@@ -563,10 +567,10 @@ export function WorkflowsView({
       {runs.length > 0 && (
         <div className="workflow-run-list" aria-label="Workflow runs">
           {runs.slice(0, 8).map((run) => (
-            <button key={run.workflow.id} type="button" className={run.workflow.id === activeRunId ? 'active' : ''} onClick={() => setActiveRunId(run.workflow.id)}>
+            <UiButton key={run.workflow.id} type="button" className={run.workflow.id === activeRunId ? 'active' : ''} onClick={() => setActiveRunId(run.workflow.id)}>
               <span className="truncate">{run.workflow.title}</span>
               <small className={`workflow-status ${run.workflow.status}`}>{run.workflow.status}</small>
-            </button>
+            </UiButton>
           ))}
         </div>
       )}
@@ -574,13 +578,13 @@ export function WorkflowsView({
         <section className="workflow-styles" aria-label="Multi-agent work styles">
           <div><strong>Choose a work style</strong><small>KAI assigns clear roles; you can edit every step before running.</small></div>
           <div className="workflow-style-options">
-            {WORKFLOW_STYLES.map((style) => <button key={style.id} type="button" disabled={running} onClick={() => applyWorkflowStyle(style.id)}><strong>{style.label}</strong><small>{style.detail}</small></button>)}
+            {WORKFLOW_STYLES.map((style) => <UiButton key={style.id} type="button" disabled={running} onClick={() => applyWorkflowStyle(style.id)}><strong>{style.label}</strong><small>{style.detail}</small></UiButton>)}
           </div>
         </section>
         <div className="workflow-builder-head">
           <label className="workflow-field" htmlFor="workflow-title">
             <span>Workflow name</span>
-            <input id="workflow-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Untitled workflow" />
+            <UiTextInput id="workflow-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Untitled workflow" />
           </label>
           <label className="workflow-field" htmlFor="workflow-template">
             <span>Saved template</span>
@@ -614,19 +618,19 @@ export function WorkflowsView({
           <label className="workflow-field" htmlFor="workflow-execution"><span>Default execution</span><Select id="workflow-execution" value={execution} onChange={(event) => setExecution(event.target.value as ExecutionMode)}><option value="cli">CLI</option><option value="api">Direct API / Proxy</option></Select></label>
           <label className="workflow-field" htmlFor="workflow-route"><span>Default route</span><Select id="workflow-route" value={route} disabled={execution !== 'api'} onChange={(event) => setRoute(event.target.value as RouteMode)}><option value="direct">Direct</option><option value="proxy">Universal Proxy</option></Select></label>
           <label className="workflow-field" htmlFor="workflow-autonomy"><span>Autonomy</span><Select id="workflow-autonomy" value={autonomy} onChange={(event) => setAutonomy(event.target.value as AutonomyMode)}><option value="plan">Plan</option><option value="ask">Ask</option><option value="autoEdit">Auto-edit</option><option value="full">Full control</option><option value="custom">Custom</option></Select></label>
-          <label className="workflow-field" htmlFor="workflow-model"><span>Model override</span><input id="workflow-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider or CLI model" /></label>
+          <label className="workflow-field" htmlFor="workflow-model"><span>Model override</span><UiTextInput id="workflow-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Provider or CLI model" /></label>
         </div>
         <div className="workflow-loop-panel">
           <label className="toggle-row workflow-loop-toggle">
             <span><strong>Loop until the check passes</strong><small>Repeat the workflow, run a check, then stop at the round, cost, or time limit.</small></span>
-            <input type="checkbox" checked={loopEnabled} disabled={running} onChange={(event) => setLoopEnabled(event.target.checked)} />
+            <Checkbox checked={loopEnabled} disabled={running} onChange={(event) => setLoopEnabled(event.target.checked)} />
           </label>
           {loopEnabled && (
             <div className="workflow-loop-fields">
-              <label className="workflow-field"><span>Maximum rounds</span><input type="number" min={1} max={20} value={loopRounds} onChange={(event) => setLoopRounds(clampNumber(event.target.value, 1, 20, 3))} /></label>
-              <label className="workflow-field"><span>Maximum cost (USD, 0 = off)</span><input type="number" min={0} max={10000} step="0.01" value={loopCost} onChange={(event) => setLoopCost(clampNumber(event.target.value, 0, 10_000, 0))} /></label>
-              <label className="workflow-field"><span>Maximum minutes</span><input type="number" min={1} max={1440} value={loopMinutes} onChange={(event) => setLoopMinutes(clampNumber(event.target.value, 1, 1440, 30))} /></label>
-              <label className="workflow-field workflow-loop-check"><span>Check command</span><input value={loopCheck} onChange={(event) => setLoopCheck(event.target.value)} placeholder="npm test" /></label>
+              <label className="workflow-field"><span>Maximum rounds</span><UiTextInput type="number" min={1} max={20} value={loopRounds} onChange={(event) => setLoopRounds(clampNumber(event.target.value, 1, 20, 3))} /></label>
+              <label className="workflow-field"><span>Maximum cost (USD, 0 = off)</span><UiTextInput type="number" min={0} max={10000} step="0.01" value={loopCost} onChange={(event) => setLoopCost(clampNumber(event.target.value, 0, 10_000, 0))} /></label>
+              <label className="workflow-field"><span>Maximum minutes</span><UiTextInput type="number" min={1} max={1440} value={loopMinutes} onChange={(event) => setLoopMinutes(clampNumber(event.target.value, 1, 1440, 30))} /></label>
+              <label className="workflow-field workflow-loop-check"><span>Check command</span><UiTextInput value={loopCheck} onChange={(event) => setLoopCheck(event.target.value)} placeholder="npm test" /></label>
             </div>
           )}
           {activeRun?.workflow.teamCheck && (
@@ -682,7 +686,7 @@ export function WorkflowsView({
               </div>
               <label className="workflow-field workflow-prompt-field">
                 <span>Prompt</span>
-                <textarea aria-label={`Step ${index + 1} prompt`} value={step.prompt} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, prompt: event.target.value } : item))} placeholder={`What should ${step.agent} do?`} rows={3} />
+                <Textarea aria-label={`Step ${index + 1} prompt`} value={step.prompt} onChange={(event) => setSteps((current) => current.map((item) => item.id === step.id ? { ...item, prompt: event.target.value } : item))} placeholder={`What should ${step.agent} do?`} rows={3} />
               </label>
               <div className="workflow-step-state">
                 <span className={`workflow-status ${step.status}`}>{step.status}</span>
@@ -692,14 +696,14 @@ export function WorkflowsView({
                 {step.error && <small className="workflow-step-error" title={step.error}>{step.error}</small>}
                 {step.output && <small className="workflow-step-output" title={step.output}>{step.output.slice(0, 180)}</small>}
               </div>
-              <button type="button" className="icon-button compact workflow-remove" aria-label={`Remove step ${index + 1}`} title="Remove step" disabled={running || steps.length === 1} onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id))}><Trash2 size={15} /></button>
+              <UiButton type="button" className="icon-button compact workflow-remove" aria-label={`Remove step ${index + 1}`} title="Remove step" disabled={running || steps.length === 1} onClick={() => setSteps((current) => current.filter((item) => item.id !== step.id))}><Trash2 size={15} /></UiButton>
             </div>
             );
           })}
         </div>
         <div className="workflow-builder-footer">
           <span>{steps.length} {steps.length === 1 ? 'step' : 'steps'} in this workflow</span>
-          <button type="button" className="secondary-button" disabled={running} onClick={addStep}><Plus size={14} /><span>Add step</span></button>
+          <UiButton type="button" className="secondary-button" disabled={running} onClick={addStep}><Plus size={14} /><span>Add step</span></UiButton>
         </div>
       </div>
     </div>
@@ -736,9 +740,9 @@ export function HistoryView({
   return (
     <div className="page-view">
       <PageHeader title="History" detail={`${conversations.length} conversations stored on this machine`}>
-        <label className="toggle-row history-archive-filter"><span><strong>Show archived</strong><small>Include archived conversations</small></span><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /></label>
+        <label className="toggle-row history-archive-filter"><span><strong>Show archived</strong><small>Include archived conversations</small></span><Checkbox checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /></label>
       </PageHeader>
-      <label className="input-with-icon history-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" /></label>
+      <label className="input-with-icon history-search"><Search size={15} /><UiTextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" /></label>
       <div className="history-table">
         <div className="history-head">
           <span>Thread</span>
@@ -751,20 +755,20 @@ export function HistoryView({
             key={conversation.id}
             className={`history-row ${conversation.id === activeId ? 'active' : ''}`}
           >
-            <button type="button" className="history-open" onClick={() => onOpen(conversation.id)}><span className="truncate">{conversation.title}</span></button>
+            <UiButton type="button" className="history-open" onClick={() => onOpen(conversation.id)}><span className="truncate">{conversation.title}</span></UiButton>
             <span className="truncate">{projects.find((project) => project.id === conversation.projectId)?.name ?? 'Unassigned'}</span>
             <span>{relativeTime(conversation.updatedAt)}</span>
             <span className="history-actions">
-              <button type="button" title="Rename" onClick={() => { void promptDialog({ title: 'Rename conversation', label: 'Conversation title', initialValue: conversation.title, confirmLabel: 'Rename' }).then((next) => { if (next?.trim()) onRename(conversation.id, next.trim()); }); }}><Pencil size={13} /></button>
-              <button type="button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onArchive(conversation.id, !conversation.archived)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}</button>
-              <button type="button" title="Copy conversation text" onClick={() => void (async () => {
+              <UiButton type="button" title="Rename" onClick={() => { void promptDialog({ title: 'Rename conversation', label: 'Conversation title', initialValue: conversation.title, confirmLabel: 'Rename' }).then((next) => { if (next?.trim()) onRename(conversation.id, next.trim()); }); }}><Pencil size={13} /></UiButton>
+              <UiButton type="button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onArchive(conversation.id, !conversation.archived)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}</UiButton>
+              <UiButton type="button" title="Copy conversation text" onClick={() => void (async () => {
                 const record = '__summary' in conversation
                   ? await window.kaiDesktop.getConversation(conversation.id).then((response) => response.ok ? response.data : null)
                   : conversation;
                 if (record) await navigator.clipboard?.writeText(record.turns.map((turn) => `${turn.role === 'user' ? 'You' : 'KAI'}:\n${turn.text}`).join('\n\n'));
-              })()}><Copy size={13} /></button>
-              <button type="button" title="Branch conversation" onClick={() => onFork(conversation.id)}><GitFork size={13} /></button>
-              <button type="button" title="Delete" onClick={() => { void confirmDialog({ title: 'Delete conversation?', detail: `Delete "${conversation.title}"?`, confirmLabel: 'Delete', destructive: true }).then((confirmed) => { if (confirmed) onDelete(conversation.id); }); }}><Trash2 size={13} /></button>
+              })()}><Copy size={13} /></UiButton>
+              <UiButton type="button" title="Branch conversation" onClick={() => onFork(conversation.id)}><GitFork size={13} /></UiButton>
+              <UiButton type="button" title="Delete" onClick={() => { void confirmDialog({ title: 'Delete conversation?', detail: `Delete "${conversation.title}"?`, confirmLabel: 'Delete', destructive: true }).then((confirmed) => { if (confirmed) onDelete(conversation.id); }); }}><Trash2 size={13} /></UiButton>
             </span>
           </div>
         ))}

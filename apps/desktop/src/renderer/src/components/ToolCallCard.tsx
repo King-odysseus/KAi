@@ -2,6 +2,7 @@ import { Check, ChevronDown, FileDiff, FilePlus, Globe, Loader2, Minus, MoveRigh
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { describeToolCall, renderToolCallPreview, type ToolCallPreview } from '../tool-call-preview';
+import { UiButton } from './UiButton';
 
 type ToolCallEvent = Extract<PersistedEvent, { type: 'tool.call' }>;
 
@@ -58,9 +59,9 @@ export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded,
   return (
     <section className={`tool-call-card ${preview.kind}${failed ? ' failed' : ''}`}>
       {hasBody ? (
-        <button type="button" className="tool-call-head" aria-expanded={expanded} title={expanded ? 'Hide the change' : 'Show the change'} onClick={() => setOverride(!expanded)}>
+        <UiButton type="button" className="tool-call-head" aria-expanded={expanded} title={expanded ? 'Hide the change' : 'Show the change'} onClick={() => setOverride(!expanded)}>
           {header}
-        </button>
+        </UiButton>
       ) : (
         <div className="tool-call-head">{header}</div>
       )}

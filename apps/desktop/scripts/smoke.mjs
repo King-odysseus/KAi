@@ -155,7 +155,7 @@ try {
   await page.screenshot({ path: path.join(outputDirectory, 'workspace-1440x920.png') });
   if (usesAgentProject) await verifyCodeLearningWorkspace(electronApp, page);
 
-  await page.getByRole('button', { name: 'Usage' }).click();
+  await navigateTo(page, 'Usage');
   await page.getByRole('heading', { name: 'Usage', level: 1 }).waitFor();
   await page.getByText('Budget limits').waitFor();
   await assertNoHorizontalOverflow(page);
@@ -166,7 +166,7 @@ try {
   await page.screenshot({ path: path.join(outputDirectory, 'usage-960x640.png') });
   await resizeWindow(electronApp, 1440, 920);
 
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await navigateTo(page, 'Settings');
   await page.getByRole('heading', { name: 'Settings' }).waitFor();
   // Settings is split into categories; the vault status sits with the connections, Overwatch with the services.
   await openSettingsCategory(page, 'Connections and models');
@@ -202,7 +202,7 @@ try {
   await assertControlsDoNotWrap(page, 'settings-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
-  await page.getByRole('button', { name: 'Workflows' }).click();
+  await navigateTo(page, 'Workflows');
   await page.getByRole('heading', { name: 'Workflows', level: 1 }).waitFor();
   await page.getByLabel('Step 1 agent').waitFor();
   await page.getByLabel('Step 1 prompt').waitFor();
@@ -216,7 +216,7 @@ try {
   await page.getByRole('button', { name: 'Remove step 2' }).click();
   await page.getByLabel('Step 2 prompt').waitFor({ state: 'detached' });
 
-  await page.getByRole('button', { name: 'History' }).click();
+  await navigateTo(page, 'History');
   await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
   await assertPageContentFillsWidth(page, '.history-search');
   await assertPageContentFillsWidth(page, '.history-table');
@@ -225,21 +225,21 @@ try {
 
   const settingsMinimumSize = await resizeWindow(electronApp, 960, 640);
   assertSize(settingsMinimumSize, 960, 640);
-  await page.getByRole('button', { name: 'Workflows' }).click();
+  await navigateTo(page, 'Workflows');
   await page.getByRole('heading', { name: 'Workflows', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
   await assertPageContentFillsWidth(page, '.workflow-builder');
   await assertControlsDoNotWrap(page, 'workflows-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'workflows-960x640.png') });
 
-  await page.getByRole('button', { name: 'History' }).click();
+  await navigateTo(page, 'History');
   await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
   await assertPageContentFillsWidth(page, '.history-search');
   await assertPageContentFillsWidth(page, '.history-table');
   await assertControlsDoNotWrap(page, 'history-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'history-960x640.png') });
 
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await navigateTo(page, 'Settings');
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
   await assertPageContentFillsWidth(page, '.settings-categories');
@@ -249,7 +249,7 @@ try {
   await resizeWindow(electronApp, 1440, 920);
   await verifyControlsOnEveryPage(page, '1440x920');
 
-  await page.getByRole('button', { name: 'Workspace' }).click();
+  await navigateTo(page, 'Workspace');
   await page.getByRole('button', { name: 'Show context panel' }).waitFor();
   if (await page.locator('.context-panel').count() > 0) {
     throw new Error('The context panel should start minimised.');
@@ -294,7 +294,9 @@ async function verifyNavigationAndSetupLayout(page) {
     }
   }
   const rail = page.locator('.nav-rail');
-  await page.getByRole('button', { name: 'Show navigation labels' }).click();
+  if (await page.getByRole('button', { name: 'Show navigation labels' }).isVisible()) {
+    await page.getByRole('button', { name: 'Show navigation labels' }).click();
+  }
   if (!await rail.getByText('Workspace', { exact: true }).isVisible()) {
     throw new Error('Expanding navigation did not reveal page labels.');
   }
@@ -307,6 +309,7 @@ async function verifyNavigationAndSetupLayout(page) {
   if ((await rail.boundingBox())?.width > 80) {
     throw new Error('Navigation did not return to its compact width.');
   }
+  await page.getByRole('button', { name: 'Show navigation labels' }).click();
 }
 
 async function verifyLiveAgent(page) {
@@ -487,7 +490,7 @@ async function verifyCodeLearningWorkspace(application, page) {
     const settings = await page.evaluate((baseUrl) => window.kaiDesktop.updateSettings({ learningTutor: { enabled: true, provider: 'openai', model: 'smoke-api-model', baseUrl, credentialId: 'provider.openai' } }), directApiFixture.baseUrl);
     if (!settings.ok) throw new Error(settings.error.message);
   }
-  await page.getByRole('button', { name: 'Learn: Learn & Code' }).click();
+  await navigateTo(page, 'Learn & Code');
   await page.locator('.code-view').waitFor();
   await page.locator('.code-tree-item').getByText('AGENTS.md', { exact: true }).click();
   await page.locator('.learning-panel').waitFor();
@@ -560,14 +563,20 @@ async function verifyCommandPalette(page) {
 
 /** Opens every page in the navigation rail and checks that none of its controls wrap their text. */
 async function verifyControlsOnEveryPage(page, size) {
-  const labels = await page.locator('.nav-rail button[aria-label]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+  const labels = ['Workspace', 'Project Studio', 'Tasks', 'Project Graph', 'Workflows', 'History', 'Learn & Code', 'Terminal Commands', 'Projects', 'Git', 'C1 Brain', 'Execution Rules', 'Universal Proxy', 'Usage', 'Operations', 'Settings'];
   for (const label of labels) {
-    await page.getByRole('button', { name: label, exact: true }).click();
+    await navigateTo(page, label);
     await page.waitForTimeout(400);
     await assertControlsDoNotWrap(page, `${label} at ${size}`);
     await assertTextIsNotClipped(page, `${label} at ${size}`);
   }
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
+}
+
+async function navigateTo(page, label) {
+  const rail = page.locator('.nav-rail');
+  const target = label.includes(': ') ? label : `: ${label}`;
+  await rail.locator(`button.nav-button[aria-label$="${target}"]`).click();
 }
 
 async function selectMenuOption(page, triggerLabel, optionName) {
@@ -1292,6 +1301,7 @@ async function resizeWindow(application, width, height) {
     ({ BrowserWindow }, size) => {
       const window = BrowserWindow.getAllWindows()[0];
       if (!window) throw new Error('KAI desktop window was not found.');
+      if (window.isMaximized()) window.unmaximize();
       window.setSize(size.width, size.height);
       return window.getSize();
     },

@@ -2,6 +2,9 @@ import { ArrowRight, Brain, Check, Circle, FolderOpen, GitPullRequest, Graduatio
 import type { FormEvent, ReactNode } from 'react';
 import { useState } from 'react';
 import type { SetupCheck, SetupGuideAnswer, SetupStatus } from '@kai/contracts';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
+import { Modal } from 'flowbite-react';
 
 export function SetupPanel({
   status,
@@ -53,22 +56,22 @@ export function SetupPanel({
     }
   }
   return (
-    <div className="setup-overlay">
-      <section className="setup-panel" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+    <Modal show size="4xl" dismissible={false} aria-labelledby="setup-title">
+      <section className="setup-panel">
         <header className="setup-head">
           <div>
             <span className="eyebrow">Welcome & reconfigure</span>
             <h2 id="setup-title">Set up KAI your way</h2>
             <p>{ready} of {status.checks.length} checks ready. Start with a local agent or API, then add optional learning, GitHub, memory, and routing when useful.</p>
           </div>
-          <button type="button" className="icon-button compact" aria-label="Set up later" onClick={onDismiss}>
+          <UiButton type="button" className="icon-button compact" aria-label="Set up later" onClick={onDismiss}>
             <X size={15} />
-          </button>
+          </UiButton>
         </header>
         <div className="setup-guide-toggle">
-          <button type="button" className="secondary-button" onClick={toggleGuide} aria-expanded={guideOpen}>
+          <UiButton type="button" className="secondary-button" onClick={toggleGuide} aria-expanded={guideOpen}>
             <GraduationCap size={14} /><span>{guideOpen ? 'Hide KAI Guide' : 'Turn on KAI Guide'}</span>
-          </button>
+          </UiButton>
           <span>Ask questions about KAI and get step-by-step help.</span>
         </div>
         {guideOpen && (
@@ -87,15 +90,15 @@ export function SetupPanel({
                   ))}
                 </div>
                 <form className="setup-guide-form" onSubmit={(event) => void askGuide(event)}>
-                  <input aria-label="Ask KAI Guide" value={guideQuestion} maxLength={1_000} onChange={(event) => setGuideQuestion(event.target.value)} placeholder="What do you want help with?" />
-                  <button type="submit" className="primary-button" disabled={guideBusy || !guideQuestion.trim()}>{guideBusy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}<span>{guideBusy ? 'Thinking' : 'Ask'}</span></button>
+                  <UiTextInput aria-label="Ask KAI Guide" value={guideQuestion} maxLength={1_000} onChange={(event) => setGuideQuestion(event.target.value)} placeholder="What do you want help with?" />
+                  <UiButton type="submit" className="primary-button" disabled={guideBusy || !guideQuestion.trim()}>{guideBusy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}<span>{guideBusy ? 'Thinking' : 'Ask'}</span></UiButton>
                 </form>
                 {guideError && <p className="setup-guide-error" role="alert">{guideError}</p>}
               </>
             ) : (
               <>
                 <p>{status.checks.find((check) => check.id === 'tutor')?.detail ?? 'Set up the Learning Tutor connection to ask questions.'}</p>
-                <button type="button" className="secondary-button align-start" disabled={busy} onClick={() => onAction('open_tutor')}><GraduationCap size={14} /><span>Set up Learning Tutor</span></button>
+                <UiButton type="button" className="secondary-button align-start" disabled={busy} onClick={() => onAction('open_tutor')}><GraduationCap size={14} /><span>Set up Learning Tutor</span></UiButton>
                 <p className="setup-guide-hint">You can still use the setup checklist below. The Guide never asks for a key in chat; save it in Settings, where KAI stores it in the system credential vault.</p>
               </>
             )}
@@ -112,24 +115,24 @@ export function SetupPanel({
                 <span>{check.detail}</span>
               </div>
               {check.action && (
-                <button type="button" className="secondary-button" disabled={busy} onClick={() => onAction(check.action!)}>
+                <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => onAction(check.action!)}>
                   {setupActionIcon(check.action)}
                   <span>{setupActionLabel(check.action, check)}</span>
-                </button>
+                </UiButton>
               )}
               {check.status === 'ready' && <span className="setup-ready-label">Ready</span>}
             </article>
           ))}
         </div>
         <footer className="setup-footer">
-          <button type="button" className="secondary-button" disabled={busy} onClick={onDismiss}>Set up later</button>
-          <button type="button" className="primary-button" disabled={busy || blocked} onClick={onComplete}>
+          <UiButton type="button" className="secondary-button" disabled={busy} onClick={onDismiss}>Set up later</UiButton>
+          <UiButton type="button" className="primary-button" disabled={busy || blocked} onClick={onComplete}>
             <Check size={15} />
             <span>{blocked ? 'Finish required checks first' : 'Finish setup'}</span>
-          </button>
+          </UiButton>
         </footer>
       </section>
-    </div>
+    </Modal>
   );
 }
 

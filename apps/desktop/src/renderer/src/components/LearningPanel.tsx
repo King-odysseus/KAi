@@ -52,6 +52,9 @@ import { projectLessons } from './learning-path';
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 interface LearningPanelProps {
   projectFiles: string[];
   onReference: (filePath: string, startLine?: number, endLine?: number) => void;
@@ -288,8 +291,8 @@ export function LearningPanel({
           <div><strong>Learning Mode</strong><small>{overallScore}% local mastery signal</small></div>
         </div>
         <div className="learning-panel-head-actions">
-          <button type="button" className="secondary-button learning-focus-toggle" aria-pressed={focus} onClick={() => { setFocus(!focus); setTab('tutor'); setComposerOpen(true); }}>{focus ? 'Exit focus' : 'Focus'}</button>
-          <button
+          <UiButton type="button" className="secondary-button learning-focus-toggle" aria-pressed={focus} onClick={() => { setFocus(!focus); setTab('tutor'); setComposerOpen(true); }}>{focus ? 'Exit focus' : 'Focus'}</UiButton>
+          <UiButton
             type="button"
             className="icon-button compact"
             aria-label={controlsOpen ? 'Collapse learning controls' : 'Expand learning controls'}
@@ -299,10 +302,10 @@ export function LearningPanel({
             onClick={() => setControlsOpen((current) => !current)}
           >
             {controlsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-          <button type="button" className="icon-button compact" aria-label="Close learning tutor" title="Close learning tutor" onClick={onClose}>
+          </UiButton>
+          <UiButton type="button" className="icon-button compact" aria-label="Close learning tutor" title="Close learning tutor" onClick={onClose}>
             <PanelRightClose size={14} />
-          </button>
+          </UiButton>
         </div>
       </div>
 
@@ -312,7 +315,7 @@ export function LearningPanel({
             <div className="learning-controls" id="learning-controls">
               <div className="learning-assistance" role="group" aria-label="Assistance level">
                 {assistanceOptions.map((option) => (
-                  <button
+                  <UiButton
                     key={option.id}
                     type="button"
                     className={teachingModes.includes(option.id) ? 'active' : ''}
@@ -326,13 +329,12 @@ export function LearningPanel({
                     }}
                   >
                     <span>{teachingModes.includes(option.id) && <CheckCircle2 size={11} aria-hidden="true" />}{option.label}</span>
-                  </button>
+                  </UiButton>
                 ))}
               </div>
 
               <label className="learning-inline-toggle" title="Copilot only: pause typing or press Alt + Backslash for ghost text. Tab accepts; Escape dismisses. Combined teaching modes keep completion off.">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={assistance === 'copilot' && inlineSuggestions}
                   disabled={assistance !== 'copilot'}
                   onChange={(event) => onPreferences(assistance, event.target.checked)}
@@ -342,7 +344,7 @@ export function LearningPanel({
 
               <div className="learning-actions">
                 {actionOptions.map((option) => (
-                  <button
+                  <UiButton
                     key={option.id}
                     type="button"
                     disabled={!readiness?.ready || Boolean(busy) || (!selection && option.id !== 'next-step') || (option.id === 'complete' && assistance !== 'copilot')}
@@ -352,7 +354,7 @@ export function LearningPanel({
                   >
                     {busy === option.id ? <LoaderCircle className="spin" size={14} /> : option.icon}
                     <span className="visually-hidden">{option.label}</span>
-                  </button>
+                  </UiButton>
                 ))}
               </div>
             </div>
@@ -365,7 +367,7 @@ export function LearningPanel({
                 <span>{readiness.reason}</span>
                 {readiness.recovery && <small>{readiness.recovery}</small>}
               </div>
-              <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} />Settings</button>
+              <UiButton type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={13} />Settings</UiButton>
             </div>
           )}
           {!readiness && <div className="learning-readiness neutral"><LoaderCircle className="spin" size={14} /><span>Checking tutor readiness</span></div>}
@@ -373,16 +375,16 @@ export function LearningPanel({
       )}
 
       <div className="learning-tabs" role="tablist" aria-label="Learning panel views">
-        <button type="button" className={tab === 'tutor' ? 'active' : ''} role="tab" aria-selected={tab === 'tutor'} onClick={() => setTab('tutor')}><BookOpen size={13} />Tutor</button>
-        <button type="button" role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</button>
-        <button type="button" className={tab === 'progress' ? 'active' : ''} role="tab" aria-selected={tab === 'progress'} onClick={() => setTab('progress')}><GraduationCap size={13} />Progress</button>
-        <button type="button" className={tab === 'teaching' ? 'active' : ''} role="tab" aria-selected={tab === 'teaching'} onClick={() => setTab('teaching')}><LibraryBig size={13} />Teaching</button>
-        <button type="button" className={tab === 'git' ? 'active' : ''} role="tab" aria-selected={tab === 'git'} onClick={() => setTab('git')}><GitBranch size={13} />Git</button>
+        <UiButton type="button" className={tab === 'tutor' ? 'active' : ''} role="tab" aria-selected={tab === 'tutor'} onClick={() => setTab('tutor')}><BookOpen size={13} />Tutor</UiButton>
+        <UiButton type="button" role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</UiButton>
+        <UiButton type="button" className={tab === 'progress' ? 'active' : ''} role="tab" aria-selected={tab === 'progress'} onClick={() => setTab('progress')}><GraduationCap size={13} />Progress</UiButton>
+        <UiButton type="button" className={tab === 'teaching' ? 'active' : ''} role="tab" aria-selected={tab === 'teaching'} onClick={() => setTab('teaching')}><LibraryBig size={13} />Teaching</UiButton>
+        <UiButton type="button" className={tab === 'git' ? 'active' : ''} role="tab" aria-selected={tab === 'git'} onClick={() => setTab('git')}><GitBranch size={13} />Git</UiButton>
       </div>
 
       {!focus && tab === 'tutor' && lessons.length > 0 && <section className="learning-path learning-path-next">
         <strong>Next in your coding path</strong>
-        <button type="button" disabled={Boolean(busy)} onClick={() => onStartLesson(lessons[0]!.prompt)}><span>{lessons[0]!.title}</span><small>{lessons[0]!.filePath ?? 'Practice from your recent work'} · Start this step</small></button>
+        <UiButton type="button" disabled={Boolean(busy)} onClick={() => onStartLesson(lessons[0]!.prompt)}><span>{lessons[0]!.title}</span><small>{lessons[0]!.filePath ?? 'Practice from your recent work'} · Start this step</small></UiButton>
         {lessons.length > 1 && <small>{lessons.length - 1} more step{lessons.length === 2 ? '' : 's'} in Progress</small>}
       </section>}
       {!focus && tab === 'tutor' && (previousLesson || firstLesson) && (
@@ -390,31 +392,31 @@ export function LearningPanel({
           <strong>Go back</strong>
           {/* Reopening a lesson shows it again and costs no tutor turn; nothing already recorded is changed. */}
           {previousLesson && previousLesson.id !== responseLessonId && (
-            <button type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(previousLesson); setTab('tutor'); }}>
+            <UiButton type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(previousLesson); setTab('tutor'); }}>
               <span>Previous lesson: {previousLesson.response.title}</span>
               <small>{new Date(previousLesson.createdAt).toLocaleString()} · Reopen it</small>
-            </button>
+            </UiButton>
           )}
           {firstLesson && firstLesson.id !== responseLessonId && firstLesson.id !== previousLesson?.id && (
-            <button type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(firstLesson); setTab('tutor'); }}>
+            <UiButton type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(firstLesson); setTab('tutor'); }}>
               <span>Start over from the first lesson</span>
               <small>{firstLesson.response.title}</small>
-            </button>
+            </UiButton>
           )}
         </section>
       )}
       <div className="learning-scroll" ref={scrollRef}>
         {!focus && response && progress?.memory && <section className="learning-memory">
           <strong>Last lesson: {progress.memory.lastLesson}</strong>
-          {progress.memory.filePath && <button type="button" onClick={() => onReference(progress.memory!.filePath!)}>{progress.memory.filePath}</button>}
+          {progress.memory.filePath && <UiButton type="button" onClick={() => onReference(progress.memory!.filePath!)}>{progress.memory.filePath}</UiButton>}
           <p>{progress.memory.unresolvedCheck ? `Unresolved check: ${progress.memory.unresolvedCheck}` : progress.memory.understood ? 'Marked understood (self-reported).' : 'No outstanding check.'}</p>
-          {progress.memory.recommendedNext && <button type="button" onClick={() => { onQuestionChange(progress.memory!.recommendedNext); setTab('tutor'); }}>Next: {progress.memory.recommendedNext}</button>}
-          {!progress.memory.understood && <button type="button" disabled={Boolean(busy)} onClick={() => onUnderstood(progress.memory!.lessonId)}>Mark understood</button>}
+          {progress.memory.recommendedNext && <UiButton type="button" onClick={() => { onQuestionChange(progress.memory!.recommendedNext); setTab('tutor'); }}>Next: {progress.memory.recommendedNext}</UiButton>}
+          {!progress.memory.understood && <UiButton type="button" disabled={Boolean(busy)} onClick={() => onUnderstood(progress.memory!.lessonId)}>Mark understood</UiButton>}
         </section>}
         {!focus && tab === 'progress' && <section className="learning-path">
           <strong>Learning path</strong>
           <p>Practice needs first, then project structure. Independent evidence advances the queue.</p>
-          {lessons.map((lesson, index) => <button key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { setTab('tutor'); onStartLesson(lesson.prompt); }}><span>{index + 1}. {lesson.title}</span><small>{lesson.filePath ?? 'Based on learning evidence'} · Start step</small></button>)}
+          {lessons.map((lesson, index) => <UiButton key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { setTab('tutor'); onStartLesson(lesson.prompt); }}><span>{index + 1}. {lesson.title}</span><small>{lesson.filePath ?? 'Based on learning evidence'} · Start step</small></UiButton>)}
           {!lessons.length && <p>{progress?.lessons?.length ? 'You have completed the current path. Open another file or ask the tutor for a new challenge.' : 'Scan or open a project to build your lesson queue.'}</p>}
         </section>}
         {error && tab === 'tutor' && !pendingQuestion && <div className="learning-error" role="alert">{error}</div>}
@@ -455,16 +457,16 @@ export function LearningPanel({
             {appliedSuggestionNeedsExplanation && <section className="learning-applied-suggestion-nudge" role="status">
               <div><BrainCircuit size={14} /><strong>You applied Tutor code</strong></div>
               <p>Before moving on, explain in your own words what it does and why it belongs here. KAI will use your explanation as learning evidence.</p>
-              <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={onExplainAppliedSuggestion}>Explain it back</button>
+              <UiButton type="button" className="secondary-button" disabled={Boolean(busy)} onClick={onExplainAppliedSuggestion}>Explain it back</UiButton>
             </section>}
           </>
         )}
         {response && tab === 'tutor' && <div className="learning-response-actions">
           {reference?.filePath && <>
-            <button type="button" onClick={() => onReference(reference.filePath)}>Open {reference.filePath}</button>
-            {reference.startLine && <button type="button" onClick={() => onReference(reference.filePath, reference.startLine, reference.endLine)}>Select lines {reference.startLine}{reference.endLine && reference.endLine !== reference.startLine ? `-${reference.endLine}` : ''}</button>}
+            <UiButton type="button" onClick={() => onReference(reference.filePath)}>Open {reference.filePath}</UiButton>
+            {reference.startLine && <UiButton type="button" onClick={() => onReference(reference.filePath, reference.startLine, reference.endLine)}>Select lines {reference.startLine}{reference.endLine && reference.endLine !== reference.startLine ? `-${reference.endLine}` : ''}</UiButton>}
           </>}
-          <button type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</button>
+          <UiButton type="button" disabled={checking || Boolean(busy)} onClick={() => void runCheck()}>{checking ? 'Running check...' : 'Run check'}</UiButton>
           {referenceNotice && <span className="learning-reference-notice" role="status">{referenceNotice}</span>}
         </div>}
         {response && tab === 'tutor' && checkOutput && <section className="learning-check-result" role="status"><strong>Project check</strong><pre className="learning-check-output">{checkOutput}</pre></section>}
@@ -487,8 +489,8 @@ export function LearningPanel({
           <div className="learning-pending-turn">
             <TutorQuestion question={pendingQuestion.text} source={pendingQuestion.source} />
             {pendingQuestion.status === 'sending'
-              ? <div className="learning-pending-reply" role="status"><LoaderCircle className="spin" size={14} />Tutor is replying... <button type="button" onClick={onCancelQuestion}>Stop</button></div>
-              : <div className="learning-pending-reply failed" role="alert"><span>{pendingQuestion.status === 'cancelled' ? 'Stopped.' : pendingQuestion.error ?? 'Tutor could not reply.'}</span> <button type="button" onClick={onRetryQuestion}>Retry</button></div>}
+              ? <div className="learning-pending-reply" role="status"><LoaderCircle className="spin" size={14} />Tutor is replying... <UiButton type="button" onClick={onCancelQuestion}>Stop</UiButton></div>
+              : <div className="learning-pending-reply failed" role="alert"><span>{pendingQuestion.status === 'cancelled' ? 'Stopped.' : pendingQuestion.error ?? 'Tutor could not reply.'}</span> <UiButton type="button" onClick={onRetryQuestion}>Retry</UiButton></div>}
           </div>
         )}
         {tab === 'history' && <section className="learning-history">
@@ -497,11 +499,11 @@ export function LearningPanel({
           {(progress?.lessons?.length ?? 0) > 5 && (
             <label className="input-with-icon learning-history-search">
               <Search size={13} />
-              <input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="Search lessons by title, file or topic" aria-label="Search lessons" />
+              <UiTextInput value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="Search lessons by title, file or topic" aria-label="Search lessons" />
             </label>
           )}
           {historyQuery.trim() && historyLessons.length === 0 && <p>No lesson matches “{historyQuery.trim()}”.</p>}
-          {historyLessons.map((lesson) => <button key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(lesson); setTab('tutor'); }}>
+          {historyLessons.map((lesson) => <UiButton key={lesson.id} type="button" disabled={Boolean(busy)} onClick={() => { onLessonSelect(lesson); setTab('tutor'); }}>
             <strong>{lesson.response.title}</strong>
             <small>{new Date(lesson.createdAt).toLocaleString()} - {lesson.filePath ?? 'Whole project'}</small>
             <span>{lesson.explainBack?.verdict === 'solid'
@@ -511,7 +513,7 @@ export function LearningPanel({
                 : lesson.explainBack
                   ? 'Explain it back again'
                   : 'Review lesson'}</span>
-          </button>)}
+          </UiButton>)}
         </section>}
         {tab === 'progress' && <ProgressContent progress={progress} />}
         {tab === 'teaching' && (
@@ -637,22 +639,22 @@ function TutorContent({
                 : 'Insert puts it at your cursor. Typing it yourself is the better way to learn it.'}
           </small>
           <div className="learning-question-actions">
-            <button type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</button>
-            {!placement && suggestedLocation && <button type="button" className="secondary-button" title={`Opens ${suggestedLocation.filePath}`} onClick={() => onReference(suggestedLocation.filePath, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open {suggestedLocation.filePath.split('/').at(-1)}</button>}
-            {canInsertSuggestion && placement && <button type="button" className="primary-button" title={`Preview code ${placementWhere} the line the tutor named in ${placement.filePath}`} onClick={onPlaceSuggestion}><WandSparkles size={13} />Review code in {placementFile}</button>}
-            {canInsertSuggestion && <button type="button" className={placement ? 'secondary-button' : 'primary-button'} onClick={onInsertSuggestion}>{!placement && <WandSparkles size={13} />}{applyLabel.replace('Apply', 'Review')}</button>}
+            <UiButton type="button" className="secondary-button" onClick={() => void copySuggestion()}><Copy size={13} />{copied ? 'Copied' : 'Copy code'}</UiButton>
+            {!placement && suggestedLocation && <UiButton type="button" className="secondary-button" title={`Opens ${suggestedLocation.filePath}`} onClick={() => onReference(suggestedLocation.filePath, suggestedLocation.startLine, suggestedLocation.endLine)}><FileCode2 size={13} />Open {suggestedLocation.filePath.split('/').at(-1)}</UiButton>}
+            {canInsertSuggestion && placement && <UiButton type="button" className="primary-button" title={`Preview code ${placementWhere} the line the tutor named in ${placement.filePath}`} onClick={onPlaceSuggestion}><WandSparkles size={13} />Review code in {placementFile}</UiButton>}
+            {canInsertSuggestion && <UiButton type="button" className={placement ? 'secondary-button' : 'primary-button'} onClick={onInsertSuggestion}>{!placement && <WandSparkles size={13} />}{applyLabel.replace('Apply', 'Review')}</UiButton>}
           </div>
           {canInsertSuggestion && suggestionPreview && <section className="learning-suggestion-preview" aria-label="Review tutor code change">
             <strong>Review change in {suggestionPreview.filePath}</strong>
             <div><span>Before</span><pre>{suggestionPreview.before || '(no code at this position)'}</pre></div>
             <div><span>After</span><pre>{suggestionPreview.after}</pre></div>
-            <div className="learning-question-actions"><button type="button" className="secondary-button" onClick={onCancelSuggestion}>Cancel</button><button type="button" className="primary-button" onClick={onApplySuggestion}>Apply reviewed code</button></div>
+            <div className="learning-question-actions"><UiButton type="button" className="secondary-button" onClick={onCancelSuggestion}>Cancel</UiButton><UiButton type="button" className="primary-button" onClick={onApplySuggestion}>Apply reviewed code</UiButton></div>
           </section>}
-          {canInsertSuggestion && canUndoSuggestion && <button type="button" className="secondary-button" onClick={onUndoSuggestion}>Undo tutor edit</button>}
+          {canInsertSuggestion && canUndoSuggestion && <UiButton type="button" className="secondary-button" onClick={onUndoSuggestion}>Undo tutor edit</UiButton>}
         </div>
       )}
       {response.followUpQuestion && (onAnswerQuestion
-        ? <button type="button" className="learning-question answerable" title="Answer this in Explain it back below" onClick={onAnswerQuestion}><Lightbulb size={14} /><span>{response.followUpQuestion}</span><small>Answer below</small></button>
+        ? <UiButton type="button" className="learning-question answerable" title="Answer this in Explain it back below" onClick={onAnswerQuestion}><Lightbulb size={14} /><span>{response.followUpQuestion}</span><small>Answer below</small></UiButton>
         : <div className="learning-question"><Lightbulb size={14} /><span>{response.followUpQuestion}</span></div>)}
       <LearningSection title="Why this matters" className="analogy" collapsible defaultOpen={false}>
         <p>{response.purpose}</p>
@@ -698,7 +700,7 @@ function TutorContent({
       )}
       {response.sourceNotes.length > 0 && (
         <LearningSection title="Sources" collapsible defaultOpen={false}>
-          <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.filePath ? <button type="button" onClick={() => onReference(source.filePath!, source.startLine, source.endLine)}>{source.label} - {source.filePath}{source.startLine ? `:${source.startLine}${source.endLine ? `-${source.endLine}` : ''}` : ''}</button> : source.url && /^https?:\/\//i.test(source.url) ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
+          <ul className="learning-sources">{response.sourceNotes.map((source, index) => <li key={`${source.label}-${index}`}>{source.filePath ? <UiButton type="button" onClick={() => onReference(source.filePath!, source.startLine, source.endLine)}>{source.label} - {source.filePath}{source.startLine ? `:${source.startLine}${source.endLine ? `-${source.endLine}` : ''}` : ''}</UiButton> : source.url && /^https?:\/\//i.test(source.url) ? <a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> : source.label}</li>)}</ul>
         </LearningSection>
       )}
     </div>
@@ -782,11 +784,11 @@ function ExplainBack({
       {solid && <div className="learning-question-actions learning-next-lesson">
         <strong>{nextLesson ? `Next in your path: ${nextLesson.title}` : 'Current learning path complete'}</strong>
         <p>{nextLesson?.prompt ?? 'Open another project file or ask the tutor for a new challenge.'}</p>
-        <button type="button" className="primary-button" disabled={disabled} onClick={() => onContinue(asked)}>{disabled ? 'Asking tutor...' : nextLesson ? 'Ask tutor to start next step' : 'Ask tutor for a new challenge'}</button>
+        <UiButton type="button" className="primary-button" disabled={disabled} onClick={() => onContinue(asked)}>{disabled ? 'Asking tutor...' : nextLesson ? 'Ask tutor to start next step' : 'Ask tutor for a new challenge'}</UiButton>
       </div>}
       {!solid && (
         <>
-          <textarea
+          <Textarea
             aria-label="Your explanation"
             value={answer}
             placeholder="Answer in your own words. A sentence or two is enough."
@@ -801,21 +803,21 @@ function ExplainBack({
             }}
           />
           <div className="learning-question-actions">
-            <button type="button" className="secondary-button" disabled={disabled || checking || helping !== null} onClick={() => void askForHelp('rephrase')} title="The tutor asks it again in simpler words, with a hint">
+            <UiButton type="button" className="secondary-button" disabled={disabled || checking || helping !== null} onClick={() => void askForHelp('rephrase')} title="The tutor asks it again in simpler words, with a hint">
               {helping === 'rephrase' ? <LoaderCircle className="spin" size={13} /> : <HelpCircle size={13} />}
               <span>I don't get the question</span>
-            </button>
+            </UiButton>
             {!answerShown && (
-              <button type="button" className="secondary-button" disabled={disabled || checking || helping !== null} onClick={() => void askForHelp('answer')} title="Shows a model answer and why; it does not count toward mastery">
+              <UiButton type="button" className="secondary-button" disabled={disabled || checking || helping !== null} onClick={() => void askForHelp('answer')} title="Shows a model answer and why; it does not count toward mastery">
                 {helping === 'answer' ? <LoaderCircle className="spin" size={13} /> : <Eye size={13} />}
                 <span>Show me the answer</span>
-              </button>
+              </UiButton>
             )}
-            {!understood && <button type="button" className="secondary-button" disabled={disabled || checking} onClick={onSkip} title="Records a self-report only; it does not raise mastery.">Skip, mark understood</button>}
-            <button type="button" className="primary-button" disabled={disabled || checking || !answer.trim()} onClick={() => void submit()}>
+            {!understood && <UiButton type="button" className="secondary-button" disabled={disabled || checking} onClick={onSkip} title="Records a self-report only; it does not raise mastery.">Skip, mark understood</UiButton>}
+            <UiButton type="button" className="primary-button" disabled={disabled || checking || !answer.trim()} onClick={() => void submit()}>
               {checking ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
               <span>{checking ? 'Checking...' : shown ? 'Try again' : 'Check my answer'}</span>
-            </button>
+            </UiButton>
           </div>
         </>
       )}
@@ -846,9 +848,9 @@ function SelectionContext({
       </div>
       {selected ? <pre><code>{selection.text}</code></pre> : <p>No selection attached.</p>}
       {selected && (
-        <button type="button" className="secondary-button learning-selection-action" disabled={busy} onClick={() => onAction('explain-selection')}>
+        <UiButton type="button" className="secondary-button learning-selection-action" disabled={busy} onClick={() => onAction('explain-selection')}>
           <Code2 size={13} />Explain selection
-        </button>
+        </UiButton>
       )}
     </section>
   );
@@ -948,7 +950,7 @@ function TutorComposer({
               <option value="active-file">File context</option>
             </Select>
           </label>
-          <button
+          <UiButton
             type="button"
             className="icon-button compact"
             aria-label={open ? 'Collapse tutor composer' : 'Expand tutor composer'}
@@ -958,7 +960,7 @@ function TutorComposer({
             onClick={onToggle}
           >
             {open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-          </button>
+          </UiButton>
         </div>
       </header>
       {card && (
@@ -968,12 +970,12 @@ function TutorComposer({
           {card.stale ? <AlertTriangle size={13} aria-hidden="true" /> : <ListChecks size={13} aria-hidden="true" />}
           <span><strong>{card.title}</strong> · learning from this Studio card</span>
           {card.stale && <em>{card.staleReason ?? 'Something this card reads changed.'} Check the card before trusting this advice.</em>}
-          <button type="button" className="link-button" onClick={onClearCard} aria-label={`Stop learning from the Studio card ${card.title}`}>Clear</button>
+          <UiButton type="button" className="link-button" onClick={onClearCard} aria-label={`Stop learning from the Studio card ${card.title}`}>Clear</UiButton>
         </div>
       )}
       {open && (
         <div className="learning-composer-body" id="learning-composer-body">
-          <textarea
+          <Textarea
             ref={inputRef}
             aria-label="Tutor question"
             value={question}
@@ -991,15 +993,15 @@ function TutorComposer({
           <footer>
             <span title={selection?.filePath ?? undefined}>{contextLabel} · Enter to ask · Shift+Enter for a new line</span>
             <div>
-              <button type="button" className="secondary-button" disabled={busy || hintLevel >= 3 || (scope === 'active-file' && !selection)} onClick={onStuck} title={stuckHints[Math.min(hintLevel, 3)]!.title}><Lightbulb size={13} />{stuckHints[Math.min(hintLevel, 3)]!.label}</button>
-              {hintLevel < 3 && <button type="button" className="secondary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={onShowCode} title="Ask for exact code and an apply button"><WandSparkles size={13} />Show code</button>}
+              <UiButton type="button" className="secondary-button" disabled={busy || hintLevel >= 3 || (scope === 'active-file' && !selection)} onClick={onStuck} title={stuckHints[Math.min(hintLevel, 3)]!.title}><Lightbulb size={13} />{stuckHints[Math.min(hintLevel, 3)]!.label}</UiButton>
+              {hintLevel < 3 && <UiButton type="button" className="secondary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={onShowCode} title="Ask for exact code and an apply button"><WandSparkles size={13} />Show code</UiButton>}
               {response && onRecordLesson && (
-                <button type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</button>
+                <UiButton type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</UiButton>
               )}
-              <button type="button" className="primary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={() => onAction('next-step')}>
+              <UiButton type="button" className="primary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={() => onAction('next-step')}>
                 {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
                 <span>{busy ? 'Working...' : response ? 'Ask' : 'Ask tutor'}</span>
-              </button>
+              </UiButton>
             </div>
           </footer>
         </div>
@@ -1065,10 +1067,10 @@ function LearningSection({
   if (!collapsible) return <section className={`learning-section ${className}`}><h3>{title}</h3>{children}</section>;
   return (
     <section className={`learning-section ${className} ${open ? 'open' : 'collapsed'}`}>
-      <button type="button" className="learning-section-toggle" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+      <UiButton type="button" className="learning-section-toggle" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
         <span className="learning-section-title">{title}</span>
         {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>
+      </UiButton>
       {open && <div className="learning-section-body">{children}</div>}
     </section>
   );

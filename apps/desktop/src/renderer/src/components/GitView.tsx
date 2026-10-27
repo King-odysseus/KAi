@@ -1,12 +1,13 @@
 import { AlertCircle, ArrowDown, ArrowUp, CheckCircle2, Copy, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw, TerminalSquare } from 'lucide-react';
 import type { GitChecksState } from '@kai/contracts';
+import { Pill } from './Pill';
 
 /** A small icon and label for a pull request's rolled-up CI state. Nothing is shown for "none" — most PRs with no checks configured shouldn't imply one is missing. */
 function ChecksBadge({ state }: { state: GitChecksState }) {
   if (state === 'none') return null;
-  if (state === 'passing') return <span className="pr-checks-badge pr-checks-passing" title="Checks passing"><CheckCircle2 size={12} /><span>Checks passing</span></span>;
-  if (state === 'failing') return <span className="pr-checks-badge pr-checks-failing" title="Checks failing"><AlertCircle size={12} /><span>Checks failing</span></span>;
-  return <span className="pr-checks-badge pr-checks-pending" title="Checks running"><Loader2 size={12} className="spin" /><span>Checks running</span></span>;
+  if (state === 'passing') return <Pill tone="success" title="Checks passing"><CheckCircle2 size={12} />Checks passing</Pill>;
+  if (state === 'failing') return <Pill tone="error" title="Checks failing"><AlertCircle size={12} />Checks failing</Pill>;
+  return <Pill tone="warning" title="Checks running"><Loader2 size={12} className="spin" />Checks running</Pill>;
 }
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { GitChange, GitGithubState, GitOverview, GitRepositoryVisibility, GitSyncAction, ProjectRecord } from '@kai/contracts';
@@ -16,6 +17,9 @@ import { GitBadge } from './GitBadge';
 import { changeKindOf } from './project-files-tree';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 const POLL_MS = 10_000;
 
 const STATE_WORDS: Record<string, string> = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', '?': 'new', U: 'conflict', '.': '' };
@@ -164,8 +168,8 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
   // remote exists but has no signed-in account behind it.
   const signInActions = (
     <div className="ops-actions">
-      <button type="button" className="primary-button" onClick={onSignInGitHub ?? onOpenTerminal}><TerminalSquare size={14} /><span>Sign in with GitHub</span></button>
-      <button type="button" className="secondary-button" onClick={() => void navigator.clipboard?.writeText('gh auth login').then(() => setMessage('Copied “gh auth login”. Paste it into the KAI Terminal, then follow GitHub’s browser approval.')).catch(() => setError('Could not copy the command. Run gh auth login in the KAI Terminal.'))}><Copy size={14} /><span>Copy sign-in command</span></button>
+      <UiButton type="button" className="primary-button" onClick={onSignInGitHub ?? onOpenTerminal}><TerminalSquare size={14} /><span>Sign in with GitHub</span></UiButton>
+      <UiButton type="button" className="secondary-button" onClick={() => void navigator.clipboard?.writeText('gh auth login').then(() => setMessage('Copied “gh auth login”. Paste it into the KAI Terminal, then follow GitHub’s browser approval.')).catch(() => setError('Could not copy the command. Run gh auth login in the KAI Terminal.'))}><Copy size={14} /><span>Copy sign-in command</span></UiButton>
     </div>
   );
 
@@ -181,13 +185,13 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           <p>This project is not a Git repository yet. Starting one is a single command, and KAI can run it for you.</p>
           <div className="git-starter">
             <code>git init</code>
-            <button type="button" className="primary-button" onClick={() => void startRepository()} disabled={busy !== null} title="Runs git init in this project's folder and names the first branch main">
+            <UiButton type="button" className="primary-button" onClick={() => void startRepository()} disabled={busy !== null} title="Runs git init in this project's folder and names the first branch main">
               {busy ? <Loader2 className="spin" size={14} /> : <GitBranch size={14} />} Start a repository
-            </button>
+            </UiButton>
             {onOpenTerminal && (
-              <button type="button" className="secondary-button" onClick={onOpenTerminal} disabled={busy !== null} title="Open the Terminal to run the commands yourself">
+              <UiButton type="button" className="secondary-button" onClick={onOpenTerminal} disabled={busy !== null} title="Open the Terminal to run the commands yourself">
                 <TerminalSquare size={14} /> Open the Terminal
-              </button>
+              </UiButton>
             )}
           </div>
           <p className="studio-note">
@@ -232,8 +236,8 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
             <code>git remote add origin &lt;url&gt;</code> in the Terminal. Pushing works with any Git remote.
           </p>
           <div className="ops-actions">
-            <button type="button" className="secondary-button" onClick={() => window.open('https://cli.github.com')}><ExternalLink size={14} /><span>Open the install page</span></button>
-            {onOpenTerminal && <button type="button" className="secondary-button" onClick={onOpenTerminal}><TerminalSquare size={14} /><span>Open the Terminal</span></button>}
+            <UiButton type="button" className="secondary-button" onClick={() => window.open('https://cli.github.com')}><ExternalLink size={14} /><span>Open the install page</span></UiButton>
+            {onOpenTerminal && <UiButton type="button" className="secondary-button" onClick={onOpenTerminal}><TerminalSquare size={14} /><span>Open the Terminal</span></UiButton>}
           </div>
         </>
       ) : !githubState.signedInAs ? (
@@ -244,7 +248,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
       ) : (
         <>
           <div className="field-grid">
-            <label className="field"><span>Repository name</span><input value={repoName} placeholder="my-project" onChange={(event) => setRepoName(event.target.value)} /></label>
+            <label className="field"><span>Repository name</span><UiTextInput value={repoName} placeholder="my-project" onChange={(event) => setRepoName(event.target.value)} /></label>
             <label className="field">
               <span>Who can see it</span>
               <Select value={repoVisibility} onChange={(event) => setRepoVisibility(event.target.value === 'public' ? 'public' : 'private')}>
@@ -259,11 +263,11 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
             <strong>Publish branch</strong> when you are ready to send your commits.
           </p>
           <div className="ops-actions">
-            <button type="button" className="primary-button" disabled={busy !== null || !repoName.trim()} title="Creates the repository on GitHub and sets it as origin. Your code stays here until you publish." onClick={() => void createRepository()}>
+            <UiButton type="button" className="primary-button" disabled={busy !== null || !repoName.trim()} title="Creates the repository on GitHub and sets it as origin. Your code stays here until you publish." onClick={() => void createRepository()}>
               {busy === 'Create repository' ? <Loader2 className="spin" size={14} /> : <Plus size={14} />} Create repository on GitHub
-            </button>
-            <button type="button" className="secondary-button" disabled={busy !== null} title="The same command, for running in a Terminal yourself" onClick={() => void navigator.clipboard?.writeText(createCommand).then(() => setMessage('Copied the create command. Paste it into the KAI Terminal to run it yourself.')).catch(() => setError('Could not copy the command.'))}><Copy size={14} /><span>Copy command</span></button>
-            {onOpenTerminal && <button type="button" className="secondary-button" onClick={onOpenTerminal} disabled={busy !== null}><TerminalSquare size={14} /><span>Open the Terminal</span></button>}
+            </UiButton>
+            <UiButton type="button" className="secondary-button" disabled={busy !== null} title="The same command, for running in a Terminal yourself" onClick={() => void navigator.clipboard?.writeText(createCommand).then(() => setMessage('Copied the create command. Paste it into the KAI Terminal to run it yourself.')).catch(() => setError('Could not copy the command.'))}><Copy size={14} /><span>Copy command</span></UiButton>
+            {onOpenTerminal && <UiButton type="button" className="secondary-button" onClick={onOpenTerminal} disabled={busy !== null}><TerminalSquare size={14} /><span>Open the Terminal</span></UiButton>}
           </div>
         </>
       )}
@@ -283,9 +287,9 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           </p>
         </div>
         <div className="page-actions">
-          <button type="button" className="secondary-button" disabled={busy !== null} title="Ask the remote what has changed. Changes nothing on your machine." onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></button>
-          <button type="button" className="secondary-button" disabled={busy !== null || !overview.upstream} title="Fast-forward only; never merges or rewrites history" onClick={() => void sync('pull', 'Pull')}><ArrowDown size={14} /><span>Pull</span></button>
-          <button type="button" className="primary-button" disabled={busy !== null || !overview.branch || overview.remotes.length === 0 || (overview.upstream !== null && overview.ahead === 0)} title={overview.remotes.length === 0 ? 'There is nowhere to push to yet — create a repository on GitHub in the GitHub section below' : undefined} onClick={() => void (async () => {
+          <UiButton type="button" className="secondary-button" disabled={busy !== null} title="Ask the remote what has changed. Changes nothing on your machine." onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></UiButton>
+          <UiButton type="button" className="secondary-button" disabled={busy !== null || !overview.upstream} title="Fast-forward only; never merges or rewrites history" onClick={() => void sync('pull', 'Pull')}><ArrowDown size={14} /><span>Pull</span></UiButton>
+          <UiButton type="button" className="primary-button" disabled={busy !== null || !overview.branch || overview.remotes.length === 0 || (overview.upstream !== null && overview.ahead === 0)} title={overview.remotes.length === 0 ? 'There is nowhere to push to yet — create a repository on GitHub in the GitHub section below' : undefined} onClick={() => void (async () => {
             const target = overview.githubRepository ? `origin (${overview.githubRepository})` : 'the remote';
             const confirmed = await confirmDialog({
               title: 'Push this branch?',
@@ -293,7 +297,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
               confirmLabel: 'Push branch',
             });
             if (confirmed) await sync('push', 'Push');
-          })()}><ArrowUp size={14} /><span>{overview.upstream ? 'Push' : 'Publish branch'}</span></button>
+          })()}><ArrowUp size={14} /><span>{overview.upstream ? 'Push' : 'Publish branch'}</span></UiButton>
         </div>
       </header>
 
@@ -321,26 +325,26 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           <div className="section-title"><GitBranch size={16} /><span>Branches</span></div>
           <div className="field-with-action">
             <label className="field"><span>Switch to</span><Select value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)}>{overview.branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.name}{branch.current ? ' (current)' : ''}</option>)}</Select></label>
-            <button type="button" className="secondary-button" disabled={busy !== null || selectedBranch === overview.branch || !selectedBranch} onClick={() => void act('Switch branch', async () => unwrap(await window.kaiDesktop.gitCheckout(activeProject.id, selectedBranch)).output, `Switched to ${selectedBranch}.`)}>Switch</button>
+            <UiButton type="button" className="secondary-button" disabled={busy !== null || selectedBranch === overview.branch || !selectedBranch} onClick={() => void act('Switch branch', async () => unwrap(await window.kaiDesktop.gitCheckout(activeProject.id, selectedBranch)).output, `Switched to ${selectedBranch}.`)}>Switch</UiButton>
           </div>
           <div className="field-with-action">
-            <label className="field"><span>New branch</span><input value={newBranch} placeholder="feature/my-change" onChange={(event) => setNewBranch(event.target.value)} /></label>
-            <button type="button" className="secondary-button" disabled={busy !== null || !newBranch.trim()} onClick={() => void act('Create branch', async () => {
+            <label className="field"><span>New branch</span><UiTextInput value={newBranch} placeholder="feature/my-change" onChange={(event) => setNewBranch(event.target.value)} /></label>
+            <UiButton type="button" className="secondary-button" disabled={busy !== null || !newBranch.trim()} onClick={() => void act('Create branch', async () => {
               unwrap(await window.kaiDesktop.gitCreateBranch(activeProject.id, newBranch.trim(), true));
               setSelectedBranch(newBranch.trim());
               setNewBranch('');
-            }, `Created and switched to ${newBranch.trim()}.`)}>Create and switch</button>
+            }, `Created and switched to ${newBranch.trim()}.`)}>Create and switch</UiButton>
           </div>
           <ul className="git-list">{overview.branches.map((branch) => <li key={branch.name} className={branch.current ? 'current' : ''}><strong>{branch.name}</strong><span className="truncate">{branch.subject}</span><small>{branch.upstream ?? 'local only'}</small></li>)}</ul>
         </section>
 
         <section className="settings-section">
           <div className="section-title"><GitCommitHorizontal size={16} /><span>Commit</span></div>
-          <label className="field"><span>Message</span><textarea rows={3} value={commitMessage} placeholder="Describe what changed and why" onChange={(event) => setCommitMessage(event.target.value)} /></label>
-          <button type="button" className="primary-button align-end" disabled={busy !== null || staged.length === 0 || !commitMessage.trim()} onClick={() => void act('Commit', async () => {
+          <label className="field"><span>Message</span><Textarea rows={3} value={commitMessage} placeholder="Describe what changed and why" onChange={(event) => setCommitMessage(event.target.value)} /></label>
+          <UiButton type="button" className="primary-button align-end" disabled={busy !== null || staged.length === 0 || !commitMessage.trim()} onClick={() => void act('Commit', async () => {
             unwrap(await window.kaiDesktop.gitCommit(activeProject.id, commitMessage.trim()));
             setCommitMessage('');
-          }, `Committed ${staged.length} file${staged.length === 1 ? '' : 's'}.`)}>Commit {staged.length} staged file{staged.length === 1 ? '' : 's'}</button>
+          }, `Committed ${staged.length} file${staged.length === 1 ? '' : 's'}.`)}>Commit {staged.length} staged file{staged.length === 1 ? '' : 's'}</UiButton>
           <p className="settings-note">Repository hooks run as usual. Only staged files are committed.</p>
         </section>
 
@@ -349,9 +353,9 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           {overview.changes.length === 0 ? <div className="empty-list">Working tree is clean</div> : (
             <>
               <div className="ops-actions">
-                <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => void act('Stage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, overview.changes.map((change) => change.path), true)).output, 'Staged everything.')}>Stage all</button>
-                <button type="button" className="secondary-button" disabled={busy !== null || staged.length === 0} onClick={() => void act('Unstage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, staged.map((change) => change.path), false)).output, 'Unstaged everything.')}>Unstage all</button>
-                {selectedPaths.size > 0 && <button type="button" className="primary-button" disabled={busy !== null} onClick={() => void act('Stage selected', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, [...selectedPaths], true)).output, `Staged ${selectedPaths.size} selected file${selectedPaths.size === 1 ? '' : 's'}.`)}>Stage selected ({selectedPaths.size})</button>}
+                <UiButton type="button" className="secondary-button" disabled={busy !== null} onClick={() => void act('Stage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, overview.changes.map((change) => change.path), true)).output, 'Staged everything.')}>Stage all</UiButton>
+                <UiButton type="button" className="secondary-button" disabled={busy !== null || staged.length === 0} onClick={() => void act('Unstage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, staged.map((change) => change.path), false)).output, 'Unstaged everything.')}>Unstage all</UiButton>
+                {selectedPaths.size > 0 && <UiButton type="button" className="primary-button" disabled={busy !== null} onClick={() => void act('Stage selected', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, [...selectedPaths], true)).output, `Staged ${selectedPaths.size} selected file${selectedPaths.size === 1 ? '' : 's'}.`)}>Stage selected ({selectedPaths.size})</UiButton>}
               </div>
               {(['staged', 'unstaged'] as const).map((group) => {
                 // A partly staged file is listed in both groups, each showing its own half of the change.
@@ -368,11 +372,11 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
                         const pending = busy !== null && pendingPath === change.path;
                         return (
                           <li key={`${group}:${change.path}`} className={`git-${kind}`}>
-                            <input type="checkbox" className="git-change-select" checked={selectedPaths.has(change.path)} aria-label={`Select ${change.path}`} onChange={() => setSelectedPaths((current) => { const next = new Set(current); if (next.has(change.path)) next.delete(change.path); else next.add(change.path); return next; })} />
+                            <Checkbox className="git-change-select" checked={selectedPaths.has(change.path)} aria-label={`Select ${change.path}`} onChange={() => setSelectedPaths((current) => { const next = new Set(current); if (next.has(change.path)) next.delete(change.path); else next.add(change.path); return next; })} />
                             <GitBadge change={shown} />
-                            <button type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, group === 'staged').then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><span className="truncate">{change.path}</span></button>
+                            <UiButton type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, group === 'staged').then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><span className="truncate">{change.path}</span></UiButton>
                             <small>{describeChange(change)}</small>
-                            <button
+                            <UiButton
                               type="button"
                               className="icon-button compact"
                               aria-label={`${staging ? 'Stage' : 'Unstage'} ${change.path}`}
@@ -384,7 +388,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
                               }}
                             >
                               {pending ? <Loader2 size={13} className="spin" /> : staging ? <Plus size={13} /> : <Minus size={13} />}
-                            </button>
+                            </UiButton>
                           </li>
                         );
                       })}
@@ -392,7 +396,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
                   </div>
                 );
               })}
-              {diff && <div className="git-diff"><div className="ops-card-head"><strong>{diff.path}</strong><button type="button" className="secondary-button" onClick={() => setDiff(null)}>Close</button></div><pre>{diff.text}</pre></div>}
+              {diff && <div className="git-diff"><div className="ops-card-head"><strong>{diff.path}</strong><UiButton type="button" className="secondary-button" onClick={() => setDiff(null)}>Close</UiButton></div><pre>{diff.text}</pre></div>}
             </>
           )}
         </section>
@@ -407,15 +411,15 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
               </p>
               {!overview.github.signedInAs && overview.github.cliAvailable && signInActions}
               {overview.pullRequests.map((request) => (
-                <div key={request.number} className="ops-card-head"><span>#{request.number} {request.title} · {request.state}</span><ChecksBadge state={request.checksState} /><button type="button" className="secondary-button" onClick={() => window.open(request.url)}><ExternalLink size={12} /><span>Open</span></button></div>
+                <div key={request.number} className="ops-card-head"><span>#{request.number} {request.title} · {request.state}</span><ChecksBadge state={request.checksState} /><UiButton type="button" className="secondary-button" onClick={() => window.open(request.url)}><ExternalLink size={12} /><span>Open</span></UiButton></div>
               ))}
               {overview.github.signedInAs && overview.branch && !onMain && overview.upstream && overview.pullRequests.length === 0 && (
                 <>
                   <div className="field-grid">
-                    <label className="field"><span>Pull request title</span><input value={pr.title} onChange={(event) => setPr({ ...pr, title: event.target.value })} /></label>
+                    <label className="field"><span>Pull request title</span><UiTextInput value={pr.title} onChange={(event) => setPr({ ...pr, title: event.target.value })} /></label>
                   </div>
-                  <label className="field"><span>Description</span><textarea rows={3} value={pr.body} onChange={(event) => setPr({ ...pr, body: event.target.value })} /></label>
-                  <button type="button" className="primary-button align-end" disabled={busy !== null || !pr.title.trim() || overview.ahead > 0} title={overview.ahead > 0 ? 'Push your commits first' : undefined} onClick={() => void (async () => {
+                  <label className="field"><span>Description</span><Textarea rows={3} value={pr.body} onChange={(event) => setPr({ ...pr, body: event.target.value })} /></label>
+                  <UiButton type="button" className="primary-button align-end" disabled={busy !== null || !pr.title.trim() || overview.ahead > 0} title={overview.ahead > 0 ? 'Push your commits first' : undefined} onClick={() => void (async () => {
                     const confirmed = await confirmDialog({
                       title: 'Open a pull request?',
                       detail: `Open a pull request from "${overview.branch}" on ${overview.githubRepository}? It is visible to everyone with access to the repository.`,
@@ -427,7 +431,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
                       setPr({ title: '', body: '' });
                       window.open(result.url);
                     }, 'Pull request opened.');
-                  })()}>Open pull request</button>
+                  })()}>Open pull request</UiButton>
                 </>
               )}
             </>

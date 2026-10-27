@@ -3,6 +3,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { AppSettings, UpdateState } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { UiButton } from './UiButton';
+import { Checkbox } from 'flowbite-react';
 
 function useUpdateState(): [UpdateState | null, (state: UpdateState) => void] {
   const [state, setState] = useState<UpdateState | null>(null);
@@ -27,7 +29,7 @@ export function UpdateBanner({ onOpen }: { onOpen: () => void }): ReactNode {
   return (
     <div className="workbench-notice update-banner" role="status">
       <span>{state.status === 'ready' ? `KAI ${state.version ?? ''} is downloaded and ready to install.` : `KAI ${state.version ?? 'update'} is available.`}</span>
-      <button type="button" className="secondary-button" onClick={onOpen}>View update</button>
+      <UiButton type="button" className="secondary-button" onClick={onOpen}>View update</UiButton>
     </div>
   );
 }
@@ -67,17 +69,17 @@ export function UpdatesPanel({ settings }: { settings: AppSettings }): ReactNode
       {state.notes && (state.status === 'available' || state.status === 'ready') && <pre className="verify-output">{state.notes}</pre>}
       {state.backupName && <p className="settings-note">Settings backup saved as "{state.backupName}". Restore it from Configuration backups below if anything looks wrong after the update.</p>}
       <div className="ops-actions">
-        <button type="button" className="secondary-button" disabled={state.status === 'disabled' || busy || state.status === 'ready'} onClick={() => void step(async () => unwrap(await window.kaiDesktop.checkForUpdates()))}><RefreshCw size={14} /><span>{state.status === 'checking' ? 'Checking…' : 'Check for updates'}</span></button>
-        {state.status === 'available' && <button type="button" className="primary-button" onClick={() => void step(async () => unwrap(await window.kaiDesktop.downloadUpdate()))}><Download size={14} /><span>Download</span></button>}
-        {state.status === 'ready' && <button type="button" className="primary-button" onClick={() => void confirmDialog({
+        <UiButton type="button" className="secondary-button" disabled={state.status === 'disabled' || busy || state.status === 'ready'} onClick={() => void step(async () => unwrap(await window.kaiDesktop.checkForUpdates()))}><RefreshCw size={14} /><span>{state.status === 'checking' ? 'Checking…' : 'Check for updates'}</span></UiButton>
+        {state.status === 'available' && <UiButton type="button" className="primary-button" onClick={() => void step(async () => unwrap(await window.kaiDesktop.downloadUpdate()))}><Download size={14} /><span>Download</span></UiButton>}
+        {state.status === 'ready' && <UiButton type="button" className="primary-button" onClick={() => void confirmDialog({
           title: 'Install the update now?',
           detail: 'KAI backs up your settings, stops running work and restarts.',
           confirmLabel: 'Install and restart',
         }).then((confirmed) => {
           if (confirmed) void step(async () => unwrap(await window.kaiDesktop.installUpdate()));
-        })}><RotateCw size={14} /><span>Install and restart</span></button>}
+        })}><RotateCw size={14} /><span>Install and restart</span></UiButton>}
       </div>
-      <label className="toggle-row"><span><strong>Check automatically</strong><small>Once after startup and every few hours. Nothing is downloaded or installed without you.</small></span><input type="checkbox" checked={autoCheck} onChange={(event) => {
+      <label className="toggle-row"><span><strong>Check automatically</strong><small>Once after startup and every few hours. Nothing is downloaded or installed without you.</small></span><Checkbox checked={autoCheck} onChange={(event) => {
         setAutoCheck(event.target.checked);
         void window.kaiDesktop.updateSettings({ updates: { autoCheck: event.target.checked } });
       }} /></label>

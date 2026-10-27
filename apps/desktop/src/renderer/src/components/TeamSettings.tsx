@@ -6,6 +6,9 @@ import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 const PRESETS: Array<{ id: TeamPreset; label: string; detail: string }> = [
   { id: 'quality', label: 'Quality', detail: 'The strongest ready agent for every role, whatever the limits.' },
   { id: 'balanced', label: 'Balanced', detail: 'Strong agents where it matters; lighter ones for tests and docs to save your Claude and Codex limits.' },
@@ -106,7 +109,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
       </div>
       <p className="settings-note team-preset-detail">{preset.detail} A preset only guides Auto; a role you pin always keeps your choice.</p>
       <div className="button-row align-start">
-        <button type="button" className="secondary-button" disabled={clearing} onClick={() => void clearRecord()}>Clear track record</button>
+        <UiButton type="button" className="secondary-button" disabled={clearing} onClick={() => void clearRecord()}>Clear track record</UiButton>
       </div>
       {recordError && <p className="settings-feedback error" role="alert">{recordError}</p>}
       <div className="team-roles">
@@ -138,7 +141,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                 </label>
                 <label className="field">
                   <span>Model</span>
-                  <input aria-label={`${info.label} model`} value={config.model ?? ''} placeholder="Agent default" list={`team-models-${role}`} aria-invalid={modelInvalid} onChange={(event) => update(role, { model: event.target.value.trim() })} />
+                  <UiTextInput aria-label={`${info.label} model`} value={config.model ?? ''} placeholder="Agent default" list={`team-models-${role}`} aria-invalid={modelInvalid} onChange={(event) => update(role, { model: event.target.value.trim() })} />
                   <datalist id={`team-models-${role}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
                   {modelInvalid && <small className="field-error">Use a model name such as gpt-5.6-sol, without spaces or a leading dash.</small>}
                 </label>
@@ -153,7 +156,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
               </div>
               <label className="field">
                 <span>Extra instructions</span>
-                <textarea aria-label={`${info.label} instructions`} rows={2} maxLength={2000} value={config.instructions} placeholder={role === 'securityReviewer' ? 'For example: check the OWASP Top 10 and flag any secret in code.' : 'Optional guidance added to every task this role gets.'} onChange={(event) => update(role, { instructions: event.target.value })} />
+                <Textarea aria-label={`${info.label} instructions`} rows={2} maxLength={2000} value={config.instructions} placeholder={role === 'securityReviewer' ? 'For example: check the OWASP Top 10 and flag any secret in code.' : 'Optional guidance added to every task this role gets.'} onChange={(event) => update(role, { instructions: event.target.value })} />
               </label>
             </fieldset>
           );
@@ -162,9 +165,9 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
       <div className="team-custom">
         <div className="team-custom-head">
           <strong>Your own roles</strong>
-          <button type="button" className="secondary-button" disabled={team.custom.length >= MAX_CUSTOM_ROLES} onClick={addCustom}>
+          <UiButton type="button" className="secondary-button" disabled={team.custom.length >= MAX_CUSTOM_ROLES} onClick={addCustom}>
             <Plus size={14} /><span>Add a role</span>
-          </button>
+          </UiButton>
         </div>
         <p className="settings-note">A role for work the built-in seven do not cover, such as a database specialist or an accessibility auditor. The orchestrator can plan parts for it; you decide whether it edits files or only reads.</p>
         {team.custom.map((role) => {
@@ -179,7 +182,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
               <div className="field-grid">
                 <label className="field">
                   <span>Name</span>
-                  <input aria-label={`${role.id} name`} value={role.label} maxLength={60} aria-invalid={!role.label.trim()} onChange={(event) => updateCustom(role.id, { label: event.target.value })} />
+                  <UiTextInput aria-label={`${role.id} name`} value={role.label} maxLength={60} aria-invalid={!role.label.trim()} onChange={(event) => updateCustom(role.id, { label: event.target.value })} />
                   {!role.label.trim() && <small className="field-error">Give the role a name.</small>}
                 </label>
                 <label className="field">
@@ -191,7 +194,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                 </label>
                 <label className="field">
                   <span>What it does</span>
-                  <input aria-label={`${role.label} description`} value={role.description} maxLength={300} placeholder="Shown to the orchestrator" onChange={(event) => updateCustom(role.id, { description: event.target.value })} />
+                  <UiTextInput aria-label={`${role.label} description`} value={role.description} maxLength={300} placeholder="Shown to the orchestrator" onChange={(event) => updateCustom(role.id, { description: event.target.value })} />
                 </label>
               </div>
               <div className="field-grid">
@@ -209,19 +212,19 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                 </label>
                 <label className="field">
                   <span>Model</span>
-                  <input aria-label={`${role.label} model`} value={role.model ?? ''} placeholder="Agent default" list={`team-models-${role.id}`} aria-invalid={modelInvalid} onChange={(event) => updateCustom(role.id, { model: event.target.value.trim() })} />
+                  <UiTextInput aria-label={`${role.label} model`} value={role.model ?? ''} placeholder="Agent default" list={`team-models-${role.id}`} aria-invalid={modelInvalid} onChange={(event) => updateCustom(role.id, { model: event.target.value.trim() })} />
                   <datalist id={`team-models-${role.id}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
                   {modelInvalid && <small className="field-error">Use a model name such as gpt-5.6-sol, without spaces or a leading dash.</small>}
                 </label>
               </div>
               <label className="field">
                 <span>Extra instructions</span>
-                <textarea aria-label={`${role.label} instructions`} rows={2} maxLength={2000} value={role.instructions} placeholder="Optional guidance added to every task this role gets." onChange={(event) => updateCustom(role.id, { instructions: event.target.value })} />
+                <Textarea aria-label={`${role.label} instructions`} rows={2} maxLength={2000} value={role.instructions} placeholder="Optional guidance added to every task this role gets." onChange={(event) => updateCustom(role.id, { instructions: event.target.value })} />
               </label>
               <div className="team-custom-actions">
-                <button type="button" className="secondary-button" onClick={() => onChange({ ...team, custom: team.custom.filter((item) => item.id !== role.id) })}>
+                <UiButton type="button" className="secondary-button" onClick={() => onChange({ ...team, custom: team.custom.filter((item) => item.id !== role.id) })}>
                   <Trash2 size={14} /><span>Remove this role</span>
-                </button>
+                </UiButton>
               </div>
               <RoleTrackRecord advice={advice.find((item) => item.role === role.id)} scope={projectId ?? 'all'} onUse={(assignee) => { updateCustom(role.id, { assignee }); }} />
             </fieldset>
@@ -280,10 +283,10 @@ export function AgentTeamCard({
   return (
     <div className="team-scope">
       <div className="team-scope-tabs" role="tablist" aria-label="Which team to edit">
-        <button type="button" role="tab" aria-selected={scope === 'all'} className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All projects</button>
-        <button type="button" role="tab" aria-selected={scope === 'project'} className={scope === 'project' ? 'active' : ''} disabled={!project} title={project ? undefined : 'Open a project to give it its own team'} onClick={() => setScope('project')}>
+        <UiButton type="button" role="tab" aria-selected={scope === 'all'} className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All projects</UiButton>
+        <UiButton type="button" role="tab" aria-selected={scope === 'project'} className={scope === 'project' ? 'active' : ''} disabled={!project} title={project ? undefined : 'Open a project to give it its own team'} onClick={() => setScope('project')}>
           {project ? `Just ${project.name}` : 'One project'}
-        </button>
+        </UiButton>
       </div>
       {scope === 'all' && (
         <>
@@ -297,22 +300,22 @@ export function AgentTeamCard({
             <p className="settings-note">{project.name} has its own team. Plans for this project use it instead of the team from Settings.</p>
             <TeamSettings team={draft} onChange={setDraft} projectId={project.id} />
             <div className="button-row align-start">
-              <button type="button" className="primary-button" disabled={busy || saving || !dirty} onClick={() => void save(draft)}>
+              <UiButton type="button" className="primary-button" disabled={busy || saving || !dirty} onClick={() => void save(draft)}>
                 <span>{saving ? 'Saving' : `Save the team for ${project.name}`}</span>
-              </button>
-              <button type="button" className="secondary-button" disabled={busy || saving || !projectTeam} onClick={() => void save(null)}>
+              </UiButton>
+              <UiButton type="button" className="secondary-button" disabled={busy || saving || !projectTeam} onClick={() => void save(null)}>
                 <span>Use the team from Settings again</span>
-              </button>
-              {!projectTeam && <button type="button" className="secondary-button" disabled={saving} onClick={() => setDraft(null)}><span>Discard</span></button>}
+              </UiButton>
+              {!projectTeam && <UiButton type="button" className="secondary-button" disabled={saving} onClick={() => setDraft(null)}><span>Discard</span></UiButton>}
             </div>
           </>
         )
         : (
           <div className="team-scope-empty">
             <p className="settings-note">{project.name} uses the team from Settings. Give it its own team when this project needs different agents or roles.</p>
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => setDraft(structuredClone(globalTeam))}>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => setDraft(structuredClone(globalTeam))}>
               <span>Create a team for {project.name}</span>
-            </button>
+            </UiButton>
           </div>
         ))}
     </div>
@@ -337,11 +340,11 @@ function RoleTrackRecord({ advice, scope, onUse }: { advice?: TeamRecordAdvice; 
     {suggestion && suggestion.fingerprint !== dismissed && <div className="team-track-suggestion">
       <p className="settings-note">{suggestion.text}</p>
       <div className="button-row align-start">
-        <button type="button" className="secondary-button" onClick={() => { onUse(suggestion.assignee); }}>Use {name(suggestion.assignee)}</button>
-        <button type="button" className="secondary-button" onClick={() => {
+        <UiButton type="button" className="secondary-button" onClick={() => { onUse(suggestion.assignee); }}>Use {name(suggestion.assignee)}</UiButton>
+        <UiButton type="button" className="secondary-button" onClick={() => {
           setDismissed(suggestion.fingerprint);
           try { window.localStorage.setItem(key, suggestion.fingerprint); } catch { /* The in-memory dismissal still works when storage is unavailable. */ }
-        }}>Dismiss</button>
+        }}>Dismiss</UiButton>
       </div>
     </div>}
   </div>;

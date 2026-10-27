@@ -1,5 +1,8 @@
 import { AlertTriangle, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { UiButton } from './UiButton';
+import { Checkbox, Modal, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 export interface PromptDialogOptions {
   title: string;
@@ -112,31 +115,6 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
         : request.kind === 'confirm' ? false : true,
   );
 
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    window.setTimeout(() => (request.kind === 'prompt' ? inputRef.current : request.kind === 'message' ? confirmRef.current : cancelRef.current)?.focus(), 0);
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        cancel();
-      } else if (event.key === 'Tab') {
-        const dialog = document.querySelector<HTMLElement>('[data-kai-dialog="true"]');
-        if (!dialog) return;
-        const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled])')];
-        if (focusable.length === 0) return;
-        const index = focusable.indexOf(document.activeElement as HTMLElement);
-        const next = event.shiftKey ? (index - 1 + focusable.length) % focusable.length : (index + 1) % focusable.length;
-        event.preventDefault();
-        focusable[next]?.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      previous?.focus();
-    };
-  }, [onFinish, request.kind]);
-
   function submit(event: FormEvent): void {
     event.preventDefault();
     if (request.kind === 'option') {
@@ -163,20 +141,27 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
   const titleId = `kai-dialog-title-${request.id}`;
   const detailId = `kai-dialog-detail-${request.id}`;
   return (
-    <div className="app-dialog-overlay" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) cancel();
-    }}>
-      <form className="app-dialog" data-kai-dialog="true" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={detailId} onSubmit={submit}>
+    <Modal
+      show
+      size="lg"
+      position="center"
+      dismissible
+      onClose={cancel}
+      initialFocus={request.kind === 'prompt' ? inputRef : request.kind === 'message' ? confirmRef : cancelRef}
+      aria-labelledby={titleId}
+      aria-describedby={detailId}
+    >
+      <form className="app-dialog" data-kai-dialog="true" onSubmit={submit}>
         <header>
           <span className="app-dialog-icon">{(request.kind === 'confirm' || request.kind === 'option') && request.options.destructive ? <AlertTriangle size={17} /> : <span>K</span>}</span>
           <div><h2 id={titleId}>{request.options.title}</h2><p id={detailId}>{request.kind === 'prompt' ? request.options.label : request.options.detail}</p></div>
-          <button type="button" className="icon-button compact" aria-label="Close dialog" onClick={cancel}><X size={14} /></button>
+          <UiButton type="button" className="icon-button compact" aria-label="Close dialog" onClick={cancel}><X size={14} /></UiButton>
         </header>
         {request.kind === 'prompt' && (
           <label className="app-dialog-field">
             <span>{request.options.label}</span>
             {request.options.multiline ? (
-              <textarea
+              <Textarea
                 ref={inputRef as RefObject<HTMLTextAreaElement>}
                 value={value}
                 onChange={(event) => { setValue(event.target.value); setError(null); }}
@@ -185,7 +170,7 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
                 aria-invalid={Boolean(error)}
               />
             ) : (
-              <input
+              <UiTextInput
                 ref={inputRef as RefObject<HTMLInputElement>}
                 value={value}
                 onChange={(event) => { setValue(event.target.value); setError(null); }}
@@ -198,17 +183,17 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
         {request.kind === 'option' && (
           <label className="toggle-row">
             <span><strong>{request.options.checkboxLabel}</strong></span>
-            <input type="checkbox" checked={checked} onChange={(event) => setChecked(event.target.checked)} />
+            <Checkbox checked={checked} onChange={(event) => setChecked(event.target.checked)} />
           </label>
         )}
         {error && <div className="app-dialog-error" role="alert">{error}</div>}
         <footer className={request.kind === 'message' ? 'single-action' : ''}>
-          {request.kind !== 'message' && <button ref={cancelRef} type="button" className="secondary-button" onClick={cancel}>Cancel</button>}
-          <button ref={confirmRef} type="submit" className={`primary-button ${(request.kind === 'confirm' || request.kind === 'option') && request.options.destructive ? 'destructive-button' : ''}`}>
+          {request.kind !== 'message' && <UiButton ref={cancelRef} type="button" className="secondary-button" onClick={cancel}>Cancel</UiButton>}
+          <UiButton ref={confirmRef} type="submit" className={`primary-button ${(request.kind === 'confirm' || request.kind === 'option') && request.options.destructive ? 'destructive-button' : ''}`}>
             {request.options.confirmLabel ?? (request.kind === 'prompt' ? 'OK' : request.kind === 'message' ? 'Close' : 'Confirm')}
-          </button>
+          </UiButton>
         </footer>
       </form>
-    </div>
+    </Modal>
   );
 }

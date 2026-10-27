@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowRight, Check, Circle, Loader2, Sparkles, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import type { CodeGuideAction, CodeGuideStep, CodeGuideView } from '@kai/contracts';
+import { UiButton } from './UiButton';
 
 /**
  * The Senior Dev for the Code screen: where the whole project is, and the one thing to do next.
@@ -50,9 +51,9 @@ function Step({ step, index, busy, onAction }: { step: CodeGuideStep; index: num
       {here && <p className="studio-note guide-why">{step.why}</p>}
       {step.detail && <p className="studio-note">{step.detail}</p>}
       {here && step.action && step.actionLabel && (
-        <button type="button" className="secondary-button" onClick={() => onAction(step.action as CodeGuideAction)} disabled={busy}>
+        <UiButton type="button" className="secondary-button" onClick={() => onAction(step.action as CodeGuideAction)} disabled={busy}>
           {step.actionLabel}
-        </button>
+        </UiButton>
       )}
     </li>
   );
@@ -76,7 +77,7 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
   return (
     <article className="studio-card" aria-label="Senior dev">
       <h2><Sparkles size={16} /> Senior dev</h2>
-      <button type="button" className="link-button" onClick={onToggleStrip}>{stripHidden ? 'Show guide bar above editor' : 'Hide guide bar above editor'}</button>
+      <UiButton type="button" className="link-button" onClick={onToggleStrip}>{stripHidden ? 'Show guide bar above editor' : 'Hide guide bar above editor'}</UiButton>
       <p className="studio-note">
         Reads this project — the repository, the files, what you have studied and the board — and says where it has
         got to and what to do next. The steps come from the project itself; the explanation is written for you.
@@ -94,9 +95,9 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
             </p>
           )}
         {!explaining && (
-          <button type="button" className="link-button" onClick={onExplain} disabled={busy}>
+          <UiButton type="button" className="link-button" onClick={onExplain} disabled={busy}>
             {view.narrative ? 'Explain this again' : 'Explain where I am'}
-          </button>
+          </UiButton>
         )}
         {view.narrativeAt && <span className="studio-note"> Written {view.narrativeAt.slice(0, 16).replace('T', ' ')}.</span>}
       </div>
@@ -137,9 +138,9 @@ export function CodeGuidePanel({ view, explaining, busy, error = null, onExplain
       </ol>
 
       <div className="guide-history">
-        <button type="button" className="link-button" aria-expanded={showHistory} onClick={() => setShowHistory((open) => !open)}>
+        <UiButton type="button" className="link-button" aria-expanded={showHistory} onClick={() => setShowHistory((open) => !open)}>
           {showHistory ? 'Hide' : 'Show'} what has been done ({view.history.length})
-        </button>
+        </UiButton>
         {showHistory && (
           view.history.length === 0
             ? <p className="studio-note">Nothing yet. Each step is recorded the first time it is finished.</p>
@@ -182,10 +183,10 @@ export function CodeGuideStrip({ view, busy, onAction, onOpen, onDismiss }: { vi
         {/* Unlike the board's strip, every action here is kept: "Open Learn" is worth offering from the strip
             precisely because it is what you would otherwise have to go looking for. */}
         {current.action && current.actionLabel && (
-          <button type="button" className="secondary-button" onClick={() => onAction(current.action as CodeGuideAction)} disabled={busy}>{current.actionLabel}</button>
+          <UiButton type="button" className="secondary-button" onClick={() => onAction(current.action as CodeGuideAction)} disabled={busy}>{current.actionLabel}</UiButton>
         )}
-        <button type="button" className="link-button" onClick={onOpen}>Open the guide</button>
-        <button type="button" className="icon-button compact" aria-label="Hide guide bar" title="Hide guide bar" onClick={onDismiss}><X size={13} /></button>
+        <UiButton type="button" className="link-button" onClick={onOpen}>Open the guide</UiButton>
+        <UiButton type="button" className="icon-button compact" aria-label="Hide guide bar" title="Hide guide bar" onClick={onDismiss}><X size={13} /></UiButton>
       </span>
     </div>
   );

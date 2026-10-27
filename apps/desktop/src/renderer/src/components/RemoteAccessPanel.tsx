@@ -9,6 +9,9 @@ import type {
   SettingsUpdate,
 } from '@kai/contracts';
 import { unwrap } from '../types';
+import { UiButton } from './UiButton';
+import { Checkbox } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 /**
  * Settings for KAI Remote. Saving here takes effect immediately: main-process `settings:update` starts,
@@ -116,7 +119,7 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
 
       <label className="toggle-row">
         <span><strong>KAI Remote</strong><small>Serves a small web app on this machine for your phone.</small></span>
-        <input type="checkbox" disabled={disabled} checked={remote.enabled} onChange={(event) => void save({ ...remote, enabled: event.target.checked })} />
+        <Checkbox disabled={disabled} checked={remote.enabled} onChange={(event) => void save({ ...remote, enabled: event.target.checked })} />
       </label>
 
       {!remote.enabled && phoneUrl && (
@@ -131,9 +134,9 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
               <strong>{status?.running ? 'Listening' : 'Not listening'}</strong>
               <small>{status?.running ? status.urls.join(' · ') : status?.lastError ?? 'Starting…'}</small>
             </div>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void refresh()} title="Refresh status">
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void refresh()} title="Refresh status">
               <RefreshCw size={14} />
-            </button>
+            </UiButton>
           </div>
 
           <label className="toggle-row">
@@ -141,7 +144,7 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
               <strong>Allow other devices on this network</strong>
               <small>Off means only this machine can reach it. On binds your private network address — never 0.0.0.0.</small>
             </span>
-            <input type="checkbox" disabled={disabled} checked={remote.lanEnabled} onChange={(event) => void save({ ...remote, lanEnabled: event.target.checked })} />
+            <Checkbox disabled={disabled} checked={remote.lanEnabled} onChange={(event) => void save({ ...remote, lanEnabled: event.target.checked })} />
           </label>
           {remote.lanEnabled && (
             <p className="settings-note"><strong>Any device on this network that has the token can run your agents, read your files and start commands.</strong> Only turn this on where you trust the network.</p>
@@ -155,28 +158,28 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
             </div>
             {phoneUrl && <code>{phoneUrl}</code>}
             {phoneUrl && (
-              <button type="button" className="secondary-button" onClick={() => copy('address', phoneUrl)} title="Copy the phone address">
+              <UiButton type="button" className="secondary-button" onClick={() => copy('address', phoneUrl)} title="Copy the phone address">
                 {copied === 'address' ? <Check size={14} /> : <Copy size={14} />}
-              </button>
+              </UiButton>
             )}
           </div>
 
           <div className="field-grid">
             <label className="field">
               <span>Port</span>
-              <input type="number" min={1024} max={65535} value={remote.port} disabled={disabled} onChange={(event) => setRemote({ ...remote, port: Number(event.target.value) })} onBlur={() => void save(remote)} />
+              <UiTextInput type="number" min={1024} max={65535} value={remote.port} disabled={disabled} onChange={(event) => setRemote({ ...remote, port: Number(event.target.value) })} onBlur={() => void save(remote)} />
             </label>
             <label className="field">
               <span>Device name</span>
-              <input type="text" maxLength={60} value={label} disabled={disabled} placeholder="Phone" onChange={(event) => setLabel(event.target.value)} />
+              <UiTextInput type="text" maxLength={60} value={label} disabled={disabled} placeholder="Phone" onChange={(event) => setLabel(event.target.value)} />
             </label>
           </div>
 
           <div className="button-row align-start">
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void pair()}>
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void pair()}>
               <KeyRound size={15} />
               <span>Pair a device</span>
-            </button>
+            </UiButton>
             <span className="settings-note">Each device gets its own token, so revoking one leaves the rest working.</span>
           </div>
 
@@ -191,9 +194,9 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
                 </small>
               </div>
               <code>{pairingLink}</code>
-              <button type="button" className="secondary-button" onClick={() => copy('link', pairingLink)} title="Copy pairing link">
+              <UiButton type="button" className="secondary-button" onClick={() => copy('link', pairingLink)} title="Copy pairing link">
                 {copied === 'link' ? <Check size={14} /> : <Copy size={14} />}
-              </button>
+              </UiButton>
             </div>
           )}
 
@@ -210,10 +213,10 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
                       <strong>{device.label}</strong>
                       <small>Paired {new Date(device.createdAt).toLocaleDateString()}</small>
                     </div>
-                    <button type="button" className="secondary-button danger" disabled={disabled} onClick={() => void revoke(device.id)} title={`Revoke ${device.label}`}>
+                    <UiButton type="button" className="secondary-button danger" disabled={disabled} onClick={() => void revoke(device.id)} title={`Revoke ${device.label}`}>
                       <Trash2 size={14} />
                       <span>Revoke</span>
-                    </button>
+                    </UiButton>
                   </li>
                 ))}
               </ul>

@@ -5,6 +5,8 @@ import { Loader2, Maximize2, Minimize2, RefreshCw, Workflow } from 'lucide-react
 import type { BoardCard, BoardStatus, StudioBoard, StudioProjectSummary } from '@kai/contracts';
 import { agentLinks, connectedCardIds, layoutAgentLinks, layoutCards, reducedDependencies } from '../graph-layout';
 import { unwrap } from '../types';
+import { UiButton } from './UiButton';
+import { UiNativeSelect } from './UiNativeSelect';
 
 /**
  * The board as a graph, on its own page. Two views of the same cards: what blocks what, and which agent is holding
@@ -101,20 +103,20 @@ export function GraphView(): ReactNode {
           <p className="studio-note">What blocks what, and which agent holds which card. Read-only: move cards from the Studio board.</p>
         </div>
         <div className="graph-controls">
-          <select className="studio-move" value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value || null)} aria-label="Studio project" disabled={projects.length === 0}>
+          <UiNativeSelect className="studio-move" value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value || null)} aria-label="Studio project" disabled={projects.length === 0}>
             {projects.length === 0 && <option value="">No Studio projects</option>}
             {projects.map((project) => <option key={project.id} value={project.id}>{project.title.slice(0, 60)}</option>)}
-          </select>
+          </UiNativeSelect>
           <div className="mode-toggle" role="group" aria-label="Graph view">
-            <button type="button" className={mode === 'dependencies' ? 'active' : ''} aria-pressed={mode === 'dependencies'} onClick={() => setMode('dependencies')}><span>Dependencies</span></button>
-            <button type="button" className={mode === 'agents' ? 'active' : ''} aria-pressed={mode === 'agents'} onClick={() => setMode('agents')}><span>Agents</span></button>
+            <UiButton type="button" className={mode === 'dependencies' ? 'active' : ''} aria-pressed={mode === 'dependencies'} onClick={() => setMode('dependencies')}><span>Dependencies</span></UiButton>
+            <UiButton type="button" className={mode === 'agents' ? 'active' : ''} aria-pressed={mode === 'agents'} onClick={() => setMode('agents')}><span>Agents</span></UiButton>
           </div>
-          <button type="button" className="secondary-button" onClick={() => void load(false)} disabled={busy || !projectId}>
+          <UiButton type="button" className="secondary-button" onClick={() => void load(false)} disabled={busy || !projectId}>
             {busy ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />} Refresh
-          </button>
-          <button type="button" className="secondary-button" onClick={() => setFull((value) => !value)} aria-pressed={full} title={full ? 'Exit full screen (Esc)' : 'Show the project graph full screen'}>
+          </UiButton>
+          <UiButton type="button" className="secondary-button" onClick={() => setFull((value) => !value)} aria-pressed={full} title={full ? 'Exit full screen (Esc)' : 'Show the project graph full screen'}>
             {full ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {full ? 'Exit full screen' : 'Full screen'}
-          </button>
+          </UiButton>
         </div>
       </header>
 

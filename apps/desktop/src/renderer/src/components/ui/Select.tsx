@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { UiButton } from '../UiButton';
 
 /** What a change handler receives: the shape of a native select's change event, so existing handlers work as-is. */
 export interface SelectChange {
@@ -201,7 +202,7 @@ export function Select({
 
   return (
     <>
-      <button
+      <UiButton
         ref={triggerRef}
         id={id}
         type="button"
@@ -219,12 +220,12 @@ export function Select({
       >
         <span className="kai-select-value">{selected?.label ?? current}</span>
         <ChevronDown className="kai-select-chevron" size={14} aria-hidden="true" />
-      </button>
+      </UiButton>
       {name && <input type="hidden" name={name} value={current} />}
       {open && createPortal(
         <div ref={listRef} className="kai-select-list" role="listbox" aria-label={ariaLabel} style={position}>
           {options.map((option, index) => (
-            <button
+            <UiButton
               ref={(element) => { optionRefs.current[index] = element; }}
               key={`${option.value}-${index}`}
               type="button"
@@ -238,7 +239,7 @@ export function Select({
             >
               <span>{option.label}</span>
               {option.value === current && <Check size={14} aria-hidden="true" />}
-            </button>
+            </UiButton>
           ))}
         </div>,
         document.body,

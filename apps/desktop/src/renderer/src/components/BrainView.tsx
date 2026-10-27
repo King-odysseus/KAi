@@ -31,6 +31,9 @@ import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 interface SearchFilters {
   query: string;
   tag: string;
@@ -271,10 +274,10 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
           <span className="eyebrow">Knowledge state</span>
           <h2>Brain overview</h2>
         </div>
-        <button type="button" className="secondary-button" disabled={loading} onClick={() => void refresh()}>
+        <UiButton type="button" className="secondary-button" disabled={loading} onClick={() => void refresh()}>
           <RefreshCw size={14} className={loading ? 'spin' : undefined} />
           <span>Refresh</span>
-        </button>
+        </UiButton>
       </div>
 
       {overview ? (
@@ -307,13 +310,13 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
         <div><strong>Your project handbook</strong><small>Open a section to check the knowledge agents should use before they work.</small></div>
         <div className="brain-handbook-options">
           {BRAIN_SECTIONS.map((section) => (
-            <button key={section.label} type="button" onClick={() => {
+            <UiButton key={section.label} type="button" onClick={() => {
               const next = { ...initialFilters, ...section.filters };
               setFilters(next);
               void runSearch(next);
             }}>
               <strong>{section.label}</strong><small>{section.detail}</small>
-            </button>
+            </UiButton>
           ))}
         </div>
       </section>
@@ -329,7 +332,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
           <span>Search</span>
           <span className="input-with-icon">
             <Search size={15} />
-            <input
+            <UiTextInput
               value={filters.query}
               onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))}
               placeholder="Title, field, agent, or project"
@@ -353,7 +356,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
         </label>
         <label>
           <span>Tag</span>
-          <input
+          <UiTextInput
             value={filters.tag}
             onChange={(event) => setFilters((current) => ({ ...current, tag: event.target.value }))}
             placeholder="Optional tag"
@@ -361,7 +364,7 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
         </label>
         <label>
           <span>Project</span>
-          <input
+          <UiTextInput
             value={filters.project}
             disabled={filters.global}
             onChange={(event) => setFilters((current) => ({ ...current, project: event.target.value }))}
@@ -382,26 +385,25 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
           </Select>
         </label>
         <label className="brain-global-filter">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={filters.global}
             onChange={(event) => setFilters((current) => ({ ...current, global: event.target.checked }))}
           />
           <span>All projects</span>
         </label>
-        <button type="submit" className="primary-button" disabled={searching}>
+        <UiButton type="submit" className="primary-button" disabled={searching}>
           {searching ? <RefreshCw size={14} className="spin" /> : <Search size={14} />}
           <span>Search</span>
-        </button>
+        </UiButton>
       </form>
 
       {error && (
         <div className="brain-error" role="alert">
           <AlertTriangle size={15} />
           <span>{error}</span>
-          <button type="button" className="icon-button compact" aria-label="Dismiss brain error" onClick={() => setError(null)}>
+          <UiButton type="button" className="icon-button compact" aria-label="Dismiss brain error" onClick={() => setError(null)}>
             <X size={14} />
-          </button>
+          </UiButton>
         </div>
       )}
 
@@ -447,10 +449,10 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
               <span className="eyebrow">Portable memory</span>
               <h2 id="brain-git-title">Brain Git sync</h2>
             </div>
-            <button type="button" className="secondary-button" disabled={Boolean(gitBusy)} onClick={() => void refreshGitStatus()}>
+            <UiButton type="button" className="secondary-button" disabled={Boolean(gitBusy)} onClick={() => void refreshGitStatus()}>
               <RefreshCw size={14} className={gitBusy === 'refresh' ? 'spin' : undefined} />
               <span>Refresh</span>
-            </button>
+            </UiButton>
           </div>
           <div className="brain-git-status">
             <div>
@@ -468,21 +470,21 @@ export function BrainPanel({ service }: { service: ServiceState }): ReactNode {
             <code title={gitStatus.path}>{gitStatus.path}</code>
           </div>
           <div className="brain-git-actions">
-            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || gitStatus.repository} onClick={() => void runGitAction('init')}>
+            <UiButton type="button" className="secondary-button" disabled={Boolean(gitBusy) || gitStatus.repository} onClick={() => void runGitAction('init')}>
               <FolderPlus size={14} /><span>Initialize</span>
-            </button>
-            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || gitStatus.clean} onClick={() => void runGitAction('commit')}>
+            </UiButton>
+            <UiButton type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || gitStatus.clean} onClick={() => void runGitAction('commit')}>
               <GitCommitHorizontal size={14} /><span>{gitBusy === 'commit' ? 'Committing' : 'Commit all'}</span>
-            </button>
-            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('pull')}>
+            </UiButton>
+            <UiButton type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('pull')}>
               <CloudDownload size={14} /><span>{gitBusy === 'pull' ? 'Pulling' : 'Pull'}</span>
-            </button>
-            <button type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('push')}>
+            </UiButton>
+            <UiButton type="button" className="secondary-button" disabled={Boolean(gitBusy) || !gitStatus.repository || !gitStatus.remote} onClick={() => void runGitAction('push')}>
               <CloudUpload size={14} /><span>{gitBusy === 'push' ? 'Pushing' : 'Push'}</span>
-            </button>
-            <button type="button" className="secondary-button" disabled={mirrorBusy} onClick={() => void copyIntoMirror()} title="Files any entry this brain holds that the mirror is missing. Agents writing through MCP are carried over by this too.">
+            </UiButton>
+            <UiButton type="button" className="secondary-button" disabled={mirrorBusy} onClick={() => void copyIntoMirror()} title="Files any entry this brain holds that the mirror is missing. Agents writing through MCP are carried over by this too.">
               <Copy size={14} /><span>{mirrorBusy ? 'Syncing' : 'Sync the mirror now'}</span>
-            </button>
+            </UiButton>
           </div>
           {gitStatus.error && !gitFeedback && (
             <div className="brain-git-feedback error" role="alert">
@@ -563,25 +565,25 @@ function BrainEntryCard({
               <dt>{field}</dt>
               {editing ? (
                 <form className="brain-field-form" onSubmit={onSubmit}>
-                  <textarea autoFocus value={editor.value} onChange={(event) => onChange(event.target.value)} />
-                  <button type="submit" className="icon-button compact" disabled={saving} aria-label={`Save ${field}`}>
+                  <Textarea autoFocus value={editor.value} onChange={(event) => onChange(event.target.value)} />
+                  <UiButton type="submit" className="icon-button compact" disabled={saving} aria-label={`Save ${field}`}>
                     {saving ? <RefreshCw size={13} className="spin" /> : <Check size={14} />}
-                  </button>
-                  <button type="button" className="icon-button compact" disabled={saving} onClick={onCancel} aria-label={`Cancel ${field}`}>
+                  </UiButton>
+                  <UiButton type="button" className="icon-button compact" disabled={saving} onClick={onCancel} aria-label={`Cancel ${field}`}>
                     <X size={14} />
-                  </button>
+                  </UiButton>
                 </form>
               ) : (
                 <>
                   <dd>{value}</dd>
-                  <button
+                  <UiButton
                     type="button"
                     className="icon-button compact field-edit-button"
                     aria-label={`Edit ${field}`}
                     onClick={() => onEdit({ title: entry.title, field, value })}
                   >
                     <Pencil size={13} />
-                  </button>
+                  </UiButton>
                 </>
               )}
             </div>
@@ -645,8 +647,8 @@ function RecallFeedback({ entry }: { entry: BrainEntry }): ReactNode {
 
   return (
     <span className="recall-feedback" role="group" aria-label={`Was "${entry.title}" useful?`}>
-      <button type="button" className={`icon-button compact ${sent === 'up' ? 'active' : ''}`} aria-pressed={sent === 'up'} title="Useful: rank this higher" aria-label="Useful" onClick={() => void send(true)}><ThumbsUp size={13} /></button>
-      <button type="button" className={`icon-button compact ${sent === 'down' ? 'active' : ''}`} aria-pressed={sent === 'down'} title="Not useful: rank this lower" aria-label="Not useful" onClick={() => void send(false)}><ThumbsDown size={13} /></button>
+      <UiButton type="button" className={`icon-button compact ${sent === 'up' ? 'active' : ''}`} aria-pressed={sent === 'up'} title="Useful: rank this higher" aria-label="Useful" onClick={() => void send(true)}><ThumbsUp size={13} /></UiButton>
+      <UiButton type="button" className={`icon-button compact ${sent === 'down' ? 'active' : ''}`} aria-pressed={sent === 'down'} title="Not useful: rank this lower" aria-label="Not useful" onClick={() => void send(false)}><ThumbsDown size={13} /></UiButton>
       {failed && <small role="alert">Could not send</small>}
     </span>
   );

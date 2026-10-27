@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { CoordinationOverview, UrgentNote } from '@kai/contracts';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 const REFRESH_MS = 15_000;
 
@@ -42,7 +44,7 @@ export function UrgentBanner(): ReactNode {
         {first!.do ? ` Do: ${first!.do}.` : ''}{first!.doNot ? ` Do not: ${first!.doNot}.` : ''}
         {rest.length > 0 ? ` +${rest.length} more` : ''}
       </span>
-      <button type="button" className="secondary-button" onClick={() => void clearUrgent(first!.project).then(refresh)}>Clear</button>
+      <UiButton type="button" className="secondary-button" onClick={() => void clearUrgent(first!.project).then(refresh)}>Clear</UiButton>
     </div>
   );
 }
@@ -84,7 +86,7 @@ export function CoordinationPanel(): ReactNode {
                   <td title={claim.what}>{claim.what}</td>
                   <td title={claim.files.join(', ')}>{claim.files.join(', ') || '—'}</td>
                   <td>
-                    <button type="button" className="icon-button compact" aria-label={`Release ${claim.agent}'s claim`} title="Release this claim" onClick={() => {
+                    <UiButton type="button" className="icon-button compact" aria-label={`Release ${claim.agent}'s claim`} title="Release this claim" onClick={() => {
                       void confirmDialog({
                         title: 'Release this claim?',
                         detail: `Release ${claim.agent}'s claim on ${claim.project}? They may still be working.`,
@@ -95,7 +97,7 @@ export function CoordinationPanel(): ReactNode {
                         void run(async () => { unwrap(await window.kaiDesktop.cognitive1Operation({ operation: 'active-release', payload: { agent: claim.agent } })); }, `Released ${claim.agent}'s claim.`);
                         }
                       });
-                    }}><Trash2 size={13} /></button>
+                    }}><Trash2 size={13} /></UiButton>
                   </td>
                 </tr>
               ))}
@@ -109,20 +111,20 @@ export function CoordinationPanel(): ReactNode {
         {overview.urgent.length === 0 ? <div className="empty-list">No urgent warnings</div> : overview.urgent.map((note: UrgentNote, index) => (
           <div key={`${note.project}-${index}`} className="ops-card-head">
             <span><strong>{note.project}</strong> — {note.what}{note.do ? ` · Do: ${note.do}` : ''}{note.doNot ? ` · Do not: ${note.doNot}` : ''}{note.until ? ` · Until: ${note.until}` : ''}</span>
-            <button type="button" className="secondary-button" onClick={() => void run(() => clearUrgent(note.project), `Cleared the warning for ${note.project}.`)}>Clear</button>
+            <UiButton type="button" className="secondary-button" onClick={() => void run(() => clearUrgent(note.project), `Cleared the warning for ${note.project}.`)}>Clear</UiButton>
           </div>
         ))}
         <div className="field-grid">
-          <label className="field"><span>Project (or global)</span><input value={form.project} onChange={(event) => setForm({ ...form, project: event.target.value })} /></label>
-          <label className="field"><span>What is wrong</span><input value={form.what} onChange={(event) => setForm({ ...form, what: event.target.value })} /></label>
-          <label className="field"><span>Agents must</span><input value={form.do} onChange={(event) => setForm({ ...form, do: event.target.value })} /></label>
-          <label className="field"><span>Agents must not</span><input value={form.do_not} onChange={(event) => setForm({ ...form, do_not: event.target.value })} /></label>
-          <label className="field"><span>Until</span><input value={form.until} placeholder="manually cleared" onChange={(event) => setForm({ ...form, until: event.target.value })} /></label>
+          <label className="field"><span>Project (or global)</span><UiTextInput value={form.project} onChange={(event) => setForm({ ...form, project: event.target.value })} /></label>
+          <label className="field"><span>What is wrong</span><UiTextInput value={form.what} onChange={(event) => setForm({ ...form, what: event.target.value })} /></label>
+          <label className="field"><span>Agents must</span><UiTextInput value={form.do} onChange={(event) => setForm({ ...form, do: event.target.value })} /></label>
+          <label className="field"><span>Agents must not</span><UiTextInput value={form.do_not} onChange={(event) => setForm({ ...form, do_not: event.target.value })} /></label>
+          <label className="field"><span>Until</span><UiTextInput value={form.until} placeholder="manually cleared" onChange={(event) => setForm({ ...form, until: event.target.value })} /></label>
         </div>
-        <button type="button" className="primary-button align-end" disabled={!form.what.trim() || !form.project.trim()} onClick={() => void run(async () => {
+        <UiButton type="button" className="primary-button align-end" disabled={!form.what.trim() || !form.project.trim()} onClick={() => void run(async () => {
           unwrap(await window.kaiDesktop.cognitive1Operation({ operation: 'urgent-set', payload: { ...form, until: form.until || 'manually cleared' } }));
           setForm({ ...form, what: '', do: '', do_not: '', until: '' });
-        }, 'Urgent warning set. Every agent will see it.')}>Set urgent warning</button>
+        }, 'Urgent warning set. Every agent will see it.')}>Set urgent warning</UiButton>
       </section>
     </div>
   );

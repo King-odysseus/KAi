@@ -620,6 +620,7 @@ function operationRoute(
     case 'brain-ping': return get('/api/brain/ping', {});
     case 'brain-export': return get('/api/brain/export', { format: payload.format ?? 'json' });
     case 'brain-drafts': return get('/api/brain/drafts', {});
+    case 'brain-draft-status': return get('/api/brain/drafts/status', { run_ids: payload.run_ids });
     case 'brain-draft-approve': return post('/api/brain/drafts/approve');
     case 'brain-draft-approve-all': return post('/api/brain/drafts/approve-all', {});
     case 'brain-draft-reject': return post('/api/brain/drafts/reject');

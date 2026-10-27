@@ -3,6 +3,9 @@ import { useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 type EntryType = 'bugs' | 'decisions' | 'gotchas' | 'patterns';
 
 const TYPES: Array<{ id: EntryType; label: string; hint: string }> = [
@@ -67,21 +70,21 @@ export function SaveToBrainDialog({ text, project, onClose, onSaved }: { text: s
       <div className="skills-panel brain-save-panel">
         <div className="skills-panel-head">
           <div><span className="eyebrow">C1 Brain</span><h2>Save to Brain</h2></div>
-          <button type="button" className="icon-button compact" aria-label="Close" onClick={onClose}><X size={15} /></button>
+          <UiButton type="button" className="icon-button compact" aria-label="Close" onClick={onClose}><X size={15} /></UiButton>
         </div>
         <div className="brain-save-form">
           <div className="field-grid">
             <label className="field"><span>Kind</span><Select value={type} onChange={(event) => setType(event.target.value as EntryType)}>{TYPES.map((item) => <option key={item.id} value={item.id}>{item.label} — {item.hint}</option>)}</Select></label>
-            <label className="field"><span>Project</span><input value={project} readOnly /></label>
+            <label className="field"><span>Project</span><UiTextInput value={project} readOnly /></label>
           </div>
-          <label className="field"><span>Title</span><input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>
-          <label className="field"><span>What to remember</span><textarea rows={8} value={note} maxLength={MAX_NOTE} onChange={(event) => setNote(event.target.value)} /></label>
-          <label className="field"><span>Tags (comma separated)</span><input value={tags} placeholder="frontend, css" onChange={(event) => setTags(event.target.value)} /></label>
+          <label className="field"><span>Title</span><UiTextInput value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label className="field"><span>What to remember</span><Textarea rows={8} value={note} maxLength={MAX_NOTE} onChange={(event) => setNote(event.target.value)} /></label>
+          <label className="field"><span>Tags (comma separated)</span><UiTextInput value={tags} placeholder="frontend, css" onChange={(event) => setTags(event.target.value)} /></label>
           {problem && <div className="workbench-error" role="alert">{problem.message}</div>}
           <div className="ops-actions">
-            <button type="button" className="primary-button" disabled={busy || !title.trim() || !note.trim()} onClick={() => void save(false)}><BookmarkPlus size={14} /><span>{busy ? 'Saving…' : 'Save'}</span></button>
-            {problem?.canForce && <button type="button" className="secondary-button" disabled={busy} onClick={() => void save(true)}>Save anyway</button>}
-            <button type="button" className="secondary-button" onClick={onClose}>Cancel</button>
+            <UiButton type="button" className="primary-button" disabled={busy || !title.trim() || !note.trim()} onClick={() => void save(false)}><BookmarkPlus size={14} /><span>{busy ? 'Saving…' : 'Save'}</span></UiButton>
+            {problem?.canForce && <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void save(true)}>Save anyway</UiButton>}
+            <UiButton type="button" className="secondary-button" onClick={onClose}>Cancel</UiButton>
           </div>
         </div>
       </div>

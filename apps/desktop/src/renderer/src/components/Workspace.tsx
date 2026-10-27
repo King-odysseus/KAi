@@ -7,12 +7,14 @@ import { steerWaitingNotice } from '../run-controls';
 import { PlanStrip } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
+import { Pill } from './Pill';
 import {
   Archive,
   AtSign,
   BookmarkPlus,
   ArrowRight,
   Braces,
+  Ellipsis,
   Brain,
   ChevronDown,
   Check,
@@ -112,6 +114,9 @@ import { BlockedActionsStrip } from './BlockedActionsStrip';
 import type { QueuedPrompt } from './composer-queue';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
   skills?: string[];
@@ -465,6 +470,19 @@ export function WorkspaceView({
     }
   });
   const [advancedComposerOpen, setAdvancedComposerOpen] = useState(false);
+  const [composerStatusOpen, setComposerStatusOpen] = useState(false);
+  const [noticesExpanded, setNoticesExpanded] = useState(false);
+  const [noticeCount, setNoticeCount] = useState(0);
+  const noticesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = noticesRef.current;
+    if (!host) return;
+    const count = (): void => setNoticeCount(host.querySelectorAll(':scope > .workbench-notice').length);
+    const observer = new MutationObserver(count);
+    observer.observe(host, { childList: true });
+    count();
+    return () => observer.disconnect();
+  }, []);
   const [checkpointReview, setCheckpointReview] = useState<CheckpointReview | null>(null);
   const [brainDraft, setBrainDraft] = useState<string | null>(null);
   const [fileChecks, setFileChecks] = useState<Record<string, FileVerificationState>>({});
@@ -1538,11 +1556,11 @@ export function WorkspaceView({
 
   return (
     <div className="workspace-view">
-      <div className="workspace-header">
-        <div><span className="eyebrow">{activeConversation ? 'Conversation' : 'Workspace'}</span><h1>{activeConversation?.title ?? activeProject?.name ?? 'Open a project'}</h1></div>
+      <header className="workspace-header page-header">
+        <div><h1>{activeConversation?.title ?? activeProject?.name ?? 'Workspace'}</h1><p>{activeConversation ? activeProject?.name ?? 'Conversation' : activeProject ? 'Workspace' : 'Open a project to begin'}</p></div>
         <div className="workspace-status">
           {activeProject && !activeProject.id.startsWith('studio_') && (
-            <button
+            <UiButton
               type="button"
               className="status-action"
               onClick={onPlanInStudio}
@@ -1550,19 +1568,22 @@ export function WorkspaceView({
               title={`Take ${activeProject.name} into the Project Studio and start a plan attached to its folder`}
             >
               <NotebookPen size={13} /><span>Plan in Studio</span>
-            </button>
+            </UiButton>
           )}
-          <button type="button" className={`status-action ${rawEventsOpen ? 'active' : ''}`} aria-pressed={rawEventsOpen} onClick={() => setRawEventsOpen((current) => !current)} title="Inspect raw fallback events"><Braces size={13} /><span>Raw</span><small>{rawEvents.length}</small></button>
-          <span className={`status-pill ${ready ? 'ready' : 'unavailable'}`}><Circle size={7} fill="currentColor" /> {apiRun ? 'API' : 'CLI'} {ready ? 'ready' : 'unavailable'}</span>
-          <span className="status-pill lavender"><Sparkles size={13} /> {apiRun ? directApiCapability?.model || directApiCapability?.displayName || 'Direct API' : selectedCapability?.version ?? selectedCapability?.displayName ?? selectedAgent}</span>
+          <Pill tone={ready ? 'success' : 'error'}><Circle size={7} fill="currentColor" /> {apiRun ? 'API' : 'CLI'} {ready ? 'ready' : 'unavailable'}</Pill>
+          <Pill tone="info"><Sparkles size={13} /> {apiRun ? directApiCapability?.model || directApiCapability?.displayName || 'Direct API' : selectedCapability?.version ?? selectedCapability?.displayName ?? selectedAgent}</Pill>
+          <details className="workspace-header-more">
+            <summary title="More workspace actions" aria-label="More workspace actions"><Ellipsis size={17} /></summary>
+            <div className="popover"><UiButton type="button" aria-pressed={rawEventsOpen} onClick={() => setRawEventsOpen((current) => !current)}><Braces size={14} /><span>Raw events ({rawEvents.length})</span></UiButton></div>
+          </details>
         </div>
-      </div>
+      </header>
 
-      <div className="workspace-notices">
+      <div ref={noticesRef} className={`workspace-notices ${noticesExpanded ? 'expanded' : ''}`}>
         {interruptedRuns > 0 && !running && (
           <div className="workbench-notice recovery-banner" role="status">
             <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
-            <button type="button" className="secondary-button" onClick={onOpenRecovery}>Review</button>
+            <UiButton type="button" className="secondary-button" onClick={onOpenRecovery}>Review</UiButton>
           </div>
         )}
 
@@ -1572,8 +1593,8 @@ export function WorkspaceView({
         {stuckNotice && (
           <div className="workbench-notice workbench-error" role="alert">
             <span>{stuckNotice}</span>
-            <button type="button" className="secondary-button" onClick={onStopEverything}>Stop everything</button>
-            <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setStuckNotice(null)}><X size={13} /></button>
+            <UiButton type="button" className="secondary-button" onClick={onStopEverything}>Stop everything</UiButton>
+            <UiButton type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setStuckNotice(null)}><X size={13} /></UiButton>
           </div>
         )}
 
@@ -1585,15 +1606,15 @@ export function WorkspaceView({
             <span>
               The board still has &ldquo;{interruptedAutopilot.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.
             </span>
-            <button type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void carryOnAutopilot()}>Carry on</button>
-            <button type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void releaseAutopilotCard()}>Put the card back</button>
+            <UiButton type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void carryOnAutopilot()}>Carry on</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void releaseAutopilotCard()}>Put the card back</UiButton>
           </div>
         )}
 
         {autopilotOrigin && (
           <div className="workbench-notice" role="status">
             <span>Studio card: &ldquo;{autopilotOrigin.cardTitle}&rdquo;</span>
-            <button type="button" className="secondary-button" onClick={() => onOpenStudioCard(autopilotOrigin.studioProjectId, autopilotOrigin.cardId)}>Open card in Studio</button>
+            <UiButton type="button" className="secondary-button" onClick={() => onOpenStudioCard(autopilotOrigin.studioProjectId, autopilotOrigin.cardId)}>Open card in Studio</UiButton>
           </div>
         )}
 
@@ -1605,8 +1626,8 @@ export function WorkspaceView({
                   the moment a cost warning is worth having, before the first reply of the new session is sent. */}
               {resumeCostEstimate && <> Resuming it costs roughly ${resumeCostEstimate.low < 0.01 ? resumeCostEstimate.low.toFixed(4) : resumeCostEstimate.low.toFixed(2)}–${resumeCostEstimate.high < 0.01 ? resumeCostEstimate.high.toFixed(4) : resumeCostEstimate.high.toFixed(2)} for the next response alone.</>}
             </span>
-            <button type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</button>
-            <button type="button" className="secondary-button" disabled={busy} onClick={onContinueInNewTab} title="Summarise this conversation and carry on in a new tab">Continue in new tab</button>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={onContinueInNewTab} title="Summarise this conversation and carry on in a new tab">Continue in new tab</UiButton>
           </div>
         )}
 
@@ -1615,7 +1636,7 @@ export function WorkspaceView({
         {workbenchNotice && (
           <div className="workbench-notice" role="status">
             <span>{workbenchNotice}</span>
-            <button type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></button>
+            <UiButton type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setWorkbenchNotice(null)}><X size={13} /></UiButton>
           </div>
         )}
 
@@ -1627,6 +1648,7 @@ export function WorkspaceView({
             <span>{notice}</span>
           </div>
         )}
+        {noticeCount > 1 && <UiButton type="button" className="workspace-more-notices" aria-expanded={noticesExpanded} onClick={() => setNoticesExpanded((open) => !open)}>{noticesExpanded ? 'Show less' : `+${noticeCount - 1} more`}</UiButton>}
       </div>
 
       {skillsOpen && (
@@ -1634,17 +1656,17 @@ export function WorkspaceView({
           <div className="skills-panel">
             <div className="skills-panel-head">
               <div><span className="eyebrow">Project capabilities</span><h2>Skills</h2></div>
-              <button type="button" className="icon-button compact" aria-label="Close skills" onClick={() => setSkillsOpen(false)}><X size={15} /></button>
+              <UiButton type="button" className="icon-button compact" aria-label="Close skills" onClick={() => setSkillsOpen(false)}><X size={15} /></UiButton>
             </div>
-            <label className="input-with-icon"><Search size={14} /><input value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)} placeholder="Search skills" autoFocus /></label>
+            <label className="input-with-icon"><Search size={14} /><UiTextInput value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)} placeholder="Search skills" autoFocus /></label>
             <div className="skills-list">
               {visibleSkills.map((skill) => {
                 const selected = selectedSkills.some((item) => item.name === skill.name);
                 return (
-                    <button key={`${skill.scope}:${skill.path}`} type="button" className={`skill-row ${selected ? 'selected' : ''}`} onClick={() => { setSelectedSkills((current) => selected ? current.filter((item) => item.name !== skill.name) : [...current, skill]); setPrompt((current) => /\$[A-Za-z0-9_-]*$/.test(current) ? current.replace(/\$[A-Za-z0-9_-]*$/, `$${skill.name} `) : current); }}>
+                    <UiButton key={`${skill.scope}:${skill.path}`} type="button" className={`skill-row ${selected ? 'selected' : ''}`} onClick={() => { setSelectedSkills((current) => selected ? current.filter((item) => item.name !== skill.name) : [...current, skill]); setPrompt((current) => /\$[A-Za-z0-9_-]*$/.test(current) ? current.replace(/\$[A-Za-z0-9_-]*$/, `$${skill.name} `) : current); }}>
                     <span><strong>${skill.name}</strong><small>{skill.scope}</small></span>
                     <p>{skill.description}</p>
-                  </button>
+                  </UiButton>
                 );
               })}
               {visibleSkills.length === 0 && <div className="empty-list">No matching skills</div>}
@@ -1670,7 +1692,7 @@ export function WorkspaceView({
           <div className="skills-panel raw-event-panel">
             <div className="skills-panel-head">
               <div><span className="eyebrow">Diagnostics</span><h2>Raw event inspector</h2></div>
-              <button type="button" className="icon-button compact" aria-label="Close raw event inspector" onClick={() => setRawEventsOpen(false)}><X size={15} /></button>
+              <UiButton type="button" className="icon-button compact" aria-label="Close raw event inspector" onClick={() => setRawEventsOpen(false)}><X size={15} /></UiButton>
             </div>
             <div className="raw-event-list">
               {rawEvents.map((event) => (
@@ -1678,7 +1700,7 @@ export function WorkspaceView({
                   <div className="raw-event-heading">
                     <strong>{event.sourceType}</strong>
                     <span>{new Date(event.timestamp).toLocaleString()}{event.agent ? ` · ${event.agent}` : ''}</span>
-                    <button type="button" className="secondary-button" onClick={() => void copyRawEvent(event.payload, setWorkbenchNotice)}>Copy payload</button>
+                    <UiButton type="button" className="secondary-button" onClick={() => void copyRawEvent(event.payload, setWorkbenchNotice)}>Copy payload</UiButton>
                   </div>
                   <pre>{formatRawPayload(event.payload)}</pre>
                 </article>
@@ -1699,8 +1721,8 @@ export function WorkspaceView({
             <div className="skills-panel-head">
               <div><span className="eyebrow">Checkpoint review</span><h2>{checkpointReview.files.length} changed file{checkpointReview.files.length === 1 ? '' : 's'}</h2></div>
               <div className="checkpoint-head-actions">
-                <button type="button" className="secondary-button" onClick={() => void restoreTurnChanges(checkpointReview.turnId)}><Undo2 size={14} /><span>Undo all</span></button>
-                <button type="button" className="icon-button compact" aria-label="Close checkpoint review" onClick={() => setCheckpointReview(null)}><X size={15} /></button>
+                <UiButton type="button" className="secondary-button" onClick={() => void restoreTurnChanges(checkpointReview.turnId)}><Undo2 size={14} /><span>Undo all</span></UiButton>
+                <UiButton type="button" className="icon-button compact" aria-label="Close checkpoint review" onClick={() => setCheckpointReview(null)}><X size={15} /></UiButton>
               </div>
             </div>
             {!checkpointReview.gitAvailable && <div className="workbench-error">This turn has no Git checkpoint, so files cannot be restored automatically.</div>}
@@ -1709,7 +1731,7 @@ export function WorkspaceView({
                 <article className="checkpoint-file" key={file.path}>
                   <div className="checkpoint-file-heading">
                     <div><strong>{file.path}</strong> <VerificationBadge status={fileChecks[file.path] ?? 'unverified'} /><span><b className="diff-add">+{file.added}</b><b className="diff-remove">-{file.removed}</b>{file.binary ? ' · binary' : ''}</span></div>
-                    <button type="button" className="secondary-button" disabled={!checkpointReview.gitAvailable} onClick={() => void rejectReviewedFile(file.path)}><Undo2 size={13} /><span>Restore file</span></button>
+                    <UiButton type="button" className="secondary-button" disabled={!checkpointReview.gitAvailable} onClick={() => void rejectReviewedFile(file.path)}><Undo2 size={13} /><span>Restore file</span></UiButton>
                   </div>
                   {!file.binary && checkpointReview.gitAvailable && canReviewHunks(file.before, file.after) && (
                     <HunkReview before={file.before} after={file.after} disabled={false} onReject={(hunkId) => void rejectReviewedHunk(file.path, hunkId)} />
@@ -1776,11 +1798,11 @@ export function WorkspaceView({
             {!trailingFolded && !liveParts && renderInlineEvents(trailingInlineEvents)}
             {runDetails.length > 0 && (
               <section className="run-details" aria-label="Activity timeline">
-                <button type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
+                <UiButton type="button" className="run-details-toggle" aria-expanded={showRunDetails} onClick={() => setShowRunDetails((current) => !current)}>
                   <ChevronDown size={13} />
                   <span>Activity</span>
                   <small>{timelineSummary.tools ? `${timelineSummary.tools} actions` : ''}{timelineSummary.edits ? `${timelineSummary.tools ? ' · ' : ''}${timelineSummary.edits} edits` : ''}{timelineSummary.usage ? `${timelineSummary.tools || timelineSummary.edits ? ' · ' : ''}usage` : ''}</small>
-                </button>
+                </UiButton>
                 {showRunDetails && (
                   <div className="run-details-list">
                     {renderInlineEvents(runDetails)}
@@ -1810,7 +1832,7 @@ export function WorkspaceView({
             <Sparkles size={40} />
             <h2>Ready when you are</h2>
             <p>Send a message to KAI, use <code>/goal</code> for durable work, or type <code>$</code> to invoke a skill.</p>
-            {!activeProject && <button type="button" className="primary-button" onClick={onChooseProject}><FolderOpen size={16} /><span>Open project</span></button>}
+            {!activeProject && <UiButton type="button" className="primary-button" onClick={onChooseProject}><FolderOpen size={16} /><span>Open project</span></UiButton>}
           </div>
         )}
       </div>
@@ -1823,9 +1845,9 @@ export function WorkspaceView({
               <strong>{selectedCapability?.displayName ?? 'This agent'} reached its account limit</strong>
               <span>Keep this conversation and switch only its next run to {settings.proxy.defaultModel} through your configured Universal Proxy. KAI will show the provider and budget before any API request.</span>
             </div>
-            <button type="button" className="primary-button" disabled={!proxyReady || busy} onClick={() => void confirmProxyContinuation(proxyContinuationAgent)}>
+            <UiButton type="button" className="primary-button" disabled={!proxyReady || busy} onClick={() => void confirmProxyContinuation(proxyContinuationAgent)}>
               <Route size={13} /><span>{proxyReady ? 'Continue via proxy' : 'Start proxy first'}</span>
-            </button>
+            </UiButton>
           </div>
         )}
         {activeConversation && (running || paused || awaitingApproval) && <AgentActivityStrip
@@ -1847,40 +1869,40 @@ export function WorkspaceView({
               {!apiRun && selectedCapability?.state === 'not_installed' && selectedCapability.installCommand && (
                 <div className="agent-install-command">
                   <code title="Official install command">{selectedCapability.installCommand}</code>
-                  <button type="button" className="icon-button" title="Copy install command" aria-label="Copy install command" onClick={() => void navigator.clipboard.writeText(selectedCapability.installCommand!).catch(() => undefined)}>
+                  <UiButton type="button" className="icon-button" title="Copy install command" aria-label="Copy install command" onClick={() => void navigator.clipboard.writeText(selectedCapability.installCommand!).catch(() => undefined)}>
                     <Copy size={13} />
-                  </button>
+                  </UiButton>
                 </div>
               )}
             </div>
             <div className="agent-setup-actions">
               {!apiRun && selectedCapability?.state === 'not_installed' && (
-                <button type="button" className="primary-button" onClick={() => onInstall(selectedAgent)} disabled={busy}>
+                <UiButton type="button" className="primary-button" onClick={() => onInstall(selectedAgent)} disabled={busy}>
                   <Download size={14} />
                   <span>Install</span>
-                </button>
+                </UiButton>
               )}
               {!apiRun && selectedCapability?.state === 'signed_out' && (
-                <button type="button" className="secondary-button" onClick={() => onSignIn(selectedAgent)} disabled={busy}>
+                <UiButton type="button" className="secondary-button" onClick={() => onSignIn(selectedAgent)} disabled={busy}>
                   <LogIn size={14} />
                   <span>Sign in</span>
-                </button>
+                </UiButton>
               )}
               {apiRun ? (
-                <button type="button" className="secondary-button" onClick={onOpenSettings} disabled={busy}>
+                <UiButton type="button" className="secondary-button" onClick={onOpenSettings} disabled={busy}>
                   <Settings2 size={14} />
                   <span>Configure API</span>
-                </button>
+                </UiButton>
               ) : (
                 <a className="secondary-button" href={selectedCapability!.installUrl} target="_blank" rel="noreferrer">
                   <ExternalLink size={14} />
                   <span>Install guide</span>
                 </a>
               )}
-              <button type="button" className="secondary-button" onClick={onRefreshAgents} disabled={busy}>
+              <UiButton type="button" className="secondary-button" onClick={onRefreshAgents} disabled={busy}>
                 <RefreshCw size={14} />
                 <span>Refresh status</span>
-              </button>
+              </UiButton>
             </div>
           </div>
         )}
@@ -1890,10 +1912,10 @@ export function WorkspaceView({
             <div className="goal-copy"><strong>{activeGoal.outcome}</strong><small>{activeGoal.status}{activeGoal.verification ? ` · ${activeGoal.verification}` : ''}</small></div>
             <div className="goal-actions">
               {activeGoal.status === 'running'
-                ? <button type="button" title="Pause goal" onClick={() => void updateGoalState('paused')}><Square size={11} /></button>
-                : <button type="button" title="Resume goal" onClick={() => void updateGoalState('running')}><Play size={12} /></button>}
-              <button type="button" title="Complete goal" onClick={() => void updateGoalState('completed')}><Check size={12} /></button>
-              <button type="button" title="Clear goal" onClick={() => void clearGoal()}><X size={12} /></button>
+                ? <UiButton type="button" title="Pause goal" onClick={() => void updateGoalState('paused')}><Square size={11} /></UiButton>
+                : <UiButton type="button" title="Resume goal" onClick={() => void updateGoalState('running')}><Play size={12} /></UiButton>}
+              <UiButton type="button" title="Complete goal" onClick={() => void updateGoalState('completed')}><Check size={12} /></UiButton>
+              <UiButton type="button" title="Clear goal" onClick={() => void clearGoal()}><X size={12} /></UiButton>
             </div>
           </div>
         )}
@@ -1903,24 +1925,24 @@ export function WorkspaceView({
               <div className="queue-row" key={item.id}>
                 <span className="queue-label" title={item.status === 'sending' ? 'Sending instruction' : item.status === 'blocked' ? 'Delivery failed' : 'Queued instruction'}><GitFork size={12} /></span><span className="truncate">{item.text}</span>
                 <span className="queue-status">{item.status === 'sending' || steeringQueued.includes(item.id) ? 'Sending' : item.status === 'blocked' ? 'Needs retry' : 'Waiting'}</span>
-                {item.status === 'blocked' && <button type="button" aria-label="Retry queued prompt" title={item.error ?? 'Retry queued prompt'} onClick={() => onUpdateQueuedPrompt(item.id, 'retry')}><RefreshCw size={12} /></button>}
-                <button
+                {item.status === 'blocked' && <UiButton type="button" aria-label="Retry queued prompt" title={item.error ?? 'Retry queued prompt'} onClick={() => onUpdateQueuedPrompt(item.id, 'retry')}><RefreshCw size={12} /></UiButton>}
+                <UiButton
                   type="button"
                   className="queue-steer-button"
                   aria-label="Send queued prompt now"
                   title={running ? apiRun ? 'Handle this instruction now, then resume the active task' : 'CLI runs cannot accept live messages; this will send after the run ends' : 'Send this instruction next'}
                   disabled={item.status === 'sending' || steeringQueued.includes(item.id) || (running && !apiRun)}
                   onClick={() => steerQueuedPrompt(index)}
-                ><ArrowRight size={12} /><span>{running && !apiRun ? 'After run' : 'Steer now'}</span></button>
-                <button type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></button>
-                <button type="button" aria-label="Remove queued prompt" title="Remove queued prompt" disabled={item.status === 'sending'} onClick={() => onUpdateQueuedPrompt(item.id, 'remove')}><Trash2 size={12} /></button>
+                ><ArrowRight size={12} /><span>{running && !apiRun ? 'After run' : 'Steer now'}</span></UiButton>
+                <UiButton type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></UiButton>
+                <UiButton type="button" aria-label="Remove queued prompt" title="Remove queued prompt" disabled={item.status === 'sending'} onClick={() => onUpdateQueuedPrompt(item.id, 'remove')}><Trash2 size={12} /></UiButton>
               </div>
             ))}
           </div>
         )}
         <div className="context-chip-row">
           {selectedFiles.map((file) => (
-            <span className="context-chip" key={file} title={file}><File size={11} /><span className="truncate">{file}</span><button type="button" aria-label={`Remove ${file}`} onClick={() => setSelectedFiles((current) => current.filter((item) => item !== file))}><X size={11} /></button></span>
+            <Pill className="context-chip" key={file} title={file}><File size={11} /><span className="truncate">{file}</span><UiButton type="button" aria-label={`Remove ${file}`} onClick={() => setSelectedFiles((current) => current.filter((item) => item !== file))}><X size={11} /></UiButton></Pill>
           ))}
           {contextChips.map((chip) => chip.type === 'image' && chip.dataUrl ? (
             <ImageChip
@@ -1930,21 +1952,21 @@ export function WorkspaceView({
               onRemove={() => setContextChips((current) => current.filter((item) => contextChipKey(item) !== contextChipKey(chip)))}
             />
           ) : (
-            <span className={`context-chip ${chip.type}-chip`} key={contextChipKey(chip)} title={contextChipLabel(chip)}>
+            <Pill className={`context-chip ${chip.type}-chip`} key={contextChipKey(chip)} title={contextChipLabel(chip)}>
               {contextChipIcon(chip.type)}
               <span className="truncate">{contextChipLabel(chip)}</span>
-              <button type="button" aria-label={`Remove ${contextChipLabel(chip)}`} onClick={() => setContextChips((current) => current.filter((item) => contextChipKey(item) !== contextChipKey(chip)))}><X size={11} /></button>
-            </span>
+              <UiButton type="button" aria-label={`Remove ${contextChipLabel(chip)}`} onClick={() => setContextChips((current) => current.filter((item) => contextChipKey(item) !== contextChipKey(chip)))}><X size={11} /></UiButton>
+            </Pill>
           ))}
           {selectedSkills.map((skill) => (
-            <span className="context-chip skill-chip" key={skill.name}>${skill.name}<button type="button" aria-label={`Remove ${skill.name}`} onClick={() => setSelectedSkills((current) => current.filter((item) => item.name !== skill.name))}><X size={11} /></button></span>
+            <Pill className="context-chip skill-chip" key={skill.name}>${skill.name}<UiButton type="button" aria-label={`Remove ${skill.name}`} onClick={() => setSelectedSkills((current) => current.filter((item) => item.name !== skill.name))}><X size={11} /></UiButton></Pill>
           ))}
         </div>
         {contextChips.filter((chip): chip is Extract<ContextChip, { type: 'memory' }> => chip.type === 'memory').map((chip) => (
           <div className="brain-brief" key={`brief:${chip.query}`} role="status">
             <Brain size={14} />
             <div><strong>Brain brief</strong><span>{chip.summary || `Memory search: ${chip.query}`}</span></div>
-            <button type="button" className="icon-button compact" aria-label="Remove Brain brief" title="Remove Brain brief" onClick={() => setContextChips((current) => current.filter((item) => item !== chip))}><X size={12} /></button>
+            <UiButton type="button" className="icon-button compact" aria-label="Remove Brain brief" title="Remove Brain brief" onClick={() => setContextChips((current) => current.filter((item) => item !== chip))}><X size={12} /></UiButton>
           </div>
         ))}
         {contextPickerOpen && activeProject && (
@@ -1952,20 +1974,20 @@ export function WorkspaceView({
           <div className="context-picker skills-panel">
             <div className="context-picker-head">
               <div><strong>Add context</strong><span>Files, selections, changes, memory, or an image</span></div>
-              <button type="button" className="icon-button compact" aria-label="Close context picker" onClick={() => setContextPickerOpen(false)}><X size={14} /></button>
+              <UiButton type="button" className="icon-button compact" aria-label="Close context picker" onClick={() => setContextPickerOpen(false)}><X size={14} /></UiButton>
             </div>
             <div className="context-picker-actions">
-              <button type="button" disabled={contextBusy} onClick={() => void addSelectionContext()}><Braces size={14} /><span>Current selection</span></button>
-              <button type="button" disabled={contextBusy} onClick={() => void addGitDiffContext()}><FileDiff size={14} /><span>Uncommitted changes</span></button>
-              <button type="button" disabled={contextBusy} onClick={() => void addMemoryContext()}><Brain size={14} /><span>Search memory</span></button>
-              <button type="button" disabled={contextBusy} onClick={() => imageInputRef.current?.click()}><ImagePlus size={14} /><span>Attach image</span></button>
+              <UiButton type="button" disabled={contextBusy} onClick={() => void addSelectionContext()}><Braces size={14} /><span>Current selection</span></UiButton>
+              <UiButton type="button" disabled={contextBusy} onClick={() => void addGitDiffContext()}><FileDiff size={14} /><span>Uncommitted changes</span></UiButton>
+              <UiButton type="button" disabled={contextBusy} onClick={() => void addMemoryContext()}><Brain size={14} /><span>Search memory</span></UiButton>
+              <UiButton type="button" disabled={contextBusy} onClick={() => imageInputRef.current?.click()}><ImagePlus size={14} /><span>Attach image</span></UiButton>
             </div>
-            <label className="input-with-icon context-file-search"><FileSearch size={14} /><input autoFocus value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="Search project files" /></label>
+            <label className="input-with-icon context-file-search"><FileSearch size={14} /><UiTextInput autoFocus value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="Search project files" /></label>
             <div className="context-file-results">
               {fileResults.map((file) => (
-                <button type="button" key={file} onClick={() => { setSelectedFiles((current) => [...new Set([...current, file])]); setContextPickerOpen(false); setFileQuery(''); setPrompt((current) => current.replace(/@[^\s]*$/, '').trimEnd()); }}>
+                <UiButton type="button" key={file} onClick={() => { setSelectedFiles((current) => [...new Set([...current, file])]); setContextPickerOpen(false); setFileQuery(''); setPrompt((current) => current.replace(/@[^\s]*$/, '').trimEnd()); }}>
                   <AtSign size={12} /><span className="truncate">{file}</span>
-                </button>
+                </UiButton>
               ))}
               {contextBusy && <div className="empty-list">Searching project files</div>}
               {!contextBusy && fileResults.length === 0 && <div className="empty-list">No matching files</div>}
@@ -1978,7 +2000,7 @@ export function WorkspaceView({
           <div className="context-picker skills-panel">
             <div className="context-picker-head">
               <div><strong>Saved prompts</strong><span>Reuse a prompt, or save the one you're writing into a slot</span></div>
-              <button type="button" className="icon-button compact" aria-label="Close saved prompts" onClick={() => setPresetsOpen(false)}><X size={14} /></button>
+              <UiButton type="button" className="icon-button compact" aria-label="Close saved prompts" onClick={() => setPresetsOpen(false)}><X size={14} /></UiButton>
             </div>
             <div className="prompt-preset-list">
               {Array.from({ length: 9 }, (_, index) => index + 1).map((slot) => {
@@ -1988,13 +2010,13 @@ export function WorkspaceView({
                     <span className="prompt-preset-slot"><Hash size={11} />{slot}</span>
                     {preset ? (
                       <>
-                        <button type="button" className="prompt-preset-use" title={preset.text} onClick={() => { setPrompt(preset.text); setPresetsOpen(false); window.setTimeout(() => promptRef.current?.focus(), 0); }}>
+                        <UiButton type="button" className="prompt-preset-use" title={preset.text} onClick={() => { setPrompt(preset.text); setPresetsOpen(false); window.setTimeout(() => promptRef.current?.focus(), 0); }}>
                           {preset.label}
-                        </button>
-                        <button type="button" className="icon-button compact" aria-label={`Delete preset ${slot}`} title="Delete this saved prompt" onClick={() => void window.kaiDesktop.deletePromptPreset(slot).then(unwrap).then(setPresets)}><Trash2 size={12} /></button>
+                        </UiButton>
+                        <UiButton type="button" className="icon-button compact" aria-label={`Delete preset ${slot}`} title="Delete this saved prompt" onClick={() => void window.kaiDesktop.deletePromptPreset(slot).then(unwrap).then(setPresets)}><Trash2 size={12} /></UiButton>
                       </>
                     ) : (
-                      <button
+                      <UiButton
                         type="button"
                         className="prompt-preset-use empty"
                         disabled={!prompt.trim() || savingPresetSlot === slot}
@@ -2014,12 +2036,13 @@ export function WorkspaceView({
                         })()}
                       >
                         Empty — save current prompt here
-                      </button>
+                      </UiButton>
                     )}
                   </div>
                 );
               })}
             </div>
+            <div className="command-chip-row in-picker" role="group" aria-label="Slash commands">{COMMANDS.map((command) => <UiButton type="button" key={command} onClick={() => { applyCommand(command); setPresetsOpen(false); }}>{command}</UiButton>)}</div>
           </div>
           </div>
         )}
@@ -2028,7 +2051,7 @@ export function WorkspaceView({
           <div className="context-picker skills-panel side-question-panel">
             <div className="context-picker-head">
               <div><strong>Side question</strong><span>Answered on its own, without changing this conversation</span></div>
-              <button type="button" className="icon-button compact" aria-label="Close side question" onClick={() => setSideOpen(false)}><X size={14} /></button>
+              <UiButton type="button" className="icon-button compact" aria-label="Close side question" onClick={() => setSideOpen(false)}><X size={14} /></UiButton>
             </div>
             {sideConversation && sideConversation.turns.length > 0 && (
               <div className="side-question-transcript">
@@ -2041,7 +2064,7 @@ export function WorkspaceView({
               </div>
             )}
             <div className="side-question-compose">
-              <textarea
+              <Textarea
                 rows={2}
                 value={sideDraft}
                 onChange={(event) => setSideDraft(event.target.value)}
@@ -2054,10 +2077,10 @@ export function WorkspaceView({
                   }
                 }}
               />
-              <button type="button" className="secondary-button" disabled={!sideDraft.trim() || sideConversationRunning} onClick={() => { onAskSideQuestion(sideDraft.trim()); setSideDraft(''); }}>
+              <UiButton type="button" className="secondary-button" disabled={!sideDraft.trim() || sideConversationRunning} onClick={() => { onAskSideQuestion(sideDraft.trim()); setSideDraft(''); }}>
                 {sideConversationRunning ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
                 <span>Ask</span>
-              </button>
+              </UiButton>
             </div>
           </div>
           </div>
@@ -2066,10 +2089,10 @@ export function WorkspaceView({
           <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Goal">
           <div className="goal-editor skills-panel">
             <div className="goal-editor-head"><strong>Goal</strong><span>Outcome, constraints, and proof of completion</span></div>
-            <label><span>Outcome</span><textarea rows={2} value={goalEditor.outcome} onChange={(event) => setGoalEditor({ ...goalEditor, outcome: event.target.value })} placeholder="What should be true when this work is done?" /></label>
-            <label><span>Constraints</span><textarea rows={2} value={goalEditor.constraints ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, constraints: event.target.value })} placeholder="Required tools, boundaries, or approaches to avoid" /></label>
-            <label><span>Verification</span><textarea rows={2} value={goalEditor.verification ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, verification: event.target.value })} placeholder="Tests, measurements, or review criteria that prove completion" /></label>
-            <div className="button-row align-end"><button type="button" className="secondary-button" onClick={() => setGoalEditor(null)}>Cancel</button><button type="button" className="secondary-button" onClick={() => void saveGoal(false)}>Save</button><button type="button" className="primary-button" onClick={() => void saveGoal(true)}>Start goal</button></div>
+            <label><span>Outcome</span><Textarea rows={2} value={goalEditor.outcome} onChange={(event) => setGoalEditor({ ...goalEditor, outcome: event.target.value })} placeholder="What should be true when this work is done?" /></label>
+            <label><span>Constraints</span><Textarea rows={2} value={goalEditor.constraints ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, constraints: event.target.value })} placeholder="Required tools, boundaries, or approaches to avoid" /></label>
+            <label><span>Verification</span><Textarea rows={2} value={goalEditor.verification ?? ''} onChange={(event) => setGoalEditor({ ...goalEditor, verification: event.target.value })} placeholder="Tests, measurements, or review criteria that prove completion" /></label>
+            <div className="button-row align-end"><UiButton type="button" className="secondary-button" onClick={() => setGoalEditor(null)}>Cancel</UiButton><UiButton type="button" className="secondary-button" onClick={() => void saveGoal(false)}>Save</UiButton><UiButton type="button" className="primary-button" onClick={() => void saveGoal(true)}>Start goal</UiButton></div>
           </div>
           </div>
         )}
@@ -2099,7 +2122,7 @@ export function WorkspaceView({
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}
         <div className={`composer-box${composerRun ? ` run-${composerRun.line.state}` : ''}`}>
-          <textarea
+          <Textarea
             ref={promptRef}
             value={prompt}
             onChange={(event) => {
@@ -2146,62 +2169,42 @@ export function WorkspaceView({
           />
           <div className="composer-toolbar">
             <div className="composer-leading">
-              <button type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></button>
-              <button type="button" className={`composer-icon-button ${presetsOpen ? 'active' : ''}`} onClick={() => setPresetsOpen((current) => !current)} title="Saved prompts" aria-label="Saved prompts"><Hash size={14} /></button>
+              <UiButton type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></UiButton>
+              <UiButton type="button" className={`composer-icon-button ${presetsOpen ? 'active' : ''}`} onClick={() => setPresetsOpen((current) => !current)} title="Saved prompts" aria-label="Saved prompts"><Hash size={14} /></UiButton>
               {activeConversation && (
-                <button type="button" className={`composer-icon-button ${sideOpen ? 'active' : ''}`} onClick={() => setSideOpen((current) => !current)} title="Ask a quick question without derailing this conversation" aria-label="Side question"><MessageCircleQuestion size={14} /></button>
+                <UiButton type="button" className={`composer-icon-button ${sideOpen ? 'active' : ''}`} onClick={() => setSideOpen((current) => !current)} title="Ask a quick question without derailing this conversation" aria-label="Side question"><MessageCircleQuestion size={14} /></UiButton>
               )}
-              <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
               <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
-              <SelectMenu ariaLabel="Reply style" className="composer-style-select" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
-              <SelectMenu ariaLabel="Agents" className="composer-style-select" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once. Auto lets the agent decide: a large job with separate parts gets helpers." value={selectedHelpers} />
-              {helperAgentCount > 0 && (
-                <span
-                  className="composer-helper-pill"
-                  title={`KAI sent ${helperAgentCount} read-only helper agent${helperAgentCount === 1 ? '' : 's'} off to look into something in this conversation`}
-                >
-                  <Search size={12} /><span>{helperAgentCount}</span>
-                </span>
-              )}
-              {/* Route is the one rarely-used choice, so it sits behind this gear. CLI/API, agent, model and effort are
-                  on the right, always in view: they are what a person changes between windows. */}
-              <button type="button" className={`composer-icon-button composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} aria-label="More run options" title="More run options (route)" onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}><Settings2 size={14} /></button>
-              {advancedComposerOpen && <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />}
+              <UiButton type="button" className={`composer-icon-button composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} aria-label="More run options" title="More run options" onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}><Settings2 size={14} /></UiButton>
             </div>
             <div className="composer-actions">
-              <div className="mode-toggle" role="group" aria-label="Execution mode">
-                <button type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}><span>CLI</span></button>
-                <button type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}><span>API</span></button>
-              </div>
-              {apiRun ? (
-                <button type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></button>
-              ) : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason ?? 'Which agent works on this conversation'} value={selectedAgent} />}
               <SelectMenu ariaLabel="Model" className="composer-model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
-              {!apiRun && reasoningLevels.length > 0 && (
-                <SelectMenu ariaLabel="Thinking effort" className="composer-effort-select" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />
-              )}
-              <button type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</button>
+              <UiButton type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</UiButton>
               {(running || paused || awaitingApproval) ? (
                 <>
-                  {running && <button type="button" className="send-button" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></button>}
-                  {running && apiRun && <button type="button" className="send-button" disabled={!canSendPrompt || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></button>}
-                  {!awaitingApproval && <button type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</button>}
-                  <button type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></button>
+                  {running && <UiButton type="button" className="send-button" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></UiButton>}
+                  {running && apiRun && <UiButton type="button" className="send-button" disabled={!canSendPrompt || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></UiButton>}
+                  {!awaitingApproval && <UiButton type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</UiButton>}
+                  <UiButton type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></UiButton>
                 </>
-              ) : <button type="button" className="send-button" disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={taskIntent === 'auto' ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={taskIntent === 'auto' ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</button>}
+              ) : <UiButton type="button" className="send-button" disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={taskIntent === 'auto' ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={taskIntent === 'auto' ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</UiButton>}
             </div>
           </div>
+          {advancedComposerOpen && <div className="composer-advanced-options" aria-label="More run options">
+            <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
+            <SelectMenu ariaLabel="Reply style" className="composer-style-select" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
+            <SelectMenu ariaLabel="Agents" className="composer-style-select" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
+            {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
+            <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
+            <div className="mode-toggle" role="group" aria-label="Execution mode"><UiButton type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}>CLI</UiButton><UiButton type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}>API</UiButton></div>
+            {apiRun ? <UiButton type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></UiButton> : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason ?? 'Which agent works on this conversation'} value={selectedAgent} />}
+            {!apiRun && reasoningLevels.length > 0 && <SelectMenu ariaLabel="Thinking effort" className="composer-effort-select" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
+          </div>}
         </div>
-        {responseCostEstimate && (
-          <p className="composer-cost-estimate" title={`Rough estimate for one model response on ${estimateModel}. Full agent runs can make multiple responses; context, caching, provider pricing, tools, and actual output change the bill.`}>
-            Roughly ${responseCostEstimate.low < 0.01 ? responseCostEstimate.low.toFixed(4) : responseCostEstimate.low.toFixed(2)}–${responseCostEstimate.high < 0.01 ? responseCostEstimate.high.toFixed(4) : responseCostEstimate.high.toFixed(2)} per response
-            <span> · full task may cost more</span>
-          </p>
-        )}
         {taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
           <p className="composer-task-guidance" role="note">
             <span>Auto works on its own, so it needs Edit files or Full access, and Access is lower than that.</span>{' '}
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => { onSelectAutonomy('autoEdit'); if (prompt.trim()) setSendWhenAccessReady(true); }}>{prompt.trim() ? 'Use Edit files and send' : 'Use Edit files'}</button>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => { onSelectAutonomy('autoEdit'); if (prompt.trim()) setSendWhenAccessReady(true); }}>{prompt.trim() ? 'Use Edit files and send' : 'Use Edit files'}</UiButton>
           </p>
         )}
         {taskIntent === 'build' && selectedAutonomy === 'plan' && (
@@ -2211,15 +2214,21 @@ export function WorkspaceView({
           <div className="permission-grid">
             {PERMISSIONS.map((permission) => (
               <label key={permission.key} title={permission.description}>
-                <input type="checkbox" checked={Boolean(projectPreferences?.customPermissions?.[permission.key])} onChange={(event) => void togglePermission(permission.key, event.target.checked)} />
+                <Checkbox checked={Boolean(projectPreferences?.customPermissions?.[permission.key])} onChange={(event) => void togglePermission(permission.key, event.target.checked)} />
                 <span><strong>{permission.label}</strong><small>{permission.description}</small></span>
               </label>
             ))}
           </div>
         )}
-        <div className="command-chip-row">{COMMANDS.map((command) => <button type="button" key={command} onClick={() => applyCommand(command)}>{command}</button>)}</div>
-        {profile.explainAccess && <p className="access-hint" role="note"><ShieldCheck size={12} /><span><strong>{ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.label}:</strong> {ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.description}</span></p>}
-        <div className="composer-footer"><span>{running ? `Enter to queue${apiRun ? ' · Alt/Ctrl+Enter to steer' : ''}` : 'Enter to send · Shift+Enter for a new line'} · Shift+Tab to change access</span><span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span></div>
+        <div className="composer-status-line">
+          <UiButton type="button" aria-expanded={composerStatusOpen} onClick={() => setComposerStatusOpen((open) => !open)}><ChevronDown size={12} className={composerStatusOpen ? 'rotate-180' : ''} /> {running ? 'Running' : 'Ready'} · {apiRun ? 'API' : 'CLI'} · {selectedModel || selectedAgent}</UiButton>
+          <span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span>
+        </div>
+        {composerStatusOpen && <div className="composer-status-details">
+          {responseCostEstimate && <p className="composer-cost-estimate" title={`Rough estimate for one model response on ${estimateModel}. Full agent runs can make multiple responses; context, caching, provider pricing, tools, and actual output change the bill.`}>Roughly ${responseCostEstimate.low < 0.01 ? responseCostEstimate.low.toFixed(4) : responseCostEstimate.low.toFixed(2)}–${responseCostEstimate.high < 0.01 ? responseCostEstimate.high.toFixed(4) : responseCostEstimate.high.toFixed(2)} per response <span>· full task may cost more</span></p>}
+          {profile.explainAccess && <p className="access-hint" role="note"><ShieldCheck size={12} /><span><strong>{ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.label}:</strong> {ACCESS_LEVELS.find((level) => level.value === selectedAutonomy)?.description}</span></p>}
+          <div className="composer-footer"><span>{running ? `Enter to queue${apiRun ? ' · Alt/Ctrl+Enter to steer' : ''}` : 'Enter to send · Shift+Enter for a new line'} · Shift+Tab to change access</span></div>
+        </div>}
       </div>
     </div>
   );
@@ -2287,12 +2296,12 @@ function ExecutableCommandsGroup({ events, runActive, children }: { events: Arra
         : 'Done';
   return (
     <section className={`command-group${failed > 0 ? ' failed' : ''}`} aria-label={`${events.length} executable command${events.length === 1 ? '' : 's'}`}>
-      <button type="button" className="command-group-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)} title={expanded ? 'Hide executable commands' : 'Show executable commands'}>
+      <UiButton type="button" className="command-group-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)} title={expanded ? 'Hide executable commands' : 'Show executable commands'}>
         <ChevronDown className="command-group-chevron" size={14} />
         <span className="tool-call-icon"><Terminal size={13} /></span>
         <strong>{events.length} command{events.length === 1 ? '' : 's'}</strong>
         <small>{summary}</small>
-      </button>
+      </UiButton>
       {expanded && <div className="command-group-list">{children}</div>}
     </section>
   );
@@ -2318,14 +2327,14 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
       {partFirst && <div className="message-role">
         {turn.role === 'user' ? 'You' : 'KAI'}
         {turn.role === 'assistant' && brainReady && (
-          <button type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => onSaveToBrain(turn.text)}>
+          <UiButton type="button" className="message-action" title="Save this answer to the C1 brain" aria-label="Save to Brain" onClick={() => onSaveToBrain(turn.text)}>
             <BookmarkPlus size={12} /><span>Save to Brain</span>
-          </button>
+          </UiButton>
         )}
         {turn.role === 'user' && (
-          <button type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></button>
+          <UiButton type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></UiButton>
         )}
-        <button type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></button>
+        <UiButton type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></UiButton>
       </div>}
       <MessageContent text={partText ?? turn.text} markdown={turn.role === 'assistant'} onOpenFile={onOpenFile} />
       {turn.role === 'user' && turn.attachments?.length ? (
@@ -2357,14 +2366,14 @@ function AnswerBox({ onAnswer }: { onAnswer: (text: string) => void }): ReactNod
   };
   return (
     <div className="answer-box" role="group" aria-label="Answer KAI's question">
-      <input
+      <UiTextInput
         type="text"
         value={text}
         placeholder="Type your answer…"
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter') submit(); }}
       />
-      <button type="button" className="primary-button" disabled={!text.trim()} onClick={submit}>Answer</button>
+      <UiButton type="button" className="primary-button" disabled={!text.trim()} onClick={submit}>Answer</UiButton>
     </div>
   );
 }
@@ -2373,7 +2382,7 @@ function CopyMessageButton({ text }: { text: string }): ReactNode {
   const [copied, setCopied] = useState(false);
   return (
     <div className="message-tools">
-      <button
+      <UiButton
         type="button"
         className="message-copy"
         title={copied ? 'Copied' : 'Copy message'}
@@ -2386,7 +2395,7 @@ function CopyMessageButton({ text }: { text: string }): ReactNode {
         }}
       >
         {copied ? <Check size={13} /> : <Copy size={13} />}
-      </button>
+      </UiButton>
     </div>
   );
 }
@@ -2414,7 +2423,7 @@ function WorkProgressTimeline({ events, activity, paused, elapsedSeconds, tokenE
   return (
     <article className="work-progress" role="status" aria-live="polite">
       <div className="work-progress-current"><span className={paused ? 'progress-dot paused' : 'progress-dot'} /> <strong>{current}</strong><small>{activity.detail}</small><time>{elapsedSeconds}s{tokenEstimate > 0 ? ` · ~${formatTokenEstimate(tokenEstimate)} tokens` : ''}</time></div>
-      {milestones.length > 0 && <div className="work-progress-steps">{milestones.map((step) => <div key={step.id} className={`work-progress-step ${step.complete ? 'complete' : step.failed ? 'failed' : 'active'}`}><span>{step.complete ? '✓' : step.failed ? '!' : '•'}</span><p>{step.label}</p></div>)}</div>}
+      {milestones.length > 0 && <div className="work-progress-steps">{milestones.map((step) => <div key={step.id} className={`work-progress-step ${step.complete ? 'complete' : step.failed ? 'failed' : 'active'}`}><span>{step.complete ? <Check size={12} /> : step.failed ? <X size={12} /> : <Circle size={9} fill="currentColor" />}</span><p>{step.label}</p></div>)}</div>}
     </article>
   );
 }
@@ -2435,7 +2444,7 @@ function MessageContent({ text, markdown = false, onOpenFile }: { text: string; 
         if (index % 3 === 2) {
           const language = parts[index - 1]?.trim() || 'text';
           return <section className="response-code" key={`code-${index}`}>
-            <header><span>{language}</span><button type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(part)}><Copy size={14} /></button></header>
+            <header><span>{language}</span><UiButton type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(part)}><Copy size={14} /></UiButton></header>
             <pre><code>{part.trim()}</code></pre>
           </section>;
         }
@@ -2520,7 +2529,7 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
     return details ? <div className="run-event cost"><span>Usage</span><strong>{details}</strong></div> : null;
   }
   if (event.type === 'error') {
-    return <div className="run-event error"><span>Error</span><strong>{event.message}</strong>{event.recoverable && <small>recoverable</small>}<button type="button" className="secondary-button explain-error-button" title="Ask KAI what this error means and how to fix it, without changing any files" onClick={() => onAskKai(`I got this error. Explain in plain words what it means, why it probably happened, and the smallest safe fix. Do not change any files yet.\n\nError: ${event.message}`)}><Lightbulb size={12} /><span>Explain this error</span></button></div>;
+    return <div className="run-event error"><span>Error</span><strong>{event.message}</strong>{event.recoverable && <small>recoverable</small>}<UiButton type="button" className="secondary-button explain-error-button" title="Ask KAI what this error means and how to fix it, without changing any files" onClick={() => onAskKai(`I got this error. Explain in plain words what it means, why it probably happened, and the smallest safe fix. Do not change any files yet.\n\nError: ${event.message}`)}><Lightbulb size={12} /><span>Explain this error</span></UiButton></div>;
   }
   if (event.type === 'turn.changes') {
     const added = event.files.reduce((sum, file) => sum + file.added, 0);
@@ -2546,7 +2555,7 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
           <ShieldCheck size={14} />
           <div><strong>{securityReview.title}</strong><span>{securityReview.detail}</span></div>
         </div>
-        <button
+        <UiButton
           type="button"
           className="changes-head"
           aria-expanded={changesExpanded}
@@ -2558,7 +2567,7 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
           <span className="changes-head-spacer" />
           {added > 0 && <span className="diff-add">+{added}</span>}
           {removed > 0 && <span className="diff-remove">-{removed}</span>}
-        </button>
+        </UiButton>
         {changesExpanded && (
           <>
             <div className="changes-list">
@@ -2571,10 +2580,10 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
           </>
         )}
         <div className="changes-actions">
-          <button type="button" className="primary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review changes</span></button>
-          <button type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo turn</span></button>
-          <button type="button" className="secondary-button" disabled={!projectId || event.files.length === 0 || explanation.state === 'loading'} onClick={() => void explainChanges(event.files.map((file) => file.path))} title="A second model reads these changes and explains them in plain words"><Lightbulb size={13} /><span>{explanation.state === 'loading' ? 'Reading the changes…' : explanation.state === 'done' ? 'Explain again' : 'Explain these changes'}</span></button>
-          {verification?.latest && <button type="button" className="secondary-button" onClick={onOpenVerification} title="Open verification history"><ShieldCheck size={13} /><span>Verification details</span></button>}
+          <UiButton type="button" className="primary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onReview(event.turnId)} title={event.hasCheckpoint ? 'Review changed files against the checkpoint' : 'This turn has no Git checkpoint'}><Eye size={13} /><span>Review changes</span></UiButton>
+          <UiButton type="button" className="secondary-button" disabled={!event.turnId || !event.hasCheckpoint} onClick={() => event.turnId && void onUndo(event.turnId)} title={event.hasCheckpoint ? 'Restore every file changed during this turn' : 'This turn has no Git checkpoint'}><Undo2 size={13} /><span>Undo turn</span></UiButton>
+          <UiButton type="button" className="secondary-button" disabled={!projectId || event.files.length === 0 || explanation.state === 'loading'} onClick={() => void explainChanges(event.files.map((file) => file.path))} title="A second model reads these changes and explains them in plain words"><Lightbulb size={13} /><span>{explanation.state === 'loading' ? 'Reading the changes…' : explanation.state === 'done' ? 'Explain again' : 'Explain these changes'}</span></UiButton>
+          {verification?.latest && <UiButton type="button" className="secondary-button" onClick={onOpenVerification} title="Open verification history"><ShieldCheck size={13} /><span>Verification details</span></UiButton>}
         </div>
         {explanation.state === 'error' && <div className="change-explanation error" role="alert"><strong>Could not explain the changes</strong><p>{explanation.error}</p></div>}
         {explanation.state === 'done' && explanation.result && (
@@ -2591,10 +2600,10 @@ function RunEventCardBase({ event, originalRequest, projectId, reviewMode, defau
               ].join('\n\n');
               return (
                 <li key={index}>
-                  <span className={`review-chip ${finding.severity}`}>{finding.severity}</span>
-                  <button type="button" className="review-finding-file-button" title={`Open ${location}`} onClick={() => onOpenFile(finding.file, finding.line)}><File size={12} /><span>{location}</span></button>
+                  <Pill tone={finding.severity === 'high' ? 'error' : finding.severity === 'medium' ? 'warning' : 'info'}>{finding.severity}</Pill>
+                  <UiButton type="button" className="review-finding-file-button" title={`Open ${location}`} onClick={() => onOpenFile(finding.file, finding.line)}><File size={12} /><span>{location}</span></UiButton>
                   <p>{finding.note}</p>
-                  <button type="button" className="secondary-button compact" onClick={() => onFixFinding(fixPrompt)}><Wand2 size={12} /><span>Ask KAI to fix</span></button>
+                  <UiButton type="button" className="secondary-button compact" onClick={() => onFixFinding(fixPrompt)}><Wand2 size={12} /><span>Ask KAI to fix</span></UiButton>
                 </li>
               );
             })}</ul>}
@@ -2666,14 +2675,14 @@ function ComparePanel({ result, onPick, onOpen, onDiscard }: { result: CompareRu
               <span className="diff-remove">-{side.files.reduce((sum, file) => sum + file.removed, 0)}</span>
             </div>
             <div className="compare-actions">
-              <button type="button" className="primary-button" disabled={Boolean(actionBusy) || !side.ok} onClick={() => void runAction(`pick-${position}`, () => onPick(result.id, position))}><Check size={13} /><span>{actionBusy === `pick-${position}` ? 'Applying' : 'Pick this one'}</span></button>
-              <button type="button" className="secondary-button" disabled={Boolean(actionBusy)} onClick={() => void runAction(`open-${position}`, () => onOpen(result.id, position))}><FolderOpen size={13} /><span>Open worktree</span></button>
+              <UiButton type="button" className="primary-button" disabled={Boolean(actionBusy) || !side.ok} onClick={() => void runAction(`pick-${position}`, () => onPick(result.id, position))}><Check size={13} /><span>{actionBusy === `pick-${position}` ? 'Applying' : 'Pick this one'}</span></UiButton>
+              <UiButton type="button" className="secondary-button" disabled={Boolean(actionBusy)} onClick={() => void runAction(`open-${position}`, () => onOpen(result.id, position))}><FolderOpen size={13} /><span>Open worktree</span></UiButton>
             </div>
           </article>
         ))}
       </div>
       {actionError && <div className="workbench-error">{actionError}</div>}
-      <div className="compare-discard-row"><button type="button" className="secondary-button" disabled={Boolean(actionBusy)} onClick={() => void runAction('discard', () => onDiscard(result.id))}><Trash2 size={13} /><span>Discard both</span></button></div>
+      <div className="compare-discard-row"><UiButton type="button" className="secondary-button" disabled={Boolean(actionBusy)} onClick={() => void runAction('discard', () => onDiscard(result.id))}><Trash2 size={13} /><span>Discard both</span></UiButton></div>
     </section>
   );
 }
@@ -2821,16 +2830,16 @@ function InlineQuestion({ question, onAnswer }: {
       {question.detail && <p className="inline-question-context">{question.detail}</p>}
       <div className="inline-question-options">
         {question.options.map((option) => (
-          <button key={option} type="button" className="secondary-button" onClick={() => onAnswer(question.requestId, option)}>{option}</button>
+          <UiButton key={option} type="button" className="secondary-button" onClick={() => onAnswer(question.requestId, option)}>{option}</UiButton>
         ))}
       </div>
       {question.allowFreeText && (
         <form className="inline-question-answer" onSubmit={(event) => { event.preventDefault(); if (answer.trim()) onAnswer(question.requestId, answer.trim()); }}>
-          <input aria-label="Your answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Or type your own answer" />
-          <button type="submit" className="primary-button" disabled={!answer.trim()}>Answer</button>
+          <UiTextInput aria-label="Your answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Or type your own answer" />
+          <UiButton type="submit" className="primary-button" disabled={!answer.trim()}>Answer</UiButton>
         </form>
       )}
-      <button type="button" className="inline-question-skip" onClick={() => onAnswer(question.requestId, null)}>Skip for now</button>
+      <UiButton type="button" className="inline-question-skip" onClick={() => onAnswer(question.requestId, null)}>Skip for now</UiButton>
     </section>
   );
 }
@@ -2921,7 +2930,7 @@ function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = fa
 
   return (
     <div ref={rootRef} className={`chip-button select-menu ${className} ${disabled ? 'disabled' : ''}`.trim()}>
-      <button
+      <UiButton
         ref={triggerRef}
         type="button"
         className="select-menu-trigger"
@@ -2935,11 +2944,11 @@ function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = fa
         {icon}
         <span className="select-menu-value truncate">{labelPrefix ? `${labelPrefix}: ` : ''}{selectedOption?.label ?? value}</span>
         <ChevronDown className="select-menu-chevron" size={12} />
-      </button>
+      </UiButton>
       {open && (
         <div className="select-menu-popover" role="listbox" aria-label={ariaLabel}>
           {options.map((option, index) => (
-            <button
+            <UiButton
               ref={(element) => { optionRefs.current[index] = element; }}
               key={option.value}
               type="button"
@@ -2954,7 +2963,7 @@ function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = fa
                 ? <span className="select-menu-option-text"><span>{option.label}</span><small>{option.description}</small></span>
                 : <span>{option.label}</span>}
               {option.value === value && <Check size={13} />}
-            </button>
+            </UiButton>
           ))}
         </div>
       )}

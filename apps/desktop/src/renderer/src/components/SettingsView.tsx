@@ -15,6 +15,9 @@ import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
 type StdioMcpServer = Extract<McpServer, { transport: 'stdio' }>;
@@ -492,7 +495,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
     const pending = cardFeedback[feedbackKey]?.kind === 'pending';
     return (
       <>
-        <button
+        <UiButton
           type="button"
           className={`primary-button align-end card-save ${isDirty(groups) ? 'dirty' : ''}`}
           disabled={busy || !isDirty(groups) || pending || (groups.includes('shortcuts') && shortcutConflictList.length > 0)}
@@ -500,7 +503,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         >
           <Check size={16} />
           <span>{pending ? 'Saving' : label}</span>
-        </button>
+        </UiButton>
         <FeedbackMessage feedback={cardFeedback[feedbackKey] ?? null} />
       </>
     );
@@ -515,11 +518,11 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           <small>{changed.length > 0 ? changed.map((group) => GROUP_LABELS[group]).join(' · ') : 'Every card below matches what KAI has stored.'}</small>
         </div>
         <div className="button-row">
-          <button type="button" className="secondary-button" disabled={busy || changed.length === 0} onClick={discardDraft}>
+          <UiButton type="button" className="secondary-button" disabled={busy || changed.length === 0} onClick={discardDraft}>
             <RotateCcw size={15} />
             <span>Discard</span>
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             type="button"
             className="primary-button"
             disabled={busy || changed.length === 0 || shortcutConflictList.length > 0 || cardFeedback.all?.kind === 'pending'}
@@ -527,14 +530,14 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           >
             <Save size={15} />
             <span>{cardFeedback.all?.kind === 'pending' ? 'Saving everything' : 'Save all changes'}</span>
-          </button>
+          </UiButton>
         </div>
         <FeedbackMessage feedback={cardFeedback.all ?? null} />
       </div>
       <div className="settings-sticky">
         <label className="settings-search">
           <Search size={14} />
-          <input
+          <UiTextInput
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -543,11 +546,11 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             title="Search every setting: model, API key, token, open-pencil…"
             aria-label="Search settings"
           />
-          {searching && <button type="button" onClick={() => setQuery('')} aria-label="Clear search"><X size={13} /></button>}
+          {searching && <UiButton type="button" onClick={() => setQuery('')} aria-label="Clear search"><X size={13} /></UiButton>}
         </label>
         <nav className="settings-category-nav" aria-label="Settings categories">
           {SETTINGS_CATEGORIES.map((category) => (
-            <button
+            <UiButton
               key={category.id}
               type="button"
               className={[openCategories[category.id] ? 'active' : '', !searching && activeCategory === category.id ? 'current' : ''].filter(Boolean).join(' ') || undefined}
@@ -555,7 +558,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
               onClick={() => jumpToCategory(category.id)}
             >
               {category.title}
-            </button>
+            </UiButton>
           ))}
         </nav>
       </div>
@@ -580,7 +583,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <NumberField label="Log entries" value={draft.logRetentionEntries} min={100} max={100000} onChange={(value) => setDraft({ ...draft, logRetentionEntries: value })} />
           </div>
           <p className="settings-note">{experienceProfile(draft.experienceLevel).summary} Changing the level also resets the default access to match; you can still pick any access level per chat. {ACCESS_LEVELS.find((level) => level.value === draft.defaultAutonomy)?.description}</p>
-          <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><input type="checkbox" checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
+          <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><Checkbox checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>Colours</span></div>
             <ThemeColors theme={settings.theme} themeLabel={THEME_MODES.find((item) => item.id === settings.theme)?.label ?? settings.theme} />
@@ -590,7 +593,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <p className="settings-note">The model each CLI agent is asked to use when Auto model has none for the job. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>
             <div className="field-grid">
               {(['claude', 'codex', 'qwen', 'gemini', 'kimi'] as const).map((agent) => (
-                <label key={agent} className="field"><span>{agent} model</span><input value={draft.agentModels[agent] ?? ''} placeholder="CLI default" list={`cli-models-${agent}`} onChange={(event) => setAgentModel(agent, event.target.value)} /><datalist id={`cli-models-${agent}`}>{CLI_MODEL_SUGGESTIONS[agent].map((name) => <option key={name} value={name} />)}</datalist></label>
+                <label key={agent} className="field"><span>{agent} model</span><UiTextInput value={draft.agentModels[agent] ?? ''} placeholder="CLI default" list={`cli-models-${agent}`} onChange={(event) => setAgentModel(agent, event.target.value)} /><datalist id={`cli-models-${agent}`}>{CLI_MODEL_SUGGESTIONS[agent].map((name) => <option key={name} value={name} />)}</datalist></label>
               ))}
             </div>
           </div>
@@ -602,7 +605,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <fieldset key={agent} className="auto-model-row">
                   <legend>{agent}</legend>
                   {WORK_LEVELS.map((level) => (
-                    <label key={level} className="field"><span>{WORK_LEVEL_LABEL[level]}</span><input aria-label={`${agent} ${level} model`} value={draft.autoModel.tiers[agent]?.[level] ?? ''} placeholder="Unchanged" list={`cli-models-${agent}`} onChange={(event) => setTierModel(agent, level, event.target.value)} /></label>
+                    <label key={level} className="field"><span>{WORK_LEVEL_LABEL[level]}</span><UiTextInput aria-label={`${agent} ${level} model`} value={draft.autoModel.tiers[agent]?.[level] ?? ''} placeholder="Unchanged" list={`cli-models-${agent}`} onChange={(event) => setTierModel(agent, level, event.target.value)} /></label>
                   ))}
                 </fieldset>
               ))}
@@ -843,7 +846,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <div className="credential-form">
               <TextField label="Search API key" value={searchCredentialValue} type="password" onChange={setSearchCredentialValue} />
               <div className="button-row align-start">
-                <button
+                <UiButton
                   type="button"
                   className="secondary-button"
                   disabled={!searchCredentialValue.trim() || !credentialStatus.available || busy}
@@ -851,8 +854,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 >
                   <KeyRound size={15} />
                   <span>Save search key</span>
-                </button>
-                <button
+                </UiButton>
+                <UiButton
                   type="button"
                   className="secondary-button"
                   disabled={busy || !credentialStatus.ids.includes(searchCredential)}
@@ -860,16 +863,16 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 >
                   <Trash2 size={15} />
                   <span>Remove key</span>
-                </button>
+                </UiButton>
               </div>
             </div>
           )}
           <FeedbackMessage feedback={credentialFeedback.search} />
           <div className="button-row align-start">
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => void testWebSearchConnection()}>
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void testWebSearchConnection()}>
               <Search size={15} />
               <span>Test search source</span>
-            </button>
+            </UiButton>
           </div>
           {searchTest && <FeedbackMessage feedback={searchTest} />}
           {searchTest && searchTest.titles.length > 0 && (
@@ -887,8 +890,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             {draft.mcpServers.map((server, index) => (
               <div className="mcp-server-row" key={server.id}>
                 <div className="mcp-server-head">
-                  <label className="mcp-enable"><input type="checkbox" checked={server.enabled} onChange={(event) => updateMcpServer(index, { enabled: event.target.checked })} /><span>{server.enabled ? 'Enabled' : 'Disabled'}</span></label>
-                  <button type="button" className="icon-button compact" aria-label={`Remove ${server.name}`} onClick={() => setDraft({ ...draft, mcpServers: draft.mcpServers.filter((item) => item.id !== server.id) })}><Trash2 size={14} /></button>
+                  <label className="mcp-enable"><Checkbox checked={server.enabled} onChange={(event) => updateMcpServer(index, { enabled: event.target.checked })} /><span>{server.enabled ? 'Enabled' : 'Disabled'}</span></label>
+                  <UiButton type="button" className="icon-button compact" aria-label={`Remove ${server.name}`} onClick={() => setDraft({ ...draft, mcpServers: draft.mcpServers.filter((item) => item.id !== server.id) })}><Trash2 size={14} /></UiButton>
                 </div>
                 <div className="field-grid">
                   <TextField label="Name" value={server.name} onChange={(value) => updateMcpServer(index, { name: value })} />
@@ -920,14 +923,14 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 onChange={setConnectorChoice}
               />
               <div className="button-row align-start">
-                <button type="button" className="secondary-button" disabled={!connectorChoice || busy} onClick={() => void addConnectorFromCatalog()}><Plus size={15} /><span>Add from catalog</span></button>
+                <UiButton type="button" className="secondary-button" disabled={!connectorChoice || busy} onClick={() => void addConnectorFromCatalog()}><Plus size={15} /><span>Add from catalog</span></UiButton>
               </div>
             </div>
           )}
           {connectorMessage && <p className="settings-note">{connectorMessage}</p>}
           <div className="button-row align-start">
-            <button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('stdio')] })}><Plus size={15} /><span>Add local server</span></button>
-            <button type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('http')] })}><Plus size={15} /><span>Add remote server</span></button>
+            <UiButton type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('stdio')] })}><Plus size={15} /><span>Add local server</span></UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => setDraft({ ...draft, mcpServers: [...draft.mcpServers, newMcpServer('http')] })}><Plus size={15} /><span>Add remote server</span></UiButton>
           </div>
           {cardSave('mcpServers', 'Save MCP servers', ['mcpServers'])}
         </section>
@@ -939,8 +942,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <TextField label="Credential ID" value={credentialId} onChange={setCredentialId} />
             <TextField label="Secret" value={credentialValue} onChange={setCredentialValue} type="password" />
             <div className="button-row">
-              <button type="button" className="primary-button" disabled={!credentialValue.trim() || !credentialStatus.available || busy} onClick={() => void saveNamedCredential(credentialId, credentialValue, 'generic')}><KeyRound size={15} /><span>Save credential</span></button>
-              <button type="button" className="secondary-button" disabled={busy || !credentialStatus.ids.includes(credentialId)} onClick={() => void clearNamedCredential(credentialId, 'generic')}><Trash2 size={15} /><span>Remove</span></button>
+              <UiButton type="button" className="primary-button" disabled={!credentialValue.trim() || !credentialStatus.available || busy} onClick={() => void saveNamedCredential(credentialId, credentialValue, 'generic')}><KeyRound size={15} /><span>Save credential</span></UiButton>
+              <UiButton type="button" className="secondary-button" disabled={busy || !credentialStatus.ids.includes(credentialId)} onClick={() => void clearNamedCredential(credentialId, 'generic')}><Trash2 size={15} /><span>Remove</span></UiButton>
             </div>
           </div>
           <FeedbackMessage feedback={credentialFeedback.generic} />
@@ -977,7 +980,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <div className="service-setting">
               <label className="toggle-row">
                 <span><strong>C1 Brain</strong><small>Run the pinned Cognitive1 daemon locally</small></span>
-                <input type="checkbox" checked={draft.cognitive1.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, enabled: event.target.checked } })} />
+                <Checkbox checked={draft.cognitive1.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, enabled: event.target.checked } })} />
               </label>
               <ServiceStatusLine kind="cognitive1" service={serviceState('cognitive1')} busy={busy} onStart={() => onControlService('cognitive1', 'start')} onRestart={() => onControlService('cognitive1', 'restart')} />
               <div className="field-grid">
@@ -988,7 +991,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <div className="settings-subsection-title"><Database size={14} /><span>Second brain</span></div>
                 <label className="toggle-row">
                   <span><strong>Mirror every lesson</strong><small>Files each lesson into another Cognitive1 daemon as well, such as the standalone one on port 9876 that commits and pushes its brain on a timer. Reads and sessions stay with KAI's own daemon.</small></span>
-                  <input type="checkbox" checked={draft.cognitive1.mirror.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, enabled: event.target.checked } } })} />
+                  <Checkbox checked={draft.cognitive1.mirror.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, enabled: event.target.checked } } })} />
                 </label>
                 <div className="field-grid">
                   <TextField label="Mirror endpoint" value={draft.cognitive1.mirror.endpoint} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, endpoint: value } } })} />
@@ -1000,8 +1003,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <div className="settings-subsection-title"><ShieldCheck size={14} /><span>AI Overwatch</span></div>
                 <label className="toggle-row">
                   <span><strong>Enable Overwatch</strong><small>Runs brain quality audits, draft classification, duplicate detection, and kernel distillation</small></span>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={draft.cognitive1.overwatch.enabled}
                     onChange={(event) => setDraft({
                       ...draft,
@@ -1050,7 +1052,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <div className="credential-form">
                   <TextField label="Overwatch API key" value={overwatchCredentialValue} type="password" onChange={setOverwatchCredentialValue} />
                   <div className="button-row align-start">
-                    <button
+                    <UiButton
                       type="button"
                       className="secondary-button"
                       disabled={!overwatchCredentialValue.trim() || !credentialStatus.available || busy}
@@ -1058,8 +1060,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                     >
                       <KeyRound size={15} />
                       <span>Save Overwatch key</span>
-                    </button>
-                    <button
+                    </UiButton>
+                    <UiButton
                       type="button"
                       className="secondary-button"
                       disabled={busy || !overwatchCredentialReady}
@@ -1067,7 +1069,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                     >
                       <Trash2 size={15} />
                       <span>Remove key</span>
-                    </button>
+                    </UiButton>
                   </div>
                 </div>
                 <FeedbackMessage feedback={credentialFeedback.overwatch} />
@@ -1078,10 +1080,10 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 </p>
               </div>
               <div className="button-row align-start">
-                <button type="button" className="secondary-button" disabled={busy} onClick={onImportBrain}>
+                <UiButton type="button" className="secondary-button" disabled={busy} onClick={onImportBrain}>
                   <FolderInput size={15} />
                   <span>Import existing brain</span>
-                </button>
+                </UiButton>
                 <span className="settings-note">Copies missing brain entries from another Cognitive1 folder and reloads C1.</span>
               </div>
               {cardSave('cognitive1', 'Save C1 settings', ['cognitive1'])}
@@ -1089,7 +1091,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <div className="service-setting">
               <label className="toggle-row">
                 <span><strong>Universal Proxy</strong><small>Run the pinned proxy on loopback only</small></span>
-                <input type="checkbox" checked={draft.proxy.enabled} onChange={(event) => setDraft({ ...draft, proxy: { ...draft.proxy, enabled: event.target.checked } })} />
+                <Checkbox checked={draft.proxy.enabled} onChange={(event) => setDraft({ ...draft, proxy: { ...draft.proxy, enabled: event.target.checked } })} />
               </label>
               <ServiceStatusLine kind="universalProxy" service={serviceState('universalProxy')} busy={busy} onStart={() => onControlService('universalProxy', 'start')} onRestart={() => onControlService('universalProxy', 'restart')} />
               <div className="field-grid">
@@ -1126,11 +1128,11 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         <section className="settings-section span-two">
           <div className="section-title"><Database size={17} /><span>Local agent experience capture</span></div>
           <p className="settings-note">Optional Cognitive1 training-data foundation. Records stay on this device, redact common secret formats, and never include hidden model reasoning. Content is excluded unless you explicitly enable it.</p>
-          <label className="toggle-row"><input type="checkbox" checked={draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, enabled: event.target.checked } })} /><span>Collect run outcomes and verification metadata locally</span></label>
-          <label className="toggle-row"><input type="checkbox" checked={draft.experienceCapture.includeContent} disabled={!draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, includeContent: event.target.checked } })} /><span>Include redacted request, response, and code diffs for later curation</span></label>
-          <label className="field"><span>Retention (days)</span><input type="number" min={1} max={3650} value={draft.experienceCapture.retentionDays} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, retentionDays: Math.max(1, Math.min(3650, Number(event.target.value) || 1)) } })} /></label>
+          <label className="toggle-row"><Checkbox checked={draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, enabled: event.target.checked } })} /><span>Collect run outcomes and verification metadata locally</span></label>
+          <label className="toggle-row"><Checkbox checked={draft.experienceCapture.includeContent} disabled={!draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, includeContent: event.target.checked } })} /><span>Include redacted request, response, and code diffs for later curation</span></label>
+          <label className="field"><span>Retention (days)</span><UiTextInput type="number" min={1} max={3650} value={draft.experienceCapture.retentionDays} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, retentionDays: Math.max(1, Math.min(3650, Number(event.target.value) || 1)) } })} /></label>
           {cardSave('experienceCapture', 'Save experience capture settings', ['experienceCapture'])}
-          <div className="backup-create-row"><span>{experienceCount} local run records</span><button type="button" className="secondary-button" disabled={!experienceCount} onClick={() => void exportExperiences()}><Archive size={14} />Export JSONL</button><button type="button" className="secondary-button danger-button" disabled={!experienceCount} onClick={() => void clearExperiences()}><Trash2 size={14} />Delete all</button></div>
+          <div className="backup-create-row"><span>{experienceCount} local run records</span><UiButton type="button" className="secondary-button" disabled={!experienceCount} onClick={() => void exportExperiences()}><Archive size={14} />Export JSONL</UiButton><UiButton type="button" className="secondary-button danger-button" disabled={!experienceCount} onClick={() => void clearExperiences()}><Trash2 size={14} />Delete all</UiButton></div>
           {experienceMessage && <p className="settings-note" role="status">{experienceMessage}</p>}
         </section>
 
@@ -1139,9 +1141,9 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           <p className="settings-note">Snapshot KAI settings and project permissions before changing models, providers, MCP servers, or service routing.</p>
           {backupError && <div className="workbench-error" role="alert">{backupError}</div>}
           <div className="backup-create-row">
-            <label className="field"><span>Backup name</span><input value={backupName} onChange={(event) => setBackupName(event.target.value)} placeholder="Optional label" /></label>
-            <button type="button" className="primary-button" disabled={busy} onClick={() => void createBackup()}><Archive size={15} /><span>Create backup</span></button>
-            <button type="button" className="secondary-button" disabled={busy || backupsLoading} onClick={() => void refreshBackups()}><RefreshCw size={15} className={backupsLoading ? 'spin' : undefined} /><span>Refresh</span></button>
+            <label className="field"><span>Backup name</span><UiTextInput value={backupName} onChange={(event) => setBackupName(event.target.value)} placeholder="Optional label" /></label>
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => void createBackup()}><Archive size={15} /><span>Create backup</span></UiButton>
+            <UiButton type="button" className="secondary-button" disabled={busy || backupsLoading} onClick={() => void refreshBackups()}><RefreshCw size={15} className={backupsLoading ? 'spin' : undefined} /><span>Refresh</span></UiButton>
           </div>
           <div className="backup-list">
             {backups.map((backup) => (
@@ -1152,8 +1154,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                   <code>{backup.path}</code>
                 </div>
                 <div className="backup-actions">
-                  <button type="button" className="secondary-button" disabled={busy} onClick={() => void restoreBackup(backup)}><ArchiveRestore size={14} /><span>Restore</span></button>
-                  <button type="button" className="icon-button danger-button" disabled={busy} aria-label={`Delete ${backup.name}`} onClick={() => void deleteBackup(backup)}><Trash2 size={14} /></button>
+                  <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => void restoreBackup(backup)}><ArchiveRestore size={14} /><span>Restore</span></UiButton>
+                  <UiButton type="button" className="icon-button danger-button" disabled={busy} aria-label={`Delete ${backup.name}`} onClick={() => void deleteBackup(backup)}><Trash2 size={14} /></UiButton>
                 </div>
               </article>
             ))}
@@ -1218,9 +1220,9 @@ function AgentConfigImportCard(): ReactNode {
             <Cpu size={17} />
             <div><strong>{preview.agent === 'codex' ? 'Codex' : 'Claude Code'}</strong><small>{preview.detail}</small></div>
             {preview.model && <code>{preview.model}</code>}
-            <button type="button" className="secondary-button" disabled={!preview.model || working !== null} onClick={() => void importModel(preview.agent)}>
+            <UiButton type="button" className="secondary-button" disabled={!preview.model || working !== null} onClick={() => void importModel(preview.agent)}>
               <FolderInput size={14} /><span>{working === preview.agent ? 'Importing…' : 'Import model'}</span>
-            </button>
+            </UiButton>
           </div>
         ))}
       </div>
@@ -1241,11 +1243,11 @@ function SettingsCategory({ id, icon, title, detail, open, onToggle, children }:
   const bodyId = `settings-category-body-${id}`;
   return (
     <section id={`settings-category-${id}`} className={`settings-category${open ? ' open' : ''}`}>
-      <button type="button" className="settings-category-toggle" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
+      <UiButton type="button" className="settings-category-toggle" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
         <span className="settings-category-icon">{icon}</span>
         <span className="settings-category-copy"><strong>{title}</strong><small>{detail}</small></span>
         <ChevronDown size={17} className="settings-category-chevron" />
-      </button>
+      </UiButton>
       {open && <div id={bodyId} className="settings-category-body">{children}</div>}
     </section>
   );
@@ -1260,10 +1262,10 @@ function ServiceStatusLine({ kind, service, busy, onStart, onRestart }: { kind: 
         <span className="service-status-dot" aria-hidden="true" />
         <strong>{SERVICE_STATES[service.status]}</strong>
         {service.endpoint && <code>{service.endpoint}</code>}
-        <button type="button" className="secondary-button compact" disabled={busy} onClick={running ? onRestart : onStart}>
+        <UiButton type="button" className="secondary-button compact" disabled={busy} onClick={running ? onRestart : onStart}>
           {running ? <RefreshCw size={14} /> : <Play size={14} />}
           <span>{running ? 'Restart' : 'Start'}</span>
-        </button>
+        </UiButton>
       </div>
       <p>{service.detail}</p>
       {service.restartsExhausted === true && <p className="service-status-warning">Automatic restarts stopped after {service.restarts ?? 0} crashes. Start {kind === 'cognitive1' ? 'C1' : 'the proxy'} again once the cause is fixed.</p>}
@@ -1340,7 +1342,7 @@ function ProviderConnectionSection({
     <section className="settings-section">
       <div className="section-title">{icon}<span>{title}</span></div>
       <p className="settings-note">{detail}</p>
-      <label className="toggle-row"><span><strong>{toggleLabel}</strong><small>{toggleHint}</small></span><input type="checkbox" checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} /></label>
+      <label className="toggle-row"><span><strong>{toggleLabel}</strong><small>{toggleHint}</small></span><Checkbox checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} /></label>
       <div className="field-grid">
         <SelectField label="Provider" value={provider} onChange={(value) => onProviderChange(value as AppSettings['directApi']['provider'])} options={DIRECT_PROVIDER_ORDER.map((id) => ({ value: id, label: directProviderPreset(id).displayName }))} />
         <TextField label="Model" value={model} list={modelListId} onChange={onModelChange} />
@@ -1349,10 +1351,10 @@ function ProviderConnectionSection({
       </div>
       <datalist id={modelListId}>{models.map((candidate) => <option key={candidate} value={candidate} />)}</datalist>
       <div className="button-row align-start">
-        <button type="button" className="secondary-button" disabled={busy || refreshingModels} onClick={onRefreshModels}>
+        <UiButton type="button" className="secondary-button" disabled={busy || refreshingModels} onClick={onRefreshModels}>
           <RefreshCw size={15} className={refreshingModels ? 'spin' : undefined} />
           <span>{refreshingModels ? 'Refreshing models' : 'Refresh models'}</span>
-        </button>
+        </UiButton>
         <span className="settings-note">
           {catalog?.source === 'live'
             ? `${catalog.models.length} ${local ? 'models on this computer' : 'live provider models'}. Refreshed ${formatRefreshTime(catalog.fetchedAt)}.`
@@ -1366,14 +1368,14 @@ function ProviderConnectionSection({
       <div className="credential-form">
         <TextField label={local ? 'API key (optional)' : 'API key'} value={credentialValue} type="password" onChange={onCredentialValueChange} />
         <div className="button-row align-start">
-          <button type="button" className="secondary-button" disabled={!credentialValue.trim() || !vaultAvailable || busy} onClick={onSaveKey}>
+          <UiButton type="button" className="secondary-button" disabled={!credentialValue.trim() || !vaultAvailable || busy} onClick={onSaveKey}>
             <KeyRound size={15} />
             <span>Save key and use provider</span>
-          </button>
-          <button type="button" className="secondary-button" disabled={busy || !credentialStored} onClick={onClearKey}>
+          </UiButton>
+          <UiButton type="button" className="secondary-button" disabled={busy || !credentialStored} onClick={onClearKey}>
             <Trash2 size={15} />
             <span>Remove key</span>
-          </button>
+          </UiButton>
         </div>
         <span className="settings-note credential-note">{credentialStored ? 'Credential stored in the OS vault.' : local ? 'No key stored, which is fine for a local server.' : 'No credential stored for this ID.'}</span>
       </div>
@@ -1403,7 +1405,7 @@ function formatRefreshTime(value: string): string {
 type SelectOption = string | { value: string; label: string };
 
 function NotificationToggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (value: boolean) => void }): ReactNode {
-  return <label className="toggle-row"><span><strong>{label}</strong><small>{hint}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
+  return <label className="toggle-row"><span><strong>{label}</strong><small>{hint}</small></span><Checkbox checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
 }
 
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }): ReactNode {
@@ -1414,7 +1416,7 @@ function SelectField({ label, value, options, onChange }: { label: string; value
 }
 
 function TextField({ label, value, type = 'text', list, onChange }: { label: string; value: string; type?: string; list?: string; onChange: (value: string) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><input type={type} list={list} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+  return <label className="field"><span>{label}</span><UiTextInput type={type} list={list} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 /**
@@ -1426,7 +1428,7 @@ function TextField({ label, value, type = 'text', list, onChange }: { label: str
 function NumberField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }): ReactNode {
   const [text, setText] = useState<string | null>(null);
   const clamp = (raw: number): number => Math.min(max, Math.max(min, Number.isFinite(raw) ? raw : min));
-  return <label className="field"><span>{label}</span><input
+  return <label className="field"><span>{label}</span><UiTextInput
     type="number"
     value={text ?? value}
     min={min}
@@ -1447,7 +1449,7 @@ function NumberField({ label, value, min, max, step, onChange }: { label: string
 }
 
 function TextAreaField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} /></label>;
+  return <label className="field"><span>{label}</span><Textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} /></label>;
 }
 
 function updateDraftMcpServer(settings: AppSettings, index: number, patch: McpServerPatch): AppSettings {

@@ -5,9 +5,10 @@ import type { OpenedFile } from '@kai/contracts';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { UiButton } from './UiButton';
 
 /** The same editor as Learn & Code, kept beside the conversation and composer. */
-export function WorkspaceFilePreview({ projectId, path, formatOnSave, onClose, onDirtyChange }: { projectId: string; path: string; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+export function WorkspaceFilePreview({ projectId, path, line, formatOnSave, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(false);
@@ -15,6 +16,8 @@ export function WorkspaceFilePreview({ projectId, path, formatOnSave, onClose, o
   const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const lineRef = useRef(line);
+  lineRef.current = line;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<Monaco.editor.ITextModel | null>(null);
@@ -56,6 +59,12 @@ export function WorkspaceFilePreview({ projectId, path, formatOnSave, onClose, o
         scrollBeyondLastLine: false,
         renderWhitespace: 'selection',
       });
+      const target = lineRef.current;
+      if (target && target > 0) {
+        const targetLine = Math.min(target, model.getLineCount());
+        editor.setPosition({ lineNumber: targetLine, column: 1 });
+        editor.revealLineInCenter(targetLine);
+      }
       editorRef.current = editor;
       editor.onDidChangeModelContent(() => setDraft(model.getValue()));
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { if (editingRef.current) void saveRef.current(); });
@@ -75,6 +84,16 @@ export function WorkspaceFilePreview({ projectId, path, formatOnSave, onClose, o
     // Keep the model mounted when saving changes opened.hash.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, path, reload, Boolean(opened)]);
+
+  useEffect(() => {
+    if (!line || line < 1) return;
+    const editor = editorRef.current;
+    const lineCount = editor?.getModel()?.getLineCount();
+    if (!editor || !lineCount) return;
+    const targetLine = Math.min(line, lineCount);
+    editor.setPosition({ lineNumber: targetLine, column: 1 });
+    editor.revealLineInCenter(targetLine);
+  }, [line]);
 
   useEffect(() => { editorRef.current?.updateOptions({ readOnly: !editing }); }, [editing]);
 
@@ -132,11 +151,11 @@ export function WorkspaceFilePreview({ projectId, path, formatOnSave, onClose, o
         <FileCode2 size={16} />
         <strong title={path}>{path}</strong>
         {dirty && <span className="workspace-file-preview-dirty">Unsaved</span>}
-        {opened && <button type="button" className="secondary-button" aria-label={editing ? 'View file' : 'Edit file'} onClick={() => setEditing((value) => !value)}><Pencil size={13} /><span>{editing ? 'View' : 'Edit'}</span></button>}
-        {editing && <button type="button" className="secondary-button" aria-label="Format file" disabled={formatting || saving || !opened} onClick={() => void formatFile()}><AlignLeft size={13} /><span>{formatting ? 'Formatting…' : 'Format'}</span></button>}
-        {editing && <button type="button" className="secondary-button" aria-label="Save file" disabled={!dirty || saving || formatting} onClick={() => void saveFile()}><Save size={13} /><span>{saving ? 'Saving…' : 'Save'}</span></button>}
-        <button type="button" className="icon-button compact" aria-label="Reload file" title="Reload file" onClick={() => void reloadFile()}><RefreshCw size={14} /></button>
-        <button type="button" className="icon-button compact" aria-label="Close file preview" title="Close file preview" onClick={onClose}><X size={15} /></button>
+        {opened && <UiButton type="button" className="secondary-button" aria-label={editing ? 'View file' : 'Edit file'} onClick={() => setEditing((value) => !value)}><Pencil size={13} /><span>{editing ? 'View' : 'Edit'}</span></UiButton>}
+        {editing && <UiButton type="button" className="secondary-button" aria-label="Format file" disabled={formatting || saving || !opened} onClick={() => void formatFile()}><AlignLeft size={13} /><span>{formatting ? 'Formatting…' : 'Format'}</span></UiButton>}
+        {editing && <UiButton type="button" className="secondary-button" aria-label="Save file" disabled={!dirty || saving || formatting} onClick={() => void saveFile()}><Save size={13} /><span>{saving ? 'Saving…' : 'Save'}</span></UiButton>}
+        <UiButton type="button" className="icon-button compact" aria-label="Reload file" title="Reload file" onClick={() => void reloadFile()}><RefreshCw size={14} /></UiButton>
+        <UiButton type="button" className="icon-button compact" aria-label="Close file preview" title="Close file preview" onClick={onClose}><X size={15} /></UiButton>
       </header>
       {error && <div className="workspace-file-preview-status" role="alert">{error}</div>}
       {opened === null && !error && <div className="workspace-file-preview-status" role="status">Opening file…</div>}

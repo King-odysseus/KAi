@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Markdown } from './Markdown';
+import { Pill } from './Pill';
 import {
   cognitive1McpTools,
   cognitive1Operations,
@@ -58,6 +59,9 @@ import {
 } from './cognitive1-drafts';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 type Cognitive1Tab = 'overview' | 'review' | 'memory' | 'work' | 'toolbox';
 
 const tabs: Array<{ id: Cognitive1Tab; label: string; help: string }> = [
@@ -215,25 +219,22 @@ export function Cognitive1Panel({
         <div>
           <span className="eyebrow">C1 · your agents' shared intelligence</span>
           <h2>What your AI has learned</h2>
-          <p>
-            C1 remembers useful lessons from every agent. <b>Overwatch</b> checks those lessons for quality,
-            connects related knowledge, and learns from every time you correct it.
-            {headlineError
-              ? ` The brain could not be reached (${headlineError}) — this is not an empty queue.`
-              : headline.total > 0
-                ? ` ${headline.total} draft(s) are waiting right now.`
-                : ' Nothing is waiting right now.'}
-          </p>
+          <p>{headlineError
+            ? `The brain could not be reached (${headlineError}).`
+            : headline.total > 0
+              ? `${headline.total} draft(s) are waiting right now.`
+              : 'Nothing is waiting right now.'}</p>
+          <details className="cognitive1-about"><summary>How C1 works</summary><p>C1 remembers useful lessons from every agent. Overwatch checks those lessons for quality, connects related knowledge, and learns from your corrections.</p></details>
         </div>
-        <button type="button" className="secondary-button" disabled={disabled} onClick={() => void refreshCore()}>
+        <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void refreshCore()}>
           <RefreshCw size={14} className={busy?.startsWith('Loading') ? 'spin' : undefined} />
           <span>Refresh</span>
-        </button>
+        </UiButton>
       </div>
 
       <nav className="cognitive1-tabs" aria-label="Cognitive1 sections">
         {tabs.map((item) => (
-          <button
+          <UiButton
             key={item.id}
             type="button"
             className={tab === item.id ? 'active' : ''}
@@ -241,15 +242,15 @@ export function Cognitive1Panel({
             onClick={() => setTab(item.id)}
           >
             {item.label}
-            {item.id === 'review' && headline.needsHuman > 0 && <span className="cognitive1-tab-count">{headline.needsHuman}</span>}
-          </button>
+            {item.id === 'review' && headline.needsHuman > 0 && <Pill tone="warning">{headline.needsHuman}</Pill>}
+          </UiButton>
         ))}
       </nav>
 
       <p className="cognitive1-tab-help">{tabs.find((item) => item.id === tab)?.help}</p>
 
-      {notice && <div className="proxy-notice success"><CheckCircle2 size={15} /><span>{notice}</span><button type="button" className="icon-button compact" aria-label="Dismiss C1 notice" onClick={() => setNotice(null)}><X size={14} /></button></div>}
-      {error && <div className="proxy-error" role="alert"><AlertTriangle size={15} /><span>{error}</span><button type="button" className="icon-button compact" aria-label="Dismiss C1 error" onClick={() => setError(null)}><X size={14} /></button></div>}
+      {notice && <div className="proxy-notice success"><CheckCircle2 size={15} /><span>{notice}</span><UiButton type="button" className="icon-button compact" aria-label="Dismiss C1 notice" onClick={() => setNotice(null)}><X size={14} /></UiButton></div>}
+      {error && <div className="proxy-error" role="alert"><AlertTriangle size={15} /><span>{error}</span><UiButton type="button" className="icon-button compact" aria-label="Dismiss C1 error" onClick={() => setError(null)}><X size={14} /></UiButton></div>}
       {busy && <div className="proxy-action-state"><RefreshCw size={14} className="spin" /><span>{busy}</span></div>}
 
       {tab === 'overview' && <OverwatchPanel data={data} projects={projects} disabled={disabled || savingAuto} onRun={run} autoApprove={settings.cognitive1.overwatch.autoApprove} onAutoApprove={setAutoApprove} />}
@@ -415,7 +416,7 @@ function ReviewPanel({
         </div>
 
         <div className="cognitive1-actions">
-          <button
+          <UiButton
             type="button"
             className="secondary-button"
             disabled={disabled || classifying || counts.unclassified === 0}
@@ -424,9 +425,9 @@ function ReviewPanel({
           >
             {classifying ? <RefreshCw size={13} className="spin" /> : <Eye size={13} />}
             <span>Ask Overwatch about {counts.unclassified} draft(s)</span>
-          </button>
-          <button type="button" className="secondary-button" disabled={disabled || counts.total === 0} onClick={() => setMarks({})}>Use Overwatch's verdicts</button>
-          <button type="button" className="secondary-button" disabled={disabled || counts.total === 0} onClick={() => setMarks(marksForAll(rows, null))}>Hold everything</button>
+          </UiButton>
+          <UiButton type="button" className="secondary-button" disabled={disabled || counts.total === 0} onClick={() => setMarks({})}>Use Overwatch's verdicts</UiButton>
+          <UiButton type="button" className="secondary-button" disabled={disabled || counts.total === 0} onClick={() => setMarks(marksForAll(rows, null))}>Hold everything</UiButton>
         </div>
         <p className="cognitive1-copy">
           Asking Overwatch costs one model call for each draft that has no verdict yet. Drafts it has already
@@ -448,18 +449,18 @@ function ReviewPanel({
               )}
             </div>
             <div className="cognitive1-actions">
-              <button type="button" className="secondary-button" disabled={disabled || applying} onClick={() => setMarks({})}>Reset marks</button>
-              <button type="button" className="primary-button" disabled={disabled || applying} onClick={() => void apply()}>
+              <UiButton type="button" className="secondary-button" disabled={disabled || applying} onClick={() => setMarks({})}>Reset marks</UiButton>
+              <UiButton type="button" className="primary-button" disabled={disabled || applying} onClick={() => void apply()}>
                 {applying ? <RefreshCw size={13} className="spin" /> : <ListChecks size={13} />}
                 <span>{applying ? 'Applying' : `Apply ${pending} change(s)`}</span>
-              </button>
+              </UiButton>
             </div>
           </div>
         )}
 
         {suggested.length > 0 && (
           <label className="cognitive1-adopt">
-            <input type="checkbox" checked={adoptTypes} onChange={(event) => setAdoptTypes(event.target.checked)} />
+            <Checkbox checked={adoptTypes} onChange={(event) => setAdoptTypes(event.target.checked)} />
             <span>File {suggested.length} approval(s) under the type Overwatch suggested before approving</span>
           </label>
         )}
@@ -525,7 +526,7 @@ function DraftCard({
           <small>{meta}</small>
         </div>
         <div className="cognitive1-mark-pair" role="group" aria-label={`Decision for ${row.title}`}>
-          <button
+          <UiButton
             type="button"
             className={mark === 'approve' ? 'cognitive1-mark approve active' : 'cognitive1-mark approve'}
             aria-pressed={mark === 'approve'}
@@ -533,8 +534,8 @@ function DraftCard({
             onClick={() => onMark(mark === 'approve' ? null : 'approve')}
           >
             Approve
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             type="button"
             className={mark === 'reject' ? 'cognitive1-mark reject active' : 'cognitive1-mark reject'}
             aria-pressed={mark === 'reject'}
@@ -542,7 +543,7 @@ function DraftCard({
             onClick={() => onMark(mark === 'reject' ? null : 'reject')}
           >
             Reject
-          </button>
+          </UiButton>
         </div>
       </div>
       {row.reason && <p className="cognitive1-draft-reason">{row.reason}</p>}
@@ -592,8 +593,8 @@ function UrgentNoteForm({ projects, disabled, onSave, onClearAll }: { projects: 
       <TextField label="Required action" value={action} onChange={setAction} />
       <TextField label="Do not" value={doNot} onChange={setDoNot} />
       <div className="cognitive1-actions">
-        <button type="submit" className="primary-button" disabled={disabled || !what.trim()}>Set urgent note</button>
-        <button type="button" className="secondary-button danger-button" disabled={disabled} onClick={onClearAll}>Clear all</button>
+        <UiButton type="submit" className="primary-button" disabled={disabled || !what.trim()}>Set urgent note</UiButton>
+        <UiButton type="button" className="secondary-button danger-button" disabled={disabled} onClick={onClearAll}>Clear all</UiButton>
       </div>
     </form>
   );
@@ -652,7 +653,7 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
         </div>
         <label className="toggle-row cognitive1-auto-toggle">
           <span><strong>Auto approve useful lessons</strong><small>{autoApprove ? 'On: Overwatch checks every 15 minutes while KAI runs. Uncertain drafts still wait for you.' : 'Off: Overwatch suggests; you decide in Approvals.'}</small></span>
-          <input type="checkbox" checked={autoApprove} disabled={disabled || (!autoApprove && overwatch.ready !== true)} onChange={(event) => void onAutoApprove(event.target.checked)} />
+          <Checkbox checked={autoApprove} disabled={disabled || (!autoApprove && overwatch.ready !== true)} onChange={(event) => void onAutoApprove(event.target.checked)} />
         </label>
       </section>
 
@@ -701,14 +702,14 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
           <SectionHeading eyebrow="Recommended action" title="Improve the brain now" icon={<Play size={16} />} />
           <p className="cognitive1-copy"><b>Run intelligence cycle</b> reviews new drafts and audits existing memory in one pass. It finds quality problems but does not approve keep decisions for you.</p>
           <div className="cognitive1-actions">
-            <button type="button" className="primary-button" disabled={disabled} onClick={() => void onRun('overwatch-run', {}, 'Overwatch full cycle completed.')}><Play size={13} /><span>Run intelligence cycle</span></button>
-            <button type="button" className="secondary-button" disabled={disabled} title="Checks saved knowledge for duplicates, gaps and patterns. It does not approve or delete drafts." onClick={() => void onRun('overwatch-audit', {}, 'Audit completed.')}>Check memory quality</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-semantic-dupes', {}, 'Duplicate scan completed.')}>Find duplicates</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-cross-ref-bugs', {}, 'Bug cross-reference completed.')}>Cross-reference bugs</button>
-            <button type="button" className="secondary-button" disabled={disabled} title="Turns a project's scattered lessons into a short guide agents can load quickly." onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Create project guides</button>
-            <button type="button" className="secondary-button" disabled={disabled} title="Makes the new project guides available to connected agents." onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Send guides to agents</button>
-            <button type="button" className="secondary-button" disabled={disabled} title="Compare every note and link the ones about the same thing, which is what fills the knowledge map" onClick={() => void onRun('overwatch-link', {}, 'Related notes linked. See the result on the Memory tab.')}>Link related notes</button>
-            <button
+            <UiButton type="button" className="primary-button" disabled={disabled} onClick={() => void onRun('overwatch-run', {}, 'Overwatch full cycle completed.')}><Play size={13} /><span>Run intelligence cycle</span></UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} title="Checks saved knowledge for duplicates, gaps and patterns. It does not approve or delete drafts." onClick={() => void onRun('overwatch-audit', {}, 'Audit completed.')}>Check memory quality</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-semantic-dupes', {}, 'Duplicate scan completed.')}>Find duplicates</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('overwatch-cross-ref-bugs', {}, 'Bug cross-reference completed.')}>Cross-reference bugs</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} title="Turns a project's scattered lessons into a short guide agents can load quickly." onClick={() => void onRun('overwatch-distill-kernels', {}, 'Project kernels distilled.')}>Create project guides</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} title="Makes the new project guides available to connected agents." onClick={() => void onRun('overwatch-push-to-memory', {}, 'Kernels pushed to memory.')}>Send guides to agents</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} title="Compare every note and link the ones about the same thing, which is what fills the knowledge map" onClick={() => void onRun('overwatch-link', {}, 'Related notes linked. See the result on the Memory tab.')}>Link related notes</UiButton>
+            <UiButton
               type="button"
               className="secondary-button danger-button"
               disabled={disabled}
@@ -721,7 +722,7 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
                 if (!confirmed) return;
                 void onRun('overwatch-heuristic-clean', {}, 'Heuristic noise drafts deleted.');
               })}
-            >Delete keyword noise…</button>
+            >Delete keyword noise…</UiButton>
           </div>
           {/*
             What each button does, written out rather than left in a `title`.
@@ -753,7 +754,7 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
           A one-time automatic pass cannot be undone from this screen.
         </p>
         <div className="cognitive1-actions">
-          <button
+          <UiButton
             type="button"
             className="secondary-button danger-button"
             disabled={disabled || overwatch.ready !== true}
@@ -766,7 +767,7 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
               if (!confirmed) return;
               void onRun('overwatch-resolve', {}, 'Overwatch resolved the draft queue.');
             })}
-          >Approve Overwatch's choices now…</button>
+          >Approve Overwatch's choices now…</UiButton>
         </div>
         {Object.keys(resolved).length > 0 && (
           <p className="cognitive1-copy">Last resolve: {String(resolved.approved ?? 0)} filed, {String(resolved.rejected ?? 0)} deleted, {String(resolved.skipped ?? 0)} left.</p>
@@ -926,8 +927,8 @@ function MemoryPanel({ data, projects, disabled, onRun, onNotice, service }: Pan
           <SectionHeading eyebrow="Retention" title="Prune and audit" icon={<Trash2 size={16} />} />
           <p className="cognitive1-copy">Run a non-destructive prune preview, or delete entries matching a title after confirmation.</p>
           <div className="cognitive1-actions">
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('brain-prune', {}, 'Prune preview loaded.')}>Preview age-based prune</button>
-            <button
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('brain-prune', {}, 'Prune preview loaded.')}>Preview age-based prune</UiButton>
+            <UiButton
               type="button"
               className="secondary-button danger-button"
               disabled={disabled || prunableTotal === 0}
@@ -942,12 +943,12 @@ function MemoryPanel({ data, projects, disabled, onRun, onNotice, service }: Pan
                 void window.kaiDesktop.cognitive1Tool({ tool: 'brain_prune', arguments: { execute: true } })
                   .then(() => onRun('brain-prune', {}, 'Age-based prune applied.'));
               })}
-            >Apply prune…</button>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('brain-auto-learn', { source: 'manual', type: 'patterns', title: 'Manual auto-learn check', fields: { note: 'Desktop maintenance check' }, require_approval: true }, 'Auto-learn check completed.')}>Run auto-learn check</button>
+            >Apply prune…</UiButton>
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('brain-auto-learn', { source: 'manual', type: 'patterns', title: 'Manual auto-learn check', fields: { note: 'Desktop maintenance check' }, require_approval: true }, 'Auto-learn check completed.')}>Run auto-learn check</UiButton>
           </div>
           <div className="cognitive1-inline-form">
             <TextField label="Exact entry title" value={pruneTitle} onChange={setPruneTitle} />
-            <button
+            <UiButton
               type="button"
               className="secondary-button danger-button"
               disabled={disabled || !pruneTitle.trim()}
@@ -962,7 +963,7 @@ function MemoryPanel({ data, projects, disabled, onRun, onNotice, service }: Pan
               })}
             >
               Delete matching titles
-            </button>
+            </UiButton>
           </div>
           <JsonPreview value={data['brain-prune']} />
         </section>
@@ -1009,8 +1010,8 @@ function BrainLearnCard({ projects, disabled, onRun }: { projects: ProjectRecord
           <TextField label="Optional field name" value={fieldName} onChange={setFieldName} />
           <TextField label="Optional field value" value={fieldValue} onChange={setFieldValue} />
         </div>
-        <label className="field"><span>Knowledge</span><textarea rows={5} value={fact} onChange={(event) => setFact(event.target.value)} placeholder="What should future agents know?" /></label>
-        <div className="cognitive1-actions"><button type="submit" className="primary-button" disabled={disabled || !title.trim() || !fact.trim()}>Learn entry</button></div>
+        <label className="field"><span>Knowledge</span><Textarea rows={5} value={fact} onChange={(event) => setFact(event.target.value)} placeholder="What should future agents know?" /></label>
+        <div className="cognitive1-actions"><UiButton type="submit" className="primary-button" disabled={disabled || !title.trim() || !fact.trim()}>Learn entry</UiButton></div>
       </form>
     </section>
   );
@@ -1044,7 +1045,7 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
               <div className="cognitive1-note" key={`${claim.agent ?? 'agent'}-${index}`}>
                 <strong>{String(claim.agent ?? 'unknown')}</strong>
                 <span>{String(claim.project ?? 'unknown')} - {String(claim.what ?? '')}</span>
-                <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('active-release', { agent: String(claim.agent ?? '') }, 'Claim released.')}>Release</button>
+                <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('active-release', { agent: String(claim.agent ?? '') }, 'Claim released.')}>Release</UiButton>
               </div>
             ))}
             {claims.length === 0 && <EmptyText>No active claims.</EmptyText>}
@@ -1053,7 +1054,7 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
             <TextField label="Agent" value={claimAgent} onChange={setClaimAgent} />
             <ProjectPicker label="Project" value={claimProject} projects={projects} onChange={setClaimProject} />
             <TextField label="What are you claiming" value={claimWhat} onChange={setClaimWhat} />
-            <div className="cognitive1-actions"><button type="submit" className="primary-button" disabled={disabled || !claimAgent.trim() || !claimWhat.trim()}>Claim work</button><button type="button" className="secondary-button danger-button" disabled={disabled} onClick={() => void onRun('active-release-all', {}, 'All work claims released.')}>Release all</button></div>
+            <div className="cognitive1-actions"><UiButton type="submit" className="primary-button" disabled={disabled || !claimAgent.trim() || !claimWhat.trim()}>Claim work</UiButton><UiButton type="button" className="secondary-button danger-button" disabled={disabled} onClick={() => void onRun('active-release-all', {}, 'All work claims released.')}>Release all</UiButton></div>
           </form>
         </section>
 
@@ -1064,12 +1065,12 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
               <div className="cognitive1-note" key={`${handoff.fromAgent ?? 'from'}-${index}`}>
                 <strong>{String(handoff.fromAgent ?? 'unknown')} to {String(handoff.toAgent ?? 'any')}</strong>
                 <span>{String(handoff.project ?? '')}: {String(handoff.next ?? handoff.status ?? '')}</span>
-                <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('handoff-claim', { from_agent: String(handoff.fromAgent ?? ''), project: String(handoff.project ?? ''), date: String(handoff.date ?? ''), time: handoff.time ? String(handoff.time) : undefined }, 'Handoff claimed.')}>Claim</button>
+                <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('handoff-claim', { from_agent: String(handoff.fromAgent ?? ''), project: String(handoff.project ?? ''), date: String(handoff.date ?? ''), time: handoff.time ? String(handoff.time) : undefined }, 'Handoff claimed.')}>Claim</UiButton>
               </div>
             ))}
             {handoffs.length === 0 && <EmptyText>No pending handoffs.</EmptyText>}
           </div>
-          <div className="cognitive1-actions"><button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('handoff-suggest', { project: projects[0]?.name ?? '' }, 'Agent handoff suggestions loaded.')}>Suggest best agent</button></div>
+          <div className="cognitive1-actions"><UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('handoff-suggest', { project: projects[0]?.name ?? '' }, 'Agent handoff suggestions loaded.')}>Suggest best agent</UiButton></div>
         </section>
       </div>
 
@@ -1080,8 +1081,8 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
             <article className="cognitive1-task-row" key={`${task.title ?? 'task'}-${index}`}>
               <div><strong>{String(task.title ?? 'Untitled task')}</strong><small>{String(task.project ?? 'unknown')} - {String(task.status ?? 'open')} - {String(task.claimedBy ?? task.assignee ?? 'unassigned')}</small></div>
               <div className="cognitive1-row-actions">
-                <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('task-claim', { title: String(task.title ?? ''), project: String(task.project ?? ''), agent: taskAgent }, 'Task claimed.')}>Claim</button>
-                <button type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('task-complete', { title: String(task.title ?? ''), project: String(task.project ?? ''), agent: taskAgent }, 'Task completed.')}>Complete</button>
+                <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('task-claim', { title: String(task.title ?? ''), project: String(task.project ?? ''), agent: taskAgent }, 'Task claimed.')}>Claim</UiButton>
+                <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => void onRun('task-complete', { title: String(task.title ?? ''), project: String(task.project ?? ''), agent: taskAgent }, 'Task completed.')}>Complete</UiButton>
               </div>
             </article>
           ))}
@@ -1091,7 +1092,7 @@ function WorkPanel({ data, projects, disabled, onRun }: PanelProps): ReactNode {
           <TextField label="Task title" value={taskTitle} onChange={setTaskTitle} />
           <ProjectPicker label="Project" value={taskProject} projects={projects} onChange={setTaskProject} />
           <TextField label="Created by" value={taskAgent} onChange={setTaskAgent} />
-          <button type="submit" className="primary-button align-end" disabled={disabled || !taskTitle.trim()}>Create task</button>
+          <UiButton type="submit" className="primary-button align-end" disabled={disabled || !taskTitle.trim()}>Create task</UiButton>
         </form>
       </section>
 
@@ -1154,7 +1155,7 @@ function RecoveryPanel({ data, projects, disabled, onRun }: PanelProps): ReactNo
       <div className="cognitive1-grid two">
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Interruption recovery" title="Recover work state" icon={<LifeBuoy size={16} />} />
-          <div className="cognitive1-actions"><TextField label="Agent" value={agent} onChange={setAgent} /><button type="button" className="secondary-button align-end" disabled={disabled} onClick={() => void onRun('recover', { agent }, 'Recovery state loaded.')}>Recover</button><button type="button" className="secondary-button align-end" disabled={disabled} onClick={() => void onRun('suggest', { agent, project }, 'Next-work suggestion loaded.')}>Suggest next work</button></div>
+          <div className="cognitive1-actions"><TextField label="Agent" value={agent} onChange={setAgent} /><UiButton type="button" className="secondary-button align-end" disabled={disabled} onClick={() => void onRun('recover', { agent }, 'Recovery state loaded.')}>Recover</UiButton><UiButton type="button" className="secondary-button align-end" disabled={disabled} onClick={() => void onRun('suggest', { agent, project }, 'Next-work suggestion loaded.')}>Suggest next work</UiButton></div>
           {Boolean(status.daemonWasRestarted) && <div className="proxy-inline-warning"><AlertTriangle size={14} /><span>The C1 daemon restarted with unfinished claims. Review recovery before editing.</span></div>}
           {Boolean(recover.checkpoint) && <pre className="cognitive1-code">{String(recover.checkpoint)}</pre>}
           <JsonPreview value={data.recover} />
@@ -1167,8 +1168,8 @@ function RecoveryPanel({ data, projects, disabled, onRun }: PanelProps): ReactNo
             <ProjectPicker label="Project" value={project} projects={projects} onChange={setProject} />
             <TextField label="Current work" value={what} onChange={setWhat} />
             <TextField label="Files" value={files} onChange={setFiles} />
-            <label className="field"><span>Notes</span><textarea rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
-            <div className="cognitive1-actions"><button type="submit" className="primary-button" disabled={disabled || !what.trim()}>Save checkpoint</button></div>
+            <label className="field"><span>Notes</span><Textarea rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+            <div className="cognitive1-actions"><UiButton type="submit" className="primary-button" disabled={disabled || !what.trim()}>Save checkpoint</UiButton></div>
           </form>
         </section>
       </div>
@@ -1178,8 +1179,8 @@ function RecoveryPanel({ data, projects, disabled, onRun }: PanelProps): ReactNo
           <SectionHeading eyebrow="Task alignment" title="Recap check" icon={<ClipboardCheck size={16} />} />
           <form className="cognitive1-form" onSubmit={(event) => { event.preventDefault(); void onRun('recap-check-log', { agent, project, task, recap }, 'Recap logged.').then(() => setRecap('')); }}>
             <TextField label="Task" value={task} onChange={setTask} />
-            <label className="field"><span>Recap</span><textarea rows={4} value={recap} onChange={(event) => setRecap(event.target.value)} /></label>
-            <div className="cognitive1-actions"><button type="submit" className="primary-button" disabled={disabled || !task.trim() || !recap.trim()}>Log recap</button></div>
+            <label className="field"><span>Recap</span><Textarea rows={4} value={recap} onChange={(event) => setRecap(event.target.value)} /></label>
+            <div className="cognitive1-actions"><UiButton type="submit" className="primary-button" disabled={disabled || !task.trim() || !recap.trim()}>Log recap</UiButton></div>
           </form>
           <div className="cognitive1-list compact">{recapEntries.slice(0, 5).map((entry, index) => <JsonRow key={`recap-${index}`} row={entry} />)}{recapEntries.length === 0 && <EmptyText>No recaps logged.</EmptyText>}</div>
         </section>
@@ -1187,7 +1188,7 @@ function RecoveryPanel({ data, projects, disabled, onRun }: PanelProps): ReactNo
         <section className="cognitive1-card">
           <SectionHeading eyebrow="Portability" title="Brain export" icon={<Download size={16} />} />
           <p className="cognitive1-copy">Export the complete memory, handoffs, urgent notes, and active claims as a portable JSON bundle.</p>
-          <div className="cognitive1-actions"><button type="button" className="primary-button" disabled={disabled} onClick={() => void exportBrainBundle(onRun)}><Download size={14} /><span>Export JSON bundle</span></button></div>
+          <div className="cognitive1-actions"><UiButton type="button" className="primary-button" disabled={disabled} onClick={() => void exportBrainBundle(onRun)}><Download size={14} /><span>Export JSON bundle</span></UiButton></div>
           <JsonPreview value={data['brain-export']} />
         </section>
       </div>
@@ -1220,10 +1221,10 @@ function SkillsPanel({
           {skills.map((skill, index) => {
             const name = String(skill.dir ?? skill.name ?? '');
             return (
-              <button type="button" className={`cognitive1-skill-row ${selected === name ? 'active' : ''}`} key={`${name}-${index}`} disabled={disabled} onClick={() => void openSkill(name)}>
+              <UiButton type="button" className={`cognitive1-skill-row ${selected === name ? 'active' : ''}`} key={`${name}-${index}`} disabled={disabled} onClick={() => void openSkill(name)}>
                 <FileCode2 size={14} />
                 <span><strong>{String(skill.name ?? name)}</strong><small>{String(skill.description ?? skill.path ?? '')}</small></span>
-              </button>
+              </UiButton>
             );
           })}
           {skills.length === 0 && <EmptyText>No Cognitive1 skills were found.</EmptyText>}
@@ -1231,8 +1232,8 @@ function SkillsPanel({
       </section>
       <section className="cognitive1-card cognitive1-skill-editor">
         <SectionHeading eyebrow={selected || 'Select a skill'} title="Skill content" icon={<BookOpen size={16} />} />
-        <textarea value={content} disabled={disabled || !selected} onChange={(event) => setContent(event.target.value)} spellCheck={false} />
-        <div className="cognitive1-actions"><button type="button" className="primary-button" disabled={disabled || !selected || !content.trim()} onClick={() => void onRun('skill-save', { name: selected, content }, 'Skill saved.')}>Save skill</button></div>
+        <Textarea value={content} disabled={disabled || !selected} onChange={(event) => setContent(event.target.value)} spellCheck={false} />
+        <div className="cognitive1-actions"><UiButton type="button" className="primary-button" disabled={disabled || !selected || !content.trim()} onClick={() => void onRun('skill-save', { name: selected, content }, 'Skill saved.')}>Save skill</UiButton></div>
       </section>
     </div>
   );
@@ -1257,9 +1258,9 @@ function AdvancedPanel({ data, disabled, onRun }: PanelProps): ReactNode {
         <p className="cognitive1-copy">Run any allowlisted Cognitive1 operation with a JSON payload. The desktop never exposes an arbitrary URL or filesystem command.</p>
         <div className="cognitive1-advanced-grid">
           <label className="field"><span>Operation</span><Select value={operation} onChange={(event) => { const next = event.target.value as Cognitive1Operation; setOperation(next); setResult(data[next]); }}>{cognitive1Operations.map((item) => <option key={item} value={item}>{item}</option>)}</Select></label>
-          <label className="field"><span>JSON payload {invalid && <em>Invalid JSON</em>}</span><textarea rows={10} value={payload} spellCheck={false} onChange={(event) => { const next = event.target.value; setPayload(next); try { const parsed = JSON.parse(next) as unknown; setInvalid(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)); } catch { setInvalid(true); } }} /></label>
+          <label className="field"><span>JSON payload {invalid && <em>Invalid JSON</em>}</span><Textarea rows={10} value={payload} spellCheck={false} onChange={(event) => { const next = event.target.value; setPayload(next); try { const parsed = JSON.parse(next) as unknown; setInvalid(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)); } catch { setInvalid(true); } }} /></label>
         </div>
-        <div className="cognitive1-actions"><button type="button" className="primary-button" disabled={disabled || invalid} onClick={async () => { const next = await onRun(operation, JSON.parse(payload) as Record<string, unknown>, `${operationLabel(operation)} completed.`); if (next !== null) setResult(next); }}>Run operation</button></div>
+        <div className="cognitive1-actions"><UiButton type="button" className="primary-button" disabled={disabled || invalid} onClick={async () => { const next = await onRun(operation, JSON.parse(payload) as Record<string, unknown>, `${operationLabel(operation)} completed.`); if (next !== null) setResult(next); }}>Run operation</UiButton></div>
         <JsonPreview value={result} />
       </section>
 
@@ -1268,10 +1269,10 @@ function AdvancedPanel({ data, disabled, onRun }: PanelProps): ReactNode {
         <p className="cognitive1-copy">Invoke the same allowlisted MCP tools that Cognitive1 exposes to coding agents. Arguments stay local and are validated by the managed engine.</p>
         <div className="cognitive1-advanced-grid">
           <label className="field"><span>MCP tool</span><Select value={tool} onChange={(event) => setTool(event.target.value as Cognitive1McpTool)}>{cognitive1McpTools.map((item) => <option key={item} value={item}>{item}</option>)}</Select></label>
-          <label className="field"><span>Tool arguments {toolInvalid && <em>Invalid JSON</em>}</span><textarea rows={10} value={toolArguments} spellCheck={false} onChange={(event) => { const next = event.target.value; setToolArguments(next); try { const parsed = JSON.parse(next) as unknown; setToolInvalid(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)); } catch { setToolInvalid(true); } }} /></label>
+          <label className="field"><span>Tool arguments {toolInvalid && <em>Invalid JSON</em>}</span><Textarea rows={10} value={toolArguments} spellCheck={false} onChange={(event) => { const next = event.target.value; setToolArguments(next); try { const parsed = JSON.parse(next) as unknown; setToolInvalid(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)); } catch { setToolInvalid(true); } }} /></label>
         </div>
         <div className="cognitive1-actions">
-          <button type="button" className="primary-button" disabled={disabled || toolBusy || toolInvalid} onClick={async () => {
+          <UiButton type="button" className="primary-button" disabled={disabled || toolBusy || toolInvalid} onClick={async () => {
             setToolBusy(true);
             setToolError(null);
             try {
@@ -1282,7 +1283,7 @@ function AdvancedPanel({ data, disabled, onRun }: PanelProps): ReactNode {
             } finally {
               setToolBusy(false);
             }
-          }}>{toolBusy ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}<span>Run MCP tool</span></button>
+          }}>{toolBusy ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}<span>Run MCP tool</span></UiButton>
         </div>
         {toolError && <div className="proxy-error" role="alert"><AlertTriangle size={15} /><span>{toolError}</span></div>}
         <JsonPreview value={toolResult} />
@@ -1315,14 +1316,14 @@ function IntelligenceGauge({ label, value, detail }: { label: string; value: num
 }
 
 function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><input value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+  return <label className="field"><span>{label}</span><UiTextInput value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 function ProjectPicker({ label, value, projects, onChange }: { label: string; value: string; projects: ProjectRecord[]; onChange: (value: string) => void }): ReactNode {
   return (
     <label className="field">
       <span>{label}</span>
-      <input list="cognitive1-projects" value={value} onChange={(event) => onChange(event.target.value)} />
+      <UiTextInput list="cognitive1-projects" value={value} onChange={(event) => onChange(event.target.value)} />
       <datalist id="cognitive1-projects">{projects.map((project) => <option key={project.id} value={project.name} />)}</datalist>
     </label>
   );
@@ -1416,9 +1417,9 @@ function Findings({ items, empty, render }: {
     <>
       {visible.map((item, index) => render(item, index))}
       {remaining > 0 && (
-        <button type="button" className="secondary-button cognitive1-more" onClick={() => setPage((current) => current + 1)}>
+        <UiButton type="button" className="secondary-button cognitive1-more" onClick={() => setPage((current) => current + 1)}>
           <span>Show {Math.min(remaining, FINDINGS_PAGE)} more ({remaining} left)</span>
-        </button>
+        </UiButton>
       )}
     </>
   );

@@ -79,7 +79,7 @@ try {
 }
 
 async function verifyCodeEditor(page) {
-  await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+  await navigateTo(page, 'Learn & Code');
   await page.getByLabel('Project files', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'src', exact: true }).click();
   const file = page.getByRole('button', { name: 'hello.ts' });
@@ -118,14 +118,22 @@ async function verifyCodeEditor(page) {
   await page.getByText('changed elsewhere').first().waitFor();
 
   // Ordinary page navigation keeps the editor session alive instead of deleting and recreating the model.
-  await page.getByRole('button', { name: 'Control: Usage', exact: true }).click();
+  await navigateTo(page, 'Usage');
   await page.getByRole('heading', { name: 'Usage', level: 1 }).waitFor();
-  await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+  await navigateTo(page, 'Learn & Code');
   await page.locator('.monaco-editor').first().waitFor();
   await page.getByText('changed elsewhere').first().waitFor();
 
   await resizeWindow(electronApp, 960, 640);
   await assertNoHorizontalOverflow(page);
+  const tutorBounds = await page.locator('.learning-panel').evaluate((panel) => {
+    const composer = panel.querySelector('.learning-composer');
+    if (!composer) return null;
+    return { pane: panel.getBoundingClientRect().bottom, composer: composer.getBoundingClientRect().bottom, scrollable: getComputedStyle(composer).overflowY === 'auto', horizontalOverflow: composer.scrollWidth > composer.clientWidth + 1 };
+  });
+  if (!tutorBounds || tutorBounds.composer > tutorBounds.pane + 1 || !tutorBounds.scrollable || tutorBounds.horizontalOverflow) {
+    throw new Error('The tutor composer overflows the learning sidebar at 960×640.');
+  }
   await assertControlsDoNotWrap(page, 'code-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'code-960x640.png') });
   await resizeWindow(electronApp, 1440, 920);
@@ -188,8 +196,7 @@ async function verifyLivePreview(application, page) {
 }
 
 async function verifyEditorAutosave(page) {
-  const navigation = page.locator('.nav-rail');
-  await navigation.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await navigateTo(page, 'Settings');
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   const autoSaveToggle = page.getByRole('checkbox', { name: /Autosave edited files/ });
   await autoSaveToggle.waitFor();
@@ -198,7 +205,7 @@ async function verifyEditorAutosave(page) {
   await page.getByRole('button', { name: 'Save editor settings' }).click();
   await page.getByText('Code editor saved and shared with all open KAI windows.').waitFor();
 
-  await navigation.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+  await navigateTo(page, 'Learn & Code');
   await page.locator('.monaco-editor').first().waitFor({ timeout: 20_000 });
   await page.locator('.monaco-editor .view-lines').first().click();
   await page.keyboard.press('Control+End');
@@ -210,7 +217,7 @@ async function verifyEditorAutosave(page) {
 }
 
 async function verifyGitAndTerminal(page) {
-  await page.getByRole('button', { name: 'Project: Git', exact: true }).click();
+  await navigateTo(page, 'Git');
   await page.getByRole('heading', { name: 'Git', level: 1 }).waitFor();
   await page.getByText('Recent commits').waitFor();
   // The Code test left src/hello.ts modified; stage and commit it through the UI.
@@ -255,7 +262,7 @@ async function verifyGitAndTerminal(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'terminal-dock-960x640.png') });
   await resizeWindow(electronApp, 1440, 920);
   // The panel and its output survive a page change, then hide again.
-  await page.getByRole('button', { name: 'Control: Usage', exact: true }).click();
+  await navigateTo(page, 'Usage');
   await page.waitForFunction(
     () => document.querySelector('.terminal-dock .xterm-rows')?.textContent?.includes('KAI_TERMINAL_OK') ?? false,
   );
@@ -265,7 +272,7 @@ async function verifyGitAndTerminal(page) {
 }
 
 async function verifyOperations(page) {
-  await page.getByRole('button', { name: 'Control: Operations', exact: true }).click();
+  await navigateTo(page, 'Operations');
   await page.getByRole('heading', { name: 'Operations', level: 1 }).waitFor();
   await page.getByRole('tab', { name: 'Recovery' }).waitFor();
   await page.getByText('No interrupted runs').waitFor();
@@ -297,9 +304,14 @@ async function verifyOperations(page) {
   await page.getByText(/Cognitive1 is not running/).waitFor();
 }
 
-/** The tour starts by itself, walks a lesson with Next, turns off everywhere, and still lists every screen. */
+/** The tour walks a lesson with Next, turns off everywhere, and still lists every screen. */
 async function verifyTour(page) {
   const card = page.locator('.tour-card');
+  if (!await card.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Guided tour and lessons' }).click();
+    await page.getByRole('dialog', { name: 'Lessons' }).getByRole('button', { name: /^Workspace/ }).click();
+  }
   await card.waitFor({ state: 'visible', timeout: 10_000 });
   await card.getByText('Workspace', { exact: false }).first().waitFor();
   await card.getByRole('button', { name: /Next/ }).click();
@@ -319,11 +331,11 @@ async function verifyTour(page) {
   await card.getByRole('button', { name: 'Turn tour off' }).click();
   await card.waitFor({ state: 'detached' });
   // Another screen must not start a lesson now that the tour is off.
-  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await navigateTo(page, 'Project Studio');
   await page.waitForTimeout(700);
   if (await card.isVisible().catch(() => false)) throw new Error('The tour started on a new screen after it was turned off.');
   // The lessons list is no longer a button of its own: it lives in the titlebar's More menu.
-  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('button', { name: 'More', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Guided tour and lessons' }).click();
   const list = page.getByRole('dialog', { name: 'Lessons' });
   await list.waitFor();
@@ -332,12 +344,12 @@ async function verifyTour(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'tour-list-1440x920.png') });
   await page.keyboard.press('Escape');
   await list.waitFor({ state: 'detached' });
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
 }
 
 /** A finished plan opens on its artifacts; the flows artifact is a tabbed, interactive diagram, and full screen works. */
 async function verifyStudioArtifacts(page) {
-  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await navigateTo(page, 'Project Studio');
   await page.getByRole('button', { name: 'Open Studio for Smoke Booking Site' }).click();
   await page.getByRole('tab', { name: /Artifacts/ }).waitFor();
   await page.getByRole('button', { name: /^flows/ }).click();
@@ -454,7 +466,7 @@ async function verifyStudioArtifacts(page) {
   await page.locator('.project-picker-button').click();
   await page.locator('.project-popover .project-row-open', { hasText: 'Sample Project' }).click();
   await waitForProjectName(page, 'Sample Project');
-  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await navigateTo(page, 'Project Studio');
   // The Design tab: each drawing step's prompt opens right under its own row, so what is copied can be read.
   await page.getByRole('tab', { name: 'Design' }).click();
   await page.getByRole('heading', { name: /Draw in open-pencil/ }).waitFor();
@@ -471,15 +483,17 @@ async function verifyStudioArtifacts(page) {
   await signIn.getByRole('button', { name: 'Close' }).click();
   await signIn.locator('.studio-step-prompt').waitFor({ state: 'detached' });
   await assertNoHorizontalOverflow(page);
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
 }
 
 /** The Equalizer is a composer intent; a design-only run needs no browser, and a fix lands in the composer as a prompt. */
 async function verifyEqualizer(page) {
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
   const toggle = page.getByRole('button', { name: /^Work locally$/ });
   if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator('.task-intent-picker').getByRole('button', { name: 'Equalizer', exact: true }).click();
+  await page.getByRole('button', { name: 'More run options' }).click();
+  await page.getByRole('button', { name: 'Task type' }).click();
+  await page.getByRole('listbox', { name: 'Task type' }).getByRole('option', { name: /^Equalizer/ }).click();
   const panel = page.getByRole('region', { name: 'Equalizer' });
   await panel.waitFor();
   // What the user writes picks the target: this wording means the design, not a live page.
@@ -506,7 +520,7 @@ async function verifyEqualizer(page) {
 
 /** Settings can be searched through every card, and the open-pencil connector is a card of its own. */
 async function verifySettingsSearch(page) {
-  await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await navigateTo(page, 'Settings');
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   const search = page.getByRole('searchbox', { name: 'Search settings' });
   await search.fill('MCP address');
@@ -526,26 +540,26 @@ async function verifySettingsSearch(page) {
 
 /** The Studio composer and the graph page open, fit the window, and show their empty states without a model. */
 async function verifyStudioAndGraph(page) {
-  await page.getByRole('button', { name: 'Work: Project Studio', exact: true }).click();
+  await navigateTo(page, 'Project Studio');
   await page.getByRole('heading', { name: /Project Studio/ }).first().waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(outputDirectory, 'studio-1440x920.png') });
 
-  await page.getByRole('button', { name: 'Work: Project Graph', exact: true }).click();
+  await navigateTo(page, 'Project Graph');
   await page.getByRole('heading', { name: 'Project graph', level: 1 }).waitFor();
   await page.getByRole('group', { name: 'Graph view' }).waitFor();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(outputDirectory, 'graph-1440x920.png') });
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
 }
 
 async function verifyTasksAndSettings(page) {
-  await page.getByRole('button', { name: 'Work: Tasks', exact: true }).click();
+  await navigateTo(page, 'Tasks');
   await page.getByRole('heading', { name: 'Tasks', level: 1 }).waitFor();
   await page.getByText(/Cognitive1 is not running/).waitFor();
   await assertNoHorizontalOverflow(page);
 
-  await page.getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await navigateTo(page, 'Settings');
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
   await page.getByText('Updates', { exact: true }).waitFor();
   if (packagedExecutable) {
@@ -561,7 +575,7 @@ async function verifyTasksAndSettings(page) {
   const learningSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
   const learningProvider = learningSection.locator('label.field:has(span:text-is("Provider")) > .kai-select');
   await chooseOption(learningProvider, 'deepseek');
-  const learningModel = learningSection.locator('label.field:has(span:text-is("Model")) > input');
+  const learningModel = learningSection.locator('label.field:has(span:text-is("Model")) input');
   if ((await learningModel.inputValue()) !== 'deepseek-v4-pro') {
     throw new Error(`The DeepSeek tutor default is stale: ${await learningModel.inputValue()}`);
   }
@@ -574,7 +588,7 @@ async function verifyTasksAndSettings(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'settings-1440x920.png') });
 
   // The composer offers a per-conversation model next to agent, route and autonomy.
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
   const titlebar = page.locator('.titlebar-actions');
   await titlebar.getByRole('button', { name: 'Show threads panel' }).waitFor();
   if (await page.locator('.conversation-column').count() > 0) {
@@ -631,7 +645,7 @@ async function verifyThemes(page) {
   for (const theme of order) {
     await setTheme(page, theme);
     for (const [button, heading] of [['Control: Usage', 'Usage'], ['Learn: Learn & Code', null], ['Work: Workspace', null], ['Control: Settings', 'Settings']]) {
-      await page.getByRole('button', { name: button, exact: true }).click();
+      await navigateTo(page, button);
       if (heading) await page.getByRole('heading', { name: heading, level: 1 }).waitFor();
       await page.waitForTimeout(500);
       if (theme === 'light' && button === 'Learn: Learn & Code') await assertTutorTextareaLightTheme(page);
@@ -642,7 +656,9 @@ async function verifyThemes(page) {
 }
 
 async function setTheme(page, target) {
-  const themeButton = page.locator('button[aria-label^="Theme:"]');
+  const more = page.getByRole('button', { name: 'More', exact: true });
+  if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
+  const themeButton = page.getByRole('menuitem', { name: /^Theme:/ });
   // More attempts than there are themes, because reaching one can mean clicking past all of them: the order above
   // starts at navy and the app opens on whatever was last chosen, so a short cap fails on which theme the run before
   // happened to leave behind rather than on anything about the theme being asked for.
@@ -661,11 +677,13 @@ async function setTheme(page, target) {
 }
 
 async function verifyIndependentWindows(application, page) {
-  await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+  await navigateTo(page, 'Workspace');
   await waitForProjectName(page, 'Sample Project');
 
   const secondWindowPromise = application.waitForEvent('window');
-  await page.getByRole('button', { name: 'New window' }).click();
+  const more = page.getByRole('button', { name: 'More', exact: true });
+  if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
+  await page.getByRole('menuitem', { name: 'New window' }).click();
   const second = await secondWindowPromise;
   second.on('pageerror', (error) => rendererErrors.push(error.stack ?? error.message));
   await second.locator('.project-picker-button').getByText('No project', { exact: true }).waitFor({ timeout: 20_000 });
@@ -1111,7 +1129,7 @@ async function openSettingsCategory(page, name) {
 }
 
 async function verifySettingsCheckboxRetention(page) {
-  await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await navigateTo(page, 'Settings');
   await openSettingsCategory(page, 'Services and access');
   const overwatch = page.getByRole('checkbox', { name: /Enable Overwatch/ });
   await overwatch.check();
@@ -1126,10 +1144,16 @@ async function verifySettingsCheckboxRetention(page) {
   await page.getByText('saved and shared with all open KAI windows.', { exact: false }).waitFor();
   const saved = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data);
   if (!saved.cognitive1.overwatch.enabled) throw new Error('Overwatch checkbox did not persist.');
-  await page.locator('.nav-rail').getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
-  await page.locator('.nav-rail').getByRole('button', { name: 'Control: Settings', exact: true }).click();
+  await navigateTo(page, 'Learn & Code');
+  await navigateTo(page, 'Settings');
   // Coming back to Settings starts with only the first category open.
   await openSettingsCategory(page, 'Services and access');
   if (!(await overwatch.isChecked())) throw new Error('Overwatch checkbox reverted after navigation.');
-  await page.locator('.nav-rail').getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+  await navigateTo(page, 'Learn & Code');
+}
+
+async function navigateTo(page, label) {
+  const rail = page.locator('.nav-rail');
+  const target = label.includes(': ') ? label : `: ${label}`;
+  await rail.locator(`button.nav-button[aria-label$="${target}"]`).click();
 }

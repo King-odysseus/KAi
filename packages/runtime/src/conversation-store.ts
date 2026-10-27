@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   conversationRecordV1Schema,
@@ -12,6 +12,7 @@ import { NodeFileSystem } from './node-file-system';
 const LIST_BATCH = 16;
 /** Conversation files looked at (not read) at the same time when taking their stamps. */
 const STAMP_BATCH = 32;
+const SUMMARY_PREFIX_BYTES = 16 * 1024;
 
 /** Follows the conversations as they are saved and removed. */
 export interface ConversationObserver {
@@ -45,6 +46,45 @@ export class ConversationStore implements ConversationStorePort {
     return conversations
       .filter((conversation): conversation is ConversationRecord => conversation !== null)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /** The sidebar needs the header, never the full history. Read only through the top-level turns key. */
+  async listSummaries(): Promise<Array<ConversationRecord & { __summary: true }>> {
+    const entries = (await this.fileSystem.list(this.directory).catch(() => [])).filter((entry) => entry.endsWith('.json'));
+    const summaries: Array<ConversationRecord & { __summary: true }> = [];
+    for (let start = 0; start < entries.length; start += LIST_BATCH) {
+      const batch = await Promise.all(entries.slice(start, start + LIST_BATCH).map(async (entry) => {
+        const id = path.basename(entry, '.json');
+        const file = await open(storePath(this.directory, id), 'r').catch(() => null);
+        if (!file) return null;
+        try {
+          let prefixBytes = Buffer.alloc(0);
+          let offset = 0;
+          for (;;) {
+            const chunk = Buffer.alloc(SUMMARY_PREFIX_BYTES);
+            const { bytesRead } = await file.read(chunk, 0, chunk.length, offset);
+            if (!bytesRead) break;
+            prefixBytes = Buffer.concat([prefixBytes, chunk.subarray(0, bytesRead)]);
+            offset += bytesRead;
+            const prefix = prefixBytes.toString('utf8');
+            const turns = prefix.search(/\r?\n  "turns":\s*\[/);
+            if (turns < 0) continue;
+            const header = prefix.slice(0, turns).replace(/,\s*$/, '');
+            const metadata = JSON.parse(`${header}\n}`) as Omit<ConversationRecord, 'turns' | 'events'>;
+            return { ...metadata, turns: [], events: [], __summary: true as const };
+          }
+        } finally {
+          await file.close();
+        }
+        // Legacy or reordered files are rare; read one in full without retaining other transcripts.
+        const conversation = await this.get(id);
+        if (!conversation) return null;
+        const { turns: _turns, events: _events, ...metadata } = conversation;
+        return { ...metadata, turns: [], events: [], __summary: true as const };
+      }));
+      for (const item of batch) if (item) summaries.push(item);
+    }
+    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async get(id: string): Promise<ConversationRecord | null> {

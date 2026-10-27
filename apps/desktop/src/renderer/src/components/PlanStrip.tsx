@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Plan } from '@kai/contracts';
 import { unwrap } from '../types';
 import { useRunPanelCollapsed } from './run-panel-collapse';
+import { UiButton } from './UiButton';
 
 /**
  * The plan the agent is working to, shown above the composer.
@@ -38,7 +39,7 @@ export function PlanStrip({ projectId, refreshKey }: { projectId: string | null;
 
   return (
     <section className="plan-strip" aria-label="Task plan">
-      <button type="button" className="plan-strip-head" onClick={toggle} aria-expanded={!collapsed}>
+      <UiButton type="button" className="plan-strip-head" onClick={toggle} aria-expanded={!collapsed}>
         {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
         <span>Plan</span>
         <small>
@@ -47,7 +48,7 @@ export function PlanStrip({ projectId, refreshKey }: { projectId: string | null;
             : `${done} of ${items.length} done${active ? ` · ${active.text}` : ''}`}
         </small>
         {loading && items.length === 0 ? <Loader2 className="spin" size={12} /> : null}
-      </button>
+      </UiButton>
       {!collapsed && items.length > 0 && (
         <ol className="plan-strip-items">
           {items.map((item, index) => (

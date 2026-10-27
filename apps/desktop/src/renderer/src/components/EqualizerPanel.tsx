@@ -12,6 +12,9 @@ import {
 } from '@kai/contracts';
 import { allDifferences, buildFixPrompt, differenceKey, reportSummary } from '../equalizer-prompt';
 import { unwrap } from '../types';
+import { UiButton } from './UiButton';
+import { Checkbox, Radio } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 /**
  * The Equalizer, in the composer. Pick where the live page comes from and what to match, run it, read the report,
@@ -134,13 +137,13 @@ export function EqualizerPanel({ projectId, message, onFix }: {
           <legend>Live page</legend>
           {(Object.keys(TARGET_LABELS) as EqualizerTarget[]).map((item) => (
             <label key={item} className="equalizer-choice" title={TARGET_LABELS[item].hint}>
-              <input type="radio" name="equalizer-target" checked={target === item} onChange={() => setChosenTarget(item)} />
+              <Radio name="equalizer-target" checked={target === item} onChange={() => setChosenTarget(item)} />
               <span>{TARGET_LABELS[item].label}</span>
             </label>
           ))}
           {chosenTarget === null && inferred !== null && <small className="studio-note">Picked from your message.</small>}
           {target === 'production' && (
-            <input className="equalizer-url" type="url" value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://your-site.com" aria-label="Production link" />
+            <UiTextInput className="equalizer-url" type="url" value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://your-site.com" aria-label="Production link" />
           )}
           {target === 'dev' && <small className="studio-note">KAI starts the project's dev script and finds the port.</small>}
         </fieldset>
@@ -149,15 +152,15 @@ export function EqualizerPanel({ projectId, message, onFix }: {
           <fieldset>
             <legend>Compare against</legend>
             <label className="equalizer-choice">
-              <input type="radio" name="equalizer-reference" checked={reference === 'open-pencil'} onChange={() => setReference('open-pencil')} />
+              <Radio name="equalizer-reference" checked={reference === 'open-pencil'} onChange={() => setReference('open-pencil')} />
               <span>open-pencil</span>
             </label>
             <label className="equalizer-choice">
-              <input type="radio" name="equalizer-reference" checked={reference === 'website'} onChange={() => setReference('website')} />
+              <Radio name="equalizer-reference" checked={reference === 'website'} onChange={() => setReference('website')} />
               <span>A website link</span>
             </label>
             {reference === 'website' && (
-              <input className="equalizer-url" type="url" value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} placeholder="https://site-to-match.com" aria-label="Website to match" />
+              <UiTextInput className="equalizer-url" type="url" value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} placeholder="https://site-to-match.com" aria-label="Website to match" />
             )}
           </fieldset>
         )}
@@ -170,18 +173,18 @@ export function EqualizerPanel({ projectId, message, onFix }: {
             <small className="studio-note">No pages list yet. Write the pages artifact in the Project Studio first.</small>
           ) : (
             <>
-              <button type="button" className="equalizer-toggle" onClick={() => setListOpen((current) => !current)} aria-expanded={listOpen}>
+              <UiButton type="button" className="equalizer-toggle" onClick={() => setListOpen((current) => !current)} aria-expanded={listOpen}>
                 {listOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {chosenScreens.length} of {screens.length} selected
-              </button>
+              </UiButton>
               {listOpen && (
                 <div className="equalizer-screens">
                   <span className="equalizer-screens-actions">
-                    <button type="button" className="tour-link" onClick={() => setSelected(new Set(screens.map((screen) => screen.name)))}>All</button>
-                    <button type="button" className="tour-link" onClick={() => setSelected(new Set())}>None</button>
+                    <UiButton type="button" className="tour-link" onClick={() => setSelected(new Set(screens.map((screen) => screen.name)))}>All</UiButton>
+                    <UiButton type="button" className="tour-link" onClick={() => setSelected(new Set())}>None</UiButton>
                   </span>
                   {screens.map((screen) => (
                     <label key={screen.name} className="equalizer-choice">
-                      <input type="checkbox" checked={selected.has(screen.name)} onChange={() => setSelected((current) => toggle(current, screen.name))} />
+                      <Checkbox checked={selected.has(screen.name)} onChange={() => setSelected((current) => toggle(current, screen.name))} />
                       <span>{screen.name}{screen.route ? <code> {screen.route}</code> : <em> no route</em>}{available.drawn.some((name) => name.toLowerCase() === screen.name.toLowerCase()) ? '' : <small> not drawn</small>}</span>
                     </label>
                   ))}
@@ -195,7 +198,7 @@ export function EqualizerPanel({ projectId, message, onFix }: {
           <legend>If it fixes</legend>
           <label className="equalizer-choice">
             <span>Rounds</span>
-            <input type="number" min={1} max={10} value={rounds} onChange={(event) => setRounds(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} aria-label="Fixing rounds" className="equalizer-rounds" />
+            <UiTextInput type="number" min={1} max={10} value={rounds} onChange={(event) => setRounds(Math.min(10, Math.max(1, Number(event.target.value) || 1)))} aria-label="Fixing rounds" className="equalizer-rounds" />
           </label>
           <small className="studio-note">The most attempts an agent gets before it stops and reports.</small>
         </fieldset>
@@ -205,9 +208,9 @@ export function EqualizerPanel({ projectId, message, onFix }: {
       {unroutable && <p className="studio-note">Some selected screens have no route, so they cannot be opened. They will be reported, not compared.</p>}
 
       <div className="equalizer-actions">
-        <button type="button" className="primary-button" onClick={() => void run(0)} disabled={!canRun}>
+        <UiButton type="button" className="primary-button" onClick={() => void run(0)} disabled={!canRun}>
           {running ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Run the Equalizer
-        </button>
+        </UiButton>
         {running && progress && progress.total > 0 && (
           <span className="studio-note" role="status">{progress.current ? `Checking ${progress.current} (${progress.done + 1} of ${progress.total})…` : 'Writing the report…'}</span>
         )}
@@ -233,12 +236,12 @@ export function EqualizerPanel({ projectId, message, onFix }: {
             ))}
           </ul>
           <div className="equalizer-actions">
-            <button type="button" className="primary-button" onClick={fixAll} disabled={ticked.size === 0 && allDifferences(report).size === 0}><Wrench size={13} /> Fix all</button>
-            <button type="button" className="secondary-button" onClick={fixTicked} disabled={ticked.size === 0}>Fix the ticked ones ({ticked.size})</button>
-            <button type="button" className="secondary-button" onClick={() => void run(report.round + 1)} disabled={running || report.round >= report.rounds} title={report.round >= report.rounds ? 'You allowed this many rounds. Raise the number to go on.' : 'Measure again after a fix'}>
+            <UiButton type="button" className="primary-button" onClick={fixAll} disabled={ticked.size === 0 && allDifferences(report).size === 0}><Wrench size={13} /> Fix all</UiButton>
+            <UiButton type="button" className="secondary-button" onClick={fixTicked} disabled={ticked.size === 0}>Fix the ticked ones ({ticked.size})</UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => void run(report.round + 1)} disabled={running || report.round >= report.rounds} title={report.round >= report.rounds ? 'You allowed this many rounds. Raise the number to go on.' : 'Measure again after a fix'}>
               <RefreshCw size={13} /> Re-check
-            </button>
-            <button type="button" className="secondary-button" onClick={() => setReport(null)}>Leave it</button>
+            </UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => setReport(null)}>Leave it</UiButton>
           </div>
           <p className="studio-note">Fix puts a prompt in the composer for you to read and send. Run Re-check after the agent has finished.</p>
         </div>
@@ -266,13 +269,13 @@ function ScreenResult({ projectId, screen, open, onToggle, ticked, onTick }: {
   const count = screen.differences.length;
   return (
     <li className={`equalizer-result ${screen.status}`}>
-      <button type="button" className="equalizer-result-head" onClick={onToggle} aria-expanded={open}>
+      <UiButton type="button" className="equalizer-result-head" onClick={onToggle} aria-expanded={open}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <strong>{screen.name}</strong>
         {screen.route && <code>{screen.route}</code>}
         <span className={`studio-kind ${screen.status}`}>{STATUS_LABELS[screen.status]}{count > 0 ? ` · ${count}` : ''}</span>
         {screen.status === 'match' && <Check size={13} />}
-      </button>
+      </UiButton>
       {open && (
         <div className="equalizer-result-body">
           {screen.error && <p className="studio-notice error">{screen.error}</p>}
@@ -290,7 +293,7 @@ function ScreenResult({ projectId, screen, open, onToggle, ticked, onTick }: {
               return (
                 <li key={difference.id} className={difference.severity}>
                   <label>
-                    <input type="checkbox" checked={ticked.has(key)} onChange={() => onTick(key)} />
+                    <Checkbox checked={ticked.has(key)} onChange={() => onTick(key)} />
                     <span className={`equalizer-severity ${difference.severity}`}>{difference.severity}</span>
                     <span>{difference.message}</span>
                   </label>

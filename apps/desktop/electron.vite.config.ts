@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 
 // Monaco's package exports do not expose its worker entry points to Vite's `?worker` loader,
@@ -50,7 +51,7 @@ export default defineConfig({
     // URLs, and both are fetched by a fixed path; the gateway publishes `/mobile/` and `/assets/` only,
     // so `public/mobile/…` is exactly the prefix the phone needs.
     publicDir: resolve(__dirname, 'src/renderer/public'),
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     resolve: {
       alias: [
         { find: /^monaco-worker\/(.*)$/, replacement: `${monacoEsmRoot}/$1` },

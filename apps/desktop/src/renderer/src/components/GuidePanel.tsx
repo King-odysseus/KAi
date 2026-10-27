@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowRight, Check, Circle, Loader2, Sparkles } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import type { GuideAction, StudioGuideStep, StudioGuideView } from '@kai/contracts';
+import { UiButton } from './UiButton';
 
 /**
  * The Senior Dev: where this project is, and the one thing to do next.
@@ -42,9 +43,9 @@ function Step({ step, index, busy, onAction }: { step: StudioGuideStep; index: n
       {here && <p className="studio-note guide-why">{step.why}</p>}
       {step.detail && <p className="studio-note">{step.detail}</p>}
       {here && step.action && step.actionLabel && (
-        <button type="button" className="secondary-button" onClick={() => onAction(step.action as GuideAction)} disabled={busy}>
+        <UiButton type="button" className="secondary-button" onClick={() => onAction(step.action as GuideAction)} disabled={busy}>
           {step.actionLabel}
-        </button>
+        </UiButton>
       )}
     </li>
   );
@@ -83,9 +84,9 @@ export function GuidePanel({ view, explaining, busy, onExplain, onAction }: Prop
             </p>
           )}
         {!explaining && (
-          <button type="button" className="link-button" onClick={onExplain} disabled={busy}>
+          <UiButton type="button" className="link-button" onClick={onExplain} disabled={busy}>
             {view.narrative ? 'Explain this again' : 'Explain where I am'}
-          </button>
+          </UiButton>
         )}
         {view.narrativeAt && <span className="studio-note"> Written {view.narrativeAt.slice(0, 16).replace('T', ' ')}.</span>}
       </div>
@@ -97,9 +98,9 @@ export function GuidePanel({ view, explaining, busy, onExplain, onAction }: Prop
       </ol>
 
       <div className="guide-history">
-        <button type="button" className="link-button" aria-expanded={showHistory} onClick={() => setShowHistory((open) => !open)}>
+        <UiButton type="button" className="link-button" aria-expanded={showHistory} onClick={() => setShowHistory((open) => !open)}>
           {showHistory ? 'Hide' : 'Show'} what has been done ({view.history.length})
-        </button>
+        </UiButton>
         {showHistory && (
           view.history.length === 0
             ? <p className="studio-note">Nothing yet. Each step is recorded the first time it is finished.</p>
@@ -139,9 +140,9 @@ export function GuideStrip({ view, busy, onAction, onOpen }: { view: StudioGuide
       <span className="guide-strip-detail">{current.detail}</span>
       <span className="guide-strip-actions">
         {current.action && current.actionLabel && !current.action.startsWith('open-') && (
-          <button type="button" className="secondary-button" onClick={() => onAction(current.action as GuideAction)} disabled={busy}>{current.actionLabel}</button>
+          <UiButton type="button" className="secondary-button" onClick={() => onAction(current.action as GuideAction)} disabled={busy}>{current.actionLabel}</UiButton>
         )}
-        <button type="button" className="link-button" onClick={onOpen}>Open the guide</button>
+        <UiButton type="button" className="link-button" onClick={onOpen}>Open the guide</UiButton>
       </span>
     </div>
   );

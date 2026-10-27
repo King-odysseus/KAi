@@ -2,6 +2,9 @@ import { AlertTriangle, Check, FileText, FolderInput, Pencil, Plus, RefreshCw, S
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { ExecutionRule, ExecutionRuleDocument, ExecutionRuleInjectionReport } from '@kai/contracts';
 import { unwrap } from '../types';
+import { UiButton } from './UiButton';
+import { Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 interface RuleEditor {
   id: string;
@@ -84,11 +87,11 @@ export function RulesView(): ReactNode {
           <p>Authoritative Cognitive1 instructions applied to every KAI agent</p>
         </div>
         <div className="page-actions">
-          <button type="button" className="secondary-button" disabled={loading} onClick={() => void loadRules()}>
+          <UiButton type="button" className="secondary-button" disabled={loading} onClick={() => void loadRules()}>
             <RefreshCw size={15} className={loading ? 'spin' : undefined} />
             <span>Refresh</span>
-          </button>
-          <button
+          </UiButton>
+          <UiButton
             type="button"
             className="secondary-button"
             disabled={!document || loading || injecting}
@@ -97,11 +100,11 @@ export function RulesView(): ReactNode {
           >
             <FolderInput size={15} className={injecting ? 'spin' : undefined} />
             <span>Inject into projects</span>
-          </button>
-          <button type="button" className="primary-button" disabled={!document || saving} onClick={() => setEditor({ id: '', title: '', body: '' })}>
+          </UiButton>
+          <UiButton type="button" className="primary-button" disabled={!document || saving} onClick={() => setEditor({ id: '', title: '', body: '' })}>
             <Plus size={16} />
             <span>Add rule</span>
-          </button>
+          </UiButton>
         </div>
       </header>
 
@@ -118,9 +121,9 @@ export function RulesView(): ReactNode {
           <div className="rules-injection-heading">
             {injection.results.some((result) => result.status === 'failed') ? <AlertTriangle size={15} /> : <Check size={15} />}
             <strong>{describeInjection(injection)}</strong>
-            <button type="button" className="icon-button compact" aria-label="Dismiss injection results" onClick={() => setInjection(null)}>
+            <UiButton type="button" className="icon-button compact" aria-label="Dismiss injection results" onClick={() => setInjection(null)}>
               <X size={14} />
-            </button>
+            </UiButton>
           </div>
           {injection.results.map((result) => (
             <div key={result.file} className={`rules-injection-row is-${result.status}`}>
@@ -136,9 +139,9 @@ export function RulesView(): ReactNode {
         <div className="rules-error" role="alert">
           <AlertTriangle size={15} />
           <span>{error}</span>
-          <button type="button" className="icon-button compact" aria-label="Dismiss rules error" onClick={() => setError(null)}>
+          <UiButton type="button" className="icon-button compact" aria-label="Dismiss rules error" onClick={() => setError(null)}>
             <X size={14} />
-          </button>
+          </UiButton>
         </div>
       )}
 
@@ -149,24 +152,24 @@ export function RulesView(): ReactNode {
               <span className="eyebrow">{editor.id ? `Rule ${editor.number}` : 'Custom rule'}</span>
               <h2>{editor.id ? 'Edit rule' : 'Add rule'}</h2>
             </div>
-            <button type="button" className="icon-button compact" aria-label="Close rule editor" disabled={saving} onClick={() => setEditor(null)}>
+            <UiButton type="button" className="icon-button compact" aria-label="Close rule editor" disabled={saving} onClick={() => setEditor(null)}>
               <X size={15} />
-            </button>
+            </UiButton>
           </div>
           <label className="field">
             <span>Title</span>
-            <input autoFocus value={editor.title} onChange={(event) => setEditor((current) => current ? { ...current, title: event.target.value } : current)} />
+            <UiTextInput autoFocus value={editor.title} onChange={(event) => setEditor((current) => current ? { ...current, title: event.target.value } : current)} />
           </label>
           <label className="field">
             <span>Rule text</span>
-            <textarea rows={7} value={editor.body} onChange={(event) => setEditor((current) => current ? { ...current, body: event.target.value } : current)} />
+            <Textarea rows={7} value={editor.body} onChange={(event) => setEditor((current) => current ? { ...current, body: event.target.value } : current)} />
           </label>
           <div className="button-row align-end">
-            <button type="button" className="secondary-button" disabled={saving} onClick={() => setEditor(null)}>Cancel</button>
-            <button type="submit" className="primary-button" disabled={saving || !editor.title.trim() || !editor.body.trim()}>
+            <UiButton type="button" className="secondary-button" disabled={saving} onClick={() => setEditor(null)}>Cancel</UiButton>
+            <UiButton type="submit" className="primary-button" disabled={saving || !editor.title.trim() || !editor.body.trim()}>
               {saving ? <RefreshCw size={15} className="spin" /> : <Check size={15} />}
               <span>Save rule</span>
-            </button>
+            </UiButton>
           </div>
         </form>
       )}
@@ -174,7 +177,7 @@ export function RulesView(): ReactNode {
       <div className="rules-toolbar">
         <label className="input-with-icon rules-search">
           <Search size={15} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rules by number, section, or text" />
+          <UiTextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search rules by number, section, or text" />
         </label>
         <span>{visibleRules.length} shown</span>
       </div>
@@ -211,9 +214,9 @@ function RuleRow({ rule, onEdit }: { rule: ExecutionRule; onEdit: () => void }):
         </div>
         <p>{rule.body || 'No additional rule text.'}</p>
       </div>
-      <button type="button" className="icon-button compact" aria-label={`Edit rule ${rule.number}`} onClick={onEdit}>
+      <UiButton type="button" className="icon-button compact" aria-label={`Edit rule ${rule.number}`} onClick={onEdit}>
         <Pencil size={14} />
-      </button>
+      </UiButton>
     </article>
   );
 }

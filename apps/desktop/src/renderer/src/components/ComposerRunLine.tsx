@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { AutoStatus, AutopilotStatus } from '@kai/contracts';
 import { AUTO_ACTIVE, useAutoStatus } from './use-auto-status';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
+import { UiButton } from './UiButton';
 
 /**
  * What the composer's border is saying. Red while a run is going, amber when it is not going anywhere on its own —
@@ -130,16 +131,16 @@ export function ComposerRunLine({ state, busy, onStop, onOpenDetails }: LineProp
       <span className="composer-run-mark" aria-hidden="true">
         {state.state === 'waiting' ? <Moon size={13} /> : state.state === 'failed' ? <AlertTriangle size={13} /> : <Loader2 className="spin" size={13} />}
       </span>
-      <button type="button" className="composer-run-text" onClick={onOpenDetails} title="Show the run's log and settings">
+      <UiButton type="button" className="composer-run-text" onClick={onOpenDetails} title="Show the run's log and settings">
         <strong>{state.lead}</strong>
         <span className="composer-run-detail">{state.detail}</span>
         <span className="composer-run-meta">{state.meta}</span>
-      </button>
+      </UiButton>
       <span className="visually-hidden" role="status">{state.lead}. {state.detail}. {state.meta}.</span>
       {state.canStop && (
-        <button type="button" className="secondary-button compact" onClick={onStop} disabled={busy}>
+        <UiButton type="button" className="secondary-button compact" onClick={onStop} disabled={busy}>
           <Square size={12} /> Stop
-        </button>
+        </UiButton>
       )}
     </div>
   );
@@ -165,7 +166,7 @@ export function ComposerRunDetails({ title, run, onClose, children }: {
       <div className="skills-panel run-detail-panel">
         <div className="skills-panel-head">
           <div><span className="eyebrow">Run</span><h2>{title}</h2></div>
-          <button type="button" className="icon-button compact" aria-label="Close run details" onClick={onClose}><X size={15} /></button>
+          <UiButton type="button" className="icon-button compact" aria-label="Close run details" onClick={onClose}><X size={15} /></UiButton>
         </div>
         <div className={`autopilot-status phase-${line.state}`}>
           <div className="autopilot-line">

@@ -2,8 +2,10 @@
 // tabs. Layout, wording and field order follow ClaudeCode-Proxy `dashboard.html`; secrets are held
 // in the desktop OS vault and the settings carry only their credential IDs.
 import { useEffect, useId, useState, type ReactNode } from 'react';
+import { AlertTriangle, Check, ClipboardCopy, Download, KeyRound, RotateCcw, Upload, X } from 'lucide-react';
 import type { CredentialStatus, ProxyAgentId, ProxyAgentRoute } from '@kai/contracts';
 import { confirmDialog, promptDialog } from './AppDialog';
+import { Pill } from './Pill';
 import {
   AGENTS,
   AGENT_LABELS,
@@ -32,6 +34,9 @@ import {
 } from './proxy-dashboard-data';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 export interface ConfigTabProps {
   draft: ProxySettings;
   patch: (update: Partial<ProxySettings>) => void;
@@ -102,8 +107,8 @@ export function AgentsTab(props: ConfigTabProps & {
         </p>
         <div className="button-row">
           {props.loginMode
-            ? <button type="button" className="btn sec" disabled={props.busy} onClick={props.onRestoreProxy}>🔄 Restore Proxy</button>
-            : <button type="button" className="btn" disabled={props.busy} onClick={props.onEnterLoginMode}>🔑 Enter Claude Login Mode</button>}
+            ? <UiButton type="button" className="btn sec" disabled={props.busy} onClick={props.onRestoreProxy}><RotateCcw size={14} /> Restore Proxy</UiButton>
+            : <UiButton type="button" className="btn" disabled={props.busy} onClick={props.onEnterLoginMode}><KeyRound size={14} /> Enter Claude Login Mode</UiButton>}
         </div>
         {props.loginMode && <p className="hint">Proxy disabled. Run <code>claude login</code> in your terminal, then click <strong>Restore Proxy</strong>.</p>}
       </div>
@@ -112,8 +117,8 @@ export function AgentsTab(props: ConfigTabProps & {
         <h2>Launch</h2>
         <p className="hint lead">Open Claude Code or Codex CLI in a new terminal with the proxy configured and ready to use.</p>
         <div className="button-row">
-          <button type="button" className="btn" disabled={props.busy} onClick={() => props.onLaunch('claude')}>Launch Claude Code</button>
-          <button type="button" className="btn sec" disabled={props.busy} onClick={() => props.onLaunch('codex')}>Launch Codex</button>
+          <UiButton type="button" className="btn" disabled={props.busy} onClick={() => props.onLaunch('claude')}>Launch Claude Code</UiButton>
+          <UiButton type="button" className="btn sec" disabled={props.busy} onClick={() => props.onLaunch('codex')}>Launch Codex</UiButton>
         </div>
       </div>
     </>
@@ -160,12 +165,12 @@ function BackendSection(props: ConfigTabProps & {
   const name = agent === 'codex' ? 'Codex' : AGENT_LABELS[agent].split(' ')[0];
   return (
     <details className="section" open={props.open || undefined}>
-      <summary><h2>{AGENT_LABELS[agent]}</h2><span className="badge">{backend.enabled ? 'own backend' : 'main provider'}</span><RouteBadge route={props.route} /></summary>
+      <summary><h2>{AGENT_LABELS[agent]}</h2><Pill tone={backend.enabled ? 'success' : 'neutral'}>{backend.enabled ? 'own backend' : 'main provider'}</Pill><RouteBadge route={props.route} /></summary>
       <div className="details-body">
         <SaveRow label={`Save ${name} settings`} saved={savedSection === `agent:${agent}`} busy={props.busy} onSave={() => save(`agent:${agent}`)} />
         <p className="hint lead">{copy.hint}</p>
         <div className="u-field u-toggle">
-          <input id={`uap-${agent}-enabled`} type="checkbox" checked={backend.enabled} onChange={(event) => update({ enabled: event.target.checked })} />
+          <Checkbox id={`uap-${agent}-enabled`} checked={backend.enabled} onChange={(event) => update({ enabled: event.target.checked })} />
           <label htmlFor={`uap-${agent}-enabled`}>{copy.toggle}</label>
         </div>
         <div style={{ marginTop: 12 }}>
@@ -225,7 +230,7 @@ function BackendSection(props: ConfigTabProps & {
 function RouteBadge({ route }: { route: ProxyAgentRoute | undefined }): ReactNode {
   if (!route) return null;
   const label = !route.installed ? 'Unavailable' : route.route === 'proxy' ? 'Proxy' : route.route === 'misconfigured' ? 'Repair' : 'Direct';
-  return <span className={`route-pill ${route.route === 'proxy' ? 'proxy' : route.route === 'misconfigured' ? 'repair' : ''}`}>{label}</span>;
+  return <Pill tone={!route.installed ? 'error' : route.route === 'proxy' ? 'success' : route.route === 'misconfigured' ? 'warning' : 'neutral'}>{label}</Pill>;
 }
 
 function RouteDetails({ route, onCopyEnv }: { route: ProxyAgentRoute | undefined; onCopyEnv: () => void }): ReactNode {
@@ -238,12 +243,12 @@ function RouteDetails({ route, onCopyEnv }: { route: ProxyAgentRoute | undefined
         <div><dt>Last verified</dt><dd>{route.lastVerified ? `${route.lastVerified.success ? 'Passed' : 'Failed'} · ${new Date(route.lastVerified.timestamp).toLocaleString()}` : 'Not verified'}</dd></div>
         <div><dt>Credential</dt><dd>{route.credentialSource.replace(/-/g, ' ')}</dd></div>
       </dl>
-      {route.restartRequired && <p className="hint">⚠ Restart the agent to apply its updated route.</p>}
-      {route.warnings.map((warning) => <p className="hint" key={warning}>⚠ {warning}</p>)}
+      {route.restartRequired && <p className="hint"><AlertTriangle size={13} /> Restart the agent to apply its updated route.</p>}
+      {route.warnings.map((warning) => <p className="hint" key={warning}><AlertTriangle size={13} /> {warning}</p>)}
       <div className="button-row" style={{ marginTop: 10 }}>
-        <button type="button" className="btn sec small" onClick={onCopyEnv} title="Copies the environment variables, including the key the proxy is checking right now. Paste them into a terminal before starting the agent.">
+        <UiButton type="button" className="btn sec small" onClick={onCopyEnv} title="Copies the environment variables, including the key the proxy is checking right now. Paste them into a terminal before starting the agent.">
           Copy terminal setup
-        </button>
+        </UiButton>
       </div>
       {/* The other way to use the proxy: this is the one that works for a terminal you open yourself, because the
           key is issued fresh every time KAI starts and only the environment carries it. */}
@@ -278,9 +283,9 @@ export function ProvidersTab(props: ConfigTabProps & {
         <p className="hint">Choose a setup to fill in the provider and model. Your saved API keys stay private.</p>
         <div className="button-row" style={{ marginTop: 10 }}>
           {ROUTING_PROFILES.map((profile) => (
-            <button type="button" className="profile-button" key={profile.id} onClick={() => patch(applyMainPreset(draft, profile.preset))}>
+            <UiButton type="button" className="profile-button" key={profile.id} onClick={() => patch(applyMainPreset(draft, profile.preset))}>
               <strong>{profile.label}</strong><span>{profile.description}</span>
-            </button>
+            </UiButton>
           ))}
         </div>
       </div>
@@ -356,15 +361,15 @@ export function ProvidersTab(props: ConfigTabProps & {
               {draft.fallbackProviders.map((provider, index) => (
                 <tr key={index}>
                   <td>{index + 1}</td>
-                  <td><input type="text" value={provider.baseUrl} onChange={(event) => patch({ fallbackProviders: replaceAt(draft.fallbackProviders, index, { ...provider, baseUrl: event.target.value }) })} /></td>
-                  <td><input type="text" value={provider.credentialId ?? ''} placeholder="provider.example" onChange={(event) => patch({ fallbackProviders: replaceAt(draft.fallbackProviders, index, withOptional(provider, 'credentialId', event.target.value)) })} /></td>
-                  <td><input type="text" value={provider.defaultModel ?? ''} onChange={(event) => patch({ fallbackProviders: replaceAt(draft.fallbackProviders, index, withOptional(provider, 'defaultModel', event.target.value)) })} /></td>
-                  <td><button type="button" className="btn danger small" aria-label={`Remove fallback ${index + 1}`} onClick={() => patch({ fallbackProviders: draft.fallbackProviders.filter((_, i) => i !== index) })}>✕</button></td>
+                  <td><UiTextInput type="text" value={provider.baseUrl} onChange={(event) => patch({ fallbackProviders: replaceAt(draft.fallbackProviders, index, { ...provider, baseUrl: event.target.value }) })} /></td>
+                  <td><UiTextInput type="text" value={provider.credentialId ?? ''} placeholder="provider.example" onChange={(event) => patch({ fallbackProviders: replaceAt(draft.fallbackProviders, index, withOptional(provider, 'credentialId', event.target.value)) })} /></td>
+                  <td><UiTextInput type="text" value={provider.defaultModel ?? ''} onChange={(event) => patch({ fallbackProviders: replaceAt(draft.fallbackProviders, index, withOptional(provider, 'defaultModel', event.target.value)) })} /></td>
+                  <td><UiButton type="button" className="btn danger small" aria-label={`Remove fallback ${index + 1}`} onClick={() => patch({ fallbackProviders: draft.fallbackProviders.filter((_, i) => i !== index) })}><X size={13} /></UiButton></td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <button type="button" className="btn sec" style={{ marginTop: 8 }} onClick={() => patch({ fallbackProviders: [...draft.fallbackProviders, { baseUrl: 'https://api.example.com/v1', defaultModel: '', modelMap: {} }] })}>+ Add Fallback</button>
+          <UiButton type="button" className="btn sec" style={{ marginTop: 8 }} onClick={() => patch({ fallbackProviders: [...draft.fallbackProviders, { baseUrl: 'https://api.example.com/v1', defaultModel: '', modelMap: {} }] })}>+ Add Fallback</UiButton>
           <p className="hint">When the primary provider or an earlier fallback returns an error (rate limit, server error, etc.), the proxy automatically tries the next fallback in order. Store each fallback's key in the Credential centre under its credential ID.</p>
         </div>
       </details>
@@ -383,7 +388,7 @@ export function ProvidersTab(props: ConfigTabProps & {
                 <tr key={model}>
                   <td>{model}</td>
                   <td>
-                    <input
+                    <UiTextInput
                       type="text"
                       value={draft.modelMap[model] ?? ''}
                       placeholder="(use default)"
@@ -402,20 +407,20 @@ export function ProvidersTab(props: ConfigTabProps & {
       </div>
 
       <div className="save-row sticky">
-        <button type="button" className="btn" disabled={props.busy} onClick={() => save('providers')}>Save</button>
-        <button type="button" className="btn sec" onClick={props.onOpenClaudeSettings}>Open Claude Code Settings</button>
+        <UiButton type="button" className="btn" disabled={props.busy} onClick={() => save('providers')}>Save</UiButton>
+        <UiButton type="button" className="btn sec" onClick={props.onOpenClaudeSettings}>Open Claude Code Settings</UiButton>
         {props.claudeResetArmed ? (
           <span className="confirm-group">
             <span>Reset Claude Code?</span>
-            <button type="button" className="btn confirm" onClick={props.onResetClaude}>Confirm</button>
-            <button type="button" className="btn sec" onClick={props.onCancelReset}>Cancel</button>
+            <UiButton type="button" className="btn confirm" onClick={props.onResetClaude}>Confirm</UiButton>
+            <UiButton type="button" className="btn sec" onClick={props.onCancelReset}>Cancel</UiButton>
           </span>
         ) : (
-          <button type="button" className="btn warn" onClick={props.onResetClaude}>Reset Claude Code</button>
+          <UiButton type="button" className="btn warn" onClick={props.onResetClaude}>Reset Claude Code</UiButton>
         )}
-        <button type="button" className="btn sec" onClick={props.onExport}>📤 Export Config</button>
-        <button type="button" className="btn sec" onClick={props.onImport}>📥 Import Config</button>
-        <button type="button" className="btn sec" title="Copy config, version, and recent logs for bug reports" onClick={props.onCopyDiagnostics}>📋 Copy Diagnostic Info</button>
+        <UiButton type="button" className="btn sec" onClick={props.onExport}><Upload size={14} /> Export Config</UiButton>
+        <UiButton type="button" className="btn sec" onClick={props.onImport}><Download size={14} /> Import Config</UiButton>
+        <UiButton type="button" className="btn sec" title="Copy config, version, and recent logs for bug reports" onClick={props.onCopyDiagnostics}><ClipboardCopy size={14} /> Copy Diagnostic Info</UiButton>
         {savedSection === 'providers' && <span className="saved">Saved — proxy restarting…</span>}
       </div>
     </>
@@ -450,7 +455,7 @@ function DualApiSection(props: ConfigTabProps): ReactNode {
     <div className="section">
       <div className="section-title-row" style={{ justifyContent: 'flex-start', gap: 8 }}>
         <h2>Dual API — OpenAI + Claude</h2>
-        <span className="badge">{dualApiBadge(draft)}</span>
+        <Pill tone="info">{dualApiBadge(draft)}</Pill>
       </div>
       <p className="hint lead">
         Give every agent both APIs. The proxy picks the upstream from the model name on each request and translates the formats,
@@ -550,15 +555,15 @@ function CredentialCentre({ draft, busy, credentialStatus, onSaveCredential, onC
     <div style={{ fontSize: 13 }}>
       {credentialStatus.ids.map((credentialId) => (
         <div className="credential-row" key={credentialId}>
-          <span className="ok-text">✓</span>
+          <span className="ok-text"><Check size={13} /></span>
           <span className="mono">{credentialId}</span>
           {inUse[credentialId] && <em>{inUse[credentialId]}</em>}
-          <button type="button" className="btn danger small" disabled={busy} aria-label={`Remove credential ${credentialId}`} onClick={() => void clearStored(credentialId, onClearCredential)}>Remove</button>
+          <UiButton type="button" className="btn danger small" disabled={busy} aria-label={`Remove credential ${credentialId}`} onClick={() => void clearStored(credentialId, onClearCredential)}>Remove</UiButton>
         </div>
       ))}
       {Object.keys(inUse).filter((credentialId) => !credentialStatus.ids.includes(credentialId)).map((credentialId) => (
         <div className="credential-row" key={credentialId}>
-          <span className="err-text">✕</span>
+          <span className="err-text"><X size={13} /></span>
           <span className="mono">{credentialId}</span>
           <em>{inUse[credentialId]} · not stored</em>
         </div>
@@ -568,12 +573,12 @@ function CredentialCentre({ draft, busy, credentialStatus, onSaveCredential, onC
         <div className="u-field"><TextField label="Credential ID" value={id} placeholder="provider.example" onChange={setId} /></div>
         <div className="u-field"><TextField label="Secret value" type="password" value={value} onChange={setValue} /></div>
         <div className="u-field" style={{ flex: '0 0 auto' }}>
-          <button
+          <UiButton
             type="button"
             className="btn sec"
             disabled={busy || !credentialStatus.available || !id.trim() || !value.trim()}
             onClick={() => { void onSaveCredential(id.trim(), value); setValue(''); }}
-          >Store secret</button>
+          >Store secret</UiButton>
         </div>
       </div>
       <p className="hint">{credentialStatus.available ? 'OS vault available.' : 'OS vault is unavailable — keys cannot be stored.'}</p>
@@ -686,22 +691,22 @@ export function AdvancedTab(props: ConfigTabProps & {
                     <option value="auto">auto</option><option value="anthropic">anthropic</option><option value="openai">openai</option>
                   </Select>
                 </div>
-                <button type="button" className="btn danger small" aria-label={`Remove provider ${name}`} onClick={() => patch({ providers: omitRecord(draft.providers, name) })}>✕</button>
+                <UiButton type="button" className="btn danger small" aria-label={`Remove provider ${name}`} onClick={() => patch({ providers: omitRecord(draft.providers, name) })}><X size={13} /></UiButton>
               </div>
               <KeyValueTable keyLabel="Model" valueLabel="Sent as" addLabel="+ Add mapping" value={provider.modelMap} onChange={(modelMap) => patch({ providers: { ...draft.providers, [name]: { ...provider, modelMap } } })} />
             </div>
           ))}
-          <button type="button" className="btn sec" onClick={() => patch({ providers: { ...draft.providers, [`provider-${Object.keys(draft.providers).length + 1}`]: { baseUrl: 'https://api.example.com/v1', format: 'auto', defaultModel: '', modelMap: {} } } })}>+ Add provider</button>
+          <UiButton type="button" className="btn sec" onClick={() => patch({ providers: { ...draft.providers, [`provider-${Object.keys(draft.providers).length + 1}`]: { baseUrl: 'https://api.example.com/v1', format: 'auto', defaultModel: '', modelMap: {} } } })}>+ Add provider</UiButton>
 
           <h3>Model routes</h3>
           {draft.modelRoutes.map((route, index) => (
             <div className="list-row" key={index}>
               <TextField label="Model glob" value={route.match} onChange={(match) => patch({ modelRoutes: replaceAt(draft.modelRoutes, index, { ...route, match }) })} />
               <TextField label="Provider name" value={route.provider} onChange={(provider) => patch({ modelRoutes: replaceAt(draft.modelRoutes, index, { ...route, provider }) })} />
-              <button type="button" className="btn danger small" aria-label={`Remove model route ${index + 1}`} onClick={() => patch({ modelRoutes: draft.modelRoutes.filter((_, i) => i !== index) })}>✕</button>
+              <UiButton type="button" className="btn danger small" aria-label={`Remove model route ${index + 1}`} onClick={() => patch({ modelRoutes: draft.modelRoutes.filter((_, i) => i !== index) })}><X size={13} /></UiButton>
             </div>
           ))}
-          <button type="button" className="btn sec" onClick={() => patch({ modelRoutes: [...draft.modelRoutes, { match: 'claude-*', provider: 'anthropic' }] })}>+ Add route</button>
+          <UiButton type="button" className="btn sec" onClick={() => patch({ modelRoutes: [...draft.modelRoutes, { match: 'claude-*', provider: 'anthropic' }] })}>+ Add route</UiButton>
           <SaveRow label="Save registry" saved={savedSection === 'registry'} busy={props.busy} onSave={() => save('registry')} />
         </div>
       </details>
@@ -712,9 +717,9 @@ export function AdvancedTab(props: ConfigTabProps & {
           <p className="hint lead">Paste a request body to see how the proxy would translate it before sending.</p>
           <div className="u-field">
             <label htmlFor="uap-dry-run">Request body (JSON)</label>
-            <textarea id="uap-dry-run" rows={6} spellCheck={false} value={props.dryRunBody} onChange={(event) => props.onDryRunBody(event.target.value)} />
+            <Textarea id="uap-dry-run" rows={6} spellCheck={false} value={props.dryRunBody} onChange={(event) => props.onDryRunBody(event.target.value)} />
           </div>
-          <button type="button" className="btn sec" disabled={!props.ready || props.busy} onClick={props.onDryRun}>Preview Translation</button>
+          <UiButton type="button" className="btn sec" disabled={!props.ready || props.busy} onClick={props.onDryRun}>Preview Translation</UiButton>
           {props.dryRunResult !== null && <pre className="logbox">{JSON.stringify(props.dryRunResult, null, 2)}</pre>}
         </div>
       </details>
@@ -723,8 +728,8 @@ export function AdvancedTab(props: ConfigTabProps & {
         <h2>Loopback access</h2>
         <p className="hint lead">KAI serves the proxy behind an authenticated loopback gateway. Agents routed by KAI receive this token automatically.</p>
         <div className="button-row">
-          <button type="button" className="btn sec" disabled={props.busy || !props.tokenStored} onClick={props.onCopyToken}>Copy access token</button>
-          <button type="button" className="btn sec" disabled={props.busy} onClick={props.onRotateToken}>Rotate access token</button>
+          <UiButton type="button" className="btn sec" disabled={props.busy || !props.tokenStored} onClick={props.onCopyToken}>Copy access token</UiButton>
+          <UiButton type="button" className="btn sec" disabled={props.busy} onClick={props.onRotateToken}>Rotate access token</UiButton>
         </div>
       </div>
     </>
@@ -801,7 +806,7 @@ export function KeyField({ label, credentialId, placeholder, credentialStatus, b
     <>
       <label htmlFor={inputId}>{label}</label>
       <div className="agent-key-row">
-        <input
+        <UiTextInput
           id={inputId}
           type="password"
           autoComplete="off"
@@ -809,13 +814,13 @@ export function KeyField({ label, credentialId, placeholder, credentialStatus, b
           placeholder={stored ? `•••••••• stored in vault (${credentialId})` : placeholder}
           onChange={(event) => { setValue(event.target.value); setSaved(false); }}
         />
-        <button
+        <UiButton
           type="button"
           className="btn"
           disabled={busy || !credentialStatus.available || !value.trim()}
           onClick={() => { onSave(value.trim()); setValue(''); setSaved(true); }}
-        >Save</button>
-        {onClear && (stored || clearLabel === 'Remove provider') && <button type="button" className="btn sec" title={clearLabel} aria-label={clearLabel} disabled={busy} onClick={onClear}>✕</button>}
+        >Save</UiButton>
+        {onClear && (stored || clearLabel === 'Remove provider') && <UiButton type="button" className="btn sec" title={clearLabel} aria-label={clearLabel} disabled={busy} onClick={onClear}><X size={13} /></UiButton>}
         {saved && <span className="saved">Saved</span>}
       </div>
     </>
@@ -825,7 +830,7 @@ export function KeyField({ label, credentialId, placeholder, credentialStatus, b
 function SaveRow({ label, saved, busy, onSave }: { label: string; saved: boolean; busy: boolean; onSave: () => void }): ReactNode {
   return (
     <div className="save-row" style={{ marginBottom: 12 }}>
-      <button type="button" className="btn" disabled={busy} onClick={onSave}>{label}</button>
+      <UiButton type="button" className="btn" disabled={busy} onClick={onSave}>{label}</UiButton>
       {saved && <span className="saved">Saved — proxy restarting…</span>}
     </div>
   );
@@ -834,7 +839,7 @@ function SaveRow({ label, saved, busy, onSave }: { label: string; saved: boolean
 function Toggle({ id, label, checked, onChange }: { id: string; label: ReactNode; checked: boolean; onChange: (checked: boolean) => void }): ReactNode {
   return (
     <div className="u-field u-toggle">
-      <input id={id} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <Checkbox id={id} checked={checked} onChange={(event) => onChange(event.target.checked)} />
       <label htmlFor={id}>{label}</label>
     </div>
   );
@@ -852,7 +857,7 @@ function TextField({ label, value, onChange, type = 'text', placeholder, title }
   return (
     <div className="u-field">
       <label htmlFor={id} title={title}>{label}</label>
-      <input id={id} type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      <UiTextInput id={id} type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
@@ -862,7 +867,7 @@ function NumberField({ label, value, min, max, onChange }: { label: string; valu
   return (
     <>
       <label htmlFor={id}>{label}</label>
-      <input id={id} type="number" value={value} min={min} max={max} onChange={(event) => onChange(Number(event.target.value))} />
+      <UiTextInput id={id} type="number" value={value} min={min} max={max} onChange={(event) => onChange(Number(event.target.value))} />
     </>
   );
 }
@@ -893,14 +898,14 @@ function KeyValueTable({ keyLabel, valueLabel, addLabel, value, onChange }: {
         <tbody>
           {rows.map(([name, text], index) => (
             <tr key={index}>
-              <td><input type="text" value={name} aria-label={`${keyLabel} ${index + 1}`} onChange={(event) => commit(replaceAt(rows, index, [event.target.value, text]))} /></td>
-              <td><input type="text" value={text} aria-label={`${valueLabel} ${index + 1}`} onChange={(event) => commit(replaceAt(rows, index, [name, event.target.value]))} /></td>
-              <td><button type="button" className="btn danger small" aria-label={`Remove row ${index + 1}`} onClick={() => commit(rows.filter((_, i) => i !== index))}>✕</button></td>
+              <td><UiTextInput type="text" value={name} aria-label={`${keyLabel} ${index + 1}`} onChange={(event) => commit(replaceAt(rows, index, [event.target.value, text]))} /></td>
+              <td><UiTextInput type="text" value={text} aria-label={`${valueLabel} ${index + 1}`} onChange={(event) => commit(replaceAt(rows, index, [name, event.target.value]))} /></td>
+              <td><UiButton type="button" className="btn danger small" aria-label={`Remove row ${index + 1}`} onClick={() => commit(rows.filter((_, i) => i !== index))}><X size={13} /></UiButton></td>
             </tr>
           ))}
         </tbody>
       </table>
-      <button type="button" className="btn sec" style={{ marginTop: 8 }} onClick={() => setRows([...rows, ['', '']])}>{addLabel}</button>
+      <UiButton type="button" className="btn sec" style={{ marginTop: 8 }} onClick={() => setRows([...rows, ['', '']])}>{addLabel}</UiButton>
     </>
   );
 }

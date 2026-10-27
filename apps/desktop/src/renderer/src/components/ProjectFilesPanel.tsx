@@ -16,6 +16,8 @@ import {
   visibleRows,
   type ChangeKind,
 } from './project-files-tree';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 type Mode = 'changes' | 'all';
 
@@ -173,15 +175,15 @@ export function ProjectFilesPanel({
       <div className="files-toolbar">
         {isRepository ? (
           <div className="ops-segment" role="group" aria-label="Which files to show">
-            <button type="button" aria-pressed={mode === 'changes'} className={mode === 'changes' ? 'active' : ''} onClick={() => setMode('changes')}>Changes{summary.total > 0 ? ` (${summary.total})` : ''}</button>
-            <button type="button" aria-pressed={mode === 'all'} className={mode === 'all' ? 'active' : ''} onClick={() => setMode('all')}>All files</button>
+            <UiButton type="button" aria-pressed={mode === 'changes'} className={mode === 'changes' ? 'active' : ''} onClick={() => setMode('changes')}>Changes{summary.total > 0 ? ` (${summary.total})` : ''}</UiButton>
+            <UiButton type="button" aria-pressed={mode === 'all'} className={mode === 'all' ? 'active' : ''} onClick={() => setMode('all')}>All files</UiButton>
           </div>
         ) : (
           <span className="files-note">Not a Git repository, so changes cannot be tracked.</span>
         )}
-        <button type="button" className="icon-button compact" title="Refresh the file list" aria-label="Refresh the file list" disabled={loading} onClick={() => void load()}>
+        <UiButton type="button" className="icon-button compact" title="Refresh the file list" aria-label="Refresh the file list" disabled={loading} onClick={() => void load()}>
           <RefreshCw size={13} className={loading ? 'spin' : undefined} />
-        </button>
+        </UiButton>
       </div>
 
       {isRepository && (
@@ -196,7 +198,7 @@ export function ProjectFilesPanel({
       )}
 
       {effectiveMode === 'all' && (
-        <label className="files-search"><Search size={13} /><input value={query} placeholder="Find a file" onChange={(event) => setQuery(event.target.value)} /></label>
+        <label className="files-search"><Search size={13} /><UiTextInput value={query} placeholder="Find a file" onChange={(event) => setQuery(event.target.value)} /></label>
       )}
 
       {error && <div className="proxy-error" role="alert"><span>{error}</span></div>}
@@ -221,7 +223,7 @@ export function ProjectFilesPanel({
             : <div className="empty-list">No file matches “{query.trim()}”.</div>
         ) : rows.length > 0 ? (
           rows.map(({ node, depth }) => node.type === 'dir' ? (
-            <button
+            <UiButton
               key={node.path}
               type="button"
               role="treeitem"
@@ -239,7 +241,7 @@ export function ProjectFilesPanel({
               {collapsed.has(node.path) ? <Folder size={13} /> : <FolderOpen size={13} />}
               <span className="truncate">{node.name}</span>
               {node.changed > 0 && <b className="files-folder-count" title={`${node.changed} changed file${node.changed === 1 ? '' : 's'} in this folder`}>{node.changed}</b>}
-            </button>
+            </UiButton>
           ) : (
             <FileRow
               key={node.path}
@@ -272,7 +274,7 @@ function FileRow({ name, title, depth, change, onOpen, onContextMenu }: {
   onContextMenu?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }): ReactNode {
   return (
-    <button
+    <UiButton
       type="button"
       role="treeitem"
       className={`files-row file ${change ? change.kind : ''}`}
@@ -285,6 +287,6 @@ function FileRow({ name, title, depth, change, onOpen, onContextMenu }: {
       <FileText size={13} />
       <span className="truncate">{name}</span>
       {change && <GitBadge change={change} />}
-    </button>
+    </UiButton>
   );
 }

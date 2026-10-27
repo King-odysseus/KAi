@@ -1,4 +1,5 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { Modal } from 'flowbite-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   AgentCapability,
@@ -74,6 +75,7 @@ import { SetupPanel } from './components/SetupPanel';
 import { ShortcutSheet } from './components/ShortcutSheet';
 import { matchingShortcutAction, shortcutLabel, shortcutsWithDefaults } from './shortcuts';
 import { loadComposerQueue, queuedPromptWasAccepted, QUEUE_KEY, type QueuedPrompt } from './components/composer-queue';
+import { UiButton } from './components/UiButton';
 
 const emptyCredentials: CredentialStatus = { available: false, ids: [] };
 
@@ -2428,10 +2430,10 @@ export function App(): ReactNode {
         <h1>KAI</h1>
         <p>{error ?? busy?.message ?? 'Preparing workspace'}</p>
         {error && (
-          <button type="button" className="primary-button" onClick={() => void loadApplication()}>
+          <UiButton type="button" className="primary-button" onClick={() => void loadApplication()}>
             <RefreshCw size={15} />
             <span>Retry</span>
-          </button>
+          </UiButton>
         )}
       </div>
     );
@@ -2472,9 +2474,9 @@ export function App(): ReactNode {
             const running = runningConversationIds.includes(conversation.id);
             const approval = pendingApprovals.some((item) => item.conversationId === conversation.id);
             const failed = failedConversationIds.includes(conversation.id);
-            return <button key={conversation.id} type="button" role="tab" aria-selected={conversation.id === activeConversationId} className={`conversation-tab ${conversation.id === activeConversationId ? 'active' : ''}`} onClick={() => void openConversation(conversation.id)}><span className={`conversation-tab-state ${approval ? 'approval' : failed ? 'failed' : running ? 'running' : 'idle'}`} /><span className="truncate">{conversation.title}</span><span className="conversation-tab-close" onClick={(event) => { event.stopPropagation(); setOpenConversationIds((current) => current.filter((id) => id !== conversation.id)); if (conversation.id === activeConversationId) setActiveConversationId(openConversations.find((item) => item.id !== conversation.id)?.id ?? null); }}>×</span></button>;
+            return <UiButton key={conversation.id} type="button" role="tab" aria-selected={conversation.id === activeConversationId} className={`conversation-tab ${conversation.id === activeConversationId ? 'active' : ''}`} onClick={() => void openConversation(conversation.id)}><span className={`conversation-tab-state ${approval ? 'approval' : failed ? 'failed' : running ? 'running' : 'idle'}`} /><span className="truncate">{conversation.title}</span><span className="conversation-tab-close" onClick={(event) => { event.stopPropagation(); setOpenConversationIds((current) => current.filter((id) => id !== conversation.id)); if (conversation.id === activeConversationId) setActiveConversationId(openConversations.find((item) => item.id !== conversation.id)?.id ?? null); }}>×</span></UiButton>;
           })}
-          <button type="button" className="conversation-tab-new" title="New conversation" aria-label="New conversation" onClick={() => void createEmptyConversation()}>+</button>
+          <UiButton type="button" className="conversation-tab-new" title="New conversation" aria-label="New conversation" onClick={() => void createEmptyConversation()}>+</UiButton>
         </nav>
       )}
       <UrgentBanner />
@@ -2483,33 +2485,33 @@ export function App(): ReactNode {
         <div className="playwright-viewport-warning" role="status">
           <AlertTriangle size={15} />
           <span>{playwrightViewport.message ?? 'The Playwright page is narrower than its browser window, which can leave blank space to the right.'}</span>
-          <button type="button" className="secondary-button compact" disabled={repairingPlaywrightViewport || runningConversationIds.length > 0} title={runningConversationIds.length > 0 ? 'Wait for active agent runs to finish before resetting the shared browser' : 'Restart the shared browser with a responsive desktop viewport'} onClick={() => void repairPlaywrightBrowser()}>
+          <UiButton type="button" className="secondary-button compact" disabled={repairingPlaywrightViewport || runningConversationIds.length > 0} title={runningConversationIds.length > 0 ? 'Wait for active agent runs to finish before resetting the shared browser' : 'Restart the shared browser with a responsive desktop viewport'} onClick={() => void repairPlaywrightBrowser()}>
             {repairingPlaywrightViewport ? 'Resetting…' : 'Reset Playwright browser'}
-          </button>
+          </UiButton>
         </div>
       )}
       {setupStatus && !setupStatus.complete && !setupOpen && (
-        <button type="button" className="setup-reminder" onClick={() => setSetupOpen(true)}>
+        <UiButton type="button" className="setup-reminder" onClick={() => setSetupOpen(true)}>
           <ShieldCheck size={15} />
           <span>Finish KAI setup</span>
           <span className="setup-reminder-progress">
             {setupStatus.checks.filter((check) => check.status === 'ready').length}/{setupStatus.checks.length} ready
           </span>
-        </button>
+        </UiButton>
       )}
       {commandPaletteOpen && <CommandPalette items={commandItems} onClose={() => setCommandPaletteOpen(false)} onSearch={searchEverything} />}
       {error && (
         <div className="error-banner" role="alert">
           <AlertTriangle size={16} />
           <span>{error}</span>
-          <button
+          <UiButton
             type="button"
             className="icon-button compact"
             onClick={() => setError(null)}
             aria-label="Dismiss error"
           >
             <X size={14} />
-          </button>
+          </UiButton>
         </div>
       )}
       <div className="app-body">
@@ -2751,8 +2753,8 @@ function ApprovalDialog({
   const question = approval.runQuestion;
   const actions = approvalActions(approval);
   return (
-    <div className="approval-overlay">
-      <section className="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+    <Modal show size="3xl" aria-labelledby="approval-title">
+      <section className="approval-dialog">
         <div className="approval-dialog-head">
           {question ? <AlertTriangle size={20} /> : <ShieldCheck size={20} />}
           <div>
@@ -2764,17 +2766,17 @@ function ApprovalDialog({
         {approval.tool && <code className="approval-tool">{approval.tool}</code>}
         <pre className="approval-detail">{approval.detail}</pre>
         <div className="approval-dialog-actions">
-          <button type="button" className="secondary-button" onClick={() => onRespond(false)}>{actions.cancelLabel}</button>
+          <UiButton type="button" className="secondary-button" onClick={() => onRespond(false)}>{actions.cancelLabel}</UiButton>
           {/* A tool being allowed is what the person expects to have focused. A question about the run is not, so
               neither answer is: Enter would take the permissive one, and these questions exist because the run is
               already past a limit. */}
-          <button type="button" className="primary-button" autoFocus={!question} onClick={() => onRespond(true)}>{actions.confirmLabel}</button>
+          <UiButton type="button" className="primary-button" autoFocus={!question} onClick={() => onRespond(true)}>{actions.confirmLabel}</UiButton>
           {actions.offersFullAccess && (
-            <button type="button" className="primary-button" onClick={() => onRespond(true, true)}>Allow &amp; use full access</button>
+            <UiButton type="button" className="primary-button" onClick={() => onRespond(true, true)}>Allow &amp; use full access</UiButton>
           )}
         </div>
       </section>
-    </div>
+    </Modal>
   );
 }
 

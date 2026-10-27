@@ -24,6 +24,7 @@ import {
 } from './knowledge-graph';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
 const MAP_HEIGHT = 440;
 const NODE_LIMIT = 150;
 const TYPES: GraphNodeType[] = ['bugs', 'decisions', 'gotchas', 'patterns', 'other'];
@@ -506,12 +507,12 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
       </p>
 
       <div className="cognitive1-actions knowledge-map-actions">
-        <button type="button" className="primary-button" disabled={disabled || busy !== null} onClick={() => void connect()} title="Compare every note and link the ones that are about the same thing">
+        <UiButton type="button" className="primary-button" disabled={disabled || busy !== null} onClick={() => void connect()} title="Compare every note and link the ones that are about the same thing">
           <Link2 size={13} className={busy === 'linking' ? 'spin' : undefined} /><span>{busy === 'linking' ? 'Connecting…' : 'Connect related notes'}</span>
-        </button>
-        <button type="button" className="secondary-button" disabled={disabled || busy !== null} onClick={() => void load()}>
+        </UiButton>
+        <UiButton type="button" className="secondary-button" disabled={disabled || busy !== null} onClick={() => void load()}>
           <RefreshCw size={13} className={busy === 'loading' ? 'spin' : undefined} /><span>Refresh</span>
-        </button>
+        </UiButton>
         {projects.length > 1 && (
           <Select aria-label="Show notes from" value={scope} onChange={(event) => { setScope(event.target.value); setSelectedId(null); }}>
             <option value="">All projects ({graph?.nodes.length ?? 0})</option>
@@ -542,9 +543,9 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
               onDoubleClick={() => setZoomBy('reset')}
             />
             <div className="knowledge-map-zoom" role="group" aria-label="Zoom">
-              <button type="button" aria-label="Zoom in" title="Zoom in (or scroll up over the orb)" disabled={zoom >= MAX_ZOOM} onClick={() => setZoomBy(1.3)}><Plus size={13} /></button>
-              <button type="button" aria-label="Zoom out" title="Zoom out (or scroll down over the orb)" disabled={zoom <= MIN_ZOOM} onClick={() => setZoomBy(1 / 1.3)}><Minus size={13} /></button>
-              <button type="button" aria-label="Reset view" title="Reset the view (or double-click the orb)" onClick={() => setZoomBy('reset')}><Maximize2 size={12} /></button>
+              <UiButton type="button" aria-label="Zoom in" title="Zoom in (or scroll up over the orb)" disabled={zoom >= MAX_ZOOM} onClick={() => setZoomBy(1.3)}><Plus size={13} /></UiButton>
+              <UiButton type="button" aria-label="Zoom out" title="Zoom out (or scroll down over the orb)" disabled={zoom <= MIN_ZOOM} onClick={() => setZoomBy(1 / 1.3)}><Minus size={13} /></UiButton>
+              <UiButton type="button" aria-label="Reset view" title="Reset the view (or double-click the orb)" onClick={() => setZoomBy('reset')}><Maximize2 size={12} /></UiButton>
               <span aria-live="polite">{Math.round(zoom * 100)}%</span>
             </div>
             {hovered && hover && (
@@ -572,7 +573,7 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
               {neighbourIds.length > 0 && (
                 <div className="knowledge-map-links">
                   <span>Connected to</span>
-                  {neighbourIds.map((id) => <button key={id} type="button" onClick={() => setSelectedId(id)}>{id}</button>)}
+                  {neighbourIds.map((id) => <UiButton key={id} type="button" onClick={() => setSelectedId(id)}>{id}</UiButton>)}
                 </div>
               )}
             </div>
@@ -580,7 +581,7 @@ export function KnowledgeMap({ disabled, onNotice }: { disabled: boolean; onNoti
             <div className="knowledge-map-detail">
               <small>Most connected notes. Click a dot, or one of these, to bring it round to the front. Drag to spin the orb and scroll to zoom.</small>
               <div className="knowledge-map-links">
-                {topNotes.map((node) => <button key={node.id} type="button" onClick={() => setSelectedId(node.id)}>{node.id} <b>{node.linkCount}</b></button>)}
+                {topNotes.map((node) => <UiButton key={node.id} type="button" onClick={() => setSelectedId(node.id)}>{node.id} <b>{node.linkCount}</b></UiButton>)}
               </div>
             </div>
           )}

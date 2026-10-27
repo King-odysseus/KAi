@@ -1,5 +1,6 @@
 import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet, Wand2, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import { Pill } from './Pill';
 import {
   isLocalProvider,
   partsFromGuide,
@@ -28,6 +29,9 @@ import { conflictDetail, teamPaths } from '../team-paths';
 import { confirmDialog } from './AppDialog';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 const AUTONOMY_OPTIONS: Array<{ value: AutonomyMode; label: string }> = [
   { value: 'autoEdit', label: 'Auto-edit' },
   { value: 'ask', label: 'Ask first' },
@@ -269,14 +273,14 @@ export function TeamPanel({
       </div>
       <label className="workflow-field" htmlFor="team-goal">
         <span>Goal</span>
-        <textarea id="team-goal" rows={3} maxLength={4000} value={goal} disabled={planning || starting} onChange={(event) => setGoal(event.target.value)} placeholder="For example: add a login page with a matching API endpoint and tests" />
+        <Textarea id="team-goal" rows={3} maxLength={4000} value={goal} disabled={planning || starting} onChange={(event) => setGoal(event.target.value)} placeholder="For example: add a login page with a matching API endpoint and tests" />
       </label>
       <div className="team-panel-actions">
-        <button type="button" className="primary-button" disabled={disabled || !activeProject || !goal.trim()} onClick={() => void plan()}>
+        <UiButton type="button" className="primary-button" disabled={disabled || !activeProject || !goal.trim()} onClick={() => void plan()}>
           {planning ? <Loader2 size={15} className="spin" /> : <Users size={15} />}
           <span>{planning ? 'Planning' : draft ? 'Plan again' : 'Plan the job'}</span>
-        </button>
-        <button
+        </UiButton>
+        <UiButton
           type="button"
           className="secondary-button"
           disabled={disabled || guiding || !activeProject || !goal.trim() || !guideReadiness?.ready}
@@ -285,7 +289,7 @@ export function TeamPanel({
         >
           {guiding ? <Loader2 size={15} className="spin" /> : <Wand2 size={15} />}
           <span>{guiding ? 'Refining' : 'Refine with Prompt Guide'}</span>
-        </button>
+        </UiButton>
         {!activeProject && <small>Open a project first.</small>}
         {activeProject && guideReadiness && !guideReadiness.ready && <small>{guideReadiness.reason}</small>}
         {planning && <small>The orchestrator is reading the project. This only reads; nothing is changed.</small>}
@@ -299,12 +303,12 @@ export function TeamPanel({
             <Wand2 size={15} />
             <strong>Prompt Guide</strong>
             <small>Nothing has run. Edit anything below, then plan with these prompts.</small>
-            <button type="button" className="icon-button" aria-label="Close the Prompt Guide" onClick={() => setGuide(null)}><X size={14} /></button>
+            <UiButton type="button" className="icon-button" aria-label="Close the Prompt Guide" onClick={() => setGuide(null)}><X size={14} /></UiButton>
           </div>
           <section className="prompt-guide-goal">
             <span className="prompt-guide-label">Clear goal</span>
             <p>{guide.goal}</p>
-            <button type="button" className="secondary-button" disabled={goal.trim() === guide.goal} onClick={() => setGoal(guide.goal)}>Use as goal</button>
+            <UiButton type="button" className="secondary-button" disabled={goal.trim() === guide.goal} onClick={() => setGoal(guide.goal)}>Use as goal</UiButton>
           </section>
           {guide.assumptions.length > 0 && (
             <section>
@@ -319,13 +323,13 @@ export function TeamPanel({
                 {guide.questions.map((question, index) => (
                   <label className="field" key={question}>
                     <span>{question}</span>
-                    <input value={guideAnswers[index] ?? ''} placeholder="Your answer (optional)" onChange={(event) => setGuideAnswers({ ...guideAnswers, [index]: event.target.value })} />
+                    <UiTextInput value={guideAnswers[index] ?? ''} placeholder="Your answer (optional)" onChange={(event) => setGuideAnswers({ ...guideAnswers, [index]: event.target.value })} />
                   </label>
                 ))}
               </div>
-              <button type="button" className="secondary-button" disabled={guiding || !Object.values(guideAnswers).some((answer) => answer.trim())} onClick={() => void refineIdea(true)}>
+              <UiButton type="button" className="secondary-button" disabled={guiding || !Object.values(guideAnswers).some((answer) => answer.trim())} onClick={() => void refineIdea(true)}>
                 {guiding ? <Loader2 size={14} className="spin" /> : <Wand2 size={14} />}<span>Refine again with my answers</span>
-              </button>
+              </UiButton>
             </section>
           )}
           <section>
@@ -334,21 +338,21 @@ export function TeamPanel({
               {guidePrompts.map((item, index) => (
                 <li key={`${item.role}-${index}`}>
                   <div className="prompt-guide-prompt-head">
-                    <span className="team-role-chip">{resolveRole(team, item.role).label}</span>
-                    <input aria-label={`Prompt ${index + 1} title`} value={item.title} maxLength={120} onChange={(event) => setGuidePrompts(guidePrompts.map((entry, at) => (at === index ? { ...entry, title: event.target.value } : entry)))} />
-                    <button type="button" className="icon-button" aria-label={`Remove prompt ${index + 1}`} disabled={guidePrompts.length === 1} onClick={() => setGuidePrompts(guidePrompts.filter((_, at) => at !== index))}><Trash2 size={13} /></button>
+                    <Pill tone="info">{resolveRole(team, item.role).label}</Pill>
+                    <UiTextInput aria-label={`Prompt ${index + 1} title`} value={item.title} maxLength={120} onChange={(event) => setGuidePrompts(guidePrompts.map((entry, at) => (at === index ? { ...entry, title: event.target.value } : entry)))} />
+                    <UiButton type="button" className="icon-button" aria-label={`Remove prompt ${index + 1}`} disabled={guidePrompts.length === 1} onClick={() => setGuidePrompts(guidePrompts.filter((_, at) => at !== index))}><Trash2 size={13} /></UiButton>
                   </div>
-                  <textarea aria-label={`Prompt ${index + 1}`} value={item.prompt} maxLength={6000} onChange={(event) => setGuidePrompts(guidePrompts.map((entry, at) => (at === index ? { ...entry, prompt: event.target.value } : entry)))} />
+                  <Textarea aria-label={`Prompt ${index + 1}`} value={item.prompt} maxLength={6000} onChange={(event) => setGuidePrompts(guidePrompts.map((entry, at) => (at === index ? { ...entry, prompt: event.target.value } : entry)))} />
                   {item.paths.length > 0 && <small className="prompt-guide-paths">{item.paths.join(' · ')}</small>}
                 </li>
               ))}
             </ol>
           </section>
           <div className="team-panel-actions">
-            <button type="button" className="primary-button" disabled={disabled || planning || guidePrompts.some((item) => !item.title.trim() || !item.prompt.trim())} onClick={() => void planFromGuide()}>
+            <UiButton type="button" className="primary-button" disabled={disabled || planning || guidePrompts.some((item) => !item.title.trim() || !item.prompt.trim())} onClick={() => void planFromGuide()}>
               {planning ? <Loader2 size={15} className="spin" /> : <Users size={15} />}
               <span>Plan with these prompts</span>
-            </button>
+            </UiButton>
             <small>KAI assigns an agent to each prompt and adds the usual reviews. You approve the plan before anything runs.</small>
           </div>
         </div>
@@ -379,7 +383,7 @@ export function TeamPanel({
                       <strong>{part.title}</strong>
                       <small>{info.label}{info.access === 'read' ? ' - read-only' : ''}{part.dependsOn.length > 0 ? ` - after ${part.dependsOn.map((id) => draft.parts.find((item) => item.id === id)?.title ?? id).join(', ')}` : ''}</small>
                     </div>
-                    <button type="button" className="icon-button compact" aria-label={`Remove ${part.title}`} title="Remove this part" disabled={disabled || draft.parts.length === 1} onClick={() => removePart(part.id)}><Trash2 size={15} /></button>
+                    <UiButton type="button" className="icon-button compact" aria-label={`Remove ${part.title}`} title="Remove this part" disabled={disabled || draft.parts.length === 1} onClick={() => removePart(part.id)}><Trash2 size={15} /></UiButton>
                   </div>
                   <div className="team-part-controls">
                     <label className="workflow-field">
@@ -404,7 +408,7 @@ export function TeamPanel({
                   <small className="team-reason">{assignment.reason}</small>
                   <details className="team-part-prompt">
                     <summary>Edit the instructions for this part</summary>
-                    <textarea aria-label={`${part.title} instructions`} rows={4} maxLength={6000} value={part.prompt} disabled={disabled} onChange={(event) => changePart(part.id, { prompt: event.target.value })} />
+                    <Textarea aria-label={`${part.title} instructions`} rows={4} maxLength={6000} value={part.prompt} disabled={disabled} onChange={(event) => changePart(part.id, { prompt: event.target.value })} />
                     {part.paths.length > 0 && <small>Stays within: {part.paths.join(', ')}</small>}
                   </details>
                 </li>
@@ -421,7 +425,7 @@ export function TeamPanel({
             <div className="team-check">
               <label className="workflow-field team-check-command">
                 <span>Check after the team finishes (optional)</span>
-                <input aria-label="Check command" value={checkCommand} disabled={disabled} maxLength={1000} placeholder="npm test" onChange={(event) => setCheckCommand(event.target.value)} />
+                <UiTextInput aria-label="Check command" value={checkCommand} disabled={disabled} maxLength={1000} placeholder="npm test" onChange={(event) => setCheckCommand(event.target.value)} />
               </label>
               <label className="workflow-field team-rounds">
                 <span>Fix rounds</span>
@@ -437,7 +441,7 @@ export function TeamPanel({
                   <strong>Run independent parts at the same time</strong>
                   <small>Each part works in its own copy of the project; KAI merges the copies and runs a part again if its changes clash. Needs a git project with at least one commit.</small>
                 </span>
-                <input type="checkbox" aria-label="Run independent parts at the same time" checked={sideBySide} disabled={disabled} onChange={(event) => setSideBySide(event.target.checked)} />
+                <Checkbox aria-label="Run independent parts at the same time" checked={sideBySide} disabled={disabled} onChange={(event) => setSideBySide(event.target.checked)} />
               </label>
               {sideBySide && (
                 <>
@@ -452,10 +456,10 @@ export function TeamPanel({
               )}
             </div>
             <small>Reviewers always read only. A security review that finds a serious problem stops the job and asks you.{perTokenParts > 0 ? ` ${perTokenParts} ${perTokenParts === 1 ? 'part uses' : 'parts use'} per-token billing.` : ''}</small>
-            <button type="button" className="primary-button" disabled={disabled || draft.parts.length === 0} onClick={() => void start()}>
+            <UiButton type="button" className="primary-button" disabled={disabled || draft.parts.length === 0} onClick={() => void start()}>
               {starting ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
               <span>{starting ? 'Starting' : `Run team (${draft.parts.length} ${draft.parts.length === 1 ? 'part' : 'parts'})`}</span>
-            </button>
+            </UiButton>
           </div>
         </div>
       )}

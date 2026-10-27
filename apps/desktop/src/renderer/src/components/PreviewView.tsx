@@ -17,6 +17,9 @@ import {
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PreviewInfo, PreviewState, ProjectRecord } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
+import { UiButton } from './UiButton';
+import { Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 interface PreviewElementSelection {
   selector: string;
@@ -264,27 +267,27 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
       <div className="preview-toolbar">
         <label className="input-with-icon preview-command">
           <Terminal size={13} />
-          <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="The command that starts this project" aria-label="Preview command" />
+          <UiTextInput value={command} onChange={(event) => setCommand(event.target.value)} placeholder="The command that starts this project" aria-label="Preview command" />
         </label>
-        <button type="button" className="primary-button preview-run-button" aria-label={running || starting ? 'Restart project' : 'Start project'} disabled={!command.trim() || Boolean(busy)} onClick={() => void start()}>
+        <UiButton type="button" className="primary-button preview-run-button" aria-label={running || starting ? 'Restart project' : 'Start project'} disabled={!command.trim() || Boolean(busy)} onClick={() => void start()}>
           {starting ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}
           <span>{running || starting ? 'Restart' : 'Run'}</span>
-        </button>
-        <button type="button" className="secondary-button preview-stop-button" disabled={!running && !starting || Boolean(busy)} onClick={() => void stop()}>
+        </UiButton>
+        <UiButton type="button" className="secondary-button preview-stop-button" disabled={!running && !starting || Boolean(busy)} onClick={() => void stop()}>
           <Square size={12} />
           <span>Stop</span>
-        </button>
+        </UiButton>
         <label className="input-with-icon preview-url">
           <Globe2 size={13} />
-          <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="http://localhost:5173" aria-label="Preview URL" onKeyDown={(event) => { if (event.key === 'Enter') openUrl(); }} />
+          <UiTextInput value={url} onChange={(event) => setUrl(event.target.value)} placeholder="http://localhost:5173" aria-label="Preview URL" onKeyDown={(event) => { if (event.key === 'Enter') openUrl(); }} />
         </label>
         <div className="preview-url-actions">
-          <button type="button" className="icon-button compact" title="Open URL in the preview" aria-label="Open URL in the preview" disabled={!url.trim()} onClick={openUrl}><ExternalLink size={14} /></button>
-          <button type="button" className="icon-button compact" title="Reload preview" aria-label="Reload preview" disabled={!url.trim()} onClick={() => webviewRef.current?.reload()}><RefreshCw size={14} /></button>
-          <button type="button" className={`secondary-button preview-inspect-button ${inspect ? 'active' : ''}`} aria-pressed={inspect} disabled={!url.trim()} onClick={() => setInspect((current) => !current)}>
+          <UiButton type="button" className="icon-button compact" title="Open URL in the preview" aria-label="Open URL in the preview" disabled={!url.trim()} onClick={openUrl}><ExternalLink size={14} /></UiButton>
+          <UiButton type="button" className="icon-button compact" title="Reload preview" aria-label="Reload preview" disabled={!url.trim()} onClick={() => webviewRef.current?.reload()}><RefreshCw size={14} /></UiButton>
+          <UiButton type="button" className={`secondary-button preview-inspect-button ${inspect ? 'active' : ''}`} aria-pressed={inspect} disabled={!url.trim()} onClick={() => setInspect((current) => !current)}>
             <MousePointerClick size={13} />
             <span>{inspect ? 'Selecting...' : 'Select element'}</span>
-          </button>
+          </UiButton>
         </div>
       </div>
 
@@ -292,7 +295,7 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
         <div className="preview-starts" role="group" aria-label="Ways to start this project">
           <span className="preview-starts-label">Start with</span>
           {info.candidates.map((candidate) => (
-            <button
+            <UiButton
               key={candidate.command}
               type="button"
               className="chip-button"
@@ -301,12 +304,12 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
               onClick={() => setCommand(candidate.command)}
             >
               {candidate.label}
-            </button>
+            </UiButton>
           ))}
         </div>
       )}
 
-      {notice && <div className="preview-notice" role="status"><span>{notice}</span><button type="button" className="icon-button compact" aria-label="Dismiss preview notice" onClick={() => setNotice(null)}><X size={13} /></button></div>}
+      {notice && <div className="preview-notice" role="status"><span>{notice}</span><UiButton type="button" className="icon-button compact" aria-label="Dismiss preview notice" onClick={() => setNotice(null)}><X size={13} /></UiButton></div>}
       {state?.message && <div className={`preview-notice ${state.status === 'failed' ? 'preview-error' : ''}`} role={state.status === 'failed' ? 'alert' : 'status'}><span>{state.message}</span></div>}
 
       <section className="preview-stage" aria-label="Application preview">
@@ -338,15 +341,15 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
 
       <aside className="preview-inspector" aria-label="Preview inspector">
         <div className="preview-inspector-tabs" role="tablist" aria-label="Preview inspector views">
-          <button type="button" role="tab" aria-selected={inspectorTab === 'selection'} className={inspectorTab === 'selection' ? 'active' : ''} onClick={() => setInspectorTab('selection')}>
+          <UiButton type="button" role="tab" aria-selected={inspectorTab === 'selection'} className={inspectorTab === 'selection' ? 'active' : ''} onClick={() => setInspectorTab('selection')}>
             <MousePointerClick size={13} />Selection
-          </button>
-          <button type="button" role="tab" aria-selected={inspectorTab === 'issues'} className={inspectorTab === 'issues' ? 'active' : ''} onClick={() => setInspectorTab('issues')}>
+          </UiButton>
+          <UiButton type="button" role="tab" aria-selected={inspectorTab === 'issues'} className={inspectorTab === 'issues' ? 'active' : ''} onClick={() => setInspectorTab('issues')}>
             <AlertTriangle size={13} />Issues{issues.length > 0 ? <span>{issues.length}</span> : null}
-          </button>
-          <button type="button" role="tab" aria-selected={inspectorTab === 'logs'} className={inspectorTab === 'logs' ? 'active' : ''} onClick={() => setInspectorTab('logs')}>
+          </UiButton>
+          <UiButton type="button" role="tab" aria-selected={inspectorTab === 'logs'} className={inspectorTab === 'logs' ? 'active' : ''} onClick={() => setInspectorTab('logs')}>
             <Terminal size={13} />Server log
-          </button>
+          </UiButton>
         </div>
 
         <div className="preview-inspector-panel" role="tabpanel">
@@ -360,10 +363,10 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
                   {selection.text && <p>{selection.text}</p>}
                   <small>{selection.tagName}{selection.url ? ` · ${selection.url}` : ''}</small>
                 </div>
-                <textarea className="preview-request-input" rows={5} value={request} onChange={(event) => setRequest(event.target.value)} placeholder="Describe what should change..." />
+                <Textarea className="preview-request-input" rows={5} value={request} onChange={(event) => setRequest(event.target.value)} placeholder="Describe what should change..." />
                 <div className="preview-inspector-actions">
-                  <button type="button" className="primary-button" disabled={!request.trim()} onClick={submitRequest}><Send size={13} /><span>Send to workspace</span></button>
-                  <button type="button" className="secondary-button" onClick={() => { setSelection(null); setRequest(''); }}>Clear</button>
+                  <UiButton type="button" className="primary-button" disabled={!request.trim()} onClick={submitRequest}><Send size={13} /><span>Send to workspace</span></UiButton>
+                  <UiButton type="button" className="secondary-button" onClick={() => { setSelection(null); setRequest(''); }}>Clear</UiButton>
                 </div>
               </>
             ) : (
@@ -371,9 +374,9 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
                 <MousePointerClick size={24} />
                 <strong>Choose an element in the preview</strong>
                 <span>Turn a rendered component into a precise change request for the active agent.</span>
-                <button type="button" className="secondary-button" disabled={!url.trim() || inspect} onClick={() => setInspect(true)}>
+                <UiButton type="button" className="secondary-button" disabled={!url.trim() || inspect} onClick={() => setInspect(true)}>
                   <MousePointerClick size={13} />Select element
-                </button>
+                </UiButton>
               </div>
             )}
             </section>
@@ -383,7 +386,7 @@ export function PreviewView({ activeProject, onRequestChange, onClose }: {
             <section className="preview-issues">
             <div className="preview-panel-heading">
               <div><span className="eyebrow">Browser errors</span><h2>{issues.length} issue{issues.length === 1 ? '' : 's'}</h2></div>
-              {issues.length > 0 && <button type="button" className="secondary-button preview-clear-issues" onClick={() => setIssues([])}><Trash2 size={13} /><span>Clear</span></button>}
+              {issues.length > 0 && <UiButton type="button" className="secondary-button preview-clear-issues" onClick={() => setIssues([])}><Trash2 size={13} /><span>Clear</span></UiButton>}
             </div>
             <div className="preview-issue-list">
               {issues.map((issue) => (
@@ -428,7 +431,7 @@ function PreviewPaneHeader({ projectName, status, startedAt, onClose }: {
       <div className="preview-pane-actions">
         <span className={`preview-status ${status}`}><Globe2 size={12} />{status}</span>
         {startedAt && <small>{relativeTime(startedAt)}</small>}
-        <button type="button" className="icon-button compact" title="Close live preview pane" aria-label="Close live preview pane" onClick={onClose}><X size={14} /></button>
+        <UiButton type="button" className="icon-button compact" title="Close live preview pane" aria-label="Close live preview pane" onClick={onClose}><X size={14} /></UiButton>
       </div>
     </header>
   );

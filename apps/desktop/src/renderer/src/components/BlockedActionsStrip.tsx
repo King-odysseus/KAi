@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { relativeTime } from '../types';
 import { BLOCKED_BY_LABEL, blockedActions } from './blocked-actions';
+import { UiButton } from './UiButton';
 
 /**
  * Every call this conversation tried that something stopped, collapsed to a count until opened.
@@ -17,11 +18,11 @@ export function BlockedActionsStrip({ events }: { events: readonly PersistedEven
   if (blocked.length === 0) return null;
   return (
     <section className="blocked-actions" aria-label="Blocked actions in this conversation">
-      <button type="button" className="blocked-actions-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+      <UiButton type="button" className="blocked-actions-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
         <ShieldAlert size={13} />
         <span>{blocked.length} action{blocked.length === 1 ? '' : 's'} blocked in this conversation</span>
         <ChevronDown className="blocked-actions-chevron" size={13} />
-      </button>
+      </UiButton>
       {expanded && (
         <ol className="blocked-actions-list">
           {[...blocked].reverse().slice(0, 20).map((entry) => (

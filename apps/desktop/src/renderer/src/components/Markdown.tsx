@@ -2,6 +2,7 @@ import { Copy } from 'lucide-react';
 import { memo, useMemo, type ReactNode } from 'react';
 import { isProjectFileHref, parseMarkdown, type Block, type Inline } from '../markdown';
 import './markdown.css';
+import { UiButton } from './UiButton';
 
 function renderInline(nodes: Inline[], keyPrefix: string, onOpenFile?: (path: string) => void): ReactNode[] {
   return nodes.map((node, index) => {
@@ -37,7 +38,7 @@ function renderBlocks(blocks: Block[], keyPrefix: string, onOpenFile?: (path: st
         <section className="response-code" key={key}>
           <header>
             <span>{block.language || 'text'}</span>
-            <button type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(block.text)}><Copy size={14} /></button>
+            <UiButton type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(block.text)}><Copy size={14} /></UiButton>
           </header>
           <pre><code>{block.text}</code></pre>
         </section>

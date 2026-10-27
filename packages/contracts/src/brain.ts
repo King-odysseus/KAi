@@ -15,6 +15,7 @@ export const cognitive1Operations = [
   'brain-ping',
   'brain-export',
   'brain-drafts',
+  'brain-draft-status',
   'brain-draft-approve',
   'brain-draft-approve-all',
   'brain-draft-reject',

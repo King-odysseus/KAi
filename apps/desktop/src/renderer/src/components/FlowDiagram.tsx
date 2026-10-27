@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css';
 import { ArrowDown, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { buildFlowGraph, type FlowGraph, type FlowGraphNode, type FlowJourney } from '../flow-diagram';
 import { layoutFlowGraph, type FlowDirection } from '../flow-layout';
+import { UiButton } from './UiButton';
 
 /**
  * The user journeys from the flows artifact, drawn with React Flow. Each journey has its own tab. A question in the
@@ -206,14 +207,14 @@ export function FlowDiagram({ journeys, fill = false }: { journeys: readonly Flo
       <div className="flow-toolbar">
         <div className="flow-tabs" role="tablist" aria-label="Flows">
           {journeys.map((item, index) => (
-            <button key={`${item.title}-${index}`} type="button" role="tab" aria-selected={index === active} className={index === active ? 'active' : undefined} onClick={() => choose(index)} title={`${item.steps.length} steps`}>
+            <UiButton key={`${item.title}-${index}`} type="button" role="tab" aria-selected={index === active} className={index === active ? 'active' : undefined} onClick={() => choose(index)} title={`${item.steps.length} steps`}>
               {item.title}
-            </button>
+            </UiButton>
           ))}
         </div>
-        <button type="button" className="secondary-button" onClick={() => setDirection((current) => (current === 'LR' ? 'TB' : 'LR'))} title="Switch between laying the flow out left to right and top to bottom">
+        <UiButton type="button" className="secondary-button" onClick={() => setDirection((current) => (current === 'LR' ? 'TB' : 'LR'))} title="Switch between laying the flow out left to right and top to bottom">
           {direction === 'LR' ? <ArrowRight size={13} /> : <ArrowDown size={13} />} {direction === 'LR' ? 'Left to right' : 'Top to bottom'}
-        </button>
+        </UiButton>
       </div>
       <div className="flow-diagram" style={fill ? undefined : { height }}>
         <ReactFlowProvider key={`${active}-${journey.title}-${direction}`}>
@@ -232,8 +233,8 @@ export function FlowDiagram({ journeys, fill = false }: { journeys: readonly Flo
             <span className={`flow-kind ${node.kind}`}>{KIND_LABELS[node.kind]}</span>
             <span className="flow-detail-text"><strong>Step {position + 1} of {graph.order.length}.</strong> {node.text}</span>
             <span className="flow-detail-buttons">
-              <button type="button" className="secondary-button" onClick={() => move(-1)} disabled={position <= 0} aria-label="Previous step"><ChevronLeft size={13} /> Previous</button>
-              <button type="button" className="secondary-button" onClick={() => move(1)} disabled={position >= graph.order.length - 1} aria-label="Next step">Next <ChevronRight size={13} /></button>
+              <UiButton type="button" className="secondary-button" onClick={() => move(-1)} disabled={position <= 0} aria-label="Previous step"><ChevronLeft size={13} /> Previous</UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => move(1)} disabled={position >= graph.order.length - 1} aria-label="Next step">Next <ChevronRight size={13} /></UiButton>
             </span>
           </>
         ) : (
@@ -241,7 +242,7 @@ export function FlowDiagram({ journeys, fill = false }: { journeys: readonly Flo
             <span className="studio-note">
               {graph.order.length} steps{branches > 0 ? `, ${branches} decision${branches === 1 ? '' : 's'} that branch` : ''}. Click a step to light up its path and read all of it, and scroll inside a card when a step says more than fits. Drag a box to tidy it, scroll the canvas to zoom, and use the fit button at the bottom left to see the whole flow.
             </span>
-            <button type="button" className="secondary-button" onClick={() => setSelected(graph.order[0] ?? null)}>Walk through <ChevronRight size={13} /></button>
+            <UiButton type="button" className="secondary-button" onClick={() => setSelected(graph.order[0] ?? null)}>Walk through <ChevronRight size={13} /></UiButton>
           </>
         )}
       </div>

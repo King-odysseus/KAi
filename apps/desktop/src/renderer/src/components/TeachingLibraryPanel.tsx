@@ -19,6 +19,9 @@ import type {
   TeachingLibraryKind,
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 interface TeachingLibraryPanelProps {
   library: TeachingLibrary | null;
@@ -165,27 +168,27 @@ export function TeachingLibraryPanel({
   return (
     <div className="teaching-library">
       <div className="teaching-kind-tabs" role="tablist" aria-label="Teaching library type">
-        <button type="button" role="tab" aria-selected={kind === 'method'} className={kind === 'method' ? 'active' : ''} onClick={() => setKind('method')}>
+        <UiButton type="button" role="tab" aria-selected={kind === 'method'} className={kind === 'method' ? 'active' : ''} onClick={() => setKind('method')}>
           <FileText size={13} />Methods
-        </button>
-        <button type="button" role="tab" aria-selected={kind === 'rule'} className={kind === 'rule' ? 'active' : ''} onClick={() => setKind('rule')}>
+        </UiButton>
+        <UiButton type="button" role="tab" aria-selected={kind === 'rule'} className={kind === 'rule' ? 'active' : ''} onClick={() => setKind('rule')}>
           <ShieldCheck size={13} />Rules
-        </button>
+        </UiButton>
       </div>
 
       <div className="teaching-library-actions">
-        <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={createEntry}>
+        <UiButton type="button" className="secondary-button" disabled={Boolean(busy)} onClick={createEntry}>
           {kind === 'method' ? <FilePlus2 size={13} /> : <ListPlus size={13} />}New
-        </button>
+        </UiButton>
         {draft && !draft.builtIn && (
-          <button type="button" className="secondary-button danger-button" disabled={Boolean(busy)} onClick={() => void deleteDraft()}>
+          <UiButton type="button" className="secondary-button danger-button" disabled={Boolean(busy)} onClick={() => void deleteDraft()}>
             {deleting ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}Delete
-          </button>
+          </UiButton>
         )}
         {draft?.builtIn && (
-          <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void resetDraft()}>
+          <UiButton type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void resetDraft()}>
             {resetting ? <LoaderCircle className="spin" size={13} /> : <RotateCcw size={13} />}Reset
-          </button>
+          </UiButton>
         )}
       </div>
 
@@ -194,7 +197,7 @@ export function TeachingLibraryPanel({
           <small className="teaching-location" title={library.directory}>KAI-owned Markdown: {library.directory}</small>
           <div className="teaching-entry-list">
             {entries.map((entry) => (
-              <button
+              <UiButton
                 key={entry.id}
                 type="button"
                 className={`teaching-entry ${selectedId === entry.id ? 'active' : ''} ${entry.enabled ? '' : 'disabled'}`}
@@ -203,7 +206,7 @@ export function TeachingLibraryPanel({
                 <span className="teaching-entry-mark">{entry.kind === 'method' ? <FileText size={13} /> : <ShieldCheck size={13} />}</span>
                 <span className="teaching-entry-copy"><strong>{entry.title}</strong><small>{entry.description || 'No description'}</small></span>
                 <span className={`teaching-entry-state ${entry.enabled ? 'enabled' : ''}`}>{entry.enabled ? 'On' : 'Off'}</span>
-              </button>
+              </UiButton>
             ))}
             {!entries.length && <div className="learning-empty compact"><FileText size={18} /><strong>No {kind} entries</strong><p>Create one or generate a draft.</p></div>}
           </div>
@@ -216,16 +219,16 @@ export function TeachingLibraryPanel({
         <section className="teaching-editor" aria-label="Teaching entry editor">
           <div className="teaching-editor-head">
             <div><strong>{draft.builtIn ? 'Built-in KAI entry' : 'Custom KAI entry'}</strong><small>{draft.builtIn ? 'Editable, and can be reset' : 'Saved under your KAI data folder'}</small></div>
-            <label className="teaching-enabled"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>Enabled</span></label>
+            <label className="teaching-enabled"><Checkbox checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>Enabled</span></label>
           </div>
-          <label><span>Title</span><input value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-          <label><span>Description</span><input value={draft.description} maxLength={1_000} placeholder="When should KAI use this?" onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-          <label><span>Markdown</span><textarea value={draft.content} rows={16} spellCheck={false} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label>
+          <label><span>Title</span><UiTextInput value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+          <label><span>Description</span><UiTextInput value={draft.description} maxLength={1_000} placeholder="When should KAI use this?" onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+          <label><span>Markdown</span><Textarea value={draft.content} rows={16} spellCheck={false} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label>
           <div className="teaching-editor-actions">
-            <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={duplicateDraft}><FilePlus2 size={13} />Duplicate</button>
-            <button type="button" className="primary-button" disabled={Boolean(busy) || !draft.title.trim() || !draft.content.trim()} onClick={() => void saveDraft()}>
+            <UiButton type="button" className="secondary-button" disabled={Boolean(busy)} onClick={duplicateDraft}><FilePlus2 size={13} />Duplicate</UiButton>
+            <UiButton type="button" className="primary-button" disabled={Boolean(busy) || !draft.title.trim() || !draft.content.trim()} onClick={() => void saveDraft()}>
               {saving ? <LoaderCircle className="spin" size={13} /> : <Save size={13} />}Save entry
-            </button>
+            </UiButton>
           </div>
         </section>
       )}
@@ -233,12 +236,12 @@ export function TeachingLibraryPanel({
       <section className="teaching-generate" aria-label="Generate a teaching draft">
         <div><WandSparkles size={14} /><strong>Generate a draft</strong></div>
         <p>The provider writes a review draft. Nothing is saved until you choose Save entry.</p>
-        <input value={topic} maxLength={500} placeholder="e.g. debugging async race conditions" onChange={(event) => setTopic(event.target.value)} />
-        <textarea value={instructions} rows={3} placeholder="Optional requirements for the method or rules" onChange={(event) => setInstructions(event.target.value)} />
+        <UiTextInput value={topic} maxLength={500} placeholder="e.g. debugging async race conditions" onChange={(event) => setTopic(event.target.value)} />
+        <Textarea value={instructions} rows={3} placeholder="Optional requirements for the method or rules" onChange={(event) => setInstructions(event.target.value)} />
         <div className="teaching-editor-actions">
-          <button type="button" className="primary-button" disabled={Boolean(busy) || !topic.trim()} onClick={() => void generateDraft()}>
+          <UiButton type="button" className="primary-button" disabled={Boolean(busy) || !topic.trim()} onClick={() => void generateDraft()}>
             {generating ? <LoaderCircle className="spin" size={13} /> : <WandSparkles size={13} />}Generate draft
-          </button>
+          </UiButton>
         </div>
       </section>
     </div>

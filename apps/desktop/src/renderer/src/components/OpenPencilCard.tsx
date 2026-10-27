@@ -2,6 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Check, KeyRound, Loader2, PenTool, PlugZap } from 'lucide-react';
 import { OPENPENCIL_ENDPOINT, type OpenPencilStatus } from '@kai/contracts';
 import { unwrap } from '../types';
+import { UiButton } from './UiButton';
+import { Checkbox } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 /**
  * The open-pencil connection. The Project Studio reads tokens, components and pages from the editor over MCP, and
@@ -67,21 +70,21 @@ export function OpenPencilCard(): ReactNode {
       </p>
       <label className="toggle-row">
         <span><strong>Connect to open-pencil</strong><small>{status?.tokenStored ? 'A token is stored in the OS vault' : 'No token stored yet'}</small></span>
-        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+        <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
       </label>
       <div className="field-grid">
-        <label className="field"><span>MCP address</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder={OPENPENCIL_ENDPOINT} spellCheck={false} /></label>
-        <label className="field"><span>Auth token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={status?.tokenStored ? 'Stored. Type a new one to replace it' : 'The OPENPENCIL_MCP_AUTH_TOKEN value'} autoComplete="off" /></label>
+        <label className="field"><span>MCP address</span><UiTextInput value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder={OPENPENCIL_ENDPOINT} spellCheck={false} /></label>
+        <label className="field"><span>Auth token</span><UiTextInput type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={status?.tokenStored ? 'Stored. Type a new one to replace it' : 'The OPENPENCIL_MCP_AUTH_TOKEN value'} autoComplete="off" /></label>
       </div>
       <div className="button-row align-start">
-        <button type="button" className="primary-button" onClick={() => void save()} disabled={busy !== null || !endpoint.trim() || !unsaved}>
+        <UiButton type="button" className="primary-button" onClick={() => void save()} disabled={busy !== null || !endpoint.trim() || !unsaved}>
           {busy === 'save' ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}
           <span>Save open-pencil settings</span>
-        </button>
-        <button type="button" className="secondary-button" onClick={() => void test()} disabled={busy !== null || unsaved || !status?.enabled}>
+        </UiButton>
+        <UiButton type="button" className="secondary-button" onClick={() => void test()} disabled={busy !== null || unsaved || !status?.enabled}>
           {busy === 'test' ? <Loader2 className="spin" size={15} /> : <PlugZap size={15} />}
           <span>Test connection</span>
-        </button>
+        </UiButton>
         {status?.enabled && status.tokenStored && !unsaved && !feedback && <span className="settings-note"><Check size={13} /> Connected settings saved</span>}
       </div>
       {feedback && <p className={`settings-feedback ${feedback.ok ? 'success' : 'error'}`} role={feedback.ok ? 'status' : 'alert'}>{feedback.message}</p>}

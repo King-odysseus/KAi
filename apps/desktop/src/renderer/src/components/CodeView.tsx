@@ -56,6 +56,8 @@ import { GuidedReviewPanel } from './GuidedReviewPanel';
 import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 interface TreeNode {
   name: string;
@@ -1873,7 +1875,7 @@ export function CodeView({
   function renderFile(path: string, label: string, depth: number): ReactNode {
     const change = gitChanges.get(path);
     return (
-      <button
+      <UiButton
         key={path}
         type="button"
         className={`code-tree-item ${activePath === path ? 'active' : ''} ${selectedTree?.kind === 'file' && selectedTree.path === path ? 'selected' : ''} ${change ? `git-${change.kind}` : ''}`}
@@ -1893,7 +1895,7 @@ export function CodeView({
         <FileIcon size={12} /><span className="truncate">{label}</span>
         {dirty[path] && <span className="code-dirty" aria-label="Unsaved changes">●</span>}
         {change && <GitBadge change={change} />}
-      </button>
+      </UiButton>
     );
   }
 
@@ -1906,7 +1908,7 @@ export function CodeView({
       const changedInside = changedInFolder.get(child.path) ?? 0;
       return (
         <div key={child.path}>
-          <button
+          <UiButton
             type="button"
             className={`code-tree-item folder ${selectedTree?.kind === 'folder' && selectedTree.path === child.path ? 'selected' : ''} ${changedInside > 0 ? 'has-changes' : ''}`}
             style={{ paddingLeft: 8 + depth * 12 }}
@@ -1929,7 +1931,7 @@ export function CodeView({
           >
             {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<Folder size={12} /><span className="truncate">{child.name}</span>
             {changedInside > 0 && <b className="files-folder-count" title={`${changedInside} changed file${changedInside === 1 ? '' : 's'} in this folder`}>{changedInside}</b>}
-          </button>
+          </UiButton>
           {open && renderNode(child, depth + 1)}
         </div>
       );
@@ -1993,9 +1995,9 @@ export function CodeView({
     <div className={`code-view ${tutorOpen ? 'learning-open' : ''} ${codeResizing ? 'is-resizing' : ''}`} style={paneStyle}>
       <aside className="code-sidebar" aria-label="Project files">
         <div className="code-sidebar-head">
-          <label className="input-with-icon"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" aria-label="Search files" /></label>
-          <button type="button" className="icon-button compact" title="New file" aria-label="New file" onClick={() => void createFile()}><FilePlus size={14} /></button>
-          <button type="button" className="icon-button compact" title="Refresh files" aria-label="Refresh files" onClick={() => { void loadTree(); void refreshGitChanges(); }}><RefreshCw size={14} /></button>
+          <label className="input-with-icon"><Search size={13} /><UiTextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" aria-label="Search files" /></label>
+          <UiButton type="button" className="icon-button compact" title="New file" aria-label="New file" onClick={() => void createFile()}><FilePlus size={14} /></UiButton>
+          <UiButton type="button" className="icon-button compact" title="Refresh files" aria-label="Refresh files" onClick={() => { void loadTree(); void refreshGitChanges(); }}><RefreshCw size={14} /></UiButton>
         </div>
         <div
           className="code-tree"
@@ -2052,17 +2054,17 @@ export function CodeView({
                 setFileMenu({ x: event.clientX, y: event.clientY, kind: 'file', path });
               }}
             >
-              <button type="button" className="code-tab-name" onClick={() => void openFile(path)}><span className="truncate">{path.split('/').at(-1)}</span>{dirty[path] && <span className="code-dirty">●</span>}</button>
-              <button type="button" className="icon-button compact" aria-label={`Close ${path}`} onClick={() => void closeFile(path)}><X size={11} /></button>
+              <UiButton type="button" className="code-tab-name" onClick={() => void openFile(path)}><span className="truncate">{path.split('/').at(-1)}</span>{dirty[path] && <span className="code-dirty">●</span>}</UiButton>
+              <UiButton type="button" className="icon-button compact" aria-label={`Close ${path}`} onClick={() => void closeFile(path)}><X size={11} /></UiButton>
             </div>
           ))}
           <span className="code-tabs-spacer" />
           {autoSave && activePath && dirty[activePath] && <span className="code-autosave-status" role="status">Autosave on</span>}
-          <button type="button" className={`icon-button compact ${tutorOpen ? 'active' : ''}`} title={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} aria-label={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} onClick={() => setTutorOpen((current) => !current)}><PanelRightOpen size={14} /></button>
-          <button type="button" className="secondary-button" title={formatOnSave ? 'Format this file now (saving with Ctrl+S also formats it)' : 'Format this file now'} disabled={!activePath || formatting} onClick={() => void formatActive()}>
+          <UiButton type="button" className={`icon-button compact ${tutorOpen ? 'active' : ''}`} title={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} aria-label={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} onClick={() => setTutorOpen((current) => !current)}><PanelRightOpen size={14} /></UiButton>
+          <UiButton type="button" className="secondary-button" title={formatOnSave ? 'Format this file now (saving with Ctrl+S also formats it)' : 'Format this file now'} disabled={!activePath || formatting} onClick={() => void formatActive()}>
             {formatting ? <RefreshCw size={13} className="spin" /> : <Braces size={13} />}<span>Format</span>
-          </button>
-          <button type="button" className="secondary-button" disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></button>
+          </UiButton>
+          <UiButton type="button" className="secondary-button" disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></UiButton>
         </div>
         {/* Above the editor rather than only behind a panel tab: what to do next is worth seeing while typing, and a
             guide you have to go and open is one you will not read. It is not tied to the tutor being open, for the
@@ -2078,12 +2080,12 @@ export function CodeView({
           <div className="workbench-notice usage-banner warning" role="alert">
             <span>{diskChanged} changed on disk after you opened it{dirty[diskChanged] ? ' and you have unsaved edits' : ''}.</span>
             <span className="code-banner-actions">
-              <button type="button" className="secondary-button" onClick={() => void refreshFromDisk(false)}>Reload from disk</button>
-              {dirty[diskChanged] && <button type="button" className="secondary-button" onClick={() => void refreshFromDisk(true)}>Keep my version</button>}
+              <UiButton type="button" className="secondary-button" onClick={() => void refreshFromDisk(false)}>Reload from disk</UiButton>
+              {dirty[diskChanged] && <UiButton type="button" className="secondary-button" onClick={() => void refreshFromDisk(true)}>Keep my version</UiButton>}
             </span>
           </div>
         )}
-        {notice && <div className="workbench-notice" role="status"><span>{notice}</span>{!editorReady && <button type="button" className="secondary-button" onClick={retryEditor} title="Load the code editor again">{editorError ? 'Try again' : 'Start the editor again'}</button>}{offerInstallRuff && <button type="button" className="secondary-button" disabled={formatting} onClick={() => void installRuff()}>{formatting ? 'Installing…' : 'Install Ruff'}</button>}<button type="button" className="icon-button compact" aria-label="Dismiss" onClick={() => { setNotice(null); setOfferInstallRuff(false); }}><X size={12} /></button></div>}
+        {notice && <div className="workbench-notice" role="status"><span>{notice}</span>{!editorReady && <UiButton type="button" className="secondary-button" onClick={retryEditor} title="Load the code editor again">{editorError ? 'Try again' : 'Start the editor again'}</UiButton>}{offerInstallRuff && <UiButton type="button" className="secondary-button" disabled={formatting} onClick={() => void installRuff()}>{formatting ? 'Installing…' : 'Install Ruff'}</UiButton>}<UiButton type="button" className="icon-button compact" aria-label="Dismiss" onClick={() => { setNotice(null); setOfferInstallRuff(false); }}><X size={12} /></UiButton></div>}
         <div className="code-editor-host" ref={containerRef} aria-label="Code editor" />
         {editorReady && openPaths.length === 0 && <div className="code-empty"><Sparkles size={18} /><span>Choose a file from the list to edit it</span></div>}
       </section>
@@ -2108,9 +2110,9 @@ export function CodeView({
           {/* One grid cell holds the tabs and whichever panel is showing; separate children would each take a cell. */}
           <div className="code-side-panel">
           <div className="code-side-panel-tabs" role="tablist" aria-label="Code assistance">
-            <button type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => openSidePanel('learn')}>Learn</button>
-            <button type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => openSidePanel('review')}>Review</button>
-            <button type="button" role="tab" aria-selected={sidePanel === 'guide'} className={sidePanel === 'guide' ? 'active' : ''} onClick={() => openSidePanel('guide')}>Senior dev</button>
+            <UiButton type="button" role="tab" aria-selected={sidePanel === 'learn'} className={sidePanel === 'learn' ? 'active' : ''} onClick={() => openSidePanel('learn')}>Learn</UiButton>
+            <UiButton type="button" role="tab" aria-selected={sidePanel === 'review'} className={sidePanel === 'review' ? 'active' : ''} onClick={() => openSidePanel('review')}>Review</UiButton>
+            <UiButton type="button" role="tab" aria-selected={sidePanel === 'guide'} className={sidePanel === 'guide' ? 'active' : ''} onClick={() => openSidePanel('guide')}>Senior dev</UiButton>
           </div>
           {sidePanel === 'guide' ? <CodeGuidePanel
             view={codeGuide}

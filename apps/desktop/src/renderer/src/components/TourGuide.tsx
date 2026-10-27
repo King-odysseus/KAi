@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronLeft, ChevronRight, GraduationCap, RotateCcw, X } from 'lucide-react';
 import { TOUR_LESSONS, lessonFor, markLessonDone, resetTour, shouldAutoStart, turnTourOff, type TourProgress } from '../tour-lessons';
 import type { ViewId } from '../types';
+import { UiButton } from './UiButton';
+import { Checkbox } from 'flowbite-react';
 
 interface Spot {
   top: number;
@@ -129,20 +131,20 @@ export function TourGuide({ view, progress, suspended, listOpen, onProgress, onC
           <aside className={`tour-card${cardAtTop ? ' top' : ''}`} role="dialog" aria-label={`Guided tour: ${lesson.title}`} aria-live="polite">
             <header>
               <span className="tour-kicker"><GraduationCap size={13} /> {lesson.title} · {running.step + 1} of {lesson.steps.length}</span>
-              <button type="button" className="tour-close" onClick={finish} aria-label="Skip this lesson" title="Skip this lesson"><X size={14} /></button>
+              <UiButton type="button" className="tour-close" onClick={finish} aria-label="Skip this lesson" title="Skip this lesson"><X size={14} /></UiButton>
             </header>
             <h3>{step.title}</h3>
             <p>{step.body}</p>
             <footer>
-              <button type="button" className="tour-link" onClick={turnOff} title="Stop the tour on every screen. The lessons stay in the list.">Turn tour off</button>
+              <UiButton type="button" className="tour-link" onClick={turnOff} title="Stop the tour on every screen. The lessons stay in the list.">Turn tour off</UiButton>
               <span className="tour-buttons">
-                <button type="button" className="secondary-button" onClick={finish}>Skip</button>
+                <UiButton type="button" className="secondary-button" onClick={finish}>Skip</UiButton>
                 {running.step > 0 && (
-                  <button type="button" className="secondary-button" onClick={() => setRunning({ ...running, step: running.step - 1 })}><ChevronLeft size={13} /> Back</button>
+                  <UiButton type="button" className="secondary-button" onClick={() => setRunning({ ...running, step: running.step - 1 })}><ChevronLeft size={13} /> Back</UiButton>
                 )}
-                <button type="button" className="primary-button" onClick={next}>
+                <UiButton type="button" className="primary-button" onClick={next}>
                   {running.step + 1 >= lesson.steps.length ? <><Check size={13} /> Done</> : <>Next <ChevronRight size={13} /></>}
-                </button>
+                </UiButton>
               </span>
             </footer>
           </aside>
@@ -151,33 +153,33 @@ export function TourGuide({ view, progress, suspended, listOpen, onProgress, onC
 
       {listOpen && (
         <>
-          <button type="button" className="tour-scrim" aria-label="Close the lessons list" onClick={onCloseList} />
+          <UiButton type="button" className="tour-scrim" aria-label="Close the lessons list" onClick={onCloseList} />
           <section className="tour-list" role="dialog" aria-label="Lessons">
             <header>
               <strong><GraduationCap size={15} /> Lessons</strong>
               <span className="studio-note">{doneCount} of {TOUR_LESSONS.length} seen</span>
-              <button type="button" className="tour-close" onClick={onCloseList} aria-label="Close"><X size={14} /></button>
+              <UiButton type="button" className="tour-close" onClick={onCloseList} aria-label="Close"><X size={14} /></UiButton>
             </header>
             <label className="toggle-row">
               <span><strong>Start lessons by themselves</strong><small>Each screen explains itself the first time you open it</small></span>
-              <input type="checkbox" checked={progress.enabled} onChange={(event) => onProgress(event.target.checked ? { ...progress, enabled: true } : turnTourOff(progress))} />
+              <Checkbox checked={progress.enabled} onChange={(event) => onProgress(event.target.checked ? { ...progress, enabled: true } : turnTourOff(progress))} />
             </label>
             <ul>
               {TOUR_LESSONS.map((item) => {
                 const seen = progress.done.includes(item.view);
                 return (
                   <li key={item.view}>
-                    <button type="button" className={view === item.view ? 'current' : undefined} onClick={() => openLesson(item.view)}>
+                    <UiButton type="button" className={view === item.view ? 'current' : undefined} onClick={() => openLesson(item.view)}>
                       <span className={`tour-tick${seen ? ' seen' : ''}`} aria-hidden="true">{seen ? <Check size={12} /> : null}</span>
                       <span className="tour-lesson-text"><strong>{item.title}</strong><small>{item.summary}</small></span>
                       <span className="studio-note">{item.steps.length} steps</span>
-                    </button>
+                    </UiButton>
                   </li>
                 );
               })}
             </ul>
             <footer>
-              <button type="button" className="secondary-button" onClick={() => { onProgress(resetTour()); lastAutoView.current = null; }}><RotateCcw size={13} /> Start over</button>
+              <UiButton type="button" className="secondary-button" onClick={() => { onProgress(resetTour()); lastAutoView.current = null; }}><RotateCcw size={13} /> Start over</UiButton>
             </footer>
           </section>
         </>

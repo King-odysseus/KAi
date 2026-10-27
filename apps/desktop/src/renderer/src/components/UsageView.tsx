@@ -5,6 +5,8 @@ import type { AppSettings, SettingsUpdate, UsageBudget, UsageLimitStatus, UsageS
 import { unwrap } from '../types';
 
 import { Select } from './ui/Select';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 const REFRESH_MS = 15_000;
 
 export function formatUsd(value: number): string {
@@ -52,7 +54,7 @@ export function UsageBanner({ conversationId, refreshToken, onOpenUsage }: { con
       <span>
         <AlertTriangle size={13} /> {limitName(worst)} budget {formatUsd(worst.spentUsd)} of {formatUsd(worst.limitUsd)} ({Math.round(worst.ratio * 100)}%, estimated). {detail}
       </span>
-      <button type="button" className="secondary-button" onClick={onOpenUsage}>Open Usage</button>
+      <UiButton type="button" className="secondary-button" onClick={onOpenUsage}>Open Usage</UiButton>
     </div>
   );
 }
@@ -86,7 +88,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
           <p>Estimated spend from paid API runs only. Claude and Codex subscription usage is never counted.</p>
         </div>
         <div className="page-actions">
-          <button type="button" className="secondary-button" onClick={() => void refresh()}><RefreshCw size={14} /><span>Refresh</span></button>
+          <UiButton type="button" className="secondary-button" onClick={() => void refresh()}><RefreshCw size={14} /><span>Refresh</span></UiButton>
         </div>
       </header>
       {error && <div className="workbench-error" role="alert">{error}</div>}
@@ -117,7 +119,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
               <UsdField key={id} label={`${directProviderPreset(id).displayName} per day (USD)`} value={draft.providerDailyUsd[id] ?? 0} onChange={(value) => setProviderLimit(id, value)} />
             ))}
           </div>
-          <button type="button" className="primary-button align-end" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save budget</span></button>
+          <UiButton type="button" className="primary-button align-end" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save budget</span></UiButton>
         </section>
 
         <section className="settings-section span-two">
@@ -154,7 +156,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
 }
 
 function UsdField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }): ReactNode {
-  return <label className="field"><span>{label}</span><input type="number" min={0} step={0.5} value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;
+  return <label className="field"><span>{label}</span><UiTextInput type="number" min={0} step={0.5} value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;
 }
 
 function UsageTable({ title, head, rows, empty, wide }: { title: string; head: string[]; rows: string[][]; empty: string; wide?: boolean }): ReactNode {

@@ -1,6 +1,7 @@
 import { Undo2 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { diffHunks } from '@kai/contracts';
+import { UiButton } from './UiButton';
 
 // The review sends at most this many characters per side; a cut-off file would number its hunks differently from disk.
 const MAX_REVIEW_CHARACTERS = 190_000;
@@ -21,7 +22,7 @@ export function HunkReview({ before, after, disabled, onReject }: { before: stri
         <section key={hunk.id} className="hunk">
           <div className="hunk-head">
             <span>Line {hunk.newStart}{hunk.removed.length > 0 ? ` (was ${hunk.oldStart})` : ''}</span>
-            <button type="button" className="secondary-button" disabled={disabled} onClick={() => onReject(hunk.id)}><Undo2 size={12} /><span>Reject hunk</span></button>
+            <UiButton type="button" className="secondary-button" disabled={disabled} onClick={() => onReject(hunk.id)}><Undo2 size={12} /><span>Reject hunk</span></UiButton>
           </div>
           <pre className="hunk-body">
             {hunk.contextBefore.map((line, index) => <div key={`b${index}`} className="hunk-line context">{'  '}{stripEnding(line)}</div>)}

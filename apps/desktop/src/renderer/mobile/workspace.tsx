@@ -10,6 +10,7 @@ const TURN_LIMIT = 12;
 
 /** The last thing said, so a row reads as a thread rather than as a title. */
 function lastLine(record: ConversationRecord): string {
+  if ('__summary' in record) return 'Open to read thread';
   const last = record.turns[record.turns.length - 1];
   if (!last) return 'No turns yet';
   const who = last.role === 'user' ? 'You' : 'KAI';
@@ -101,7 +102,7 @@ export function ConversationDetail({ state, conversationId, backLabel, onBack, o
 }): ReactNode {
   // The list carries the turns already; a conversation opened from a run's own detail may not be in it.
   const fromList = state.conversations?.find((record) => record.id === conversationId) ?? null;
-  const record = fromList ?? (state.conversation?.id === conversationId ? state.conversation : null);
+  const record = state.conversation?.id === conversationId ? state.conversation : fromList;
   const live = state.tails[conversationId] ?? '';
   const queued = state.sent[conversationId] ?? [];
   const run = state.runs.find((candidate) => candidate.conversationId === conversationId) ?? null;

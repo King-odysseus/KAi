@@ -15,6 +15,10 @@ import {
 } from '@kai/contracts';
 import { unwrap } from '../types';
 import { SaveToBrainDialog } from './SaveToBrain';
+import { Pill } from './Pill';
+import { UiButton } from './UiButton';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { UiTextInput } from './UiTextInput';
 
 type TasksTab = 'board' | 'reviews' | 'handoffs' | 'decisions';
 
@@ -72,7 +76,7 @@ export function TasksView({ activeProject, cognitive1Ready, onStartTask }: {
       </header>
       <div className="ops-tabs" role="tablist" aria-label="Task sections">
         {TABS.map((item) => (
-          <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={`ops-tab ${tab === item.id ? 'active' : ''}`} onClick={() => setTab(item.id)}>{item.label}</button>
+          <UiButton key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={`ops-tab ${tab === item.id ? 'active' : ''}`} onClick={() => setTab(item.id)}>{item.label}</UiButton>
         ))}
       </div>
       <p className="tasks-tab-help">{TABS.find((item) => item.id === tab)?.help}</p>
@@ -138,13 +142,13 @@ function TaskBoard({ activeProject, report, onStartTask }: { activeProject: Proj
   return (
     <div className="ops-panel">
       <div className="ops-actions">
-        <label className="toggle-row history-archive-filter"><span><strong>All projects</strong><small>{projectName ? `Otherwise only ${projectName}` : 'No project open'}</small></span><input type="checkbox" checked={allProjects || !projectName} disabled={!projectName} onChange={(event) => setAllProjects(event.target.checked)} /></label>
-        <button type="button" className="secondary-button" onClick={() => void load()}><RefreshCw size={14} /><span>Refresh</span></button>
+        <label className="toggle-row history-archive-filter"><span><strong>All projects</strong><small>{projectName ? `Otherwise only ${projectName}` : 'No project open'}</small></span><Checkbox checked={allProjects || !projectName} disabled={!projectName} onChange={(event) => setAllProjects(event.target.checked)} /></label>
+        <UiButton type="button" className="secondary-button" onClick={() => void load()}><RefreshCw size={14} /><span>Refresh</span></UiButton>
       </div>
       {routeText && (
         <div className="workbench-notice" role="status">
           <span><strong>Suggested agent for "{routeText.title}":</strong> {routeText.text}</span>
-          <button type="button" className="secondary-button" onClick={() => setRouteText(null)}>Dismiss</button>
+          <UiButton type="button" className="secondary-button" onClick={() => setRouteText(null)}>Dismiss</UiButton>
         </div>
       )}
       <div className="kanban" role="list">
@@ -159,9 +163,9 @@ function TaskBoard({ activeProject, report, onStartTask }: { activeProject: Proj
                 {task.subtasksTotal > 0 && <small>Subtasks {task.subtasksDone}/{task.subtasksTotal}</small>}
                 {task.dependsOn && <small>Depends on {task.dependsOn}</small>}
                 <div className="ops-actions">
-                  {task.column === 'todo' && <button type="button" className="primary-button" onClick={() => void start(task)}><Play size={12} /><span>Start</span></button>}
-                  {task.column === 'todo' && <button type="button" className="secondary-button" title="Ask Cognitive1 which agent fits this task" onClick={() => void suggestAgent(task)}><RouteIcon size={12} /><span>Suggest agent</span></button>}
-                  {task.column === 'doing' && <button type="button" className="primary-button" onClick={() => void complete(task)}><span>Complete</span></button>}
+                  {task.column === 'todo' && <UiButton type="button" className="primary-button" onClick={() => void start(task)}><Play size={12} /><span>Start</span></UiButton>}
+                  {task.column === 'todo' && <UiButton type="button" className="secondary-button" title="Ask Cognitive1 which agent fits this task" onClick={() => void suggestAgent(task)}><RouteIcon size={12} /><span>Suggest agent</span></UiButton>}
+                  {task.column === 'doing' && <UiButton type="button" className="primary-button" onClick={() => void complete(task)}><span>Complete</span></UiButton>}
                 </div>
               </article>
             ))}
@@ -173,15 +177,15 @@ function TaskBoard({ activeProject, report, onStartTask }: { activeProject: Proj
       <section className="settings-section">
         <div className="section-title"><Plus size={16} /><span>New task</span></div>
         <div className="field-grid">
-          <label className="field"><span>Title</span><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
-          <label className="field"><span>Tags</span><input value={form.tags} placeholder="frontend, css" onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
+          <label className="field"><span>Title</span><UiTextInput value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+          <label className="field"><span>Tags</span><UiTextInput value={form.tags} placeholder="frontend, css" onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
         </div>
-        <label className="field"><span>Description</span><textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
-        <button type="button" className="primary-button align-end" disabled={!form.title.trim() || !projectName} title={projectName ? undefined : 'Open a project first'} onClick={() => void report(async () => {
+        <label className="field"><span>Description</span><Textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+        <UiButton type="button" className="primary-button align-end" disabled={!form.title.trim() || !projectName} title={projectName ? undefined : 'Open a project first'} onClick={() => void report(async () => {
           await operation('task-create', { ...form, title: form.title.trim(), project: projectName, agent: AGENT_NAME });
           setForm({ title: '', description: '', tags: '' });
           await load();
-        }, 'Task created.')}>Create task</button>
+        }, 'Task created.')}>Create task</UiButton>
       </section>
       {brainDraft && <SaveToBrainDialog text={brainDraft.text} project={brainDraft.project} onClose={() => setBrainDraft(null)} onSaved={() => undefined} />}
     </div>
@@ -210,20 +214,20 @@ function ReviewQueue({ activeProject, report }: { activeProject: ProjectRecord |
     <div className="ops-panel">
       <div className="ops-segment" role="group" aria-label="Review state">
         {REVIEW_STATES.map((item) => (
-          <button key={item.id} type="button" aria-pressed={status === item.id} className={status === item.id ? 'active' : ''} onClick={() => setStatus(item.id)}>{item.label}</button>
+          <UiButton key={item.id} type="button" aria-pressed={status === item.id} className={status === item.id ? 'active' : ''} onClick={() => setStatus(item.id)}>{item.label}</UiButton>
         ))}
       </div>
       {reviews.length === 0 && <div className="empty-list">No reviews in this state{status === 'pending' ? '. Use "Request a review" below to ask for one.' : ''}</div>}
       {reviews.map((review) => (
         <section key={review.id} className="settings-section ops-card">
-          <div className="ops-card-head"><strong>{review.project}{review.commit && <code className="ops-chip">{review.commit}</code>}</strong><span>requested by {review.requestedBy}</span></div>
+          <div className="ops-card-head"><strong>{review.project}{review.commit && <Pill tone="neutral"><code>{review.commit}</code></Pill>}</strong><span>requested by {review.requestedBy}</span></div>
           <p className="settings-note">{review.summary}</p>
           {review.files && <small className="ops-note ops-files">Files: {review.files}</small>}
           {review.feedback && <p className="settings-note"><strong>Feedback:</strong> {review.feedback}</p>}
           {status !== 'done' && (
             <div className="ops-inline-form">
-              <label className="field"><span>Your feedback</span><input value={feedback[review.id] ?? ''} placeholder="What should change, or what looks good" onChange={(event) => setFeedback({ ...feedback, [review.id]: event.target.value })} /></label>
-              <button type="button" className="primary-button" disabled={!(feedback[review.id] ?? '').trim()} onClick={() => void report(async () => { await tool({ project: review.project, review_id: review.id, feedback: feedback[review.id], status: 'done' }); await load(); }, 'Review submitted.')}>Submit review</button>
+              <label className="field"><span>Your feedback</span><UiTextInput value={feedback[review.id] ?? ''} placeholder="What should change, or what looks good" onChange={(event) => setFeedback({ ...feedback, [review.id]: event.target.value })} /></label>
+              <UiButton type="button" className="primary-button" disabled={!(feedback[review.id] ?? '').trim()} onClick={() => void report(async () => { await tool({ project: review.project, review_id: review.id, feedback: feedback[review.id], status: 'done' }); await load(); }, 'Review submitted.')}>Submit review</UiButton>
             </div>
           )}
         </section>
@@ -232,11 +236,11 @@ function ReviewQueue({ activeProject, report }: { activeProject: ProjectRecord |
         <div className="section-title"><span>Request a review</span></div>
         <p className="settings-note">Ask another agent to check work that was just done. Give the commit or branch, and say what changed and why.</p>
         <div className="field-grid">
-          <label className="field"><span>Commit or branch</span><input value={form.commit} onChange={(event) => setForm({ ...form, commit: event.target.value })} /></label>
-          <label className="field"><span>Changed files (comma separated)</span><input value={form.files} onChange={(event) => setForm({ ...form, files: event.target.value })} /></label>
+          <label className="field"><span>Commit or branch</span><UiTextInput value={form.commit} onChange={(event) => setForm({ ...form, commit: event.target.value })} /></label>
+          <label className="field"><span>Changed files (comma separated)</span><UiTextInput value={form.files} onChange={(event) => setForm({ ...form, files: event.target.value })} /></label>
         </div>
-        <label className="field"><span>What changed and why</span><textarea rows={3} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label>
-        <button type="button" className="primary-button align-end" disabled={!project || !form.summary.trim()} onClick={() => void report(async () => { await tool({ project, ...form }); setForm({ commit: '', files: '', summary: '' }); await load(); }, 'Review requested.')}>Request review</button>
+        <label className="field"><span>What changed and why</span><Textarea rows={3} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label>
+        <UiButton type="button" className="primary-button align-end" disabled={!project || !form.summary.trim()} onClick={() => void report(async () => { await tool({ project, ...form }); setForm({ commit: '', files: '', summary: '' }); await load(); }, 'Review requested.')}>Request review</UiButton>
       </section>
     </div>
   );
@@ -260,7 +264,7 @@ function HandoffInbox({ report }: { report: Report }): ReactNode {
           <p className="settings-note">{handoff.next || handoff.notes}</p>
           <div className="ops-actions">
             <span className="ops-note">{handoff.status}</span>
-            {handoff.status.toLowerCase().includes('pending') && <button type="button" className="primary-button" onClick={() => void report(async () => { await operation('handoff-claim', { from_agent: handoff.fromAgent, project: handoff.project, date: handoff.date, time: handoff.time, agent: AGENT_NAME }); await load(); }, 'Handoff claimed.')}>Claim</button>}
+            {handoff.status.toLowerCase().includes('pending') && <UiButton type="button" className="primary-button" onClick={() => void report(async () => { await operation('handoff-claim', { from_agent: handoff.fromAgent, project: handoff.project, date: handoff.date, time: handoff.time, agent: AGENT_NAME }); await load(); }, 'Handoff claimed.')}>Claim</UiButton>}
           </div>
         </section>
       ))}
@@ -288,17 +292,17 @@ function DecisionLog({ activeProject, report }: { activeProject: ProjectRecord |
       <section className="settings-section">
         <div className="section-title"><span>Record a decision</span></div>
         <div className="field-grid">
-          <label className="field"><span>Title</span><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
-          <label className="field"><span>Chosen option</span><input value={form.chosen} onChange={(event) => setForm({ ...form, chosen: event.target.value })} /></label>
+          <label className="field"><span>Title</span><UiTextInput value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+          <label className="field"><span>Chosen option</span><UiTextInput value={form.chosen} onChange={(event) => setForm({ ...form, chosen: event.target.value })} /></label>
         </div>
-        <label className="field"><span>What prompted it</span><textarea rows={2} value={form.context} onChange={(event) => setForm({ ...form, context: event.target.value })} /></label>
-        <label className="field"><span>Other options considered</span><input value={form.alternatives} onChange={(event) => setForm({ ...form, alternatives: event.target.value })} /></label>
-        <label className="field"><span>Why this one</span><textarea rows={2} value={form.rationale} onChange={(event) => setForm({ ...form, rationale: event.target.value })} /></label>
-        <button type="button" className="primary-button align-end" disabled={!project || !form.title.trim() || !form.chosen.trim() || !form.context.trim() || !form.rationale.trim()} title={project ? undefined : 'Open a project first'} onClick={() => void report(async () => {
+        <label className="field"><span>What prompted it</span><Textarea rows={2} value={form.context} onChange={(event) => setForm({ ...form, context: event.target.value })} /></label>
+        <label className="field"><span>Other options considered</span><UiTextInput value={form.alternatives} onChange={(event) => setForm({ ...form, alternatives: event.target.value })} /></label>
+        <label className="field"><span>Why this one</span><Textarea rows={2} value={form.rationale} onChange={(event) => setForm({ ...form, rationale: event.target.value })} /></label>
+        <UiButton type="button" className="primary-button align-end" disabled={!project || !form.title.trim() || !form.chosen.trim() || !form.context.trim() || !form.rationale.trim()} title={project ? undefined : 'Open a project first'} onClick={() => void report(async () => {
           unwrap(await window.kaiDesktop.cognitive1Tool({ tool: 'decision_log', arguments: { ...form, project, agent: AGENT_NAME } }));
           setForm({ title: '', context: '', chosen: '', alternatives: '', rationale: '' });
           await load();
-        }, 'Decision recorded.')}>Record decision</button>
+        }, 'Decision recorded.')}>Record decision</UiButton>
       </section>
       <section className="settings-section">
         <div className="section-title"><span>Timeline{project ? ` · ${project}` : ''}</span></div>

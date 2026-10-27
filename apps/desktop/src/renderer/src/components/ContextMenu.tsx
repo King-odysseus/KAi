@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { UiButton } from './UiButton';
 
 export interface ContextMenuItem {
   label: string;
@@ -66,7 +67,7 @@ export function ContextMenu({ x, y, items, onClose }: {
       {items.map((item, index) => (item.separator ? (
         <div key={`separator-${index}`} className="context-menu-separator" role="separator" />
       ) : (
-        <button
+        <UiButton
           key={`${item.label}-${index}`}
           type="button"
           role="menuitem"
@@ -79,7 +80,7 @@ export function ContextMenu({ x, y, items, onClose }: {
         >
           {item.icon}
           <span>{item.label}</span>
-        </button>
+        </UiButton>
       )))}
     </div>,
     document.body,

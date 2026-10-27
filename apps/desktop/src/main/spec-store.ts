@@ -14,6 +14,30 @@ import { resolveInside } from './project-files';
 export const SPEC_ROOT = '.kai/spec';
 export const SPEC_HISTORY_ROOT = `${SPEC_ROOT}/.history`;
 
+/**
+ * Keeps KAI's own pictures out of the project's Git history. The spec's text files are worth versioning; the
+ * screenshots a visual check takes and the pictures the Equalizer compares are not. They are made again on every run,
+ * in a new folder each time, so a project that commits everything put 74 of them (16MB) in front of the person as a
+ * question. Written only when missing, so a person who edits or empties it keeps their own rules.
+ */
+export const SPEC_IGNORE_CONTENT = [
+  '# Written by KAI. Check screenshots and Equalizer pictures are made again on every run, so they stay on this',
+  '# machine. Edit this file if you want to version them after all.',
+  'board/**/*.png',
+  'equalizer/**/*.png',
+  '',
+].join('\n');
+
+export async function ensureSpecIgnore(projectRoot: string): Promise<void> {
+  const target = await resolveInside(projectRoot, path.join(SPEC_ROOT, '.gitignore'));
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  try {
+    await fs.writeFile(target, SPEC_IGNORE_CONTENT, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+}
+
 export interface SpecWriteResult {
   /** Project-relative path, with forward slashes so it reads the same on every platform. */
   path: string;

@@ -127,10 +127,11 @@ describe('keeping the shared browser\'s window usable after a check', () => {
     expect(b.tabs).toHaveLength(1);
   });
 
-  it('tells agents to resize only in a tab of their own and to close it, which removes the fixed size', () => {
-    const rule = BROWSER_RULES.find((line) => line.includes('browser_resize fixes the page viewport'));
+  it('tells agents to resize only in a tab of their own and to close it, which puts the window back', () => {
+    const rule = BROWSER_RULES.find((line) => line.includes('browser_resize fixes that tab'));
     expect(rule).toBeDefined();
-    expect(rule).toContain('Maximising Chrome will then leave empty space');
+    expect(rule).toContain('sizes the Chrome window to match');
+    expect(rule).toContain('Closing the resized tab puts the window back');
     expect(rule).toContain('Never call browser_resize on the preview tab');
   });
 });

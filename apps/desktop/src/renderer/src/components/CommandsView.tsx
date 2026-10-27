@@ -1,6 +1,8 @@
 import { AlertTriangle, ArrowRight, Copy, Search, TerminalSquare } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { COMMAND_GROUPS, type CommandEntry } from './command-reference';
+import { UiButton } from './UiButton';
+import { UiTextInput } from './UiTextInput';
 
 /**
  * The terminal commands worth knowing, explained for someone who has not used a terminal.
@@ -48,22 +50,22 @@ export function CommandsView({ onOpenTerminal }: { onOpenTerminal?: () => void }
         </div>
         {onOpenTerminal && (
           <div className="page-actions">
-            <button type="button" className="secondary-button" onClick={onOpenTerminal} title="Open the Terminal to try any of these">
+            <UiButton type="button" className="secondary-button" onClick={onOpenTerminal} title="Open the Terminal to try any of these">
               <TerminalSquare size={14} /> Open the Terminal
-            </button>
+            </UiButton>
           </div>
         )}
       </header>
 
       <div className="command-search">
         <Search size={14} />
-        <input
+        <UiTextInput
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search a command, or describe what you want to do — “search files”, “undo”"
           aria-label="Search commands"
         />
-        {query && <button type="button" className="link-button" onClick={() => setQuery('')}>Clear</button>}
+        {query && <UiButton type="button" className="link-button" onClick={() => setQuery('')}>Clear</UiButton>}
       </div>
 
       {found === 0 && <p className="empty-list">Nothing here matches “{query}”. Try the name of a command, or a word like “files” or “history”.</p>}
@@ -81,7 +83,7 @@ export function CommandsView({ onOpenTerminal }: { onOpenTerminal?: () => void }
                   {entry.examples.map((example) => (
                     <li key={example.line}>
                       <code>{example.line}</code>
-                      <button
+                      <UiButton
                         type="button"
                         className="link-button"
                         onClick={() => void copy(example.line)}
@@ -89,7 +91,7 @@ export function CommandsView({ onOpenTerminal }: { onOpenTerminal?: () => void }
                         aria-label={`Copy ${example.line}`}
                       >
                         <Copy size={11} /> {copied === example.line ? 'Copied' : 'Copy'}
-                      </button>
+                      </UiButton>
                       <span className="command-explains"><ArrowRight size={11} /> {example.explains}</span>
                     </li>
                   ))}
