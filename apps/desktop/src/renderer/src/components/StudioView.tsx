@@ -182,6 +182,16 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [designChatText, setDesignChatText] = useState('');
   const [designChatImage, setDesignChatImage] = useState<{ name: string; dataUrl: string } | null>(null);
   const [designChatMessages, setDesignChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  // Empty means the whole project, same as always. A name scopes the turn to just that page — see `pageName` on
+  // `chatWithStudioDesign` — so a correction to Checkout cannot see, and cannot be tempted to "fix", Home or Account.
+  const [designChatPageName, setDesignChatPageName] = useState('');
+  // One screenshot at a time: a page, its data URL once loaded, and whether a capture is in flight for it. open-
+  // pencil has no screenshot tool of its own, so this switches the editor to the page and captures it live, which
+  // takes a few seconds — never pre-fetched for every row, only for the one asked about.
+  const [previewPage, setPreviewPage] = useState<string | null>(null);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   // The Studio chat works on the plan, not on the drawing: it explains what a drawn page is or what changed, and
   // answers with a change set the person ticks before anything is written.
   const [planChatText, setPlanChatText] = useState('');
@@ -254,6 +264,11 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   // The step a build stopped on, so the button can say "Retry X" instead of just "Build the design" again —
   // cleared the moment a new build starts, since that attempt speaks for itself from then on.
   const [lastFailedStep, setLastFailedStep] = useState<string | null>(null);
+  // When on, "Build the design" lays out each screen's sections as plain labelled placeholders and skips the
+  // foundation step entirely — no tokens, no shared components — for a person who wants to design the look
+  // themselves, by hand or with open-pencil's own AI, on top of a structure KAI already set up. Only affects the
+  // plain "fill in what's missing" build; Redraw, Fix & redraw and Restart all keep their own modes.
+  const [scaffoldOnly, setScaffoldOnly] = useState(false);
   const projectId = screen === 'project' ? viewedProjectId : screen === 'new' ? draftProjectId : null;
   // The live run, for the banner above the board. The Autopilot panel subscribes to the same status for its own
   // detail; the banner needs it here because "is anything waiting on me right now" is a question about the run, not
@@ -1588,7 +1603,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     const namesInPencil = (pull: Parameters<typeof drawnPageNames>[0]): string => drawnPageNames(pull).join(', ') || 'no pages';
     try {
       let pulled = await refreshDesign(); requireSameDocument(pulled);
-      if (!foundationDone || (action?.kind === 'redraw' && action.target === 'all')) {
+      if (!action && scaffoldOnly) {
+        // Scaffold mode never sets up a design system — there is no look yet for variables or shared components to
+        // follow — so the foundation step is skipped outright rather than run and then ignored.
+      } else if (!foundationDone || (action?.kind === 'redraw' && action.target === 'all')) {
         const result = await runBuildStepWithRetry('Foundation', promptFor('Foundation', 'draw', pulled.artifacts), foundationDone ? undefined : foundationLanded);
         if (result.status === 'failed') { setLastFailedStep('Foundation'); throw new Error(`Foundation: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign(); requireSameDocument(pulled);
@@ -1629,7 +1647,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           return;
         }
         const row = remaining[0]!;
-        const result = await runBuildStepWithRetry(row.name, promptFor(row.name, 'draw', pulled.artifacts), (pull) => screenLanded(row.name, pull));
+        const result = await runBuildStepWithRetry(row.name, promptFor(row.name, scaffoldOnly ? 'scaffold' : 'draw', pulled.artifacts), (pull) => screenLanded(row.name, pull));
         if (result.status === 'failed') { setLastFailedStep(row.name); throw new Error(`${row.name}: ${result.error || 'the step failed.'}`); }
         pulled = await refreshDesign(); requireSameDocument(pulled);
         if (!screenLanded(row.name, pulled)) {
@@ -2055,7 +2073,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setDesignChatMessages((items) => [...items, { role: 'user', text: `${message}${designChatImage ? ` [Screenshot: ${designChatImage.name}]` : ''}` }]);
     setDesignChatText(''); setDesignChatImage(null); setBusy('design'); setError(null); setBuildEvents([]);
     try {
-      const response = unwrap(await window.kaiDesktop.chatWithStudioDesign({ projectId, message, ...(imageDataUrl ? { imageDataUrl } : {}), stepId }));
+      const response = unwrap(await window.kaiDesktop.chatWithStudioDesign({
+        projectId,
+        message,
+        ...(imageDataUrl ? { imageDataUrl } : {}),
+        stepId,
+        ...(designChatPageName ? { pageName: designChatPageName } : {}),
+      }));
       const text = response.status === 'completed' ? response.output : response.error ?? response.output ?? 'The design turn failed.';
       setDesignChatMessages((items) => [...items, { role: 'assistant', text }]);
       if (response.status === 'completed') {
@@ -2073,6 +2097,26 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setError('Attach a PNG, JPEG or WebP screenshot.'); return; }
     const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error(`Could not read ${file.name}.`)); reader.readAsDataURL(file); });
     setDesignChatImage({ name: file.name, dataUrl });
+  }
+
+  /** Toggles the preview open for one drawn screen, capturing it live through open-pencil on first open. */
+  async function previewScreen(name: string): Promise<void> {
+    if (previewPage === name) { setPreviewPage(null); return; }
+    setPreviewPage(name);
+    setPreviewSrc(null);
+    setPreviewError(null);
+    if (!projectId) return;
+    const pageId = screenPageId(design, name);
+    if (!pageId) { setPreviewError(`"${name}" has no open-pencil page id recorded — pull the design again.`); return; }
+    setPreviewBusy(true);
+    try {
+      const result = unwrap(await window.kaiDesktop.captureStudioDesignScreenshot({ projectId, pageId }));
+      setPreviewSrc(result.dataUrl);
+    } catch (caught) {
+      setPreviewError(messageOf(caught));
+    } finally {
+      setPreviewBusy(false);
+    }
   }
 
   function toggleSelectedKind(kind: ArtifactKind): void {
@@ -2956,6 +3000,18 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             <section className="studio-design-chat" aria-label="Design assistant chat">
               <h3>Chat with the design assistant</h3>
               <p className="studio-note">Explain a correction or attach a screenshot. The assistant checks the project page list, board, and Open Pencil design before replying.</p>
+              <label className="studio-relink">
+                <span className="studio-note">Scope</span>
+                <UiNativeSelect
+                  aria-label="Scope this chat to one page"
+                  value={designChatPageName}
+                  disabled={busy !== null}
+                  onChange={(event) => setDesignChatPageName(event.target.value)}
+                >
+                  <option value="">Whole project</option>
+                  {designRows.map((row) => <option key={row.name} value={row.name}>{row.name}</option>)}
+                </UiNativeSelect>
+              </label>
               <div className="studio-design-chat-thread" aria-live="polite">
                 {designChatMessages.length === 0 && <p className="studio-note">For example: “Academic sessions and terms already exists at /admin/setup/terms. Please find the existing page and sync the board.”</p>}
                 {designChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Design AI'}</strong><br />{item.text}</p>)}
@@ -2987,6 +3043,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   </p>
                 )}
                 {buildOutcome && <p className="studio-note" role="status">{buildOutcome}</p>}
+                <label className="studio-step-check">
+                  <Checkbox checked={scaffoldOnly} onChange={(event) => setScaffoldOnly(event.target.checked)} disabled={busy !== null} />
+                  <span><strong>Scaffold only</strong><small>Lay out each screen's sections as plain labelled placeholders, with no look applied — for designing it yourself, by hand or with open-pencil's own AI.</small></span>
+                </label>
                 <div className="page-actions">
                   {busy === 'design-build' ? (
                     <UiButton type="button" className="secondary-button" onClick={stopBuildingDesign}>
@@ -2994,7 +3054,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                     </UiButton>
                   ) : (
                     <UiButton type="button" className="primary-button" onClick={() => void buildDesign()} disabled={busy !== null || !readiness?.ready || toDraw.length === 0}>
-                      <Wand2 size={14} /> {buildButtonLabel}
+                      <Wand2 size={14} /> {scaffoldOnly && buildButtonLabel === 'Build the design' ? 'Scaffold the design' : buildButtonLabel}
                     </UiButton>
                   )}
                   <UiButton type="button" className="secondary-button" onClick={() => void pullDesign()} disabled={busy !== null}>
@@ -3068,9 +3128,14 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                               onCopy={(key) => void copyDrawPrompt(key)}
                               extra={<>
                                 {row.drawn ? (
-                                  <UiButton type="button" className="secondary-button" onClick={() => void buildDesign({ kind: 'redraw', target: row.name })} disabled={busy !== null || !readiness?.ready} aria-label={`Redraw ${row.name}`}>
-                                    <RotateCcw size={13} /> Redraw
-                                  </UiButton>
+                                  <>
+                                    <UiButton type="button" className="secondary-button" onClick={() => void previewScreen(row.name)} aria-label={`Preview ${row.name}`} aria-expanded={previewPage === row.name}>
+                                      {previewBusy && previewPage === row.name ? <Loader2 className="spin" size={13} /> : <Eye size={13} />} {previewPage === row.name ? 'Hide preview' : 'Preview'}
+                                    </UiButton>
+                                    <UiButton type="button" className="secondary-button" onClick={() => void buildDesign({ kind: 'redraw', target: row.name })} disabled={busy !== null || !readiness?.ready} aria-label={`Redraw ${row.name}`}>
+                                      <RotateCcw size={13} /> Redraw
+                                    </UiButton>
+                                  </>
                                 ) : (
                                   <UiButton type="button" className="secondary-button" onClick={() => toggleSkip(row.name)} aria-label={`${isSkipped ? 'Draw' : 'Skip'} ${row.name}`}>
                                     <SkipForward size={13} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
@@ -3088,6 +3153,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                             </span>
                           )}
                           {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
+                          {previewPage === row.name && (
+                            <div className="studio-design-preview" role="status">
+                              {previewBusy ? (
+                                <p className="studio-note"><Loader2 className="spin" size={13} /> Switching open-pencil to this page and capturing it…</p>
+                              ) : previewError ? (
+                                <p className="studio-notice warning" role="alert"><AlertTriangle size={14} /> {previewError}</p>
+                              ) : previewSrc ? (
+                                <img src={previewSrc} alt={`${row.name} as currently drawn in open-pencil`} />
+                              ) : null}
+                            </div>
+                          )}
                         </li>
                       );
                     })}

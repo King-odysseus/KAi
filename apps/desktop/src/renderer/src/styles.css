@@ -12296,6 +12296,23 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .studio-design-chat h3 { margin-bottom: 0; }
 .studio-design-chat textarea { width: 100%; resize: vertical; margin-top: 0; }
 .studio-design-chat-thread { max-height: 260px; overflow: auto; }
+
+/* The per-screen preview: a screenshot taken live from open-pencil, so it is sized and bordered like a photo, not
+   stretched to fill the row it sits under. */
+.studio-design-preview {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--bg-panel);
+}
+.studio-design-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+}
 .studio-chat-message { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 7px; background: var(--bg-input); margin: 0 0 8px; }
 .studio-chat-message:last-child { margin-bottom: 0; }
 .studio-chat-pending { color: var(--text-muted); }
@@ -13642,7 +13659,10 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .settings-sticky {
   position: sticky;
   top: 0;
-  z-index: 20;
+  /* Matches .settings-save-bar's sticky header below: high enough to sit above the settings cards scrolling beneath
+     it, but not .titlebar's z-index (20) — tied with it, a sticky header later in the DOM painted over the whole
+     titlebar, popovers included (the project picker among them), because a tied z-index is broken by DOM order. */
+  z-index: 3;
   display: flex;
   flex-direction: column;
   gap: 8px;
