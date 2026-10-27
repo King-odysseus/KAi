@@ -439,7 +439,6 @@ button:disabled {
 }
 
 .icon-button.active {
-  border-color: rgba(102, 227, 189, 0.34);
   color: var(--mint-strong);
   background: var(--mint-soft);
 }
@@ -9156,7 +9155,6 @@ button.tool-call-head:hover strong { color: var(--mint); }
 
 .command-palette-item:hover,
 .command-palette-item.active {
-  border-color: rgba(102, 227, 189, 0.22);
   background: var(--mint-soft);
 }
 
@@ -9188,7 +9186,6 @@ button.tool-call-head:hover strong { color: var(--mint); }
 
 :root[data-theme-family="light"] .command-palette-item:hover,
 :root[data-theme-family="light"] .command-palette-item.active {
-  border-color: #9fd9c8;
   background: #e8f8f3;
 }
 
@@ -13740,6 +13737,27 @@ button.tool-call-head:hover strong { color: var(--mint); }
   padding: 0;
   list-style: none;
 }
+
+/* The screens list used to render every row's seven actions inline, which read as a wall of buttons on a project
+   with more than a handful of screens. They now live behind one menu per row (see .studio-step-menu below), and the
+   whole list collapses behind this summary so a long project does not push the build controls above it off screen. */
+.studio-screens-collapse > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.studio-screens-collapse > summary::-webkit-details-marker { display: none; }
+.studio-screens-collapse > summary > svg { transition: transform 120ms ease; }
+.studio-screens-collapse[open] > summary > svg { transform: rotate(180deg); }
+.studio-screens-collapse > summary:hover { color: var(--text); }
+
+.studio-step-menu .icon-button.compact { width: 26px; height: 26px; }
 
 .studio-steps > li {
   display: flex;

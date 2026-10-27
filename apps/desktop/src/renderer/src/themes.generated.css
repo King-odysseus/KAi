@@ -22,9 +22,6 @@ html[data-theme="code"]:root .popover {
   background: #262626;
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
 }
-html[data-theme="code"]:root .icon-button.active {
-  border-color: rgba(53, 164, 255, 0.34);
-}
 html[data-theme="code"]:root .nav-rail {
   background: #1d1d1d;
 }
@@ -874,9 +871,6 @@ html[data-theme="code"]:root .command-palette {
   background: #242424;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }
-html[data-theme="code"]:root .command-palette-item:hover, html[data-theme="code"]:root .command-palette-item.active {
-  border-color: rgba(53, 164, 255, 0.22);
-}
 html[data-theme="code"]:root .shortcut-capture {
   border: 1px solid #515151;
 }
@@ -1270,9 +1264,6 @@ html[data-theme="purple"]:root .popover {
   border: 1px solid #413f62;
   background: #1c1b35;
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
-}
-html[data-theme="purple"]:root .icon-button.active {
-  border-color: rgba(251, 205, 0, 0.34);
 }
 html[data-theme="purple"]:root .nav-rail {
   background: #141329;
@@ -2123,9 +2114,6 @@ html[data-theme="purple"]:root .command-palette {
   background: #1b1932;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }
-html[data-theme="purple"]:root .command-palette-item:hover, html[data-theme="purple"]:root .command-palette-item.active {
-  border-color: rgba(251, 205, 0, 0.22);
-}
 html[data-theme="purple"]:root .shortcut-capture {
   border: 1px solid #413f63;
 }
@@ -2519,9 +2507,6 @@ html[data-theme="navy"]:root .popover {
   border: 1px solid #314470;
   background: #101e3f;
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
-}
-html[data-theme="navy"]:root .icon-button.active {
-  border-color: rgba(109, 187, 255, 0.34);
 }
 html[data-theme="navy"]:root .nav-rail {
   background: #0b1732;
@@ -3371,9 +3356,6 @@ html[data-theme="navy"]:root .command-palette {
   border: 1px solid #324572;
   background: #0f1d3d;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-}
-html[data-theme="navy"]:root .command-palette-item:hover, html[data-theme="navy"]:root .command-palette-item.active {
-  border-color: rgba(109, 187, 255, 0.22);
 }
 html[data-theme="navy"]:root .shortcut-capture {
   border: 1px solid #314471;

@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, Code2, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Square, Trash2, Users, Wand2 } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowLeft, Check, ChevronDown, Code2, Ellipsis, Eye, FileText, FolderOpen, FolderPlus, ImagePlus, LayoutGrid, Loader2, Maximize2, Minimize2, NotebookPen, Palette, PencilLine, Play, Plus, RefreshCw, RotateCcw, Search, Send, Settings, SkipForward, Sparkles, Square, Trash2, Users, Wand2 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AgentOrb } from './AgentOrb';
 import { deriveAgentActivity } from './AgentActivity';
@@ -53,7 +53,7 @@ import {
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Checkbox, Dropdown, DropdownItem, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { UiNativeSelect } from './UiNativeSelect';
 
@@ -3106,7 +3106,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   <UiTextInput type="search" value={screenQuery} onChange={(event) => setScreenQuery(event.target.value)} placeholder="Search screens by name, route or what is on them" aria-label="Search screens" />
                 </label>
                 {designRows.length > 0 ? (
-                  <ul className="studio-steps">
+                  <details className="studio-screens-collapse" open={visibleRows.length <= 8}>
+                    <summary><ChevronDown size={14} /> {visibleRows.length} screen{visibleRows.length === 1 ? '' : 's'}</summary>
+                    <ul className="studio-steps">
                     {visibleRows.map((row) => {
                       const isSkipped = !row.drawn && skipped.has(screenTitleKey(row.name));
                       const pageId = screenPageId(design, row.name);
@@ -3119,39 +3121,55 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                               {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
                             </small>
                           </div>
-                          {row.inPages ? (
-                            <PromptButtons
-                              id={row.name}
-                              openPrompt={openPrompt}
-                              copiedPrompt={copiedPrompt}
-                              onToggle={setOpenPrompt}
-                              onCopy={(key) => void copyDrawPrompt(key)}
-                              extra={<>
-                                {row.drawn ? (
-                                  <>
-                                    <UiButton type="button" className="secondary-button" onClick={() => void previewScreen(row.name)} aria-label={`Preview ${row.name}`} aria-expanded={previewPage === row.name}>
-                                      {previewBusy && previewPage === row.name ? <Loader2 className="spin" size={13} /> : <Eye size={13} />} {previewPage === row.name ? 'Hide preview' : 'Preview'}
-                                    </UiButton>
-                                    <UiButton type="button" className="secondary-button" onClick={() => void buildDesign({ kind: 'redraw', target: row.name })} disabled={busy !== null || !readiness?.ready} aria-label={`Redraw ${row.name}`}>
-                                      <RotateCcw size={13} /> Redraw
-                                    </UiButton>
-                                  </>
-                                ) : (
-                                  <UiButton type="button" className="secondary-button" onClick={() => toggleSkip(row.name)} aria-label={`${isSkipped ? 'Draw' : 'Skip'} ${row.name}`}>
-                                    <SkipForward size={13} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
-                                  </UiButton>
-                                )}
-                                <UiButton type="button" className="secondary-button" onClick={() => void fixAndRedraw(row.name)} disabled={busy !== null || !readiness?.ready} aria-label={`Fix and redraw ${row.name}`} title="Ask an agent to clear whatever is blocking this screen in open-pencil — a duplicate, a leftover, a page named so nothing matches it — and draw it again">
-                                  <Wand2 size={13} /> Fix & redraw
-                                </UiButton>
-                                <PageButtons name={row.name} pageId={pageId} canRename disabled={busy !== null} onRename={(name) => void renamePage(name)} onDelete={(name, id) => void deletePage(name, id)} />
-                              </>}
-                            />
-                          ) : (
-                            <span className="studio-step-buttons">
-                              <PageButtons name={row.name} pageId={pageId} canRename disabled={busy !== null} onRename={(name) => void renamePage(name)} onDelete={(name, id) => void deletePage(name, id)} />
-                            </span>
-                          )}
+                          <Dropdown
+                            className="studio-step-menu"
+                            placement="bottom-end"
+                            arrowIcon={false}
+                            label="Actions"
+                            renderTrigger={() => (
+                              <UiButton type="button" className="icon-button compact" title={`Actions for ${row.name}`} aria-label={`Actions for ${row.name}`}>
+                                <Ellipsis size={15} />
+                              </UiButton>
+                            )}
+                          >
+                            {row.inPages && (
+                              <DropdownItem onClick={() => setOpenPrompt(openPrompt === row.name ? null : row.name)}>
+                                <Eye size={14} /> {openPrompt === row.name ? 'Hide prompt' : 'View prompt'}
+                              </DropdownItem>
+                            )}
+                            {row.inPages && (
+                              <DropdownItem onClick={() => void copyDrawPrompt(row.name)}>
+                                {copiedPrompt === row.name ? <Check size={14} /> : <Send size={14} />} {copiedPrompt === row.name ? 'Copied' : 'Copy prompt'}
+                              </DropdownItem>
+                            )}
+                            {row.drawn && (
+                              <DropdownItem onClick={() => void previewScreen(row.name)}>
+                                {previewBusy && previewPage === row.name ? <Loader2 className="spin" size={14} /> : <Eye size={14} />} {previewPage === row.name ? 'Hide preview' : 'Preview'}
+                              </DropdownItem>
+                            )}
+                            {row.inPages && (row.drawn ? (
+                              <DropdownItem disabled={busy !== null || !readiness?.ready} onClick={() => void buildDesign({ kind: 'redraw', target: row.name })}>
+                                <RotateCcw size={14} /> Redraw
+                              </DropdownItem>
+                            ) : (
+                              <DropdownItem onClick={() => toggleSkip(row.name)}>
+                                <SkipForward size={14} /> {isSkipped ? 'Draw it anyway' : 'Skip'}
+                              </DropdownItem>
+                            ))}
+                            {row.inPages && (
+                              <DropdownItem disabled={busy !== null || !readiness?.ready} onClick={() => void fixAndRedraw(row.name)}>
+                                <Wand2 size={14} /> Fix & redraw
+                              </DropdownItem>
+                            )}
+                            <DropdownItem disabled={busy !== null} onClick={() => void renamePage(row.name)}>
+                              <PencilLine size={14} /> Rename
+                            </DropdownItem>
+                            {pageId !== null && (
+                              <DropdownItem disabled={busy !== null} onClick={() => void deletePage(row.name, pageId)}>
+                                <Trash2 size={14} /> Delete page
+                              </DropdownItem>
+                            )}
+                          </Dropdown>
                           {row.inPages && openPrompt === row.name && <PromptPanel text={promptFor(row.name)} copied={copiedPrompt === row.name} onCopy={() => void copyDrawPrompt(row.name)} onClose={() => setOpenPrompt(null)} />}
                           {previewPage === row.name && (
                             <div className="studio-design-preview" role="status">
@@ -3168,7 +3186,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       );
                     })}
                     {visibleRows.length === 0 && <li className="studio-note">No screen matches "{screenQuery}".</li>}
-                  </ul>
+                    </ul>
+                  </details>
                 ) : (
                   <p className="studio-note">{pagesText === null ? 'No pages list yet. Write it, or generate all artifacts.' : 'The pages artifact has no screens in it yet.'}</p>
                 )}
@@ -3883,36 +3902,6 @@ function PromptButtons({ id, openPrompt, copiedPrompt, onToggle, onCopy, extra }
   );
 }
 
-/**
- * Rename and Delete for one screen: the acts the build loop cannot aim at a single page. Rename is offered wherever
- * the name lives — the pages list, open-pencil, or both — because either side can be the wrong one. Delete is offered
- * only when a page exists to delete, and it is the one control here that says, before it runs, that open-pencil
- * cannot undo it from KAI.
- */
-function PageButtons({ name, pageId, canRename, disabled, onRename, onDelete }: {
-  name: string;
-  pageId: string | null;
-  canRename: boolean;
-  disabled: boolean;
-  onRename: (name: string) => void;
-  onDelete: (name: string, pageId: string) => void;
-}): ReactNode {
-  if (!canRename && pageId === null) return null;
-  return (
-    <>
-      {canRename && (
-        <UiButton type="button" className="secondary-button" onClick={() => onRename(name)} disabled={disabled} aria-label={`Rename ${name}`} title="Rename this screen in the pages list and, when it is drawn, in open-pencil too. The route is left as it is.">
-          <PencilLine size={13} /> Rename
-        </UiButton>
-      )}
-      {pageId !== null && (
-        <UiButton type="button" className="secondary-button" onClick={() => onDelete(name, pageId)} disabled={disabled} aria-label={`Delete the open-pencil page for ${name}`} title="Delete this screen's page in open-pencil. It cannot be undone from KAI.">
-          <Trash2 size={13} /> Delete page
-        </UiButton>
-      )}
-    </>
-  );
-}
 
 /** The prompt itself, under its row: read it, copy it again, or close it. */
 function PromptPanel({ text, copied, onCopy, onClose }: { text: string; copied: boolean; onCopy: () => void; onClose: () => void }): ReactNode {
