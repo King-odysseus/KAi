@@ -42,12 +42,12 @@ import { relativeTime } from '../types';
 import { shortcutLabel } from '../shortcuts';
 import { ProjectFilesPanel } from './ProjectFilesPanel';
 import { UiButton } from './UiButton';
+import { ActionsMenu } from './ui/ActionsMenu';
 import { UiTextInput } from './UiTextInput';
 import kaiIcon from '../../../../build/icon.png';
 import { Dropdown, DropdownItem } from 'flowbite-react';
 
 const themeLabel = (theme: ThemeMode): string => THEME_MODES.find((item) => item.id === theme)?.label ?? theme;
-const nextTheme = (theme: ThemeMode): ThemeMode => THEME_MODES[(THEME_MODES.findIndex((item) => item.id === theme) + 1) % THEME_MODES.length]!.id;
 
 export const navigation: Array<{ id: ViewId; label: string; group: 'Work' | 'Learn' | 'Project' | 'Brain' | 'Control'; icon: typeof Brain }> = [
   { id: 'workspace', label: 'Workspace', group: 'Work', icon: Layers3 },
@@ -126,7 +126,7 @@ export function NavigationRail({ view, version, versionTitle, serviceStatus, sho
   );
 }
 
-export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onRemoveProject, onClearProjects, onNewWindow, onToggleTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal, onOpenTour, tourListOpen }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onRemoveProject: (id: string) => void; onClearProjects: () => void; onNewWindow: () => void; onToggleTheme: () => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void; onOpenTour: () => void; tourListOpen: boolean }): ReactNode {
+export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, previewOpen, terminalOpen, shortcuts, onChoose, onOpenProject, onRemoveProject, onClearProjects, onNewWindow, onSetTheme, onOpenSearch, onOpenShortcuts, onToggleThreads, onToggleContext, onTogglePreview, onToggleTerminal, onOpenTour, tourListOpen }: { projects: ProjectRecord[]; activeProject: ProjectRecord | null; theme: ThemeMode; leftOpen: boolean; rightOpen: boolean; previewOpen: boolean; terminalOpen: boolean; shortcuts: AppSettings['shortcuts']; onChoose: () => void; onOpenProject: (id: string) => void; onRemoveProject: (id: string) => void; onClearProjects: () => void; onNewWindow: () => void; onSetTheme: (theme: ThemeMode) => void; onOpenSearch: () => void; onOpenShortcuts: () => void; onToggleThreads: () => void; onToggleContext: () => void; onTogglePreview: () => void; onToggleTerminal: () => void; onOpenTour: () => void; tourListOpen: boolean }): ReactNode {
   const newWindowShortcut = shortcutLabel(shortcuts, 'new-window');
   const searchShortcut = shortcutLabel(shortcuts, 'command-palette');
   const threadsShortcut = shortcutLabel(shortcuts, 'threads');
@@ -151,10 +151,16 @@ export function TitleBar({ projects, activeProject, theme, leftOpen, rightOpen, 
         <UiButton type="button" className={`icon-button ${terminalOpen ? 'active' : ''}`} title={terminalOpen ? 'Hide terminal (Ctrl+`)' : 'Show terminal (Ctrl+`)'} aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'} aria-pressed={terminalOpen} onClick={onToggleTerminal}>
           <Terminal size={17} />
         </UiButton>
+        <ActionsMenu
+          ariaLabel="Theme"
+          items={THEME_MODES.map((item) => ({ key: item.id, label: item.label, icon: item.id === theme ? <Check size={14} /> : <span style={{ width: 14 }} />, onSelect: () => onSetTheme(item.id) }))}
+          trigger={({ onClick, expanded }) => (
+            <UiButton type="button" className="icon-button" title={`Theme: ${themeLabel(theme)}`} aria-label="Choose theme" aria-expanded={expanded} onClick={onClick}><Palette size={17} /></UiButton>
+          )}
+        />
         <MoreMenu
           items={[
             { label: 'New window', hint: newWindowShortcut, icon: <AppWindow size={15} />, onSelect: onNewWindow },
-            { label: `Theme: ${themeLabel(theme)}`, hint: `Switch to ${themeLabel(nextTheme(theme))}`, icon: <Palette size={15} />, onSelect: onToggleTheme },
             { label: 'Guided tour and lessons', hint: '', icon: <GraduationCap size={15} />, onSelect: onOpenTour, active: tourListOpen },
             { label: 'Keyboard shortcuts', hint: sheetShortcut, icon: <Keyboard size={15} />, onSelect: onOpenShortcuts },
           ]}

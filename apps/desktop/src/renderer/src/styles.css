@@ -131,10 +131,14 @@ select option:disabled,
    click that leaves the control genuinely focused (not just hovered), including after a custom dropdown explicitly
    refocuses its trigger once closed. Text fields keep the outline: there is no background-tint equivalent for
    knowing where typed input is going, and nobody asked for that one removed. */
-input:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--mint);
-  outline-offset: 2px;
+/* In the `base` layer so a Flowbite-themed field (which marks focus with its own border colour and sets
+   `focus:outline-none`) wins over it, while a plain input still gets the outline. */
+@layer base {
+  input:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--mint);
+    outline-offset: 2px;
+  }
 }
 
 button:disabled {
@@ -236,6 +240,7 @@ button:disabled {
 }
 
 .project-picker-button {
+  justify-content: flex-start;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 16px;
   align-items: center;
@@ -323,6 +328,7 @@ button:disabled {
 .popover > button {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 9px;
   width: 100%;
   min-height: 34px;
@@ -360,9 +366,14 @@ button:disabled {
   color: var(--mint);
 }
 
+.project-row-open > svg:last-child {
+  margin-left: auto;
+}
+
 .project-row-open {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 9px;
   flex: 1;
   min-width: 0;

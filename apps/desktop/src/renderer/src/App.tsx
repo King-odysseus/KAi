@@ -30,7 +30,7 @@ import type {
   PlaywrightViewportStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily } from '@kai/contracts';
+import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, type ThemeMode } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
@@ -2005,10 +2005,10 @@ export function App(): ReactNode {
     setLogs(logs);
   }
 
-  function toggleTheme(): void {
+  function setTheme(theme: ThemeMode): void {
     if (!bootstrap) return;
     const previous = bootstrap.settings.theme;
-    const theme = THEME_MODES[(THEME_MODES.findIndex((item) => item.id === previous) + 1) % THEME_MODES.length]!.id;
+    if (theme === previous) return;
     setBootstrap((current) => current ? { ...current, settings: { ...current.settings, theme } } : current);
     void window.kaiDesktop
       .updateSettings({ theme })
@@ -2458,7 +2458,7 @@ export function App(): ReactNode {
         onRemoveProject={(id) => void removeProject(id)}
         onClearProjects={() => void clearProjects()}
         onNewWindow={() => void openNewWindow()}
-        onToggleTheme={toggleTheme}
+        onSetTheme={setTheme}
         onOpenSearch={() => setCommandPaletteOpen(true)}
         onOpenShortcuts={() => setShortcutSheetOpen(true)}
         onToggleThreads={() => setThreadsOpen((open) => !open)}

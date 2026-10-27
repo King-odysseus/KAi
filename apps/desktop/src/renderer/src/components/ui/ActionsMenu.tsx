@@ -95,7 +95,7 @@ export function ActionsMenu({
               key={item.key}
               type="button"
               role="menuitem"
-              className="kai-select-option"
+              className="kai-select-option actions-menu-item"
               disabled={item.disabled}
               onClick={() => { setOpen(false); item.onSelect(); }}
             >

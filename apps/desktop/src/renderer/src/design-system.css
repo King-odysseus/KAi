@@ -1,5 +1,8 @@
 /* Tailwind utilities and Flowbite tokens are available to renderer components.
    Existing resets stay in place while legacy screens move to shared primitives. */
+/* Declared up front so the plugin-supplied `base` rules (Flowbite's form resets) rank below `utilities`. Without this
+   they were declared after utilities and overrode every `bg-*`/`border-*` class on inputs, selects and checkboxes. */
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme" layer(theme);
 @import "tailwindcss/utilities" layer(utilities);
 @plugin "flowbite/plugin";
