@@ -706,12 +706,13 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, projectId, applied.board);
     return applied;
   });
-  handle(context, 'studio:design-chat', async ({ projectId, message, imageDataUrl, stepId }, request) =>
+  handle(context, 'studio:design-chat', async ({ projectId, message, imageDataUrl, stepId, pageName }, request) =>
     context.studio.chatDesign(projectId, message, imageDataUrl, stepId, (event) => {
       const payload = { conversationId: stepId, event } satisfies AgentRunEvent;
       if (context.windows.send(request.ownerWindowId, 'agents:event', payload)) return;
       context.windows.broadcast('agents:event', payload);
-    }));
+    }, pageName));
+  handle(context, 'studio:design-screenshot', async ({ projectId, pageId }) => context.studio.capturePageScreenshot(projectId, pageId));
   handle(context, 'team:start', async (input, request) => context.teamPlanner.start(input, request.ownerWindowId));
   handle(context, 'team:record', async (input) => context.teamPlanner.advice(input));
   handle(context, 'team:clear-record', async () => { await context.teamRecord.clear(); return null; });
@@ -2666,7 +2667,7 @@ async function interjectionExtras(
   return { context: sections.join('\n\n'), attachments };
 }
 
-async function renderContextChips(
+export async function renderContextChips(
   projectPath: string,
   attachmentsRoot: string,
   chips: readonly ContextChip[],
@@ -2701,8 +2702,12 @@ async function renderContextChips(
       if (!target || !insideRoot(root, target) || !(await fs.stat(target)).isFile()) {
         throw new Error(`Attached image is unavailable: ${chip.name}`);
       }
-      imagePaths.push(target);
-      sections.push(`### Attached image\nName: ${chip.name}\nPath: ${target}\nThis is visual input. Open the image with an image-capable reader before answering; do not infer its contents from the file name.`);
+      // Staged inside the project, not left in KAI's own userData folder: a CLI agent's file tools only trust paths
+      // under the project root, so a path outside it is one `--image` (Codex) can still take but a plain file-path
+      // mention cannot — every other agent was being told to open a file it had no way to reach.
+      const staged = await stageAttachmentForCli(projectPath, target);
+      imagePaths.push(staged);
+      sections.push(`### Attached image\nName: ${chip.name}\nPath: ${staged}\nThis is visual input. Open the image with an image-capable reader before answering; do not infer its contents from the file name.`);
     }
   }
   return {
@@ -3176,6 +3181,23 @@ function buildGoalPrompt(goal: NonNullable<ConversationRecord['goal']>, prompt: 
 function insideRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * Copies an attached image into the project's own tree so a CLI agent — whose Read/file tools stay inside the
+ * project root — can actually open the path a prompt names. Reused per run rather than cached: these are small
+ * (image-attachments.ts caps a single image at 8 MB) and the source in KAI's attachments folder can change between
+ * messages even when a chip keeps the same name.
+ */
+export async function stageAttachmentForCli(projectPath: string, sourcePath: string): Promise<string> {
+  const relative = path.posix.join('.kai/tmp/attachments', path.basename(sourcePath));
+  const target = await resolveInside(projectPath, relative);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(path.join(path.dirname(target), '.gitignore'), '*\n', { encoding: 'utf8', flag: 'wx' }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  });
+  await fs.copyFile(sourcePath, target);
+  return target;
 }
 
 /** How many memories a run is grounded in. Enough to be useful, few enough to leave room for the actual prompt. */

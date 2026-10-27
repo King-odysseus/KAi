@@ -222,6 +222,8 @@ export const cardRunSchema = z
     agent: z.string().min(1).max(120),
     model: z.string().max(120).nullable().default(null),
     at: z.string().min(1),
+    /** The conversation that performed this attempt, when KAI created one. */
+    conversationId: z.string().min(1).optional(),
     /** Files the run changed, project-relative, so a reviewer can see the card's footprint. */
     files: z.array(z.string()).default([]),
   })
@@ -666,6 +668,8 @@ export const studioDesignChatInputSchema = z
     message: z.string().trim().min(1).max(20_000),
     imageDataUrl: z.string().max(8_000_000).optional(),
     stepId: z.string().min(1).max(128),
+    /** Scopes the turn to one page's board card and drawn screen instead of the whole project. */
+    pageName: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 export type StudioDesignChatInput = z.infer<typeof studioDesignChatInputSchema>;
@@ -674,6 +678,15 @@ export const studioDesignChatResultSchema = z
   .object({ status: z.enum(['completed', 'failed']), output: z.string(), error: z.string().optional(), costUsd: z.number().nonnegative().optional() })
   .strict();
 export type StudioDesignChatResult = z.infer<typeof studioDesignChatResultSchema>;
+
+/** Asks for one screenshot of a page exactly as open-pencil currently shows it. */
+export const studioDesignScreenshotInputSchema = z
+  .object({ projectId: z.string().min(1), pageId: z.string().min(1).max(300) })
+  .strict();
+export type StudioDesignScreenshotInput = z.infer<typeof studioDesignScreenshotInputSchema>;
+
+export const studioDesignScreenshotResultSchema = z.object({ dataUrl: z.string().min(1) }).strict();
+export type StudioDesignScreenshotResult = z.infer<typeof studioDesignScreenshotResultSchema>;
 
 export const studioRouteSuggestionSchema = z
   .object({ cardId: z.string().min(1).max(120), route: z.string().min(1).max(300), confidence: z.enum(['high', 'medium']), reason: z.string().max(500) })

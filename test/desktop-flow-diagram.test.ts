@@ -115,6 +115,22 @@ describe('pages and the drawing prompts', () => {
     expect(prompt.length).toBeLessThan(3_000);
   });
 
+  it('asks for a plain labelled layout, not a finished look, in scaffold mode', () => {
+    const [signIn] = parsePages(PAGES);
+    const prompt = buildPagePrompt(signIn!, CONTEXT, 'scaffold');
+    expect(prompt).toContain('lay out the structure of one screen for "ZuriAI": Sign-in (/sign-in)');
+    expect(prompt).toContain('This is a scaffold, not a finished design');
+    expect(prompt).toContain('grey fill and black text');
+    expect(prompt).toContain('Do not change any other page');
+    // Nothing about styling with the project's own system — scaffold mode never reads or applies it.
+    expect(prompt).not.toContain('tokens.json');
+    expect(prompt).not.toContain('style-guide.md');
+    expect(prompt).not.toContain('variables, text styles and components');
+    expect(prompt).toContain('Do not draw loading, error or empty states');
+    expect(prompt).not.toContain('Dashboard');
+    expect(prompt).not.toMatch(/\n{3,}/);
+  });
+
   it('does not mention files that are not there', () => {
     const prompt = buildFoundationPrompt({ projectName: 'X', goal: 'Y', hasTokens: false, hasStyleGuide: false, hasStyleReference: false, references: [] });
     expect(prompt).not.toContain('tokens.json');

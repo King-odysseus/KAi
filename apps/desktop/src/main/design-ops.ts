@@ -30,3 +30,11 @@ export async function deletePageNode(ports: DesignPorts, pageId: string): Promis
 export async function renamePageNode(ports: DesignPorts, pageId: string, name: string): Promise<void> {
   await callPageTool(ports, DESIGN_TOOLS.renameNode, 'rename', { id: pageId, name });
 }
+
+/**
+ * Makes one page the editor's current page. open-pencil has no per-page screenshot tool, so this is what a page
+ * preview switches to before the shared browser captures whatever the editor is showing.
+ */
+export async function switchToPage(ports: DesignPorts, pageId: string): Promise<void> {
+  await callPageTool(ports, DESIGN_TOOLS.switchPage, 'switch to', { page: pageId });
+}

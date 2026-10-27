@@ -185,27 +185,55 @@ export function buildFoundationPrompt(context: DesignContext): string {
 
 /**
  * How one screen is asked for. `draw` is the first time; `redraw` refills a page that already exists, after the look
- * changed; `clean` clears whatever is broken or duplicated about the screen first, then draws it fresh.
+ * changed; `clean` clears whatever is broken or duplicated about the screen first, then draws it fresh; `scaffold`
+ * lays out the screen's sections as plain labelled placeholders and stops there, for a person who wants to do the
+ * actual design themselves — by hand or with open-pencil's own AI — on top of a structure KAI already set up.
  *
  * Studio matches screens to pages by name, so a turn that finds a page already there and decides there is nothing to
  * do reports it finished while Studio sees no page to match — which stops the whole build. Every mode therefore says
  * what to do with a page that already exists, and names the tools that make it true: `rename_node` to make a page's
  * name identify the screen, `delete_node` to clear a duplicate or a leftover that is in the way.
  */
-export type DesignPromptMode = 'draw' | 'redraw' | 'clean';
+export type DesignPromptMode = 'draw' | 'redraw' | 'clean' | 'scaffold';
 
 /** Step 1 of a drawing prompt, by mode. What to do about the page a screen is drawn on. */
 const SCREEN_PAGE_STEP: Record<DesignPromptMode, string> = {
   draw: '1. Create one page named exactly as above and mark it as a screen, so Studio can match it to its card. If a page for this screen already exists, keep that page — rename it with rename_node if its name does not identify the screen, since Studio matches by name — and make sure it is marked as a screen. Do not add a second page for it.',
   redraw: '1. The page for this screen already exists. Studio matches screens to pages by name — ignoring the route and any "— …" suffix — so keep exactly one page whose name identifies this screen and make sure it is marked as a screen. If another page or node also stands for this screen (a duplicate, or a leftover), delete the extras with delete_node. Replace the kept page\'s contents with this design.',
   clean: '1. This screen\'s pages may be broken or duplicated. Clean them up in open-pencil first: list the pages, find every page or node that stands for this screen (matching by name, ignoring the route and any "— …" suffix), and delete the ones that are not the single page you are about to draw — use delete_node for each. Delete nothing that belongs to another screen. Then create one page named exactly as above, mark it as a screen, and draw the screen below on it.',
+  scaffold: '1. Create one page named exactly as above and mark it as a screen, so Studio can match it to its card. If a page for this screen already exists, keep that page — rename it with rename_node if its name does not identify the screen — and make sure it is marked as a screen. Do not add a second page for it.',
 };
 
 /**
  * Step 2..n: one screen. It names exactly what to draw and forbids touching anything else.
+ *
+ * `scaffold` mode skips every styling instruction on purpose: no variables, no text styles, no shared components, no
+ * empty/loading/error states. It asks for one labelled rectangle per section the screen needs — named from what
+ * pages.md says about it — laid out roughly where it belongs, and nothing else. The result is deliberately plain so
+ * a person designing it by hand, or asking open-pencil's own AI, is working from an accurate layout rather than
+ * guessing what KAI would have put where, or fighting a finished look to change it.
  */
 export function buildPagePrompt(page: ScreenRow | PageEntry, context: DesignContext, mode: DesignPromptMode = 'draw'): string {
   const details = page.details.trim().slice(0, 1_800);
+  if (mode === 'scaffold') {
+    return [
+      `Use the open-pencil tools to lay out the structure of one screen for "${context.projectName}": ${page.name}${page.route ? ` (${page.route})` : ''}. This is a scaffold, not a finished design — the person is going to design this screen themselves, by hand or with open-pencil's own AI, and wants an accurate layout to start from, not KAI's idea of the look.`,
+      '',
+      `The project: ${context.goal}`,
+      '',
+      '- pages.md for every screen, and flows.md for how people move between them',
+      '',
+      details ? `What pages.md says about this screen:\n${details}\n` : '',
+      'Then, in open-pencil:',
+      SCREEN_PAGE_STEP.scaffold,
+      '2. Lay out one plain rectangle per section or feature this screen needs, each labelled with its name in the rectangle (e.g. "Hero banner", "Price", "Add to cart button") and placed roughly where it belongs on the screen. Use only grey fill and black text — no colours, no variables, no text styles, no shared components, no icons or imagery.',
+      '3. Do not draw loading, error or empty states, and do not add a phone-width version — this is a starting structure, not a finished set of screens.',
+      '4. Do not change any other page or any shared component.',
+      '',
+      ...CAREFULLY,
+      'When you are done, say what sections you laid out on this screen.',
+    ].filter((line, index, all) => line !== '' || all[index - 1] !== '').join('\n');
+  }
   return [
     `Use the open-pencil tools to ${mode === 'draw' ? 'draw' : 'draw again'} one screen for "${context.projectName}": ${page.name}${page.route ? ` (${page.route})` : ''}.`,
     '',

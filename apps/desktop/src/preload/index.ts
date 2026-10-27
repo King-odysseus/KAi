@@ -184,6 +184,7 @@ const bridge: KaiDesktopBridge = {
   deleteStudioDesignPage: (input) => ipcRenderer.invoke('studio:design-page-delete', input),
   buildStudioDesignStep: (projectId, prompt, stepId) => ipcRenderer.invoke('studio:design-build-step', { projectId, prompt, stepId }),
   chatWithStudioDesign: (input) => ipcRenderer.invoke('studio:design-chat', input),
+  captureStudioDesignScreenshot: (input) => ipcRenderer.invoke('studio:design-screenshot', input),
   chatWithStudioPlan: (input) => ipcRenderer.invoke('studio:plan-chat', input),
   onStudioPlanProgress: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: StudioPlanProgress): void => listener(payload);

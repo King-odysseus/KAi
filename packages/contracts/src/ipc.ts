@@ -73,6 +73,8 @@ import {
   studioDesignBuildStepResultSchema,
   studioDesignChatInputSchema,
   studioDesignChatResultSchema,
+  studioDesignScreenshotInputSchema,
+  studioDesignScreenshotResultSchema,
   studioRouteRepairInputSchema,
   studioRouteRepairResultSchema,
   studioDesignPageDeleteInputSchema,
@@ -112,6 +114,8 @@ import {
   type StudioDesignBuildStepResult,
   type StudioDesignChatInput,
   type StudioDesignChatResult,
+  type StudioDesignScreenshotInput,
+  type StudioDesignScreenshotResult,
   type StudioRouteRepairResult,
   type StudioDesignPageDeleteInput,
   type StudioDesignPageRenameInput,
@@ -578,6 +582,7 @@ export const ipcChannels = [
   'studio:design-status',
   'studio:design-build-step',
   'studio:design-chat',
+  'studio:design-screenshot',
   'studio:board-repair-routes',
   'studio:design-build-cancel',
   'studio:design-page-rename',
@@ -939,6 +944,7 @@ export const ipcInputSchemas = {
   'studio:design-status': studioProjectInputSchema,
   'studio:design-build-step': studioDesignBuildStepInputSchema,
   'studio:design-chat': studioDesignChatInputSchema,
+  'studio:design-screenshot': studioDesignScreenshotInputSchema,
   'studio:board-repair-routes': studioRouteRepairInputSchema,
   'studio:design-build-cancel': studioDesignBuildCancelInputSchema,
   'studio:design-page-rename': studioDesignPageRenameInputSchema,
@@ -1228,6 +1234,7 @@ export const studioBoardCardResponseSchema = boardCardSchema.nullable();
 export const studioUiCheckResponseSchema = studioUiCheckResultSchema;
 export const studioDesignResponseSchema = studioDesignSchema;
 export const studioDesignChatResponseSchema = studioDesignChatResultSchema;
+export const studioDesignScreenshotResponseSchema = studioDesignScreenshotResultSchema;
 export const studioRouteRepairResponseSchema = studioRouteRepairResultSchema;
 export const studioDesignPullResponseSchema = studioDesignPullSchema;
 export const studioDesignBuildStepResponseSchema = studioDesignBuildStepResultSchema;
@@ -1568,6 +1575,11 @@ export interface KaiDesktopBridge {
   buildStudioDesignStep(projectId: string, prompt: string, stepId: string): Promise<IpcResponse<StudioDesignBuildStepResult>>;
   /** Sends a conversational correction to the Design agent, optionally with a screenshot. */
   chatWithStudioDesign(input: StudioDesignChatInput): Promise<IpcResponse<StudioDesignChatResult>>;
+  /**
+   * One screenshot of a page exactly as open-pencil currently shows it, for the Design tab's per-page preview.
+   * Switches the editor to that page first, so this is not instant and not free to call on every keystroke.
+   */
+  captureStudioDesignScreenshot(input: StudioDesignScreenshotInput): Promise<IpcResponse<StudioDesignScreenshotResult>>;
   /**
    * Explains what a drawn page is, or what is missing from the plan, and answers with a change set. Writes nothing:
    * the person approves the set before `applyStudioPlanChanges` runs it.

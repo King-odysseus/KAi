@@ -84,6 +84,7 @@ import { DESIGN_TOOLS, pagesFromReply, type DesignPorts } from './design-source'
 import { createEqualizerPorts } from './equalizer-ports';
 import { SPEC_ROOT, SpecStore, ensureSpecIgnore } from './spec-store';
 import { DesktopUiCheck, failureSummary, playwrightUiCheckPorts } from './ui-check';
+import { playwrightDesignScreenshot } from './design-screenshot';
 import { DesktopDevCheck, playwrightDevCheckPorts } from './dev-check';
 import { listProjectFiles, resolveInside } from './project-files';
 import { completeTeam } from './team-assign';
@@ -1146,6 +1147,7 @@ async function startApplication(): Promise<void> {
     ensureOpenPencilRunning: ensureOpenPencilReady,
     runDesignAgent,
     cancelDesignAgent: (conversationId) => designBuildDirectApi.cancel(conversationId),
+    screenshotDesignPage: playwrightDesignScreenshot(checkRuntime),
     handoff: {
       write: async (projectId, board, catalog) => {
         await writeHandoffFiles(await studioProjectRoot(projectId), board, catalog, new Date().toISOString());

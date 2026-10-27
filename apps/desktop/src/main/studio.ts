@@ -50,7 +50,7 @@ import type { StructuredRequester } from './prompt-guide';
 import type { StudioArtifacts as ArtifactStore } from './artifacts';
 import { withPlanRoutes, type StudioBoardStore } from './board';
 import { changedNodes, designErrorMessage, readDesign, type DesignPorts, type DesignRead } from './design-source';
-import { deletePageNode, renamePageNode } from './design-ops';
+import { deletePageNode, renamePageNode, switchToPage } from './design-ops';
 import { failureSummary, type DesktopUiCheck } from './ui-check';
 import { boardDraftFromStories, replySnippet } from './studio-fallbacks';
 
@@ -182,6 +182,12 @@ export interface StudioPorts {
    * the two above.
    */
   cancelDesignAgent?(conversationId: string): boolean;
+  /**
+   * One screenshot of whatever open-pencil's editor is showing at this endpoint, for the Design tab's per-page
+   * preview. Optional for the same reason as `ensureOpenPencilRunning`: a build without it simply cannot offer a
+   * preview, rather than failing to construct.
+   */
+  screenshotDesignPage?(endpoint: string): Promise<string>;
   /** Writes the status file and the root agent instructions. Optional so tests can leave it out. */
   handoff?: { write(projectId: string, board: StudioBoard, catalog: StudioArtifacts): Promise<void> };
   now(): string;
@@ -769,6 +775,24 @@ export class DesktopStudio {
   }
 
   /**
+   * A screenshot of one page exactly as open-pencil currently shows it, for the Design tab's per-page preview.
+   * Switches the editor to the page first — open-pencil has no per-page screenshot tool of its own, so what the
+   * shared browser captures is only the right page because the editor was put on it immediately beforehand.
+   */
+  async capturePageScreenshot(projectId: string, pageId: string): Promise<{ dataUrl: string }> {
+    const ports = await this.ports.openPencil?.();
+    if (!ports) throw new Error('open-pencil is not connected. Set it up under Settings, Design tools, then try again.');
+    if (!this.ports.screenshotDesignPage) throw new Error('Screenshots are not available in this build.');
+    try {
+      await switchToPage(ports, pageId);
+    } catch (error) {
+      throw new Error(designErrorMessage(error));
+    }
+    const base64 = await this.ports.screenshotDesignPage(ports.endpoint());
+    return { dataUrl: `data:image/png;base64,${base64}` };
+  }
+
+  /**
    * Runs one design-build prompt as a real agent turn against open-pencil's tools, instead of a person pasting it
    * into the composer by hand. Launches the editor first if it is not already running. The caller is expected to
    * pull the design afterward to see what actually got drawn — this only reports whether the turn itself finished,
@@ -788,9 +812,17 @@ export class DesktopStudio {
     return this.ports.runDesignAgent(prompt, root, stepId, onEvent);
   }
 
-  /** Runs a conversational design correction with project, board and Open Pencil context attached. */
+  /**
+   * Runs a conversational design correction with project, board and Open Pencil context attached.
+   *
+   * `pageName` scopes the whole turn to one screen: when given, the prompt carries only that page's board card and
+   * drawn component instead of the full project dump, and the model is told in so many words not to touch anything
+   * else. A correction to one page used to arrive with the entire page inventory, every board card and every drawn
+   * screen beside it — context the model did not need and, worse, an invitation to "fix" something nobody asked
+   * about. Left out (the default), this behaves exactly as the whole-project chat always has.
+   */
   async chatDesign(projectId: string, message: string, imageDataUrl: string | undefined, stepId: string,
-    onEvent?: (event: PersistedEvent) => void): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> {
+    onEvent?: (event: PersistedEvent) => void, pageName?: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> {
     if (!this.ports.ensureOpenPencilRunning || !this.ports.runDesignAgent) throw new Error('The design chat is not available in this build.');
     await this.ports.ensureOpenPencilRunning();
     const [root, pages, board, design] = await Promise.all([
@@ -798,12 +830,21 @@ export class DesktopStudio {
       this.ports.board.read(projectId), this.ports.board.design(projectId),
     ]);
     const context = await loadProjectContext(root, undefined, 10_000).catch(() => null);
+    const pageCards = board.cards.filter((card) => card.kind === 'page');
+    const screens = design.components.filter((item) => item.screen);
+    const scope = pageName ? findScreen(pageCards, (card) => card.title, pageName) : undefined;
+    const scopedScreen = pageName ? findScreen(screens, (item) => item.name, pageName) : undefined;
     const prompt = [
-      'You are the Design assistant inside this Project Studio. Treat this as a continuing conversation and act on the user’s correction. Inspect Open Pencil before claiming a page is missing. If the page already exists, identify it by name/node id and report that you found it; do not redraw or delete it unless asked. Never claim success unless the Open Pencil tools confirm the change.',
+      pageName
+        ? `You are the Design assistant inside this Project Studio, scoped to ONE page: "${pageName}". Treat this as a continuing conversation about that page only and act on the user's correction there. Do not redraw, rename or delete any other page, and do not touch the project plan or other screens even if they look related. Inspect Open Pencil before claiming the page is missing. If it already exists, identify it by name/node id and report that you found it; do not redraw it unless asked. Never claim success unless the Open Pencil tools confirm the change.`
+        : 'You are the Design assistant inside this Project Studio. Treat this as a continuing conversation and act on the user’s correction. Inspect Open Pencil before claiming a page is missing. If the page already exists, identify it by name/node id and report that you found it; do not redraw or delete it unless asked. Never claim success unless the Open Pencil tools confirm the change.',
       `USER MESSAGE:\n${message}`,
-      `PROJECT PAGE INVENTORY:\n${pages ?? '(none)'}`,
-      `BOARD SCREENS:\n${board.cards.filter((card) => card.kind === 'page').map((card) => `${card.id}: ${card.title} | route=${card.route || '(missing)'} | designRef=${card.designRef ?? '(none)'}`).join('\n') || '(none)'}`,
-      `LAST PULLED OPEN PENCIL PAGES:\n${design.components.filter((item) => item.screen).map((item) => `${item.name} | node=${item.id}`).join('\n') || '(none recorded; inspect live Open Pencil)'}`,
+      pageName
+        ? `THE PAGE IN SCOPE:\n${scope ? `${scope.id}: ${scope.title} | route=${scope.route || '(missing)'} | designRef=${scope.designRef ?? '(none)'}` : `"${pageName}" is not on the board yet.`}`
+        : `PROJECT PAGE INVENTORY:\n${pages ?? '(none)'}`,
+      pageName
+        ? `THIS PAGE AS LAST PULLED FROM OPEN PENCIL:\n${scopedScreen ? `${scopedScreen.name} | node=${scopedScreen.id}` : '(not recorded; inspect live Open Pencil)'}`
+        : `BOARD SCREENS:\n${pageCards.map((card) => `${card.id}: ${card.title} | route=${card.route || '(missing)'} | designRef=${card.designRef ?? '(none)'}`).join('\n') || '(none)'}\n\nLAST PULLED OPEN PENCIL PAGES:\n${screens.map((item) => `${item.name} | node=${item.id}`).join('\n') || '(none recorded; inspect live Open Pencil)'}`,
       context ? `PROJECT SOURCE CONTEXT:\n${context}` : '',
       imageDataUrl ? `SCREENSHOT ATTACHED (inspect it as visual evidence): ${imageDataUrl.slice(0, 80)}…` : '',
       'After any Open Pencil change, report exactly what changed and remind the user to pull the design so the board and project record reconcile.',
