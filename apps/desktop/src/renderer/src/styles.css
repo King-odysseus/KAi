@@ -5790,7 +5790,7 @@ code {
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-dim);
-  background: #0b1727;
+  background: var(--bg-inset);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -10777,6 +10777,10 @@ button.tool-call-head:hover strong { color: var(--mint); }
   cursor: pointer;
   font-size: 12.5px;
   text-align: left;
+  /* The shared button theme makes every UiButton a flex row centered on its content (`justify-content: center`),
+     which text-align: left above does nothing to fix — it only governs text inside the single flex child, not where
+     that child sits in the button. A row label needs to start at the left edge, not float in the middle. */
+  justify-content: flex-start;
 }
 
 .history-row.active .history-open {

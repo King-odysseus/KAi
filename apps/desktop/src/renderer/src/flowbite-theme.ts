@@ -54,7 +54,10 @@ export const kaiFlowbiteTheme = createTheme({
     icon: { off: '', on: 'rounded-md px-1 py-0.5' },
   },
   button: {
-    base: 'relative inline-flex items-center justify-center gap-1.5 rounded-md border text-center font-medium focus:outline-none focus:ring-0 focus-visible:ring-2 focus-visible:ring-[var(--mint)] disabled:pointer-events-none disabled:opacity-50',
+    // Background only, never a ring: a focused/selected button (a dropdown's current option among them) gets a
+    // tint, not a border box — the same choice every other active/selected state in the app makes (see
+    // .kai-select-option.selected, .learning-tabs button.active, and the dropdown item's own focus style below).
+    base: 'relative inline-flex items-center justify-center gap-1.5 rounded-md border text-center font-medium focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
     size: { xs: 'min-h-6 px-2 text-xs', sm: 'min-h-7 px-2.5 text-xs', md: 'min-h-8 px-3 text-sm' },
     color: {
       default: 'border-transparent bg-[var(--mint)] text-[var(--bg-deep)] hover:bg-[var(--mint-strong)]',

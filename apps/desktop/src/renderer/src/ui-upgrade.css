@@ -52,6 +52,17 @@ html[data-theme]:root .popover > button.selected,
 html[data-theme]:root .select-menu-option:hover,
 html[data-theme]:root .select-menu-option:focus-visible { background: var(--bg-hover); }
 html[data-theme]:root .select-menu-option.selected { color: var(--mint); background: var(--mint-soft); }
+/* A text field inside .input-with-icon (the file search box among them) rendered with Tailwind's default white
+   input background instead of the theme's: UiTextInput replaces the Flowbite field wrapper with `display: contents`
+   for its compact icon-beside-input layout, and something in that path drops the themed input colors before they
+   reach the real <input>. Reasserted here with the same extra-specificity pattern the rules above already use for
+   Flowbite-vs-theme conflicts, rather than fighting the library's internals. */
+html[data-theme]:root .input-with-icon input,
+html[data-theme]:root .history-search input {
+  background: var(--bg-input);
+  color: var(--text);
+  border-color: var(--border);
+}
 
 .nav-rail { background: var(--bg-shell); }
 :root[data-density] .nav-rail.expanded { flex: 0 0 180px; width: 180px; }
