@@ -11,6 +11,7 @@ export type Inline =
   | { type: 'em'; children: Inline[] }
   | { type: 'del'; children: Inline[] }
   | { type: 'link'; href: string; children: Inline[] }
+  | { type: 'image'; src: string; alt: string }
   | { type: 'br' };
 
 export type Align = 'left' | 'center' | 'right' | null;
@@ -280,6 +281,17 @@ export function parseInline(source: string): Inline[] {
       buffer += marker;
       index += run;
       continue;
+    }
+    if (char === '!' && source[index + 1] === '[') {
+      // `![alt](path)`: a picture. Only a path inside the project is drawn, because the page can load nothing from the
+      // network; anything else keeps its alt text so the reply still reads.
+      const image = matchLink(source, index + 1);
+      if (image) {
+        flush();
+        out.push(isProjectFileHref(image.href) ? { type: 'image', src: image.href, alt: image.label } : { type: 'text', text: image.label });
+        index = image.end;
+        continue;
+      }
     }
     if (char === '[') {
       const link = matchLink(source, index);

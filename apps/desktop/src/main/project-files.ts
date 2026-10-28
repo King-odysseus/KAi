@@ -164,6 +164,37 @@ export async function readProjectFile(projectRoot: string, relativePath: string)
   };
 }
 
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+};
+const MAX_IMAGE_BYTES = 10_000_000;
+
+/** Whether a path names a picture the app can show. */
+export function imageTypeForPath(filePath: string): string | undefined {
+  return IMAGE_TYPES[path.extname(filePath).toLowerCase()];
+}
+
+/**
+ * A project picture as a data URL. The page may only load `data:` images, so this is how a mockup an agent saved in
+ * the project reaches the screen. Read-only, and held to the same project boundary as every other file read.
+ */
+export async function readProjectImage(projectRoot: string, relativePath: string): Promise<{ dataUrl: string; mime: string; size: number }> {
+  const mime = imageTypeForPath(relativePath);
+  if (!mime) throw new Error('That file is not a picture KAI can show.');
+  const target = await resolveInside(projectRoot, relativePath);
+  const stats = await fs.stat(target);
+  if (!stats.isFile()) throw new Error('That path is not a file.');
+  if (stats.size > MAX_IMAGE_BYTES) throw new Error('This picture is too large to show here.');
+  const data = await fs.readFile(target);
+  return { dataUrl: `data:${mime};base64,${data.toString('base64')}`, mime, size: stats.size };
+}
+
 /**
  * Save an edit. `expectedHash` is the hash the editor loaded; if the file on disk no longer matches,
  * nothing is written and a FileConflictError is thrown. The original line endings and BOM are kept.

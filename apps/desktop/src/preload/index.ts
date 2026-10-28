@@ -59,6 +59,7 @@ const bridge: KaiDesktopBridge = {
   suggestPermissionRules: (projectId) => ipcRenderer.invoke('permission-rules:suggest', { projectId }),
   projectFileTree: (projectId) => ipcRenderer.invoke('files:tree', { projectId }),
   readProjectFile: (projectId, path) => ipcRenderer.invoke('files:read', { projectId, path }),
+  readProjectImage: (projectId, path) => ipcRenderer.invoke('files:image', { projectId, path }),
   writeProjectFile: (request) => ipcRenderer.invoke('files:write', request),
   deleteProjectPath: (request) => ipcRenderer.invoke('files:delete', request),
   renameProjectPath: (request) => ipcRenderer.invoke('files:rename', request),

@@ -11,6 +11,7 @@ import {
   fileChangedOnDisk,
   listProjectFiles,
   readProjectFile,
+  readProjectImage,
   renameProjectPath,
   resolveInside,
   writeProjectFile,
@@ -221,5 +222,22 @@ describe('file actions', () => {
     await createProjectFolder(root, 'src/components/ui');
     await expect(fs.stat(path.join(root, 'src', 'components', 'ui'))).resolves.toBeTruthy();
     await expect(createProjectFolder(root, '.git/hooks')).rejects.toThrow(/Git folder/);
+  });
+});
+
+describe('readProjectImage', () => {
+  it('returns a project picture as a data URL and refuses anything else', async () => {
+    const root = await project();
+    await fs.mkdir(path.join(root, 'mockups'));
+    await fs.writeFile(path.join(root, 'mockups', 'home.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    await fs.writeFile(path.join(root, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    await fs.writeFile(path.join(root, 'notes.txt'), 'text');
+    const png = await readProjectImage(root, 'mockups/home.png');
+    expect(png.mime).toBe('image/png');
+    expect(png.dataUrl).toBe(`data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString('base64')}`);
+    expect((await readProjectImage(root, 'logo.svg')).mime).toBe('image/svg+xml');
+    await expect(readProjectImage(root, 'notes.txt')).rejects.toThrow(/not a picture/);
+    await expect(readProjectImage(root, '../outside.png')).rejects.toThrow();
+    await expect(readProjectImage(root, 'missing.png')).rejects.toThrow();
   });
 });

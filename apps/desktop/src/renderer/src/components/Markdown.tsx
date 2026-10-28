@@ -1,8 +1,52 @@
 import { Copy } from 'lucide-react';
-import { memo, useMemo, type ReactNode } from 'react';
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { isProjectFileHref, parseMarkdown, type Block, type Inline } from '../markdown';
 import './markdown.css';
 import { UiButton } from './UiButton';
+import { unwrap } from '../types';
+
+/** The project a reply belongs to, so a picture it names can be read from that project. */
+export const MarkdownProjectContext = createContext<{ projectId: string; projectPath: string } | null>(null);
+
+function projectRelativePath(href: string, projectRoot: string): string {
+  let target = href.trim();
+  if (/^file:\/\//i.test(target)) {
+    try { target = decodeURIComponent(new URL(target).pathname); } catch { /* The reader reports an invalid link. */ }
+  }
+  target = target.replace(/#.*$/, '').replace(/\\/g, '/').replace(/^\/(?=[a-z]:\/)/i, '');
+  const root = projectRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  if (target.toLowerCase().startsWith(`${root.toLowerCase()}/`)) return target.slice(root.length + 1);
+  return target.replace(/^\.?\//, '');
+}
+
+/** A picture the agent saved in the project, drawn in the reply. */
+function ProjectImage({ src, alt }: { src: string; alt: string }): ReactNode {
+  const project = useContext(MarkdownProjectContext);
+  const projectId = project?.projectId;
+  const projectPath = project?.projectPath ?? '';
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    setDataUrl(null);
+    setFailed(false);
+    void window.kaiDesktop.readProjectImage(projectId, projectRelativePath(src, projectPath)).then(unwrap)
+      .then((image) => { if (!cancelled) setDataUrl(image.dataUrl); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [projectId, projectPath, src]);
+  if (!projectId || failed) return <span className="md-image-missing" title={src}>{alt || src}</span>;
+  if (!dataUrl) return <span className="md-image-missing" role="status">Loading {alt || src}…</span>;
+  return <img className="md-image" src={dataUrl} alt={alt} title={src} />;
+}
+
+/** A fenced `svg` block, drawn as a picture. An <img> never runs script, so the markup cannot act on the page. */
+function SvgPreview({ source }: { source: string }): ReactNode {
+  const url = useMemo(() => /<svg[\s>]/i.test(source) && /<\/svg>\s*$/i.test(source.trim())
+    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}` : null, [source]);
+  return url ? <img className="md-image md-svg-preview" src={url} alt="SVG preview" /> : null;
+}
 
 function renderInline(nodes: Inline[], keyPrefix: string, onOpenFile?: (path: string) => void): ReactNode[] {
   return nodes.map((node, index) => {
@@ -10,6 +54,7 @@ function renderInline(nodes: Inline[], keyPrefix: string, onOpenFile?: (path: st
     switch (node.type) {
       case 'text': return node.text;
       case 'br': return <br key={key} />;
+      case 'image': return <ProjectImage key={key} src={node.src} alt={node.alt} />;
       case 'code': return <code key={key} className="md-inline-code">{node.text}</code>;
       case 'strong': return <strong key={key}>{renderInline(node.children, key, onOpenFile)}</strong>;
       case 'em': return <em key={key}>{renderInline(node.children, key, onOpenFile)}</em>;
@@ -36,6 +81,7 @@ function renderBlocks(blocks: Block[], keyPrefix: string, onOpenFile?: (path: st
       case 'quote': return <blockquote key={key}>{renderBlocks(block.blocks, key, onOpenFile)}</blockquote>;
       case 'code': return (
         <section className="response-code" key={key}>
+          {block.language.toLowerCase() === 'svg' && <SvgPreview source={block.text} />}
           <header>
             <span>{block.language || 'text'}</span>
             <UiButton type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(block.text)}><Copy size={14} /></UiButton>

@@ -1,6 +1,6 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { Modal } from 'flowbite-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   AgentCapability,
   AgentTeam,
@@ -42,6 +42,7 @@ import { RulesView } from './components/RulesView';
 import { SettingsView } from './components/SettingsView';
 import { CodeView } from './components/CodeView';
 import { WorkspaceFilePreview } from './components/WorkspaceFilePreview';
+import { MarkdownProjectContext } from './components/Markdown';
 import { GitView } from './components/GitView';
 import { CommandsView } from './components/CommandsView';
 import { TasksView } from './components/TasksView';
@@ -391,6 +392,7 @@ export function App(): ReactNode {
   shortcutSheetOpenRef.current = shortcutSheetOpen;
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
+  const markdownProject = useMemo(() => (activeProject ? { projectId: activeProject.id, projectPath: activeProject.path } : null), [activeProject?.id, activeProject?.path]);
 
   async function openWorkspaceFile(path: string, line?: number): Promise<void> {
     if (workspaceFileDirty && workspaceFilePath && path !== workspaceFilePath && !(await confirmDialog({
@@ -2277,147 +2279,149 @@ export function App(): ReactNode {
       default: {
         const sideConversation = activeConversationId ? conversations.find((item) => item.sideOf === activeConversationId) ?? null : null;
         return (
-          <WorkspaceView
-            activeProject={activeProject}
-            activeConversation={activeConversation}
-            settings={bootstrap.settings}
-            projectPreferences={projectPreferences}
-            busy={Boolean(busy)}
-            composerDraft={composerDrafts[activeDraftKey] ?? ''}
-            onComposerDraftChange={updateComposerDraft}
-            selectedFiles={activeComposerContext.selectedFiles}
-            setSelectedFiles={(update) => setComposerContextField('selectedFiles', update)}
-            contextChips={activeComposerContext.contextChips}
-            setContextChips={(update) => setComposerContextField('contextChips', update)}
-            selectedSkills={activeComposerContext.selectedSkills}
-            setSelectedSkills={(update) => setComposerContextField('selectedSkills', update)}
-            onInterjectionDelivered={(conversationId, text) => setComposerDrafts((current) => current[conversationId]?.trim() === text
-              ? { ...current, [conversationId]: '' } : current)}
-            commandRequest={workspaceCommand}
-            onCommandHandled={() => setWorkspaceCommand(null)}
-            agentCapabilities={agentCapabilities}
-            directApiCapability={directApiCapability}
-            selectedAgent={selectedAgent}
-            executionMode={executionMode}
-            selectedRoute={selectedRoute}
-            selectedAutonomy={selectedAutonomy}
-            proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
-            proxyContinuationAgent={proxyContinuationAgent}
-            streamingText={streamingText}
-            running={activeRunning}
-            paused={activePaused}
-            autoWaiting={Boolean(activeConversationId && autoWaitingConversationIds.includes(activeConversationId))}
-            awaitingApproval={Boolean(activeQuestion) || isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
-            pendingQuestion={activeQuestion?.options ? { ...activeQuestion, options: activeQuestion.options } : null}
-            onAnswerQuestion={(requestId, answer) => void respondToApproval(Boolean(answer), false, answer ?? undefined, requestId)}
-            notice={agentNotice}
-            onSelectExecution={(mode) => {
-              setExecutionMode(mode);
-              updateComposerSelection({ execution: mode, model: modelFor(selectedAgent, mode, modelChoices[`${mode}:${selectedAgent}`]), reasoning: '' });
-              rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: mode });
-              setAgentNotice(null);
-            }}
-            onSelectAgent={(agent) => {
-              setSelectedAgent(agent);
-              const capability = agentCapabilities.find((item) => item.id === agent);
-              const route = capability?.supportsRoutes.includes('proxy') ? selectedRoute : 'direct';
-              if (route !== selectedRoute) setSelectedRoute(route);
-              // The model and effort belong to the agent that was chosen with them; the new agent starts from its own.
-              updateComposerSelection({ agent, route, model: modelFor(agent, executionMode, modelChoices[`${executionMode}:${agent}`]), reasoning: '' });
-              rememberAgentChoice({ agent, route, execution: executionMode });
-              setAgentNotice(null);
-            }}
-            onSelectRoute={(route) => {
-              setSelectedRoute(route);
-              updateComposerSelection({ route });
-              rememberAgentChoice({ agent: selectedAgent, route, execution: executionMode });
-              if (route === 'proxy') setProxyContinuationAgent(null);
-              setAgentNotice(null);
-            }}
-            onContinueViaProxy={(agent) => {
-              if (serviceFor(bootstrap, 'universalProxy').status !== 'ready') {
-                setError('Start Universal Proxy before continuing this agent through its proxy route.');
-                return;
-              }
-              setExecutionMode('cli');
-              setSelectedAgent(agent);
-              setSelectedRoute('proxy');
-              updateComposerSelection({ execution: 'cli', agent, route: 'proxy' });
-              rememberAgentChoice({ agent, route: 'proxy', execution: 'cli' });
-              setProxyContinuationAgent(null);
-              setAgentNotice(`${agentCapabilities.find((item) => item.id === agent)?.displayName ?? agent} now uses the proxy for the next message in this conversation.`);
-            }}
-            onSelectAutonomy={(autonomy) => {
-              setSelectedAutonomy(autonomy);
-              updateComposerSelection({ autonomy });
-              setAgentNotice(null);
-            }}
-            onUpdatePreferences={saveProjectPreferences}
-            onUpdateConversation={saveConversationRecord}
-            onChooseProject={() => void chooseProject()}
-            onPlanInStudio={planInStudio}
-            onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
-            onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
-            onRewindTurn={(turnId) => { if (activeConversation) void rewindConversation(activeConversation.id, turnId); }}
-            onSend={(prompt, options) => void sendPrompt(prompt, options)}
-            queuedPrompts={activeConversationId ? queuedPromptsByConversation[activeConversationId] ?? [] : []}
-            onQueuePrompt={queuePrompt}
-            onUpdateQueuedPrompt={(id, update) => { if (activeConversationId) updateQueuedPrompt(activeConversationId, id, update); }}
-            onHandoff={(agent, prompt) => void handoffConversation(agent, prompt)}
-            onCompare={compareConversation}
-            onPickCompare={pickCompareWinner}
-            onDiscardCompare={discardCompare}
-            onOpenCompareWorktree={openCompareWorktree}
-            onReviewCheckpoint={reviewConversationCheckpoint}
-            onRejectCheckpointFile={rejectConversationFile}
-            onRestoreCheckpoint={restoreConversationCheckpoint}
-            onCancel={() => void cancelConversation()}
-            onPause={() => void pauseConversation()}
-            onResume={() => void resumeConversation()}
-            onStopEverything={() => void stopEverything()}
-            onSignIn={(agent) => void signInAgent(agent)}
-            onInstall={(agent) => void installAgent(agent)}
-            onRefreshAgents={() => void refreshAgentCapabilities()}
-            onOpenSettings={() => setView('settings')}
-            onOpenUsage={() => setView('usage')}
-            selectedModel={selectedWorkspaceModel}
-            onSelectModel={(model) => {
-              if (executionMode === 'cli' && modelBelongsToOtherAgent(selectedAgent, model)) {
-                setError(`That model belongs to a different agent. Pick one of ${agentCapabilities.find((item) => item.id === selectedAgent)?.displayName ?? selectedAgent}'s models, or Default.`);
-                return;
-              }
-              setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }));
-              updateComposerSelection({ model });
-            }}
-            selectedHelpers={selectedWorkspaceHelpers}
-            onSelectHelpers={(helpers) => {
-              try { window.localStorage.setItem(HELPERS_KEY, helpers); } catch { /* the choice still applies to this conversation */ }
-              updateComposerSelection({ helpers });
-            }}
-            selectedStyle={selectedWorkspaceStyle}
-            onSelectStyle={(style) => {
-              try { window.localStorage.setItem(RESPONSE_STYLE_KEY, style); } catch { /* the choice still applies to this conversation */ }
-              updateComposerSelection({ style });
-            }}
-            selectedReasoning={selectedWorkspaceReasoning}
-            reasoningLevels={executionMode === 'cli' ? CLI_EFFORT_LEVELS[selectedAgent] : []}
-            onSelectReasoning={(reasoning) => updateComposerSelection({ reasoning })}
-            interruptedRuns={interruptedRuns}
-            onOpenRecovery={() => openOperations('recovery')}
-            onOpenVerification={() => openOperations('verification')}
-            onOpenRules={() => setView('rules')}
-            onOpenWorkflows={() => setView('workflows')}
-            onOpenStudioCard={(projectId, cardId) => {
-              setStudioCardRequest({ projectId, cardId, nonce: Date.now() });
-              setView('studio');
-            }}
-            onCompactConversation={() => void compactActiveConversation()}
-            onContinueInNewTab={() => void continueInNewTab()}
-            sideConversation={sideConversation}
-            sideConversationRunning={Boolean(sideConversation && runningConversationIds.includes(sideConversation.id))}
-            onAskSideQuestion={(question) => void askSideQuestion(question)}
-            onOpenFile={(href, line) => { if (activeProject) void openWorkspaceFile(projectFileLinkPath(href, activeProject.path), line); }}
-          />
+          <MarkdownProjectContext.Provider value={markdownProject}>
+            <WorkspaceView
+              activeProject={activeProject}
+              activeConversation={activeConversation}
+              settings={bootstrap.settings}
+              projectPreferences={projectPreferences}
+              busy={Boolean(busy)}
+              composerDraft={composerDrafts[activeDraftKey] ?? ''}
+              onComposerDraftChange={updateComposerDraft}
+              selectedFiles={activeComposerContext.selectedFiles}
+              setSelectedFiles={(update) => setComposerContextField('selectedFiles', update)}
+              contextChips={activeComposerContext.contextChips}
+              setContextChips={(update) => setComposerContextField('contextChips', update)}
+              selectedSkills={activeComposerContext.selectedSkills}
+              setSelectedSkills={(update) => setComposerContextField('selectedSkills', update)}
+              onInterjectionDelivered={(conversationId, text) => setComposerDrafts((current) => current[conversationId]?.trim() === text
+                ? { ...current, [conversationId]: '' } : current)}
+              commandRequest={workspaceCommand}
+              onCommandHandled={() => setWorkspaceCommand(null)}
+              agentCapabilities={agentCapabilities}
+              directApiCapability={directApiCapability}
+              selectedAgent={selectedAgent}
+              executionMode={executionMode}
+              selectedRoute={selectedRoute}
+              selectedAutonomy={selectedAutonomy}
+              proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
+              proxyContinuationAgent={proxyContinuationAgent}
+              streamingText={streamingText}
+              running={activeRunning}
+              paused={activePaused}
+              autoWaiting={Boolean(activeConversationId && autoWaitingConversationIds.includes(activeConversationId))}
+              awaitingApproval={Boolean(activeQuestion) || isApprovalForConversation(pendingApproval?.conversationId, activeConversation?.id)}
+              pendingQuestion={activeQuestion?.options ? { ...activeQuestion, options: activeQuestion.options } : null}
+              onAnswerQuestion={(requestId, answer) => void respondToApproval(Boolean(answer), false, answer ?? undefined, requestId)}
+              notice={agentNotice}
+              onSelectExecution={(mode) => {
+                setExecutionMode(mode);
+                updateComposerSelection({ execution: mode, model: modelFor(selectedAgent, mode, modelChoices[`${mode}:${selectedAgent}`]), reasoning: '' });
+                rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: mode });
+                setAgentNotice(null);
+              }}
+              onSelectAgent={(agent) => {
+                setSelectedAgent(agent);
+                const capability = agentCapabilities.find((item) => item.id === agent);
+                const route = capability?.supportsRoutes.includes('proxy') ? selectedRoute : 'direct';
+                if (route !== selectedRoute) setSelectedRoute(route);
+                // The model and effort belong to the agent that was chosen with them; the new agent starts from its own.
+                updateComposerSelection({ agent, route, model: modelFor(agent, executionMode, modelChoices[`${executionMode}:${agent}`]), reasoning: '' });
+                rememberAgentChoice({ agent, route, execution: executionMode });
+                setAgentNotice(null);
+              }}
+              onSelectRoute={(route) => {
+                setSelectedRoute(route);
+                updateComposerSelection({ route });
+                rememberAgentChoice({ agent: selectedAgent, route, execution: executionMode });
+                if (route === 'proxy') setProxyContinuationAgent(null);
+                setAgentNotice(null);
+              }}
+              onContinueViaProxy={(agent) => {
+                if (serviceFor(bootstrap, 'universalProxy').status !== 'ready') {
+                  setError('Start Universal Proxy before continuing this agent through its proxy route.');
+                  return;
+                }
+                setExecutionMode('cli');
+                setSelectedAgent(agent);
+                setSelectedRoute('proxy');
+                updateComposerSelection({ execution: 'cli', agent, route: 'proxy' });
+                rememberAgentChoice({ agent, route: 'proxy', execution: 'cli' });
+                setProxyContinuationAgent(null);
+                setAgentNotice(`${agentCapabilities.find((item) => item.id === agent)?.displayName ?? agent} now uses the proxy for the next message in this conversation.`);
+              }}
+              onSelectAutonomy={(autonomy) => {
+                setSelectedAutonomy(autonomy);
+                updateComposerSelection({ autonomy });
+                setAgentNotice(null);
+              }}
+              onUpdatePreferences={saveProjectPreferences}
+              onUpdateConversation={saveConversationRecord}
+              onChooseProject={() => void chooseProject()}
+              onPlanInStudio={planInStudio}
+              onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
+              onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
+              onRewindTurn={(turnId) => { if (activeConversation) void rewindConversation(activeConversation.id, turnId); }}
+              onSend={(prompt, options) => void sendPrompt(prompt, options)}
+              queuedPrompts={activeConversationId ? queuedPromptsByConversation[activeConversationId] ?? [] : []}
+              onQueuePrompt={queuePrompt}
+              onUpdateQueuedPrompt={(id, update) => { if (activeConversationId) updateQueuedPrompt(activeConversationId, id, update); }}
+              onHandoff={(agent, prompt) => void handoffConversation(agent, prompt)}
+              onCompare={compareConversation}
+              onPickCompare={pickCompareWinner}
+              onDiscardCompare={discardCompare}
+              onOpenCompareWorktree={openCompareWorktree}
+              onReviewCheckpoint={reviewConversationCheckpoint}
+              onRejectCheckpointFile={rejectConversationFile}
+              onRestoreCheckpoint={restoreConversationCheckpoint}
+              onCancel={() => void cancelConversation()}
+              onPause={() => void pauseConversation()}
+              onResume={() => void resumeConversation()}
+              onStopEverything={() => void stopEverything()}
+              onSignIn={(agent) => void signInAgent(agent)}
+              onInstall={(agent) => void installAgent(agent)}
+              onRefreshAgents={() => void refreshAgentCapabilities()}
+              onOpenSettings={() => setView('settings')}
+              onOpenUsage={() => setView('usage')}
+              selectedModel={selectedWorkspaceModel}
+              onSelectModel={(model) => {
+                if (executionMode === 'cli' && modelBelongsToOtherAgent(selectedAgent, model)) {
+                  setError(`That model belongs to a different agent. Pick one of ${agentCapabilities.find((item) => item.id === selectedAgent)?.displayName ?? selectedAgent}'s models, or Default.`);
+                  return;
+                }
+                setModelChoices((current) => ({ ...current, [`${executionMode}:${selectedAgent}`]: model }));
+                updateComposerSelection({ model });
+              }}
+              selectedHelpers={selectedWorkspaceHelpers}
+              onSelectHelpers={(helpers) => {
+                try { window.localStorage.setItem(HELPERS_KEY, helpers); } catch { /* the choice still applies to this conversation */ }
+                updateComposerSelection({ helpers });
+              }}
+              selectedStyle={selectedWorkspaceStyle}
+              onSelectStyle={(style) => {
+                try { window.localStorage.setItem(RESPONSE_STYLE_KEY, style); } catch { /* the choice still applies to this conversation */ }
+                updateComposerSelection({ style });
+              }}
+              selectedReasoning={selectedWorkspaceReasoning}
+              reasoningLevels={executionMode === 'cli' ? CLI_EFFORT_LEVELS[selectedAgent] : []}
+              onSelectReasoning={(reasoning) => updateComposerSelection({ reasoning })}
+              interruptedRuns={interruptedRuns}
+              onOpenRecovery={() => openOperations('recovery')}
+              onOpenVerification={() => openOperations('verification')}
+              onOpenRules={() => setView('rules')}
+              onOpenWorkflows={() => setView('workflows')}
+              onOpenStudioCard={(projectId, cardId) => {
+                setStudioCardRequest({ projectId, cardId, nonce: Date.now() });
+                setView('studio');
+              }}
+              onCompactConversation={() => void compactActiveConversation()}
+              onContinueInNewTab={() => void continueInNewTab()}
+              sideConversation={sideConversation}
+              sideConversationRunning={Boolean(sideConversation && runningConversationIds.includes(sideConversation.id))}
+              onAskSideQuestion={(question) => void askSideQuestion(question)}
+              onOpenFile={(href, line) => { if (activeProject) void openWorkspaceFile(projectFileLinkPath(href, activeProject.path), line); }}
+            />
+          </MarkdownProjectContext.Provider>
         );
       }
     }

@@ -1088,6 +1088,9 @@ html[data-theme="code"]:root .composer-box.run-failed {
   border-color: rgba(217, 83, 79, 0.55);
   box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.07);
 }
+html[data-theme="code"]:root .workspace-file-preview-image img {
+  background: #ffffff;
+}
 html[data-theme="code"]:root .hunk-line.removed {
   background: rgba(242, 125, 135, 0.1);
 }
@@ -2331,6 +2334,9 @@ html[data-theme="purple"]:root .composer-box.run-failed {
   border-color: rgba(217, 83, 79, 0.55);
   box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.07);
 }
+html[data-theme="purple"]:root .workspace-file-preview-image img {
+  background: #ffffff;
+}
 html[data-theme="purple"]:root .hunk-line.removed {
   background: rgba(242, 125, 135, 0.1);
 }
@@ -3573,6 +3579,9 @@ html[data-theme="navy"]:root .composer-box.run-waiting {
 html[data-theme="navy"]:root .composer-box.run-failed {
   border-color: rgba(217, 83, 79, 0.55);
   box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.07);
+}
+html[data-theme="navy"]:root .workspace-file-preview-image img {
+  background: #ffffff;
 }
 html[data-theme="navy"]:root .hunk-line.removed {
   background: rgba(242, 125, 135, 0.1);

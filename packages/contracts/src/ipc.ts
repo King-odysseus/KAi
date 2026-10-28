@@ -476,6 +476,7 @@ export const ipcChannels = [
   'files:search',
   'files:tree',
   'files:read',
+  'files:image',
   'files:write',
   'files:changed',
   'files:delete',
@@ -833,6 +834,7 @@ export const ipcInputSchemas = {
   'files:search': contextSearchInputSchema,
   'files:tree': z.object({ projectId: z.string().min(1) }).strict(),
   'files:read': fileReadInputSchema,
+  'files:image': filePathInputSchema,
   'files:write': fileWriteInputSchema,
   'files:changed': fileChangedInputSchema,
   'files:delete': filePathInputSchema,
@@ -1373,6 +1375,8 @@ export interface KaiDesktopBridge {
   suggestPermissionRules(projectId: string): Promise<IpcResponse<PermissionRule[]>>;
   projectFileTree(projectId: string): Promise<IpcResponse<ProjectFileTree>>;
   readProjectFile(projectId: string, path: string): Promise<IpcResponse<OpenedFile>>;
+  /** A picture inside the project as a `data:` URL, for showing mockups the agent saved. */
+  readProjectImage(projectId: string, path: string): Promise<IpcResponse<{ dataUrl: string; mime: string; size: number }>>;
   writeProjectFile(request: FileWriteInput): Promise<IpcResponse<WrittenFile>>;
   /** Deletes one file or folder, after the renderer has confirmed it. */
   deleteProjectPath(request: FilePathInput): Promise<IpcResponse<FileMutationResult>>;

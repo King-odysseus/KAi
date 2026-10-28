@@ -129,3 +129,12 @@ describe('Markdown component', () => {
     expect(out).toContain('let a = 1;');
   });
 });
+
+describe('markdown pictures', () => {
+  it('turns a project image into an image node and keeps the alt text for anything off-project', () => {
+    const [local] = parseMarkdown('![Home mockup](mockups/home.png)');
+    expect(local).toMatchObject({ type: 'paragraph', children: [{ type: 'image', src: 'mockups/home.png', alt: 'Home mockup' }] });
+    const [remote] = parseMarkdown('![Cat](https://example.com/cat.png)');
+    expect(remote).toMatchObject({ type: 'paragraph', children: [{ type: 'text', text: 'Cat' }] });
+  });
+});

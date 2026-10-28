@@ -8,7 +8,45 @@ import { confirmDialog } from './AppDialog';
 import { UiButton } from './UiButton';
 
 /** The same editor as Learn & Code, kept beside the conversation and composer. */
-export function WorkspaceFilePreview({ projectId, path, line, formatOnSave, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+export function WorkspaceFilePreview(props: { projectId: string; path: string; line?: number; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+  return IMAGE_PATH.test(props.path) ? <WorkspaceImagePreview projectId={props.projectId} path={props.path} onClose={props.onClose} onDirtyChange={props.onDirtyChange} /> : <WorkspaceCodePreview {...props} />;
+}
+
+const IMAGE_PATH = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+
+/** A picture in the project (a mockup an agent saved), shown as itself because the code editor cannot open it. */
+function WorkspaceImagePreview({ projectId, path, onClose, onDirtyChange }: { projectId: string; path: string; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+  const [image, setImage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  useEffect(() => { onDirtyChange(false); }, [onDirtyChange]);
+  useEffect(() => {
+    let cancelled = false;
+    setImage(null);
+    setError(null);
+    void window.kaiDesktop.readProjectImage(projectId, path).then(unwrap).then((file) => {
+      if (!cancelled) setImage(file.dataUrl);
+    }).catch((caught: unknown) => {
+      if (!cancelled) setError(caught instanceof Error ? caught.message : 'This picture could not be opened.');
+    });
+    return () => { cancelled = true; };
+  }, [projectId, path, reload]);
+  return (
+    <aside className="workspace-file-preview" aria-label={`Picture preview: ${path}`}>
+      <header className="workspace-file-preview-head">
+        <FileCode2 size={16} />
+        <strong title={path}>{path}</strong>
+        <UiButton type="button" className="icon-button compact" aria-label="Reload picture" title="Reload picture" onClick={() => setReload((value) => value + 1)}><RefreshCw size={14} /></UiButton>
+        <UiButton type="button" className="icon-button compact" aria-label="Close file preview" title="Close file preview" onClick={onClose}><X size={15} /></UiButton>
+      </header>
+      {error && <div className="workspace-file-preview-status" role="alert">{error}</div>}
+      {!image && !error && <div className="workspace-file-preview-status" role="status">Opening picture…</div>}
+      {image && <div className="workspace-file-preview-image"><img src={image} alt={path} /></div>}
+    </aside>
+  );
+}
+
+function WorkspaceCodePreview({ projectId, path, line, formatOnSave, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(false);

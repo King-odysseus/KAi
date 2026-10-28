@@ -121,3 +121,25 @@
   white-space: pre;
   font: 12.5px/1.6 "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
 }
+
+/* Pictures an agent names or draws: a mockup it saved in the project, or an `svg` block. */
+.markdown .md-image {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  margin: 6px 0 10px;
+  border: 1px solid var(--border, rgba(128, 128, 160, 0.35));
+  border-radius: 10px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.markdown .response-code .md-svg-preview {
+  margin: 8px 12px 0;
+  max-width: calc(100% - 24px);
+}
+
+.markdown .md-image-missing {
+  color: var(--muted, inherit);
+  font-style: italic;
+}

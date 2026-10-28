@@ -57,7 +57,8 @@ export function buildSkillPrompt(skills: readonly DesktopSkill[], prompt: string
 
 function skillRoots(projectPath?: string): SkillRoot[] {
   const roots: SkillRoot[] = [];
-  const relativeRoots = ['.agents/skills', '.codex/skills', '.claude/skills', '.kai/skills'];
+  // Codex keeps its bundled skills (imagegen, skill-creator, ...) one level down, in `.system`.
+  const relativeRoots = ['.agents/skills', '.codex/skills', '.codex/skills/.system', '.claude/skills', '.kai/skills'];
   if (projectPath) {
     let current = path.resolve(projectPath);
     const visited = new Set<string>();
