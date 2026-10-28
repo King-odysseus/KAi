@@ -143,3 +143,25 @@
   color: var(--muted, inherit);
   font-style: italic;
 }
+
+/* A running mockup (an `html` block) above its source. */
+.markdown .md-mockup {
+  margin: 8px 12px 0;
+}
+
+.markdown .mockup-frame,
+.workspace-file-preview-live .mockup-frame {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border, rgba(128, 128, 160, 0.35));
+  border-radius: 10px;
+  background: #fff;
+  resize: vertical;
+  overflow: auto;
+}
+
+.markdown .mockup-frame-status,
+.workspace-file-preview-live .mockup-frame-status {
+  padding: 12px;
+  font-style: italic;
+}

@@ -15136,3 +15136,18 @@ button.tool-call-head:hover strong { color: var(--mint); }
   border-radius: 8px;
   background: #fff;
 }
+
+.workspace-file-preview-live {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+}
+
+.workspace-file-preview-live .mockup-frame {
+  height: 100%;
+  resize: none;
+}
+
+.workspace-file-preview-monaco[hidden] {
+  display: none;
+}

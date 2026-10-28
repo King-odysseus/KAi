@@ -477,6 +477,8 @@ export const ipcChannels = [
   'files:tree',
   'files:read',
   'files:image',
+  'mockup:inline',
+  'mockup:file',
   'files:write',
   'files:changed',
   'files:delete',
@@ -835,6 +837,8 @@ export const ipcInputSchemas = {
   'files:tree': z.object({ projectId: z.string().min(1) }).strict(),
   'files:read': fileReadInputSchema,
   'files:image': filePathInputSchema,
+  'mockup:inline': z.object({ html: z.string().min(1).max(2_000_000) }).strict(),
+  'mockup:file': filePathInputSchema,
   'files:write': fileWriteInputSchema,
   'files:changed': fileChangedInputSchema,
   'files:delete': filePathInputSchema,
@@ -1375,6 +1379,9 @@ export interface KaiDesktopBridge {
   suggestPermissionRules(projectId: string): Promise<IpcResponse<PermissionRule[]>>;
   projectFileTree(projectId: string): Promise<IpcResponse<ProjectFileTree>>;
   readProjectFile(projectId: string, path: string): Promise<IpcResponse<OpenedFile>>;
+  /** Where a sandboxed, running copy of an HTML mockup can be framed (an agent's design in HTML, CSS and script). */
+  publishInlineMockup(html: string): Promise<IpcResponse<{ url: string }>>;
+  publishProjectMockup(projectId: string, path: string): Promise<IpcResponse<{ url: string }>>;
   /** A picture inside the project as a `data:` URL, for showing mockups the agent saved. */
   readProjectImage(projectId: string, path: string): Promise<IpcResponse<{ dataUrl: string; mime: string; size: number }>>;
   writeProjectFile(request: FileWriteInput): Promise<IpcResponse<WrittenFile>>;

@@ -1,10 +1,11 @@
-import { AlignLeft, FileCode2, Pencil, RefreshCw, Save, X } from 'lucide-react';
+import { AlignLeft, Eye, FileCode2, Pencil, RefreshCw, Save, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type { OpenedFile } from '@kai/contracts';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
+import { MockupFrame } from './MockupFrame';
 import { UiButton } from './UiButton';
 
 /** The same editor as Learn & Code, kept beside the conversation and composer. */
@@ -54,6 +55,8 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, onClose, on
   const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [live, setLive] = useState(false);
+  const isHtml = /\.html?$/i.test(path);
   const lineRef = useRef(line);
   lineRef.current = line;
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -189,7 +192,8 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, onClose, on
         <FileCode2 size={16} />
         <strong title={path}>{path}</strong>
         {dirty && <span className="workspace-file-preview-dirty">Unsaved</span>}
-        {opened && <UiButton type="button" className="secondary-button" aria-label={editing ? 'View file' : 'Edit file'} onClick={() => setEditing((value) => !value)}><Pencil size={13} /><span>{editing ? 'View' : 'Edit'}</span></UiButton>}
+        {isHtml && <UiButton type="button" className="secondary-button" aria-label={live ? 'Show code' : 'Show live preview'} onClick={() => setLive((value) => !value)}><Eye size={13} /><span>{live ? 'Code' : 'Preview'}</span></UiButton>}
+        {opened && !live && <UiButton type="button" className="secondary-button" aria-label={editing ? 'View file' : 'Edit file'} onClick={() => setEditing((value) => !value)}><Pencil size={13} /><span>{editing ? 'View' : 'Edit'}</span></UiButton>}
         {editing && <UiButton type="button" className="secondary-button" aria-label="Format file" disabled={formatting || saving || !opened} onClick={() => void formatFile()}><AlignLeft size={13} /><span>{formatting ? 'Formatting…' : 'Format'}</span></UiButton>}
         {editing && <UiButton type="button" className="secondary-button" aria-label="Save file" disabled={!dirty || saving || formatting} onClick={() => void saveFile()}><Save size={13} /><span>{saving ? 'Saving…' : 'Save'}</span></UiButton>}
         <UiButton type="button" className="icon-button compact" aria-label="Reload file" title="Reload file" onClick={() => void reloadFile()}><RefreshCw size={14} /></UiButton>
@@ -197,7 +201,8 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, onClose, on
       </header>
       {error && <div className="workspace-file-preview-status" role="alert">{error}</div>}
       {opened === null && !error && <div className="workspace-file-preview-status" role="status">Opening file…</div>}
-      <div className="workspace-file-preview-monaco" ref={containerRef} aria-label={`${editing ? 'Edit' : 'View'} ${path}`} />
+      {live && isHtml && <div className="workspace-file-preview-live"><MockupFrame key={`${path}:${reload}:${opened?.hash ?? ''}`} projectId={projectId} path={path} title={`Live preview of ${path}`} height="100%" /></div>}
+      <div className="workspace-file-preview-monaco" ref={containerRef} hidden={live} aria-label={`${editing ? 'Edit' : 'View'} ${path}`} />
     </aside>
   );
 }

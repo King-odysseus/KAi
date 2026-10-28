@@ -113,6 +113,7 @@ import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
+import { publishInlineMockup, publishProjectMockup } from './mockup-server';
 import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedOnDisk, listProjectFiles, readProjectFile, readProjectImage, renameProjectPath, writeProjectFile } from './project-files';
 import { buildRecap, buildResume, describeEvent, type RecoveryStore } from './recovery-store';
 import type { NotificationCenter } from './notification-rules';
@@ -952,6 +953,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'files:tree', async ({ projectId }) => listProjectFiles((await resolveProject(context, projectId, true)).path));
   handle(context, 'files:read', async ({ projectId, path: filePath }) => readProjectFile((await resolveProject(context, projectId, true)).path, filePath));
   handle(context, 'files:image', async ({ projectId, path: filePath }) => readProjectImage((await resolveProject(context, projectId, true)).path, filePath));
+  handle(context, 'mockup:inline', async ({ html }) => publishInlineMockup(html));
+  handle(context, 'mockup:file', async ({ projectId, path: filePath }) => publishProjectMockup((await resolveProject(context, projectId, true)).path, filePath));
   handle(context, 'files:write', async ({ projectId, path: filePath, content, expectedHash, eol, bom }) => {
     try {
       return await writeProjectFile((await resolveProject(context, projectId, true)).path, filePath, content, { expectedHash, eol, bom });

@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { app, BrowserWindow, dialog, screen, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, protocol, screen, session, shell } from 'electron';
+import { MOCKUP_CSP, MOCKUP_SCHEME, serveMockup } from './mockup-server';
 import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
@@ -217,6 +218,9 @@ function refreshJumpList(): void {
 
 if (process.platform === 'win32' && app.isPackaged) app.setAppUserModelId('ai.kai.desktop');
 installCrashRecord();
+// Mockups are served from their own scheme with their own policy; see mockup-server.ts. Registered before ready.
+protocol.registerSchemesAsPrivileged([{ scheme: MOCKUP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+
 app.whenReady().then(startApplication).catch(reportStartupFailure);
 
 app.on('window-all-closed', () => {
@@ -1687,6 +1691,7 @@ function installContentSecurityPolicy(): void {
     `script-src ${scriptSources}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
+    `frame-src ${MOCKUP_SCHEME}:`,
     "font-src 'self'",
     "worker-src 'self' blob:",
     `connect-src ${connectSources}`,
@@ -1695,7 +1700,11 @@ function installContentSecurityPolicy(): void {
     "frame-ancestors 'none'",
   ].join('; ');
 
+  protocol.handle(MOCKUP_SCHEME, (request) => serveMockup(request.url));
+
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // A mockup keeps the stricter-by-design policy it was served with, not the app's.
+    if (details.url.startsWith(`${MOCKUP_SCHEME}:`)) { callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [MOCKUP_CSP] } }); return; }
     callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [policy] } });
   });
 }

@@ -4,6 +4,7 @@ import { isProjectFileHref, parseMarkdown, type Block, type Inline } from '../ma
 import './markdown.css';
 import { UiButton } from './UiButton';
 import { unwrap } from '../types';
+import { MockupFrame, isMockupHtml } from './MockupFrame';
 
 /** The project a reply belongs to, so a picture it names can be read from that project. */
 export const MarkdownProjectContext = createContext<{ projectId: string; projectPath: string } | null>(null);
@@ -82,6 +83,7 @@ function renderBlocks(blocks: Block[], keyPrefix: string, onOpenFile?: (path: st
       case 'code': return (
         <section className="response-code" key={key}>
           {block.language.toLowerCase() === 'svg' && <SvgPreview source={block.text} />}
+          {isMockupHtml(block.language, block.text) && <div className="md-mockup"><MockupFrame html={block.text} title="Mockup preview" /></div>}
           <header>
             <span>{block.language || 'text'}</span>
             <UiButton type="button" title="Copy code" aria-label="Copy code" onClick={() => void navigator.clipboard?.writeText(block.text)}><Copy size={14} /></UiButton>
