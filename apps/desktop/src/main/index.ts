@@ -5,11 +5,11 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, protocol, screen, session, shell } from 'electron';
 import { MOCKUP_CSP, MOCKUP_SCHEME, serveMockup } from './mockup-server';
-import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, KAI_WINDOW_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
 import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
-import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
+import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installKaiWindowMcpForAgents, withKaiWindowMcpSetting, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { PLAYWRIGHT_HOST_PORT, realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
 import { installCrashRecord } from './crash-record';
 import { UsageLedger } from './usage-ledger';
@@ -21,6 +21,8 @@ import { inspectPlaywrightViewport } from './playwright-viewport';
 import { PLAYWRIGHT_WINDOW_SYNC_SCRIPT, withWindowSync } from './playwright-window-sync';
 import { AgentTerminal } from './agent-terminal';
 import { startTerminalMcpHost, type TerminalMcpHost } from './terminal-mcp-host';
+import { startWindowMcpHost, type WindowMcpHost } from './window-mcp-host';
+import { WindowControl } from './window-control';
 import { DesktopConfigBackupStore } from './backups';
 import { CredentialVault } from './credential-vault';
 import { DesktopDirectProviderRuntime } from './direct-provider-runtime';
@@ -111,6 +113,7 @@ let serviceController: DesktopServiceController | null = null;
 let proxyRoutingRef: DesktopProxyRouting | null = null;
 let mcpRuntime: DesktopMcpRuntime | null = null;
 let terminalMcpHost: TerminalMcpHost | null = null;
+let windowMcpHost: WindowMcpHost | null = null;
 /** The one Playwright browser every agent shares, once it is answering. Ended with KAI. */
 let playwrightHost: PlaywrightHost | null = null;
 let remoteGateway: RemoteGateway | null = null;
@@ -316,6 +319,7 @@ app.on('before-quit', (event) => {
       process.platform === 'win32' ? Promise.resolve() : (mcpRuntime?.dispose() ?? Promise.resolve()),
       remoteGateway?.dispose() ?? Promise.resolve(),
       terminalMcpHost?.close() ?? Promise.resolve(),
+      windowMcpHost?.close() ?? Promise.resolve(),
       playwrightHost?.close() ?? Promise.resolve(),
     ]))
     .then(() => undefined)
@@ -339,6 +343,7 @@ app.on('before-quit', (event) => {
       mcpRuntime = null;
       remoteGateway = null;
       terminalMcpHost = null;
+      windowMcpHost = null;
       playwrightHost = null;
       desktopShell?.dispose();
       endOwnProcessTree();
@@ -451,6 +456,26 @@ async function startApplication(): Promise<void> {
     }
   } catch (error) {
     logger.warn('internal', 'KAI terminal MCP could not start', messageOf(error));
+  }
+  // KAI's own windows, for agents: a picture of a window, its controls, and input to it. It sees KAI's pages only,
+  // never another application, and holds still while an approval is on screen. See window-control.ts.
+  try {
+    const windowControl = new WindowControl(() => desktopWindows.live().map((entry) => ({
+      id: entry.id,
+      title: entry.window.getTitle(),
+      projectId: entry.projectId,
+      focused: entry.window.isFocused(),
+      webContents: entry.window.webContents as never,
+    })));
+    windowMcpHost = await startWindowMcpHost(windowControl);
+    await credentials.set(KAI_WINDOW_CREDENTIAL_ID, windowMcpHost.authorization);
+    const windowSetting = withKaiWindowMcpSetting(await settings.load(), { endpoint: windowMcpHost.endpoint });
+    if (windowSetting.changed) await settings.save(windowSetting.settings);
+    for (const result of await installKaiWindowMcpForAgents({ endpoint: windowMcpHost.endpoint, authorization: windowMcpHost.authorization })) {
+      if (result.error) logger.warn('internal', `KAI window MCP could not be added to ${result.agent}`, `${result.configPath}: ${result.error}`);
+    }
+  } catch (error) {
+    logger.warn('internal', 'KAI window MCP could not start', messageOf(error));
   }
   // The board server is useful only with a project to point at, so it is registered for the active project. An
   // agent launched for another project keeps the entry it was given; opening that project rewrites it.
@@ -858,6 +883,7 @@ async function startApplication(): Promise<void> {
     directApi,
     mcp: mcpRuntime,
     terminalMcp: terminalMcpHost !== null,
+    windowMcp: windowMcpHost !== null,
     ensureOpenPencil: ensureOpenPencilReady,
     workflowTemplates,
     backups,

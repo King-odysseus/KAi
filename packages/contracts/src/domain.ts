@@ -304,6 +304,10 @@ export const OPENPENCIL_CREDENTIAL_ID = 'design.openpencil';
 export const KAI_TERMINAL_MCP_SERVER_ID = 'kai-terminal';
 export const KAI_TERMINAL_CREDENTIAL_ID = 'terminal.agent';
 
+/** KAI's own windows, offered to agents so they can look at and operate the app. The token is reissued every launch. */
+export const KAI_WINDOW_MCP_SERVER_ID = 'kai-window';
+export const KAI_WINDOW_CREDENTIAL_ID = 'window.agent';
+
 export const mcpStdioServerSettingsSchema = z
   .object({
     ...mcpServerBaseSchema,

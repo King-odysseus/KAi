@@ -108,6 +108,7 @@ import { mcpText, parseActiveClaims, parseConflictText, parseRecallText, parseUr
 import type { TerminalManager } from './terminal';
 import { findGitBash } from './terminal';
 import { availableShells, terminalBriefing } from './agent-terminal';
+import { windowBriefing } from './window-control';
 import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
@@ -220,6 +221,8 @@ export interface IpcContext {
   mcp: DesktopMcpRuntime;
   /** KAI's terminal is being offered to agents this launch, so their briefing says so. */
   terminalMcp?: boolean;
+  /** KAI's own windows are being offered to agents this launch. */
+  windowMcp?: boolean;
   /** Launches open-pencil if it is not running, and re-syncs KAI's own connection to whatever it reports (its
    * token when auth is on, no header at all when it is off). Called before any user-initiated open-pencil action
    * — Pull the design, Check connection, a design-build step — so each one works from the editor's live state
@@ -1837,6 +1840,7 @@ export async function runConversationAgent(
   if (chipContext.text) effectivePrompt = `${chipContext.text}\n\n${effectivePrompt}`;
   const terminalTools = context.terminalMcp === true;
   if (request.autonomy === 'full') effectivePrompt = `${fullAccessExecutionBriefing(executionMode, terminalTools)}\n\n${effectivePrompt}`;
+  if (context.windowMcp === true) effectivePrompt = `${windowBriefing(executionMode)}\n\n${effectivePrompt}`;
   if (terminalTools) effectivePrompt = `${terminalBriefing(executionMode, availableShells())}\n\n${effectivePrompt}`;
   const promptWithoutProjectContext = effectivePrompt;
   // A route/agent switch starts a fresh CLI session. Carry enough transcript
