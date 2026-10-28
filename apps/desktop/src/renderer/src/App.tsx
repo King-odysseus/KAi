@@ -392,6 +392,10 @@ export function App(): ReactNode {
   shortcutSheetOpenRef.current = shortcutSheetOpen;
 
   const activeProject = bootstrap?.projects.find((project) => project.id === bootstrap.activeProjectId) ?? null;
+  // The window title is what the taskbar and Alt+Tab show. Every window used to read "KAI"; naming the project makes
+  // several windows tell apart. The folder name is used when a project has no display name.
+  const windowProjectName = activeProject ? (activeProject.name?.trim() || activeProject.path.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || '') : '';
+  useEffect(() => { document.title = windowProjectName ? `${windowProjectName} - KAI` : 'KAI'; }, [windowProjectName]);
   const markdownProject = useMemo(() => (activeProject ? { projectId: activeProject.id, projectPath: activeProject.path } : null), [activeProject?.id, activeProject?.path]);
 
   async function openWorkspaceFile(path: string, line?: number): Promise<void> {
