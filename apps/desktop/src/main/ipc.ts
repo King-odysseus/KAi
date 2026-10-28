@@ -3740,15 +3740,16 @@ async function chooseProject(
 
   const projectPath = path.resolve(result.filePaths[0]);
   const now = new Date().toISOString();
-  const project: ProjectRecord = {
+  // The store keeps the id it already has for a folder it knows, so everything below must use the record it returns.
+  // Using the id minted here made the active project an id that is not in the list, and the folder never opened.
+  const project = await context.projects.upsert({
     schemaVersion: 1,
     id: `project_${crypto.randomUUID()}`,
     name: path.basename(projectPath) || projectPath,
     path: projectPath,
     createdAt: now,
     lastOpenedAt: now,
-  };
-  await context.projects.upsert(project);
+  });
   await context.settings.update((settings) => ({
     ...settings,
     activeProjectId: project.id,
@@ -3880,7 +3881,7 @@ async function chooseStudioProjectFolder(
   const stored = await context.projects.upsert(project);
   await context.interview.setLinkedProject(studioProjectId, stored.id);
   await broadcastSharedState(context);
-  return { projectId: project.id, projectName: project.name, path: project.path };
+  return { projectId: stored.id, projectName: project.name, path: project.path };
 }
 
 async function launchStudioProject(
