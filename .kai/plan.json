@@ -2,29 +2,37 @@
   "schemaVersion": 1,
   "items": [
     {
-      "text": "Inspect repo state and each untracked file",
+      "text": "Confirm what VoiceStudio is, its requirements and install steps",
       "state": "done"
     },
     {
-      "text": "Classify each item: commit skills, preserve screenshot, delete debug log",
+      "text": "Check this computer: OS, Python, git, disk space, GPU, RAM",
       "state": "done"
     },
     {
-      "text": "Check for secrets before staging",
+      "text": "Download the official Windows installer script and read it before running it",
       "state": "done"
     },
     {
-      "text": "Apply classification and commit what belongs",
+      "text": "Run the installer and verify the installed files are complete",
       "state": "done"
     },
     {
-      "text": "Verify the tree is clean and report",
+      "text": "Clone the VoiceStudio repository into D:\\WebDevProjects2, including its submodule",
       "state": "done"
     },
     {
-      "text": "Check whether the collapsed command-groups change is in the build",
+      "text": "Let first-run setup build the Python engine and verify it finished (ready marker, CPU torch, 464 packages)",
       "state": "done"
+    },
+    {
+      "text": "Verify VoiceStudio launches, its window responds, and its local service is listening",
+      "state": "done"
+    },
+    {
+      "text": "Download voice models inside the app (needs the person's choice in the app)",
+      "state": "pending"
     }
   ],
-  "updatedAt": "2026-10-15T21:08:18.221Z"
+  "updatedAt": "2026-10-28T12:46:45.768Z"
 }
