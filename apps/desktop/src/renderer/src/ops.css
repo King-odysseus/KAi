@@ -2867,6 +2867,23 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 }
 .learning-assistance button > span { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 
+.learning-security-auditor { display: flex; flex-direction: column; gap: 10px; }
+.learning-security-intro { display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); }
+.learning-security-intro p { margin: 2px 0 0; font-size: 12px; color: var(--text-dim); }
+.learning-security-scan { display: flex; flex-direction: column; gap: 6px; }
+.learning-security-scan small { color: var(--text-dim); }
+.learning-security-header { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.learning-security-finding { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-input); overflow-wrap: anywhere; }
+.learning-security-finding header { display: flex; gap: 8px; align-items: center; font-size: 11px; }
+.learning-security-severity { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); }
+.learning-security-finding.severity-critical .learning-security-severity, .learning-security-finding.severity-high .learning-security-severity { color: var(--red); }
+.learning-security-finding.severity-medium .learning-security-severity { color: var(--amber); }
+.learning-security-vuln-class { padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); font-size: 10px; color: var(--text-dim); }
+.learning-security-finding p { margin: 0; font-size: 12px; color: var(--text-dim); }
+.learning-security-finding footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.learning-security-finding.resolved { opacity: 0.7; }
+.learning-security-resolved summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+
 .learning-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .learning-tabs button { font-size: 10px; padding-inline: 3px; gap: 3px; }
 .learning-tabs button svg { display: none; }

@@ -398,6 +398,14 @@ import {
   type TeachingLibrarySaveInput,
 } from './learning';
 import {
+  securityFindingSaveInputSchema,
+  securityFindingSchema,
+  securityFindingStatusUpdateInputSchema,
+  type SecurityFinding,
+  type SecurityFindingSaveInput,
+  type SecurityFindingStatusUpdateInput,
+} from './security-findings';
+import {
   teamPlanDraftSchema,
   teamPlanInputSchema,
   teamStartInputSchema,
@@ -503,6 +511,9 @@ export const ipcChannels = [
   'learning:delete-teaching-entry',
   'learning:reset-teaching-entry',
   'learning:generate-teaching-draft',
+  'learning:security-findings',
+  'learning:save-security-finding',
+  'learning:update-security-finding-status',
   'code:format',
   'code:install-formatter',
   'code:guide-read',
@@ -863,6 +874,9 @@ export const ipcInputSchemas = {
   'learning:delete-teaching-entry': teachingLibraryEntryInputSchema,
   'learning:reset-teaching-entry': teachingLibraryEntryInputSchema,
   'learning:generate-teaching-draft': teachingDraftGenerateInputSchema,
+  'learning:security-findings': emptyInputSchema,
+  'learning:save-security-finding': securityFindingSaveInputSchema,
+  'learning:update-security-finding-status': securityFindingStatusUpdateInputSchema,
   'code:format': codeFormatInputSchema,
   'code:install-formatter': codeInstallFormatterInputSchema,
   'code:guide-read': studioProjectInputSchema,
@@ -1206,6 +1220,7 @@ export const learningExplainBackHelpResponseSchema = learningExplainBackHelpSche
 export const learningLessonRecordResponseSchema = learningLessonRecordResultSchema;
 export const teachingLibraryResponseSchema = teachingLibrarySchema;
 export const teachingDraftResponseSchema = teachingDraftSchema;
+export const securityFindingsResponseSchema = z.array(securityFindingSchema);
 export const codeFormatResponseSchema = codeFormatResultSchema;
 export const gitFileInfoResponseSchema = gitFileInfoSchema;
 export const coordinationOverviewResponseSchema = coordinationOverviewSchema;
@@ -1413,6 +1428,9 @@ export interface KaiDesktopBridge {
   deleteTeachingEntry(input: TeachingLibraryEntryInput): Promise<IpcResponse<TeachingLibrary>>;
   resetTeachingEntry(input: TeachingLibraryEntryInput): Promise<IpcResponse<TeachingLibrary>>;
   generateTeachingDraft(input: TeachingDraftGenerateInput): Promise<IpcResponse<TeachingDraft>>;
+  securityFindings(): Promise<IpcResponse<SecurityFinding[]>>;
+  saveSecurityFinding(input: SecurityFindingSaveInput): Promise<IpcResponse<SecurityFinding>>;
+  updateSecurityFindingStatus(input: SecurityFindingStatusUpdateInput): Promise<IpcResponse<SecurityFinding | null>>;
   formatCode(input: CodeFormatInput): Promise<IpcResponse<CodeFormatResult>>;
   installCodeFormatter(input: CodeInstallFormatterInput): Promise<IpcResponse<{ message: string }>>;
   /**

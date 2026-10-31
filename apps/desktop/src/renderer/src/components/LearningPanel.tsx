@@ -23,6 +23,7 @@ import {
   Search,
   Send,
   Settings,
+  ShieldAlert,
   Sparkles,
   Target,
   WandSparkles,
@@ -47,9 +48,11 @@ import type {
   TeachingLibraryEntryInput,
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
+import type { SecurityFinding } from '@kai/contracts';
 import { responseReferenceTarget, suggestionTarget } from '../learning-placement';
 import { projectLessons } from './learning-path';
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
+import { SecurityAuditorPanel } from './SecurityAuditorPanel';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
@@ -113,6 +116,13 @@ interface LearningPanelProps {
   onDeleteTeachingEntry: (input: TeachingLibraryEntryInput) => Promise<void>;
   onResetTeachingEntry: (input: TeachingLibraryEntryInput) => Promise<void>;
   onGenerateTeachingDraft: (input: TeachingDraftGenerateInput) => Promise<TeachingDraft>;
+  securityFindings: SecurityFinding[];
+  securityBusy: boolean;
+  securityError: string | null;
+  onRefreshSecurityFindings: () => void;
+  /** Starts the Security Auditor persona against a target (a file/feature, or the whole project when blank). */
+  onRunSecurityScan: (target: string) => void;
+  onMarkSecurityFindingFixed: (findingId: string) => void;
   onOpenSettings: () => void;
   onClose: () => void;
 }
@@ -212,6 +222,12 @@ export function LearningPanel({
   onDeleteTeachingEntry,
   onResetTeachingEntry,
   onGenerateTeachingDraft,
+  securityFindings,
+  securityBusy,
+  securityError,
+  onRefreshSecurityFindings,
+  onRunSecurityScan,
+  onMarkSecurityFindingFixed,
   onOpenSettings,
   onClose,
 }: LearningPanelProps): ReactNode {
@@ -235,7 +251,7 @@ export function LearningPanel({
     catch (error) { setCheckOutput(error instanceof Error ? error.message : 'Check failed.'); }
     finally { setChecking(false); }
   };
-  const [tab, setTab] = useState<'tutor' | 'history' | 'progress' | 'teaching' | 'git'>('tutor');
+  const [tab, setTab] = useState<'tutor' | 'history' | 'progress' | 'teaching' | 'security' | 'git'>('tutor');
   const [historyQuery, setHistoryQuery] = useState('');
   function focusExplainBack(): void {
     const box = document.querySelector<HTMLElement>('.learning-explain-back');
@@ -379,6 +395,7 @@ export function LearningPanel({
         <UiButton type="button" role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</UiButton>
         <UiButton type="button" className={tab === 'progress' ? 'active' : ''} role="tab" aria-selected={tab === 'progress'} onClick={() => setTab('progress')}><GraduationCap size={13} />Progress</UiButton>
         <UiButton type="button" className={tab === 'teaching' ? 'active' : ''} role="tab" aria-selected={tab === 'teaching'} onClick={() => setTab('teaching')}><LibraryBig size={13} />Teaching</UiButton>
+        <UiButton type="button" className={tab === 'security' ? 'active' : ''} role="tab" aria-selected={tab === 'security'} onClick={() => setTab('security')}><ShieldAlert size={13} />Security</UiButton>
         <UiButton type="button" className={tab === 'git' ? 'active' : ''} role="tab" aria-selected={tab === 'git'} onClick={() => setTab('git')}><GitBranch size={13} />Git</UiButton>
       </div>
 
@@ -524,6 +541,18 @@ export function LearningPanel({
             onDelete={onDeleteTeachingEntry}
             onReset={onResetTeachingEntry}
             onGenerate={onGenerateTeachingDraft}
+          />
+        )}
+        {tab === 'security' && (
+          <SecurityAuditorPanel
+            findings={securityFindings}
+            busy={securityBusy}
+            loadError={securityError}
+            currentFile={selection?.filePath ?? null}
+            onReference={(filePath) => onReference(filePath)}
+            onRefresh={onRefreshSecurityFindings}
+            onRunScan={onRunSecurityScan}
+            onMarkFixed={onMarkSecurityFindingFixed}
           />
         )}
         {tab === 'git' && <GitContent info={gitInfo} />}

@@ -39,6 +39,7 @@ import type {
   OpenedFile,
   ProjectFileEntry,
   ProjectRecord,
+  SecurityFinding,
   TeachingDraft,
   TeachingDraftGenerateInput,
   TeachingLibrary,
@@ -357,6 +358,9 @@ export function CodeView({
   const [offerInstallRuff, setOfferInstallRuff] = useState(false);
   const [teachingLibrary, setTeachingLibrary] = useState<TeachingLibrary | null>(null);
   const [teachingBusy, setTeachingBusy] = useState<string | null>(null);
+  const [securityFindings, setSecurityFindings] = useState<SecurityFinding[]>([]);
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [securityError, setSecurityError] = useState<string | null>(null);
   const assistance = optimisticPreferences?.assistance ?? progress?.preferences.assistance ?? 'guided';
   const teachingModes = optimisticPreferences?.teachingModes ?? progress?.preferences.teachingModes ?? [assistance];
   const inlineSuggestions = optimisticPreferences?.inlineSuggestions ?? progress?.preferences.inlineSuggestions ?? false;
@@ -667,6 +671,19 @@ export function CodeView({
   useEffect(() => {
     void loadTeachingLibrary();
   }, [loadTeachingLibrary]);
+
+  const loadSecurityFindings = useCallback(async () => {
+    try {
+      setSecurityFindings(unwrap(await window.kaiDesktop.securityFindings()));
+      setSecurityError(null);
+    } catch (caught) {
+      setSecurityError(caught instanceof Error ? caught.message : 'Security findings could not be loaded.');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSecurityFindings();
+  }, [loadSecurityFindings]);
 
   useEffect(() => {
     try {
@@ -1797,6 +1814,33 @@ export function CodeView({
   }
 
   /**
+   * Runs the Security Auditor persona against a target the learner built, local only — never a deployed or
+   * public URL. Rides the same tutor pipeline as a normal lesson (`runLearningAction`); findings the tutor's turn
+   * writes land in the security findings store and the list refreshes once the turn comes back.
+   */
+  async function runSecurityScan(target: string): Promise<void> {
+    setSecurityBusy(true);
+    setSecurityError(null);
+    const scope = target.trim() ? `the feature at ${target.trim()}` : 'this whole project';
+    const prompt = `Act as the security-auditor skill. Attack ${scope}: try to find real vulnerabilities (injection, broken auth, secrets, insecure deserialization, path traversal, SSRF, dependency CVEs, CORS/header misconfig). Local only — never a deployed or public URL, only this repo and a dev server you start on localhost. For every reproduced finding, log it to the security findings store and file a fixer task; then report a short severity-ranked summary.`;
+    try {
+      await runLearningAction('next-step', false, undefined, prompt);
+      await loadSecurityFindings();
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function markSecurityFindingFixed(findingId: string): Promise<void> {
+    try {
+      const updated = unwrap(await window.kaiDesktop.updateSecurityFindingStatus({ id: findingId, status: 'fixed' }));
+      if (updated) setSecurityFindings((current) => current.map((finding) => (finding.id === findingId ? updated : finding)));
+    } catch (caught) {
+      setSecurityError(caught instanceof Error ? caught.message : 'The finding could not be updated.');
+    }
+  }
+
+  /**
    * Formats one open file in place, as a single undoable edit that keeps the cursor and scroll position. Returns a
    * short note for the save message ('' when there is nothing to say). If the learner typed while the formatter
    * ran, the result is dropped rather than overwriting what they typed.
@@ -2218,6 +2262,12 @@ export function CodeView({
             onDeleteTeachingEntry={deleteTeachingEntry}
             onResetTeachingEntry={resetTeachingEntry}
             onGenerateTeachingDraft={generateTeachingDraft}
+            securityFindings={securityFindings}
+            securityBusy={securityBusy}
+            securityError={securityError}
+            onRefreshSecurityFindings={() => void loadSecurityFindings()}
+            onRunSecurityScan={(target) => void runSecurityScan(target)}
+            onMarkSecurityFindingFixed={(findingId) => void markSecurityFindingFixed(findingId)}
             onOpenSettings={onOpenSettings}
             onClose={() => setTutorOpen(false)}
           />}

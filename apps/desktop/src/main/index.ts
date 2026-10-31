@@ -63,6 +63,7 @@ import { WorkflowTemplateStore } from './workflow-templates';
 import { LearningProgressStore } from './learning-progress';
 import { DesktopLearningTutor } from './learning-tutor';
 import { TeachingLibraryStore } from './teaching-library';
+import { SecurityFindingsStore } from './security-findings-store';
 import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
@@ -592,6 +593,7 @@ async function startApplication(): Promise<void> {
   const learningUsage = new LearningUsageStore(paths.learning, fileSystem);
   const learningBudget = new LearningBudgetGuard();
   const teachingLibrary = new TeachingLibraryStore(path.join(paths.learning, 'teaching'), fileSystem);
+  const securityFindings = new SecurityFindingsStore(path.join(paths.learning, 'security-findings.json'), fileSystem);
   const learningTutor = new DesktopLearningTutor(
     settings,
     credentials,
@@ -891,6 +893,7 @@ async function startApplication(): Promise<void> {
     learningTutor,
     preview,
     teachingLibrary,
+    securityFindings,
     compareRuns: new Map(),
     memorySessions: new Map(),
     pendingApprovals: new Map(),

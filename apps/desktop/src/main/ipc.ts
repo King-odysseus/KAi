@@ -129,6 +129,7 @@ import type { DesktopConfigBackupStore } from './backups';
 import type { LearningProgressStore } from './learning-progress';
 import type { DesktopLearningTutor } from './learning-tutor';
 import type { TeachingLibraryStore } from './teaching-library';
+import type { SecurityFindingsStore } from './security-findings-store';
 import { recordLearningLesson } from './learning-records';
 import type { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { listProviderModels } from './provider-models';
@@ -233,6 +234,7 @@ export interface IpcContext {
   learningProgress: LearningProgressStore;
   learningTutor: DesktopLearningTutor;
   teachingLibrary: TeachingLibraryStore;
+  securityFindings: SecurityFindingsStore;
   preview: PreviewRuntime;
   compareRuns: Map<string, ActiveCompareRun>;
   memorySessions: Map<string, ActiveMemorySession>;
@@ -1134,6 +1136,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'learning:save-teaching-entry', async (input) => context.teachingLibrary.save(input));
   handle(context, 'learning:delete-teaching-entry', async ({ kind, id }) => context.teachingLibrary.remove(kind, id));
   handle(context, 'learning:reset-teaching-entry', async ({ kind, id }) => context.teachingLibrary.reset(kind, id));
+  handle(context, 'learning:security-findings', async () => context.securityFindings.list());
+  handle(context, 'learning:save-security-finding', async (input) => context.securityFindings.add(input));
+  handle(context, 'learning:update-security-finding-status', async (input) => context.securityFindings.updateStatus(input));
   handle(context, 'learning:generate-teaching-draft', async (input, request) => {
     const settings = await context.settings.load();
     const learningProjectId = request.session?.projectId ?? settings.activeProjectId ?? 'learning-library';
@@ -2179,6 +2184,7 @@ export async function runConversationAgent(
     role: 'assistant' as const,
     text: closingText,
     createdAt: conversation.updatedAt,
+    ...(execution.generatedImages?.length ? { generatedImages: execution.generatedImages } : {}),
     ...(awaitingAnswer ? { awaitingAnswer: true } : {}),
     ...(toolDigest ? { toolDigest } : {}),
   });

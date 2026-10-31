@@ -32,6 +32,7 @@ export * from './prompt-presets';
 export * from './plan';
 export * from './preview';
 export * from './proxy';
+export * from './security-findings';
 export * from './playwright-viewport';
 export * from './recovery';
 export * from './review';
