@@ -855,34 +855,54 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
+    // Registered before any `await` below, not after — `cancel(conversationId)` only has something to abort once
+    // this exists, and the awaits below (capability, credential, proxy-route lookups) used to run first, so a
+    // cancel arriving during any of them found nothing registered and silently did nothing: the run went on to
+    // start anyway. This is one of the ways "Stop" fails to stop a Direct API (Auto) turn. The same controller is
+    // threaded into whichever protocol method ends up handling the run, instead of each one minting (and
+    // re-registering) its own — a second controller would silently replace this one in `activeRuns` and lose any
+    // abort already requested against the first.
+    const controller = new AbortController();
+    this.activeRuns.set(request.conversationId, controller);
+    const bailEarly = (message: string): AgentExecutionResult => {
+      this.activeRuns.delete(request.conversationId);
+      return immediateFailure(request, message);
+    };
+    const checkCancelledEarly = (): AgentExecutionResult | null => {
+      if (!controller.signal.aborted) return null;
+      this.activeRuns.delete(request.conversationId);
+      return cancelledEarly(request);
+    };
+
     let capability = await this.capability();
+    const cancelledDuringCapability = checkCancelledEarly();
+    if (cancelledDuringCapability) return cancelledDuringCapability;
     // A model chosen in the composer applies to this run only.
     if (request.model) capability = { ...capability, model: request.model };
     let apiKey: string;
     if (request.route === 'proxy') {
       const preset = directProviderPreset(capability.provider);
       if (!capability.enabled) {
-        return immediateFailure(request, 'Direct API mode is disabled in Settings.');
+        return bailEarly('Direct API mode is disabled in Settings.');
       }
       if (!capability.model.trim()) {
-        return immediateFailure(request, 'Set a direct API model in Settings before using the proxy route.');
+        return bailEarly('Set a direct API model in Settings before using the proxy route.');
       }
       if (!this.options.resolveProxyRoute) {
-        return immediateFailure(request, 'Universal Proxy routing is not available in this KAI build.');
+        return bailEarly('Universal Proxy routing is not available in this KAI build.');
       }
       try {
         const proxyRoute = await this.options.resolveProxyRoute(request);
         capability = { ...capability, baseUrl: proxyRoute.baseUrl };
         apiKey = proxyRoute.apiKey;
       } catch (error) {
-        return immediateFailure(
-          request,
-          `Universal Proxy route is unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        return bailEarly(`Universal Proxy route is unavailable: ${error instanceof Error ? error.message : String(error)}`);
       }
+      const cancelledDuringProxyLookup = checkCancelledEarly();
+      if (cancelledDuringProxyLookup) return cancelledDuringProxyLookup;
     } else {
       if (!capability.available) {
-        return immediateFailure(request, capability.unavailableReason || 'Direct API mode is unavailable.');
+        return bailEarly(capability.unavailableReason || 'Direct API mode is unavailable.');
       }
       const local = isLocalProvider(capability.provider);
       // A key is optional for a local server (LM Studio can be set to require one); use it when one is stored.
@@ -893,9 +913,11 @@ export class DesktopDirectProviderRuntime {
         if (!local) throw error;
       }
       if (!directApiKey && !local) {
-        return immediateFailure(request, `Credential ${capability.credentialId} is not available.`);
+        return bailEarly(`Credential ${capability.credentialId} is not available.`);
       }
       apiKey = directApiKey ?? LOCAL_PROVIDER_PLACEHOLDER_KEY;
+      const cancelledDuringCredentialLookup = checkCancelledEarly();
+      if (cancelledDuringCredentialLookup) return cancelledDuringCredentialLookup;
     }
 
     const protocol = directProviderPreset(capability.provider).protocol;
@@ -913,6 +935,7 @@ export class DesktopDirectProviderRuntime {
         projectRoot,
         { ...capability, baseUrl: anthropicBase },
         apiKey,
+        controller,
         watch,
         approvals,
         contextText,
@@ -928,6 +951,7 @@ export class DesktopDirectProviderRuntime {
           projectRoot,
           { ...capability, baseUrl: anthropicBase },
           apiKey,
+          controller,
           watch,
           approvals,
           contextText,
@@ -947,6 +971,7 @@ export class DesktopDirectProviderRuntime {
         projectRoot,
         capability,
         apiKey,
+        controller,
         onEvent,
         approvals,
         contextText,
@@ -960,6 +985,7 @@ export class DesktopDirectProviderRuntime {
         projectRoot,
         capability,
         apiKey,
+        controller,
         onEvent,
         approvals,
         contextText,
@@ -973,6 +999,7 @@ export class DesktopDirectProviderRuntime {
         projectRoot,
         capability,
         apiKey,
+        controller,
         onEvent,
         approvals,
         contextText,
@@ -982,6 +1009,8 @@ export class DesktopDirectProviderRuntime {
     }
 
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    const cancelledDuringToolRuntime = checkCancelledEarly();
+    if (cancelledDuringToolRuntime) return cancelledDuringToolRuntime;
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
@@ -995,8 +1024,7 @@ export class DesktopDirectProviderRuntime {
     };
     emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
 
-    const controller = new AbortController();
-    this.activeRuns.set(request.conversationId, controller);
+    // `controller` is the one created at the top of this method, already registered — not re-created here.
     const outputParts: string[] = [];
     const errors: string[] = [];
     let previousResponseId = resumeResponseId;
@@ -1244,6 +1272,9 @@ export class DesktopDirectProviderRuntime {
     projectRoot: string,
     capability: DirectApiCapability,
     apiKey: string,
+    /** Already registered in `activeRuns` by `run()` before any of its own preflight awaits; reused here rather
+     *  than minted fresh, so a cancel that landed during `run()`'s own setup is not lost. */
+    controller: AbortController,
     onEvent?: (event: PersistedEvent) => void,
     approvals?: DirectApiApprovalPort,
     contextText?: string,
@@ -1251,6 +1282,7 @@ export class DesktopDirectProviderRuntime {
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    if (controller.signal.aborted) return cancelledEarly(request);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
@@ -1264,8 +1296,7 @@ export class DesktopDirectProviderRuntime {
     };
     emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
 
-    const controller = new AbortController();
-    this.activeRuns.set(request.conversationId, controller);
+    // `controller` is the caller's own, already registered in `activeRuns` — not re-created here.
     const messages = chatMessages(request, contextText, history);
     const outputParts: string[] = [];
     const errors: string[] = [];
@@ -1548,6 +1579,9 @@ export class DesktopDirectProviderRuntime {
     projectRoot: string,
     capability: DirectApiCapability,
     apiKey: string,
+    /** Already registered in `activeRuns` by `run()` before any of its own preflight awaits; reused here rather
+     *  than minted fresh, so a cancel that landed during `run()`'s own setup is not lost. */
+    controller: AbortController,
     onEvent?: (event: PersistedEvent) => void,
     approvals?: DirectApiApprovalPort,
     contextText?: string,
@@ -1556,6 +1590,7 @@ export class DesktopDirectProviderRuntime {
     maxTokens: number = OUTPUT_TOKEN_BUDGET,
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    if (controller.signal.aborted) return cancelledEarly(request);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
@@ -1569,8 +1604,7 @@ export class DesktopDirectProviderRuntime {
     };
     emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
 
-    const controller = new AbortController();
-    this.activeRuns.set(request.conversationId, controller);
+    // `controller` is the caller's own, already registered in `activeRuns` — not re-created here.
     const messages = anthropicMessages(request, history);
     // The part of the prompt the provider served from its cache, which costs a fraction of a fresh one.
     let cachedReadTokens = 0;
@@ -1810,6 +1844,9 @@ export class DesktopDirectProviderRuntime {
     projectRoot: string,
     capability: DirectApiCapability,
     apiKey: string,
+    /** Already registered in `activeRuns` by `run()` before any of its own preflight awaits; reused here rather
+     *  than minted fresh, so a cancel that landed during `run()`'s own setup is not lost. */
+    controller: AbortController,
     onEvent?: (event: PersistedEvent) => void,
     approvals?: DirectApiApprovalPort,
     contextText?: string,
@@ -1817,6 +1854,7 @@ export class DesktopDirectProviderRuntime {
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
     const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    if (controller.signal.aborted) return cancelledEarly(request);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
       externalToolDefinitions = await this.externalFor(projectRoot)?.definitions() ?? [];
@@ -1830,8 +1868,7 @@ export class DesktopDirectProviderRuntime {
     };
     emit(lifecycleEvent(request, 'starting', `${capability.displayName} starting.`));
 
-    const controller = new AbortController();
-    this.activeRuns.set(request.conversationId, controller);
+    // `controller` is the caller's own, already registered in `activeRuns` — not re-created here.
     const contents = geminiContents(request, history);
     const outputParts: string[] = [];
     const errors: string[] = [];
@@ -3516,6 +3553,19 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
+}
+
+/** Cancelled before any request ever went out — setup (capability/credential/tool-runtime lookup) was still in
+ *  flight when Stop landed. */
+function cancelledEarly(request: AgentRunRequest): AgentExecutionResult {
+  return {
+    status: 'failed',
+    cancelled: true,
+    output: '',
+    outputAgent: request.agent,
+    events: [lifecycleEvent(request, 'cancelled', `${request.agent} stopped before it started.`)],
+    error: undefined,
+  };
 }
 
 function immediateFailure(request: AgentRunRequest, message: string): AgentExecutionResult {
