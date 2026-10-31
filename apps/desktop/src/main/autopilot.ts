@@ -1456,6 +1456,7 @@ export class DesktopAutopilot {
         criterion,
         status: 'passed' as const,
         evidence: `Verification run ${check.runId} passed: ${command}`,
+        criterionId: card.acceptanceCriteria.find((item) => item.text === criterion)?.id,
       })),
     });
     if (needsScreenCheck(card)) {
@@ -1568,6 +1569,11 @@ export class DesktopAutopilot {
     let interrupted = false;
     let restedMs = 0;
     for (;;) {
+      // Stop can land between this card's conversation being created and tracked (trackLane runs after the
+      // `createConversation` await settles), so `stop()`'s cancelAgent loop can miss it entirely. Checked here,
+      // right before every agent call — including retries — so an abort that arrived during that gap, or during
+      // the rest below, is never missed and the agent is never started (or restarted) after Stop was pressed.
+      if (active.controller.signal.aborted) throw new Error('Autopilot was stopped.');
       // A rest another card started is everyone's: the limit is the provider's, not the card's.
       const shared = active.restUntil - this.ports.now();
       if (shared > 0) await sleepAbortable(shared, active.controller.signal);

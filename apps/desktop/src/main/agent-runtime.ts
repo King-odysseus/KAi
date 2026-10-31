@@ -107,6 +107,8 @@ export function agentInstallCommand(id: AgentId, platform: NodeJS.Platform = pro
 export interface AgentExecutionResult {
   status: 'completed' | 'failed';
   output: string;
+  /** Images the provider generated for the assistant's reply. */
+  generatedImages?: Array<{ name: string; dataUrl: string }>;
   outputAgent: AgentId;
   events: PersistedEvent[];
   sessionId?: string;
@@ -472,28 +474,44 @@ export class DesktopAgentRuntime {
     if (rejectedReason) {
       return this.immediateFailure(request, `${definition.displayName} cannot use "${model}" for the current CLI/account. ${rejectedReason}`);
     }
+    // Registered before any `await` below, not after — `cancel(conversationId)` only has something to abort once
+    // this exists. Capability and proxy-environment lookups were previously awaited first, so a cancel arriving
+    // during either one found nothing registered and silently did nothing: the run went on to spawn anyway, which
+    // is one of the ways "Stop" fails to stop an Auto or Autopilot turn. Every return below this point must clean
+    // this entry up itself, since nothing else will once it exists.
+    const controller = new AbortController();
+    const active: ActiveAgentRun = { controller, child: null, paused: false };
+    this.activeRuns.set(request.conversationId, active);
+    const bailEarly = (message: string): AgentExecutionResult => {
+      this.activeRuns.delete(request.conversationId);
+      return this.immediateFailure(request, message);
+    };
+    const checkCancelledEarly = (): AgentExecutionResult | null => {
+      if (!controller.signal.aborted) return null;
+      this.activeRuns.delete(request.conversationId);
+      return this.cancelledEarly(request);
+    };
+
     const capability = await this.cachedCapability(request.agent);
+    const cancelledDuringCapability = checkCancelledEarly();
+    if (cancelledDuringCapability) return cancelledDuringCapability;
     // The proxy supplies its own credentials, so a CLI that is installed but signed out can still run through it.
     const proxyWithoutAccount = request.route === 'proxy' && capability.state === 'signed_out' && supportsProxy(request.agent);
     if (!capability.available && !proxyWithoutAccount) {
-      return this.immediateFailure(
-        request,
-        `${definition.displayName} is unavailable: ${capability.unavailableReason || 'command not found'}`,
-      );
+      return bailEarly(`${definition.displayName} is unavailable: ${capability.unavailableReason || 'command not found'}`);
     }
     let environment = process.env;
     if (request.route === 'proxy') {
       if (!supportsProxy(request.agent) || !this.options.resolveProxyEnvironment) {
-        return this.immediateFailure(request, `${definition.displayName} does not have a Universal Proxy route in this KAI build.`);
+        return bailEarly(`${definition.displayName} does not have a Universal Proxy route in this KAI build.`);
       }
       try {
         environment = await this.options.resolveProxyEnvironment(request.agent, request, model) ?? process.env;
       } catch (error) {
-        return this.immediateFailure(
-          request,
-          `Universal Proxy route is unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        return bailEarly(`Universal Proxy route is unavailable: ${error instanceof Error ? error.message : String(error)}`);
       }
+      const cancelledDuringProxyLookup = checkCancelledEarly();
+      if (cancelledDuringProxyLookup) return cancelledDuringProxyLookup;
     }
 
     const proxyBaseUrl = request.route === 'proxy' && (request.agent === 'qwen' || request.agent === 'codex')
@@ -513,16 +531,14 @@ export class DesktopAgentRuntime {
       const limit = native ? KIMI_WINDOWS_NATIVE_LIMIT : KIMI_WINDOWS_SHIM_LIMIT;
       const needed = args.reduce((total, argument) => total + argument.length + 3, 0);
       if (needed > limit) {
-        return this.immediateFailure(
-          request,
+        return bailEarly(
           `Kimi Code takes its prompt as a command-line argument, and Windows allows about ${limit.toLocaleString('en-US')} characters (this run needs ${needed.toLocaleString('en-US')}). `
           + (native ? 'Use another agent for this part.' : 'Install the native Kimi Code with its PowerShell installer to raise the limit to about 30,000, or use another agent for this part.'),
         );
       }
     }
-    const controller = new AbortController();
-    const active: ActiveAgentRun = { controller, child: null, paused: false };
-    this.activeRuns.set(request.conversationId, active);
+    const cancelledBeforeSpawn = checkCancelledEarly();
+    if (cancelledBeforeSpawn) return cancelledBeforeSpawn;
 
     const events: PersistedEvent[] = [lifecycleEvent(request, 'starting', model
       ? `${definition.displayName} starting on ${model}${modelNote ? ` (${modelNote})` : ''}.`
@@ -779,6 +795,19 @@ export class DesktopAgentRuntime {
 
   private commandFor(id: AgentId): string {
     return this.commandOverrides[id] || AGENTS[id].command;
+  }
+
+  /** Cancelled before the CLI ever spawned — setup (capability/proxy lookup) was still in flight when Stop landed. */
+  private cancelledEarly(request: AgentRunRequest): AgentExecutionResult {
+    const definition = AGENTS[request.agent];
+    return {
+      status: 'failed',
+      cancelled: true,
+      output: '',
+      outputAgent: request.agent,
+      events: [lifecycleEvent(request, 'cancelled', `${definition.displayName} stopped before it started.`)],
+      error: undefined,
+    };
   }
 
   private immediateFailure(request: AgentRunRequest, message: string): AgentExecutionResult {
