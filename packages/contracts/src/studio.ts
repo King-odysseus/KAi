@@ -212,6 +212,12 @@ export const cardCheckSchema = z
       criterion: z.string().min(1).max(400),
       status: z.enum(['passed', 'failed', 'unknown']),
       evidence: z.string().max(1_000),
+      /** The matching `BoardCard.acceptanceCriteria[].id`, when the card had stable criterion ids at the time this
+       *  was recorded. Absent for evidence recorded before criteria had ids, or if the criterion's wording no
+       *  longer matches any current criterion (it was edited or removed) — `criterion` text is still authoritative
+       *  for matching; this id is additive, for linking evidence to a criterion across tools (e.g. a future C1
+       *  lesson), not a replacement for the text match in `doneBlockedBy`. */
+      criterionId: z.string().min(1).max(40).optional(),
     }).strict()).max(20).optional(),
   })
   .strict();
@@ -230,6 +236,28 @@ export const cardRunSchema = z
   .strict();
 export type CardRun = z.infer<typeof cardRunSchema>;
 
+/** A stable identity for one acceptance criterion's current wording — see `deriveAcceptanceCriteria`. */
+export const acceptanceCriterionSchema = z.object({ id: z.string().min(1).max(40), text: z.string().min(1).max(400) }).strict();
+export type AcceptanceCriterion = z.infer<typeof acceptanceCriterionSchema>;
+
+/** A short, deterministic id for a criterion's exact current wording — same text always hashes to the same id, a
+ *  changed word always hashes to a different one. FNV-1a is used only for a compact stable key, not for security. */
+function shortCriterionId(text: string): string {
+  const normalized = text.trim().toLowerCase();
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `c${(hash >>> 0).toString(36)}`;
+}
+
+/** Recomputes every acceptance criterion's id from its current text. Exported so the one production writer of
+ *  `acceptanceEvidence` (`autopilot.ts`) can resolve a criterion's id without re-deriving the hash itself. */
+export function deriveAcceptanceCriteria(acceptance: readonly string[]): AcceptanceCriterion[] {
+  return acceptance.map((text) => ({ id: shortCriterionId(text), text }));
+}
+
 export const boardCardSchema = z
   .object({
     id: z.string().min(1).max(120),
@@ -238,6 +266,14 @@ export const boardCardSchema = z
     /** The story this card implements, from `stories.md`. */
     story: z.string().max(4_000).default(''),
     acceptance: z.array(z.string().max(400)).max(20).default([]),
+    /**
+     * `acceptance`'s own ids, recomputed on every parse (see the `.transform` below) rather than trusted from
+     * input — so no card-writing call site has to maintain this itself. An id is stable for as long as its text
+     * does not change (an edit mints a new one for that entry; unrelated entries keep theirs), which is enough to
+     * link evidence and future C1 lessons to a specific criterion without disturbing the existing text-based
+     * matching in `doneBlockedBy`.
+     */
+    acceptanceCriteria: z.array(acceptanceCriterionSchema).max(20).default([]),
     /** The prompt the agent works from; seeded from the story and refined before the card is claimed. */
     prompt: z.string().max(20_000).default(''),
     /** The open-pencil node id when the design produced this card, else null. */
@@ -264,7 +300,12 @@ export const boardCardSchema = z
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
   })
-  .strict();
+  .strict()
+  // Input never has to supply a correct `acceptanceCriteria` (or any at all, since it defaults to `[]` above) —
+  // every parse recomputes it from `acceptance`, so every one of the many call sites that build a card by
+  // spreading a previous one through `boardCardSchema.parse({ ...card, ... })` gets it for free and in sync,
+  // even where `acceptance` itself was just edited.
+  .transform((card) => ({ ...card, acceptanceCriteria: deriveAcceptanceCriteria(card.acceptance) }));
 export type BoardCard = z.infer<typeof boardCardSchema>;
 
 export const studioBoardSchema = z

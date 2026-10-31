@@ -1628,11 +1628,8 @@ button:disabled {
 
 .message-attachments { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 0 0; }
 .message-image-attachment { width: min(240px, 100%); margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
-.message-image-attachment.expanded { width: min(640px, 100%); }
 .message-image-button { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
-.message-image-attachment.expanded .message-image-button { cursor: zoom-out; }
 .message-image-attachment img { display: block; width: 100%; max-height: 180px; object-fit: cover; background: color-mix(in srgb, var(--surface) 80%, #000); }
-.message-image-attachment.expanded img { max-height: 520px; object-fit: contain; }
 .message-image-attachment figcaption { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; overflow: hidden; color: var(--text-dim); font-size: 11px; }
 .message-image-attachment figcaption strong { min-width: 0; color: var(--text); font-weight: 600; }
 .message-image-attachment figcaption small { flex: 0 0 auto; color: var(--text-dim); font-size: 10.5px; }
@@ -1645,6 +1642,13 @@ button:disabled {
 .attachment-meta small { color: var(--text-dim); font-size: 10.5px; }
 .attachment-chip button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; color: var(--text-dim); background: transparent; cursor: pointer; }
 .attachment-chip button:hover { color: var(--text); background: var(--bg-hover); }
+.attachment-chip .attachment-preview-button { display: block; width: auto; height: auto; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.image-viewer-backdrop { position: fixed; z-index: 10000; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(0, 0, 0, .82); }
+.image-viewer { display: flex; flex-direction: column; width: min(1200px, 100%); max-height: 100%; min-height: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 24px 80px rgba(0, 0, 0, .5); }
+.image-viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 12px; color: var(--text); }
+.image-viewer-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-viewer-head button { display: grid; place-items: center; flex: 0 0 auto; }
+.image-viewer > img { display: block; max-width: 100%; max-height: calc(100vh - 110px); margin: auto; object-fit: contain; }
 
 .workspace-empty {
   display: flex;
@@ -9966,6 +9970,11 @@ button.tool-call-head:hover strong { color: var(--mint); }
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.4;
+}
+
+.team-part-paths {
+  font-family: var(--font-mono, monospace);
+  overflow-wrap: anywhere;
 }
 
 .team-part-controls {

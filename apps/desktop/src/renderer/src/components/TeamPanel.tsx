@@ -382,6 +382,9 @@ export function TeamPanel({
                     <div className="team-part-title">
                       <strong>{part.title}</strong>
                       <small>{info.label}{info.access === 'read' ? ' - read-only' : ''}{part.dependsOn.length > 0 ? ` - after ${part.dependsOn.map((id) => draft.parts.find((item) => item.id === id)?.title ?? id).join(', ')}` : ''}</small>
+                      {/* The same ownership this plan's own pre-run conflict check reads (`teamPaths`), shown here
+                          too so it stays visible the whole time a part is running, not just once before Start. */}
+                      {part.paths.length > 0 && <small className="team-part-paths" title="Files and folders this part owns">{part.paths.join(', ')}</small>}
                     </div>
                     <UiButton type="button" className="icon-button compact" aria-label={`Remove ${part.title}`} title="Remove this part" disabled={disabled || draft.parts.length === 1} onClick={() => removePart(part.id)}><Trash2 size={15} /></UiButton>
                   </div>
