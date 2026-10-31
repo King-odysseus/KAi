@@ -551,7 +551,7 @@ export function LearningPanel({
             currentFile={selection?.filePath ?? null}
             onReference={(filePath) => onReference(filePath)}
             onRefresh={onRefreshSecurityFindings}
-            onRunScan={onRunSecurityScan}
+            onRunScan={(target) => { setTab('tutor'); onRunSecurityScan(target); }}
             onMarkFixed={onMarkSecurityFindingFixed}
           />
         )}

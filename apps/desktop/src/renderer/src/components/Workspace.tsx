@@ -239,7 +239,13 @@ interface WorkspaceViewProps {
   onOpenFile: (path: string, line?: number) => void;
 }
 
-type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto';
+type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto' | 'security-auditor';
+
+/** Both intents send through startAuto and share Auto's access requirement; Security Auditor only differs in its
+ *  starter text (the security-auditor skill, attacking the project rather than building it). */
+function isAutoLikeIntent(intent: TaskIntent): boolean {
+  return intent === 'auto' || intent === 'security-auditor';
+}
 
 /**
  * Where the chosen intent is remembered. It is a working preference rather than part of a message, so it is kept for
@@ -276,6 +282,7 @@ const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: 
   { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
   { id: 'equalizer', label: 'Equalizer', description: 'Compare the built screens with their design and report every difference', placeholder: 'Say what does not match, for example: the dashboard on my dev server', starter: '' },
   { id: 'auto', label: 'Auto', description: 'Send the task and KAI works it on its own until the agent says it is done, switching provider when a limit is hit', placeholder: 'Describe the task; send it and Auto works it until it is done', starter: '' },
+  { id: 'security-auditor', label: 'Security Auditor', description: 'Auto mode that attacks your own project instead of building it: injection, broken auth, secrets, insecure dependencies, against your code and a local dev server only', placeholder: 'Say what to attack (a file, a feature, or leave it to scan the whole project); send it and Auto works it until it is done', starter: 'Act as the security-auditor skill. Attack ' },
 ];
 
 const STATUS_WORDS = [
@@ -792,8 +799,9 @@ export function WorkspaceView({
       images: contextChips.flatMap((chip) => (chip.type === 'image' && chip.dataUrl ? [{ name: chip.name, dataUrl: chip.dataUrl }] : [])),
     });
     // Auto is a mode of this composer, not a second one: the same box, the same send. Decided here rather than at the
-    // button, so a steered or queued task behaves the same as one typed straight in.
-    if (taskIntent === 'auto') {
+    // button, so a steered or queued task behaves the same as one typed straight in. Security Auditor is the same
+    // loop with a different starter prompt, not a separate engine.
+    if (isAutoLikeIntent(taskIntent)) {
       void startAuto(text, options);
       return;
     }
@@ -821,7 +829,7 @@ export function WorkspaceView({
     const typedText = prompt.trim();
     if ((!typedText && !hasImageAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
     const text = typedText || IMAGE_ONLY_PROMPT;
-    if (taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
+    if (isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
       setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
       return;
     }
@@ -1006,7 +1014,7 @@ export function WorkspaceView({
     setWorkbenchNotice(null);
     try {
       const refined = await settleWithin(
-        () => window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || taskIntent === 'auto' ? 'build' : taskIntent }).then(unwrap),
+        () => window.kaiDesktop.refinePrompt({ text, intent: taskIntent === 'equalizer' || isAutoLikeIntent(taskIntent) ? 'build' : taskIntent }).then(unwrap),
         REFINE_WAIT_MS,
       );
       // Nothing was changed in the project, so releasing the button is all this needs to do.
@@ -2187,7 +2195,7 @@ export function WorkspaceView({
                   {!awaitingApproval && <UiButton type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</UiButton>}
                   <UiButton type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></UiButton>
                 </>
-              ) : <UiButton type="button" className="send-button" disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={taskIntent === 'auto' ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={taskIntent === 'auto' ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</UiButton>}
+              ) : <UiButton type="button" className="send-button" disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={isAutoLikeIntent(taskIntent) ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={isAutoLikeIntent(taskIntent) ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</UiButton>}
             </div>
           </div>
           {advancedComposerOpen && <div className="composer-advanced-options" aria-label="More run options">
@@ -2201,7 +2209,7 @@ export function WorkspaceView({
             {!apiRun && reasoningLevels.length > 0 && <SelectMenu ariaLabel="Thinking effort" className="composer-effort-select" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
           </div>}
         </div>
-        {taskIntent === 'auto' && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
+        {isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
           <p className="composer-task-guidance" role="note">
             <span>Auto works on its own, so it needs Edit files or Full access, and Access is lower than that.</span>{' '}
             <UiButton type="button" className="secondary-button" disabled={busy} onClick={() => { onSelectAutonomy('autoEdit'); if (prompt.trim()) setSendWhenAccessReady(true); }}>{prompt.trim() ? 'Use Edit files and send' : 'Use Edit files'}</UiButton>

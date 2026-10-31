@@ -72,6 +72,12 @@ export function SecurityAuditorPanel({
           {busy ? 'Scanning…' : 'Attack this feature'}
         </UiButton>
         {currentFile && !target.trim() && <small>Defaults to the open file: {currentFile}</small>}
+        {busy && (
+          <div className="learning-security-running" role="status">
+            Scanning — the attack itself runs as a Tutor turn; switch to the <strong>Tutor</strong> tab to watch it work.
+            Findings land back here once it finishes.
+          </div>
+        )}
       </div>
 
       <div className="learning-security-header">

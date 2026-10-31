@@ -2872,6 +2872,7 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-security-intro p { margin: 2px 0 0; font-size: 12px; color: var(--text-dim); }
 .learning-security-scan { display: flex; flex-direction: column; gap: 6px; }
 .learning-security-scan small { color: var(--text-dim); }
+.learning-security-running { padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-input); font-size: 12px; color: var(--text-dim); }
 .learning-security-header { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
 .learning-security-finding { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-input); overflow-wrap: anywhere; }
 .learning-security-finding header { display: flex; gap: 8px; align-items: center; font-size: 11px; }

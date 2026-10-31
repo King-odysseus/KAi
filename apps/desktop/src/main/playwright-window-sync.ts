@@ -27,14 +27,19 @@ const path = require('node:path');
   let core;
   try {
     core = require(require.resolve('playwright-core/lib/coreBundle', { paths: [path.dirname(entry)] }));
-  } catch {
+  } catch (error) {
+    console.error('[kai window-sync] could not load playwright-core/lib/coreBundle next to', entry, '-', error && error.message);
     return;
   }
   const tools = (core && core.tools && core.tools.browserTools) || [];
   const named = (name) => tools.find((tool) => tool && tool.schema && tool.schema.name === name);
   const resize = named('browser_resize');
   const tabs = named('browser_tabs');
-  if (!resize || !tabs) return;
+  if (!resize || !tabs) {
+    console.error('[kai window-sync] browser_resize/browser_tabs not found among', tools.length, 'tools; window sync is disabled for this run.');
+    return;
+  }
+  console.error('[kai window-sync] attached to browser_resize and browser_tabs.');
 
   // The window as it was before anything resized it, put back when no resized tab is in front.
   let restore = null;
@@ -88,14 +93,16 @@ const path = require('node:path');
   resize.handle = async (context, params, response, signal) => {
     try {
       await measureFrame((await context.ensureTab()).page);
-    } catch {
+    } catch (error) {
       // The default frame size is close enough.
+      console.error('[kai window-sync] could not measure the window frame before resizing, using the default:', error && error.message);
     }
     const result = await resizeHandle(context, params, response, signal);
     try {
       await sync((await context.ensureTab()).page);
-    } catch {
+    } catch (error) {
       // The page is resized either way; only the window is left as it was.
+      console.error('[kai window-sync] the page viewport resized but the window did not follow:', error && error.message);
     }
     return result;
   };
@@ -106,8 +113,9 @@ const path = require('node:path');
     try {
       const tab = context.currentTab();
       if (tab) await sync(tab.page);
-    } catch {
+    } catch (error) {
       // The tab change stands; only the window is left as it was.
+      console.error('[kai window-sync] the tab changed but the window did not resize to match it:', error && error.message);
     }
     return result;
   };
