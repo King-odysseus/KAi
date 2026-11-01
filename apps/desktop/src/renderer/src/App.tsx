@@ -36,6 +36,7 @@ import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
+import { CrewView } from './components/CrewView';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
 import { ProxyPanel } from './components/ProxyView';
 import { RulesView } from './components/RulesView';
@@ -523,6 +524,7 @@ export function App(): ReactNode {
     { id: 'brain', label: 'Open C1 Brain', description: 'Search, inspect, and maintain the shared brain', run: () => setView('brain') },
     { id: 'proxy', label: 'Open Universal Proxy', description: 'Show proxy status, activity, health, history, and costs', run: () => setView('proxy') },
     { id: 'workflows', label: 'Open Workflows', description: 'Build, save, and run sequential agent work', run: () => setView('workflows') },
+    { id: 'crew', label: 'Open Crew', description: 'A Lead and builders that plan, build and check a whole project from a task board', run: () => setView('crew') },
     { id: 'history', label: 'Open Conversation History', description: 'Search, rename, archive, fork, and reopen threads', run: () => setView('history') },
     { id: 'usage', label: 'Open Usage and Budgets', description: 'See estimated API spend and set warn or block limits', run: () => setView('usage') },
     { id: 'operations-recovery', label: 'Open Recovery (interrupted runs)', description: 'Resume or discard runs interrupted by a crash or close', run: () => openOperations('recovery') },
@@ -2222,6 +2224,8 @@ export function App(): ReactNode {
             onIncomingPlanUsed={() => setIncomingTeamPlan(null)}
           />
         );
+      case 'crew':
+        return <CrewView activeProject={activeProject} agentCapabilities={agentCapabilities} settings={bootstrap.settings} />;
       case 'history':
         return (
           <HistoryView

@@ -1,0 +1,371 @@
+import { randomUUID } from 'node:crypto';
+import { MAX_SUB_AGENTS_TOTAL, roleAccess } from '@kai/contracts';
+import type { CrewAsk, CrewConfig, CrewFeedEntry, CrewReview, CrewRole, CrewRun, CrewTask } from '@kai/contracts';
+
+/**
+ * The rules of a Crew run, kept apart from anything that starts an agent so they can be tested without one. Every
+ * function takes a run and returns a new one; the service that drives agents decides when to call them.
+ */
+
+// The read-only rule and the report are pure, so the Crew screen uses the same ones; they live with the contracts.
+export { buildReport, roleAccess } from '@kai/contracts';
+export type { CrewReport } from '@kai/contracts';
+
+const FEED_LIMIT = 400;
+function feed(run: CrewRun, entry: Omit<CrewFeedEntry, 'id' | 'at'>, at: string): CrewRun {
+  const next: CrewFeedEntry = { id: `feed_${randomUUID()}`, at, ...entry };
+  return { ...run, feed: [...run.feed, next].slice(-FEED_LIMIT), updatedAt: at };
+}
+
+function patchTask(run: CrewRun, taskId: string, change: (task: CrewTask) => CrewTask, at: string): CrewRun {
+  return { ...run, updatedAt: at, tasks: run.tasks.map((task) => (task.id === taskId ? { ...change(task), updatedAt: at } : task)) };
+}
+
+function taskOf(run: CrewRun, taskId: string): CrewTask {
+  const task = run.tasks.find((item) => item.id === taskId);
+  if (!task) throw new Error(`There is no task ${taskId} on this board.`);
+  return task;
+}
+
+function roleOf(config: CrewConfig, roleId: string): CrewRole | undefined {
+  return config.roles.find((role) => role.id === roleId);
+}
+
+/** A task is on the board unless a worker only suggested it and nobody has accepted it yet. */
+function onBoard(task: CrewTask): boolean {
+  return !task.proposed;
+}
+
+/** Tasks nothing stands in the way of: waiting, on the board, and every task they depend on already accepted. */
+export function readyTasks(run: Pick<CrewRun, 'tasks'>): CrewTask[] {
+  const byId = new Map(run.tasks.map((task) => [task.id, task]));
+  return run.tasks.filter((task) => {
+    if (!onBoard(task) || (task.status !== 'backlog' && task.status !== 'sentBack')) return false;
+    // A dependency that is not on the board cannot be waited on: it was removed, so it must not hold the task forever.
+    return task.dependsOn.every((id) => {
+      const dependency = byId.get(id);
+      return !dependency || dependency.status === 'accepted' || dependency.status === 'skipped';
+    });
+  });
+}
+
+/** The tasks to start now: the ready ones that fit under the parallel limit, sent-back work first. */
+export function pickTasks(run: CrewRun): CrewTask[] {
+  const running = run.tasks.filter((task) => task.status === 'building').length;
+  const room = Math.max(0, run.config.limits.maxParallelTasks - running);
+  const ready = readyTasks(run);
+  return [...ready.filter((task) => task.status === 'sentBack'), ...ready.filter((task) => task.status === 'backlog')].slice(0, room);
+}
+
+/**
+ * How many helpers a role may start for one task: its own limit, held to what is left of the team-wide cap after the
+ * helpers already running.
+ */
+export function subAgentsFor(config: CrewConfig, roleId: string, activeSubAgents: number): number {
+  const role = roleOf(config, roleId);
+  if (!role) return 0;
+  const teamCap = Math.min(config.limits.maxSubAgents, MAX_SUB_AGENTS_TOTAL);
+  return Math.max(0, Math.min(role.subAgents.max, teamCap - activeSubAgents));
+}
+
+/** Why the project is not done yet, or null when it is: every task on the board has to be accepted or skipped. */
+export function unfinishedReason(run: Pick<CrewRun, 'tasks'>): string | null {
+  const proposed = run.tasks.filter((task) => task.proposed).length;
+  if (proposed > 0) return `${proposed} suggested ${proposed === 1 ? 'task is' : 'tasks are'} waiting to be accepted.`;
+  const open = run.tasks.filter((task) => onBoard(task) && task.status !== 'accepted' && task.status !== 'skipped');
+  if (open.length === 0) return run.tasks.length === 0 ? 'The board has no tasks yet.' : null;
+  return `${open.length} of ${run.tasks.filter(onBoard).length} tasks are not accepted yet.`;
+}
+
+export function isFinished(run: Pick<CrewRun, 'tasks'>): boolean {
+  return unfinishedReason(run) === null;
+}
+
+/** Adds the tasks the Lead or Planner wrote. A task with no acceptance criteria is refused, with the reason. */
+export type CrewTaskDraft = Pick<CrewTask, 'id' | 'title' | 'role' | 'acceptance'> & Partial<CrewTask>;
+
+export function addTasks(run: CrewRun, drafts: readonly CrewTaskDraft[], at: string, by: 'lead' | 'user' = 'lead'): { run: CrewRun; refused: string[] } {
+  const refused: string[] = [];
+  let next = run;
+  for (const draft of drafts) {
+    if (!roleOf(run.config, draft.role)) { refused.push(`${draft.title}: there is no role ${draft.role}.`); continue; }
+    if (draft.acceptance.length === 0) { refused.push(`${draft.title}: it needs at least one acceptance criterion.`); continue; }
+    if (next.tasks.some((task) => task.id === draft.id)) { refused.push(`${draft.title}: a task with id ${draft.id} already exists.`); continue; }
+    const task: CrewTask = {
+      description: '', dependsOn: [], status: 'backlog', round: 0, reviews: [], designRef: null, proposed: false,
+      assignedTo: null, files: [], costUsd: 0, note: '', ...draft, createdBy: by, updatedAt: at,
+    };
+    next = { ...next, tasks: [...next.tasks, task], updatedAt: at };
+  }
+  return { run: next, refused };
+}
+
+/** A worker's suggestion for work the plan missed. It waits off the board until someone accepts it. */
+export function proposeTask(run: CrewRun, from: string, draft: CrewTaskDraft, at: string): CrewRun {
+  const result = addTasks(run, [{ ...draft, proposed: true }], at, 'lead');
+  if (result.refused.length > 0) throw new Error(result.refused[0]);
+  const marked = patchTask(result.run, draft.id, (task) => ({ ...task, createdBy: 'worker' }), at);
+  return feed(marked, { who: from, kind: 'proposal', text: `Suggested a new task: "${draft.title}".`, taskId: draft.id }, at);
+}
+
+export function acceptProposal(run: CrewRun, taskId: string, accepted: boolean, by: string, at: string): CrewRun {
+  const task = taskOf(run, taskId);
+  if (!task.proposed) return run;
+  if (!accepted) return feed({ ...run, tasks: run.tasks.filter((item) => item.id !== taskId), updatedAt: at }, { who: by, kind: 'info', text: `Declined the suggestion "${task.title}".`, taskId }, at);
+  return feed(patchTask(run, taskId, (item) => ({ ...item, proposed: false }), at), { who: by, kind: 'info', text: `Added "${task.title}" to the board.`, taskId }, at);
+}
+
+/** A builder takes a task. Only a ready task can be taken, and only by a role that exists. */
+export function startTask(run: CrewRun, taskId: string, roleId: string, at: string): CrewRun {
+  const task = taskOf(run, taskId);
+  if (!readyTasks(run).some((item) => item.id === taskId)) throw new Error(`"${task.title}" is not ready to start.`);
+  if (!roleOf(run.config, roleId)) throw new Error(`There is no role ${roleId}.`);
+  const moved = patchTask(run, taskId, (item) => ({ ...item, status: 'building', round: item.round + 1, assignedTo: roleId }), at);
+  return feed(moved, { who: roleId, kind: 'info', text: task.round === 0 ? `Started "${task.title}".` : `Started "${task.title}" again (round ${task.round + 1}).`, taskId }, at);
+}
+
+/** The builder hands the task in for review, with the files it changed and what it cost. */
+export function submitTask(run: CrewRun, taskId: string, result: { files: readonly string[]; costUsd?: number }, at: string): CrewRun {
+  const task = taskOf(run, taskId);
+  if (task.status !== 'building') throw new Error(`"${task.title}" is not being built.`);
+  const moved = patchTask(run, taskId, (item) => ({
+    ...item, status: 'review', files: [...new Set(result.files)].slice(0, 200), costUsd: item.costUsd + (result.costUsd ?? 0),
+  }), at);
+  return { ...moved, spentUsd: moved.spentUsd + (result.costUsd ?? 0) };
+}
+
+/** Two pieces of feedback say the same thing when they match once case, punctuation and spacing are ignored. */
+export function sameFeedback(a: string, b: string): boolean {
+  const flat = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return flat(a).length > 0 && flat(a) === flat(b);
+}
+
+export interface ReviewInput {
+  verdict: CrewReview['verdict'];
+  feedback: string;
+  reviewer: string;
+}
+
+/**
+ * Records the Lead's verdict. An accept needs every criterion checked, so a task without criteria can never be
+ * accepted. A send-back goes to the worker that built the task; once the task has been sent back as often as the
+ * limit allows, or for the same reason twice, the run stops and asks the user instead of looping.
+ */
+export function reviewTask(run: CrewRun, taskId: string, input: ReviewInput, at: string): CrewRun {
+  const task = taskOf(run, taskId);
+  if (task.status !== 'review') throw new Error(`"${task.title}" is not waiting for review.`);
+  if (input.verdict === 'accept' && task.acceptance.length === 0) throw new Error(`"${task.title}" has no acceptance criteria, so there is nothing to accept it against.`);
+  const review: CrewReview = { round: task.round, verdict: input.verdict, feedback: input.feedback.trim(), reviewer: input.reviewer, at };
+
+  if (input.verdict === 'accept') {
+    const accepted = patchTask(run, taskId, (item) => ({ ...item, status: 'accepted', reviews: [...item.reviews, review] }), at);
+    return feed(accepted, { who: input.reviewer, kind: 'accepted', text: `Accepted "${task.title}".`, taskId }, at);
+  }
+
+  const previousFeedback = [...task.reviews].reverse().find((item) => item.verdict === 'sendBack')?.feedback ?? '';
+  const sendBacks = task.reviews.filter((item) => item.verdict === 'sendBack').length + (input.verdict === 'sendBack' ? 1 : 0);
+  const repeated = run.config.savings.stopOnRepeatedFailure && input.verdict === 'sendBack' && sameFeedback(previousFeedback, input.feedback);
+  const exhausted = sendBacks > run.config.limits.maxSendBacks;
+  const escalate = input.verdict === 'needsYou' || repeated || exhausted;
+
+  const withReview = patchTask(run, taskId, (item) => ({ ...item, status: escalate ? 'needsYou' : 'sentBack', reviews: [...item.reviews, review] }), at);
+  if (!escalate) return feed(withReview, { who: input.reviewer, kind: 'sentBack', text: `Sent "${task.title}" back: ${shorten(input.feedback)}`, taskId }, at);
+
+  const ask: CrewAsk = {
+    reason: repeated ? 'sameFailure' : exhausted ? 'sendBacks' : roleOf(run.config, input.reviewer)?.kind === 'security' ? 'securityBlock' : 'noProgress',
+    message: repeated
+      ? `"${task.title}" came back for the same problem twice: ${shorten(input.feedback)}`
+      : exhausted
+        ? `"${task.title}" has been sent back ${sendBacks - 1} times. ${shorten(input.feedback)}`
+        : `${input.reviewer} needs you on "${task.title}": ${shorten(input.feedback)}`,
+    taskId,
+  };
+  return feed({ ...withReview, status: 'needsYou', ask }, { who: input.reviewer, kind: 'needsYou', text: ask.message, taskId }, at);
+}
+
+function shorten(text: string, length = 160): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > length ? `${flat.slice(0, length - 1)}…` : flat;
+}
+
+/**
+ * What the user chose when the run asked. "continue" gives a stuck task one more round (or lets the run go on past a
+ * limit); "skip" drops the task from the finish line; "finish" ends the run with what is accepted.
+ */
+export function answerAsk(run: CrewRun, answer: 'continue' | 'skip' | 'finish', guidance: string, at: string): CrewRun {
+  const ask = run.ask;
+  if (!ask) return run;
+  let next: CrewRun = { ...run, ask: null, updatedAt: at };
+  const taskId = ask.taskId;
+  if (answer === 'finish') {
+    return feed({ ...next, status: 'stopped', completedAt: at }, { who: 'you', kind: 'info', text: 'Finished the run with the work accepted so far.' }, at);
+  }
+  if (taskId && answer === 'skip') {
+    next = patchTask(next, taskId, (task) => ({ ...task, status: 'skipped', note: 'Skipped by you.' }), at);
+    next = feed(next, { who: 'you', kind: 'info', text: 'Skipped the task.', taskId }, at);
+  } else if (taskId) {
+    next = patchTask(next, taskId, (task) => ({
+      ...task, status: 'sentBack',
+      // Guidance becomes the next piece of feedback, and the send-back count starts again from here.
+      reviews: [...task.reviews.filter((item) => item.verdict !== 'sendBack'), ...(guidance.trim() ? [{ round: task.round, verdict: 'sendBack' as const, feedback: guidance.trim(), reviewer: 'you', at }] : [])],
+    }), at);
+    next = feed(next, { who: 'you', kind: 'info', text: guidance.trim() ? `Gave guidance: ${shorten(guidance)}` : 'Asked for another round.', taskId }, at);
+  } else {
+    // Continuing past a limit moves the limit out by the same amount again, so the next question comes later, not now.
+    const limits = { ...next.config.limits };
+    if (ask.reason === 'spend' && limits.maxUsd > 0) limits.maxUsd = Math.max(limits.maxUsd * 2, next.spentUsd + limits.maxUsd);
+    if (ask.reason === 'time' && limits.maxMinutes > 0) limits.maxMinutes *= 2;
+    next = feed({ ...next, config: { ...next.config, limits } }, { who: 'you', kind: 'info', text: 'Continued past the limit.' }, at);
+  }
+  return { ...next, status: 'running' };
+}
+
+/** A limit that has been reached, as a question for the user, or null while the run is inside all of them. */
+export function limitReached(run: CrewRun, now: Date): CrewAsk | null {
+  const { maxUsd, maxMinutes } = run.config.limits;
+  if (maxUsd > 0 && run.spentUsd >= maxUsd) {
+    return { reason: 'spend', message: `The run has spent $${run.spentUsd.toFixed(2)} of the $${maxUsd.toFixed(2)} you allowed.` };
+  }
+  if (maxMinutes > 0 && (now.getTime() - new Date(run.startedAt).getTime()) / 60_000 >= maxMinutes) {
+    return { reason: 'time', message: `The run has used the ${maxMinutes} minutes you allowed.` };
+  }
+  return null;
+}
+
+/** Stops the run on a limit and asks, or finishes quietly when the user chose that. Nothing is cut off mid-task. */
+export function enforceLimits(run: CrewRun, now: Date): CrewRun {
+  if (run.status !== 'running' || run.ask) return run;
+  const ask = limitReached(run, now);
+  if (!ask) return run;
+  const at = now.toISOString();
+  if (run.config.limits.onLimit === 'finish') {
+    return feed({ ...run, status: 'stopped', completedAt: at }, { who: 'crew', kind: 'limit', text: `${ask.message} Finished with the accepted work.` }, at);
+  }
+  return feed({ ...run, status: 'needsYou', ask }, { who: 'crew', kind: 'limit', text: ask.message }, at);
+}
+
+/**
+ * Decides where the run stands after a change: finished when the board says so (and the check, if there is one,
+ * has passed), waiting on the user while a question is open, otherwise running.
+ */
+export function settle(run: CrewRun, at: string, check?: { passed: boolean }): CrewRun {
+  if (run.status === 'stopped' || run.status === 'completed') return run;
+  if (run.ask || run.tasks.some((task) => task.status === 'needsYou')) return { ...run, status: 'needsYou', updatedAt: at };
+  if (isFinished(run)) {
+    if (run.config.checkCommand && !check?.passed) return { ...run, status: 'running', updatedAt: at };
+    return feed({ ...run, status: 'completed', completedAt: at }, { who: 'crew', kind: 'done', text: 'Every task is accepted. The project is done.' }, at);
+  }
+  return { ...run, status: run.status === 'planning' || run.status === 'awaitingApproval' ? run.status : 'running', updatedAt: at };
+}
+
+/** A line per task state for the brief every agent receives, so none of them needs the chat history. */
+export function boardSummary(run: Pick<CrewRun, 'tasks'>): string {
+  const count = (status: CrewTask['status']): number => run.tasks.filter((task) => onBoard(task) && task.status === status).length;
+  const open = run.tasks.filter((task) => onBoard(task) && task.status !== 'accepted' && task.status !== 'skipped');
+  return [
+    `Board: ${count('accepted')} accepted, ${count('review')} in review, ${count('building')} being built, ${count('sentBack')} sent back, ${count('backlog')} waiting, ${count('needsYou')} waiting on the user.`,
+    ...open.slice(0, 12).map((task) => `- ${task.title} [${task.status}]`),
+    ...(open.length > 12 ? [`- and ${open.length - 12} more`] : []),
+  ].join('\n');
+}
+
+/**
+ * The brief a worker gets: its task, the criteria, the Lead's latest feedback and the state of the board. It is the
+ * same whether or not a model wrote any of it, which is why it costs a few hundred tokens instead of a history.
+ */
+export function taskBrief(run: CrewRun, taskId: string, conventions = ''): string {
+  const task = taskOf(run, taskId);
+  const role = roleOf(run.config, task.role);
+  const feedback = [...task.reviews].reverse().find((item) => item.verdict === 'sendBack');
+  const writes = role && roleAccess(role) === 'edit';
+  return [
+    `Project goal: ${run.goal}`,
+    '',
+    `Your task: ${task.title}`,
+    task.description,
+    '',
+    'Acceptance criteria (the Lead will check each one):',
+    ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),
+    ...(feedback ? ['', `The Lead sent this back (round ${feedback.round}). Fix exactly this:`, feedback.feedback] : []),
+    ...(task.designRef ? ['', `This task builds the design page ${task.designRef}. Match it.`] : []),
+    ...(conventions.trim() ? ['', 'How this developer usually builds things:', conventions.trim()] : []),
+    '',
+    boardSummary(run),
+    '',
+    writes ? 'You may change files. Keep the change to this task, run the relevant checks, and report the files you changed.' : 'Do not change any files. Report what you found.',
+  ].join('\n');
+}
+
+/** The composer's helper choices, as total agents. A role's sub-agents are helpers on top of the one that runs. */
+const HELPER_TOTALS = [2, 3, 4, 5, 6, 8] as const;
+
+/** The composer setting for a run that may use this many sub-agents: off for none, else the next size up that fits. */
+export function helperChoiceFor(subAgents: number): 'off' | '2' | '3' | '4' | '5' | '6' | '8' {
+  if (subAgents <= 0) return 'off';
+  const total = subAgents + 1;
+  const fit = HELPER_TOTALS.find((size) => size >= total) ?? 8;
+  return String(fit) as '2' | '3' | '4' | '5' | '6' | '8';
+}
+
+/** Adds what a review cost to the task and the run, so the spend limit sees reviewers as well as builders. */
+export function addSpend(run: CrewRun, taskId: string, costUsd: number, at: string): CrewRun {
+  if (!(costUsd > 0)) return run;
+  const moved = patchTask(run, taskId, (task) => ({ ...task, costUsd: task.costUsd + costUsd }), at);
+  return { ...moved, spentUsd: moved.spentUsd + costUsd };
+}
+
+/**
+ * A build that failed outright (the agent errored, not the review). The task goes back to waiting so the next pass
+ * tries it again, but a task that keeps failing is the user's to decide, so it stops at the send-back limit.
+ */
+export function failBuild(run: CrewRun, taskId: string, error: string, at: string): CrewRun {
+  const task = taskOf(run, taskId);
+  const failures = task.note.startsWith('Build failed') ? Number(task.note.match(/\((\d+)\)/)?.[1] ?? 1) + 1 : 1;
+  const stuck = failures > run.config.limits.maxSendBacks;
+  const note = `Build failed (${failures}): ${shorten(error, 200)}`;
+  if (!stuck) {
+    return feed(patchTask(run, taskId, (item) => ({ ...item, status: 'backlog', note }), at), { who: task.assignedTo ?? 'builder', kind: 'info', text: `"${task.title}" failed to build and will be tried again: ${shorten(error)}`, taskId }, at);
+  }
+  const ask: CrewAsk = { reason: 'noProgress', message: `"${task.title}" failed to build ${failures} times: ${shorten(error)}`, taskId };
+  return feed({ ...patchTask(run, taskId, (item) => ({ ...item, status: 'needsYou', note }), at), status: 'needsYou', ask }, { who: 'crew', kind: 'needsYou', text: ask.message, taskId }, at);
+}
+
+/** The project's own check failed after every task was accepted: one more task, for a builder, to make it pass. */
+export function addCheckFix(run: CrewRun, output: string, at: string): CrewRun {
+  const builder = run.config.roles.find((role) => role.kind === 'builder') ?? run.config.roles.find((role) => roleAccess(role) === 'edit');
+  if (!builder) return feed({ ...run, status: 'needsYou', ask: { reason: 'noProgress', message: 'The project check failed and no role can edit files to fix it.' } }, { who: 'crew', kind: 'needsYou', text: 'The project check failed and no role can edit files to fix it.' }, at);
+  const attempts = run.tasks.filter((task) => task.id.startsWith('check-fix-')).length + 1;
+  if (attempts > run.config.limits.maxSendBacks) {
+    const message = `The project check "${run.config.checkCommand}" still fails after ${attempts - 1} fix attempts.`;
+    return feed({ ...run, status: 'needsYou', ask: { reason: 'sendBacks', message } }, { who: 'crew', kind: 'needsYou', text: message }, at);
+  }
+  const { run: next } = addTasks(run, [{
+    id: `check-fix-${attempts}`, title: `Make the project check pass (attempt ${attempts})`, role: builder.id,
+    description: `The command "${run.config.checkCommand}" failed. Its output:
+${output.slice(-3_000)}`,
+    acceptance: [`"${run.config.checkCommand}" exits with code 0.`],
+  }], at, 'lead');
+  return feed(next, { who: 'crew', kind: 'info', text: `The project check failed, so a fix task was added (attempt ${attempts}).` }, at);
+}
+
+/**
+ * Reads the Lead's verdict out of its reply. The Lead is asked for one JSON object; anything else (prose, a fence,
+ * a missing field) reads as "no verdict" and the caller asks again, because guessing would accept unchecked work.
+ */
+export function parseReview(text: string): { verdict: CrewReview['verdict']; feedback: string } | null {
+  const candidates = [...text.matchAll(/\{[^{}]*"verdict"[^{}]*\}/g)].map((match) => match[0]);
+  for (const candidate of candidates.reverse()) {
+    try {
+      const value = JSON.parse(candidate) as { verdict?: unknown; feedback?: unknown };
+      const verdict = value.verdict === 'accept' || value.verdict === 'sendBack' || value.verdict === 'needsYou' ? value.verdict : null;
+      if (!verdict) continue;
+      const feedback = typeof value.feedback === 'string' ? value.feedback : '';
+      // Sending work back with no reason gives the builder nothing to fix, so that is not a usable verdict either.
+      if (verdict !== 'accept' && feedback.trim().length === 0) continue;
+      return { verdict, feedback };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}

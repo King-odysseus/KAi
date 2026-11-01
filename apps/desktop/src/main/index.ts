@@ -67,6 +67,10 @@ import { SecurityFindingsStore } from './security-findings-store';
 import { EditorSessionManager } from './editor-sessions';
 import { LearningBudgetGuard, LearningUsageStore } from './learning-usage';
 import { DesktopWorkflowRunner } from './workflow-runner';
+import { DesktopCrewRunner } from './crew-runner';
+import { CrewRunStore } from './crew-store';
+import { CrewSupport } from './crew-support';
+import { ConventionService } from './conventions-service';
 import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
 import { DesktopAutoSession } from './auto-session';
@@ -303,6 +307,8 @@ app.on('before-quit', (event) => {
     // Written out now rather than on its timer. Nothing depends on it: it is rebuilt from the conversations if lost.
     .then(() => activeContext?.usageLedger?.flush())
     .then(() => mirrorLoop?.stop())
+    // The conventions watcher stops with the app, after any scan or write in flight has finished.
+    .then(async () => { activeContext?.conventions?.stop(); await activeContext?.conventions?.idle(); })
     .then(() => { if (overwatchApprovalTimer) clearInterval(overwatchApprovalTimer); overwatchApprovalTimer = null; })
     .then(() => { if (routeHousekeepingTimer) clearInterval(routeHousekeepingTimer); routeHousekeepingTimer = null; })
     // Before the services are disposed, which is what stops the proxy: a CLI whose config still points at KAI's proxy
@@ -783,6 +789,9 @@ async function startApplication(): Promise<void> {
   // Filled in after registerIpc returns the handler registry the gateway dispatches through.
   let remote!: RemoteGateway;
   let workflowRunner!: DesktopWorkflowRunner;
+  let crewRunner!: DesktopCrewRunner;
+  let crewSupport!: CrewSupport;
+  let conventionService!: ConventionService;
   let teamPlanner!: DesktopTeamPlanner;
   let autopilot!: DesktopAutopilot;
   let auto!: DesktopAutoSession;
@@ -902,6 +911,9 @@ async function startApplication(): Promise<void> {
     learningUsage,
     learningBudget,
     workflows: workflowRunner,
+    crew: crewRunner,
+    crewSupport,
+    conventions: conventionService,
     teamPlanner,
     autopilot,
     auto,
@@ -977,6 +989,58 @@ async function startApplication(): Promise<void> {
     },
   });
   ipcContext.workflows = workflowRunner;
+  const crewStore = new CrewRunStore(path.join(paths.root, 'crew-runs.json'), fileSystem);
+  // How this developer builds: learned from their own projects, kept up to date, filed into C1, and handed to every
+  // agent run (the composer, Studio, Autopilot, workflows and the crew all start runs the same way).
+  conventionService = new ConventionService(path.join(paths.root, 'conventions.json'), fileSystem, {
+    projects: async () => (await ipcContext!.projects.list()).map((project) => ({ id: project.id, name: project.name, path: project.path })),
+    learn: (payload) => cognitive1.operation({ operation: 'brain-learn', payload }),
+    onChange: (state) => { for (const session of desktopWindows.live()) desktopWindows.send(session.id, 'conventions:changed', state); },
+  });
+  ipcContext.conventions = conventionService;
+  conventionService.start();
+  // Saved crew defaults, and a look at Open Pencil for the Design tab.
+  crewSupport = new CrewSupport(path.join(paths.root, 'crew-defaults.json'), fileSystem, {
+    designStatus: () => crewDesignStatus(),
+    designEnsure: () => ipcContext!.studio.openPencilEnsure(),
+  });
+  ipcContext.crewSupport = crewSupport;
+  // The design as the crew sees it: Studio's own look at open-pencil, in the crew's shape.
+  const crewDesignStatus = async (): Promise<import('@kai/contracts').CrewDesign> => {
+    const seen = await ipcContext!.studio.openPencilLook();
+    return seen.state === 'running' ? { state: 'running', pages: seen.pages } : { state: seen.state, pages: [] };
+  };
+  crewRunner = new DesktopCrewRunner({
+    design: {
+      status: crewDesignStatus,
+      ensureRunning: () => ipcContext!.studio.openPencilEnsure(),
+      draw: async (projectId, prompt, conversationId) => {
+        const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+        if (!project) throw new Error('The crew project is no longer available.');
+        return ipcContext!.studio.designAgentTurn(prompt, project.path, conversationId);
+      },
+    },
+    createConversation: createBlankConversation,
+    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
+    runCheck: async (projectId, command, signal) => {
+      const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error('The crew project is no longer available.');
+      const check = await runCheckCommand(project.path, command, signal);
+      await recordVerification(ipcContext!.verification, project.id, project.path, check).catch(() => undefined);
+      return { passed: check.exitCode === 0, output: check.output };
+    },
+    save: (run) => crewStore.save(run),
+    load: (id) => crewStore.get(id),
+    list: (projectId) => crewStore.list(projectId),
+    notifyChanged: (ownerWindowId, run) => { desktopWindows.send(ownerWindowId, 'crew:changed', run); },
+    changedFiles: async (projectId) => {
+      const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
+      return project ? (await gitOverview(project.path)).changes.map((change) => change.path) : [];
+    },
+    conventions: async () => conventionService.briefing(),
+  });
+  ipcContext.crew = crewRunner;
   teamPlanner = new DesktopTeamPlanner({
     teamRecords: () => teamRecord.list(),
     settings: () => settings.load(),
@@ -1129,9 +1193,11 @@ async function startApplication(): Promise<void> {
     onEvent?: (event: PersistedEvent) => void,
     contextChips?: import('@kai/contracts').ContextChip[],
   ): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> => {
+    // The design agent draws the way this developer wants things to look: their buttons, their cards, their rules.
+    const conventions = conventionService.briefing();
     const request: AgentRunRequest = {
       conversationId,
-      prompt,
+      prompt: conventions ? `${conventions}\n\n---\n\n${prompt}` : prompt,
       agent: 'codex',
       execution: 'api',
       route: 'direct',

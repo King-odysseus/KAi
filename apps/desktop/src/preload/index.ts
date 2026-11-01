@@ -223,6 +223,32 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('workflows:changed', handler);
     return () => ipcRenderer.removeListener('workflows:changed', handler);
   },
+  listCrewRuns: (projectId) => ipcRenderer.invoke('crew:list', projectId ? { projectId } : {}),
+  startCrew: (request) => ipcRenderer.invoke('crew:start', request),
+  approveCrew: (runId) => ipcRenderer.invoke('crew:approve', { runId }),
+  answerCrew: (runId, answer, guidance = '') => ipcRenderer.invoke('crew:answer', { runId, answer, guidance }),
+  pauseCrew: (runId) => ipcRenderer.invoke('crew:pause', { runId }),
+  resumeCrew: (runId) => ipcRenderer.invoke('crew:resume', { runId }),
+  stopCrew: (runId) => ipcRenderer.invoke('crew:stop', { runId }),
+  crewDefaults: (projectId) => ipcRenderer.invoke('crew:defaults', projectId ? { projectId } : {}),
+  saveCrewDefaults: (config, projectId) => ipcRenderer.invoke('crew:save-defaults', { config, ...(projectId ? { projectId } : {}) }),
+  conventionsState: (refresh = false) => ipcRenderer.invoke('conventions:get', { refresh }),
+  setConventionReference: (path, reference) => ipcRenderer.invoke('conventions:reference', { path, reference }),
+  addConventionRule: (text) => ipcRenderer.invoke('conventions:rule-add', { text }),
+  removeConventionRule: (id) => ipcRenderer.invoke('conventions:rule-remove', { id }),
+  muteConvention: (key, muted) => ipcRenderer.invoke('conventions:mute', { key, muted }),
+  markConventionsSeen: () => ipcRenderer.invoke('conventions:seen', {}),
+  onConventionsChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: import('@kai/contracts').ConventionsState): void => listener(state);
+    ipcRenderer.on('conventions:changed', handler);
+    return () => ipcRenderer.removeListener('conventions:changed', handler);
+  },
+  crewDesign: (launch = false) => ipcRenderer.invoke('crew:design', { launch }),
+  onCrewChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, run: import('@kai/contracts').CrewRun): void => listener(run);
+    ipcRenderer.on('crew:changed', handler);
+    return () => ipcRenderer.removeListener('crew:changed', handler);
+  },
   saveWorkflowTemplate: (request) => ipcRenderer.invoke('workflows:save-template', request),
   deleteWorkflowTemplate: (id) => ipcRenderer.invoke('workflows:delete-template', { id }),
   proxyOverview: () => ipcRenderer.invoke('proxy:overview', {}),

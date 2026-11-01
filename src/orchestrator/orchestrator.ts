@@ -92,6 +92,13 @@ export class WorkbenchOrchestrator extends EventEmitter {
     this.state = { ...initialState };
   }
 
+  /** Where the short "how this developer builds" list comes from. Every agent run is given it, so it is set once. */
+  setConventionsProvider(provider: () => string): void {
+    this.conventionsProvider = provider;
+  }
+
+  private conventionsProvider: () => string = () => '';
+
   registerAdapter(adapter: AgentAdapter): void {
     this.adapters.set(adapter.id, adapter);
   }
@@ -812,7 +819,7 @@ export class WorkbenchOrchestrator extends EventEmitter {
     // never sent, so the "Used N memories" chip showed even though the
     // agent never saw a word of it.
     const briefing = buildMemoryBriefing(rs);
-    const finalPrompt = [conversationBriefing, briefing, prompt].filter(Boolean).join('\n\n');
+    const finalPrompt = [conversationBriefing, this.conventionsProvider(), briefing, prompt].filter(Boolean).join('\n\n');
 
     await this.runAgentStream(agent, route, autonomy, finalPrompt);
     return taskId;

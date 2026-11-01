@@ -11,6 +11,9 @@ import type { Cognitive1Client } from './cognitive1/cognitive1-client';
 import { Cognitive1HttpClient, DisabledCognitive1Client } from './cognitive1/cognitive1-client';
 import { EmbeddedCognitive1 } from './cognitive1/embedded-cognitive1';
 import { CognitiveRuleStore } from './cognitive1/rule-store';
+import { manageConventions } from './cognitive1/conventions-command';
+import { ConventionService } from './cognitive1/conventions-service';
+import { projectFoldersIn } from './cognitive1/conventions';
 import { BackupManager } from './config/backup-manager';
 import { CodexConfigWriter, defaultCodexConfigPath } from './config/codex-config';
 import { ClaudeConfigWriter } from './config/claude-config';
@@ -151,6 +154,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     new CognitiveRuleStore(executionRulesPath),
   );
   orchestrator.setCustomPermissions(customPermissions);
+  // How this developer builds: learned from their projects, kept up to date, filed into this extension's own C1, and
+  // handed to every agent run. It shares nothing with KAI Desktop.
+  const conventions = new ConventionService(path.join(context.globalStorageUri.fsPath, 'conventions.json'), {
+    projectFolders: async () => {
+      const root = vscode.workspace.getConfiguration('kai').get<string>('conventionsRoot', '').trim();
+      return root ? projectFoldersIn(root) : [];
+    },
+    learn: async (note) => {
+      if (!(cognitive1 instanceof EmbeddedCognitive1)) throw new Error('Saving conventions needs the built-in memory.');
+      return cognitive1.learn(note);
+    },
+    onChange: (state) => {
+      const fresh = state.items.filter((item) => item.isNew && !item.muted && !announcedConventions.has(item.key));
+      if (fresh.length === 0) return;
+      for (const item of fresh) announcedConventions.add(item.key);
+      void vscode.window.showInformationMessage(`KAI found ${fresh.length} new ${fresh.length === 1 ? 'way' : 'ways'} you build. It will follow ${fresh.length === 1 ? 'it' : 'them'} from now on.`, 'Review').then((choice) => {
+        if (choice) void manageConventions(conventions);
+      });
+    },
+  });
+  const announcedConventions = new Set<string>();
+  orchestrator.setConventionsProvider(() => conventions.briefing());
+  conventions.start();
+  context.subscriptions.push({ dispose: () => { conventions.stop(); void conventions.idle(); } });
   orchestrator.setAlwaysAllowRules(prefs.getAlwaysAllowRules());
   orchestrator.on('approvalRuleChanged', (rules: string[]) => { void prefs.setAlwaysAllowRules(rules); });
 
@@ -430,6 +457,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('kai.openGoal', async () => {
       await workbenchProvider.openGoalEditor();
+    }),
+
+    vscode.commands.registerCommand('kai.conventions', async () => {
+      await manageConventions(conventions);
     }),
 
     vscode.commands.registerCommand('kai.openSkills', async () => {

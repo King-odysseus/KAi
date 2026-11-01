@@ -81,6 +81,17 @@ export const TOUR_LESSONS: TourLesson[] = [
     ],
   },
   {
+    view: 'crew',
+    title: 'Crew',
+    summary: 'A team that plans, builds and checks a whole project',
+    steps: [
+      RAIL,
+      { title: 'Give it a goal', body: 'Describe what to build. A Lead writes the tasks, each with acceptance criteria, and shows you the plan before anything is built if you ask it to.' },
+      { title: 'Choose who does what', body: 'On the Crew tab every role has its own agent, subscription or API, model and number of sub-agents. The Lead and reviewers only read; builders can change files.' },
+      { title: 'Checked, then accepted', body: 'Each result is checked against its criteria. Problems go back to the builder that wrote them. The crew stops and asks you when it is stuck or a limit is reached.' },
+    ],
+  },
+  {
     view: 'history',
     title: 'History',
     summary: 'Find, rename, fork and reopen conversations',

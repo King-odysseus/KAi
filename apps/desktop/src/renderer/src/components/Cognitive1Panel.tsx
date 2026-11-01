@@ -62,12 +62,14 @@ import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
-type Cognitive1Tab = 'overview' | 'review' | 'memory' | 'work' | 'toolbox';
+import { ConventionsPanel } from './ConventionsPanel';
+type Cognitive1Tab = 'overview' | 'review' | 'memory' | 'conventions' | 'work' | 'toolbox';
 
 const tabs: Array<{ id: Cognitive1Tab; label: string; help: string }> = [
   { id: 'overview', label: 'Overview', help: 'See whether C1 is working, what Overwatch has learned, and run its intelligence cycle.' },
   { id: 'review', label: 'Approvals', help: 'Only the decisions that need you: approve useful lessons, reject noise, or correct Overwatch.' },
   { id: 'memory', label: 'Knowledge', help: 'See and search everything your agents have learned about your projects and working style.' },
+  { id: 'conventions', label: 'How you build', help: 'What C1 has learned about how you build and want things to look. Every agent run follows the ones switched on.' },
   { id: 'work', label: 'Agent work', help: 'Tasks, handoffs, reviews, regressions, and project Git status.' },
   { id: 'toolbox', label: 'Toolbox', help: 'Recovery, reusable skills, service diagnostics, and advanced controls.' },
 ];
@@ -77,6 +79,8 @@ const tabLoads: Record<Cognitive1Tab, Cognitive1Operation[]> = {
   overview: ['brain-drafts', 'urgent-list', 'overwatch-status', 'overwatch-insights', 'metrics'],
   review: ['brain-drafts', 'urgent-list', 'overwatch-status', 'overwatch-insights'],
   memory: [],
+  // Conventions are KAI's own list, read from its own service, so this tab loads nothing from C1.
+  conventions: [],
   work: ['status', 'handoffs', 'tasks', 'reviews', 'regressions', 'git-status', 'integration-status'],
   toolbox: ['recover', 'recap-check', 'status', 'skills'],
 };
@@ -103,6 +107,13 @@ export function Cognitive1Panel({
   onSaveSettings: (update: SettingsUpdate) => Promise<boolean>;
 }): ReactNode {
   const [tab, setTab] = useState<Cognitive1Tab>('overview');
+  // How many conventions KAI found since the person last looked, shown on the tab so a new habit is not missed.
+  const [newConventions, setNewConventions] = useState(0);
+  useEffect(() => {
+    const count = (state: import('@kai/contracts').ConventionsState): number => state.items.filter((item) => item.isNew && !item.muted).length;
+    void window.kaiDesktop.conventionsState(false).then(unwrap).then((state) => setNewConventions(count(state))).catch(() => undefined);
+    return window.kaiDesktop.onConventionsChanged((state) => setNewConventions(count(state)));
+  }, []);
   const [data, setData] = useState<Partial<Record<Cognitive1Operation, unknown>>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -243,6 +254,7 @@ export function Cognitive1Panel({
           >
             {item.label}
             {item.id === 'review' && headline.needsHuman > 0 && <Pill tone="warning">{headline.needsHuman}</Pill>}
+            {item.id === 'conventions' && newConventions > 0 && tab !== 'conventions' && <Pill tone="info">{newConventions}</Pill>}
           </UiButton>
         ))}
       </nav>
@@ -256,6 +268,7 @@ export function Cognitive1Panel({
       {tab === 'overview' && <OverwatchPanel data={data} projects={projects} disabled={disabled || savingAuto} onRun={run} autoApprove={settings.cognitive1.overwatch.autoApprove} onAutoApprove={setAutoApprove} />}
       {tab === 'review' && <ReviewPanel data={data} projects={projects} disabled={disabled} onInvoke={invoke} onReload={reload} onNotice={setNotice} />}
       {tab === 'memory' && <MemoryPanel data={data} projects={projects} disabled={disabled} onRun={run} onNotice={setNotice} service={service} />}
+      {tab === 'conventions' && <ConventionsPanel />}
       {tab === 'work' && <WorkPanel data={data} projects={projects} disabled={disabled} onRun={run} />}
       {tab === 'toolbox' && <div className="cognitive1-toolbox"><RecoveryPanel data={data} projects={projects} disabled={disabled} onRun={run} /><SkillsPanel data={data} projects={projects} disabled={disabled} onRun={run} onInvoke={invoke} /><AdvancedPanel data={data} projects={projects} disabled={disabled} onRun={run} /></div>}
     </section>

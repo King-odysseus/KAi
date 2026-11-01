@@ -34,6 +34,7 @@ import {
   Wallet,
   X,
   Workflow,
+  UsersRound,
 } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { THEME_MODES, type AppSettings, type ConversationRecord, type ProjectRecord, type ThemeMode } from '@kai/contracts';
@@ -54,6 +55,7 @@ export const navigation: Array<{ id: ViewId; label: string; group: 'Work' | 'Lea
   { id: 'studio', label: 'Project Studio', group: 'Work', icon: DraftingCompass },
   { id: 'graph', label: 'Project Graph', group: 'Work', icon: Network },
   { id: 'workflows', label: 'Workflows', group: 'Work', icon: Workflow },
+  { id: 'crew', label: 'Crew', group: 'Work', icon: UsersRound },
   { id: 'history', label: 'History', group: 'Work', icon: History },
   { id: 'tasks', label: 'Tasks', group: 'Work', icon: Kanban },
   { id: 'code', label: 'Learn & Code', group: 'Learn', icon: Code2 },

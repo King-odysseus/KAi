@@ -7,6 +7,8 @@ export * from './blocked';
 export * from './brain-mirror';
 export * from './catalog';
 export * from './context';
+export * from './conventions';
+export * from './crew';
 export * from './composer-queue';
 export * from './build-progress';
 export * from './coordination';

@@ -602,6 +602,22 @@ export class DesktopStudio {
    * Whether open-pencil can be read, and whether it still holds the pages the last pull recorded. The Design tab shows
    * it and pulls on its own when the editor changes, so a design redrawn in open-pencil is noticed without a button.
    */
+  /** A look at open-pencil that never launches it and never switches its page: its state and the pages it holds. */
+  async openPencilLook(): Promise<NonNullable<Awaited<ReturnType<NonNullable<StudioPorts['openPencilStatus']>>>>> {
+    return (await this.ports.openPencilStatus?.()) ?? { state: 'not-configured' };
+  }
+
+  /** Opens open-pencil when it is not already open, and reconnects to it. */
+  async openPencilEnsure(): Promise<void> {
+    await this.ports.ensureOpenPencilRunning?.();
+  }
+
+  /** One design prompt as a real agent turn with open-pencil's tools, through the provider the user configured. */
+  async designAgentTurn(prompt: string, projectRoot: string, conversationId: string): Promise<{ status: 'completed' | 'failed'; output: string; error?: string; costUsd?: number }> {
+    if (!this.ports.runDesignAgent) return { status: 'failed', output: '', error: 'No design agent is set up. Choose a provider under Settings, Design tools.' };
+    return this.ports.runDesignAgent(prompt, projectRoot, conversationId);
+  }
+
   async designStatus(projectId: string): Promise<StudioDesignStatus> {
     const stored = await this.ports.board.design(projectId);
     const pulledAt = stored.components.length > 0 ? stored.pulledAt : null;

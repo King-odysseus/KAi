@@ -66,6 +66,7 @@ import {
   type LearningProgress,
   type WorkflowRun,
   type WorkflowStartInput,
+  createDefaultCrewConfig,
   parseIpcInput,
   parseTasks,
   parseTestCounts,
@@ -146,6 +147,9 @@ import { escalatedLevel, summarizeScores, type RunScoreStore } from './run-score
 import { makeAgentExperience, type AgentExperienceStore } from './experience-store';
 import type { DesktopScheduler, ScheduledRunOutcome } from './scheduler';
 import type { DesktopWorkflowRunner } from './workflow-runner';
+import type { DesktopCrewRunner } from './crew-runner';
+import type { CrewSupport } from './crew-support';
+import type { ConventionService } from './conventions-service';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopAutopilot } from './autopilot';
 import type { DesktopAutoSession } from './auto-session';
@@ -251,6 +255,9 @@ export interface IpcContext {
   learningUsage: LearningUsageStore;
   learningBudget: LearningBudgetGuard;
   workflows: DesktopWorkflowRunner;
+  crew: DesktopCrewRunner;
+  crewSupport: CrewSupport;
+  conventions: ConventionService;
   teamPlanner: DesktopTeamPlanner;
   autopilot: DesktopAutopilot;
   auto: DesktopAutoSession;
@@ -568,6 +575,22 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'workflows:resume', async ({ workflowId }, request) => context.workflows.resume(workflowId, request.ownerWindowId));
   handle(context, 'workflows:save-template', async (template) => context.workflowTemplates.save(template));
   handle(context, 'workflows:delete-template', async ({ id }) => context.workflowTemplates.delete(id));
+  handle(context, 'crew:list', async ({ projectId }) => context.crew.list(projectId));
+  handle(context, 'crew:start', async ({ projectId, goal, config }, request) => context.crew.start({ projectId, goal, config: config ?? createDefaultCrewConfig((await context.settings.load()).defaultAgent) }, request.ownerWindowId));
+  handle(context, 'crew:approve', async ({ runId }, request) => context.crew.approve(runId, request.ownerWindowId));
+  handle(context, 'crew:answer', async ({ runId, answer, guidance }, request) => context.crew.answer(runId, answer, guidance, request.ownerWindowId));
+  handle(context, 'crew:pause', async ({ runId }) => context.crew.pause(runId));
+  handle(context, 'crew:resume', async ({ runId }, request) => context.crew.resume(runId, request.ownerWindowId));
+  handle(context, 'crew:stop', async ({ runId }) => context.crew.stop(runId));
+  handle(context, 'crew:defaults', async ({ projectId }) => context.crewSupport.defaults(projectId));
+  handle(context, 'crew:save-defaults', async ({ projectId, config }) => context.crewSupport.saveDefaults(projectId, config));
+  handle(context, 'conventions:get', async ({ refresh }) => context.conventions.state(refresh));
+  handle(context, 'conventions:reference', async ({ path: projectPath, reference }) => context.conventions.setReference(projectPath, reference));
+  handle(context, 'conventions:rule-add', async ({ text }) => context.conventions.addRule(text));
+  handle(context, 'conventions:rule-remove', async ({ id }) => context.conventions.removeRule(id));
+  handle(context, 'conventions:mute', async ({ key, muted }) => context.conventions.setMuted(key, muted));
+  handle(context, 'conventions:seen', async () => context.conventions.markSeen());
+  handle(context, 'crew:design', async ({ launch }) => context.crewSupport.design(launch));
   handle(context, 'team:plan', async (input, request) => context.teamPlanner.plan(input, request.ownerWindowId));
   handle(context, 'team:plan-from-parts', async (input) => context.teamPlanner.planFromParts(input));
   handle(context, 'prompt-guide:readiness', async () => context.promptGuide.readiness());
@@ -2597,6 +2620,7 @@ async function buildConversationContext(
     memories: recall.memories,
     memoryNote: recall.note,
     authoritativeRules,
+    conventions: context.conventions.briefing(),
     omitStatic,
     includeRepoMap,
     ...(history ? { history } : {}),

@@ -26,6 +26,10 @@
         "title": "KAI: Open Settings"
       },
       {
+        "command": "kai.conventions",
+        "title": "KAI: How I build (conventions)"
+      },
+      {
         "command": "kai.openEngineRoom",
         "title": "KAI: Open Engine Room"
       },
@@ -218,6 +222,11 @@
             "Choose which actions need approval."
           ],
           "description": "Default autonomy mode for new KAI tasks. Legacy 'review'/'auto' values are migrated to 'ask'/'autoEdit' automatically."
+        },
+        "kai.conventionsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "The folder that holds all your projects. KAI reads each folder inside it to find how you usually build things and what you want things to look like, and tells every agent. Set by KAI: How I build (conventions)."
         },
         "kai.brainPath": {
           "type": "string",

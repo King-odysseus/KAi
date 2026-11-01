@@ -39,6 +39,8 @@ export interface BuildProjectContextOptions {
   /** What the recall did, shown beside the memories so an empty list is explained instead of silent. */
   memoryNote?: string | null;
   authoritativeRules?: string;
+  /** How this developer builds (their habits, the look they want, their own rules), as short lines. Every run gets it. */
+  conventions?: string;
   /**
    * Leave out the instruction files, rules and skills list. A resumed CLI session already holds them from its first
    * turn, so repeating them only spends tokens and crowds out the conversation.
@@ -70,7 +72,7 @@ export async function buildProjectContext(
     : await collectPathRules(root, options.touchedPaths ?? options.selectedPaths ?? []);
   const instructions = options.omitStatic
     ? []
-    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...(await collectInstructions(root)), ...pathRules];
+    : [...collectAuthoritativeInstructions(options.authoritativeRules), ...collectConventions(options.conventions), ...(await collectInstructions(root)), ...pathRules];
   const instructionPaths = new Set(instructions.map((entry) => entry.item.source));
   const files = await collectSelectedFiles(root, options.selectedPaths ?? [], instructionPaths);
   const skills = options.omitStatic ? [] : await collectSkills(root);
@@ -241,6 +243,11 @@ function collectMemories(memories: readonly BrainEntry[]): ContextEntry[] {
     );
   }
   return entries;
+}
+
+function collectConventions(text: string | undefined): ContextEntry[] {
+  const trimmed = text?.trim();
+  return trimmed ? [toEntry('instructions', 'How this developer builds', 'KAI conventions', trimmed, false)] : [];
 }
 
 function collectAuthoritativeInstructions(markdown: string | undefined): ContextEntry[] {

@@ -350,6 +350,8 @@ import {
   type TerminalSession,
 } from './terminal';
 import { planSchema, type Plan } from './plan';
+import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
+import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileMutationResultSchema, filePathInputSchema, fileReadInputSchema, fileRenameInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileMutationResult, type FilePathInput, type FileRenameInput, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
@@ -529,6 +531,22 @@ export const ipcChannels = [
   'workflows:resume',
   'workflows:save-template',
   'workflows:delete-template',
+  'crew:list',
+  'crew:start',
+  'crew:approve',
+  'crew:answer',
+  'crew:pause',
+  'crew:resume',
+  'crew:stop',
+  'crew:defaults',
+  'crew:save-defaults',
+  'conventions:get',
+  'conventions:reference',
+  'conventions:rule-add',
+  'conventions:rule-remove',
+  'conventions:mute',
+  'conventions:seen',
+  'crew:design',
   'team:plan',
   'team:plan-from-parts',
   'prompt-guide:readiness',
@@ -897,6 +915,22 @@ export const ipcInputSchemas = {
   'workflows:resume': workflowControlInputSchema,
   'workflows:save-template': workflowTemplateSaveInputSchema,
   'workflows:delete-template': z.object({ id: z.string().min(1) }).strict(),
+  'crew:list': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'crew:start': crewStartInputSchema,
+  'crew:approve': crewControlInputSchema,
+  'crew:answer': crewAnswerInputSchema,
+  'crew:pause': crewControlInputSchema,
+  'crew:resume': crewControlInputSchema,
+  'crew:stop': crewControlInputSchema,
+  'crew:defaults': z.object({ projectId: z.string().min(1).optional() }).strict(),
+  'crew:save-defaults': crewDefaultsInputSchema,
+  'conventions:get': conventionsGetInputSchema,
+  'conventions:reference': conventionsReferenceInputSchema,
+  'conventions:rule-add': conventionsRuleAddInputSchema,
+  'conventions:rule-remove': conventionsRuleRemoveInputSchema,
+  'conventions:mute': conventionsMuteInputSchema,
+  'conventions:seen': emptyInputSchema,
+  'crew:design': crewDesignInputSchema,
   'team:plan': teamPlanInputSchema,
   'team:plan-from-parts': teamPlanFromPartsInputSchema,
   'prompt-guide:readiness': emptyInputSchema,
@@ -1640,6 +1674,24 @@ export interface KaiDesktopBridge {
   stopWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   resumeWorkflow(workflowId: string): Promise<IpcResponse<WorkflowRun>>;
   onWorkflowChanged(listener: (run: WorkflowRun) => void): () => void;
+  listCrewRuns(projectId?: string): Promise<IpcResponse<CrewRun[]>>;
+  startCrew(request: CrewStartInput): Promise<IpcResponse<CrewRun>>;
+  approveCrew(runId: string): Promise<IpcResponse<CrewRun>>;
+  answerCrew(runId: string, answer: CrewAnswerInput['answer'], guidance?: string): Promise<IpcResponse<CrewRun>>;
+  pauseCrew(runId: string): Promise<IpcResponse<CrewRun>>;
+  resumeCrew(runId: string): Promise<IpcResponse<CrewRun>>;
+  stopCrew(runId: string): Promise<IpcResponse<CrewRun>>;
+  onCrewChanged(listener: (run: CrewRun) => void): () => void;
+  crewDefaults(projectId?: string): Promise<IpcResponse<CrewConfig | null>>;
+  saveCrewDefaults(config: CrewConfig | null, projectId?: string): Promise<IpcResponse<CrewConfig | null>>;
+  conventionsState(refresh?: boolean): Promise<IpcResponse<ConventionsState>>;
+  setConventionReference(path: string, reference: boolean): Promise<IpcResponse<ConventionsState>>;
+  addConventionRule(text: string): Promise<IpcResponse<ConventionsState>>;
+  removeConventionRule(id: string): Promise<IpcResponse<ConventionsState>>;
+  muteConvention(key: string, muted: boolean): Promise<IpcResponse<ConventionsState>>;
+  markConventionsSeen(): Promise<IpcResponse<ConventionsState>>;
+  onConventionsChanged(listener: (state: ConventionsState) => void): () => void;
+  crewDesign(launch?: boolean): Promise<IpcResponse<CrewDesign>>;
   saveWorkflowTemplate(request: WorkflowTemplateSaveInput): Promise<IpcResponse<WorkflowTemplate>>;
   deleteWorkflowTemplate(id: string): Promise<IpcResponse<{ deleted: boolean }>>;
   proxyOverview(): Promise<IpcResponse<ProxyOverview>>;
