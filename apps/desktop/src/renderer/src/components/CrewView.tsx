@@ -242,6 +242,7 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
           {tab === 'board' && (activeRun
             ? <Board run={activeRun} />
             : (
+              <>
               <section className="ops-panel crew-start">
                 <label className="workflow-field" htmlFor="crew-goal"><span>What should the crew build?</span></label>
                 <Textarea id="crew-goal" rows={4} value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="For example: build the Zuri log viewer with search, saved filters and sign-in." />
@@ -262,6 +263,8 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
                 </div>
                 <small className="crew-empty">Every agent on this crew is also told how you usually build and want things to look. See and change that under C1 Brain, How you build.</small>
               </section>
+              <EmptyBoard />
+              </>
             ))}
 
           {tab === 'crew' && (
@@ -304,6 +307,30 @@ function RunBar({ run, working, onPause, onResume, onStop, onApprove }: { run: C
         {live && <UiButton type="button" className="secondary-button" disabled={working} onClick={onPause}><Pause size={14} /><span>Pause</span></UiButton>}
         {run.status === 'paused' && <UiButton type="button" className="primary-button" disabled={working} onClick={onResume}><Play size={14} /><span>Resume</span></UiButton>}
         {run.status !== 'completed' && run.status !== 'stopped' && <UiButton type="button" className="danger-button" disabled={working} onClick={onStop}><Square size={14} /><span>Stop</span></UiButton>}
+      </div>
+    </section>
+  );
+}
+
+/** The board as it will look once the crew starts, so it is clear the work happens right here on this page. */
+function EmptyBoard(): ReactNode {
+  return (
+    <section className="crew-preview" aria-label="Where the crew will work">
+      <h3 className="crew-subheading"><Kanban size={13} /> Your board</h3>
+      <small className="crew-empty">Press Start crew and the Lead writes the tasks here. You will see each task move across as it is built, checked, sent back or accepted, with a live feed beside it.</small>
+      <div className="crew-board-wrap">
+        <div className="crew-board">
+          {COLUMNS.map((column) => (
+            <section key={column.id} className="kanban-column" aria-label={column.label}>
+              <h3>{column.label} <small>0</small></h3>
+              <small className="crew-empty">Nothing here yet</small>
+            </section>
+          ))}
+        </div>
+        <aside className="crew-feed" aria-label="Live feed">
+          <h3><Activity size={14} /><span>Live feed</span></h3>
+          <small className="crew-empty">What each role is doing shows here, in plain sentences.</small>
+        </aside>
       </div>
     </section>
   );

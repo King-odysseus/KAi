@@ -3000,8 +3000,11 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .crew-guidance { margin-top: 8px; width: 100%; }
 .needs-you .crew-answer-actions { margin-left: auto; align-self: flex-start; }
 
-.crew-start { display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
-.crew-start-row { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 12px; align-items: end; }
+.crew-start { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.crew-start textarea { width: 100%; }
+.crew-preview { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.crew-preview .crew-board, .crew-preview .crew-feed { opacity: 0.7; }
+.crew-start-row { display: grid; grid-template-columns: minmax(160px, 260px) minmax(0, 1fr); gap: 12px; align-items: end; }
 
 .crew-board-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; align-items: start; }
 .crew-board { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 10px; min-width: 0; overflow-x: auto; padding-bottom: 4px; }
