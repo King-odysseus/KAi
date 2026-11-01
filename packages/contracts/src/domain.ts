@@ -380,6 +380,8 @@ export const appSettingsV1Schema = z
     setupCompletedAt: z.string().datetime().nullable().default(null),
     // Model each CLI agent is asked to use. A missing entry means the CLI uses its own configured default.
     agentModels: z.record(agentIdSchema, cliModelNameSchema).default({}),
+    // CLIs that run on the API key kept in the vault instead of their own subscription sign-in. Off by default.
+    cliApiKeys: z.record(agentIdSchema, z.boolean()).default({}),
     // Pick a CLI model by how heavy each request is. A model chosen for a run or a team role still wins.
     autoModel: autoModelSettingsSchema.default(createDefaultAutoModel),
     // Who plans and who does each part when a job is handed to the agent team.

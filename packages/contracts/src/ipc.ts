@@ -819,6 +819,7 @@ export const ipcInputSchemas = {
       notifications: notificationSettingsSchema.partial().strict().optional(),
       updates: updateSettingsSchema.partial().strict().optional(),
       agentModels: z.record(agentIdSchema, cliModelNameSchema).optional(),
+      cliApiKeys: z.record(agentIdSchema, z.boolean()).optional(),
       autoModel: autoModelSettingsSchema.optional(),
       agentTeam: agentTeamSchema.optional(),
       shortcuts: z.record(z.string().min(1).max(100), z.string().min(1).max(80)).optional(),
@@ -1365,6 +1366,7 @@ export interface SettingsUpdate {
   notifications?: Partial<AppSettings['notifications']>;
   updates?: Partial<AppSettings['updates']>;
   agentModels?: AppSettings['agentModels'];
+  cliApiKeys?: AppSettings['cliApiKeys'];
   autoModel?: AppSettings['autoModel'];
   agentTeam?: AppSettings['agentTeam'];
   shortcuts?: AppSettings['shortcuts'];

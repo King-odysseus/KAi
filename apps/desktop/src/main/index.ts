@@ -5,10 +5,10 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { app, BrowserWindow, dialog, protocol, screen, session, shell } from 'electron';
 import { MOCKUP_CSP, MOCKUP_SCHEME, serveMockup } from './mockup-server';
-import { DIRECT_PROVIDER_ORDER, KAI_TERMINAL_CREDENTIAL_ID, KAI_WINDOW_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
+import { DIRECT_PROVIDER_ORDER, cliApiKeyCredentialId, KAI_TERMINAL_CREDENTIAL_ID, KAI_WINDOW_CREDENTIAL_ID, OPENPENCIL_CREDENTIAL_ID, OPENPENCIL_ENDPOINT, OPENPENCIL_MCP_SERVER_ID, PLAYWRIGHT_MCP_SERVER_ID, directProviderPreset, isLocalProvider, migrateDeepSeekModel, type AgentRunRequest, type ConversationRecord, type PersistedEvent, type PlaywrightViewportStatus, type RemoteWindowSummary } from '@kai/contracts';
 import { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import { Cognitive1Client } from './cognitive1-client';
-import { cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
+import { cliApiKeyEnvironment, cliProxyEnvironment, DesktopAgentRuntime } from './agent-runtime';
 import { installKaiProjectMcpForAgents, installKaiTerminalMcpForAgents, installKaiWindowMcpForAgents, withKaiWindowMcpSetting, installPlaywrightMcpForAgents, installPlaywrightSharedMcpForAgents, preparePlaywrightMcpSettings, syncCognitive1Mcp, withKaiTerminalMcpSetting, withOpenPencilMcpSetting } from './agent-mcp-config';
 import { PLAYWRIGHT_HOST_PORT, realPlaywrightHostPorts, startPlaywrightHost, type PlaywrightHost } from './playwright-host';
 import { installCrashRecord } from './crash-record';
@@ -568,6 +568,11 @@ async function startApplication(): Promise<void> {
   });
   proxyRoutingRef = proxyRouting;
   const agents = new DesktopAgentRuntime(undefined, undefined, {
+    resolveApiKeyEnvironment: async (agent, model) => {
+      if (!(await settings.load()).cliApiKeys[agent]) return null;
+      const key = await credentials.get(cliApiKeyCredentialId(agent)).catch(() => undefined);
+      return key ? cliApiKeyEnvironment(agent, key, process.env, model) : null;
+    },
     resolveProxyEnvironment: async (agent, request, model) => {
       const controller = serviceController;
       if (!controller) throw new Error('The managed service controller is unavailable.');

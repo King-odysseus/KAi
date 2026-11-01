@@ -8,9 +8,9 @@ import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { ThemeColors } from './ThemeColors';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
 import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
-import { confirmDialog } from './AppDialog';
+import { confirmDialog, promptDialog } from './AppDialog';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
 
@@ -25,7 +25,7 @@ type McpServerPatch = Partial<HttpMcpServer> | Partial<StdioMcpServer>;
 type ProviderScope = 'direct' | 'learning' | 'guide';
 /** The settings entry each provider card edits. */
 const SCOPE_KEY = { direct: 'directApi', learning: 'learningTutor', guide: 'promptGuide' } as const;
-type FeedbackScope = ProviderScope | 'generic' | 'overwatch' | 'search';
+type FeedbackScope = ProviderScope | 'generic' | 'overwatch' | 'search' | 'cli';
 type FeedbackKind = 'success' | 'error' | 'pending';
 interface SettingsFeedback { kind: FeedbackKind; message: string }
 type SettingsCategoryId = 'general' | 'connections' | 'design' | 'services' | 'data';
@@ -73,11 +73,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
   const [overwatchCredentialValue, setOverwatchCredentialValue] = useState('');
   const [guideCredentialValue, setGuideCredentialValue] = useState('');
   const [searchCredentialValue, setSearchCredentialValue] = useState('');
+  const [cliKeyValues, setCliKeyValues] = useState<Record<string, string>>({});
   const [searchTest, setSearchTest] = useState<{ kind: FeedbackKind; message: string; titles: string[] } | null>(null);
   const [providerModels, setProviderModels] = useState<Record<ProviderScope, ProviderModelCatalog | null>>({ direct: null, learning: null, guide: null });
   const [refreshingModels, setRefreshingModels] = useState<ProviderScope | null>(null);
   const [modelFeedback, setModelFeedback] = useState<Record<ProviderScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null });
-  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null, generic: null, overwatch: null, search: null });
+  const [credentialFeedback, setCredentialFeedback] = useState<Record<FeedbackScope, SettingsFeedback | null>>({ direct: null, learning: null, guide: null, generic: null, overwatch: null, search: null, cli: null });
   const [backups, setBackups] = useState<ConfigBackup[]>([]);
   const [backupName, setBackupName] = useState('');
   const [backupsLoading, setBackupsLoading] = useState(true);
@@ -158,6 +159,9 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
       else delete next[agent];
       return { ...current, agentModels: next };
     });
+  };
+  const setCliApiKey = (agent: AppSettings['defaultAgent'], use: boolean): void => {
+    setDraft((current) => ({ ...current, cliApiKeys: { ...current.cliApiKeys, [agent]: use } }));
   };
   const setTierModel = (agent: AppSettings['defaultAgent'], level: (typeof WORK_LEVELS)[number], value: string): void => {
     setDraft((current) => {
@@ -346,6 +350,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
     if (saved) {
       if (scope === 'generic') setCredentialValue('');
       if (scope === 'overwatch') setOverwatchCredentialValue('');
+      if (scope === 'cli') setCliKeyValues({});
     }
     setCredentialFeedback((current) => ({
       ...current,
@@ -593,9 +598,31 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <p className="settings-note">The model each CLI agent is asked to use when Auto model has none for the job. Leave a field empty to keep that CLI's own default (for example the model in ~/.codex/config.toml).</p>
             <div className="field-grid">
               {(['claude', 'codex', 'qwen', 'gemini', 'kimi'] as const).map((agent) => (
-                <label key={agent} className="field"><span>{agent} model</span><UiTextInput value={draft.agentModels[agent] ?? ''} placeholder="CLI default" list={`cli-models-${agent}`} onChange={(event) => setAgentModel(agent, event.target.value)} /><datalist id={`cli-models-${agent}`}>{CLI_MODEL_SUGGESTIONS[agent].map((name) => <option key={name} value={name} />)}</datalist></label>
+                <ModelField key={agent} label={`${agent} model`} value={draft.agentModels[agent] ?? ''} models={CLI_MODEL_SUGGESTIONS[agent]} emptyLabel="CLI default" onChange={(value) => setAgentModel(agent, value)} />
               ))}
             </div>
+          </div>
+          <div className="settings-subsection">
+            <div className="settings-subsection-title"><span>CLI API keys</span></div>
+            <p className="settings-note">For when the subscription ends. Save an API key and switch it on, and that CLI runs on the key and is billed per token instead of using its own sign-in. The key stays in the OS vault and is handed to that one run only; the CLI's own config and sign-in are never changed. Leave the switch off to keep using the subscription. Runs routed through the Universal Proxy keep the proxy's own credentials.</p>
+            {(['claude', 'codex', 'gemini', 'kimi'] as const).map((agent) => {
+              const id = cliApiKeyCredentialId(agent);
+              const stored = credentialStatus.ids.includes(id);
+              const label = { claude: 'Claude Code (Anthropic key)', codex: 'Codex (OpenAI key)', gemini: 'Gemini CLI (Google key)', kimi: 'Kimi Code (Kimi Code or Moonshot key)' }[agent];
+              return (
+                <div key={agent} className="settings-subsection">
+                  <NotificationToggle label={label} hint={stored ? 'A key is stored in the OS vault.' : 'No key stored yet. Save one to use this.'} checked={Boolean(draft.cliApiKeys[agent]) && stored} onChange={(use) => setCliApiKey(agent, use)} />
+                  <div className="field-grid">
+                    <TextField label={`${agent} API key`} value={cliKeyValues[agent] ?? ''} type="password" onChange={(value) => setCliKeyValues((current) => ({ ...current, [agent]: value }))} />
+                  </div>
+                  <div className="button-row align-start">
+                    <UiButton type="button" className="secondary-button" disabled={!(cliKeyValues[agent] ?? '').trim() || !credentialStatus.available || busy} onClick={() => void saveNamedCredential(id, cliKeyValues[agent] ?? '', 'cli')}><KeyRound size={15} /><span>Save key</span></UiButton>
+                    <UiButton type="button" className="secondary-button" disabled={busy || !stored} onClick={() => void clearNamedCredential(id, 'cli')}><Trash2 size={15} /><span>Remove key</span></UiButton>
+                  </div>
+                </div>
+              );
+            })}
+            <FeedbackMessage feedback={credentialFeedback.cli} />
           </div>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>Auto model</span></div>
@@ -605,7 +632,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <fieldset key={agent} className="auto-model-row">
                   <legend>{agent}</legend>
                   {WORK_LEVELS.map((level) => (
-                    <label key={level} className="field"><span>{WORK_LEVEL_LABEL[level]}</span><UiTextInput aria-label={`${agent} ${level} model`} value={draft.autoModel.tiers[agent]?.[level] ?? ''} placeholder="Unchanged" list={`cli-models-${agent}`} onChange={(event) => setTierModel(agent, level, event.target.value)} /></label>
+                    <ModelField key={level} label={WORK_LEVEL_LABEL[level]} value={draft.autoModel.tiers[agent]?.[level] ?? ''} models={CLI_MODEL_SUGGESTIONS[agent]} emptyLabel="Unchanged" onChange={(value) => setTierModel(agent, level, value)} />
                   ))}
                 </fieldset>
               ))}
@@ -716,7 +743,6 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           credentialStored={credentialStatus.ids.includes(draft.learningTutor.credentialId)}
           credentialFeedback={credentialFeedback.learning}
           busy={busy}
-          modelListId="learning-tutor-models"
           saveSlot={cardSave('learningTutor', 'Save Learning Tutor settings', ['learningTutor'])}
           onEnabledChange={(enabled) => setDraft({ ...draft, learningTutor: { ...draft.learningTutor, enabled } })}
           onProviderChange={(provider) => updateLearningProvider(provider)}
@@ -751,7 +777,6 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           credentialStored={credentialStatus.ids.includes(draft.promptGuide.credentialId)}
           credentialFeedback={credentialFeedback.guide}
           busy={busy}
-          modelListId="prompt-guide-models"
           saveSlot={cardSave('promptGuide', 'Save Prompt Guide settings', ['promptGuide'])}
           onEnabledChange={(enabled) => setDraft({ ...draft, promptGuide: { ...draft.promptGuide, enabled } })}
           onProviderChange={(provider) => updateLearningProvider(provider, 'guide')}
@@ -784,7 +809,6 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           credentialStored={credentialStatus.ids.includes(draft.directApi.credentialId)}
           credentialFeedback={credentialFeedback.direct}
           busy={busy}
-          modelListId="direct-api-models"
           saveSlot={cardSave('directApi', 'Save Direct API settings', ['directApi'])}
           onEnabledChange={(enabled) => setDraft({ ...draft, directApi: { ...draft.directApi, enabled } })}
           onProviderChange={(provider) => updateDirectProvider(provider)}
@@ -1292,7 +1316,6 @@ function ProviderConnectionSection({
   credentialStored,
   credentialFeedback,
   busy,
-  modelListId,
   vaultAvailable,
   saveSlot,
   onEnabledChange,
@@ -1323,7 +1346,6 @@ function ProviderConnectionSection({
   credentialStored: boolean;
   credentialFeedback: SettingsFeedback | null;
   busy: boolean;
-  modelListId: string;
   vaultAvailable: boolean;
   saveSlot: ReactNode;
   onEnabledChange: (enabled: boolean) => void;
@@ -1345,11 +1367,10 @@ function ProviderConnectionSection({
       <label className="toggle-row"><span><strong>{toggleLabel}</strong><small>{toggleHint}</small></span><Checkbox checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} /></label>
       <div className="field-grid">
         <SelectField label="Provider" value={provider} onChange={(value) => onProviderChange(value as AppSettings['directApi']['provider'])} options={DIRECT_PROVIDER_ORDER.map((id) => ({ value: id, label: directProviderPreset(id).displayName }))} />
-        <TextField label="Model" value={model} list={modelListId} onChange={onModelChange} />
+        <ModelField label="Model" value={model} models={models} onChange={onModelChange} />
         <TextField label="Base URL" value={baseUrl} onChange={onBaseUrlChange} />
         <TextField label="Credential ID" value={credentialId} onChange={onCredentialIdChange} />
       </div>
-      <datalist id={modelListId}>{models.map((candidate) => <option key={candidate} value={candidate} />)}</datalist>
       <div className="button-row align-start">
         <UiButton type="button" className="secondary-button" disabled={busy || refreshingModels} onClick={onRefreshModels}>
           <RefreshCw size={15} className={refreshingModels ? 'spin' : undefined} />
@@ -1360,7 +1381,7 @@ function ProviderConnectionSection({
             ? `${catalog.models.length} ${local ? 'models on this computer' : 'live provider models'}. Refreshed ${formatRefreshTime(catalog.fetchedAt)}.`
             : local
               ? 'Refresh lists the models you have downloaded in LM Studio.'
-              : 'Bundled model catalog. Refresh uses the stored credential without exposing it.'}
+              : 'Bundled model list, which can be out of date. Save a key, then Refresh to load every model your key can use. Refresh uses the stored credential without exposing it.'}
         </span>
       </div>
       <FeedbackMessage feedback={modelFeedback} />
@@ -1413,6 +1434,35 @@ function SelectField({ label, value, options, onChange }: { label: string; value
     const item = typeof option === 'string' ? { value: option, label: option } : option;
     return <option key={item.value} value={item.value}>{item.label}</option>;
   })}</Select></label>;
+}
+
+/**
+ * A model list that always shows every model. A text box with a suggestion list shows only the entries that match what
+ * is already typed, so once a model was chosen the list looked as if the provider had only that one. A name that is not
+ * in the list can still be entered through "Custom model".
+ */
+function ModelField({ label, value, models, emptyLabel, onChange }: { label: string; value: string; models: readonly string[]; emptyLabel?: string; onChange: (value: string) => void }): ReactNode {
+  const shown = value && !models.includes(value) ? [value, ...models] : models;
+  return (
+    <label className="field"><span>{label}</span>
+      <Select
+        aria-label={label}
+        value={value}
+        onChange={(event) => {
+          if (event.target.value !== '__custom__') {
+            onChange(event.target.value);
+            return;
+          }
+          void promptDialog({ title: 'Custom model', label: 'Enter the model ID', initialValue: value })
+            .then((entered) => { if (entered?.trim()) onChange(entered.trim()); });
+        }}
+      >
+        {emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
+        {shown.map((model) => <option key={model} value={model}>{model}</option>)}
+        <option value="__custom__">Custom model…</option>
+      </Select>
+    </label>
+  );
 }
 
 function TextField({ label, value, type = 'text', list, onChange }: { label: string; value: string; type?: string; list?: string; onChange: (value: string) => void }): ReactNode {

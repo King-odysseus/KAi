@@ -13,7 +13,7 @@ import type {
   PermissionRule,
   PersistedEvent,
 } from '@kai/contracts';
-import { effortFitsAgent } from '@kai/contracts';
+import { CLI_API_KEY_ENV, effortFitsAgent } from '@kai/contracts';
 
 /** How long to keep reading a finished process's output before giving up on pipes a background process still holds. */
 const OUTPUT_DRAIN_GRACE_MS = 1_000;
@@ -177,6 +177,11 @@ export interface DesktopAgentRuntimeOptions {
     request: AgentRunRequest,
     model?: string,
   ) => Promise<NodeJS.ProcessEnv | null>;
+  /**
+   * The environment for a run that uses the API key kept in the vault instead of the CLI's own sign-in, or null when
+   * this agent is not set up that way. Only consulted for a direct run; a proxied run brings its own credentials.
+   */
+  resolveApiKeyEnvironment?: (agent: AgentId, model?: string) => Promise<NodeJS.ProcessEnv | null>;
   suspendProcess?: (pid: number) => Promise<void>;
   resumeProcess?: (pid: number) => Promise<void>;
   installLauncher?: InstallLauncher;
@@ -185,6 +190,34 @@ export interface DesktopAgentRuntimeOptions {
 export interface CliProxyAccess {
   endpoint: string;
   token: string;
+}
+
+/**
+ * The run's environment with the CLI's API key set. Only this process sees it: the CLI's own config files and
+ * sign-in are not touched, and any base URL left over from a proxy setup is dropped so the key goes to the
+ * vendor and not to a stale address.
+ */
+export function cliApiKeyEnvironment(agent: AgentId, apiKey: string, base: NodeJS.ProcessEnv = process.env, model?: string): NodeJS.ProcessEnv | null {
+  const names = CLI_API_KEY_ENV[agent];
+  const key = apiKey.trim();
+  if (!names || !key) return null;
+  const environment: NodeJS.ProcessEnv = { ...base };
+  for (const name of names) environment[name] = key;
+  if (agent === 'claude') {
+    // An auth token or base URL from another setup would win over the key, or send it somewhere else.
+    delete environment.ANTHROPIC_AUTH_TOKEN;
+    delete environment.ANTHROPIC_BASE_URL;
+  }
+  if (agent === 'codex') delete environment.OPENAI_BASE_URL;
+  if (agent === 'kimi') {
+    // Kimi Code builds a temporary provider from these for this run only. A Kimi Code key belongs to the coding
+    // endpoint; a key from the Moonshot platform belongs to the platform one, which serves the other model names.
+    const name = model?.trim() || 'kimi-for-coding';
+    environment.KIMI_MODEL_NAME = name;
+    environment.KIMI_MODEL_PROVIDER_TYPE = 'kimi';
+    environment.KIMI_MODEL_BASE_URL = name === 'kimi-for-coding' ? 'https://api.kimi.com/coding/v1' : 'https://api.moonshot.ai/v1';
+  }
+  return environment;
 }
 
 /** Environment-only routing keeps the CLI's own configuration and credentials untouched. */
@@ -495,12 +528,25 @@ export class DesktopAgentRuntime {
     const capability = await this.cachedCapability(request.agent);
     const cancelledDuringCapability = checkCancelledEarly();
     if (cancelledDuringCapability) return cancelledDuringCapability;
+    // A direct run can use the API key kept in the vault. That is looked up here so a CLI that is installed but
+    // signed out (a cancelled subscription) can still start.
+    let apiKeyEnvironment: NodeJS.ProcessEnv | null = null;
+    if (request.route !== 'proxy' && this.options.resolveApiKeyEnvironment) {
+      try {
+        apiKeyEnvironment = await this.options.resolveApiKeyEnvironment(request.agent, model);
+      } catch {
+        apiKeyEnvironment = null;
+      }
+    }
+    const cancelledDuringKeyLookup = checkCancelledEarly();
+    if (cancelledDuringKeyLookup) return cancelledDuringKeyLookup;
     // The proxy supplies its own credentials, so a CLI that is installed but signed out can still run through it.
     const proxyWithoutAccount = request.route === 'proxy' && capability.state === 'signed_out' && supportsProxy(request.agent);
-    if (!capability.available && !proxyWithoutAccount) {
+    const keyWithoutAccount = apiKeyEnvironment !== null && capability.state === 'signed_out';
+    if (!capability.available && !proxyWithoutAccount && !keyWithoutAccount) {
       return bailEarly(`${definition.displayName} is unavailable: ${capability.unavailableReason || 'command not found'}`);
     }
-    let environment = process.env;
+    let environment = apiKeyEnvironment ?? process.env;
     if (request.route === 'proxy') {
       if (!supportsProxy(request.agent) || !this.options.resolveProxyEnvironment) {
         return bailEarly(`${definition.displayName} does not have a Universal Proxy route in this KAI build.`);

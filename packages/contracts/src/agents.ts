@@ -156,10 +156,10 @@ export const CLI_MODEL_SUGGESTIONS: Record<AgentId, readonly string[]> = {
     'qwen-coder-plus',
   ],
   gemini: [
+    'gemini-4-argon',
     'gemini-3.8-pro',
     'gemini-3.8-flash',
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
+    'gemini-3.5-flash',
     'pro',
     'flash',
   ],
@@ -299,3 +299,20 @@ export type AgentApprovalResponseInput = z.infer<typeof agentApprovalResponseInp
 export type DirectApiCapability = z.infer<typeof directApiCapabilitySchema>;
 export type AgentRunEvent = z.infer<typeof agentRunEventSchema>;
 export type AgentRunState = z.infer<typeof agentRunStateSchema>;
+
+/**
+ * The CLIs that can run on a plain API key instead of a subscription sign-in, and the environment variables each one
+ * reads it from. Qwen is left out: it also needs a base URL and a model that belong together, which is what the
+ * Universal Proxy card is for.
+ */
+export const CLI_API_KEY_ENV: Partial<Record<AgentId, readonly string[]>> = {
+  claude: ['ANTHROPIC_API_KEY'],
+  codex: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+  gemini: ['GEMINI_API_KEY'],
+  kimi: ['KIMI_MODEL_API_KEY'],
+};
+
+/** Where a CLI's own API key is kept in the OS vault. */
+export function cliApiKeyCredentialId(agent: AgentId): string {
+  return `cli.${agent}.apikey`;
+}
