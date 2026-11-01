@@ -190,6 +190,8 @@ interface WorkspaceViewProps {
   onBranchTurn: (turnId: string) => void;
   /** Branches the chat from its latest message and puts a queued message in the new chat's composer. */
   onBranchQueued: (id: string, text: string) => void;
+  /** Opens a queued message in a new empty chat tab, ready to send there. */
+  onNewTabQueued: (id: string, text: string) => void;
   onRewindTurn: (turnId: string) => void;
   onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
   queuedPrompts: QueuedPrompt[];
@@ -404,6 +406,7 @@ export function WorkspaceView({
   onCreateConversation,
   onBranchTurn,
   onBranchQueued,
+  onNewTabQueued,
   onRewindTurn,
   onSend,
   queuedPrompts,
@@ -1953,6 +1956,14 @@ export function WorkspaceView({
                   disabled={item.status === 'sending' || steeringQueued.includes(item.id)}
                   onClick={() => onBranchQueued(item.id, item.text)}
                 ><GitFork size={12} /><span>Branch</span></UiButton>
+                <UiButton
+                  type="button"
+                  className="queue-steer-button"
+                  aria-label="Continue this queued prompt in a new tab"
+                  title="Open a new empty chat tab with this message ready to send there"
+                  disabled={item.status === 'sending' || steeringQueued.includes(item.id)}
+                  onClick={() => onNewTabQueued(item.id, item.text)}
+                ><Plus size={12} /><span>New tab</span></UiButton>
                 <UiButton type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></UiButton>
                 <UiButton type="button" aria-label="Remove queued prompt" title="Remove queued prompt" disabled={item.status === 'sending'} onClick={() => onUpdateQueuedPrompt(item.id, 'remove')}><Trash2 size={12} /></UiButton>
               </div>

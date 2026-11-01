@@ -1322,13 +1322,13 @@ export function App(): ReactNode {
     await runConversation(conversation, prompt, options);
   }
 
-  async function createEmptyConversation(): Promise<void> {
-    if (!bootstrap) return;
+  async function createEmptyConversation(): Promise<string | null> {
+    if (!bootstrap) return null;
     const conversation = await perform(
       () => window.kaiDesktop.createConversation(activeProject?.id ?? null, '').then(unwrap),
       'Opening new conversation',
     );
-    if (!conversation) return;
+    if (!conversation) return null;
     setConversations((current) => [conversation, ...current]);
     setOpenConversationIds((current) => current.includes(conversation.id) ? current : [...current, conversation.id]);
     setActiveConversationId(conversation.id);
@@ -1339,6 +1339,17 @@ export function App(): ReactNode {
     setAgentNotice(null);
     setProxyContinuationAgent(null);
     setView('workspace');
+    return conversation.id;
+  }
+
+  /** Opens a queued message in a new empty chat tab, ready to send there, and takes it out of the queue. */
+  async function continueQueuedInNewTab(queuedId: string, text: string): Promise<void> {
+    if (!activeConversationId) return;
+    const sourceId = activeConversationId;
+    const id = await createEmptyConversation();
+    if (!id) return;
+    setComposerDrafts((current) => ({ ...current, [id]: text }));
+    updateQueuedPrompt(sourceId, queuedId, 'remove');
   }
 
   async function sendPrompt(prompt: string, options: WorkspaceSendOptions = {}): Promise<void> {
@@ -2392,6 +2403,7 @@ export function App(): ReactNode {
               onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
               onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
               onBranchQueued={(id, text) => void branchWithQueued(id, text)}
+              onNewTabQueued={(id, text) => void continueQueuedInNewTab(id, text)}
               onRewindTurn={(turnId) => { if (activeConversation) void rewindConversation(activeConversation.id, turnId); }}
               onSend={(prompt, options) => void sendPrompt(prompt, options)}
               queuedPrompts={activeConversationId ? queuedPromptsByConversation[activeConversationId] ?? [] : []}
