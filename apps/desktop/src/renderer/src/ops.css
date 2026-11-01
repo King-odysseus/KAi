@@ -3097,3 +3097,9 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .conventions-row-actions { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .conventions-serve { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--text-muted); }
 .conventions-panel .crew-spend li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+
+/* Rewind and Branch sit with the copy button under your own messages, and fade in the same way. */
+.message.user .message-tools { align-items: center; }
+.message.user .message-tools .message-action { margin-left: 0; margin-right: 6px; opacity: 0.55; transition: opacity 120ms ease, color 120ms ease; }
+.message.user:hover .message-tools .message-action,
+.message.user .message-tools .message-action:focus-visible { opacity: 1; }

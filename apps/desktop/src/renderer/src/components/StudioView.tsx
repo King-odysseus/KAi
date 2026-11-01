@@ -53,6 +53,7 @@ import {
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { UiButton } from './UiButton';
+import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { ActionsMenu, type ActionsMenuItem } from './ui/ActionsMenu';
 import { UiTextInput } from './UiTextInput';
@@ -173,7 +174,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [boardFull, setBoardFull] = useState(false);
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
-  const [tab, setTab] = useState<'interview' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide' | 'team'>('interview');
+  const [tab, setTab] = usePersistentChoice<'interview' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide' | 'team'>('kai.tab.studio', 'interview', ['interview', 'artifacts', 'board', 'design', 'chat', 'guide', 'team']);
   // How the last design build ended, shown beside the buttons that start it. The page's own banner is at the very top,
   // a long way above the build controls, and a build that stopped there looked like one that had not said anything.
   const [buildOutcome, setBuildOutcome] = useState<string | null>(null);

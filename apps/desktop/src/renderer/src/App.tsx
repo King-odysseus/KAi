@@ -34,7 +34,7 @@ import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperCh
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
-import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, type CommandPaletteItem } from './components/Chrome';
+import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, navigation, type CommandPaletteItem } from './components/Chrome';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { CrewView } from './components/CrewView';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -68,6 +68,7 @@ import { TourGuide } from './components/TourGuide';
 import { TOUR_STORAGE_KEY, parseTourProgress, type TourProgress } from './tour-lessons';
 import { clamp, unwrap, type ViewId } from './types';
 import { liveOpenTabs, readOpenTabs, writeOpenTabs } from './open-tabs';
+import { usePersistentChoice, usePersistentFlag } from './persistent-choice';
 import { confirmDialog, DialogHost, optionDialog } from './components/AppDialog';
 import { TooltipLayer } from './components/TooltipLayer';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
@@ -251,7 +252,8 @@ export function App(): ReactNode {
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('cli');
   const [selectedRoute, setSelectedRoute] = useState<RouteMode>('direct');
   const [selectedAutonomy, setSelectedAutonomy] = useState<AutonomyMode>('ask');
-  const [view, setView] = useState<ViewId>('workspace');
+  // KAI opens on the screen it was closed on.
+  const [view, setView] = usePersistentChoice<ViewId>('kai.view', 'workspace', navigation.map((item) => item.id));
   // The Studio stays mounted once it has been opened, hidden rather than torn down when another screen is shown. A
   // design build runs inside it, and leaving it used to cancel the build: a trip to the composer, or anywhere else,
   // ended a run that was drawing, and coming back found it idle. The Code view is kept the same way.
@@ -278,7 +280,7 @@ export function App(): ReactNode {
   // A plan the Project Studio built from the board, carried to the Workflows page so it opens for review there.
   const [incomingTeamPlan, setIncomingTeamPlan] = useState<TeamPlanDraft | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState(0);
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = usePersistentFlag('kai.terminalOpen', false);
   /** Shells an agent started while the terminal was closed. It does not open on its own; this is what says so. */
   const [agentTerminals, setAgentTerminals] = useState(0);
   const [appearance, setAppearanceState] = useState<Appearance>(loadAppearance);
@@ -1826,20 +1828,31 @@ export function App(): ReactNode {
     await saveConversationRecord({ ...conversation, archived, updatedAt: new Date().toISOString() });
   }
 
-  async function forkConversation(id: string, throughTurnId?: string): Promise<void> {
+  async function forkConversation(id: string, throughTurnId?: string): Promise<string | null> {
     // The main process owns the copy: new turn IDs, no provider session, no run events, and no compaction that
     // reaches past the branch point. Keeping that rule in one place keeps the original untouched.
     const result = await perform(
       () => window.kaiDesktop.forkConversation({ conversationId: id, ...(throughTurnId ? { throughTurnId } : {}) }).then(unwrap),
       'Branching conversation',
     );
-    if (!result) return;
+    if (!result) return null;
     setConversations((current) => [result.conversation, ...current.filter((item) => item.id !== result.conversation.id)]);
     setActiveConversationId(result.conversation.id);
     setError(null);
     setProxyContinuationAgent(null);
     setView('workspace');
     setAgentNotice(`Branched into "${result.conversation.title}". Continue from here without changing the original chat.`);
+    return result.conversation.id;
+  }
+
+  /** Branches the chat from its latest message and puts a queued message in the new chat's composer, ready to send. */
+  async function branchWithQueued(queuedId: string, text: string): Promise<void> {
+    if (!activeConversation) return;
+    const source = activeConversation;
+    const branchId = await forkConversation(source.id, source.turns.at(-1)?.id);
+    if (!branchId) return;
+    setComposerDrafts((current) => ({ ...current, [branchId]: text }));
+    updateQueuedPrompt(source.id, queuedId, 'remove');
   }
 
   async function rewindConversation(id: string, turnId: string): Promise<void> {
@@ -2378,6 +2391,7 @@ export function App(): ReactNode {
               onPlanInStudio={planInStudio}
               onCreateConversation={(prompt, options) => void createConversation(prompt, options)}
               onBranchTurn={(turnId) => { if (activeConversation) void forkConversation(activeConversation.id, turnId); }}
+              onBranchQueued={(id, text) => void branchWithQueued(id, text)}
               onRewindTurn={(turnId) => { if (activeConversation) void rewindConversation(activeConversation.id, turnId); }}
               onSend={(prompt, options) => void sendPrompt(prompt, options)}
               queuedPrompts={activeConversationId ? queuedPromptsByConversation[activeConversationId] ?? [] : []}

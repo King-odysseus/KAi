@@ -60,6 +60,7 @@ import {
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
+import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { ConventionsPanel } from './ConventionsPanel';
@@ -106,7 +107,7 @@ export function Cognitive1Panel({
   settings: AppSettings;
   onSaveSettings: (update: SettingsUpdate) => Promise<boolean>;
 }): ReactNode {
-  const [tab, setTab] = useState<Cognitive1Tab>('overview');
+  const [tab, setTab] = usePersistentChoice<Cognitive1Tab>('kai.tab.c1', 'overview', tabs.map((item) => item.id));
   // How many conventions KAI found since the person last looked, shown on the tab so a new habit is not missed.
   const [newConventions, setNewConventions] = useState(0);
   useEffect(() => {

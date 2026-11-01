@@ -11,6 +11,7 @@ import { unwrap } from '../types';
 import { Pill, type PillTone } from './Pill';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
+import { usePersistentChoice } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
 
 type Tab = 'board' | 'crew' | 'design' | 'cost' | 'report';
@@ -76,7 +77,7 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CrewConfig>(() => createDefaultCrewConfig(settings.defaultAgent));
   const [goal, setGoal] = useState('');
-  const [tab, setTab] = useState<Tab>('board');
+  const [tab, setTab] = usePersistentChoice<Tab>('kai.tab.crew', 'board', TABS.map((item) => item.id));
   const [guidance, setGuidance] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);

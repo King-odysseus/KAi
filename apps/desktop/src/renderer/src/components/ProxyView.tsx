@@ -45,6 +45,7 @@ import {
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
+import { usePersistentChoice } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
 type ProxyTab = 'overview' | 'agents' | 'providers' | 'traffic' | 'advanced';
 type StatusFilter = '' | '2xx' | '4xx' | '5xx';
@@ -105,7 +106,7 @@ export function ProxyPanel({
   onCopyToken: () => void;
   onRotateToken: () => void;
 }): ReactNode {
-  const [tab, setTab] = useState<ProxyTab>('overview');
+  const [tab, setTab] = usePersistentChoice<ProxyTab>('kai.tab.proxy', 'overview', tabs.map((item) => item.id));
   const [draft, setDraft] = useState<ProxySettings>(settings.proxy);
   const [savedSection, setSavedSection] = useState<string | null>(null);
   const [openAgentSection, setOpenAgentSection] = useState<ProxyAgentId | null>(null);

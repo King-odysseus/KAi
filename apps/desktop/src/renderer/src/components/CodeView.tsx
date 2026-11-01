@@ -58,6 +58,7 @@ import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { UiButton } from './UiButton';
+import { existingCodeTabs, readCodeTabs, writeCodeTabs } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
 
 interface TreeNode {
@@ -648,6 +649,34 @@ export function CodeView({
       activePath: nextActivePath,
     }).catch(() => undefined);
   }, []);
+
+  // Reopen the files that were open when KAI was last closed, once the project's files are known. Files that were
+  // deleted or renamed since are skipped, and the tab that was showing is brought back to the front.
+  const tabsRestoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!projectId || files.length === 0 || tabsRestoredFor.current === projectId) return;
+    tabsRestoredFor.current = projectId;
+    if (openPathsRef.current.length > 0) return;
+    const saved = existingCodeTabs(readCodeTabs(window.localStorage, projectId), new Set(files.map((file) => file.path)));
+    if (saved.openPaths.length === 0) return;
+    void (async () => {
+      for (const path of saved.openPaths) {
+        if (projectIdRef.current !== projectId) return;
+        await openFile(path);
+      }
+      if (saved.activePath && saved.activePath !== saved.openPaths.at(-1) && projectIdRef.current === projectId) await openFile(saved.activePath);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, files]);
+
+  // Remember the open files, but only ones that belong to this project, so a project switch never saves one
+  // project's tabs under another's name.
+  useEffect(() => {
+    if (!projectId || files.length === 0 || tabsRestoredFor.current !== projectId) return;
+    const known = new Set(files.map((file) => file.path));
+    const keep = openPaths.filter((path) => known.has(path));
+    writeCodeTabs(window.localStorage, projectId, { openPaths: keep, activePath: activePath && keep.includes(activePath) ? activePath : null });
+  }, [projectId, files, openPaths, activePath]);
 
   const loadTree = useCallback(async () => {
     if (!projectId) return;

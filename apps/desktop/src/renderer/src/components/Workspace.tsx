@@ -188,6 +188,8 @@ interface WorkspaceViewProps {
   onPlanInStudio: () => void;
   onCreateConversation: (prompt: string, options?: WorkspaceSendOptions) => void;
   onBranchTurn: (turnId: string) => void;
+  /** Branches the chat from its latest message and puts a queued message in the new chat's composer. */
+  onBranchQueued: (id: string, text: string) => void;
   onRewindTurn: (turnId: string) => void;
   onSend: (prompt: string, options?: WorkspaceSendOptions) => void;
   queuedPrompts: QueuedPrompt[];
@@ -401,6 +403,7 @@ export function WorkspaceView({
   onPlanInStudio,
   onCreateConversation,
   onBranchTurn,
+  onBranchQueued,
   onRewindTurn,
   onSend,
   queuedPrompts,
@@ -1942,6 +1945,14 @@ export function WorkspaceView({
                   disabled={item.status === 'sending' || steeringQueued.includes(item.id) || (running && !apiRun)}
                   onClick={() => steerQueuedPrompt(index)}
                 ><ArrowRight size={12} /><span>{running && !apiRun ? 'After run' : 'Steer now'}</span></UiButton>
+                <UiButton
+                  type="button"
+                  className="queue-steer-button"
+                  aria-label="Branch from this queued prompt"
+                  title="Start a new chat branched from your latest message, with this message ready to send there"
+                  disabled={item.status === 'sending' || steeringQueued.includes(item.id)}
+                  onClick={() => onBranchQueued(item.id, item.text)}
+                ><GitFork size={12} /><span>Branch</span></UiButton>
                 <UiButton type="button" aria-label="Edit queued prompt" title="Edit queued prompt" disabled={item.status === 'sending'} onClick={() => { setPrompt(item.text); onUpdateQueuedPrompt(item.id, 'remove'); promptRef.current?.focus(); }}><Pencil size={12} /></UiButton>
                 <UiButton type="button" aria-label="Remove queued prompt" title="Remove queued prompt" disabled={item.status === 'sending'} onClick={() => onUpdateQueuedPrompt(item.id, 'remove')}><Trash2 size={12} /></UiButton>
               </div>
@@ -2339,10 +2350,9 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
             <BookmarkPlus size={12} /><span>Save to Brain</span>
           </UiButton>
         )}
-        {turn.role === 'user' && (
-          <UiButton type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></UiButton>
+        {turn.role === 'assistant' && (
+          <UiButton type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></UiButton>
         )}
-        <UiButton type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></UiButton>
       </div>}
       <MessageContent text={partText ?? turn.text} markdown={turn.role === 'assistant'} onOpenFile={onOpenFile} />
       {turn.role === 'user' && turn.attachments?.length ? (
@@ -2352,7 +2362,12 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
           ))}
         </div>
       ) : null}
-      {partLast && <CopyMessageButton text={turn.text} />}
+      {partLast && <CopyMessageButton text={turn.text} extra={turn.role === 'user' ? (
+        <>
+          <UiButton type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></UiButton>
+          <UiButton type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></UiButton>
+        </>
+      ) : undefined} />}
       {awaitingAnswer && partLast && <AnswerBox onAnswer={onAnswer} />}
     </article>
   );
@@ -2386,10 +2401,11 @@ function AnswerBox({ onAnswer }: { onAnswer: (text: string) => void }): ReactNod
   );
 }
 
-function CopyMessageButton({ text }: { text: string }): ReactNode {
+function CopyMessageButton({ text, extra }: { text: string; extra?: ReactNode }): ReactNode {
   const [copied, setCopied] = useState(false);
   return (
     <div className="message-tools">
+      {extra}
       <UiButton
         type="button"
         className="message-copy"

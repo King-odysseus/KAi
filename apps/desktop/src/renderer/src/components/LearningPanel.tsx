@@ -56,6 +56,7 @@ import { SecurityAuditorPanel } from './SecurityAuditorPanel';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
+import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 interface LearningPanelProps {
@@ -251,7 +252,7 @@ export function LearningPanel({
     catch (error) { setCheckOutput(error instanceof Error ? error.message : 'Check failed.'); }
     finally { setChecking(false); }
   };
-  const [tab, setTab] = useState<'tutor' | 'history' | 'progress' | 'teaching' | 'security' | 'git'>('tutor');
+  const [tab, setTab] = usePersistentChoice<'tutor' | 'history' | 'progress' | 'teaching' | 'security' | 'git'>('kai.tab.learning', 'tutor', ['tutor', 'history', 'progress', 'teaching', 'security', 'git']);
   const [historyQuery, setHistoryQuery] = useState('');
   function focusExplainBack(): void {
     const box = document.querySelector<HTMLElement>('.learning-explain-back');

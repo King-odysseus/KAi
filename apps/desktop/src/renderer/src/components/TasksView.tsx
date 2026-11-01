@@ -17,6 +17,7 @@ import { unwrap } from '../types';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { Pill } from './Pill';
 import { UiButton } from './UiButton';
+import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 
@@ -52,7 +53,7 @@ export function TasksView({ activeProject, cognitive1Ready, onStartTask }: {
   cognitive1Ready: boolean;
   onStartTask: (prompt: string) => Promise<void>;
 }): ReactNode {
-  const [tab, setTab] = useState<TasksTab>('board');
+  const [tab, setTab] = usePersistentChoice<TasksTab>('kai.tab.tasks', 'board', TABS.map((item) => item.id));
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
