@@ -5,6 +5,7 @@ import type { TeamRecordAdvice, TeamResolvedAssignee } from '@kai/contracts';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 
+import { ModelField } from './ModelField';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
@@ -139,12 +140,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                     {ROUTE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </Select>
                 </label>
-                <label className="field">
-                  <span>Model</span>
-                  <UiTextInput aria-label={`${info.label} model`} value={config.model ?? ''} placeholder="Agent default" list={`team-models-${role}`} aria-invalid={modelInvalid} onChange={(event) => update(role, { model: event.target.value.trim() })} />
-                  <datalist id={`team-models-${role}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
-                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.6-sol, without spaces or a leading dash.</small>}
-                </label>
+                <ModelField label="Model" value={config.model ?? ''} models={suggestions} emptyLabel="Agent default" error={modelInvalid ? 'Use a model name such as the ones listed, without spaces or a leading dash.' : undefined} onChange={(value) => update(role, { model: value.trim() })} />
                 {role !== 'orchestrator' && (
                   <label className="field">
                     <span>Added to a job</span>
@@ -210,12 +206,7 @@ export function TeamSettings({ team, onChange, projectId }: { team: AgentTeam; o
                     {ROUTE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </Select>
                 </label>
-                <label className="field">
-                  <span>Model</span>
-                  <UiTextInput aria-label={`${role.label} model`} value={role.model ?? ''} placeholder="Agent default" list={`team-models-${role.id}`} aria-invalid={modelInvalid} onChange={(event) => updateCustom(role.id, { model: event.target.value.trim() })} />
-                  <datalist id={`team-models-${role.id}`}>{suggestions.map((name) => <option key={name} value={name} />)}</datalist>
-                  {modelInvalid && <small className="field-error">Use a model name such as gpt-5.6-sol, without spaces or a leading dash.</small>}
-                </label>
+                <ModelField label="Model" value={role.model ?? ''} models={suggestions} emptyLabel="Agent default" error={modelInvalid ? 'Use a model name such as the ones listed, without spaces or a leading dash.' : undefined} onChange={(value) => updateCustom(role.id, { model: value.trim() })} />
               </div>
               <label className="field">
                 <span>Extra instructions</span>

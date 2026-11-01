@@ -58,6 +58,7 @@ import {
   type MarkBook,
 } from './cognitive1-drafts';
 
+import { ModelField } from './ModelField';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
@@ -1334,13 +1335,7 @@ function TextField({ label, value, onChange }: { label: string; value: string; o
 }
 
 function ProjectPicker({ label, value, projects, onChange }: { label: string; value: string; projects: ProjectRecord[]; onChange: (value: string) => void }): ReactNode {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <UiTextInput list="cognitive1-projects" value={value} onChange={(event) => onChange(event.target.value)} />
-      <datalist id="cognitive1-projects">{projects.map((project) => <option key={project.id} value={project.name} />)}</datalist>
-    </label>
-  );
+  return <ModelField label={label} value={value} models={projects.map((project) => project.name)} emptyLabel="None" noun="project name" onChange={onChange} />;
 }
 
 /**

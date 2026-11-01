@@ -9,6 +9,7 @@ import {
 import type { AgentCapability, AgentId, AppSettings, AutonomyMode, CrewConfig, CrewDesign, CrewRole, CrewRun, CrewTask, ProjectRecord } from '@kai/contracts';
 import { unwrap } from '../types';
 import { Pill, type PillTone } from './Pill';
+import { ModelField } from './ModelField';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
@@ -482,10 +483,7 @@ function CrewTab({ config, readOnly, capabilityOf, agentCapabilities, onRole, on
                     {(proxyOk || choice === 'cli-proxy') && <option value="cli-proxy">Proxy (CLI)</option>}
                   </Select>
                 </label>
-                <label className="workflow-field crew-field-wide"><span>Model</span>
-                  <UiTextInput aria-label={`${role.label} model`} disabled={readOnly} list={`crew-models-${role.id}`} value={role.model ?? ''} placeholder="Default for this agent" onChange={(event) => onRole(role.id, { model: event.target.value.trim() || undefined })} />
-                  <datalist id={`crew-models-${role.id}`}>{CLI_MODEL_SUGGESTIONS[role.agent].map((name) => <option key={name} value={name} />)}</datalist>
-                </label>
+                <ModelField labelClassName="workflow-field crew-field-wide" label="Model" disabled={readOnly} value={role.model ?? ''} models={CLI_MODEL_SUGGESTIONS[role.agent]} emptyLabel="Default for this agent" onChange={(value) => onRole(role.id, { model: value.trim() || undefined })} />
               </div>
               <div className="crew-subagents">
                 <span><strong>Sub-agents</strong><small>{role.subAgents.max === 0 ? 'Works alone' : `Up to ${role.subAgents.max} helpers on a task`}</small></span>

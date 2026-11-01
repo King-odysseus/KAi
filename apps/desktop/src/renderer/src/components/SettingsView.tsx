@@ -10,7 +10,8 @@ import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGrou
 import { ThemeColors } from './ThemeColors';
 import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
 import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
-import { confirmDialog, promptDialog } from './AppDialog';
+import { confirmDialog } from './AppDialog';
+import { ModelField } from './ModelField';
 import { ShortcutEditor } from './ShortcutSheet';
 import { shortcutConflicts } from '../shortcuts';
 
@@ -1434,35 +1435,6 @@ function SelectField({ label, value, options, onChange }: { label: string; value
     const item = typeof option === 'string' ? { value: option, label: option } : option;
     return <option key={item.value} value={item.value}>{item.label}</option>;
   })}</Select></label>;
-}
-
-/**
- * A model list that always shows every model. A text box with a suggestion list shows only the entries that match what
- * is already typed, so once a model was chosen the list looked as if the provider had only that one. A name that is not
- * in the list can still be entered through "Custom model".
- */
-function ModelField({ label, value, models, emptyLabel, onChange }: { label: string; value: string; models: readonly string[]; emptyLabel?: string; onChange: (value: string) => void }): ReactNode {
-  const shown = value && !models.includes(value) ? [value, ...models] : models;
-  return (
-    <label className="field"><span>{label}</span>
-      <Select
-        aria-label={label}
-        value={value}
-        onChange={(event) => {
-          if (event.target.value !== '__custom__') {
-            onChange(event.target.value);
-            return;
-          }
-          void promptDialog({ title: 'Custom model', label: 'Enter the model ID', initialValue: value })
-            .then((entered) => { if (entered?.trim()) onChange(entered.trim()); });
-        }}
-      >
-        {emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
-        {shown.map((model) => <option key={model} value={model}>{model}</option>)}
-        <option value="__custom__">Custom model…</option>
-      </Select>
-    </label>
-  );
 }
 
 function TextField({ label, value, type = 'text', list, onChange }: { label: string; value: string; type?: string; list?: string; onChange: (value: string) => void }): ReactNode {
