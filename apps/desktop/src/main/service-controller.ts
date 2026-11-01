@@ -17,6 +17,7 @@ import {
 import type { RedactedLogger, SettingsService } from '@kai/runtime';
 import type { CredentialVault } from './credential-vault';
 import type { DesktopPaths } from './paths';
+import { KeyedQueue } from './keyed-queue';
 
 /** The port the standalone Cognitive1 daemon uses. KAI's managed copy must not share it. */
 export const STANDALONE_COGNITIVE1_PORT = 9876;
@@ -123,6 +124,8 @@ export class DesktopServiceController {
   private readonly restartTimers = new Map<ServiceKind, NodeJS.Timeout>();
   private disposed = false;
   private readonly gateways = new Map<ServiceKind, AuthenticatedLoopbackGateway>();
+  /** One start, stop or restart of a service at a time, and one restart shared by everyone who asks during it. */
+  private readonly lifecycle = new KeyedQueue<ServiceKind>();
   private readonly locator: EngineLocator;
   private readonly executablePath: string;
   private readonly installationErrors = new Map<ServiceKind, string>();
@@ -156,7 +159,11 @@ export class DesktopServiceController {
     return Promise.all((['cognitive1', 'universalProxy'] as const).map((kind) => this.statusFor(kind, settings)));
   }
 
-  async start(kind: ServiceKind, suppliedSettings?: AppSettings, persistEnabled = true): Promise<ServiceState[]> {
+  start(kind: ServiceKind, suppliedSettings?: AppSettings, persistEnabled = true): Promise<ServiceState[]> {
+    return this.lifecycle.run(kind, () => this.startNow(kind, suppliedSettings, persistEnabled));
+  }
+
+  private async startNow(kind: ServiceKind, suppliedSettings?: AppSettings, persistEnabled = true): Promise<ServiceState[]> {
     let settings = suppliedSettings ?? (await this.options.settings.load());
     const current = this.manager.getState(kind).status;
     if (current === 'ready' || current === 'starting') return this.status();
@@ -185,6 +192,8 @@ export class DesktopServiceController {
       }
     }
 
+    // Anything still holding this service's port from an earlier run is closed first, so it cannot make this start fail.
+    await this.closeGateway(kind);
     let gateway: AuthenticatedLoopbackGateway | null = null;
     try {
       const spec = await this.launchSpec(kind, settings);
@@ -200,7 +209,9 @@ export class DesktopServiceController {
       this.installationErrors.delete(kind);
     } catch (error) {
       await gateway?.stop().catch(() => undefined);
-      this.gateways.delete(kind);
+      // Only this start's own gateway is forgotten. Dropping another one from the map left it bound to the port with
+      // nothing able to close it.
+      if (this.gateways.get(kind) === gateway) this.gateways.delete(kind);
       const explained = explainStartFailure(kind, endpointFor(kind, settings), error);
       this.installationErrors.set(kind, explained);
       throw explained === messageOf(error) ? error : new Error(explained);
@@ -237,8 +248,7 @@ export class DesktopServiceController {
     const timer = setTimeout(() => {
       this.restartTimers.delete(kind);
       if (this.disposed) return;
-      void this.closeGateway(kind)
-        .then(() => this.options.settings.load())
+      void this.options.settings.load()
         .then((settings) => (serviceEnabled(settings, kind) ? this.start(kind, settings, false) : undefined))
         .catch((error) => {
           this.options.logger.error('service_error', `Automatic restart of ${kind} failed`, messageOf(error));
@@ -257,24 +267,34 @@ export class DesktopServiceController {
     this.restartPolicies.get(kind)?.reset();
   }
 
-  async stop(kind: ServiceKind): Promise<ServiceState[]> {
-    this.clearRestartState(kind);
-    try {
-      await this.manager.stop(kind);
-    } finally {
-      await this.closeGateway(kind);
-    }
-    await this.persistEnabled(kind, false);
-    this.options.onServiceStopped?.(kind);
-    return this.status();
+  stop(kind: ServiceKind): Promise<ServiceState[]> {
+    return this.lifecycle.run(kind, async () => {
+      this.clearRestartState(kind);
+      try {
+        await this.manager.stop(kind);
+      } finally {
+        await this.closeGateway(kind);
+      }
+      await this.persistEnabled(kind, false);
+      this.options.onServiceStopped?.(kind);
+      return this.status();
+    });
   }
 
-  async restart(kind: ServiceKind, suppliedSettings?: AppSettings): Promise<ServiceState[]> {
-    const settings = suppliedSettings ?? (await this.options.settings.load());
-    this.clearRestartState(kind);
-    await this.manager.stop(kind);
-    await this.closeGateway(kind);
-    return this.start(kind, settings, true);
+  /**
+   * Brings a service back. Callers who ask while a restart is already running share it (a daemon that stops
+   * answering is noticed by several callers at once, and one restart is all it needs). A restart with new
+   * settings is never folded into one that began with the old ones.
+   */
+  restart(kind: ServiceKind, suppliedSettings?: AppSettings): Promise<ServiceState[]> {
+    const work = async (): Promise<ServiceState[]> => {
+      const settings = suppliedSettings ?? (await this.options.settings.load());
+      this.clearRestartState(kind);
+      await this.manager.stop(kind);
+      await this.closeGateway(kind);
+      return this.startNow(kind, settings, true);
+    };
+    return suppliedSettings ? this.lifecycle.run(kind, work) : this.lifecycle.share(kind, work);
   }
 
   async rotateToken(kind: ServiceKind): Promise<ServiceState[]> {
