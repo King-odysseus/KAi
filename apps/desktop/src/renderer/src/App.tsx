@@ -67,6 +67,7 @@ import { composerSettingsFor } from './components/composer-settings';
 import { TourGuide } from './components/TourGuide';
 import { TOUR_STORAGE_KEY, parseTourProgress, type TourProgress } from './tour-lessons';
 import { clamp, unwrap, type ViewId } from './types';
+import { liveOpenTabs, readOpenTabs, writeOpenTabs } from './open-tabs';
 import { confirmDialog, DialogHost, optionDialog } from './components/AppDialog';
 import { TooltipLayer } from './components/TooltipLayer';
 import { isApprovalForConversation, shouldHandleAgentEvent } from './agent-events';
@@ -228,7 +229,8 @@ export function App(): ReactNode {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [openConversationIds, setOpenConversationIds] = useState<string[]>([]);
+  // The tabs that were open when KAI was last closed come back with it, not only the one that was active.
+  const [openConversationIds, setOpenConversationIds] = useState<string[]>(() => readOpenTabs(window.localStorage));
   const [credentials, setCredentials] = useState<CredentialStatus>(emptyCredentials);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [agentCapabilities, setAgentCapabilities] = useState<AgentCapability[]>([]);
@@ -480,6 +482,13 @@ export function App(): ReactNode {
   useEffect(() => {
     if (activeConversationId) setOpenConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
   }, [activeConversationId]);
+
+  // Remember the open tabs. Nothing is saved until the conversations have loaded, because until then every saved tab
+  // would look like a deleted one and be forgotten.
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    writeOpenTabs(window.localStorage, liveOpenTabs(openConversationIds, conversations, activeConversationId));
+  }, [openConversationIds, conversations, activeConversationId]);
 
   useEffect(() => {
     try {
