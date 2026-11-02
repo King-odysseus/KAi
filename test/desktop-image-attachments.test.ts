@@ -1,8 +1,12 @@
 import { normalizeToolResult } from '../apps/desktop/src/main/mcp-runtime';
 import { describe, expect, it } from 'vitest';
 import type { AgentRunRequest } from '@kai/contracts';
+import { persistedEventV1Schema } from '@kai/contracts';
 import {
   toolOutputImages,
+  toolOutputImageDataUrls,
+  sniffImageMediaType,
+  withoutImageData,
   anthropicImagePart,
   attachedImages,
   geminiImagePart,
@@ -157,5 +161,69 @@ describe('tool images reach providers as visual content', () => {
     expect(split.images).toEqual([]);
     expect(split.text).toContain('Image omitted');
     expect(split.text).not.toContain('AAAA');
+  });
+});
+
+/**
+ * A screenshot tool answers with an image block and no media type - Playwright's does, and the model was told
+ * "[Image omitted]" for every picture it took. The bytes carry the answer, and the run's transcript can now draw
+ * what a tool returned instead of printing a megabyte of base64 into the card.
+ */
+describe('pictures a tool hands back', () => {
+  const png = 'iVBORw0KGgoAAAANSUhEUg==';
+  const jpeg = '/9j/4AAQSkZJRg==';
+  const gif = 'R0lGODlhAQABAAAAACw=';
+  const webp = 'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
+
+  it('reads the type from the bytes when the server sends none', () => {
+    expect(sniffImageMediaType(png)).toBe('image/png');
+    expect(sniffImageMediaType(jpeg)).toBe('image/jpeg');
+    expect(sniffImageMediaType(gif)).toBe('image/gif');
+    expect(sniffImageMediaType(webp)).toBe('image/webp');
+    // Not one of the four a vision model takes, so there is nothing to claim it is.
+    expect(sniffImageMediaType('AAAAAAAA')).toBeNull();
+    expect(sniffImageMediaType('')).toBeNull();
+  });
+
+  it('keeps an untyped image block instead of replacing it with a note', () => {
+    const split = toolOutputImages({ text: 'Screenshot', content: [{ type: 'image', data: png }] });
+    expect(split.images).toEqual([{ mediaType: 'image/png', base64: png }]);
+    expect(split.text).toContain('Screenshot');
+    expect(split.text).not.toContain(png);
+  });
+
+  it('gives the conversation a data URL to draw', () => {
+    expect(toolOutputImageDataUrls({ content: [{ type: 'image', data: png }] })).toEqual([`data:image/png;base64,${png}`]);
+    expect(toolOutputImageDataUrls({ text: 'no picture' })).toEqual([]);
+  });
+
+  it('takes the bytes out of the stored output, leaving the rest', () => {
+    const stripped = withoutImageData({
+      text: 'Screenshot',
+      content: [
+        { type: 'text', text: 'Screenshot of viewport' },
+        { type: 'image', data: png },
+      ],
+    });
+    expect(JSON.stringify(stripped)).not.toContain(png);
+    expect(stripped).toMatchObject({ text: 'Screenshot', content: [{ type: 'text', text: 'Screenshot of viewport' }, { type: 'text', text: '[Image shown in the conversation]' }] });
+  });
+
+  it('lets a tool call carry its pictures through the event schema', () => {
+    const event = {
+      schemaVersion: 1,
+      id: 'evt_1',
+      taskId: 'conv_1',
+      timestamp: new Date().toISOString(),
+      type: 'tool.call',
+      name: 'browser_take_screenshot',
+      status: 'completed',
+      output: { content: [{ type: 'text', text: '[Image shown in the conversation]' }] },
+      images: [`data:image/png;base64,${png}`],
+    };
+    const parsed = persistedEventV1Schema.safeParse(event);
+    expect(parsed.success).toBe(true);
+    // A URL that is not an image has no business in a field the renderer puts in an <img>.
+    expect(persistedEventV1Schema.safeParse({ ...event, images: ['javascript:alert(1)'] }).success).toBe(false);
   });
 });

@@ -78,6 +78,7 @@ export function VerificationPanel({ activeProject }: { activeProject: ProjectRec
           <p className="settings-note">
             <strong>{latest.passed ? 'Passed' : 'Failed'}</strong> · <code>{latest.command}</code> · {latest.source === 'agent' ? 'run by an agent' : 'run here'} · {relativeTime(latest.startedAt)}
             {latest.testsPassed !== null ? ` · ${latest.testsPassed} passed${latest.testsFailed ? `, ${latest.testsFailed} failed` : ''}` : ''}
+            {latest.taskOutcome ? ` · Goal: ${latest.taskOutcome}` : ''}
             {stale ? ' · files have changed since' : ''}
           </p>
         ) : <p className="settings-note">No check has been recorded for this project yet.</p>}
@@ -109,7 +110,10 @@ export function VerificationPanel({ activeProject }: { activeProject: ProjectRec
             <tbody>{overview.history.slice(0, 15).map((item) => (
               <tr key={item.id}>
                 <td>{item.passed ? 'Passed' : 'Failed'}</td>
-                <td className="truncate" title={item.command}>{item.command}</td>
+                <td className="truncate" title={[item.command, item.taskOutcome ? `Goal: ${item.taskOutcome}` : ''].filter(Boolean).join('\n')}>
+                  <div>{item.command}</div>
+                  {item.taskOutcome && <small className="settings-note">Goal: {item.taskOutcome}</small>}
+                </td>
                 <td>{item.testsPassed === null ? '—' : `${item.testsPassed}${item.testsFailed ? ` / ${item.testsFailed} failed` : ''}`}</td>
                 <td>{relativeTime(item.startedAt)}</td>
               </tr>

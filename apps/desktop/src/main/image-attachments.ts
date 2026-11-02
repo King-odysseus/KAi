@@ -125,8 +125,11 @@ export function toolOutputImages(output: unknown): { text: string; images: Attac
     if (!block || typeof block !== 'object') return block;
     const part = block as Record<string, unknown>;
     if (part.type !== 'image') return part;
-    const image = typeof part.mimeType === 'string' && typeof part.data === 'string'
-      ? parseImageDataUrl(`data:${part.mimeType};base64,${part.data}`) : null;
+    // Some servers (Playwright's screenshot tool among them) send an image block with no media type at all. The
+    // bytes say what they are, and without one the picture was lost for the model as well as for the person.
+    const mediaType = typeof part.mimeType === 'string' ? part.mimeType : sniffImageMediaType(typeof part.data === 'string' ? part.data : '');
+    const image = mediaType !== null && typeof part.data === 'string'
+      ? parseImageDataUrl(`data:${mediaType};base64,${part.data}`) : null;
     if (image && images.length < MAX_IMAGES) {
       images.push(image);
       return { type: 'text', text: '[Image supplied as visual input]' };
@@ -134,4 +137,39 @@ export function toolOutputImages(output: unknown): { text: string; images: Attac
     return { type: 'text', text: '[Image omitted: unsupported format, invalid data, or image limit exceeded]' };
   });
   return { text: JSON.stringify({ ...record, content }), images };
+}
+
+/**
+ * What an image's first bytes say it is, for the servers that send no media type.
+ *
+ * PNG, JPEG, GIF and WEBP are the four types the providers take, so these are the four worth recognising; anything
+ * else is an image no vision model will accept, and replacing it with a note is more honest than sending it.
+ */
+export function sniffImageMediaType(base64: string): string | null {
+  const bytes = Buffer.from(base64.replace(/\s+/g, '').slice(0, 24), 'base64');
+  const hex = bytes.toString('hex');
+  if (hex.startsWith('89504e47')) return 'image/png';
+  if (hex.startsWith('ffd8ff')) return 'image/jpeg';
+  if (hex.startsWith('47494638')) return 'image/gif';
+  if (hex.startsWith('52494646') && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/** The images a tool returned, as the data URLs the conversation draws. */
+export function toolOutputImageDataUrls(output: unknown): string[] {
+  return toolOutputImages(output).images.map((image) => `data:${image.mediaType};base64,${image.base64}`);
+}
+
+/**
+ * The tool output with its image bytes taken out, for the copy the transcript stores.
+ *
+ * The bytes live in the event's `images` at full size, so keeping them here as well would double the size of a
+ * conversation that holds one screenshot. The note says an image came back, which is what raw output needs to say.
+ */
+export function withoutImageData(output: unknown): unknown {
+  if (Array.isArray(output)) return output.map((item) => withoutImageData(item));
+  if (!output || typeof output !== 'object') return output;
+  const record = output as Record<string, unknown>;
+  if (record.type === 'image' && typeof record.data === 'string') return { type: 'text', text: '[Image shown in the conversation]' };
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, withoutImageData(value)]));
 }

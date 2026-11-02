@@ -167,6 +167,7 @@ export interface RecordedCheck {
   startedAt: Date;
   durationMs: number;
   output: string;
+  task?: { id: string; outcome: string };
 }
 
 /** Store a finished check against the content of every currently changed file. */
@@ -175,6 +176,7 @@ export async function recordVerification(store: VerificationStore, projectId: st
   const run: VerificationRun = {
     id: randomUUID(),
     projectId,
+    ...(check.task ? { taskId: check.task.id, taskOutcome: check.task.outcome } : {}),
     command: check.command.slice(0, 2_000),
     source: check.source,
     exitCode: check.exitCode,

@@ -22,6 +22,8 @@ import { listProjectFiles } from './repo-map';
 
 export interface RunNote {
   at: string;
+  taskId?: string;
+  taskOutcome?: string;
   task: string;
   outcome: 'completed' | 'failed';
   files: string[];

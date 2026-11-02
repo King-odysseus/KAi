@@ -434,6 +434,11 @@ export const conversationTurnSchema = z
       name: z.string().min(1).max(500),
       dataUrl: z.string().min(1).max(30_000_000),
     }).strict()).optional(),
+    /** Images generated in an assistant reply, retained with the conversation. */
+    generatedImages: z.array(z.object({
+      name: z.string().min(1).max(500),
+      dataUrl: z.string().startsWith('data:image/').max(30_000_000),
+    }).strict()).max(6).optional(),
   })
   .strict();
 

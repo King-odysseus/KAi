@@ -123,6 +123,7 @@
 }
 
 /* Pictures an agent names or draws: a mockup it saved in the project, or an `svg` block. */
+.markdown .md-image-button { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 .markdown .md-image {
   display: block;
   max-width: 100%;

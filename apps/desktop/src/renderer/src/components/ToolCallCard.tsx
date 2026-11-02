@@ -2,6 +2,7 @@ import { Check, ChevronDown, FileDiff, FilePlus, Globe, Loader2, Minus, MoveRigh
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { describeToolCall, renderToolCallPreview, type ToolCallPreview } from '../tool-call-preview';
+import { ImageCard } from './ImageAttachment';
 import { UiButton } from './UiButton';
 
 type ToolCallEvent = Extract<PersistedEvent, { type: 'tool.call' }>;
@@ -31,12 +32,30 @@ export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded,
   // when the run ends.
   const [override, setOverride] = useState<boolean | null>(null);
   const status = toolCallStatus(event.status, runActive);
+  // A tool that answers with pictures (a screenshot, a render, an image it was asked to look at) shows them here,
+  // outside the disclosure: the picture is the answer, and a card that hid it would read as a tool that did nothing.
+  const imageRow = event.images && event.images.length > 0 ? (
+    <div className="tool-call-images">
+      {event.images.map((dataUrl, index) => (
+        <ImageCard
+          key={index}
+          name={event.images!.length > 1 ? `${event.name} image ${index + 1}` : event.name}
+          dataUrl={dataUrl}
+        />
+      ))}
+    </div>
+  ) : null;
   const preview = useMemo(() => describeToolCall(event.name, event.input, event.output), [event]);
   const view = useMemo(() => (preview ? renderToolCallPreview(preview) : null), [preview]);
   // Arguments that the tool schema rejects leave nothing to show, but hiding the call would be
   // worse than a plain line.
   if (!preview || !view) {
-    return <div className={`run-event tool ${event.status}`}><span>Tool</span><strong>{event.name}</strong><small>{status.word}</small></div>;
+    return (
+      <>
+        <div className={`run-event tool ${event.status}`}><span>Tool</span><strong>{event.name}</strong><small>{status.word}</small></div>
+        {imageRow}
+      </>
+    );
   }
 
   const failed = event.status === 'failed';
@@ -65,6 +84,7 @@ export const ToolCallCard = memo(function ToolCallCard({ event, defaultExpanded,
       ) : (
         <div className="tool-call-head">{header}</div>
       )}
+      {imageRow}
       {expanded && (
         <div className="tool-call-body">
           {view.note && <p className="tool-call-note">{view.note}</p>}

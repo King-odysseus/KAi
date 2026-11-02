@@ -7,15 +7,20 @@
 export const OPEN_TABS_KEY = 'kai.openConversationTabs';
 const MAX_TABS = 30;
 
+function storageKey(projectId?: string | null): string {
+  if (projectId === undefined) return OPEN_TABS_KEY;
+  return projectId ? `${OPEN_TABS_KEY}:${encodeURIComponent(projectId)}` : `${OPEN_TABS_KEY}:none`;
+}
+
 interface TabStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
 
 /** The saved tab ids, or an empty list when nothing usable was saved. Never throws: storage can be blocked or corrupt. */
-export function readOpenTabs(storage: Pick<TabStorage, 'getItem'> | null | undefined): string[] {
+export function readOpenTabs(storage: Pick<TabStorage, 'getItem'> | null | undefined, projectId?: string | null): string[] {
   try {
-    const parsed: unknown = JSON.parse(storage?.getItem(OPEN_TABS_KEY) ?? '[]');
+    const parsed: unknown = JSON.parse(storage?.getItem(storageKey(projectId)) ?? (projectId === undefined ? null : storage?.getItem(OPEN_TABS_KEY)) ?? '[]');
     if (!Array.isArray(parsed)) return [];
     return [...new Set(parsed.filter((id): id is string => typeof id === 'string' && id.length > 0))].slice(0, MAX_TABS);
   } catch {
@@ -23,9 +28,9 @@ export function readOpenTabs(storage: Pick<TabStorage, 'getItem'> | null | undef
   }
 }
 
-export function writeOpenTabs(storage: Pick<TabStorage, 'setItem'> | null | undefined, ids: readonly string[]): void {
+export function writeOpenTabs(storage: Pick<TabStorage, 'setItem'> | null | undefined, ids: readonly string[], projectId?: string | null): void {
   try {
-    storage?.setItem(OPEN_TABS_KEY, JSON.stringify([...new Set(ids)].slice(0, MAX_TABS)));
+    storage?.setItem(storageKey(projectId), JSON.stringify([...new Set(ids)].slice(0, MAX_TABS)));
   } catch {
     // Remembering tabs is a convenience; a full or blocked store must not break the app.
   }

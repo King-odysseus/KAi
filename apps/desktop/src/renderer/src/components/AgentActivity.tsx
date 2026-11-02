@@ -75,6 +75,10 @@ export function codingNuggets(events: readonly PersistedEvent[]): readonly strin
     'TypeScript narrows types at boundaries; validate unknown data once so the rest of the code stays simple.',
     'A runtime schema protects the application when data comes from a file, network, or another process.',
   ];
+  if (/postgres|postgresql|sql|migration|prisma|database|query/.test(evidence)) return [
+    'A database index is a shortcut for a common lookup; add one for real query patterns, but remember it also costs space and slows writes.',
+    'A transaction keeps related database changes together, so a failure does not leave half the operation saved.',
+  ];
   if (/test|spec|vitest|jest|pytest|assert/.test(evidence)) return [
     'A useful regression test names the behavior that failed, so it keeps its value even if the implementation changes.',
     'Fast unit checks catch local mistakes; an integration check proves that the pieces work together.',
@@ -168,10 +172,11 @@ export function AgentActivityStrip({ events, running, paused, autoWaiting = fals
     void window.kaiDesktop.generateTeachingDraft({
       kind: 'method',
       topic: nuggetTopic(events),
-      instructions: 'Write one or two short sentences in simple words, like a patient coding teacher. Explain one useful concept related to this work. Do not describe hidden reasoning, private prompts, or this run. Avoid repeating common beginner advice.',
+      instructions: 'Return ONLY one or two short sentences that teach one concrete coding concept in simple words. No title, headings, labels, markdown, template, lesson plan, teaching sequence, meta-commentary, or discussion of these instructions. Do not mention hidden reasoning, private prompts, or this run.',
       baseContent: activity.detail,
     }).then((response) => {
-      if (response.ok && response.data.content.trim()) setProviderNugget(response.data.content.trim());
+      const cleaned = response.ok ? cleanProviderNugget(response.data.content) : null;
+      if (cleaned) setProviderNugget(cleaned);
     }).catch(() => undefined);
   }, [running]);
   if (!running && !paused && !awaitingApproval && !['waiting', 'blocked'].includes(activity.kind)) return null;
@@ -216,10 +221,24 @@ function nuggetTopic(events: readonly PersistedEvent[]): string {
   if (/react|\.tsx|jsx|useeffect|usestate/.test(evidence)) return 'React components, state, and rendering';
   if (/django|python|manage\.py|urlpatterns/.test(evidence)) return 'Django views, validation, and models';
   if (/typescript|\.ts\b|\.tsx\b|zod|schema/.test(evidence)) return 'TypeScript types and runtime validation';
+  if (/postgres|postgresql|sql|migration|prisma|database|query/.test(evidence)) return 'Postgres data modelling, queries, and indexes';
   if (/css|\.css|tailwind|flex|grid|responsive/.test(evidence)) return 'CSS layout and responsive design';
   if (/test|spec|vitest|jest|pytest|assert/.test(evidence)) return 'software testing and regression checks';
   if (/fetch|http|api|endpoint|request|response|json/.test(evidence)) return 'APIs, requests, and error handling';
   return 'the coding concept behind the current task';
+}
+
+/** Provider output is optional enrichment; never let a returned prompt/template appear as a teaching nugget. */
+function cleanProviderNugget(value: string): string | null {
+  const text = value
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#*_>`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text || /concept[- ]in[- ]context|teaching sequence|when to use|instructions|prompt|lesson plan|meta[- ]commentary|private reasoning/i.test(text)) return null;
+  const sentences = text.match(/[^.!?]+[.!?]+/g) ?? [text];
+  const concise = sentences.slice(0, 2).join(' ').trim();
+  return concise.length >= 30 && concise.length <= 520 ? concise : null;
 }
 
 /**

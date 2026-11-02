@@ -6,6 +6,9 @@
  */
 
 export interface RunLessonInput {
+  /** Stable conversation goal identity, when this run was attached to one. */
+  taskId?: string;
+  taskOutcome?: string;
   /** What the user (or Autopilot) asked for. */
   prompt: string;
   /** The agent's closing message. */

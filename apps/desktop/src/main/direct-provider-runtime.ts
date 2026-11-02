@@ -15,6 +15,8 @@ import { readPlan } from './plan-store';
 import { interjectionImages, steeringInstructionFor, takeInterjectionMessage } from './interjections';
 import {
   toolOutputImages,
+  toolOutputImageDataUrls,
+  withoutImageData,
   anthropicImagePart,
   attachedImages,
   geminiImagePart,
@@ -26,6 +28,7 @@ import {
   type AttachedImage,
 } from './image-attachments';
 import { probeLocalServer, type LocalServerProbe } from './local-provider';
+import { generatedImageFromOutputItem, supportsImageGenerationTool } from './generated-images';
 import {
   askUserInputSchema,
   describeArgumentError,
@@ -1026,6 +1029,7 @@ export class DesktopDirectProviderRuntime {
 
     // `controller` is the one created at the top of this method, already registered — not re-created here.
     const outputParts: string[] = [];
+    const generatedImages = new Map<string, string>();
     const errors: string[] = [];
     let previousResponseId = resumeResponseId;
     let inputTokens: number | undefined;
@@ -1099,7 +1103,10 @@ export class DesktopDirectProviderRuntime {
             continue;
           }
           if (type === 'response.output_item.added' || type === 'response.output_item.done') {
-            rememberToolCall(pendingToolCalls, asRecord(value.item));
+            const item = asRecord(value.item);
+            rememberToolCall(pendingToolCalls, item);
+            const image = generatedImageFromOutputItem(item);
+            if (image) generatedImages.set(image.id, image.dataUrl);
             continue;
           }
           if (type === 'response.function_call_arguments.delta' || type === 'response.function_call_arguments.done') {
@@ -1125,7 +1132,11 @@ export class DesktopDirectProviderRuntime {
             const roundOutputTokens = integerValue(usage?.output_tokens);
             if (roundInputTokens !== undefined) inputTokens = (inputTokens ?? 0) + roundInputTokens;
             if (roundOutputTokens !== undefined) outputTokens = (outputTokens ?? 0) + roundOutputTokens;
-            for (const item of outputItems(responseRecord?.output)) rememberToolCall(pendingToolCalls, item);
+            for (const item of outputItems(responseRecord?.output)) {
+              rememberToolCall(pendingToolCalls, item);
+              const image = generatedImageFromOutputItem(item);
+              if (image) generatedImages.set(image.id, image.dataUrl);
+            }
             if (!roundEmittedText) {
               const finalText = outputText(responseRecord?.output);
               if (finalText) {
@@ -1210,7 +1221,7 @@ export class DesktopDirectProviderRuntime {
       this.activeRuns.delete(request.conversationId);
     }
 
-    const output = outputParts.join('').trim();
+    const output = outputParts.join('').trim() || (generatedImages.size > 0 ? 'Generated an image.' : '');
     const { failed, error } = runFailure({
       aborted,
       errors,
@@ -1260,6 +1271,7 @@ export class DesktopDirectProviderRuntime {
       status: failed || aborted ? 'failed' : 'completed',
       ...(aborted ? { cancelled: true } : {}),
       output,
+      ...(generatedImages.size > 0 ? { generatedImages: [...generatedImages.values()].slice(0, 6).map((dataUrl, index) => ({ name: `Generated image ${index + 1}.png`, dataUrl })) } : {}),
       outputAgent: request.agent,
       events,
       sessionId: previousResponseId,
@@ -2316,7 +2328,12 @@ export class DesktopDirectProviderRuntime {
             model: capability.model,
             input: outgoing,
             stream: true,
-            ...(toolsEnabled ? { tools: [...builtinToolDefinitions, ...externalToolDefinitions], tool_choice: 'auto' } : {}),
+            ...(toolsEnabled ? { tools: [
+              ...builtinToolDefinitions,
+              ...externalToolDefinitions,
+              ...(supportsImageGenerationTool(capability.provider, capability.model)
+                ? [{ type: 'image_generation', model: 'gpt-image-2.5-flare', output_format: 'png' }] : []),
+            ], tool_choice: 'auto' } : {}),
             ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
           }),
           signal,
@@ -3613,6 +3630,9 @@ function toolCallEvent(
    * read-only agent run) be counted as a sub-agent rather than an ordinary tool call. */
   callId?: string,
 ): PersistedEvent {
+  // A tool that answers with pictures (a screenshot, a render, a looked-at image) puts the bytes here, where the
+  // conversation can draw them, rather than leaving a megabyte of base64 inside `output` for the card to print.
+  const images = output === undefined ? [] : toolOutputImageDataUrls(output);
   return {
     schemaVersion: 1,
     id: eventId(),
@@ -3623,7 +3643,8 @@ function toolCallEvent(
     name,
     status,
     ...(input === undefined ? {} : { input }),
-    ...(output === undefined ? {} : { output }),
+    ...(output === undefined ? {} : { output: withoutImageData(output) }),
+    ...(images.length > 0 ? { images } : {}),
     ...(callId === undefined ? {} : { callId }),
   };
 }

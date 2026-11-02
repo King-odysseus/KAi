@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PersistedEvent } from '@kai/contracts';
-import { activeAgentCount, deriveAgentActivity } from '../apps/desktop/src/renderer/src/components/AgentActivity';
+import { activeAgentCount, codingNuggets, deriveAgentActivity } from '../apps/desktop/src/renderer/src/components/AgentActivity';
 
 const base = {
   schemaVersion: 1 as const,
@@ -81,6 +81,16 @@ describe('desktop agent activity summary', () => {
     // `explore` is a nested agent run too, in the Direct API route rather than claude's own Task tool.
     const exploring = [event({ type: 'tool.call', name: 'explore', status: 'started', callId: 'd' })];
     expect(activeAgentCount(exploring)).toBe(1);
+  });
+
+  it('offers a short coding concept from observable work instead of exposing hidden reasoning', () => {
+    const react = event({ type: 'tool.call', name: 'read_file', status: 'started', input: { path: 'src/Profile.tsx' } });
+    expect(codingNuggets([react])[0]).toContain('React re-renders');
+
+    const django = event({ type: 'tool.call', name: 'read_file', status: 'started', input: { path: 'manage.py' } });
+    expect(codingNuggets([django])[0]).toContain('Django views');
+
+    expect(deriveAgentActivity([react], true, false, false).learningNuggets.length).toBeGreaterThan(0);
   });
 });
 

@@ -180,6 +180,27 @@ describe('desktop direct provider runtime', () => {
     expect(cost).not.toHaveProperty('amountUsd');
   });
 
+  it('offers image generation and keeps a generated image in an image-only reply', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', 'base64').toString('base64');
+    const requests: Array<Record<string, unknown>> = [];
+    const server = http.createServer((request, response) => {
+      let raw = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', () => {
+        requests.push(JSON.parse(raw) as Record<string, unknown>);
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.end(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { id: 'resp-image', output: [{ id: 'ig-1', type: 'image_generation_call', status: 'completed', result: png }] } })}\n\n`);
+      });
+    });
+    const baseUrl = await listen(server);
+    const runtime = new DesktopDirectProviderRuntime(settingsPort(enabledSettings(baseUrl, 'gpt-6-astra')), credentialPort('provider.openai', 'test'));
+    const result = await runtime.run(runRequest(), isolatedProjectRoot);
+    expect(result).toMatchObject({ status: 'completed', output: 'Generated an image.', sessionId: 'resp-image' });
+    expect(result.generatedImages).toEqual([{ name: 'Generated image 1.png', dataUrl: `data:image/png;base64,${png}` }]);
+    expect(requests[0]?.tools).toEqual(expect.arrayContaining([{ type: 'image_generation', model: 'gpt-image-2.5-flare', output_format: 'png' }]));
+  });
+
   it('streams OpenRouter Chat Completions with attribution and measured usage', async () => {
     const requests: Array<{ path?: string; authorization?: string; title?: string; body: Record<string, unknown> }> = [];
     const server = http.createServer((request, response) => {

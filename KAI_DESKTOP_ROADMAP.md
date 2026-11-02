@@ -8,6 +8,17 @@ Status: proposed implementation backlog; no application changes are claimed by t
 
 Make KAI a dependable, integrated agent workbench where a request can be followed through planning, execution, verification, review, and reusable C1 knowledge. Prioritize composer, Project Studio, and C1 while retaining agent neutrality and portable project data.
 
+## Audit follow-through (2 November 2026)
+
+The product audit's cross-window and task-evidence gaps are addressed in the current source:
+
+- New-conversation drafts and restored conversation tabs are scoped to the active project. Conversation tabs from another project are hidden, and opening a conversation aligns the window to its project first.
+- The main process checks that a window creates, saves, verifies, and runs conversations only for its own project. Ordinary interactive runs in the same project are serialized; Compare, Evals, and Autopilot retain their isolated worktree flows.
+- The composer shows the project name and folder path before a run. Goal-based verification records and run-learning notes retain the goal ID and outcome so checks and memory drafts can be traced back to the task.
+- Queue and steer controls, side questions, recovery/resume, workflow templates, skills, prompt presets, and saved cross-agent eval comparisons already exist. Roadmap work should connect and simplify these flows rather than add parallel versions.
+
+The desktop typecheck passed after these changes. Tests were not run for this implementation update.
+
 ## Delivery approach
 
 - Deliver small, usable increments. Every phase ends with a working user flow and a documented validation result.

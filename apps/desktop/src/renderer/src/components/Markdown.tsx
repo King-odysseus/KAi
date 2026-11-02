@@ -5,6 +5,7 @@ import './markdown.css';
 import { UiButton } from './UiButton';
 import { unwrap } from '../types';
 import { MockupFrame, isMockupHtml } from './MockupFrame';
+import { ImageViewer } from './ImageAttachment';
 
 /** The project a reply belongs to, so a picture it names can be read from that project. */
 export const MarkdownProjectContext = createContext<{ projectId: string; projectPath: string } | null>(null);
@@ -27,6 +28,7 @@ function ProjectImage({ src, alt }: { src: string; alt: string }): ReactNode {
   const projectPath = project?.projectPath ?? '';
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -39,14 +41,15 @@ function ProjectImage({ src, alt }: { src: string; alt: string }): ReactNode {
   }, [projectId, projectPath, src]);
   if (!projectId || failed) return <span className="md-image-missing" title={src}>{alt || src}</span>;
   if (!dataUrl) return <span className="md-image-missing" role="status">Loading {alt || src}…</span>;
-  return <img className="md-image" src={dataUrl} alt={alt} title={src} />;
+  return <><button type="button" className="md-image-button" aria-label={`View ${alt || src}`} onClick={() => setOpen(true)}><img className="md-image" src={dataUrl} alt={alt} title={src} /></button>{open && <ImageViewer name={alt || src} dataUrl={dataUrl} onClose={() => setOpen(false)} />}</>;
 }
 
 /** A fenced `svg` block, drawn as a picture. An <img> never runs script, so the markup cannot act on the page. */
 function SvgPreview({ source }: { source: string }): ReactNode {
+  const [open, setOpen] = useState(false);
   const url = useMemo(() => /<svg[\s>]/i.test(source) && /<\/svg>\s*$/i.test(source.trim())
     ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}` : null, [source]);
-  return url ? <img className="md-image md-svg-preview" src={url} alt="SVG preview" /> : null;
+  return url ? <><button type="button" className="md-image-button" aria-label="View SVG preview" onClick={() => setOpen(true)}><img className="md-image md-svg-preview" src={url} alt="SVG preview" /></button>{open && <ImageViewer name="SVG preview" dataUrl={url} onClose={() => setOpen(false)} />}</> : null;
 }
 
 function renderInline(nodes: Inline[], keyPrefix: string, onOpenFile?: (path: string) => void): ReactNode[] {

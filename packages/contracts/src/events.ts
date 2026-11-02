@@ -27,6 +27,12 @@ export const toolCallEventSchema = eventBaseSchema.extend({
   status: z.enum(['started', 'updated', 'completed', 'failed']),
   input: z.unknown().optional(),
   output: z.unknown().optional(),
+  /**
+   * The pictures the tool handed back, as data URLs, so the conversation can show what the model was looking at.
+   * A screenshot tool answers with around a megabyte of base64; it used to land in `output` and render as a wall of
+   * characters. The bytes are lifted here and drawn as an image, with `output` keeping a one-line note in their place.
+   */
+  images: z.array(z.string().startsWith('data:image/').max(12_000_000)).max(6).optional(),
   /** The CLI's own id for this call (e.g. a `tool_use` block's id), so a later completion can be matched to it. */
   callId: z.string().optional(),
 });

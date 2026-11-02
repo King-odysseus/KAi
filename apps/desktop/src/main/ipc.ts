@@ -394,11 +394,13 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'settings:get', async () => context.settings.load());
   handle(context, 'setup:agent-config-preview', async () => agentConfigImportPreview());
   handle(context, 'setup:agent-config-import', async ({ agent }) => importAgentConfig(context, agent));
-  handle(context, 'setup:guide-answer', async ({ question, conversationContext }) => {
+  handle(context, 'setup:guide-answer', async ({ question, conversationContext }, request) => {
     const settings = await context.settings.load();
     const readiness = await context.learningTutor.readiness();
     if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Tutor is not ready.'} ${readiness.recovery ?? ''}`.trim());
-    const projectId = settings.activeProjectId ?? 'kai-guide';
+    const projectId = request.session
+      ? request.session.projectId ?? 'kai-guide'
+      : settings.activeProjectId ?? 'kai-guide';
     const reservation = context.learningBudget.reserve({
       projectId,
       provider: readiness.provider,
@@ -849,6 +851,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'prompt-presets:delete', async ({ slot }) => context.promptPresets.delete(slot));
   handle(context, 'conversations:get', async ({ id }) => context.conversations.get(id));
   handle(context, 'conversations:create', async ({ projectId, firstPrompt }, request) => {
+    if (request.session && request.session.projectId !== projectId) {
+      throw new Error('This window can create conversations only for its open project. Open the project in this window first.');
+    }
     const now = new Date().toISOString();
     const conversation: ConversationRecord = {
       schemaVersion: 1,
@@ -871,6 +876,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'conversations:compact', async ({ conversationId }) => compactConversation(context, conversationId));
   handle(context, 'conversations:save', async (conversation, request) => {
+    if (request.session && request.session.projectId !== conversation.projectId) {
+      throw new Error('This window can save conversations only for its open project. Open the project in this window first.');
+    }
     await context.conversations.save(conversation);
     if (request.session) request.session.conversationId = conversation.id;
     return conversation;
@@ -1164,7 +1172,9 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'learning:update-security-finding-status', async (input) => context.securityFindings.updateStatus(input));
   handle(context, 'learning:generate-teaching-draft', async (input, request) => {
     const settings = await context.settings.load();
-    const learningProjectId = request.session?.projectId ?? settings.activeProjectId ?? 'learning-library';
+    const learningProjectId = request.session
+      ? request.session.projectId ?? 'learning-library'
+      : settings.activeProjectId ?? 'learning-library';
     const readiness = await context.learningTutor.readiness();
     if (!readiness.ready) throw new Error(`${readiness.reason ?? 'Learning Mode is not ready.'} ${readiness.recovery ?? ''}`.trim());
     const reservation = context.learningBudget.reserve({
@@ -1282,8 +1292,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     const project = await resolveProject(context, projectId, true);
     return verificationOverview(context.verification, project.id, project.path);
   });
-  handle(context, 'verification:run', async ({ projectId, command }) => {
+  handle(context, 'verification:run', async ({ projectId, command }, request) => {
     // The renderer asks the user to confirm before this channel is called; the command runs with their permissions.
+    if (request.session && request.session.projectId !== projectId) {
+      throw new Error('Checks can only run in the project open in this window.');
+    }
     const project = await resolveProject(context, projectId, true);
     const check = await runCheckCommand(project.path, command);
     const run = await recordVerification(context.verification, project.id, project.path, check);
@@ -1460,14 +1473,24 @@ export async function runInteractiveAgent(
 ): Promise<AgentRunResult> {
   const conversation = await context.conversations.get(request.conversationId);
   if (!conversation) throw new NotFoundError('Conversation not found.');
+  const ownerSession = ownerWindowId === null ? null : context.windows.get(ownerWindowId);
+  if (ownerSession && ownerSession.projectId !== conversation.projectId) {
+    throw new Error('This conversation belongs to a different project. Open that project in this window before running it.');
+  }
+  if (ownerSession) ownerSession.conversationId = conversation.id;
   const settings = await context.settings.load();
-  const projectId = conversation.projectId ?? settings.activeProjectId;
+  const projectId = conversation.projectId ?? (ownerSession ? null : settings.activeProjectId);
   const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
   if (!project) return runConversationAgent(context, request, ownerWindowId);
 
   const startedAt = Date.now();
   const firstTurnIndex = conversation.turns.length;
   const automation = (await context.preferences.get(project.id))?.automation;
+  const activeProjectRun = interactiveProjectRuns.get(project.id);
+  if (activeProjectRun) {
+    throw new Error(`Another agent run is already active in ${project.name}. Wait for it to finish, or start isolated work through Team or Compare.`);
+  }
+  interactiveProjectRuns.set(project.id, request.conversationId);
   // The same signal every level of this run shares, so one Stop reaches the automation, the setup and the agent.
   const stop = runStopFor(request.conversationId);
   const ports: AutomationPorts = {
@@ -1481,7 +1504,15 @@ export async function runInteractiveAgent(
       return { exitCode: check.exitCode, output: check.output };
     },
     recordCheck: async (command, outcome) => {
-      const check: RecordedCheck = { command, source: 'agent', exitCode: outcome.exitCode, startedAt: new Date(), durationMs: 0, output: outcome.output };
+      const check: RecordedCheck = {
+        command,
+        source: 'agent',
+        exitCode: outcome.exitCode,
+        startedAt: new Date(),
+        durationMs: 0,
+        output: outcome.output,
+        ...(conversation.goal ? { task: { id: conversation.goal.id, outcome: conversation.goal.outcome } } : {}),
+      };
       await recordVerification(context.verification, project.id, project.path, check);
       await logRegression(context, project.path, project.name, check);
     },
@@ -1506,6 +1537,7 @@ export async function runInteractiveAgent(
     outcome = await runWithAutomation(ports, request);
   } finally {
     automationRuns.delete(request.conversationId);
+    if (interactiveProjectRuns.get(project.id) === request.conversationId) interactiveProjectRuns.delete(project.id);
   }
   const cancelled = stop.signal.aborted || outcome.result.cancelled === true;
   if (!cancelled) {
@@ -1622,7 +1654,7 @@ export async function runConversationAgent(
   let writtenTurnId = '';
 
   const settings = await context.settings.load();
-  const projectId = conversation.projectId ?? settings.activeProjectId;
+  const projectId = conversation.projectId ?? (ownerWindowId === null ? settings.activeProjectId : null);
   const project = projectId ? (await context.projects.list()).find((item) => item.id === projectId) : undefined;
   if (!project) throw new NotFoundError('Open a project before sending a message.');
   // Where the agent works and reads files. The project itself stays the identity for memory, claims and checks.
@@ -2129,6 +2161,7 @@ export async function runConversationAgent(
   for (const check of agentChecksFromEvents(execution.events as Array<{ type: string } & Record<string, unknown>>)) {
     // The recorded run knows the commit the check ran against; the brain gets it below so a regression can be
     // traced to the change behind it rather than filed against "unknown".
+    if (conversation.goal) check.task = { id: conversation.goal.id, outcome: conversation.goal.outcome };
     const recorded = await recordVerification(context.verification, project.id, project.path, check).catch(() => null);
     // Reporting the totals to C1 is a courtesy, like the lesson filed below it: the brain being slow or down must
     // not cost the run its saved turn, which is what a throw here would do.
@@ -2159,6 +2192,7 @@ export async function runConversationAgent(
     agent: request.agent,
     projectPath: project.path,
     projectName: project.name,
+    ...(conversation.goal ? { taskId: conversation.goal.id, taskOutcome: conversation.goal.outcome } : {}),
     prompt: userTurn.text,
     output: execution.output ?? '',
     status: execution.status,
@@ -2346,6 +2380,7 @@ async function fileRunLesson(
     const checked = run.checks.filter((check) => check.passed !== null);
     void recordRunKnowledge(run.projectPath, {
       at: new Date().toISOString(),
+      ...(run.taskId ? { taskId: run.taskId, taskOutcome: run.taskOutcome } : {}),
       task: run.prompt,
       outcome: run.status === 'completed' ? 'completed' : 'failed',
       files: run.files.slice(0, 12),
@@ -2369,7 +2404,12 @@ async function fileRunLesson(
         source: 'session',
         // The first line remains the draft title; the marker follows it so C1 carries the run ID into its draft,
         // learned entry and rejection record without needing a moving queue index.
-        summary: `${lesson.summary.slice(0, lesson.summary.indexOf('\n'))}\nKAI Run ID: ${run.conversationId}\n${lesson.summary.slice(lesson.summary.indexOf('\n') + 1)}`,
+        summary: [
+          lesson.summary.slice(0, lesson.summary.indexOf('\n')),
+          `KAI Run ID: ${run.conversationId}`,
+          ...(run.taskId ? [`KAI Goal ID: ${run.taskId}`, `Goal: ${run.taskOutcome ?? ''}`] : []),
+          lesson.summary.slice(lesson.summary.indexOf('\n') + 1),
+        ].join('\n'),
         files: lesson.files,
         project: await memoryProjectName(context, run.projectPath, run.projectName),
         agent: run.agent,
@@ -3648,6 +3688,8 @@ export async function mirrorBrainNow(context: IpcContext, dryRun: boolean): Prom
 
 /** Stops on Stop: the checks and hooks a run's automation is executing, not only the agent. */
 const automationRuns = new Map<string, AbortController>();
+/** Keep ordinary interactive runs from two windows from editing the same project at the same time. */
+const interactiveProjectRuns = new Map<string, string>();
 
 /**
  * The stop signal for one conversation's run, whichever level asks for it first.

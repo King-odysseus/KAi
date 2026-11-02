@@ -4,6 +4,9 @@ export const verificationRunSchema = z
   .object({
     id: z.string().min(1),
     projectId: z.string().min(1),
+    // When a check was run as part of a conversation goal, preserve that link so evidence can be reviewed with the task.
+    taskId: z.string().min(1).max(120).optional(),
+    taskOutcome: z.string().min(1).max(4_000).optional(),
     command: z.string().min(1).max(2_000),
     source: z.enum(['user', 'agent']),
     exitCode: z.number().int().nullable(),
