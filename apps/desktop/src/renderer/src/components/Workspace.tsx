@@ -105,6 +105,7 @@ import { ToolCallCard, toolCallStatus } from './ToolCallCard';
 import { isPreviewableTool } from '../tool-call-preview';
 import { collapseToolCalls } from '../tool-call-events';
 import { interleaveRun, type RunSegment } from '../transcript-order';
+import { addPendingSteer, visiblePendingSteers, type PendingSteer } from '../pending-steers';
 import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
@@ -247,7 +248,7 @@ type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 
 
 /** Both intents send through startAuto and share Auto's access requirement; Security Auditor only differs in its
  *  starter text (the security-auditor skill, attacking the project rather than building it). */
-function isAutoLikeIntent(intent: TaskIntent): boolean {
+function isAutoLikeIntent(intent: TaskIntent): intent is 'auto' | 'security-auditor' {
   return intent === 'auto' || intent === 'security-auditor';
 }
 
@@ -528,6 +529,7 @@ export function WorkspaceView({
   const wasRunningRef = useRef(false);
   const previousConversationIdRef = useRef<string | null>(null);
   const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number; images: Array<{ name: string; dataUrl: string }> } | null>(null);
+  const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
   const brainReady = settings.cognitive1.enabled;
   const profile = experienceProfile(settings.experienceLevel);
@@ -783,6 +785,20 @@ export function WorkspaceView({
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }, [activeConversation?.id]);
 
+  const visibleSteers = visiblePendingSteers(pendingSteers, activeConversation?.id, activeConversation?.turns ?? []);
+
+  const showDeliveredSteer = (conversationId: string, text: string, chips: readonly ContextChip[]): void => {
+    const images = chips.flatMap((chip) => chip.type === 'image' && chip.dataUrl
+      ? [{ name: chip.name, dataUrl: chip.dataUrl }] : []).slice(0, 6);
+    const turns = activeConversation?.id === conversationId ? activeConversation.turns : [];
+    setPendingSteers((current) => addPendingSteer([
+      ...current.filter((item) => item.conversationId !== conversationId),
+      ...visiblePendingSteers(current, conversationId, turns),
+    ], {
+      id: crypto.randomUUID(), conversationId, text, images,
+    }, turns));
+  };
+
   const onCanvasScroll = (): void => {
     const canvas = canvasRef.current;
     if (canvas) stickToBottomRef.current = canvas.scrollHeight - canvas.scrollTop - canvas.clientHeight < 80;
@@ -960,6 +976,7 @@ export function WorkspaceView({
     void window.kaiDesktop.interjectAgent({ conversationId, text, ...(chips.length > 0 ? { contextChips: chips } : {}) }).then(unwrap)
       .then(({ queued }) => {
         if (queued) {
+          showDeliveredSteer(conversationId, text, chips);
           setPrompt((current) => current.trim() === typed ? '' : current);
           // Cleared only now that the run has taken it: on any other outcome the composer is left as it was.
           clearComposerContext();
@@ -995,6 +1012,7 @@ export function WorkspaceView({
       void window.kaiDesktop.interjectAgent({ conversationId, text: item.text, ...(chips.length > 0 ? { contextChips: chips } : {}) }).then(unwrap)
         .then(({ queued }) => {
           if (queued) {
+            showDeliveredSteer(conversationId, item.text, chips);
             onInterjectionDelivered(conversationId, item.text);
             onUpdateQueuedPrompt(item.id, 'remove');
             setWorkbenchNotice('Sent to the active run; it will answer this and carry on with the rest.');
@@ -1765,7 +1783,7 @@ export function WorkspaceView({
       , document.body)}
 
       <div ref={canvasRef} className="conversation-canvas" onScroll={onCanvasScroll}>
-        {activeConversation?.turns.length || streamingText || pendingUser || pendingQuestion ? (
+        {activeConversation?.turns.length || streamingText || pendingUser || visibleSteers.length || pendingQuestion ? (
           <>
             {activeConversation?.turns.map((turn, index) => (
               <Fragment key={turn.id}>
@@ -1795,6 +1813,17 @@ export function WorkspaceView({
                 )}
               </article>
             )}
+            {visibleSteers.map((steer) => (
+              <article key={steer.id} className="message user">
+                <div className="message-role">You</div>
+                <MessageContent text={steer.text} />
+                {steer.images.length > 0 && (
+                  <div className="message-attachments" aria-label="Attached images">
+                    {steer.images.map((image, index) => <ImageCard key={`${index}-${image.name}`} name={image.name} dataUrl={image.dataUrl} />)}
+                  </div>
+                )}
+              </article>
+            ))}
             {liveParts
               ? liveParts.map((part, partIndex) => part.kind === 'events'
                 ? <Fragment key={`live-events-${partIndex}`}>{renderInlineEvents(part.events)}</Fragment>
@@ -1852,6 +1881,12 @@ export function WorkspaceView({
       </div>
 
       <div className="composer">
+        {running && activeConversation?.activeAgent && activeConversation.activeAgent !== selectedAgent && (
+          <div className="composer-agent-notice" role="status">
+            <strong>Current run: {agentCapabilities.find((agent) => agent.id === activeConversation.activeAgent)?.displayName ?? activeConversation.activeAgent}</strong>
+            <span>{agentCapabilities.find((agent) => agent.id === selectedAgent)?.displayName ?? selectedAgent} is selected for the next run.</span>
+          </div>
+        )}
         {proxyContinuationAgent === selectedAgent && !apiRun && effectiveRoute === 'direct' && (
           <div className="composer-route-handoff" role="status">
             <Route size={15} />
@@ -2151,6 +2186,13 @@ export function WorkspaceView({
         {taskIntent === 'equalizer' && activeProject && (
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}
+        {activeProject && (
+          <div className="composer-project-scope" title={`Agent runs in ${activeProject.path}`}>
+            <FolderOpen size={12} aria-hidden="true" />
+            <strong>{activeProject.name}</strong>
+            <span>{activeProject.path}</span>
+          </div>
+        )}
         <div className={`composer-box${composerRun ? ` run-${composerRun.line.state}` : ''}`}>
           <Textarea
             ref={promptRef}
@@ -2227,7 +2269,7 @@ export function WorkspaceView({
             {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
             <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
             <div className="mode-toggle" role="group" aria-label="Execution mode"><UiButton type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}>CLI</UiButton><UiButton type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}>API</UiButton></div>
-            {apiRun ? <UiButton type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></UiButton> : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={selectedCapability?.unavailableReason ?? 'Which agent works on this conversation'} value={selectedAgent} />}
+            {apiRun ? <UiButton type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></UiButton> : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy || running} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={running ? 'The current run is using its original agent; stop it before switching' : (selectedCapability?.unavailableReason ?? 'Which agent works on this conversation')} value={selectedAgent} />}
             {!apiRun && reasoningLevels.length > 0 && <SelectMenu ariaLabel="Thinking effort" className="composer-effort-select" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
           </div>}
         </div>
@@ -2371,6 +2413,11 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
           {turn.attachments.map((attachment) => (
             <ImageCard key={`${attachment.name}-${attachment.dataUrl.slice(-24)}`} name={attachment.name} dataUrl={attachment.dataUrl} />
           ))}
+        </div>
+      ) : null}
+      {turn.role === 'assistant' && partLast && turn.generatedImages?.length ? (
+        <div className="message-attachments" aria-label="Generated images">
+          {turn.generatedImages.map((image, index) => <ImageCard key={`${turn.id}-${index}`} name={image.name} dataUrl={image.dataUrl} />)}
         </div>
       ) : null}
       {partLast && <CopyMessageButton text={turn.text} extra={turn.role === 'user' ? (

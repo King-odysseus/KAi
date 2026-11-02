@@ -7395,6 +7395,8 @@ code {
   color: var(--amber);
   background: rgba(246, 174, 95, 0.09);
 }
+.composer-agent-notice { display: flex; align-items: baseline; gap: 7px; margin: 0 0 7px; padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border)); border-radius: 7px; color: var(--text-dim); font-size: 10px; }
+.composer-agent-notice strong { color: var(--amber); font-size: 10px; }
 
 .composer-route-handoff > div {
   display: grid;
@@ -12780,8 +12782,7 @@ button.tool-call-head:hover strong { color: var(--mint); }
 
 /* The activity strip is a single quiet line too. */
 .agent-activity {
-  display: flex;
-  align-items: center;
+  display: block;
   gap: 8px;
   margin-bottom: 4px;
   padding: 2px 2px;
@@ -12791,15 +12792,21 @@ button.tool-call-head:hover strong { color: var(--mint); }
   font-size: 11px;
 }
 .agent-activity.waiting, .agent-activity.blocked { background: transparent; }
-.agent-activity-toggle { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.agent-activity-toggle { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .agent-activity-icon { display: inline-flex; flex: 0 0 auto; width: auto; height: auto; background: transparent !important; }
-.agent-activity-copy { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; }
+.agent-activity-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: stretch; gap: 2px; overflow: hidden; white-space: nowrap; }
+.agent-activity-summary-line { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .agent-activity-heading { display: flex; flex: 0 0 auto; gap: 8px; }
 .agent-activity-detail { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.agent-activity-nugget { display: flex; min-width: 0; width: 100%; align-items: baseline; gap: 5px; margin: 0 0 4px 28px; color: var(--text-dim); text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.agent-activity-nugget strong { flex: 0 0 auto; color: var(--mint-strong); font-size: 9px; }
+.agent-activity-nugget > span { min-width: 0; }
 .agent-activity-chevron { flex: 0 0 auto; color: var(--text-dim); transition: transform 120ms ease; }
 .agent-activity-toggle[aria-expanded='true'] .agent-activity-chevron { transform: rotate(180deg); }
 .agent-activity-expanded { flex: 0 0 100%; padding: 5px 28px 4px; color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-activity-expanded p { margin: 0 0 4px; }
+.agent-activity-expanded-nugget { color: var(--text); }
+.agent-activity-expanded-nugget strong { color: var(--mint-strong); }
 .agent-activity.is-expanded { flex-wrap: wrap; align-items: flex-start; }
 .agent-activity.is-expanded .agent-activity-copy { overflow: visible; white-space: normal; }
 .agent-activity.is-expanded .agent-activity-detail { overflow: visible; text-overflow: clip; }

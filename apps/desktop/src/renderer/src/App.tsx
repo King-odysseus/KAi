@@ -231,7 +231,7 @@ export function App(): ReactNode {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   // The tabs that were open when KAI was last closed come back with it, not only the one that was active.
-  const [openConversationIds, setOpenConversationIds] = useState<string[]>(() => readOpenTabs(window.localStorage));
+  const [openConversationIds, setOpenConversationIds] = useState<string[]>([]);
   const [credentials, setCredentials] = useState<CredentialStatus>(emptyCredentials);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [agentCapabilities, setAgentCapabilities] = useState<AgentCapability[]>([]);
@@ -431,8 +431,13 @@ export function App(): ReactNode {
     && (pausedConversationIds.includes(activeConversationId) || autoWaitingConversationIds.includes(activeConversationId)),
   );
   const streamingText = activeConversationId ? streamingTextByConversation[activeConversationId] ?? '' : '';
-  const openConversations = openConversationIds.map((id) => conversations.find((conversation) => conversation.id === id)).filter((conversation): conversation is ConversationRecord => Boolean(conversation));
-  const activeDraftKey = activeConversationId ?? '__new__';
+  const openConversations = openConversationIds
+    .map((id) => conversations.find((conversation) => conversation.id === id))
+    .filter((conversation): conversation is ConversationRecord => conversation !== undefined && conversation.projectId === activeProject?.id);
+  // BrowserWindows share localStorage. A single "new conversation" key therefore
+  // made the unsent prompt and agent settings from one project's window appear in
+  // another project's window. Keep new-conversation state within its project.
+  const activeDraftKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
   const activeContextKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
   const activeComposerContext = composerContexts[activeContextKey] ?? emptyComposerContext;
   const activeComposerSelection = composerSelections[activeDraftKey];
@@ -488,9 +493,10 @@ export function App(): ReactNode {
   // Remember the open tabs. Nothing is saved until the conversations have loaded, because until then every saved tab
   // would look like a deleted one and be forgotten.
   useEffect(() => {
-    if (conversations.length === 0) return;
-    writeOpenTabs(window.localStorage, liveOpenTabs(openConversationIds, conversations, activeConversationId));
-  }, [openConversationIds, conversations, activeConversationId]);
+    if (!bootstrap || conversations.length === 0) return;
+    const projectConversations = conversations.filter((conversation) => conversation.projectId === bootstrap.activeProjectId);
+    writeOpenTabs(window.localStorage, liveOpenTabs(openConversationIds, projectConversations, activeConversationId), bootstrap.activeProjectId);
+  }, [openConversationIds, conversations, activeConversationId, bootstrap?.activeProjectId]);
 
   useEffect(() => {
     try {
@@ -767,6 +773,11 @@ export function App(): ReactNode {
         { agent: nextBootstrap.settings.defaultAgent, route: nextBootstrap.settings.defaultRoute, execution: 'cli' },
       );
       setBootstrap(nextBootstrap);
+      setOpenConversationIds(liveOpenTabs(
+        readOpenTabs(window.localStorage, nextBootstrap.activeProjectId),
+        nextConversations.filter((conversation) => conversation.projectId === nextBootstrap.activeProjectId),
+        startConversationId,
+      ));
       const initial = startConversationId
         ? await window.kaiDesktop.getConversation(startConversationId).then(unwrap)
         : null;
@@ -1020,7 +1031,9 @@ export function App(): ReactNode {
       if (background) {
         const loaded = await window.kaiDesktop.getConversation(conversationId).then(unwrap).catch(() => null);
         if (loaded) setConversations((current) => [loaded, ...current.filter((item) => item.id !== conversationId)]);
-        setOpenConversationIds((current) => (current.includes(conversationId) ? current : [...current, conversationId]));
+        if (loaded?.projectId === activeProjectIdRef.current) {
+          setOpenConversationIds((current) => (current.includes(conversationId) ? current : [...current, conversationId]));
+        }
         return;
       }
       // A conversation belongs to a project; switch to it first or the composer would show the wrong one.
@@ -1097,6 +1110,7 @@ export function App(): ReactNode {
     if (next) {
       setBootstrap(next);
       setActiveConversationId(next.activeConversationId);
+      restoreProjectTabs(next.activeProjectId, next.activeConversationId);
       setView('workspace');
     }
   }
@@ -1106,11 +1120,22 @@ export function App(): ReactNode {
     setView('operations');
   }
 
+  function restoreProjectTabs(projectId: string | null, activeId: string | null): void {
+    const projectConversations = conversations.filter((conversation) => conversation.projectId === projectId);
+    setOpenConversationIds(liveOpenTabs(
+      readOpenTabs(window.localStorage, projectId),
+      projectConversations,
+      activeId,
+    ));
+  }
+
   async function openProject(id: string, destination: 'workspace' | 'code' | 'stay' = 'workspace'): Promise<BootstrapPayload | null> {
     const next = await perform(() => window.kaiDesktop.openProject(id).then(unwrap), 'Opening project');
     if (next) {
       setBootstrap(next);
-      setActiveConversationId(preferredConversationId(next, conversations));
+      const activeId = preferredConversationId(next, conversations);
+      setActiveConversationId(activeId);
+      restoreProjectTabs(next.activeProjectId, activeId);
       if (destination !== 'stay') setView(destination);
     }
     return next ?? null;
@@ -1227,7 +1252,12 @@ export function App(): ReactNode {
 
   async function removeProject(id: string): Promise<void> {
     const next = await perform(() => window.kaiDesktop.removeProject(id).then(unwrap), 'Removing project');
-    if (next) setBootstrap(next);
+    if (next) {
+      setBootstrap(next);
+      const activeId = preferredConversationId(next, conversations);
+      setActiveConversationId(activeId);
+      restoreProjectTabs(next.activeProjectId, activeId);
+    }
   }
 
   /**
@@ -1242,7 +1272,11 @@ export function App(): ReactNode {
     });
     if (!confirmed) return;
     const next = await perform(() => window.kaiDesktop.clearProjects().then(unwrap), 'Clearing projects');
-    if (next) setBootstrap(next);
+    if (next) {
+      setBootstrap(next);
+      setActiveConversationId(null);
+      restoreProjectTabs(next.activeProjectId, null);
+    }
   }
 
   /**
@@ -1272,21 +1306,15 @@ export function App(): ReactNode {
 
   async function openConversation(id: string): Promise<void> {
     const existing = conversations.find((conversation) => conversation.id === id);
-    if (existing && !('__summary' in existing)) {
-      setActiveConversationId(id);
-      adoptConversationSettings(existing);
-      // A failure from whatever chat was open before must not bleed into the one being switched to.
-      setError(null);
-      setAgentNotice(null);
-      setProxyContinuationAgent(null);
-      setView('workspace');
-      return;
-    }
-    const conversation = await perform(
+    const conversation = existing && !('__summary' in existing) ? existing : await perform(
       () => window.kaiDesktop.getConversation(id).then(unwrap),
       'Loading conversation',
     );
     if (!conversation) return;
+    if (conversation.projectId && conversation.projectId !== activeProjectIdRef.current) {
+      const opened = await openProjectRef.current(conversation.projectId, 'stay');
+      if (!opened) return;
+    }
     setConversations((current) => [conversation, ...current.filter((item) => item.id !== id)]);
     setActiveConversationId(id);
     adoptConversationSettings(conversation);
@@ -2129,6 +2157,15 @@ export function App(): ReactNode {
   async function resumeConversation(): Promise<void> {
     // Resume is drawn for a run Auto parked as well as one the person paused, and a parked run has no turn in flight.
     if (!activeConversationId || !canResumeRun(controlStateFor(activeConversationId))) return;
+    // Auto sessions keep the agent they started with. Resuming after changing the composer selection would otherwise
+    // silently send the next turn back to the old CLI (and make a Claude limit look like a Codex failure). Require a
+    // fresh turn for an intentional agent handoff instead.
+    if (activeConversation?.activeAgent && activeConversation.activeAgent !== selectedAgent) {
+      const previous = agentCapabilities.find((agent) => agent.id === activeConversation.activeAgent)?.displayName ?? activeConversation.activeAgent;
+      const next = agentCapabilities.find((agent) => agent.id === selectedAgent)?.displayName ?? selectedAgent;
+      setAgentNotice(`This Auto session belongs to ${previous}. Stop it, then send a new message to continue with ${next}.`);
+      return;
+    }
     await window.kaiDesktop.resumeAuto({ conversationId: activeConversationId }).catch(() => undefined);
     await window.kaiDesktop.resumeAgent(activeConversationId).catch(() => undefined);
     setPausedConversationIds((current) => current.filter((id) => id !== activeConversationId));

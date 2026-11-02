@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, ChevronDown, FileCode2, Loader2, Pause, Search, Terminal, Wrench } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PersistedEvent } from '@kai/contracts';
 import { relativeTime } from '../types';
 import { UiButton } from './UiButton';
@@ -12,6 +12,7 @@ export interface AgentActivitySummary {
   detail: string;
   lastAction: string | null;
   lastAt: string | null;
+  learningNuggets: readonly string[];
 }
 
 export function deriveAgentActivity(
@@ -25,13 +26,14 @@ export function deriveAgentActivity(
   const meaningful = [...events].reverse();
   const last = meaningful.find((event) => event.type !== 'text.delta' && event.type !== 'cost.update') ?? null;
   const action = last ? describeEvent(last) : null;
-  if (awaitingApproval) return { kind: 'waiting', label: 'Waiting for approval', detail: 'KAI paused before a protected action.', lastAction: action, lastAt: last?.timestamp ?? null };
+  const learningNuggets = codingNuggets(events);
+  if (awaitingApproval) return { kind: 'waiting', label: 'Waiting for approval', detail: 'KAI paused before a protected action.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
   // Said before "Paused": this state is drawn as paused everywhere else, and the label that read "suspended, and can
   // continue from the same point" sent a person who had paused nothing looking for the run they thought they had held.
-  if (running && autoWaiting) return { kind: 'waiting', label: 'Waiting for you', detail: 'Auto stopped to ask something. Answer in the composer, or press Resume to let it carry on without an answer.', lastAction: action, lastAt: last?.timestamp ?? null };
-  if (running && paused) return { kind: 'paused', label: 'Paused', detail: 'The run is suspended and can continue from the same point.', lastAction: action, lastAt: last?.timestamp ?? null };
-  if (last?.type === 'error') return { kind: 'blocked', label: running ? 'Blocked' : 'Failed', detail: last.message, lastAction: action, lastAt: last.timestamp };
-  if (last?.type === 'permission.escalation') return { kind: 'waiting', label: 'Waiting for permission', detail: last.reason || last.permission, lastAction: action, lastAt: last.timestamp };
+  if (running && autoWaiting) return { kind: 'waiting', label: 'Waiting for you', detail: 'Auto stopped to ask something. Answer in the composer, or press Resume to let it carry on without an answer.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
+  if (running && paused) return { kind: 'paused', label: 'Paused', detail: 'The run is suspended and can continue from the same point.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
+  if (last?.type === 'error') return { kind: 'blocked', label: running ? 'Blocked' : 'Failed', detail: last.message, lastAction: action, lastAt: last.timestamp, learningNuggets };
+  if (last?.type === 'permission.escalation') return { kind: 'waiting', label: 'Waiting for permission', detail: last.reason || last.permission, lastAction: action, lastAt: last.timestamp, learningNuggets };
 
   const recentTool = meaningful.find((event): event is Extract<PersistedEvent, { type: 'tool.call' }> => event.type === 'tool.call');
   if (running && recentTool) {
@@ -39,12 +41,60 @@ export function deriveAgentActivity(
     const state = recentTool.status === 'completed' || recentTool.status === 'failed'
       ? { kind: 'working' as const, label: 'Reviewing results', detail: classified.detail }
       : classified;
-    return { kind: state.kind, label: state.label, detail: state.detail, lastAction: action, lastAt: recentTool.timestamp };
+    return { kind: state.kind, label: state.label, detail: state.detail, lastAction: action, lastAt: recentTool.timestamp, learningNuggets };
   }
-  if (running) return { kind: 'planning', label: 'Thinking', detail: 'Reading context and deciding the next action.', lastAction: action, lastAt: last?.timestamp ?? null };
-  if (last?.type === 'turn.changes') return { kind: 'completed', label: 'Changes ready to review', detail: `${last.files.length} file${last.files.length === 1 ? '' : 's'} changed in the latest turn.`, lastAction: action, lastAt: last.timestamp };
-  if (last?.type === 'agent.lifecycle' && last.status === 'completed') return { kind: 'completed', label: 'Completed', detail: last.detail ?? 'The agent finished the latest turn.', lastAction: action, lastAt: last.timestamp };
-  return { kind: 'idle', label: 'Ready', detail: last ? 'No agent run is active.' : 'Start a task when you are ready.', lastAction: action, lastAt: last?.timestamp ?? null };
+  if (running) return { kind: 'planning', label: 'Thinking', detail: 'Reading context and deciding the next action.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
+  if (last?.type === 'turn.changes') return { kind: 'completed', label: 'Changes ready to review', detail: `${last.files.length} file${last.files.length === 1 ? '' : 's'} changed in the latest turn.`, lastAction: action, lastAt: last.timestamp, learningNuggets };
+  if (last?.type === 'agent.lifecycle' && last.status === 'completed') return { kind: 'completed', label: 'Completed', detail: last.detail ?? 'The agent finished the latest turn.', lastAction: action, lastAt: last.timestamp, learningNuggets };
+  return { kind: 'idle', label: 'Ready', detail: last ? 'No agent run is active.' : 'Start a task when you are ready.', lastAction: action, lastAt: last?.timestamp ?? null, learningNuggets };
+}
+
+/**
+ * Short teaching prompts based on observable work only. These explain a useful coding idea without exposing private
+ * model reasoning, hidden prompts, or speculative claims about what the agent is thinking.
+ */
+export function codingNuggets(events: readonly PersistedEvent[]): readonly string[] {
+  const evidence = events.slice(-20).map((event) => {
+    if (event.type === 'tool.call') {
+      let input = '';
+      try { input = JSON.stringify(event.input ?? ''); } catch { /* Ignore an unusual tool payload. */ }
+      return `${event.name} ${input}`;
+    }
+    if (event.type === 'file.change' || event.type === 'file.edit.applied') return JSON.stringify(event);
+    return event.type;
+  }).join(' ').toLowerCase();
+  if (/react|\.tsx|jsx|useeffect|usestate/.test(evidence)) return [
+    'React re-renders when state or props change; keep derived values in render and use effects for external synchronization.',
+    'A component is easier to test when it receives data and actions as props instead of reaching into global state.',
+  ];
+  if (/django|python|manage\.py|urlpatterns|django_rest/.test(evidence)) return [
+    'Django views should validate input at the boundary and keep business rules out of templates.',
+    'A Django model constraint protects data even when a request path or admin action forgets to validate it.',
+  ];
+  if (/typescript|\.ts\b|\.tsx\b|zod|schema/.test(evidence)) return [
+    'TypeScript narrows types at boundaries; validate unknown data once so the rest of the code stays simple.',
+    'A runtime schema protects the application when data comes from a file, network, or another process.',
+  ];
+  if (/test|spec|vitest|jest|pytest|assert/.test(evidence)) return [
+    'A useful regression test names the behavior that failed, so it keeps its value even if the implementation changes.',
+    'Fast unit checks catch local mistakes; an integration check proves that the pieces work together.',
+  ];
+  if (/fetch|http|api|endpoint|request|response|json/.test(evidence)) return [
+    'API-backed UI has three normal states to design: loading, failure, and an empty result.',
+    'Keep transport errors separate from validation errors so the user gets a useful recovery action.',
+  ];
+  if (/css|\.css|tailwind|flex|grid|responsive/.test(evidence)) return [
+    'Many layout bugs come from the parent sizing context; inspect grid and flex constraints before adding offsets.',
+    'Responsive design is easier when the layout changes at meaningful content breakpoints instead of device labels.',
+  ];
+  if (/git|commit|branch|worktree|diff/.test(evidence)) return [
+    'Small commits and checkpoints make changes easier to review, revert, and resume after an interruption.',
+    'A diff is evidence of what changed; a passing check is separate evidence that the behavior still works.',
+  ];
+  return [
+    'Small, focused changes are easier to verify than a broad refactor mixed with a feature.',
+    'The best next check is the one that could disprove the current approach quickly.',
+  ];
 }
 
 function classifyTool(name: string, input: unknown): { kind: AgentActivityKind; label: string; detail: string } {
@@ -103,18 +153,46 @@ export function AgentActivityStrip({ events, running, paused, autoWaiting = fals
 }): ReactNode {
   const activity = deriveAgentActivity(events, running, paused, awaitingApproval, autoWaiting);
   const [expanded, setExpanded] = useState(false);
+  const [providerNugget, setProviderNugget] = useState<string | null>(null);
+  const requestedProviderNugget = useRef(false);
+  const fallbackNugget = activity.learningNuggets[Math.floor(elapsedSeconds / 10) % activity.learningNuggets.length] ?? activity.learningNuggets[0];
+  const nugget = providerNugget ?? fallbackNugget;
+  useEffect(() => {
+    if (!running) {
+      requestedProviderNugget.current = false;
+      setProviderNugget(null);
+      return;
+    }
+    if (requestedProviderNugget.current || !fallbackNugget) return;
+    requestedProviderNugget.current = true;
+    void window.kaiDesktop.generateTeachingDraft({
+      kind: 'method',
+      topic: nuggetTopic(events),
+      instructions: 'Write one or two short sentences in simple words, like a patient coding teacher. Explain one useful concept related to this work. Do not describe hidden reasoning, private prompts, or this run. Avoid repeating common beginner advice.',
+      baseContent: activity.detail,
+    }).then((response) => {
+      if (response.ok && response.data.content.trim()) setProviderNugget(response.data.content.trim());
+    }).catch(() => undefined);
+  }, [running]);
   if (!running && !paused && !awaitingApproval && !['waiting', 'blocked'].includes(activity.kind)) return null;
   return (
     <section className={`agent-activity ${activity.kind}${expanded ? ' is-expanded' : ''}`} aria-live="polite" aria-label="Agent activity">
+      {nugget && <div className="agent-activity-nugget" aria-label="Learning nugget"><strong>Learning nugget</strong><span>{nugget}</span></div>}
       <UiButton type="button" className="agent-activity-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} title={expanded ? 'Hide activity details' : 'Show full activity details'}>
         <span className="agent-activity-icon">{activityIcon(activity.kind)}</span>
         <span className="agent-activity-copy">
-          <span className="agent-activity-heading"><strong>{activity.label}</strong>{activity.lastAt && <small>Last action {relativeTime(activity.lastAt)}</small>}</span>
-          <span className="agent-activity-detail">{activity.detail}</span>
+          <span className="agent-activity-summary-line">
+            <span className="agent-activity-heading"><strong>{activity.label}</strong>{activity.lastAt && <small>Last action {relativeTime(activity.lastAt)}</small>}</span>
+            <span className="agent-activity-detail">{activity.detail}</span>
+          </span>
         </span>
         <ChevronDown className="agent-activity-chevron" size={13} />
       </UiButton>
-      {expanded && <div className="agent-activity-expanded"><p>{activity.detail}</p>{activity.lastAction && <p><strong>Last action:</strong> {activity.lastAction}</p>}</div>}
+      {expanded && <div className="agent-activity-expanded">
+        <p>{activity.detail}</p>
+        {activity.lastAction && <p><strong>Last action:</strong> {activity.lastAction}</p>}
+        {nugget && <p className="agent-activity-expanded-nugget"><strong>Learning nugget:</strong> {nugget}</p>}
+      </div>}
       {(running || paused || awaitingApproval) && (() => {
         const agents = activeAgentCount(events);
         return (
@@ -127,6 +205,21 @@ export function AgentActivityStrip({ events, running, paused, autoWaiting = fals
       })()}
     </section>
   );
+}
+
+function nuggetTopic(events: readonly PersistedEvent[]): string {
+  const evidence = events.slice(-20).map((event) => {
+    if (event.type === 'tool.call') return `${event.name} ${JSON.stringify(event.input ?? '')}`;
+    if (event.type === 'file.change' || event.type === 'file.edit.applied') return JSON.stringify(event);
+    return event.type;
+  }).join(' ').toLowerCase();
+  if (/react|\.tsx|jsx|useeffect|usestate/.test(evidence)) return 'React components, state, and rendering';
+  if (/django|python|manage\.py|urlpatterns/.test(evidence)) return 'Django views, validation, and models';
+  if (/typescript|\.ts\b|\.tsx\b|zod|schema/.test(evidence)) return 'TypeScript types and runtime validation';
+  if (/css|\.css|tailwind|flex|grid|responsive/.test(evidence)) return 'CSS layout and responsive design';
+  if (/test|spec|vitest|jest|pytest|assert/.test(evidence)) return 'software testing and regression checks';
+  if (/fetch|http|api|endpoint|request|response|json/.test(evidence)) return 'APIs, requests, and error handling';
+  return 'the coding concept behind the current task';
 }
 
 /**
