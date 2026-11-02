@@ -159,15 +159,17 @@ export function AgentActivityStrip({ events, running, paused, autoWaiting = fals
   const [expanded, setExpanded] = useState(false);
   const [providerNugget, setProviderNugget] = useState<string | null>(null);
   const requestedProviderNugget = useRef(false);
-  const fallbackNugget = activity.learningNuggets[Math.floor(elapsedSeconds / 10) % activity.learningNuggets.length] ?? activity.learningNuggets[0];
-  const nugget = providerNugget ?? fallbackNugget;
+  const nuggetChoices = providerNugget ? [providerNugget, ...activity.learningNuggets] : activity.learningNuggets;
+  const nugget = nuggetChoices.length > 0
+    ? nuggetChoices[Math.floor(elapsedSeconds / 60) % nuggetChoices.length]
+    : null;
   useEffect(() => {
     if (!running) {
       requestedProviderNugget.current = false;
       setProviderNugget(null);
       return;
     }
-    if (requestedProviderNugget.current || !fallbackNugget) return;
+    if (requestedProviderNugget.current || activity.learningNuggets.length === 0) return;
     requestedProviderNugget.current = true;
     void window.kaiDesktop.generateTeachingDraft({
       kind: 'method',

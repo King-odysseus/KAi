@@ -16,4 +16,5 @@ work/
 # Scratch output from tools and one-off documents, not part of the app
 output/
 tmp/
+.tmp/
 .playwright-mcp/
