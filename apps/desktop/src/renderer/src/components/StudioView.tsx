@@ -3189,7 +3189,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       <ChevronDown size={14} className={expanded ? 'open' : undefined} /> {visibleRows.length} screen{visibleRows.length === 1 ? '' : 's'}
                     </UiButton>
                     {expanded && (
-                    <ul className="studio-steps">
+                    <ul className="studio-steps studio-screen-grid">
                     {visibleRows.map((row) => {
                       const isSkipped = !row.drawn && skipped.has(screenTitleKey(row.name));
                       const pageId = screenPageId(design, row.name);
@@ -3245,8 +3245,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                           <div className="studio-step-text">
                             <strong>{row.name}{row.route ? <code> {row.route}</code> : null}</strong>
                             <small>
-                              <span className={`studio-kind ${row.drawn ? 'drawn' : ''}`}>{row.drawn ? 'drawn' : isSkipped ? 'skipped' : 'to draw'}</span>
-                              {!row.inPages && <span className="studio-kind"> not in the pages list</span>}
+                              <span className={`studio-kind ${row.drawn ? 'drawn' : ''}`}>{row.drawn ? (row.inPages ? 'Drawn and planned' : 'Drawn but not planned') : isSkipped ? 'Skipped' : 'Not drawn yet'}</span>
                             </small>
                           </div>
                           <ActionsMenu
@@ -3537,7 +3536,17 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           )}
 
           {/* Keep the room connected while someone reviews another Studio tab. */}
-          {projectId && <div hidden={tab !== 'team'}>
+          {projectId && <div hidden={tab !== 'team'} className="studio-team-tab">
+            <article className="studio-card studio-team-roles">
+              <h2><Users size={16} /> Studio team</h2>
+              <p className="studio-note">Roles, agents and who owns which artifact.</p>
+              <div className="studio-rail-pills">
+                <Pill>Planner · {readiness?.displayName ?? 'not set'}{readiness?.model ? ` · ${readiness.model}` : ''}</Pill>
+                <Pill>Designer · OpenPencil</Pill>
+                <Pill>Autopilot · {autopilot && AUTOPILOT_ACTIVE.has(autopilot.phase) ? 'running' : 'idle'}</Pill>
+              </div>
+              <p className="studio-note">{artifacts ? `${artifacts.artifacts.length} artifacts written by ${[...new Set(artifacts.artifacts.map((entry) => entry.generatedBy))].join(', ') || 'no one yet'}.` : 'Artifacts appear here once they are written.'}</p>
+            </article>
             <StudioTeamPanel projectId={projectId} projectTitle={projectTitle} linkedProjectId={state?.linkedProjectId ?? null} artifacts={artifacts} onArtifactsChanged={setArtifacts} />
           </div>}
 
@@ -3852,15 +3861,15 @@ function BoardCardView({ card, busy, onMove, onCheckUi, onSetRoute, onRememberAp
       )}
       {card.check && <p className="studio-note">{card.check.visual === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} Visual check {card.check.visual ?? 'not run'} · {card.check.screenshots.length} shots · verification {card.check.runId}</p>}
       {card.acceptance.length > 0 && (
-        <div className="studio-note studio-acceptance" aria-label={`Acceptance criteria for ${card.title}`}>
-          <strong>Acceptance evidence</strong>
+        <details className="studio-note studio-acceptance" aria-label={`Acceptance criteria for ${card.title}`}>
+          <summary>Acceptance evidence ({card.acceptance.length})</summary>
           <ul>
             {card.acceptance.map((criterion) => {
               const evidence = card.check?.acceptanceEvidence?.find((item) => item.criterion === criterion);
               return <li key={criterion}>{evidence?.status === 'passed' ? <Check size={12} /> : <AlertTriangle size={12} />} {criterion}{evidence?.evidence ? <small> — {evidence.evidence}</small> : <small> — no passing evidence yet</small>}</li>;
             })}
           </ul>
-        </div>
+        </details>
       )}
       {ui && !card.route && card.kind === 'page' && (
         <p className="studio-note studio-why blocked">

@@ -538,6 +538,28 @@ html[data-theme]:root .composer textarea {
 .cognitive1-control-heading .eyebrow, .cognitive1-control-heading h2, .cognitive1-control-heading .cognitive1-about { display: none; }
 .cognitive1-tab-help { display: none; }
 
+/* The Studio board follows its board: the columns come before Autopilot, each a tall rounded card with a counted heading. */
+.studio-card:has(> .studio-board) > .studio-board { order: 4; margin-top: 10px; }
+.studio-card:has(> .studio-board) > .autopilot-panel { order: 5; margin-top: 14px; }
+.studio-board { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.studio-board .studio-column { min-height: 280px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); gap: 10px; }
+.studio-board .studio-column > h3 { margin: 0; color: var(--text-dim); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; }
+.studio-board .studio-column.drop-target { background: var(--mint-soft, var(--bg-hover)); }
+.studio-board .studio-column > .studio-note { margin: 0; padding: 10px; border: 1px dashed var(--border); border-radius: 10px; color: var(--text-dim); text-align: center; }
+
+/* The Design tab's screens are cards: a preview area, the name and route, and where the screen stands. */
+.studio-screen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin: 10px 0 0; padding: 0; list-style: none; }
+.studio-screen-grid > li { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.studio-screen-grid > li::before { content: "No preview"; display: grid; height: 84px; place-items: center; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg-inset); color: var(--text-dim); font-size: 12px; }
+.studio-screen-grid > li.done::before { content: "Preview"; }
+.studio-screen-grid > li .studio-step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.studio-screen-grid > li .studio-step-text strong { display: flex; flex-direction: column; gap: 1px; color: var(--text); font-size: 13px; }
+.studio-screen-grid > li .studio-step-text strong code { color: var(--text-muted); font-size: 12px; background: transparent; padding: 0; }
+.studio-screen-grid > li .studio-kind { display: inline-block; margin-top: 4px; padding: 2px 10px; border-radius: 999px; background: var(--bg-hover); color: var(--text-muted); font-size: 11px; }
+.studio-screen-grid > li .studio-kind.drawn { background: var(--success-soft, var(--bg-hover)); color: var(--success, var(--text)); }
+.studio-screen-grid > li > .actions-menu-anchor { position: absolute; top: 14px; right: 14px; }
+.studio-screen-grid > li > .studio-design-preview, .studio-screen-grid > li > .studio-prompt-panel { grid-column: 1 / -1; }
+
 /* Design: the page list and pull controls on the left, the design assistant as its own column on the right. */
 .studio-design-card {
   display: grid;
@@ -783,3 +805,26 @@ th,
 .nav-rail .nav-button { height: clamp(30px, 3.6vh, 36px) !important; margin-block: clamp(1px, 0.2vh, 2px) !important; }
 .nav-rail .nav-group-label { padding-bottom: clamp(3px, 0.6vh, 6px) !important; }
 .nav-rail .nav-group-label:not(:first-child) { padding-top: clamp(12px, 2.2vh, 24px) !important; }
+
+/* Editor toolbar: a quiet green pill says autosave is on, and Save is the accent action once there is something to save. */
+.code-autosave-status { padding: 3px 10px; border-radius: 999px; background: var(--success-soft, var(--bg-hover)); color: var(--success, var(--text)); font-size: 11.5px; }
+
+/* Overlays follow their board: the highlighted palette row is a soft tint with normal text, not an accent-coloured one. */
+.command-palette-item.active, .command-palette-item:hover { background: var(--selection) !important; color: var(--text) !important; border-color: transparent !important; }
+.command-palette-item.active > strong, .command-palette-item.active .command-palette-label { color: var(--text) !important; }
+.command-palette { border-radius: 16px; }
+.app-dialog, .approval-dialog, .setup-panel, .shortcut-sheet, .tour-card, .tour-list { border-radius: 16px; }
+
+/* A running crew follows its board: the status and goal on a line, then Accepted / Spent / Roles as three stat tiles. */
+.crew-runbar { display: flex; flex-wrap: wrap; align-items: stretch; gap: 14px; margin: 14px 20px 12px; padding: 0; border: 0; background: transparent; }
+.crew-runbar > .crew-runbar-title { flex: 1 1 100%; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.crew-runbar > .crew-stats { display: contents; margin: 0; }
+.crew-runbar > .crew-stats > div { flex: 1 1 200px; padding: 14px 16px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.crew-runbar .crew-stats dt { color: var(--text-muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.crew-runbar .crew-stats dd { margin: 4px 0 0; color: var(--text); font-size: 22px; font-weight: 650; }
+.crew-runbar > .crew-runbar-actions { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.needs-you.tone-needs-you { margin-inline: 20px; border-radius: 14px; }
+
+/* The Studio chat's task choices are pills, and the studio side-cards are rounded like the rest. */
+.studio-chat-intents button { border-radius: 999px; padding: 6px 14px; }
+.studio-team-roles { margin-bottom: 14px; }

@@ -2133,12 +2133,12 @@ export function CodeView({
             </div>
           ))}
           <span className="code-tabs-spacer" />
-          {autoSave && activePath && dirty[activePath] && <span className="code-autosave-status" role="status">Autosave on</span>}
+          {autoSave && <span className="code-autosave-status" role="status">Autosave on</span>}
           <UiButton type="button" className={`icon-button compact ${tutorOpen ? 'active' : ''}`} title={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} aria-label={tutorOpen ? 'Hide learning tutor' : 'Show learning tutor'} onClick={() => setTutorOpen((current) => !current)}><PanelRightOpen size={14} /></UiButton>
           <UiButton type="button" className="secondary-button" title={formatOnSave ? 'Format this file now (saving with Ctrl+S also formats it)' : 'Format this file now'} disabled={!activePath || formatting} onClick={() => void formatActive()}>
             {formatting ? <RefreshCw size={13} className="spin" /> : <Braces size={13} />}<span>Format</span>
           </UiButton>
-          <UiButton type="button" className="secondary-button" disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></UiButton>
+          <UiButton type="button" className={activePath && dirty[activePath] ? 'primary-button' : 'secondary-button'} disabled={!activePath || !dirty[activePath]} onClick={() => void saveActive()}><Save size={13} /><span>Save</span></UiButton>
         </div>
         {/* Above the editor rather than only behind a panel tab: what to do next is worth seeing while typing, and a
             guide you have to go and open is one you will not read. It is not tied to the tutor being open, for the
