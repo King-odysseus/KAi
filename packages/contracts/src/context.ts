@@ -77,6 +77,15 @@ export const contextChipSchema = z.discriminatedUnion('type', [
       dataUrl: z.string().min(1).max(30_000_000).optional(),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal('attachment'),
+      name: z.string().min(1).max(500),
+      path: z.string().min(1).max(2_000),
+      /** Best-effort type from the browser; extraction also looks at the extension. */
+      mimeType: z.string().min(1).max(200).optional(),
+    })
+    .strict(),
 ]);
 
 export const contextSearchInputSchema = z

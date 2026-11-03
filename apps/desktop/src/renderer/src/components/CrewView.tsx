@@ -14,6 +14,7 @@ import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 
 type Tab = 'board' | 'crew' | 'design' | 'cost' | 'report';
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
@@ -194,21 +195,13 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
 
   return (
     <div className="page-view crew-view">
-      <header className="page-header">
-        <div>
-          <h1>Crew</h1>
-          <p>A Lead plans the tasks, builders write the code, and every result is checked before it counts{activeProject ? ` · ${activeProject.name}` : ''}</p>
-        </div>
-        <div className="crew-header-actions">
-          {runs.length > 0 && (
+      <PageHeader title="Crew" detail={<>A Lead plans the tasks, builders write the code, and every result is checked before it counts{activeProject ? ` · ${activeProject.name}` : ''}</>} actions={<>{runs.length > 0 && (
             <Select aria-label="Crew run" value={activeRunId ?? ''} onChange={(event) => { setActiveRunId(event.target.value || null); setTab('board'); }}>
               <option value="">New crew</option>
               {runs.map((item) => <option key={item.id} value={item.id}>{item.goal.slice(0, 48)}</option>)}
             </Select>
           )}
-          <UiButton type="button" className="secondary-button" onClick={newCrew} disabled={!activeRun}><Plus size={14} /><span>New crew</span></UiButton>
-        </div>
-      </header>
+          <UiButton type="button" className="secondary-button" onClick={newCrew} disabled={!activeRun}><Plus size={14} /><span>New crew</span></UiButton></>} />
 
       {!activeProject && <div className="empty-list">Open a project to start a crew.</div>}
       {error && <div className="workbench-error" role="alert">{error}</div>}

@@ -5,6 +5,7 @@ import { unwrap } from '../types';
 import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 
 interface RuleEditor {
   id: string;
@@ -81,13 +82,7 @@ export function RulesView(): ReactNode {
 
   return (
     <div className="page-view rules-view">
-      <header className="page-header">
-        <div>
-          <h1>Execution Rules</h1>
-          <p>Authoritative Cognitive1 instructions applied to every KAI agent</p>
-        </div>
-        <div className="page-actions">
-          <UiButton type="button" className="secondary-button" disabled={loading} onClick={() => void loadRules()}>
+      <PageHeader title="Execution Rules" detail="Authoritative Cognitive1 instructions applied to every KAI agent" actions={<><UiButton type="button" className="secondary-button" disabled={loading} onClick={() => void loadRules()}>
             <RefreshCw size={15} className={loading ? 'spin' : undefined} />
             <span>Refresh</span>
           </UiButton>
@@ -104,9 +99,7 @@ export function RulesView(): ReactNode {
           <UiButton type="button" className="primary-button" disabled={!document || saving} onClick={() => setEditor({ id: '', title: '', body: '' })}>
             <Plus size={16} />
             <span>Add rule</span>
-          </UiButton>
-        </div>
-      </header>
+          </UiButton></>} />
 
       <section className="rules-source-card">
         <ShieldCheck size={18} />

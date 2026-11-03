@@ -101,18 +101,24 @@ export function Select({
     const place = (): void => {
       const rect = triggerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      if (rect.bottom < 0 || rect.top > window.innerHeight) {
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      if (rect.bottom < 0 || rect.top > viewportHeight) {
         setOpen(false);
         return;
       }
-      const below = window.innerHeight - rect.bottom - POPOVER_GAP - 8;
+      // The list is never taller than the room above or below the trigger. A minimum height (the old 120px floor)
+      // could force it past the window edge when the trigger sat near the bottom; the list scrolls instead.
+      const desired = Math.min(POPOVER_MAX_HEIGHT, options.length * 32, viewportHeight - 16);
+      const below = viewportHeight - rect.bottom - POPOVER_GAP - 8;
       const above = rect.top - POPOVER_GAP - 8;
-      const upward = below < Math.min(POPOVER_MAX_HEIGHT, options.length * 32) && above > below;
-      const maxHeight = Math.max(120, Math.min(POPOVER_MAX_HEIGHT, upward ? above : below));
-      const width = Math.max(rect.width, 160);
-      const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+      const fitsBelow = below >= desired;
+      const upward = !fitsBelow && (above >= desired || above > below);
+      const maxHeight = Math.max(0, Math.min(desired, upward ? above : below));
+      const width = Math.max(0, Math.min(Math.max(rect.width, 160), viewportWidth - 16));
+      const left = Math.min(Math.max(8, rect.left), Math.max(8, viewportWidth - width - 8));
       setPosition(upward
-        ? { left, width, maxHeight, bottom: window.innerHeight - rect.top + POPOVER_GAP }
+        ? { left, width, maxHeight, bottom: viewportHeight - rect.top + POPOVER_GAP }
         : { left, width, maxHeight, top: rect.bottom + POPOVER_GAP });
     };
     const follow = (event: Event): void => {

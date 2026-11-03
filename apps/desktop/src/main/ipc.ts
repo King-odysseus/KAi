@@ -86,6 +86,7 @@ import { diagnoseRun, diagnosisLine } from './run-doctor';
 import { buildHistoryNote } from './run-history';
 import { canInterject, clearInterjections, interject, setInterjectionActive, takeDeliveredInterjections, type InterjectionAttachment, type InterjectionExtras } from './interjections';
 import { parseImageDataUrl } from './image-attachments';
+import { attachmentText } from './attachment-text';
 import { buildProjectContext } from './context-builder';
 import type { DesktopDirectProviderRuntime, DirectApiApprovalPort, DirectApiApprovalRequest } from './direct-provider-runtime';
 import { awaitsTheUser } from './direct-provider-runtime';
@@ -183,6 +184,7 @@ import {
   gitDiffStat,
   isGitRepo,
   readFileAtCheckpoint,
+  textDiffFileFromCheckpoint,
   textDiffFromCheckpoint,
   restoreCheckpoint,
   restoreCheckpointFile,
@@ -1730,6 +1732,14 @@ export async function runConversationAgent(
             .map((chip) => ({ name: chip.name, dataUrl: chip.dataUrl! })),
         }
       : {}),
+    ...(request.contextChips?.some((chip) => chip.type === 'attachment')
+      ? {
+          files: request.contextChips
+            .filter((chip): chip is Extract<ContextChip, { type: 'attachment' }> => chip.type === 'attachment')
+            .slice(0, 20)
+            .map((chip) => ({ name: chip.name, ...(chip.mimeType ? { mimeType: chip.mimeType } : {}) })),
+        }
+      : {}),
   };
   // A thread opened with the + button starts unnamed; its first message is what names it, so tabs read as topics.
   if (isPlaceholderTitle(conversation.title) && !conversation.turns.some((turn) => turn.role === 'user')) {
@@ -1784,6 +1794,11 @@ export async function runConversationAgent(
   // Where in the reply each event happened, so the transcript can keep prose and activity in the order they occurred.
   let streamedChars = 0;
   const eventOffsets = new Map<string, number>();
+  const liveDiffEvents: PersistedEvent[] = [];
+  const liveDiffTasks = new Map<string, Promise<void>>();
+  const liveDiffRefreshes = new Set<Promise<void>>();
+  const providerDiffAt = new Map<string, number>();
+  const generatedDiffIds = new Set<string>();
   const emit = (original: AgentRunEvent['event']): void => {
     let event = original;
     if (event.type === 'text.delta') {
@@ -1805,8 +1820,54 @@ export async function runConversationAgent(
       context.auto?.onApprovalRequest(conversation.id, event.title);
     }
     const payload = { conversationId: conversation.id, event } satisfies AgentRunEvent;
-    if (ownerWindowId !== null && context.windows.send(ownerWindowId, 'agents:event', payload)) return;
-    context.windows.broadcast('agents:event', payload);
+    if (ownerWindowId === null || !context.windows.send(ownerWindowId, 'agents:event', payload)) {
+      context.windows.broadcast('agents:event', payload);
+    }
+    if (event.type === 'diff.proposal' && !generatedDiffIds.has(event.id)) providerDiffAt.set(event.filePath, Date.now());
+    // Providers vary in how they report edits: some send a file-change event, while others only complete an edit or
+    // shell tool call. Refresh the checkpoint's changed paths after each such event so every composer execution mode
+    // gets the same live diff. Native proposals take precedence when the provider supplies one.
+    const toolMayChangeFiles = event.type === 'tool.call'
+      && event.status === 'completed'
+      && /(edit|write|patch|create|delete|rename|replace|shell|command|exec|terminal|bash|powershell)/i.test(event.name);
+    const shouldRefreshDiffs = Boolean(checkpoint) && (
+      event.type === 'file.change'
+      || event.type === 'file.edit.applied'
+      || toolMayChangeFiles
+    );
+    if (shouldRefreshDiffs && checkpoint) {
+      const refresh = (async () => {
+        // Give providers that emit a first-party diff immediately after the tool result a chance to do so.
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        const changedFiles = await diffFromCheckpoint(workRoot, checkpoint).catch(() => []);
+        await Promise.all(changedFiles.map(async ({ path: filePath }) => {
+          const previous = liveDiffTasks.get(filePath) ?? Promise.resolve();
+          const task = previous.then(async () => {
+            if (Date.now() - (providerDiffAt.get(filePath) ?? 0) < 1_500) return;
+            const diff = await textDiffFileFromCheckpoint(workRoot, checkpoint, filePath);
+            if (!diff || Date.now() - (providerDiffAt.get(filePath) ?? 0) < 1_500) return;
+            const proposal: PersistedEvent = {
+              schemaVersion: 1,
+              id: `evt_${crypto.randomUUID()}`,
+              taskId: conversation.id,
+              timestamp: new Date().toISOString(),
+              agent: request.agent,
+              type: 'diff.proposal',
+              filePath,
+              summary: 'Live changes from this run',
+              diff,
+            };
+            generatedDiffIds.add(proposal.id);
+            liveDiffEvents.push(proposal);
+            emit(proposal);
+          }).catch(() => undefined);
+          liveDiffTasks.set(filePath, task);
+          await task;
+        }));
+      })().catch(() => undefined);
+      liveDiffRefreshes.add(refresh);
+      void refresh.finally(() => liveDiffRefreshes.delete(refresh));
+    }
   };
   const approvalEvent = (approval: DirectApiApprovalRequest): Extract<AgentRunEvent['event'], { type: 'approval.request' }> => ({
     schemaVersion: 1,
@@ -2095,6 +2156,8 @@ export async function runConversationAgent(
         chipContext.imagePaths,
       ));
     }
+    await Promise.all([...liveDiffRefreshes, ...liveDiffTasks.values()]);
+    execution.events.push(...liveDiffEvents);
   } catch (error) {
     // A run that threw never reaches the save at the end, so it is announced here instead: a window left believing
     // the conversation is still running would show a spinner and a Stop button for work that is already over.
@@ -2774,6 +2837,20 @@ export async function renderContextChips(
       sections.push(`### Memory search: ${chip.query}\n${chip.summary.slice(0, 100_000)}`);
       continue;
     }
+    if (chip.type === 'attachment') {
+      const root = await fs.realpath(attachmentsRoot).catch(() => path.resolve(attachmentsRoot));
+      const target = await fs.realpath(chip.path).catch(() => '');
+      if (!target || !insideRoot(root, target) || !(await fs.stat(target)).isFile()) {
+        throw new Error(`Attached file is unavailable: ${chip.name}`);
+      }
+      // Staged beside images so a CLI agent's file tools can reach it, and quoted here when it has readable text.
+      const staged = await stageAttachmentForCli(projectPath, target);
+      const text = await attachmentText(target, chip.name, chip.mimeType);
+      sections.push(`### Attached file: ${chip.name}${chip.mimeType ? ` (${chip.mimeType})` : ''}\nPath: ${staged}\n${text
+        ? `Contents:\n${text.slice(0, 100_000)}`
+        : 'This file is binary or could not be read as text. Use the project tools to inspect the staged path.'}`);
+      continue;
+    }
     if (chip.type === 'image') {
       const root = await fs.realpath(attachmentsRoot).catch(() => path.resolve(attachmentsRoot));
       const target = await fs.realpath(chip.path).catch(() => '');
@@ -2898,18 +2975,29 @@ async function gitDiffForProject(context: IpcContext, projectId: string): Promis
 }
 
 async function saveAttachment(context: IpcContext, name: string, dataUrl: string): Promise<ContextChip> {
-  const match = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/i.exec(dataUrl);
-  if (!match) throw new Error('Unsupported image attachment. Use PNG, JPEG, GIF, or WebP.');
-  const extension = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
-  const data = Buffer.from(match[2], 'base64');
-  if (data.length === 0 || data.length > 15 * 1024 * 1024) {
-    throw new Error('Image attachments must be between 1 byte and 15 MB.');
+  const match = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(dataUrl);
+  if (!match) throw new Error('Unsupported attachment.');
+  const mimeType = (match[1] || 'application/octet-stream').toLowerCase();
+  const data = match[2]
+    ? Buffer.from(match[3] ?? '', 'base64')
+    : Buffer.from(decodeURIComponent(match[3] ?? ''), 'utf8');
+  if (data.length === 0 || data.length > 25 * 1024 * 1024) {
+    throw new Error('Attachments must be between 1 byte and 25 MB.');
   }
+  const safeName = sanitizeAttachmentName(name, 'attachment');
+  const imageExtension = /^image\/(png|jpe?g|gif|webp)$/i.exec(mimeType)?.[1].toLowerCase();
+  const extension = imageExtension
+    ? (imageExtension === 'jpeg' ? 'jpg' : imageExtension)
+    : (path.extname(safeName).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12)
+      || ({ 'application/pdf': '.pdf', 'text/plain': '.txt', 'text/markdown': '.md', 'application/json': '.json' }[mimeType] ?? '.bin'));
   await fs.mkdir(context.paths.attachments, { recursive: true });
-  const id = `img_${crypto.randomUUID()}`;
-  const filePath = path.join(context.paths.attachments, `${id}.${extension}`);
+  const id = `${imageExtension ? 'img' : 'file'}_${crypto.randomUUID()}`;
+  const filePath = path.join(context.paths.attachments, `${id}${extension.startsWith('.') ? extension : `.${extension}`}`);
   await fs.writeFile(filePath, data);
-  return { type: 'image', name: sanitizeAttachmentName(name, `${id}.${extension}`), path: filePath, dataUrl };
+  if (imageExtension) {
+    return { type: 'image', name: safeName, path: filePath, dataUrl };
+  }
+  return { type: 'attachment', name: safeName, path: filePath, mimeType };
 }
 
 function sanitizeAttachmentName(name: string, fallback: string): string {

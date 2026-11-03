@@ -4,7 +4,7 @@ import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerR
 import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
 import { settleWithin } from '../async-deadline';
 import { steerWaitingNotice } from '../run-controls';
-import { PlanStrip } from './PlanStrip';
+import { PlanStrip, usePlanProgress } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
 import { Markdown } from './Markdown';
 import { Pill } from './Pill';
@@ -110,11 +110,19 @@ import { SaveToBrainDialog } from './SaveToBrain';
 import { VerificationBadge } from './VerificationPanel';
 import { UsageBanner } from './UsageView';
 import { confirmDialog, promptDialog } from './AppDialog';
-import { AgentActivityStrip, deriveAgentActivity } from './AgentActivity';
+import { deriveAgentActivity } from './AgentActivity';
+import { ActivityCard } from './ActivityCard';
+import { currentStep, deriveActivitySteps } from '../activity-steps';
 import { BlockedActionsStrip } from './BlockedActionsStrip';
 import type { QueuedPrompt } from './composer-queue';
 
 import { Select } from './ui/Select';
+import { Composer, ComposerInput, ComposerPause, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
+import { IconButton } from './ui/IconButton';
+import { ActionsMenu } from './ui/ActionsMenu';
+import { PageHeader } from './ui/PageHeader';
+import { NoticeBanner } from './ui/NoticeBanner';
+import { OptionMenu, type OptionMenuOption } from './ui/OptionMenu';
 import { UiButton } from './UiButton';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
@@ -278,6 +286,7 @@ const REFINE_WAIT_MS = 60_000;
 const STOP_WAIT_MS = 30_000;
 /** What goes with an image sent alone, so a message is never empty. The main process uses the same words. */
 const IMAGE_ONLY_PROMPT = 'Please look at the attached image.';
+const FILE_ONLY_PROMPT = 'Please read the attached file.';
 
 const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
   { id: 'ask', label: 'General', description: 'Ask a question or describe a task in your own words', placeholder: 'Ask KAI about this project or describe a task', starter: '' },
@@ -556,6 +565,12 @@ export function WorkspaceView({
   const providerLabel = effectiveRoute === 'proxy'
     ? `Proxy${settings.proxy.defaultModel ? ` · ${settings.proxy.defaultModel}` : ''}`
     : `${directApiCapability?.displayName || 'Direct API'}${directApiCapability?.model ? ` · ${directApiCapability.model}` : ''}`;
+  // What this run actually is. In API mode the agent id is irrelevant: the provider and model are the run.
+  const runLabel = apiRun
+    ? effectiveRoute === 'proxy'
+      ? providerLabel
+      : `${directApiCapability?.displayName || 'Direct API'}${(selectedModel || directApiCapability?.model) ? ` · ${selectedModel || directApiCapability?.model}` : ''}`
+    : selectedModel || selectedAgent;
   const activeGoal = activeConversation?.goal ?? null;
   const activeTaskIntent = TASK_INTENTS.find((intent) => intent.id === taskIntent) ?? TASK_INTENTS[0];
   const allContextChips: ContextChip[] = [
@@ -563,7 +578,10 @@ export function WorkspaceView({
     ...contextChips,
   ];
   const hasImageAttachment = contextChips.some((chip) => chip.type === 'image');
-  const canSendPrompt = Boolean(prompt.trim()) || hasImageAttachment;
+  const hasFileAttachment = contextChips.some((chip) => chip.type === 'attachment');
+  const hasAttachment = hasImageAttachment || hasFileAttachment;
+  const attachmentOnlyPrompt = hasFileAttachment ? FILE_ONLY_PROMPT : IMAGE_ONLY_PROMPT;
+  const canSendPrompt = Boolean(prompt.trim()) || hasAttachment;
   const estimateModel = selectedModel || directApiCapability?.model || '';
   const promptContextCharacters = allContextChips.reduce((total, chip) => total + (
     chip.type === 'selection' || chip.type === 'terminal' ? chip.content?.length ?? 0
@@ -849,8 +867,8 @@ export function WorkspaceView({
 
   const send = (): void => {
     const typedText = prompt.trim();
-    if ((!typedText && !hasImageAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
-    const text = typedText || IMAGE_ONLY_PROMPT;
+    if ((!typedText && !hasAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
+    const text = typedText || attachmentOnlyPrompt;
     if (isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
       setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
       return;
@@ -937,7 +955,7 @@ export function WorkspaceView({
 
   const steerNow = (): void => {
     // An image alone is a complete message, the same as when it is sent rather than steered.
-    const text = prompt.trim() || (hasImageAttachment ? IMAGE_ONLY_PROMPT : '');
+    const text = prompt.trim() || (hasAttachment ? attachmentOnlyPrompt : '');
     if (!text || !activeProject || busy || refiningPrompt || !ready || !queueConversationId) return;
     if (!running) {
       send();
@@ -965,7 +983,7 @@ export function WorkspaceView({
    */
   const interjectNow = (): void => {
     const typed = prompt.trim();
-    const text = typed || (hasImageAttachment ? IMAGE_ONLY_PROMPT : '');
+    const text = typed || (hasAttachment ? attachmentOnlyPrompt : '');
     const conversationId = activeConversation?.id;
     if (!text || !conversationId || !running || interjecting) return;
     // What a send would carry: an image, a selection or terminal output attached beside the words is part of what is
@@ -1000,8 +1018,11 @@ export function WorkspaceView({
    */
   const steerQueuedPrompt = (index: number): void => {
     const item = queuedPrompts[index];
-    if (!item || busy || !activeProject || !ready) return;
+    if (!item || !activeProject) return;
     const conversationId = activeConversation?.id;
+    // A run that is already going is proof enough that the provider is usable. Requiring `ready` (or the composer's
+    // transient `busy` flag) here made Steer now a no-op while an API run was active; it only matters when this falls
+    // through to promoting the instruction for a later turn.
     if (running && conversationId && apiRun) {
       if (steeringQueued.includes(item.id)) return;
       setSteeringQueued((current) => [...current, item.id]);
@@ -1028,6 +1049,7 @@ export function WorkspaceView({
       setWorkbenchNotice('This CLI run cannot take a live message. The instruction remains queued for its next turn.');
       return;
     }
+    if (busy || !ready) return;
     onUpdateQueuedPrompt(item.id, 'promote');
   };
 
@@ -1304,22 +1326,18 @@ export function WorkspaceView({
     }
   }
 
-  /** Attaches every image given, one after another. A failure on one is reported and the rest still attach. */
-  async function attachImageFiles(files: readonly File[]): Promise<void> {
-    const images = files.filter((file) => file.type.startsWith('image/'));
-    if (images.length === 0) {
-      setWorkbenchNotice('Attach a PNG, JPEG, GIF, or WebP image.');
-      return;
-    }
+  /** Attaches every file given, one after another. A failure on one is reported and the rest still attach. */
+  async function attachComposerFiles(files: readonly File[]): Promise<void> {
+    if (files.length === 0) return;
     setContextBusy(true);
     try {
-      for (const file of images) {
+      for (const file of files) {
         try {
           const dataUrl = await readFileAsDataUrl(file);
           const chip = await window.kaiDesktop.saveAttachment(file.name, dataUrl).then(unwrap);
-          if (chip.type !== 'image') throw new Error('The attachment service returned an invalid image chip.');
           // Each save has its own file, so two pasted screenshots that are both called image.png stay separate.
-          setContextChips((current) => [...current.filter((item) => !(item.type === 'image' && item.path === chip.path)), chip]);
+          const savedPath = chip.type === 'image' || chip.type === 'attachment' ? chip.path : null;
+          setContextChips((current) => [...current.filter((item) => !(savedPath && (item.type === 'image' || item.type === 'attachment') && item.path === savedPath)), chip]);
         } catch (caught) {
           setWorkbenchNotice(`${file.name}: ${messageOf(caught)}`);
         }
@@ -1501,6 +1519,11 @@ export function WorkspaceView({
     return summary;
   }, { tools: 0, edits: 0, usage: 0 });
   const activity = deriveAgentActivity(recentEvents, running, paused, awaitingApproval, autoWaiting);
+  const latestRequestText = [...(activeConversation?.turns ?? [])].reverse().find((turn) => turn.role === 'user')?.text ?? '';
+  const latestRequest = latestRequestText.replace(/\s+/g, ' ').trim().slice(0, 80) || undefined;
+  // The composer's status line names only the step in hand ("Editing payment.service.ts"); the card holds the rest.
+  const liveStep = running ? currentStep(deriveActivitySteps(recentEvents)) : null;
+  const planProgress = usePlanProgress(activeProject?.id ?? null, activeConversation?.updatedAt);
   // Autopilot runs a Studio plan, so it is reached through the plan this conversation was opened for — the studio id,
   // not the desktop project the plan happens to be registered as. Auto, by contrast, is about this conversation.
   const autopilotOrigin = activeConversation?.origin?.kind === 'autopilot' ? activeConversation.origin : null;
@@ -1588,9 +1611,10 @@ export function WorkspaceView({
 
   return (
     <div className="workspace-view">
-      <header className="workspace-header page-header">
-        <div><h1>{activeConversation?.title ?? activeProject?.name ?? 'Workspace'}</h1><p>{activeConversation ? activeProject?.name ?? 'Conversation' : activeProject ? 'Workspace' : 'Open a project to begin'}</p></div>
-        <div className="workspace-status">
+      <PageHeader
+        title={activeConversation?.title ?? activeProject?.name ?? 'Workspace'}
+        detail={activeConversation ? activeProject?.name ?? 'Conversation' : activeProject ? 'Workspace' : 'Open a project to begin'}
+        actions={<>
           {activeProject && !activeProject.id.startsWith('studio_') && (
             <UiButton
               type="button"
@@ -1604,63 +1628,64 @@ export function WorkspaceView({
           )}
           <Pill tone={ready ? 'success' : 'error'}><Circle size={7} fill="currentColor" /> {apiRun ? 'API' : 'CLI'} {ready ? 'ready' : 'unavailable'}</Pill>
           <Pill tone="info"><Sparkles size={13} /> {apiRun ? directApiCapability?.model || directApiCapability?.displayName || 'Direct API' : selectedCapability?.version ?? selectedCapability?.displayName ?? selectedAgent}</Pill>
-          <details className="workspace-header-more">
-            <summary title="More workspace actions" aria-label="More workspace actions"><Ellipsis size={17} /></summary>
-            <div className="popover"><UiButton type="button" aria-pressed={rawEventsOpen} onClick={() => setRawEventsOpen((current) => !current)}><Braces size={14} /><span>Raw events ({rawEvents.length})</span></UiButton></div>
-          </details>
-        </div>
-      </header>
+          <ActionsMenu
+            ariaLabel="More workspace actions"
+            items={[
+              { key: 'raw', label: `Raw events (${rawEvents.length})`, icon: <Braces size={14} />, onSelect: () => setRawEventsOpen((current) => !current) },
+              { key: 'compact', label: 'Compact conversation', disabled: busy || !activeConversation, onSelect: onCompactConversation },
+              { key: 'continue', label: 'Continue in new tab', disabled: busy || !activeConversation, onSelect: onContinueInNewTab },
+            ]}
+            trigger={({ onClick, expanded }) => <IconButton aria-label="More workspace actions" aria-expanded={expanded} onClick={onClick} icon={<Ellipsis size={15} />} />}
+          />
+        </>}
+      />
 
       <div ref={noticesRef} className={`workspace-notices ${noticesExpanded ? 'expanded' : ''}`}>
         {interruptedRuns > 0 && !running && (
-          <div className="workbench-notice recovery-banner" role="status">
-            <span>{interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.</span>
-            <UiButton type="button" className="secondary-button" onClick={onOpenRecovery}>Review</UiButton>
-          </div>
+          <NoticeBanner primary={<UiButton type="button" variant="secondary" onClick={onOpenRecovery}>Review</UiButton>}>
+            {interruptedRuns} run{interruptedRuns === 1 ? ' was' : 's were'} interrupted the last time KAI closed.
+          </NoticeBanner>
         )}
 
         {/* Something the composer was waiting on has passed its deadline. Rendering it here rather than in the
             composer is the point: the control that is stuck is inside the composer, so the way out has to be
             somewhere the stuck call cannot disable. */}
         {stuckNotice && (
-          <div className="workbench-notice workbench-error" role="alert">
-            <span>{stuckNotice}</span>
-            <UiButton type="button" className="secondary-button" onClick={onStopEverything}>Stop everything</UiButton>
-            <UiButton type="button" className="icon-button compact" aria-label="Dismiss notice" onClick={() => setStuckNotice(null)}><X size={13} /></UiButton>
-          </div>
+          <NoticeBanner tone="danger" primary={<UiButton type="button" variant="danger" onClick={onStopEverything}>Stop everything</UiButton>} onDismiss={() => setStuckNotice(null)}>
+            {stuckNotice}
+          </NoticeBanner>
         )}
 
         {/* Said here because this is the conversation that card was being worked in. A run that closed mid-card, or
             one stopped by hand, leaves the board holding the card with nothing running for it — and this is the only
             screen that can offer to carry on from where it stopped rather than starting the card over. */}
         {interruptedAutopilot && (
-          <div className="workbench-notice recovery-banner" role="status">
-            <span>
-              The board still has &ldquo;{interruptedAutopilot.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.
-            </span>
-            <UiButton type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void carryOnAutopilot()}>Carry on</UiButton>
-            <UiButton type="button" className="secondary-button" disabled={stoppingRun} onClick={() => void releaseAutopilotCard()}>Put the card back</UiButton>
-          </div>
+          <NoticeBanner
+            tone="waiting"
+            primary={<UiButton type="button" variant="secondary" disabled={stoppingRun} onClick={() => void carryOnAutopilot()}>Carry on</UiButton>}
+            more={[{ key: 'release', label: 'Put the card back', disabled: stoppingRun, onSelect: () => void releaseAutopilotCard() }]}
+          >
+            The board still has &ldquo;{interruptedAutopilot.cardTitle}&rdquo; marked In progress from an Autopilot run that is no longer going.
+          </NoticeBanner>
         )}
 
         {autopilotOrigin && (
-          <div className="workbench-notice" role="status">
-            <span>Studio card: &ldquo;{autopilotOrigin.cardTitle}&rdquo;</span>
-            <UiButton type="button" className="secondary-button" onClick={() => onOpenStudioCard(autopilotOrigin.studioProjectId, autopilotOrigin.cardId)}>Open card in Studio</UiButton>
-          </div>
+          <NoticeBanner primary={<UiButton type="button" variant="secondary" onClick={() => onOpenStudioCard(autopilotOrigin.studioProjectId, autopilotOrigin.cardId)}>Open card in Studio</UiButton>}>
+            Studio card: &ldquo;{autopilotOrigin.cardTitle}&rdquo;
+          </NoticeBanner>
         )}
 
         {activeConversation && !running && estimateConversationTokens(activeConversation) >= COMPACTION_WARNING_TOKENS && (
-          <div className="workbench-notice compaction-banner" role="status">
-            <span>
+          <NoticeBanner
+            primary={<UiButton type="button" variant="secondary" disabled={busy} onClick={onCompactConversation}>Compact</UiButton>}
+            more={[{ key: 'continue', label: 'Continue in new tab', disabled: busy, onSelect: onContinueInNewTab }]}
+          >
               This conversation is about {formatCompact(estimateConversationTokens(activeConversation))} tokens. Compact it before the context window fills.
               {/* The size on its own says nothing about money; a large idle conversation resumed on a paid API model is exactly
                   the moment a cost warning is worth having, before the first reply of the new session is sent. */}
               {resumeCostEstimate && <> Resuming it costs roughly ${resumeCostEstimate.low < 0.01 ? resumeCostEstimate.low.toFixed(4) : resumeCostEstimate.low.toFixed(2)}–${resumeCostEstimate.high < 0.01 ? resumeCostEstimate.high.toFixed(4) : resumeCostEstimate.high.toFixed(2)} for the next response alone.</>}
-            </span>
-            <UiButton type="button" className="secondary-button" disabled={busy} onClick={onCompactConversation}>Compact</UiButton>
-            <UiButton type="button" className="secondary-button" disabled={busy} onClick={onContinueInNewTab} title="Summarise this conversation and carry on in a new tab">Continue in new tab</UiButton>
-          </div>
+            
+          </NoticeBanner>
         )}
 
         <UsageBanner conversationId={activeConversation?.id} refreshToken={activeConversation?.events.length} onOpenUsage={onOpenUsage} />
@@ -1833,8 +1858,8 @@ export function WorkspaceView({
                   </article>)
               : streamingText && <article className="message assistant streaming"><div className="message-role">KAI</div><Markdown text={streamingText} onOpenFile={onOpenFile} /></article>}
             {pendingQuestion && <InlineQuestion key={pendingQuestion.requestId} question={pendingQuestion} onAnswer={onAnswerQuestion} />}
-            {running && (
-              <WorkProgressTimeline events={recentEvents} activity={activity} paused={paused} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} />
+            {(running || paused || awaitingApproval) && (
+              <ActivityCard events={recentEvents} activity={activity} running={running} paused={paused} task={latestRequest} elapsedSeconds={elapsedSeconds} tokenEstimate={liveTokenEstimate} onOpenFile={onOpenFile} />
             )}
             {/* The run in progress shows its changes as they happen; a finished one keeps them closed. */}
             {/* Commands and edits stay folded to one line while the run is live too; opening one is the reader's choice. */}
@@ -1881,7 +1906,9 @@ export function WorkspaceView({
       </div>
 
       <div className="composer">
-        {running && activeConversation?.activeAgent && activeConversation.activeAgent !== selectedAgent && (
+        {/* CLI only: the next agent is a real choice there. In API mode the provider/model runs the turn, and the
+            conversation's old CLI agent (often "claude") is not what is running. */}
+        {!apiRun && running && activeConversation?.activeAgent && activeConversation.activeAgent !== selectedAgent && (
           <div className="composer-agent-notice" role="status">
             <strong>Current run: {agentCapabilities.find((agent) => agent.id === activeConversation.activeAgent)?.displayName ?? activeConversation.activeAgent}</strong>
             <span>{agentCapabilities.find((agent) => agent.id === selectedAgent)?.displayName ?? selectedAgent} is selected for the next run.</span>
@@ -1899,15 +1926,6 @@ export function WorkspaceView({
             </UiButton>
           </div>
         )}
-        {activeConversation && (running || paused || awaitingApproval) && <AgentActivityStrip
-          events={activeConversation.events}
-          running={running}
-          paused={paused}
-          autoWaiting={autoWaiting}
-          awaitingApproval={awaitingApproval}
-          elapsedSeconds={elapsedSeconds}
-          tokenEstimate={liveTokenEstimate}
-        />}
         {activeConversation && <BlockedActionsStrip events={activeConversation.events} />}
         {/* A missing CLI is explained even before a project is open, so the user knows how to get it. */}
         {(activeProject || (!apiRun && selectedCapability?.state === 'not_installed')) && !ready && (apiRun ? directApiCapability : selectedCapability) && (
@@ -2038,14 +2056,14 @@ export function WorkspaceView({
           <div className="skills-overlay" role="dialog" aria-modal="true" aria-label="Add context">
           <div className="context-picker skills-panel">
             <div className="context-picker-head">
-              <div><strong>Add context</strong><span>Files, selections, changes, memory, or an image</span></div>
+              <div><strong>Add context</strong><span>Files, selections, changes, memory, or an attachment</span></div>
               <UiButton type="button" className="icon-button compact" aria-label="Close context picker" onClick={() => setContextPickerOpen(false)}><X size={14} /></UiButton>
             </div>
             <div className="context-picker-actions">
               <UiButton type="button" disabled={contextBusy} onClick={() => void addSelectionContext()}><Braces size={14} /><span>Current selection</span></UiButton>
               <UiButton type="button" disabled={contextBusy} onClick={() => void addGitDiffContext()}><FileDiff size={14} /><span>Uncommitted changes</span></UiButton>
               <UiButton type="button" disabled={contextBusy} onClick={() => void addMemoryContext()}><Brain size={14} /><span>Search memory</span></UiButton>
-              <UiButton type="button" disabled={contextBusy} onClick={() => imageInputRef.current?.click()}><ImagePlus size={14} /><span>Attach image</span></UiButton>
+              <UiButton type="button" disabled={contextBusy} onClick={() => imageInputRef.current?.click()}><Paperclip size={14} /><span>Attach file</span></UiButton>
             </div>
             <label className="input-with-icon context-file-search"><FileSearch size={14} /><UiTextInput autoFocus value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="Search project files" /></label>
             <div className="context-file-results">
@@ -2130,7 +2148,7 @@ export function WorkspaceView({
             )}
             <div className="side-question-compose">
               <Textarea
-                rows={2}
+                rows={1}
                 value={sideDraft}
                 onChange={(event) => setSideDraft(event.target.value)}
                 placeholder="Ask something off to the side, then come back to this conversation"
@@ -2165,24 +2183,15 @@ export function WorkspaceView({
           ref={imageInputRef}
           className="visually-hidden"
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
           multiple
           onChange={(event) => {
             const files = [...(event.target.files ?? [])];
-            if (files.length > 0) void attachImageFiles(files);
+            if (files.length > 0) void attachComposerFiles(files);
           }}
         />
         {activeProject && <PlanStrip projectId={activeProject.id} refreshKey={activeConversation?.updatedAt} />}
         {/* `busy` here is the boolean prop. It used to be compared to null, which is always true, so the Stop
             button on this line was disabled on every run: the one control that ends a run was unreachable. */}
-        {composerRun && (
-          <ComposerRunLine
-            state={composerRun.line}
-            busy={stoppingRun || busy}
-            onStop={() => void (composerRun.line.who === 'autopilot' ? stopAutopilot() : onCancel())}
-            onOpenDetails={() => setRunDetailsOpen(true)}
-          />
-        )}
         {taskIntent === 'equalizer' && activeProject && (
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}
@@ -2193,8 +2202,20 @@ export function WorkspaceView({
             <span>{activeProject.path}</span>
           </div>
         )}
-        <div className={`composer-box${composerRun ? ` run-${composerRun.line.state}` : ''}`}>
-          <Textarea
+        <Composer
+          tone={composerRun?.line.state ?? 'idle'}
+          status={composerRun ? (
+            <ComposerRunLine
+              state={composerRun.line}
+              step={liveStep}
+              progress={planProgress}
+              busy={stoppingRun || busy}
+              onStop={() => void (composerRun.line.who === 'autopilot' ? stopAutopilot() : onCancel())}
+              onOpenDetails={() => setRunDetailsOpen(true)}
+            />
+          ) : undefined}
+        >
+          <ComposerInput
             ref={promptRef}
             value={prompt}
             onChange={(event) => {
@@ -2212,11 +2233,11 @@ export function WorkspaceView({
             }}
             onPaste={(event) => {
               const files = [...event.clipboardData.items]
-                .filter((item) => item.type.startsWith('image/'))
+                .filter((item) => item.kind === 'file')
                 .flatMap((item) => item.getAsFile() ?? []);
               if (files.length > 0) {
                 event.preventDefault();
-                void attachImageFiles(files);
+                void attachComposerFiles(files);
               }
             }}
             onKeyDown={(event) => {
@@ -2235,44 +2256,52 @@ export function WorkspaceView({
                 setContextPickerOpen(false);
               }
             }}
-            placeholder={activeTaskIntent.placeholder}
+            placeholder={running
+              ? apiRun ? 'Steer the run, or press Stop to take over…' : 'Queue a message for the next turn…'
+              : activeTaskIntent.placeholder}
             aria-label="Task prompt"
             disabled={!activeProject || (busy && !running) || !ready || refiningPrompt}
           />
-          <div className="composer-toolbar">
-            <div className="composer-leading">
-              <UiButton type="button" className={`composer-icon-button ${contextPickerOpen ? 'active' : ''}`} onClick={() => setContextPickerOpen((current) => !current)} title="Add files, images, memory, or project context" aria-label="Add context"><Plus size={15} /></UiButton>
-              <UiButton type="button" className={`composer-icon-button ${presetsOpen ? 'active' : ''}`} onClick={() => setPresetsOpen((current) => !current)} title="Saved prompts" aria-label="Saved prompts"><Hash size={14} /></UiButton>
-              {activeConversation && (
-                <UiButton type="button" className={`composer-icon-button ${sideOpen ? 'active' : ''}`} onClick={() => setSideOpen((current) => !current)} title="Ask a quick question without derailing this conversation" aria-label="Side question"><MessageCircleQuestion size={14} /></UiButton>
-              )}
-              <SelectMenu ariaLabel="Access level" className="composer-access-select" disabled={busy} icon={<ShieldCheck size={14} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
-              <UiButton type="button" className={`composer-icon-button composer-advanced-toggle ${advancedComposerOpen ? 'active' : ''}`} aria-expanded={advancedComposerOpen} aria-label="More run options" title="More run options" onClick={() => setAdvancedComposerOpen((open) => !open)} disabled={busy}><Settings2 size={14} /></UiButton>
-            </div>
-            <div className="composer-actions">
-              <SelectMenu ariaLabel="Model" className="composer-model-select" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
-              <UiButton type="button" className={`composer-icon-button ${refiningPrompt ? 'active' : ''}`} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} title={refineTitle} aria-label="Refine prompt">{refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}</UiButton>
+          <ComposerToolbar
+            leading={<>
+              <IconButton aria-label="Add context" title="Add files, images, memory, or project context" active={contextPickerOpen} onClick={() => setContextPickerOpen((current) => !current)} icon={<Plus size={15} />} />
+              <IconButton aria-label="Saved prompts" title="Saved prompts" active={presetsOpen} onClick={() => setPresetsOpen((current) => !current)} icon={<Hash size={14} />} />
+              {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
+              <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
+              <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
+              <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
+              <IconButton data-tour="composer-advanced" aria-label="More run options" title="More run options" aria-expanded={advancedComposerOpen} active={advancedComposerOpen} disabled={busy} onClick={() => setAdvancedComposerOpen((open) => !open)} icon={<Settings2 size={14} />} />
+            </>}
+            actions={<>
+              <IconButton aria-label="Refine prompt" title={refineTitle} disabled={!prompt.trim() || refineBlocked || !refineTarget} onClick={() => void refinePromptDraft()} icon={refiningPrompt ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} />
               {(running || paused || awaitingApproval) ? (
                 <>
-                  {running && <UiButton type="button" className="send-button" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} title="Queue for the next turn" aria-label="Queue message"><Send size={13} /></UiButton>}
-                  {running && apiRun && <UiButton type="button" className="send-button" disabled={!canSendPrompt || interjecting} onClick={interjectNow} title="Steer this run at its next model step" aria-label="Steer active run"><ArrowRight size={13} /></UiButton>}
-                  {!awaitingApproval && <UiButton type="button" className="send-button pause-button" onClick={paused ? onResume : onPause} title={paused ? 'Resume agent' : 'Pause agent'} aria-label={paused ? 'Resume agent' : 'Pause agent'}>{paused ? <Play size={13} fill="currentColor" /> : <Pause size={13} fill="currentColor" />}</UiButton>}
-                  <UiButton type="button" className="send-button stop-button" onClick={onCancel} title="Stop agent" aria-label="Stop agent"><Square size={13} fill="currentColor" /></UiButton>
+                  {running && <ComposerSend label="Queue message" title="Queue for the next turn" disabled={!canSendPrompt || busy || refiningPrompt} onClick={send} />}
+                  {running && apiRun && <ComposerSend label="Steer active run" title="Steer this run at its next model step" disabled={!canSendPrompt || interjecting} onClick={interjectNow} icon={<ArrowRight size={14} />} />}
+                  {!awaitingApproval && <ComposerPause paused={paused} onPause={onPause} onResume={onResume} />}
+                  <ComposerStop onClick={onCancel} />
                 </>
-              ) : <UiButton type="button" className="send-button" disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready} onClick={send} title={isAutoLikeIntent(taskIntent) ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'} aria-label={isAutoLikeIntent(taskIntent) ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}>{startingAuto ? <Loader2 className="spin" size={15} /> : <Send size={16} />}</UiButton>}
-            </div>
-          </div>
+              ) : (
+                <ComposerSend
+                  label={isAutoLikeIntent(taskIntent) ? 'Start Auto on this task' : activeConversation ? 'Send message' : 'Start conversation'}
+                  title={isAutoLikeIntent(taskIntent) ? 'Send and Auto works it until it is done' : activeConversation ? 'Send message' : 'Start conversation'}
+                  disabled={!activeProject || !canSendPrompt || busy || startingAuto || refiningPrompt || !ready}
+                  sending={startingAuto}
+                  onClick={send}
+                />
+              )}
+            </>}
+          />
           {advancedComposerOpen && <div className="composer-advanced-options" aria-label="More run options">
-            <SelectMenu ariaLabel="Task type" className="composer-task-select" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
-            <SelectMenu ariaLabel="Reply style" className="composer-style-select" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
-            <SelectMenu ariaLabel="Agents" className="composer-style-select" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
+            <OptionMenu ariaLabel="Reply style" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
+            <OptionMenu ariaLabel="Agents" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
             {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
-            <SelectMenu ariaLabel="Route" className={`control-select route-select ${effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : ''}`} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
+            <OptionMenu ariaLabel="Route" tone={effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : undefined} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
             <div className="mode-toggle" role="group" aria-label="Execution mode"><UiButton type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}>CLI</UiButton><UiButton type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}>API</UiButton></div>
-            {apiRun ? <UiButton type="button" className="composer-icon-button" title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy}><Cloud size={14} /></UiButton> : <SelectMenu ariaLabel="Agent" className={`agent-select ${ready ? '' : 'unavailable'}`} disabled={busy || running} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={running ? 'The current run is using its original agent; stop it before switching' : (selectedCapability?.unavailableReason ?? 'Which agent works on this conversation')} value={selectedAgent} />}
-            {!apiRun && reasoningLevels.length > 0 && <SelectMenu ariaLabel="Thinking effort" className="composer-effort-select" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
+            {apiRun ? <IconButton title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy} icon={<Cloud size={14} />} /> : <OptionMenu ariaLabel="Agent" tone={ready ? undefined : 'unavailable'} disabled={busy || running} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={running ? 'The current run is using its original agent; stop it before switching' : (selectedCapability?.unavailableReason ?? 'Which agent works on this conversation')} value={selectedAgent} />}
+            {!apiRun && reasoningLevels.length > 0 && <OptionMenu ariaLabel="Thinking effort" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
           </div>}
-        </div>
+        </Composer>
         {isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (
           <p className="composer-task-guidance" role="note">
             <span>Auto works on its own, so it needs Edit files or Full access, and Access is lower than that.</span>{' '}
@@ -2293,7 +2322,7 @@ export function WorkspaceView({
           </div>
         )}
         <div className="composer-status-line">
-          <UiButton type="button" aria-expanded={composerStatusOpen} onClick={() => setComposerStatusOpen((open) => !open)}><ChevronDown size={12} className={composerStatusOpen ? 'rotate-180' : ''} /> {running ? 'Running' : 'Ready'} · {apiRun ? 'API' : 'CLI'} · {selectedModel || selectedAgent}</UiButton>
+          <UiButton type="button" aria-expanded={composerStatusOpen} onClick={() => setComposerStatusOpen((open) => !open)}><ChevronDown size={12} className={composerStatusOpen ? 'rotate-180' : ''} /> {running ? 'Running' : 'Ready'} · {apiRun ? 'API' : 'CLI'} · {runLabel}</UiButton>
           <span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span>
         </div>
         {composerStatusOpen && <div className="composer-status-details">
@@ -2415,6 +2444,15 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
           ))}
         </div>
       ) : null}
+      {turn.role === 'user' && turn.files?.length ? (
+        <div className="message-attachments" aria-label="Attached files">
+          {turn.files.map((file) => (
+            <span className="attachment-file" key={`${file.name}:${file.mimeType ?? ''}`} title={file.name}>
+              <Paperclip size={12} /><span className="truncate">{file.name}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
       {turn.role === 'assistant' && partLast && turn.generatedImages?.length ? (
         <div className="message-attachments" aria-label="Generated images">
           {turn.generatedImages.map((image, index) => <ImageCard key={`${turn.id}-${index}`} name={image.name} dataUrl={image.dataUrl} />)}
@@ -2479,34 +2517,6 @@ function CopyMessageButton({ text, extra }: { text: string; extra?: ReactNode })
         {copied ? <Check size={13} /> : <Copy size={13} />}
       </UiButton>
     </div>
-  );
-}
-
-function WorkProgressTimeline({ events, activity, paused, elapsedSeconds, tokenEstimate }: {
-  events: readonly PersistedEvent[];
-  activity: ReturnType<typeof deriveAgentActivity>;
-  paused: boolean;
-  elapsedSeconds: number;
-  tokenEstimate: number;
-}): ReactNode {
-  const milestones = events
-    .filter((event) => event.type === 'tool.call' || event.type === 'file.edit.applied' || event.type === 'file.change')
-    .slice(-5)
-    .map((event) => {
-      if (event.type === 'tool.call') {
-        const input = event.input && typeof event.input === 'object' && !Array.isArray(event.input) ? event.input as Record<string, unknown> : {};
-        const detail = [input.path, input.filePath, input.command, input.pattern].find((value): value is string => typeof value === 'string');
-        return { id: event.id, label: detail ? `${event.name}: ${detail}` : event.name, complete: event.status === 'completed', failed: event.status === 'failed' };
-      }
-      const path = event.type === 'file.edit.applied' ? event.filePath : event.path;
-      return { id: event.id, label: `${event.type === 'file.change' ? event.action : 'Edited'} ${path}`, complete: true, failed: false };
-    });
-  const current = paused ? 'Paused' : activity.label;
-  return (
-    <article className="work-progress" role="status" aria-live="polite">
-      <div className="work-progress-current"><span className={paused ? 'progress-dot paused' : 'progress-dot'} /> <strong>{current}</strong><small>{activity.detail}</small><time>{elapsedSeconds}s{tokenEstimate > 0 ? ` · ~${formatTokenEstimate(tokenEstimate)} tokens` : ''}</time></div>
-      {milestones.length > 0 && <div className="work-progress-steps">{milestones.map((step) => <div key={step.id} className={`work-progress-step ${step.complete ? 'complete' : step.failed ? 'failed' : 'active'}`}><span>{step.complete ? <Check size={12} /> : step.failed ? <X size={12} /> : <Circle size={9} fill="currentColor" />}</span><p>{step.label}</p></div>)}</div>}
-    </article>
   );
 }
 
@@ -2790,6 +2800,7 @@ function contextChipLabel(chip: ContextChip): string {
     case 'memory':
       return `Memory: ${chip.query}`;
     case 'image':
+    case 'attachment':
       return chip.name;
   }
 }
@@ -2807,14 +2818,16 @@ function contextChipIcon(type: ContextChip['type']): ReactNode {
       return <Brain size={11} />;
     case 'image':
       return <ImagePlus size={11} />;
+    case 'attachment':
+      return <Paperclip size={11} />;
   }
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('The image could not be read.'));
-    reader.onerror = () => reject(reader.error ?? new Error('The image could not be read.'));
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('The file could not be read.'));
+    reader.onerror = () => reject(reader.error ?? new Error('The file could not be read.'));
     reader.readAsDataURL(file);
   });
 }
@@ -2862,6 +2875,26 @@ const MODEL_LABELS: Record<string, string> = {
   'gpt-5.6-luna': 'GPT-5.6 Luna (fastest)',
 };
 
+/** The trade-off each model makes, said in the picker the way the mockup does. */
+const MODEL_DESCRIPTIONS: Record<string, string> = {
+  opus: 'Deep reasoning',
+  sonnet: 'Fast, everyday builds',
+  haiku: 'Cheapest, quick checks',
+  'claude-opus-5-5': 'Deep reasoning',
+  'claude-sonnet-5-5': 'Fast, everyday builds',
+  'claude-haiku-5-5': 'Cheapest, quick checks',
+  'claude-fable-5-1': 'Long-form and creative work',
+};
+
+/** The picker groups by who serves the model, so a list that mixes providers reads as a menu, not a jumble. */
+function modelGroup(name: string): string {
+  if (name.startsWith('claude')) return 'Anthropic';
+  if (name.startsWith('gpt')) return 'OpenAI';
+  if (name.startsWith('deepseek')) return 'DeepSeek';
+  if (name.startsWith('qwen')) return 'Qwen';
+  return 'Other';
+}
+
 function positiveLine(value: string): string | null {
   return /^\d+$/.test(value) && Number(value) >= 1 ? null : 'Enter a positive line number.';
 }
@@ -2878,7 +2911,7 @@ function modelOptions(
   agent: AgentId,
   capability: DirectApiCapability | null,
   selected: string,
-): SelectMenuOption<string>[] {
+): OptionMenuOption<string>[] {
   const suggestions = apiRun
     ? directProviderPreset(capability?.provider ?? 'openai').models
     : agent in CLI_MODEL_SUGGESTIONS ? CLI_MODEL_SUGGESTIONS[agent as keyof typeof CLI_MODEL_SUGGESTIONS] : [];
@@ -2886,18 +2919,15 @@ function modelOptions(
   const defaultLabel = apiRun && capability?.model ? `Default (${capability.model})` : 'Default';
   return [
     { value: '', label: defaultLabel },
-    ...suggestions.map((name) => ({ value: name, label: MODEL_LABELS[name] ?? name })),
-    ...(selected && !known.has(selected) ? [{ value: selected, label: selected }] : []),
+    ...suggestions.map((name) => ({
+      value: name,
+      label: MODEL_LABELS[name] ?? name,
+      ...(MODEL_DESCRIPTIONS[name] ? { description: MODEL_DESCRIPTIONS[name] } : {}),
+      group: modelGroup(name),
+    })),
+    ...(selected && !known.has(selected) ? [{ value: selected, label: selected, group: modelGroup(selected) }] : []),
     { value: CUSTOM_MODEL, label: 'Other model…' },
   ];
-}
-
-interface SelectMenuOption<T extends string> {
-  value: T;
-  label: string;
-  /** A line under the label that says what the choice does. */
-  description?: string;
-  disabled?: boolean;
 }
 
 function InlineQuestion({ question, onAnswer }: {
@@ -2927,131 +2957,7 @@ function InlineQuestion({ question, onAnswer }: {
 }
 
 /** The access choices with what each one lets KAI do. There is one control for them, in the composer's own row. */
-const ACCESS_OPTIONS: readonly SelectMenuOption<AutonomyMode>[] = ACCESS_LEVELS.map((level) => ({ value: level.value, label: level.label, description: level.description }));
-
-function SelectMenu<T extends string>({ ariaLabel, className = '', disabled = false, icon, labelPrefix, onChange, options, title, value }: {
-  ariaLabel: string;
-  className?: string;
-  disabled?: boolean;
-  icon: ReactNode;
-  labelPrefix?: string;
-  onChange: (value: T) => void;
-  options: readonly SelectMenuOption<T>[];
-  title?: string;
-  value: T;
-}): ReactNode {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
-  const selectedOption = options[selectedIndex];
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    const focusTimer = window.setTimeout(() => optionRefs.current[selectedIndex]?.focus(), 0);
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      window.clearTimeout(focusTimer);
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [open, selectedIndex]);
-
-  const choose = (option: SelectMenuOption<T>): void => {
-    if (option.disabled) return;
-    onChange(option.value);
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-
-  const moveFocus = (currentIndex: number, direction: 1 | -1): void => {
-    for (let offset = 1; offset <= options.length; offset += 1) {
-      const nextIndex = (currentIndex + direction * offset + options.length) % options.length;
-      if (!options[nextIndex]?.disabled) {
-        optionRefs.current[nextIndex]?.focus();
-        return;
-      }
-    }
-  };
-
-  const focusEdge = (fromStart: boolean): void => {
-    const indexes = options.map((_, index) => index);
-    if (!fromStart) indexes.reverse();
-    for (const index of indexes) {
-      if (options[index]?.disabled) continue;
-      optionRefs.current[index]?.focus();
-      return;
-    }
-  };
-
-  const handleOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      moveFocus(index, 1);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      moveFocus(index, -1);
-    } else if (event.key === 'Home') {
-      event.preventDefault();
-      focusEdge(true);
-    } else if (event.key === 'End') {
-      event.preventDefault();
-      focusEdge(false);
-    }
-  };
-
-  return (
-    <div ref={rootRef} className={`chip-button select-menu ${className} ${disabled ? 'disabled' : ''}`.trim()}>
-      <UiButton
-        ref={triggerRef}
-        type="button"
-        className="select-menu-trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        title={title}
-      >
-        {icon}
-        <span className="select-menu-value truncate">{labelPrefix ? `${labelPrefix}: ` : ''}{selectedOption?.label ?? value}</span>
-        <ChevronDown className="select-menu-chevron" size={12} />
-      </UiButton>
-      {open && (
-        <div className="select-menu-popover" role="listbox" aria-label={ariaLabel}>
-          {options.map((option, index) => (
-            <UiButton
-              ref={(element) => { optionRefs.current[index] = element; }}
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              className={`select-menu-option ${option.value === value ? 'selected' : ''}`.trim()}
-              disabled={option.disabled}
-              onClick={() => choose(option)}
-              onKeyDown={(event) => handleOptionKeyDown(event, index)}
-            >
-              {option.description
-                ? <span className="select-menu-option-text"><span>{option.label}</span><small>{option.description}</small></span>
-                : <span>{option.label}</span>}
-              {option.value === value && <Check size={13} />}
-            </UiButton>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+const ACCESS_OPTIONS: readonly OptionMenuOption<AutonomyMode>[] = ACCESS_LEVELS.map((level) => ({ value: level.value, label: level.label, description: level.description }));
 
 function setupTitle(capability: AgentCapability): string {
   if (capability.state === 'signed_out') return 'Sign in required';
@@ -3067,37 +2973,47 @@ function setupSuffix(capability: AgentCapability): string {
 }
 
 export function ContextPanel({ activeProject, conversation, services, contextPreview, contextPreviewLoading }: { activeProject: ProjectRecord | null; conversation: ConversationRecord | null; services: ServiceState[]; contextPreview: ContextPreview | null; contextPreviewLoading: boolean }): ReactNode {
+  const label = 'text-[10.5px] font-medium uppercase tracking-[0.07em] text-[var(--text-dim)]';
   return (
-    <div className="context-body">
-      <div className="context-heading"><div><span className="eyebrow">Context</span><h2>{activeProject?.name ?? 'No project'}</h2></div><FileDiff size={17} /></div>
-      <div className="context-meter">
-        <span>Estimated direct API context</span>
-        <strong>{contextPreviewLoading ? 'Calculating...' : contextPreview ? `~${formatCompact(contextPreview.estimatedTokens)} tokens` : 'Unavailable'}</strong>
-        <small>{contextPreview ? `${formatCompact(contextPreview.totalCharacters)} characters across ${contextPreview.sections.reduce((sum, section) => sum + section.items.length, 0)} item(s)` : 'Open a project to preview context.'}</small>
+    <div className="context-body kai-scroll-hidden flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-3.5">
+      <div>
+        <div className={label}>Context</div>
+        <h2 className="m-0 mt-1 text-sm font-semibold text-[var(--text)]">{activeProject?.name ?? 'No project'}</h2>
+      </div>
+      <div>
+        <div className={label}>Estimated direct API context</div>
+        <div className="mt-1 text-[13px] text-[var(--text)]">{contextPreviewLoading ? 'Calculating...' : contextPreview ? `~${formatCompact(contextPreview.estimatedTokens)} tokens` : 'Unavailable'}</div>
+        <div className="mt-0.5 text-xs text-[var(--text-dim)]">{contextPreview ? `${formatCompact(contextPreview.totalCharacters)} characters across ${contextPreview.sections.reduce((sum, section) => sum + section.items.length, 0)} item(s)` : 'Open a project to preview context.'}</div>
       </div>
       {(contextPreview?.sections ?? []).map((section) => (
-        <div className="context-section" key={section.kind}>
-          <div className="context-label">{contextSectionIcon(section.kind)}<span>{section.label}</span><small>~{formatCompact(section.estimatedTokens)}</small></div>
-          {section.note && <div className="context-note">{section.note}</div>}
+        <div key={section.kind}>
+          <div className={`${label} flex items-center gap-1.5`}>{contextSectionIcon(section.kind)}<span>{section.label}</span><small className="ml-auto normal-case tracking-normal">~{formatCompact(section.estimatedTokens)}</small></div>
+          {section.note && <div className="mt-1 text-xs text-[var(--text-dim)]">{section.note}</div>}
           {section.items.length > 0 ? (
-            <div className="context-item-list">
+            <div className="mt-1 flex flex-col">
               {section.items.map((item) => (
-                <div className="context-item" key={`${item.kind}:${item.source ?? item.label}`} title={item.source}>
-                  <span>{item.label}</span>
-                  <small>~{formatCompact(item.estimatedTokens)} tok{item.truncated ? ' / partial' : ''}</small>
+                <div key={`${item.kind}:${item.source ?? item.label}`} title={item.source} className="flex items-center justify-between gap-2 py-1 text-xs text-[var(--text-muted)]">
+                  <span className="min-w-0 truncate">{item.label}</span>
+                  <small className="shrink-0 whitespace-nowrap text-[11px] text-[var(--text-dim)]">~{formatCompact(item.estimatedTokens)} tok{item.truncated ? ' / partial' : ''}</small>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="context-empty">None</div>
+            <div className="mt-1 text-xs text-[var(--text-dim)]">None</div>
           )}
         </div>
       ))}
-      <div className="context-section">
-        <div className="context-label"><Cpu size={14} /><span>Services</span></div>
-        {services.map((service) => <div key={service.kind} className="service-row"><span className={`status-dot ${service.status}`} /><span>{service.kind === 'cognitive1' ? 'C1 Brain' : 'Universal Proxy'}</span><small>{statusLabel(service.status)}</small></div>)}
+      <div>
+        <div className={`${label} flex items-center gap-1.5`}><Cpu size={12} /><span>Services</span></div>
+        {services.map((service) => (
+          <div key={service.kind} className="mt-1.5 flex items-center gap-2 text-[13px] text-[var(--text)]">
+            <span className={`status-dot ${service.status}`} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{service.kind === 'cognitive1' ? 'C1 Brain' : 'Universal Proxy'}</span>
+            <Pill tone={service.status === 'ready' ? 'success' : service.status === 'failed' || service.status === 'degraded' ? 'error' : 'neutral'}>{statusLabel(service.status)}</Pill>
+          </div>
+        ))}
       </div>
-      <div className="context-section context-foot"><span>Updated</span><strong>{conversation ? relativeTime(conversation.updatedAt) : 'Not active'}</strong></div>
+      <div className="mt-auto flex items-center justify-between border-t border-[color:var(--border-soft)] pt-2.5 text-xs text-[var(--text-dim)]"><span>Updated</span><strong className="font-medium text-[var(--text-muted)]">{conversation ? relativeTime(conversation.updatedAt) : 'Not active'}</strong></div>
     </div>
   );
 }
@@ -3114,5 +3030,5 @@ function formatCompact(value: number): string {
 }
 
 function BrainIcon(): ReactNode {
-  return <span className="brain-dot" aria-hidden="true" />;
+  return <span className="inline-block h-2 w-2 rounded-full bg-[var(--accent-2)]" aria-hidden="true" />;
 }

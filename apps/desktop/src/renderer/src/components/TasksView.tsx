@@ -20,6 +20,7 @@ import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 
 type TasksTab = 'board' | 'reviews' | 'handoffs' | 'decisions';
 
@@ -69,25 +70,37 @@ export function TasksView({ activeProject, cognitive1Ready, onStartTask }: {
 
   return (
     <div className="page-view tasks-view">
-      <header className="page-header">
-        <div>
-          <h1>Tasks</h1>
-          <p>Work shared between you and your AI agents, stored in the C1 brain{activeProject ? ` · ${activeProject.name}` : ''}</p>
-        </div>
-      </header>
+      <PageHeader title="Tasks" detail={<>Work shared between you and your AI agents, stored in the C1 brain{activeProject ? ` · ${activeProject.name}` : ''}</>} />
       <div className="ops-tabs" role="tablist" aria-label="Task sections">
         {TABS.map((item) => (
-          <UiButton key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={`ops-tab ${tab === item.id ? 'active' : ''}`} onClick={() => setTab(item.id)}>{item.label}</UiButton>
+          <UiButton
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            className={`ops-tab ${tab === item.id ? 'active' : ''}`}
+            onClick={() => {
+              setTab(item.id);
+              document.getElementById(`tasks-${item.id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            }}
+          >{item.label}</UiButton>
         ))}
       </div>
-      <p className="tasks-tab-help">{TABS.find((item) => item.id === tab)?.help}</p>
       {!cognitive1Ready && <div className="empty-list">Cognitive1 is not running. Start it from the C1 Brain page to use tasks, reviews and handoffs.</div>}
       {cognitive1Ready && message && <div className="workbench-notice" role="status"><span>{message}</span></div>}
       {cognitive1Ready && error && <div className="workbench-error" role="alert">{error}</div>}
-      {cognitive1Ready && tab === 'board' && <TaskBoard activeProject={activeProject} report={report} onStartTask={onStartTask} />}
-      {cognitive1Ready && tab === 'reviews' && <ReviewQueue activeProject={activeProject} report={report} />}
-      {cognitive1Ready && tab === 'handoffs' && <HandoffInbox report={report} />}
-      {cognitive1Ready && tab === 'decisions' && <DecisionLog activeProject={activeProject} report={report} />}
+      {/* The board, then reviews, handoffs and decisions side by side: everything the agents share is on one page, and
+          the tabs jump to a section. */}
+      {cognitive1Ready && (
+        <div className="tasks-board">
+          <section id="tasks-board" className="tasks-section"><TaskBoard activeProject={activeProject} report={report} onStartTask={onStartTask} /></section>
+          <div className="tasks-lower">
+            <section id="tasks-reviews" className="tasks-section"><ReviewQueue activeProject={activeProject} report={report} /></section>
+            <section id="tasks-handoffs" className="tasks-section"><HandoffInbox report={report} /></section>
+            <section id="tasks-decisions" className="tasks-section"><DecisionLog activeProject={activeProject} report={report} /></section>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

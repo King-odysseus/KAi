@@ -146,72 +146,35 @@ function describeEvent(event: PersistedEvent): string {
   return event.type.replaceAll('.', ' ');
 }
 
-export function AgentActivityStrip({ events, running, paused, autoWaiting = false, awaitingApproval, elapsedSeconds = 0, tokenEstimate = 0 }: {
-  events: readonly PersistedEvent[];
-  running: boolean;
-  paused: boolean;
-  autoWaiting?: boolean;
-  awaitingApproval: boolean;
-  elapsedSeconds?: number;
-  tokenEstimate?: number;
-}): ReactNode {
-  const activity = deriveAgentActivity(events, running, paused, awaitingApproval, autoWaiting);
-  const [expanded, setExpanded] = useState(false);
+/**
+ * The learning nugget shown while a run is going: one coding idea drawn from what the agent is doing, rotating each
+ * minute, with a provider-written one folded in when the Teaching service answers. Returns null when there is none.
+ */
+export function useLearningNugget(events: readonly PersistedEvent[], running: boolean, detail: string, elapsedSeconds: number): string | null {
+  const learningNuggets = codingNuggets(events);
   const [providerNugget, setProviderNugget] = useState<string | null>(null);
   const requestedProviderNugget = useRef(false);
-  const nuggetChoices = providerNugget ? [providerNugget, ...activity.learningNuggets] : activity.learningNuggets;
-  const nugget = nuggetChoices.length > 0
-    ? nuggetChoices[Math.floor(elapsedSeconds / 60) % nuggetChoices.length]
-    : null;
+  const nuggetChoices = providerNugget ? [providerNugget, ...learningNuggets] : learningNuggets;
+  const nugget = nuggetChoices.length > 0 ? nuggetChoices[Math.floor(elapsedSeconds / 60) % nuggetChoices.length] ?? null : null;
   useEffect(() => {
     if (!running) {
       requestedProviderNugget.current = false;
       setProviderNugget(null);
       return;
     }
-    if (requestedProviderNugget.current || activity.learningNuggets.length === 0) return;
+    if (requestedProviderNugget.current || learningNuggets.length === 0) return;
     requestedProviderNugget.current = true;
     void window.kaiDesktop.generateTeachingDraft({
       kind: 'method',
       topic: nuggetTopic(events),
       instructions: 'Return ONLY one or two short sentences that teach one concrete coding concept in simple words. No title, headings, labels, markdown, template, lesson plan, teaching sequence, meta-commentary, or discussion of these instructions. Do not mention hidden reasoning, private prompts, or this run.',
-      baseContent: activity.detail,
+      baseContent: detail,
     }).then((response) => {
       const cleaned = response.ok ? cleanProviderNugget(response.data.content) : null;
       if (cleaned) setProviderNugget(cleaned);
     }).catch(() => undefined);
   }, [running]);
-  if (!running && !paused && !awaitingApproval && !['waiting', 'blocked'].includes(activity.kind)) return null;
-  return (
-    <section className={`agent-activity ${activity.kind}${expanded ? ' is-expanded' : ''}`} aria-live="polite" aria-label="Agent activity">
-      {nugget && <div className="agent-activity-nugget" aria-label="Learning nugget"><strong>Learning nugget</strong><span>{nugget}</span></div>}
-      <UiButton type="button" className="agent-activity-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} title={expanded ? 'Hide activity details' : 'Show full activity details'}>
-        <span className="agent-activity-icon">{activityIcon(activity.kind)}</span>
-        <span className="agent-activity-copy">
-          <span className="agent-activity-summary-line">
-            <span className="agent-activity-heading"><strong>{activity.label}</strong>{activity.lastAt && <small>Last action {relativeTime(activity.lastAt)}</small>}</span>
-            <span className="agent-activity-detail">{activity.detail}</span>
-          </span>
-        </span>
-        <ChevronDown className="agent-activity-chevron" size={13} />
-      </UiButton>
-      {expanded && <div className="agent-activity-expanded">
-        <p>{activity.detail}</p>
-        {activity.lastAction && <p><strong>Last action:</strong> {activity.lastAction}</p>}
-        {nugget && <p className="agent-activity-expanded-nugget"><strong>Learning nugget:</strong> {nugget}</p>}
-      </div>}
-      {(running || paused || awaitingApproval) && (() => {
-        const agents = activeAgentCount(events);
-        return (
-          <div className="agent-activity-metrics" aria-label="Run progress">
-            <span>{elapsedSeconds}s</span>
-            {tokenEstimate > 0 && <span>~{formatTokens(tokenEstimate)} tokens</span>}
-            {agents > 0 && <span>{agents} agent{agents === 1 ? '' : 's'}</span>}
-          </div>
-        );
-      })()}
-    </section>
-  );
+  return nugget;
 }
 
 function nuggetTopic(events: readonly PersistedEvent[]): string {

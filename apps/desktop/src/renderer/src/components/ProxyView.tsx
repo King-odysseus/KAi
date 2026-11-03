@@ -586,6 +586,8 @@ export function ProxyPanel({
               {service.detail}
             </Notice>
           )}
+          <div className="overview-cols">
+            <div className="overview-col">
           <section className="section overview-hero">
             <div className="eyebrow">Effective routing</div>
             <div className="hero-row">
@@ -603,35 +605,6 @@ export function ProxyPanel({
               </div>
             </div>
           </section>
-
-          <div className="agent-grid">
-            {OVERVIEW_AGENTS.map((agent) => (
-              <AgentCard
-                key={agent}
-                agent={agent}
-                route={routes.find((candidate) => candidate.agentId === agent)}
-                draft={draft}
-                ready={ready}
-                busy={working}
-                credentialStatus={credentialStatus}
-                onSaveKey={(value) => saveAgentKey(agent, value)}
-                onProvider={(key) => {
-                  if (key === 'custom') {
-                    configureAgent(agent);
-                    return;
-                  }
-                  save(`card:${agent}`, applyAgentProvider(draft, agent, key));
-                }}
-                onModel={(model) => save(`card:${agent}`, applyAgentModel(draft, agent, model))}
-                onRoute={(hours) => void routeAction(agent, 'route', hours ? Date.now() + hours * 60 * 60 * 1000 : undefined)}
-                onDirect={() => void routeAction(agent, 'direct')}
-                onVerify={() => void routeAction(agent, 'verify')}
-                onRollback={() => void routeAction(agent, 'rollback')}
-                onLaunch={() => void launchAgent(agent === 'codex' ? 'codex' : 'claude')}
-                onConfigure={() => configureAgent(agent)}
-              />
-            ))}
-          </div>
 
           <section className="section">
             <div className="section-title-row"><h2>Quick actions</h2><span className="hint" role="status" aria-live="polite" style={{ margin: 0 }} /></div>
@@ -684,6 +657,40 @@ export function ProxyPanel({
               </div>
             )}
           </details>
+            </div>
+            <div className="overview-col overview-agents">
+              <h2 className="overview-agents-title">Agents</h2>
+          <div className="agent-grid">
+            {OVERVIEW_AGENTS.map((agent) => (
+              <AgentCard
+                key={agent}
+                agent={agent}
+                route={routes.find((candidate) => candidate.agentId === agent)}
+                draft={draft}
+                ready={ready}
+                busy={working}
+                credentialStatus={credentialStatus}
+                onSaveKey={(value) => saveAgentKey(agent, value)}
+                onProvider={(key) => {
+                  if (key === 'custom') {
+                    configureAgent(agent);
+                    return;
+                  }
+                  save(`card:${agent}`, applyAgentProvider(draft, agent, key));
+                }}
+                onModel={(model) => save(`card:${agent}`, applyAgentModel(draft, agent, model))}
+                onRoute={(hours) => void routeAction(agent, 'route', hours ? Date.now() + hours * 60 * 60 * 1000 : undefined)}
+                onDirect={() => void routeAction(agent, 'direct')}
+                onVerify={() => void routeAction(agent, 'verify')}
+                onRollback={() => void routeAction(agent, 'rollback')}
+                onLaunch={() => void launchAgent(agent === 'codex' ? 'codex' : 'claude')}
+                onConfigure={() => configureAgent(agent)}
+              />
+            ))}
+          </div>
+
+            </div>
+          </div>
         </div>
       )}
 

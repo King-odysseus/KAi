@@ -7,6 +7,7 @@ import { unwrap } from '../types';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 const REFRESH_MS = 15_000;
 
 export function formatUsd(value: number): string {
@@ -82,15 +83,7 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
 
   return (
     <div className="page-view usage-view">
-      <header className="page-header">
-        <div>
-          <h1>Usage</h1>
-          <p>Estimated spend from paid API runs only. Claude and Codex subscription usage is never counted.</p>
-        </div>
-        <div className="page-actions">
-          <UiButton type="button" className="secondary-button" onClick={() => void refresh()}><RefreshCw size={14} /><span>Refresh</span></UiButton>
-        </div>
-      </header>
+      <PageHeader title="Usage" detail="Estimated spend from paid API runs only. Claude and Codex subscription usage is never counted." actions={<><UiButton type="button" className="secondary-button" onClick={() => void refresh()}><RefreshCw size={14} /><span>Refresh</span></UiButton></>} />
       {error && <div className="workbench-error" role="alert">{error}</div>}
 
       <div className="metric-strip usage-metrics">
@@ -103,27 +96,27 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
         <p className="settings-note">Some runs used a model with no known price, so they count as $0. Their token counts are still listed below.</p>
       )}
 
-      <div className="settings-grid usage-grid">
-        <section className="settings-section span-two">
-          <div className="section-title"><Wallet size={17} /><span>Budget limits</span></div>
+      <div className="usage-layout">
+        <section className="settings-section usage-budget">
+          <div className="section-title"><span>Budget limits</span></div>
           <p className="settings-note">Set a limit to 0 to turn it off. Warn mode shows a banner at 80% and 100%. Block mode also stops new API requests at 100%, before anything is sent. The per-run limit always stops a single direct API run that reaches it, in either mode.</p>
-          <div className="field-grid">
+          <div className="usage-budget-row">
             <label className="field"><span>Mode</span><Select value={draft.mode} onChange={(event) => setDraft({ ...draft, mode: event.target.value as UsageBudget['mode'] })}><option value="warn">warn</option><option value="block">block</option></Select></label>
             <UsdField label="Per run (USD)" value={draft.perRunUsd} onChange={(value) => setLimit('perRunUsd', value)} />
             <UsdField label="Per conversation (USD)" value={draft.perConversationUsd} onChange={(value) => setLimit('perConversationUsd', value)} />
             <UsdField label="Per day (USD)" value={draft.dailyUsd} onChange={(value) => setLimit('dailyUsd', value)} />
             <UsdField label="Per month (USD)" value={draft.monthlyUsd} onChange={(value) => setLimit('monthlyUsd', value)} />
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save budget</span></UiButton>
           </div>
-          <div className="field-grid">
-            {paidProviders.map((id) => (
-              <UsdField key={id} label={`${directProviderPreset(id).displayName} per day (USD)`} value={draft.providerDailyUsd[id] ?? 0} onChange={(value) => setProviderLimit(id, value)} />
-            ))}
-          </div>
-          <UiButton type="button" className="primary-button align-end" disabled={busy} onClick={() => onSave({ usageBudget: draft })}><Check size={16} /><span>Save budget</span></UiButton>
-        </section>
-
-        <section className="settings-section span-two">
-          <div className="section-title"><Wallet size={17} /><span>Limit status</span></div>
+          <details className="usage-provider-limits">
+            <summary>Daily limit per provider</summary>
+            <div className="field-grid">
+              {paidProviders.map((id) => (
+                <UsdField key={id} label={`${directProviderPreset(id).displayName} (USD)`} value={draft.providerDailyUsd[id] ?? 0} onChange={(value) => setProviderLimit(id, value)} />
+              ))}
+            </div>
+          </details>
+          <h3 className="usage-subtitle">Limit status</h3>
           {summary && summary.limits.length > 0 ? (
             <div className="usage-limits">
               {summary.limits.map((limit) => (
@@ -138,8 +131,8 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
           )}
         </section>
 
-        <section className="settings-section span-two">
-          <div className="section-title"><Wallet size={17} /><span>Last 30 days</span></div>
+        <section className="settings-section usage-days">
+          <div className="section-title"><span>Last 30 days</span></div>
           <div className="usage-chart" role="img" aria-label="Estimated daily spend for the last 30 days">
             {(summary?.byDay ?? []).map((day) => (
               <span key={day.day} className="usage-chart-bar" title={`${day.day}: ${formatUsd(day.usd)}`} style={{ height: `${Math.max(2, (day.usd / maxDay) * 100)}%` }} />
@@ -147,9 +140,9 @@ export function UsageView({ settings, activeConversationId, busy, onSave }: { se
           </div>
         </section>
 
-        <UsageTable title="By provider" empty="No paid API runs yet" head={['Provider', 'Runs', 'Tokens in / out', 'Estimate']} rows={(summary?.byProvider ?? []).map((row) => [row.provider, String(row.runs), `${row.inputTokens.toLocaleString()} / ${row.outputTokens.toLocaleString()}`, formatUsd(row.usd)])} />
-        <UsageTable title="By model" empty="No paid API runs yet" head={['Model', 'Runs', 'Tokens in / out', 'Estimate']} rows={(summary?.byModel ?? []).map((row) => [`${row.model} (${row.provider})`, String(row.runs), `${row.inputTokens.toLocaleString()} / ${row.outputTokens.toLocaleString()}`, formatUsd(row.usd)])} />
-        <UsageTable title="Top conversations" empty="No paid API runs yet" wide head={['Conversation', 'Estimate']} rows={(summary?.byConversation ?? []).map((row) => [row.title || row.conversationId, formatUsd(row.usd)])} />
+        <UsageTable title="By provider" empty="No paid API runs yet" rows={(summary?.byProvider ?? []).map((row) => ({ name: row.provider, usd: formatUsd(row.usd), detail: `${row.runs} runs · ${row.inputTokens.toLocaleString()} in / ${row.outputTokens.toLocaleString()} out` }))} />
+        <UsageTable title="By model" empty="No paid API runs yet" rows={(summary?.byModel ?? []).map((row) => ({ name: row.model, usd: formatUsd(row.usd), detail: `${row.provider} · ${row.runs} runs · ${row.inputTokens.toLocaleString()} in / ${row.outputTokens.toLocaleString()} out` }))} />
+        <UsageTable title="Top conversations" empty="No paid API runs yet" rows={(summary?.byConversation ?? []).map((row) => ({ name: row.title || row.conversationId, usd: formatUsd(row.usd) }))} />
       </div>
     </div>
   );
@@ -159,15 +152,16 @@ function UsdField({ label, value, onChange }: { label: string; value: number; on
   return <label className="field"><span>{label}</span><UiTextInput type="number" min={0} step={0.5} value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;
 }
 
-function UsageTable({ title, head, rows, empty, wide }: { title: string; head: string[]; rows: string[][]; empty: string; wide?: boolean }): ReactNode {
+function UsageTable({ title, rows, empty }: { title: string; rows: Array<{ name: string; usd: string; detail?: string }>; empty: string }): ReactNode {
   return (
-    <section className={`settings-section ${wide ? 'span-two' : ''}`}>
-      <div className="section-title"><Wallet size={17} /><span>{title}</span></div>
+    <section className="settings-section usage-table-card">
+      <div className="section-title"><span>{title}</span></div>
       {rows.length === 0 ? <p className="settings-note">{empty}</p> : (
-        <table className="usage-table">
-          <thead><tr>{head.map((label) => <th key={label}>{label}</th>)}</tr></thead>
-          <tbody>{rows.map((row) => <tr key={row.join('|')}>{row.map((cell, index) => <td key={index} className={index === 0 ? 'truncate' : ''}>{cell}</td>)}</tr>)}</tbody>
-        </table>
+        <ul className="usage-rows">
+          {rows.slice(0, 8).map((row) => (
+            <li key={row.name} title={row.detail}><span className="truncate">{row.name}</span><strong>{row.usd}</strong></li>
+          ))}
+        </ul>
       )}
     </section>
   );

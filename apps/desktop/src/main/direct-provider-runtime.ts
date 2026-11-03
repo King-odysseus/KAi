@@ -3207,6 +3207,21 @@ async function executeToolCalls(
           summary: execution.changedFile.summary,
         });
       }
+      // The comparison the activity card opens. It travels with the change, so the row is clickable as soon as the
+      // edit lands rather than waiting for a turn summary that only knows the counts.
+      if (execution.changedFile.diff) {
+        emit({
+          schemaVersion: 1,
+          id: eventId(),
+          taskId: request.conversationId,
+          timestamp: nowIso(),
+          agent: request.agent,
+          type: 'diff.proposal',
+          filePath: execution.changedFile.path,
+          summary: execution.changedFile.summary,
+          diff: execution.changedFile.diff,
+        });
+      }
     }
     results.push(formatOutput(callId, execution.output));
   }

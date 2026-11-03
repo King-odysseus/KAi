@@ -71,6 +71,7 @@ describe('composer run line', () => {
 
   it('shows Auto by its turns, and parks it in amber when it is waiting on a person', () => {
     expect(composerRunLine(null, auto(), NOW)).toMatchObject({ who: 'auto', state: 'live', lead: 'Auto is on', meta: 'turn 4 of 40' });
+    expect(composerRunLine(null, auto({ turnCount: 0 }), NOW)).toMatchObject({ meta: 'starting' });
     expect(composerRunLine(null, auto({ phase: 'waiting-for-you', waitReason: 'cost-cap' }), NOW)).toMatchObject({ state: 'waiting', canStop: true });
     expect(composerRunLine(null, auto({ phase: 'cooling', resumeAt: new Date(NOW + 90_000).toISOString() }), NOW)).toMatchObject({ state: 'waiting', canStop: true });
     expect(composerRunLine(null, auto({ phase: 'failed', message: 'The check kept failing.' }), NOW)).toMatchObject({ state: 'failed', canStop: false });

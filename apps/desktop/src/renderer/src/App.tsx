@@ -2552,13 +2552,29 @@ export function App(): ReactNode {
         onOpenTour={() => setTourListOpen((open) => !open)}
         tourListOpen={tourListOpen}
       />
-      {view === 'workspace' && (
+      {view === 'workspace' && openConversations.length > 0 && (
         <nav className="conversation-tab-strip" role="tablist" aria-label="Open conversations">
           {openConversations.map((conversation) => {
             const running = runningConversationIds.includes(conversation.id);
             const approval = pendingApprovals.some((item) => item.conversationId === conversation.id);
             const failed = failedConversationIds.includes(conversation.id);
-            return <UiButton key={conversation.id} type="button" role="tab" aria-selected={conversation.id === activeConversationId} className={`conversation-tab ${conversation.id === activeConversationId ? 'active' : ''}`} onClick={() => void openConversation(conversation.id)}><span className={`conversation-tab-state ${approval ? 'approval' : failed ? 'failed' : running ? 'running' : 'idle'}`} /><span className="truncate">{conversation.title}</span><span className="conversation-tab-close" onClick={(event) => { event.stopPropagation(); setOpenConversationIds((current) => current.filter((id) => id !== conversation.id)); if (conversation.id === activeConversationId) setActiveConversationId(openConversations.find((item) => item.id !== conversation.id)?.id ?? null); }}>×</span></UiButton>;
+            const active = conversation.id === activeConversationId;
+            const dot = approval ? 'bg-[var(--waiting)]' : failed ? 'bg-[var(--failed)]' : running ? 'animate-pulse bg-[var(--running)]' : 'bg-[var(--text-dim)]';
+            return (
+              <button
+                key={conversation.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                title={conversation.title}
+                onClick={() => void openConversation(conversation.id)}
+                className={`flex h-7 min-w-[8rem] max-w-[14rem] shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-t-lg border border-b-0 px-2.5 text-[11px] focus:outline-none focus-visible:bg-[var(--bg-hover)] ${active ? 'border-[color:var(--border)] bg-[var(--bg-deep)] text-[var(--text)]' : 'border-transparent bg-transparent text-[var(--text-dim)] hover:text-[var(--text)]'}`}
+              >
+                <span className={`h-[7px] w-[7px] shrink-0 rounded-full ${dot}`} />
+                <span className="min-w-0 flex-1 truncate text-left">{conversation.title}</span>
+                <span className="ml-auto rounded px-1 text-sm leading-none text-[var(--text-dim)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]" aria-label={`Close ${conversation.title}`} onClick={(event) => { event.stopPropagation(); setOpenConversationIds((current) => current.filter((id) => id !== conversation.id)); if (conversation.id === activeConversationId) setActiveConversationId(openConversations.find((item) => item.id !== conversation.id)?.id ?? null); }}>×</span>
+              </button>
+            );
           })}
           <UiButton type="button" className="conversation-tab-new" title="New conversation" aria-label="New conversation" onClick={() => void createEmptyConversation()}>+</UiButton>
         </nav>
@@ -2771,7 +2787,7 @@ export function App(): ReactNode {
       <StatusBar
         project={activeProject?.name ?? null}
         agent={executionMode === 'api' ? 'Direct API' : agentCapabilities.find((item) => item.id === selectedAgent)?.displayName ?? selectedAgent}
-        model={selectedWorkspaceModel || 'default model'}
+        model={selectedWorkspaceModel || (executionMode === 'api' ? directApiCapability?.model : '') || 'default model'}
         effort={selectedWorkspaceReasoning ? REASONING_LABEL[selectedWorkspaceReasoning] : null}
         runningCount={runningConversationIds.length}
         agentTerminals={agentTerminals}

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from '@playwright/test';
-import { findClippedText } from './layout-checks.mjs';
+import { findClippedText, findWrappedControls } from './layout-checks.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The repository itself is the fixture: a real project fills in the pages that are nothing but empty states
@@ -24,6 +24,7 @@ const sizes = [
   [1440, 920],
 ];
 const findings = [];
+const wrapped = [];
 
 const now = new Date().toISOString();
 const project = { schemaVersion: 1, id: 'project-wrap-audit', name: 'KAi', path: projectRoot, createdAt: now, lastOpenedAt: now };
@@ -70,32 +71,45 @@ async function clickIfPresent(name, role = 'button') {
 async function audit(where) {
   const offenders = await findClippedText(page, { includeTruncated: true });
   for (const offender of offenders) findings.push({ where, ...offender });
+  for (const offender of await findWrappedControls(page)) wrapped.push({ where, ...offender });
+}
+
+/**
+ * Opens a page from the rail. A button covered by a transient overlay is still the page we mean, so the click is
+ * forced: this sweep is measuring what the page lays out, not whether the pointer can reach the rail.
+ */
+async function openPage(label) {
+  await page.locator(`.nav-rail button[aria-label=${JSON.stringify(label)}]`).click({ force: true, timeout: 5_000 });
 }
 
 let page;
 try {
   page = await application.firstWindow();
-  const setupDialog = page.locator('.setup-panel[role="dialog"]');
-  await setupDialog.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
+  // Bootstrap is what opens the setup wizard, so wait for the window to settle before deciding whether it is there.
+  await page.locator('.project-picker-button').waitFor({ timeout: 60_000 });
+  const setupDialog = page.locator('.setup-panel');
+  await setupDialog.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => undefined);
   if (await setupDialog.isVisible().catch(() => false)) {
-    await setupDialog.locator('button.secondary-button').filter({ hasText: 'Set up later' }).click({ force: true });
-    await setupDialog.waitFor({ state: 'detached' });
+    // The header's X carries the label even when the footer button is disabled mid-check; clicked in the DOM so a
+    // layer over the panel cannot swallow it.
+    await setupDialog.evaluate((panel) => panel.querySelector('button[aria-label="Set up later"]')?.click()).catch(() => undefined);
+    await setupDialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
   }
   await page.locator('.tour-card').getByRole('button', { name: 'Turn tour off' }).click({ timeout: 4_000 }).catch(() => undefined);
-  await page.locator('.project-picker-button').waitFor({ timeout: 30_000 });
 
-  const labels = await page.locator('.nav-rail button[aria-label]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+  // Page buttons only: the rail's own expand/collapse control also carries an aria-label but opens no page.
+  const labels = await page.locator('.nav-rail nav button[aria-label]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
   console.log(`Auditing ${labels.length} pages at ${sizes.length} window sizes.`);
   for (const [width, height] of sizes) {
     await resize(width, height);
     for (const label of labels) {
       console.log(`Checking ${label} at ${width}x${height}.`);
-      await page.getByRole('button', { name: label, exact: true }).click();
+      await openPage(label);
       await page.waitForTimeout(500);
       await audit(`${label.replace(/^(Work|Learn|Project|Brain|Control): /, '')}-${width}x${height}`);
     }
     // The workspace with both side panels open holds the densest text on the page.
-    await page.getByRole('button', { name: 'Work: Workspace', exact: true }).click();
+    await openPage('Work: Workspace');
     await clickIfPresent('Show threads panel');
     await clickIfPresent('Show context panel');
     await page.waitForTimeout(500);
@@ -103,7 +117,7 @@ try {
     await clickIfPresent('Hide threads panel');
     await clickIfPresent('Hide context panel');
     // The Learn & Code page carries the tutor column and its own tabs, the densest prose in the app.
-    await page.getByRole('button', { name: 'Learn: Learn & Code', exact: true }).click();
+    await openPage('Learn: Learn & Code');
     const tutorOpen = await clickIfPresent('Show learning tutor');
     if (!tutorOpen) console.log(`  (no learning panel toggle at ${width}x${height})`);
     await page.waitForTimeout(500);
@@ -141,6 +155,13 @@ if (shortened.length > 0) {
   console.log(`\n${shortened.length} deliberately shortened (check these read well):\n`);
   for (const item of shortened) console.log(describe(item));
 }
+if (wrapped.length === 0) {
+  console.log('No wrapped control labels found.');
+} else {
+  console.log(`${wrapped.length} wrapped control labels:\n`);
+  for (const item of wrapped) console.log(`${item.where} | <${item.tag} class="${item.className}"> ${item.lines} lines at ${item.width}px "${item.text}"`);
+}
 await mkdir(path.join(appRoot, 'test-results'), { recursive: true });
 await writeFile(path.join(appRoot, 'test-results', 'wrap-audit.json'), `${JSON.stringify(findings, null, 2)}\n`, 'utf8');
-console.log('\nWritten to test-results/wrap-audit.json');
+await writeFile(path.join(appRoot, 'test-results', 'wrap-controls.json'), `${JSON.stringify(wrapped, null, 2)}\n`, 'utf8');
+console.log('\nWritten to test-results/wrap-audit.json and test-results/wrap-controls.json');

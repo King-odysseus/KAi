@@ -434,6 +434,11 @@ export const conversationTurnSchema = z
       name: z.string().min(1).max(500),
       dataUrl: z.string().min(1).max(30_000_000),
     }).strict()).optional(),
+    /** Non-image files attached to this turn, named in the transcript; their contents travel as context. */
+    files: z.array(z.object({
+      name: z.string().min(1).max(500),
+      mimeType: z.string().min(1).max(200).optional(),
+    }).strict()).max(20).optional(),
     /** Images generated in an assistant reply, retained with the conversation. */
     generatedImages: z.array(z.object({
       name: z.string().min(1).max(500),

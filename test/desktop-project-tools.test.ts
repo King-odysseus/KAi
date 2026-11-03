@@ -78,6 +78,29 @@ describe('desktop project tool runtime', () => {
     });
   });
 
+  it('returns a unified diff with an applied edit so the activity card can open it', async () => {
+    const root = await fixtureProject();
+    await writeFile(path.join(root, 'src', 'app.ts'), 'const a = 1;\nconst b = 2;\n', 'utf8');
+    const tools = new DesktopProjectToolRuntime(root);
+
+    const result = await tools.execute('replace_in_file', {
+      path: 'src/app.ts',
+      old_text: 'const b = 2;',
+      new_text: 'const b = 3;',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      changedFile: {
+        path: 'src/app.ts',
+        action: 'edited',
+        diff: expect.stringContaining('--- a/src/app.ts'),
+      },
+    });
+    const diff = (result as { changedFile?: { diff?: string } }).changedFile?.diff ?? '';
+    expect(diff).toContain('-const b = 2;');
+    expect(diff).toContain('+const b = 3;');
+  });
+
   it('does not allow a symlink to escape the project boundary', async () => {
     const root = await fixtureProject();
     const outside = await mkdtemp(path.join(tmpdir(), 'kai-project-outside-'));

@@ -31,6 +31,8 @@ export async function findWrappedControls(page) {
       if (box.width === 0 || box.height === 0 || style.visibility === 'hidden' || style.display === 'none') continue;
       // A label that holds a title plus a hint (strong + small) is two lines by design.
       if (element.matches('label > span') && element.querySelector('small, strong, p, div, br')) continue;
+      // A card-shaped row (a title, a sentence and a state) is prose in a button; its title may take a second line.
+      if (element.matches('.teaching-entry, .learning-history button, .learning-memory button, .learning-path button, .learning-sources button')) continue;
 
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
       const spans = [];

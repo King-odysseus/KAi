@@ -59,6 +59,8 @@ import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
+import { Composer, ComposerInput, ComposerSend, ComposerToolbar } from './ui/Composer';
+import { ActionsMenu } from './ui/ActionsMenu';
 interface LearningPanelProps {
   projectFiles: string[];
   onReference: (filePath: string, startLine?: number, endLine?: number) => void;
@@ -1005,35 +1007,42 @@ function TutorComposer({
       )}
       {open && (
         <div className="learning-composer-body" id="learning-composer-body">
-          <Textarea
-            ref={inputRef}
-            aria-label="Tutor question"
-            value={question}
-            onChange={(event) => onQuestionChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                if (!busy && !(scope === 'active-file' && !selection)) onAction('next-step');
-              }
-            }}
-            placeholder={placeholder}
-            rows={1}
-          />
-          {busy && <TutorProcessing tick={progressTick} />}
-          <footer>
-            <span title={selection?.filePath ?? undefined}>{contextLabel} · Enter to ask · Shift+Enter for a new line</span>
-            <div>
-              <UiButton type="button" className="secondary-button" disabled={busy || hintLevel >= 3 || (scope === 'active-file' && !selection)} onClick={onStuck} title={stuckHints[Math.min(hintLevel, 3)]!.title}><Lightbulb size={13} />{stuckHints[Math.min(hintLevel, 3)]!.label}</UiButton>
-              {hintLevel < 3 && <UiButton type="button" className="secondary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={onShowCode} title="Ask for exact code and an apply button"><WandSparkles size={13} />Show code</UiButton>}
-              {response && onRecordLesson && (
-                <UiButton type="button" className="secondary-button" disabled={busy} onClick={onRecordLesson}><Save size={13} />Record lesson</UiButton>
-              )}
-              <UiButton type="button" className="primary-button" disabled={busy || (scope === 'active-file' && !selection)} onClick={() => onAction('next-step')}>
-                {busy ? <LoaderCircle className="spin" size={13} /> : <Send size={13} />}
-                <span>{busy ? 'Working...' : response ? 'Ask' : 'Ask tutor'}</span>
-              </UiButton>
-            </div>
-          </footer>
+          <Composer>
+            <ComposerInput
+              ref={inputRef}
+              aria-label="Tutor question"
+              value={question}
+              onChange={(event) => onQuestionChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (!busy && !(scope === 'active-file' && !selection)) onAction('next-step');
+                }
+              }}
+              placeholder={placeholder}
+              rows={2}
+            />
+            {busy && <TutorProcessing tick={progressTick} />}
+            <ComposerToolbar
+              leading={(() => {
+                const stuck = stuckHints[Math.min(hintLevel, 3)]!;
+                const needsSelection = scope === 'active-file' && !selection;
+                return (
+                  <ActionsMenu
+                    ariaLabel="More ways to ask"
+                    items={[
+                      { key: 'stuck', label: stuck.label, icon: <Lightbulb size={13} />, disabled: busy || hintLevel >= 3 || needsSelection, onSelect: onStuck },
+                      ...(hintLevel < 3 ? [{ key: 'code', label: 'Show code', icon: <WandSparkles size={13} />, disabled: busy || needsSelection, onSelect: onShowCode }] : []),
+                      ...(response && onRecordLesson ? [{ key: 'record', label: 'Record lesson', icon: <Save size={13} />, disabled: busy, onSelect: onRecordLesson }] : []),
+                    ]}
+                    trigger={({ onClick, expanded }) => <UiButton type="button" variant="secondary" className="!min-h-6 !rounded-full !px-2.5 !text-[11px]" aria-expanded={expanded} onClick={onClick}>Help <ChevronDown size={11} /></UiButton>}
+                  />
+                );
+              })()}
+              actions={<ComposerSend label={busy ? 'Working' : response ? 'Ask' : 'Ask tutor'} sending={busy} disabled={busy || (scope === 'active-file' && !selection)} onClick={() => onAction('next-step')} />}
+            />
+          </Composer>
+          <p className="m-0 px-1 text-[11px] text-[var(--text-dim)]" title={selection?.filePath ?? undefined}>{contextLabel} · Enter to ask · Shift+Enter for a new line</p>
         </div>
       )}
     </div>

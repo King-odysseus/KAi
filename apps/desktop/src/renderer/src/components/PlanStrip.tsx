@@ -14,6 +14,20 @@ import { UiButton } from './UiButton';
  * One line by default, because the transcript is already busy and a plan that is going well does not need room. It
  * opens to the steps when anyone wants them, and remembers that choice.
  */
+/** How far the plan has got, for lines that only have room for a count. Null until the agent has written a plan. */
+export function usePlanProgress(projectId: string | null, refreshKey?: string): { done: number; total: number } | null {
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  useEffect(() => {
+    if (!projectId) { setProgress(null); return undefined; }
+    let cancelled = false;
+    void window.kaiDesktop.readTaskPlan(projectId).then(unwrap)
+      .then((plan) => { if (!cancelled) setProgress(plan && plan.items.length > 0 ? { done: plan.items.filter((item) => item.state === 'done').length, total: plan.items.length } : null); })
+      .catch(() => { if (!cancelled) setProgress(null); });
+    return () => { cancelled = true; };
+  }, [projectId, refreshKey]);
+  return progress;
+}
+
 export function PlanStrip({ projectId, refreshKey }: { projectId: string | null; refreshKey?: string }): ReactNode {
   const [collapsed, toggle] = useRunPanelCollapsed('plan', true);
   const [plan, setPlan] = useState<Plan | null>(null);

@@ -172,6 +172,55 @@ export async function textDiffFromCheckpoint(cwd: string, checkpoint: Checkpoint
   }
 }
 
+/** The current unified diff for one file since a run's checkpoint. Used by the live activity feed. */
+export async function textDiffFileFromCheckpoint(cwd: string, checkpoint: CheckpointRecord, filePath: string, maxCharacters = 30_000): Promise<string> {
+  if (!filePath) return '';
+  if (isCopyRef(checkpoint.ref)) {
+    const before = await readFileAtCheckpoint(cwd, checkpoint, filePath).catch(() => '');
+    const target = resolveInside(cwd, filePath);
+    const after = await fs.readFile(target, 'utf8').catch(() => null);
+    if (after === null || before.includes('\0') || after.includes('\0')) return '';
+    const oldLines = before.split(/\r?\n/);
+    const newLines = after.split(/\r?\n/);
+    let prefix = 0;
+    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix
+      && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix += 1;
+    const start = Math.max(0, prefix - 3);
+    const oldEnd = Math.min(oldLines.length, oldLines.length - suffix + 3);
+    const newEnd = Math.min(newLines.length, newLines.length - suffix + 3);
+    const contextBefore = oldLines.slice(start, prefix);
+    const contextAfter = oldLines.slice(oldLines.length - suffix, oldEnd);
+    const oldChanged = oldLines.slice(prefix, oldLines.length - suffix);
+    const newChanged = newLines.slice(prefix, newLines.length - suffix);
+    const oldCount = contextBefore.length + oldChanged.length + contextAfter.length;
+    const newCount = contextBefore.length + newChanged.length + contextAfter.length;
+    const oldStart = Math.max(1, start + 1);
+    const newStart = Math.max(1, start + 1);
+    const lines = [
+      `--- a/${filePath}`,
+      `+++ b/${filePath}`,
+      `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`,
+      ...contextBefore.map((line) => ` ${line}`),
+      ...oldChanged.map((line) => `-${line}`),
+      ...newChanged.map((line) => `+${line}`),
+      ...contextAfter.map((line) => ` ${line}`),
+    ];
+    const diff = lines.join('\n');
+    return diff.length > maxCharacters ? `${diff.slice(0, maxCharacters)}\n... (diff cut at ${maxCharacters} characters)` : diff;
+  }
+  try {
+    const args = (await isTreeSnapshot(cwd, checkpoint.ref))
+      ? ['diff', '--no-renames', '--no-color', '--unified=3', checkpoint.ref, await snapshotTree(cwd), '--', filePath]
+      : ['diff', '--no-renames', '--no-color', '--unified=3', checkpoint.ref, '--', filePath];
+    const diff = await git(cwd, args);
+    return diff.length > maxCharacters ? `${diff.slice(0, maxCharacters)}\n... (diff cut at ${maxCharacters} characters)` : diff;
+  } catch {
+    return '';
+  }
+}
+
 export async function restoreCheckpoint(
   cwd: string,
   checkpoint: CheckpointRecord,

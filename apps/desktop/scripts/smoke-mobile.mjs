@@ -289,8 +289,10 @@ async function verifyWorkspaceTab(phone) {
   await phone.locator('.tab', { hasText: 'Workspace' }).click();
   await phone.getByRole('heading', { name: 'Workspace' }).waitFor({ timeout: 15_000 });
   await phone.getByText(conversationTitle, { exact: true }).waitFor({ timeout: 15_000 });
-  // The row shows the thread's last line, not just its title, or a list of workflows reads as a list of names.
-  await phone.getByText(`KAI: ${lastTurnText}`, { exact: true }).waitFor();
+  // The list read is a summary (it deliberately omits turns), so the row points into the thread rather than
+  // pretending to quote a last line it does not have.
+  // More than one history row can share the summary line; either proves the list renders.
+  await phone.getByText('Open to read thread', { exact: true }).first().waitFor();
   await phone.screenshot({ path: path.join(outputDirectory, 'phone-workspace.png') });
 
   await phone.getByText(conversationTitle, { exact: true }).click();

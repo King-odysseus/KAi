@@ -1,7 +1,7 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import { ContextPanel } from './Workspace';
 import { BuildProgressPanel } from './BuildProgressPanel';
-import { UiButton } from './UiButton';
+import { TabBar } from './ui/TabBar';
 
 /** RightPane shows the ContextPanel's props through unchanged; it only adds a tab strip above them. */
 type ContextProps = Parameters<typeof ContextPanel>[0];
@@ -33,14 +33,16 @@ export function RightPane(props: ContextProps): ReactNode {
 
   return (
     <aside className="context-panel">
-      <div className="context-tabs" role="tablist" aria-label="Right pane">
-        <UiButton type="button" role="tab" aria-selected={tab === 'context'} className={tab === 'context' ? 'active' : ''} onClick={() => setTab('context')}>
-          Context
-        </UiButton>
-        <UiButton type="button" role="tab" aria-selected={tab === 'build'} className={tab === 'build' ? 'active' : ''} onClick={() => setTab('build')}>
-          Build{building ? <span className="context-tab-live" aria-label="a build is running" /> : null}
-        </UiButton>
-      </div>
+      <TabBar
+        label="Right pane"
+        value={tab}
+        onChange={setTab}
+        className="!px-2"
+        tabs={[
+          { id: 'context', label: 'Context' },
+          { id: 'build', label: <>Build{building ? <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-[var(--running)]" aria-label="a build is running" /> : null}</> },
+        ]}
+      />
       <div className="context-pane-body" role="tabpanel">
         <div className="context-pane" hidden={tab !== 'context'}>
           <ContextPanel {...props} />

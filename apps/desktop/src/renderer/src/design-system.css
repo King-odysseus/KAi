@@ -13,3 +13,60 @@
 @theme {
   --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
 }
+
+/*
+ * Semantic tokens. Components say what a colour means (accent, success, waiting, danger) and never name a theme's
+ * palette, so all nine themes restyle every screen from the same rules. The palette variables each theme sets
+ * (--mint is the accent, --lavender the second accent, --amber, --red) stay as they are, and these resolve through
+ * them: a theme that sets only its palette gets every alias for free. The aliases are declared on `:root`, which is
+ * also where `data-theme` sits, so `var()` resolves against the active theme's values.
+ */
+:root {
+  --accent: var(--mint);
+  --accent-strong: var(--mint-strong);
+  --accent-soft: var(--mint-soft);
+  --accent-2: var(--lavender);
+  --accent-2-soft: var(--lavender-soft);
+  --selection: var(--bg-hover);
+  --selection-border: var(--border);
+  --danger: var(--red);
+  /* "Running" is the accent, "needs you" is red, "waiting" is amber, "failed" is red with the life taken out of it. */
+  --running: var(--accent);
+  --needs-you: var(--red);
+  --waiting: var(--amber);
+  --failed: color-mix(in srgb, var(--red) 62%, var(--text-muted));
+  --success: #5fd39a;
+  --success-soft: color-mix(in srgb, var(--success) 15%, transparent);
+  --warning-soft: color-mix(in srgb, var(--waiting) 15%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 15%, transparent);
+  --radius-control: 0.5rem;
+  --radius-card: 0.875rem;
+  --radius-pill: 999px;
+  --radius-composer: 1.375rem;
+  --composer-max: 60rem;
+}
+
+/* Light themes: the dark-theme green is too pale on white, and Sand's accent is amber, so its "waiting" moves to orange. */
+:root[data-theme-family="light"] { --success: #1f8a5b; }
+:root[data-theme="sand"] { --waiting: #b4531a; }
+
+/* A list that scrolls with the wheel or trackpad but draws no track or thumb: the sidebar's threads and files. */
+.kai-scroll-hidden { scrollbar-width: none; -ms-overflow-style: none; }
+.kai-scroll-hidden::-webkit-scrollbar { display: none; }
+
+/*
+ * A control that is selected, focused or pressed is marked by a background tint and nothing else. Flowbite draws a
+ * ring or a box around a focused button and the browser draws an outline around a clicked one; both read as a
+ * bordered "active" state, and both came back each time a new control was added without the reset. This is the reset,
+ * once, for every button and for the roles that behave like one. Text fields are not here: typing needs a marker.
+ */
+@layer base {
+  button:focus, button:focus-visible, button:active,
+  [role="tab"]:focus, [role="tab"]:focus-visible,
+  [role="option"]:focus, [role="option"]:focus-visible,
+  [role="menuitem"]:focus, [role="menuitem"]:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+  button:focus-visible, [role="tab"]:focus-visible, [role="option"]:focus-visible { background-color: var(--bg-hover); }
+}

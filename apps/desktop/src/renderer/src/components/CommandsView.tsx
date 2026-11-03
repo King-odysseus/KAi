@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { COMMAND_GROUPS, type CommandEntry } from './command-reference';
 import { UiButton } from './UiButton';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 
 /**
  * The terminal commands worth knowing, explained for someone who has not used a terminal.
@@ -43,30 +44,22 @@ export function CommandsView({ onOpenTerminal }: { onOpenTerminal?: () => void }
 
   return (
     <div className="page-view">
-      <header className="page-header">
-        <div>
-          <h1>Terminal commands</h1>
-          <p>What the common commands do, and when you would reach for them.</p>
-        </div>
-        {onOpenTerminal && (
-          <div className="page-actions">
-            <UiButton type="button" className="secondary-button" onClick={onOpenTerminal} title="Open the Terminal to try any of these">
-              <TerminalSquare size={14} /> Open the Terminal
-            </UiButton>
-          </div>
-        )}
-      </header>
-
-      <div className="command-search">
-        <Search size={14} />
-        <UiTextInput
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search a command, or describe what you want to do — “search files”, “undo”"
-          aria-label="Search commands"
-        />
-        {query && <UiButton type="button" className="link-button" onClick={() => setQuery('')}>Clear</UiButton>}
-      </div>
+      <PageHeader
+        title="Terminal commands"
+        detail="What the common commands do, and when you would reach for them."
+        actions={<>
+          <label className="input-with-icon command-header-search">
+            <Search size={14} />
+            <UiTextInput
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search commands"
+              aria-label="Search commands"
+            />
+          </label>
+          {query && <UiButton type="button" className="secondary-button" onClick={() => setQuery('')}>Clear</UiButton>}
+        </>}
+      />
 
       {found === 0 && <p className="empty-list">Nothing here matches “{query}”. Try the name of a command, or a word like “files” or “history”.</p>}
 
@@ -78,28 +71,31 @@ export function CommandsView({ onOpenTerminal }: { onOpenTerminal?: () => void }
             {group.commands.map((entry) => (
               <article key={entry.name} className="command-card">
                 <h3><code>{entry.name}</code><span>{entry.summary}</span></h3>
-                <p>{entry.detail}</p>
                 <ul className="command-examples">
                   {entry.examples.map((example) => (
-                    <li key={example.line}>
+                    <li key={example.line} title={example.explains}>
                       <code>{example.line}</code>
                       <UiButton
                         type="button"
-                        className="link-button"
+                        className="secondary-button"
                         onClick={() => void copy(example.line)}
-                        title="Copy this line"
+                        title={example.explains}
                         aria-label={`Copy ${example.line}`}
                       >
-                        <Copy size={11} /> {copied === example.line ? 'Copied' : 'Copy'}
+                        {copied === example.line ? 'Copied' : 'Copy this line'}
                       </UiButton>
-                      <span className="command-explains"><ArrowRight size={11} /> {example.explains}</span>
                     </li>
                   ))}
                 </ul>
                 <p className="command-when"><strong>When:</strong> {entry.useWhen}</p>
+                <details className="command-more">
+                  <summary>What it does</summary>
+                  <p>{entry.detail}</p>
+                </details>
                 {entry.caution && (
                   <p className="command-caution"><AlertTriangle size={13} /> {entry.caution}</p>
                 )}
+                {onOpenTerminal && <UiButton type="button" className="secondary-button command-try" onClick={onOpenTerminal}>Try in Terminal</UiButton>}
               </article>
             ))}
           </div>

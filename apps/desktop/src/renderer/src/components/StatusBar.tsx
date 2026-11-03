@@ -46,7 +46,7 @@ export function StatusBar({
       <div className="status-bar-group">
         {project && <span className="status-item" title="Project in this window">{project}</span>}
         <UiButton type="button" className="status-item status-button" onClick={onOpenPalette} title="What runs your next message. Open the command palette to change it.">
-          {agent}{model ? ` · ${model}` : ''}{effort ? ` · ${effort}` : ''}
+          <span className="status-label">{agent}{model ? ` · ${model}` : ''}{effort ? ` · ${effort}` : ''}</span>
         </UiButton>
         <span className={`status-item ${runningCount > 0 ? 'status-running' : ''}`} role="status">
           <span className="status-dot" aria-hidden="true" />

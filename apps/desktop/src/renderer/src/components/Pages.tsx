@@ -52,6 +52,7 @@ import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 export function ProjectsView({
   projects,
   activeProjectId,
@@ -81,42 +82,18 @@ export function ProjectsView({
       <div className="project-grid">
         {projects.map((project) => (
           <article key={project.id} className={`project-card ${project.id === activeProjectId ? 'active' : ''}`}>
-            <div className="project-card-icon">{project.name.slice(0, 1).toUpperCase()}</div>
             <div className="project-card-copy">
               <div className="project-card-title">
                 <strong>{project.name}</strong>
-                {project.id === activeProjectId && <Pill tone="info">Active</Pill>}
+                {project.id === activeProjectId && <Pill tone="success">Active</Pill>}
+                <UiButton type="button" className="project-card-remove" onClick={() => onRemove(project.id)} title="Remove this project from KAI; its files stay where they are">Remove project</UiButton>
               </div>
-              <span className="mono truncate">{project.path}</span>
-              <small>Last opened {relativeTime(project.lastOpenedAt)}</small>
-            </div>
-            <div className="project-card-actions">
-              <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}>
-                <MessageSquare size={14} />
-                <span>Composer</span>
-              </UiButton>
-              <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}>
-                <Code2 size={14} />
-                <span>Editor</span>
-              </UiButton>
-              <UiButton
-                type="button"
-                className="icon-button"
-                onClick={() => onOpenInNewWindow(project.id)}
-                title={`Open ${project.name} in a new window`}
-                aria-label={`Open ${project.name} in a new window`}
-              >
-                <AppWindow size={15} />
-              </UiButton>
-              <UiButton
-                type="button"
-                className="icon-button"
-                onClick={() => onRemove(project.id)}
-                title="Remove project"
-                aria-label="Remove project"
-              >
-                <Trash2 size={15} />
-              </UiButton>
+              <span className="mono project-card-path" title={project.path}>{project.path}</span>
+              <div className="project-card-actions">
+                <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}><span>Composer</span></UiButton>
+                <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}><span>Editor</span></UiButton>
+                <UiButton type="button" className="secondary-button" onClick={() => onOpenInNewWindow(project.id)} title={`Open ${project.name} in a new window`}><span>Open in new window</span></UiButton>
+              </div>
             </div>
           </article>
         ))}
@@ -159,64 +136,32 @@ export function ServiceView({
   const running = service.status === 'ready' || service.status === 'starting';
   return (
     <div className="page-view">
-      <PageHeader title={title} detail={service.detail}>
-        <UiButton type="button" className="secondary-button" onClick={onConfigure}>
-          <Settings size={15} />
-          <span>Configure</span>
-        </UiButton>
-        {running ? (
-          <UiButton type="button" className="secondary-button" disabled={busy} onClick={onStop}>
-            <Square size={13} />
-            <span>Stop</span>
-          </UiButton>
-        ) : (
-          <UiButton type="button" className="primary-button" disabled={busy} onClick={onStart}>
-            <Play size={14} />
-            <span>Start</span>
-          </UiButton>
-        )}
-        <UiButton type="button" className="secondary-button" disabled={busy || !running} onClick={onRestart}>
-          <RotateCcw size={14} />
-          <span>Restart</span>
-        </UiButton>
-      </PageHeader>
-      <div className="service-hero">
-        <div className="service-icon">
-          <Icon size={22} />
-        </div>
-        <div>
-          <span className="eyebrow">Service state</span>
-          <h2>{statusLabel(service.status)}</h2>
-          <p>{service.endpoint ?? 'No endpoint configured'}</p>
-        </div>
-        <div className={`service-beacon ${service.status}`} />
-      </div>
-      <div className="metric-strip">
-        <Metric label="Version" value={service.version ?? 'Not reported'} icon={<GitBranch size={15} />} />
-        <Metric label="Endpoint" value={service.endpoint ?? 'Not configured'} icon={<Activity size={15} />} />
-        <Metric
-          label="Access"
-          value={service.authentication === 'loopback-token' ? 'Token required' : 'Not configured'}
-          icon={<KeyRound size={15} />}
-        />
-        <Metric label="Updated" value={relativeTime(service.updatedAt)} icon={<Clock3 size={15} />} />
-      </div>
-      <div className="service-access-actions">
-        <UiButton
-          type="button"
-          className="secondary-button"
-          disabled={busy || !service.tokenStored}
-          onClick={onCopyToken}
-        >
-          <Copy size={14} />
-          <span>Copy access token</span>
-        </UiButton>
-        <UiButton type="button" className="secondary-button" disabled={busy} onClick={onRotateToken}>
-          <RefreshCw size={14} />
-          <span>Rotate access token</span>
-        </UiButton>
-      </div>
+      <PageHeader
+        title={title}
+        status={<Pill tone={service.status === 'ready' ? 'success' : service.status === 'failed' ? 'error' : service.status === 'starting' ? 'warning' : 'neutral'}>{statusLabel(service.status)}</Pill>}
+        detail={service.detail}
+        actions={<>
+          <UiButton type="button" className="secondary-button" onClick={onConfigure}><span>Configure</span></UiButton>
+          {running ? (
+            <UiButton type="button" className="secondary-button" disabled={busy} onClick={onStop}><span>Stop</span></UiButton>
+          ) : (
+            <UiButton type="button" className="primary-button" disabled={busy} onClick={onStart}><span>Start</span></UiButton>
+          )}
+          <UiButton type="button" className="secondary-button" disabled={busy || !running} onClick={onRestart}><span>Restart</span></UiButton>
+          <UiButton type="button" className="secondary-button" disabled={busy || !service.tokenStored} onClick={onCopyToken}><span>Copy access token</span></UiButton>
+          <UiButton type="button" className="secondary-button" disabled={busy} onClick={onRotateToken}><span>Rotate access token</span></UiButton>
+        </>}
+      />
       {children}
+      <section className="service-state-card" aria-label="Service state">
+        <h3>Service state</h3>
+        <p>
+          {statusLabel(service.status)} · {service.endpoint ?? 'No endpoint configured'}
+          {service.version ? ` · version ${service.version}` : ''}
+          {' · '}{service.authentication === 'loopback-token' ? 'access token required' : 'no access token'}
+          {service.updatedAt ? ` · updated ${relativeTime(service.updatedAt)}` : ''}
+        </p>
+      </section>
     </div>
   );
 }
@@ -551,6 +496,7 @@ export function WorkflowsView({
           <span>{activeRun.workflow.notice}</span>
         </div>
       )}
+      <div className="workflow-layout">
       <TeamPanel
         activeProject={activeProject}
         agentCapabilities={agentCapabilities}
@@ -706,6 +652,7 @@ export function WorkflowsView({
           <UiButton type="button" className="secondary-button" disabled={running} onClick={addStep}><Plus size={14} /><span>Add step</span></UiButton>
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -740,53 +687,46 @@ export function HistoryView({
   return (
     <div className="page-view">
       <PageHeader title="History" detail={`${conversations.length} conversations stored on this machine`}>
-        <label className="toggle-row history-archive-filter"><span><strong>Show archived</strong><small>Include archived conversations</small></span><Checkbox checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /></label>
+        <div className="history-header-tools">
+          <label className="input-with-icon history-search"><Search size={15} /><UiTextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" /></label>
+          <label className="toggle-row history-archive-filter"><span><strong>Show archived</strong><small>Include archived conversations</small></span><Checkbox checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /></label>
+        </div>
       </PageHeader>
-      <label className="input-with-icon history-search"><Search size={15} /><UiTextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" /></label>
       <div className="history-table">
         <div className="history-head">
           <span>Thread</span>
           <span>Project</span>
           <span>Updated</span>
-          <span />
+          <span>Actions</span>
         </div>
         {visible.map((conversation) => (
           <div
             key={conversation.id}
             className={`history-row ${conversation.id === activeId ? 'active' : ''}`}
           >
-            <UiButton type="button" className="history-open" onClick={() => onOpen(conversation.id)}><span className="truncate">{conversation.title}</span></UiButton>
+            <UiButton type="button" className="history-open" onClick={() => onOpen(conversation.id)}>
+              <span className="truncate">{conversation.title}</span>
+              {conversation.archived && <span className="history-archived">Archived</span>}
+            </UiButton>
             <span className="truncate">{projects.find((project) => project.id === conversation.projectId)?.name ?? 'Unassigned'}</span>
             <span>{relativeTime(conversation.updatedAt)}</span>
             <span className="history-actions">
-              <UiButton type="button" title="Rename" onClick={() => { void promptDialog({ title: 'Rename conversation', label: 'Conversation title', initialValue: conversation.title, confirmLabel: 'Rename' }).then((next) => { if (next?.trim()) onRename(conversation.id, next.trim()); }); }}><Pencil size={13} /></UiButton>
-              <UiButton type="button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onArchive(conversation.id, !conversation.archived)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}</UiButton>
+              <UiButton type="button" title="Rename" onClick={() => { void promptDialog({ title: 'Rename conversation', label: 'Conversation title', initialValue: conversation.title, confirmLabel: 'Rename' }).then((next) => { if (next?.trim()) onRename(conversation.id, next.trim()); }); }}><Pencil size={12} /><span>Rename</span></UiButton>
               <UiButton type="button" title="Copy conversation text" onClick={() => void (async () => {
                 const record = '__summary' in conversation
                   ? await window.kaiDesktop.getConversation(conversation.id).then((response) => response.ok ? response.data : null)
                   : conversation;
                 if (record) await navigator.clipboard?.writeText(record.turns.map((turn) => `${turn.role === 'user' ? 'You' : 'KAI'}:\n${turn.text}`).join('\n\n'));
-              })()}><Copy size={13} /></UiButton>
-              <UiButton type="button" title="Branch conversation" onClick={() => onFork(conversation.id)}><GitFork size={13} /></UiButton>
-              <UiButton type="button" title="Delete" onClick={() => { void confirmDialog({ title: 'Delete conversation?', detail: `Delete "${conversation.title}"?`, confirmLabel: 'Delete', destructive: true }).then((confirmed) => { if (confirmed) onDelete(conversation.id); }); }}><Trash2 size={13} /></UiButton>
+              })()}><Copy size={12} /><span>Copy conversation text</span></UiButton>
+              <UiButton type="button" title="Branch conversation" onClick={() => onFork(conversation.id)}><GitFork size={12} /><span>Branch conversation</span></UiButton>
+              <UiButton type="button" title={conversation.archived ? 'Restore' : 'Archive'} onClick={() => onArchive(conversation.id, !conversation.archived)}>{conversation.archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}<span>{conversation.archived ? 'Restore' : 'Archive'}</span></UiButton>
+              <UiButton type="button" title="Delete" onClick={() => { void confirmDialog({ title: 'Delete conversation?', detail: `Delete "${conversation.title}"?`, confirmLabel: 'Delete', destructive: true }).then((confirmed) => { if (confirmed) onDelete(conversation.id); }); }}><Trash2 size={12} /><span>Delete</span></UiButton>
             </span>
           </div>
         ))}
         {visible.length === 0 && <div className="empty-list">No matching conversations</div>}
       </div>
     </div>
-  );
-}
-
-function PageHeader({ title, detail, children }: { title: string; detail: string; children?: ReactNode }): ReactNode {
-  return (
-    <header className="page-header">
-      <div>
-        <h1>{title}</h1>
-        <p>{detail}</p>
-      </div>
-      {children && <div className="page-actions">{children}</div>}
-    </header>
   );
 }
 

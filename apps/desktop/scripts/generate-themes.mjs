@@ -32,9 +32,9 @@ const themes = {
   },
   purple: {
     neutral: { hue: 243, satScale: 0.62, lift: 0.028 },
-    accent: { hue: 49, sat: 1, light: 0.49 },
+    accent: { hue: 37, sat: 1, light: 0.5 },
     lavender: { hue: 274, sat: 1 },
-    amber: { hue: 33 },
+    amber: { hue: 49 },
   },
   navy: {
     neutral: { hue: 222, satScale: 1.12, lift: 0.03 },

@@ -12,55 +12,6 @@
 .titlebar-actions .icon-button { width: 30px; height: 30px; border-radius: 4px; }
 .titlebar-actions .icon-button:hover,
 .titlebar-actions .icon-button.active { background: var(--bg-hover); }
-.project-picker-button { min-height: 28px; border-radius: 4px; }
-.nav-rail {
-  flex-basis: 52px;
-  width: 52px;
-  padding: 8px 6px 7px;
-  border-right-color: var(--border-soft);
-  background: var(--bg-shell);
-}
-.brand-mark { width: 30px; height: 30px; border-radius: 6px; box-shadow: none; }
-.nav-stack { gap: 8px; padding-top: 12px; }
-.nav-group-label { height: 12px; margin-top: 3px; border-color: var(--border-soft); }
-.nav-group-label span { display: none; }
-.nav-group-label i { display: block; width: 16px; height: 1px; background: var(--border); }
-.nav-button { width: 38px; height: 34px; border-radius: 4px; }
-.nav-button-label { display: none; }
-.nav-button:hover { background: var(--bg-hover); }
-.nav-button.active { border-color: transparent; color: var(--text); background: var(--bg-hover); }
-.nav-button.active::before { left: -6px; width: 2px; height: 22px; background: var(--mint); }
-html[data-theme]:root .nav-button.active { border-color: transparent; color: var(--text); background: var(--bg-hover); }
-html[data-theme]:root .nav-button.active::before { background: var(--mint); }
-.rail-footer { gap: 4px; }
-.nav-expand-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  width: 38px;
-  min-height: 28px;
-  margin-top: 7px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text-muted);
-  background: transparent;
-  cursor: pointer;
-}
-.nav-expand-button:hover,
-.nav-expand-button:focus-visible { color: var(--text); background: var(--bg-hover); }
-.nav-rail.expanded { flex-basis: 180px; width: 180px; align-items: stretch; padding-inline: 8px; }
-.nav-rail.expanded .brand-mark { align-self: center; }
-.nav-rail.expanded .nav-expand-button { justify-content: flex-start; width: 100%; padding: 0 10px; }
-.nav-rail.expanded .nav-stack { align-items: stretch; }
-.nav-rail.expanded .nav-group-label { width: 100%; height: 24px; justify-content: start; padding-left: 10px; margin-top: 8px; }
-.nav-rail.expanded .nav-group-label span { display: block; color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
-.nav-rail.expanded .nav-group-label i { display: none; }
-.nav-rail.expanded .nav-button { display: flex; width: 100%; gap: 10px; justify-content: flex-start; padding: 0 10px; }
-.nav-rail.expanded .nav-button-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.nav-rail.expanded .nav-button.active::before { left: -8px; }
-.nav-rail.expanded .rail-footer { flex-direction: row; justify-content: center; }
 
 /* Reusable page framing for all destinations. */
 .page-view {
@@ -190,9 +141,7 @@ html[data-theme]:root .page-view .chip-button:hover:not(:disabled) { border-colo
 .context-column { background: var(--bg-shell); }
 .conversation-column { border-right-color: var(--border-soft); }
 .context-column { border-left-color: var(--border-soft); }
-.sidebar-heading { min-height: 36px; border-bottom-color: var(--border-soft); }
-.conversation-row { border-radius: 3px; }
-.conversation-row.active { background: var(--bg-hover); }
+
 .conversation-canvas { gap: 10px; padding-top: 16px; padding-bottom: 12px; }
 .workspace-notices { gap: 4px; padding: 6px clamp(10px, 1.2vw, 18px) 0; }
 .workbench-notice,
@@ -240,53 +189,23 @@ html[data-theme]:root .compaction-banner {
 .composer-project-scope svg { flex: 0 0 auto; }
 .composer-project-scope strong { flex: 0 0 auto; color: var(--text); font-weight: 600; }
 .composer-project-scope span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer-box {
-  border-color: var(--border);
-  border-radius: 6px;
-  background: var(--bg-raised);
-  box-shadow: none;
-}
-.composer-box:focus-within { border-color: var(--mint-strong); box-shadow: 0 0 0 1px color-mix(in srgb, var(--mint) 12%, transparent); }
-.composer-box textarea,
+
 .composer textarea { min-height: 54px; padding: 9px 11px 3px; color: var(--text); }
-html[data-theme]:root .composer-box {
-  border-color: var(--border);
-  border-radius: 6px;
-  background: var(--bg-raised);
-  box-shadow: none;
-}
-html[data-theme]:root .composer-box:focus-within {
-  border-color: var(--mint-strong);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mint) 12%, transparent);
-}
-html[data-theme]:root .composer-box textarea,
+
 html[data-theme]:root .composer textarea {
   min-height: 54px;
   padding: 9px 11px 3px;
   color: var(--text);
   background: transparent;
 }
-.composer-toolbar { min-height: 28px; padding: 2px 7px 4px; }
-html[data-theme]:root .composer-toolbar { min-height: 28px; padding: 2px 7px 4px; background: transparent; }
-.composer-leading,
-.composer-actions { gap: 3px; }
-.composer-icon-button { width: 22px; height: 22px; }
-.composer-task-select,
-.composer-access-select,
-.composer-model-select { max-width: 150px; color: var(--text-muted); font-size: 10.5px; }
-html[data-theme]:root .composer-task-select,
-html[data-theme]:root .composer-access-select,
-html[data-theme]:root .composer-model-select { max-width: 150px; color: var(--text-muted); font-size: 10.5px; }
-.composer-advanced-toggle { min-height: 22px; padding: 2px 6px; color: var(--text-muted); font-size: 10px; }
-.composer-actions .send-button { width: 26px; height: 26px; border-radius: 4px; background: var(--mint-strong); }
+
 .send-button:hover:not(:disabled) { background: var(--mint); }
 @media (max-width: 1100px) {
-  .composer-toolbar { flex-wrap: wrap; row-gap: 5px; }
-  .composer-leading,
-  .composer-actions { width: 100%; }
-  .composer-actions { justify-content: flex-start; margin-left: 0; }
-  .composer-actions > .send-button:last-child { margin-left: auto; }
-  .composer-box textarea,
+  
+  
+  
+  
+  
   .composer textarea { min-height: 70px; }
 }
 .agent-setup-banner {
@@ -418,7 +337,7 @@ html[data-theme]:root .autopilot-panel .run-interrupted { display: grid; grid-te
   background: var(--mint);
   content: '';
 }
-.settings-category-nav button:focus-visible { outline: 2px solid var(--mint); outline-offset: -2px; }
+.settings-category-nav button:focus-visible { background: var(--bg-hover); outline: none; }
 @media (min-width: 1000px) {
   .settings-view > .settings-sticky { padding-right: 14px; border-right: 1px solid var(--border-soft); border-bottom: 0; }
 }

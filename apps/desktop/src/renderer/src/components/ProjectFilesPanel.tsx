@@ -203,7 +203,7 @@ export function ProjectFilesPanel({
 
       {error && <div className="proxy-error" role="alert"><span>{error}</span></div>}
 
-      <div className="files-list" role="tree" aria-label="Project files">
+      <div className="files-list kai-scroll-hidden" role="tree" aria-label="Project files">
         {search && effectiveMode === 'all' ? (
           matches.length > 0
             ? matches.map((path) => {

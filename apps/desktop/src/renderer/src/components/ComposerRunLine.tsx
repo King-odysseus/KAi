@@ -67,7 +67,9 @@ export function composerRunLine(autopilot: AutopilotStatus | null, auto: AutoSta
     return null;
   }
   if (auto) {
-    const meta = auto.maxTurns > 0 ? `turn ${auto.turnCount} of ${auto.maxTurns}` : `turn ${auto.turnCount}`;
+    // "turn 0" read as a run that had not begun while the plan beside it was already part done, so the first turn says
+    // it is starting and the counter only appears once there is a turn to count.
+    const meta = auto.turnCount === 0 ? 'starting' : auto.maxTurns > 0 ? `turn ${auto.turnCount} of ${auto.maxTurns}` : `turn ${auto.turnCount}`;
     if (AUTO_ACTIVE.has(auto.phase)) {
       const waiting = auto.phase === 'cooling' || auto.phase === 'waiting-for-you';
       const resting = auto.phase === 'cooling' && auto.resumeAt;
@@ -121,28 +123,37 @@ interface LineProps {
   busy: boolean;
   onStop: () => void;
   onOpenDetails: () => void;
+  /** The one step in hand ("Editing payment.service.ts"), from the live activity. */
+  step?: string | null;
+  /** The plan's own count, which says more than a turn counter does. */
+  progress?: { done: number; total: number } | null;
 }
 
-export function ComposerRunLine({ state, busy, onStop, onOpenDetails }: LineProps): ReactNode {
+/**
+ * The composer's single status line: what is being done right now on the left, which run owns the box on the right.
+ * The step comes from the live activity so the sentence is said once; the run's own message is only the fallback when
+ * there is no step yet. It never repeats the activity card's header or a raw command.
+ */
+export function ComposerRunLine({ state, busy, onStop, onOpenDetails, step, progress }: LineProps): ReactNode {
+  const tone = state.state === 'waiting' ? 'text-[var(--waiting)]' : state.state === 'failed' ? 'text-[var(--failed)]' : 'text-[var(--needs-you)]';
+  const count = progress && progress.total > 0 ? `${progress.done} of ${progress.total}` : state.meta;
   return (
-    <div className={`composer-run-line run-${state.state}`}>
-      {/* The live region is the sentence, not the whole line: a reader should hear that the run changed, not be
-          read a Stop button every time it does. */}
-      <span className="composer-run-mark" aria-hidden="true">
-        {state.state === 'waiting' ? <Moon size={13} /> : state.state === 'failed' ? <AlertTriangle size={13} /> : <Loader2 className="spin" size={13} />}
+    <>
+      <span aria-hidden="true" className={tone}>
+        {state.state === 'waiting' ? <Moon size={13} /> : state.state === 'failed' ? <AlertTriangle size={13} /> : <Loader2 className="animate-spin" size={13} />}
       </span>
-      <UiButton type="button" className="composer-run-text" onClick={onOpenDetails} title="Show the run's log and settings">
-        <strong>{state.lead}</strong>
-        <span className="composer-run-detail">{state.detail}</span>
-        <span className="composer-run-meta">{state.meta}</span>
-      </UiButton>
-      <span className="visually-hidden" role="status">{state.lead}. {state.detail}. {state.meta}.</span>
+      <span className="min-w-0 flex-1 truncate text-[var(--text)]" title={step ?? state.detail}>{step ?? state.detail}</span>
+      <button type="button" onClick={onOpenDetails} title="Show the run's log and settings" className={`inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap border-0 bg-transparent p-0 text-xs focus:outline-none focus-visible:underline ${tone}`}>
+        <strong className="font-semibold">{state.lead}</strong>
+        <span className="text-[var(--text-dim)]">· {count}</span>
+      </button>
+      <span className="sr-only">{state.lead}. {state.detail}. {state.meta}.</span>
       {state.canStop && (
-        <UiButton type="button" className="secondary-button compact" onClick={onStop} disabled={busy}>
-          <Square size={12} /> Stop
+        <UiButton type="button" variant="secondary" className="!min-h-6 !px-2 !text-xs" onClick={onStop} disabled={busy}>
+          <Square size={11} /> Stop
         </UiButton>
       )}
-    </div>
+    </>
   );
 }
 

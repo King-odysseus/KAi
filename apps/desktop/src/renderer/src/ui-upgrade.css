@@ -41,17 +41,14 @@ html[data-theme]:root .command-palette,
 html[data-theme]:root .context-menu,
 html[data-theme]:root .terminal-menu,
 html[data-theme]:root .status-popover,
-html[data-theme]:root .select-menu-popover,
 html[data-theme]:root .kai-select-list {
   border-color: var(--border);
   color: var(--text);
   background: var(--bg-panel);
 }
 html[data-theme]:root .popover > button:hover,
-html[data-theme]:root .popover > button.selected,
-html[data-theme]:root .select-menu-option:hover,
-html[data-theme]:root .select-menu-option:focus-visible { background: var(--bg-hover); }
-html[data-theme]:root .select-menu-option.selected { color: var(--mint); background: var(--mint-soft); }
+html[data-theme]:root .popover > button.selected{ background: var(--bg-hover); }
+
 /* A text field inside .input-with-icon (the file search box among them) rendered with Tailwind's default white
    input background instead of the theme's: UiTextInput replaces the Flowbite field wrapper with `display: contents`
    for its compact icon-beside-input layout, and something in that path drops the themed input colors before they
@@ -63,21 +60,12 @@ html[data-theme]:root .history-search input {
   color: var(--text);
   border-color: var(--border);
 }
-
-.nav-rail { background: var(--bg-shell); }
-:root[data-density] .nav-rail.expanded { flex: 0 0 180px; width: 180px; }
-.nav-rail .brand-mark { display: block; object-fit: contain; border: 0; background: transparent; box-shadow: none; }
-.nav-rail.expanded .brand-mark { align-self: flex-start; }
-.nav-stack { width: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
-.nav-stack::-webkit-scrollbar { display: block; width: 4px; }
-.nav-stack::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--border); }
-.nav-group-label { flex: 0 0 auto; }
-.nav-stack .nav-button { flex: 0 0 auto; }
-.nav-rail.expanded .nav-stack { gap: 4px; padding-top: 10px; }
-.nav-rail.expanded .nav-group-label { height: 24px; margin-top: 14px; padding-top: 8px; }
-.nav-rail.expanded .nav-button { height: 34px; min-height: 34px; }
-.nav-bottom { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: auto; }
-.nav-rail.expanded .nav-bottom { align-items: stretch; }
+/*
+ * UiTextInput wraps the real input, so the legacy `> input` padding rule misses it and the magnifier sits on top of
+ * the placeholder. Match the input at any depth and centre the icon against whatever height the field has.
+ */
+.input-with-icon input { padding-left: 32px !important; }
+.input-with-icon > svg { top: 50%; transform: translateY(-50%); }
 
 .workspace-header { min-height: 64px; padding: 14px 20px; margin-bottom: 0; }
 .workspace-header h1,
@@ -86,24 +74,18 @@ html[data-theme]:root .history-search input {
 .workspace-status .kai-pill { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .workspace-notices { padding-top: 6px; }
 .workspace-notices:not(.expanded) > .workbench-notice ~ .workbench-notice { display: none; }
-.workspace-header-more { position: relative; }
-.workspace-header-more > summary { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 6px; color: var(--text-muted); cursor: pointer; list-style: none; }
-.workspace-header-more > summary::-webkit-details-marker { display: none; }
-.workspace-header-more > summary:hover,
-.workspace-header-more[open] > summary { color: var(--text); background: var(--bg-hover); }
-.workspace-header-more .popover { right: 0; left: auto; width: 190px; }
+
 .workspace-more-notices { align-self: flex-start; min-height: 24px; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .workspace-more-notices:hover { color: var(--text); }
 
 .composer { background: var(--bg-shell); }
-.composer-toolbar { gap: 8px; }
+
 .composer-advanced-options { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-.composer-advanced-options .select-menu { background: var(--bg-panel); border-radius: 6px; }
+
 .kai-select-list { display: flex; flex-direction: column; }
 .kai-select-list > .kai-select-option { flex: 0 0 auto; width: 100%; }
 .kai-select-list > .kai-select-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.select-menu-popover { display: flex; flex-direction: column; }
-.select-menu-popover > .select-menu-option { flex: 0 0 auto; height: auto; min-height: 32px; justify-content: space-between; text-align: left; white-space: normal; }
+
 .composer-status-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 23px; margin-top: 4px; color: var(--text-dim); font-size: 10px; }
 .composer-status-line button { padding: 2px 4px; border: 0; color: inherit; background: transparent; font: inherit; cursor: pointer; }
 .composer-status-line button { display: inline-flex; align-items: center; gap: 3px; }
@@ -158,3 +140,646 @@ html[data-theme]:root .history-search input {
 
 /* Windows draws its window controls on the right, so nothing needs the left 72px; the project picker sits flush with the nav rail. */
 .titlebar { padding-left: 10px; }
+
+/* ---------- One line for every control label ---------- */
+
+/*
+ * A control's label is never two lines. The global rule in styles.css says so, but a label nested in a strong, a
+ * wrapper span or a flexible tab lost it again, and the wrap audit found them at compact widths: scope chips, the
+ * page tabs, the status bar, the rail, settings rows and the toggles that put a checkbox beside a label. A label that
+ * cannot fit is shortened, or its strip scrolls sideways; it does not break mid-name. Prose (hints, descriptions,
+ * notices) still wraps, which is why only these labels are named.
+ */
+.kai-pill,
+.kai-pill > span,
+.status-pill,
+.status-action,
+.chip-button,
+.graph-chip,
+.graph-chip > b,
+.api-provider-chip,
+.attachment-chip,
+.context-chip,
+.gitDiff-chip,
+.image-chip,
+.memory-chip,
+.ops-chip,
+.review-chip,
+.selection-chip,
+.skill-chip,
+.status-chip,
+.team-role-chip,
+.terminal-chip,
+.route-pill,
+.composer-helper-pill,
+[role="tab"],
+.mode-toggle button,
+.workflow-status,
+.team-billing,
+.team-access,
+.nav-button,
+.nav-button > span,
+.settings-category-nav button,
+.settings-category-copy strong,
+.settings-subsection-title,
+.settings-save-summary strong,
+.section-title > span,
+.studio-chat-intents button,
+.studio-screens-toggle,
+.studio-fullscreen-toggle,
+.studio-project-action-row > button,
+.crew-start-row button {
+  white-space: nowrap;
+}
+
+/* A tab strip is one row that scrolls sideways. The labels never split, and the strip is not wrapped into a block. */
+.studio-tabs,
+.code-side-panel-tabs,
+.ops-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.studio-tabs::-webkit-scrollbar,
+.code-side-panel-tabs::-webkit-scrollbar,
+.ops-tabs::-webkit-scrollbar { display: none; }
+.studio-tabs button,
+.code-side-panel-tabs button,
+.ops-tabs button,
+.cognitive1-tabs button,
+.learning-tabs button,
+.conversation-tab-strip button,
+.terminal-tabs [role="tab"] {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.ops-tabs,
+.cognitive1-tabs,
+.learning-tabs,
+.conversation-tab-strip { min-width: 0; }
+/* The tutor's six section tabs are one scrollable row rather than a five-column grid with "Git" on a second line. */
+.learning-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.learning-tabs::-webkit-scrollbar { display: none; }
+.learning-tabs button { flex: 0 0 auto; }
+/* Provider budgets need room for their labels; five 220px columns forced the longest names into an ellipsis. */
+.usage-grid .field-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.nav-button > span { overflow: hidden; text-overflow: ellipsis; }
+
+/*
+ * A selected tab is a tinted surface, never a border, underline or inset ring. The underline that used to mark the
+ * Learn and Operations tabs read as a second border against the panel edge, and the inset ring on Learn drew a box
+ * inside a box. The tint is the same marker every other selected control in the app uses.
+ */
+[role="tab"][aria-selected="true"],
+.ops-tab.active,
+.studio-tabs button.active,
+.code-side-panel-tabs button.active,
+.learning-tabs button.active,
+.learning-tabs button.active:hover,
+.learning-assistance button.active,
+.learning-assistance button.active:hover,
+.preview-inspector-tabs button.active,
+.teaching-kind-tabs button.active,
+.studio-chat-intents .secondary-button.selected,
+.ops-segment button.active {
+  border-color: transparent !important;
+  border-bottom-color: transparent !important;
+  border-radius: 6px;
+  outline: 0;
+  box-shadow: none;
+  background: var(--mint-soft, var(--bg-hover));
+  color: var(--text);
+}
+
+/* The composer is where typing goes, so it says so with a surface tint instead of a brighter border. */
+.kai-composer { transition: background-color 120ms ease; }
+.kai-composer:focus-within { background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel)); }
+
+/* One line when empty, growing with what is typed, rather than a fixed multi-line well. */
+html[data-theme]:root .composer textarea {
+  field-sizing: content;
+  min-height: 1lh;
+  max-height: 12lh;
+  overflow-y: auto;
+  resize: none;
+}
+
+/* The live activity scrolls inside its own box; it never grows tall enough to push the composer off screen. */
+.activity-card-rows { max-height: 240px; overflow-y: auto; scrollbar-width: thin; }
+
+/*
+ * Project Studio follows its board: the tabs sit directly under the header as one strip, and the Interview tab is
+ * three columns — Decisions, the question flow, and a side rail with the projects list and Autopilot.
+ */
+/* Header and tabs are fixed above the scroller; the strip is one row with a quiet rule under it, as on the board. */
+.studio-view { display: flex; flex-direction: column; min-height: 0; }
+.studio-view > .kai-page-header,
+.studio-view > .studio-tabs { flex: 0 0 auto; }
+.studio-view > .studio-scroll { flex: 1 1 0; min-height: 0; }
+.studio-tabs {
+  gap: 4px;
+  margin: 0;
+  padding: 8px 20px 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-shell);
+}
+.studio-tabs button { flex: 0 0 auto; padding: 8px 14px; border-radius: 6px 6px 0 0; margin-bottom: 0; }
+.studio-relink-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.studio-relink-row .studio-project-label { flex: 0 0 auto; }
+.studio-relink-row select { max-width: 320px; }
+.studio-view .studio-grid:not(.studio-grid-intake) {
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.9fr) minmax(220px, 0.9fr);
+}
+.studio-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.studio-rail-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.studio-rail-list { display: flex; flex-direction: column; margin: 4px 0; padding: 0; list-style: none; }
+.studio-rail-list button {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.studio-rail-list button:hover { color: var(--text); background: var(--bg-hover); }
+.studio-rail-list button.active { color: var(--text); background: var(--mint-soft, var(--bg-hover)); }
+.studio-rail-list small { flex: 0 0 auto; color: var(--text-dim); font-size: 10.5px; }
+.studio-rail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+/* A suggested answer is a pill, so a row of them reads as choices rather than a button toolbar. */
+.studio-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.studio-options button { border-radius: 999px; padding: 6px 14px; white-space: nowrap; }
+@media (max-width: 1100px) {
+  .studio-view .studio-grid:not(.studio-grid-intake) { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); }
+  .studio-rail { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
+  .studio-rail > .studio-card { flex: 1 1 260px; }
+}
+
+/* Artifacts: the list on the left, the open artifact on the right, the way the board lays them out. */
+.studio-artifacts-card.split {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.5fr);
+  grid-auto-rows: min-content;
+  column-gap: 14px;
+  align-items: start;
+}
+.studio-artifacts-card.split > * { grid-column: 1; min-width: 0; }
+.studio-artifacts-card.split > .studio-viewer {
+  grid-column: 2;
+  grid-row: 1 / span 8;
+  position: sticky;
+  top: 0;
+  max-height: calc(100dvh - 220px);
+  overflow: auto;
+}
+.studio-artifacts-card.split > .studio-viewer-full { position: fixed; max-height: none; }
+@media (max-width: 1000px) {
+  .studio-artifacts-card.split { display: flex; }
+  .studio-artifacts-card.split > .studio-viewer { position: static; max-height: none; }
+}
+
+/*
+ * Usage follows its board: four stat tiles, then Budget limits beside the 30-day chart, then three short
+ * breakdown cards (provider, model, conversation) that show a name and its estimate.
+ */
+.usage-metrics { display: grid; width: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 20px 14px; box-sizing: border-box; }
+.usage-metrics .metric { align-items: flex-start; padding: 14px 16px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.usage-metrics .metric-icon { display: none; }
+.usage-metrics .metric small { color: var(--text-muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.usage-metrics .metric strong { display: block; margin-top: 4px; color: var(--text); font-size: 26px; font-weight: 650; line-height: 1.1; }
+.usage-layout {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 14px;
+  padding: 0 20px 24px;
+}
+.usage-layout > .usage-budget { grid-column: span 3; }
+.usage-layout > .usage-days { grid-column: span 3; display: flex; flex-direction: column; }
+.usage-layout > .usage-table-card { grid-column: span 2; align-self: start; }
+.usage-days .usage-chart { flex: 1 1 auto; min-height: 180px; }
+.usage-budget-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.usage-budget-row .field { flex: 1 1 90px; min-width: 90px; }
+.usage-provider-limits { margin-top: 10px; }
+.usage-provider-limits summary { color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.usage-provider-limits .field-grid { margin-top: 8px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.usage-subtitle { margin: 14px 0 4px; font-size: 13px; font-weight: 600; color: var(--text); }
+.usage-rows { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.usage-rows li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+.usage-rows li:last-child { border-bottom: 0; }
+.usage-rows li > span { color: var(--text-muted); }
+.usage-rows li > strong { flex: 0 0 auto; color: var(--text); font-weight: 600; }
+@media (max-width: 1100px) {
+  .usage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .usage-layout > .usage-budget, .usage-layout > .usage-days { grid-column: 1 / -1; }
+  .usage-layout > .usage-table-card { grid-column: span 3; }
+}
+
+/* Projects follow their board: two roomy cards across, the full path on show, named buttons under it. */
+.project-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 14px 20px 24px; }
+.project-card { display: block; padding: 16px 18px; border-radius: 14px; }
+.project-card-copy { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.project-card-title { display: flex; align-items: center; gap: 10px; }
+.project-card-title strong { font-size: 16px; font-weight: 650; }
+.project-card-remove { margin-left: auto; padding: 2px 6px; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.project-card-remove:hover { color: var(--danger); background: transparent; }
+.project-card-path { overflow: hidden; color: var(--text-muted); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.project-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.project-card-actions button { font-size: 13px; padding: 6px 14px; }
+.project-card-path { font-family: inherit; font-size: 13px; }
+.project-card .project-card-icon { display: none; }
+@media (max-width: 900px) { .project-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Project graph follows its board: the canvas on the left, Card details on the right, the legend under both. */
+.graph-view { padding: 0; gap: 0; }
+.graph-view > .kai-page-header { margin: 0; }
+.graph-view > .studio-notice { margin: 10px 20px 0; }
+.graph-view .graph-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; flex: 1; min-height: 420px; padding: 14px 20px 8px; }
+.graph-view .graph-canvas { border-radius: 14px; background: var(--bg-shell); }
+.graph-view .graph-detail { flex: none; padding: 16px; border-radius: 14px; gap: 8px; }
+.graph-view .graph-detail h2 { font-size: 15px; font-weight: 650; }
+.graph-view .graph-detail h3 { margin-top: 6px; color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.graph-view .studio-move { max-width: 300px; }
+.graph-detail-title { color: var(--text); font-size: 13.5px; }
+.graph-view .graph-legend { align-items: center; gap: 8px; padding: 4px 20px 16px; }
+.graph-legend-label { color: var(--text-muted); font-size: 12px; }
+.graph-view .graph-chip { padding: 3px 10px; font-size: 11.5px; }
+@media (max-width: 1000px) { .graph-view .graph-body { grid-template-columns: minmax(0, 1fr); } }
+
+/* Workflows follow their board: Auto team and the run list on the left, the Workflow editor on the right. */
+.workflow-layout { display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr); gap: 14px; align-items: start; padding: 14px 20px 24px; }
+.workflow-layout > * { grid-column: 1; min-width: 0; margin: 0; }
+.workflow-layout > .workflow-builder { grid-column: 2; grid-row: 1 / span 3; }
+.workflow-run-list { display: flex; flex-direction: column; gap: 2px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.workflow-style-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 1100px) {
+  .workflow-layout { grid-template-columns: minmax(0, 1fr); }
+  .workflow-layout > .workflow-builder { grid-column: 1; grid-row: auto; }
+}
+
+/* Terminal commands follow their board: the search sits in the header and every command is its own card. */
+.command-header-search { min-width: 260px; }
+.command-group { padding: 6px 20px 8px; }
+.command-group .section-title { margin-bottom: 2px; }
+.command-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 10px; }
+.command-card { display: flex; min-width: 0; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.command-card h3 { display: flex; flex-direction: column; gap: 2px; margin: 0; font-size: 14px; }
+.command-card h3 code { align-self: flex-start; color: var(--text); font-size: 14px; font-weight: 650; background: transparent; padding: 0; }
+.command-card h3 span { color: var(--text-muted); font-size: 12.5px; font-weight: 400; }
+.command-card .command-examples { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.command-card .command-examples li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--bg-inset); }
+.command-card .command-examples code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); background: transparent; }
+.command-card .command-examples button { flex: 0 0 auto; }
+.command-card .command-when { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.command-more { color: var(--text-dim); font-size: 12px; }
+.command-more summary { cursor: pointer; }
+.command-more p { margin: 6px 0 0; line-height: 1.5; }
+.command-try { align-self: flex-start; margin-top: auto; }
+@media (max-width: 1200px) { .command-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 800px) { .command-list { grid-template-columns: minmax(0, 1fr); } }
+
+/* Execution Rules follow their board: one card holding plain rows, the rule number in accent text, no badge. */
+.rules-list { gap: 0; padding: 4px 16px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.rules-list .rule-row { border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; background: transparent; padding: 12px 4px; }
+.rules-list .rule-row:last-child { border-bottom: 0; }
+.rules-list .rule-row:hover { background: transparent; }
+.rule-number { display: inline-block; min-width: 52px; width: auto; height: auto; padding: 0; border: 0; box-shadow: none; background: transparent; color: var(--accent); font-size: 13px; font-weight: 650; white-space: nowrap; }
+.rule-number::before { content: "R-"; }
+
+/* Operations follow their board: Recovery and Active work on the left, Checks and Diagnostics on the right. */
+.ops-board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; padding: 14px 20px 24px; }
+.ops-column { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
+.ops-section { min-width: 0; scroll-margin-top: 12px; }
+@media (max-width: 1100px) { .ops-board { grid-template-columns: minmax(0, 1fr); } }
+
+/* Proxy overview follows its board: routing, quick actions and health on the left, the agents on the right. */
+.proxy-control-centre .overview-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 14px; align-items: start; }
+.proxy-control-centre .overview-col { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
+.proxy-control-centre .overview-col > .section { margin: 0; }
+.proxy-control-centre .overview-agents-title { margin: 0; text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 650; color: var(--text); }
+.proxy-control-centre .overview-agents .agent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1200px) { .proxy-control-centre .overview-cols { grid-template-columns: minmax(0, 1fr); } }
+
+/* An artifact is one row: its state pill, its name and when it was written, then the action. One column, like the board. */
+.studio-artifacts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.studio-artifacts > li { border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; background: transparent; padding: 10px 4px; }
+.studio-artifacts > li:last-child { border-bottom: 0; }
+.studio-artifacts > li > .studio-artifact-open { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.studio-artifacts > li > .studio-artifact-open > .kai-pill { flex: 0 0 auto; align-self: center; }
+.studio-artifacts > li > .studio-artifact-open > strong { font-size: 13px; }
+.studio-artifacts > li > .studio-artifact-open > .studio-note { flex: 1 1 100%; margin: 0; padding-left: 0; color: var(--text-dim); font-size: 11.5px; }
+.studio-relink-row select, .studio-relink-row [role="combobox"] { min-height: 30px; font-size: 12.5px; }
+
+/* Settings follow their board: search and Save all in the header, a nav that names what each section holds. */
+.settings-view > .kai-page-header { grid-column: 1 / -1; }
+.settings-view > .kai-page-header .settings-search { min-width: 280px; margin: 0; }
+.settings-view > .settings-feedback, .settings-view > [role="status"] { grid-column: 1 / -1; }
+.settings-category-nav button { display: flex; height: auto; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; text-align: left; white-space: normal; }
+.settings-category-nav button > strong { color: var(--text); font-size: 13px; font-weight: 600; white-space: normal; }
+.settings-category-nav button > small { color: var(--text-dim); font-size: 11.5px; font-weight: 400; line-height: 1.4; }
+@media (min-width: 1500px) {
+  .settings-categories .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .settings-categories .settings-grid > .settings-section.span-two { grid-column: 1 / -1; }
+}
+
+/* The crew board follows its board: tall rounded columns with an uppercase heading and count, the live feed as a sixth card. */
+.crew-board-wrap { grid-template-columns: minmax(0, 1fr) 300px; align-items: stretch; }
+.crew-board .kanban-column { min-height: 360px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); gap: 10px; }
+.crew-board .kanban-column > h3 { margin: 0; color: var(--text-dim); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; }
+.crew-board .kanban-column > h3 small::before { content: "("; }
+.crew-board .kanban-column > h3 small::after { content: ")"; }
+.crew-board .kanban-card { border-radius: 12px; }
+.crew-feed { min-height: 360px; padding: 14px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.crew-feed > h3 { margin: 0 0 8px; font-size: 14px; font-weight: 650; color: var(--text); }
+.crew-empty { color: var(--text-dim); }
+
+/* Tasks follow their board: the board and the new-task form on top, reviews, handoffs and decisions in three columns. */
+.tasks-board { display: flex; flex-direction: column; gap: 14px; padding: 14px 20px 24px; }
+.tasks-lower { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.tasks-section { min-width: 0; scroll-margin-top: 12px; }
+.tasks-tab-help { display: none; }
+#tasks-board > .ops-panel { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+#tasks-board > .ops-panel > .ops-actions,
+#tasks-board > .ops-panel > .workbench-notice { grid-column: 1 / -1; }
+#tasks-board > .ops-panel > .kanban { grid-column: 1; min-width: 0; }
+#tasks-board > .ops-panel > .settings-section { grid-column: 2; }
+.tasks-board .kanban { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.tasks-board .kanban .kanban-column { min-height: 300px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); gap: 10px; }
+.tasks-board .kanban .kanban-column > h3 { margin: 0; color: var(--text-dim); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; }
+.tasks-board .kanban .kanban-card { border-radius: 12px; }
+@media (max-width: 1100px) { #tasks-board > .ops-panel { grid-template-columns: minmax(0, 1fr); } #tasks-board > .ops-panel > .settings-section { grid-column: 1; } }
+@media (max-width: 1200px) { .tasks-lower { grid-template-columns: minmax(0, 1fr); } }
+
+/* C1 Brain follows its board: the actions and a state pill in the header, one quiet line for the service state. */
+.service-state-card { margin: 4px 20px 24px; padding: 14px 18px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-panel); }
+.service-state-card h3 { margin: 0 0 4px; font-size: 14px; font-weight: 650; color: var(--text); }
+.service-state-card p { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+
+/* The Cognitive1 tabs sit directly under the page header; the lead-in line follows them as one quiet row. */
+.cognitive1-panel { display: flex; box-sizing: border-box; min-width: 0; flex-direction: column; padding: 0; }
+.cognitive1-panel > * { box-sizing: border-box; min-width: 0; }
+.cognitive1-panel > :not(.cognitive1-tabs) { margin-inline: 20px; }
+.cognitive1-panel > .cognitive1-tabs { order: -2; margin: 0 0 12px; padding: 8px 20px 0; border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0; background: transparent; }
+.cognitive1-panel > .cognitive1-control-heading { order: -1; margin-bottom: 8px; }
+.cognitive1-control-heading .eyebrow, .cognitive1-control-heading h2, .cognitive1-control-heading .cognitive1-about { display: none; }
+.cognitive1-tab-help { display: none; }
+
+/* Design: the page list and pull controls on the left, the design assistant as its own column on the right. */
+.studio-design-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 1fr);
+  grid-auto-rows: min-content;
+  column-gap: 14px;
+  align-items: start;
+}
+.studio-design-card > * { grid-column: 1; min-width: 0; }
+.studio-design-card > h2 { grid-column: 1 / -1; }
+.studio-design-card > .studio-design-chat {
+  grid-column: 2;
+  grid-row: 2 / span 8;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-shell);
+}
+@media (max-width: 1000px) {
+  .studio-design-card { display: flex; flex-direction: column; }
+}
+
+/* The board, summarised under the artifacts: four columns of the cards that matter, each one click from the board. */
+.studio-board-summary { margin-top: 14px; }
+.studio-board-summary-title { margin: 0 0 8px; color: var(--text-dim); font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; }
+.studio-board-summary-columns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.studio-board-summary-column {
+  display: flex;
+  min-height: 160px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-panel);
+}
+.studio-board-summary-column h4 { margin: 0; color: var(--text-dim); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.studio-board-summary-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-shell);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.studio-board-summary-card:hover { background: var(--bg-hover); }
+.studio-board-summary-card.held { background: var(--mint-soft, var(--bg-hover)); }
+.studio-board-summary-card small { color: var(--text-muted); font-size: 11px; }
+.studio-board-summary-more { align-self: flex-start; padding: 2px 4px; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.studio-board-summary-more:hover { color: var(--text); }
+.studio-board-summary-empty { margin: 0; padding: 10px; border: 1px dashed var(--border); border-radius: 10px; color: var(--text-dim); font-size: 11.5px; text-align: center; }
+@media (max-width: 900px) { .studio-board-summary-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/*
+ * Git follows its board: three columns — Branches with Recent commits, Changes above Commit, and GitHub — with the
+ * whole action row in the header. A long change list scrolls inside its own box so Commit is never pushed away.
+ */
+.git-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
+.git-col { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.git-col > .settings-section { min-width: 0; }
+.git-change-group .git-list { max-height: 320px; overflow-y: auto; }
+@media (max-width: 1100px) {
+  .git-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .git-grid > .git-col:last-child { grid-column: 1 / -1; }
+}
+
+/*
+ * History follows its board: the search and the archive filter sit in the page header, and every row owns a real
+ * Actions column of named buttons rather than a strip of icons that appears from nowhere.
+ */
+.history-header-tools { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
+.history-header-tools .history-search { min-width: 260px; margin: 0; }
+.history-header-tools .history-search input { height: 30px; }
+.history-head,
+.history-row { grid-template-columns: minmax(0, 1fr) 160px 90px 400px; column-gap: 14px; }
+.history-row { min-height: 52px; padding-block: 6px; align-items: center; }
+.history-open { display: inline-flex; align-items: center; gap: 8px; }
+.history-archived {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.history-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 2px 12px; opacity: 1; overflow: visible; white-space: normal; }
+.history-actions button {
+  display: inline-flex;
+  width: auto;
+  height: auto;
+  gap: 4px;
+  padding: 3px 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: normal;
+}
+.history-actions button:hover { color: var(--text); background: transparent; text-decoration: underline; }
+.history-actions button[title="Delete"] { color: var(--danger); }
+.history-actions button[title="Delete"]:hover { color: var(--danger); }
+
+/* A non-image attachment in the transcript: a quiet file chip, not a thumbnail. */
+.attachment-file {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  font-size: 11.5px;
+}
+.attachment-file > svg { flex: 0 0 auto; color: var(--accent); }
+
+/* Hover and selection are backgrounds too. A border around one reads as a second outline in every theme. */
+.icon-button:hover,
+.icon-button.active,
+.icon-button.active:hover,
+.status-action:hover,
+.status-action.active,
+.guided-review-files button.active,
+.teaching-entry.active,
+.workflow-run-list button.active,
+.cognitive1-skill-row.active,
+.code-tab.active {
+  border-color: transparent;
+  box-shadow: none;
+}
+.project-card.active {
+  border-color: transparent;
+  background: var(--selection);
+  box-shadow: none;
+}
+/* An open picker or menu says so with the same tint, not by keeping its outline. The anchor covers every
+   ActionsMenu trigger, whatever button variant a page chose for it. */
+.actions-menu-anchor > button[aria-expanded="true"],
+.kai-select.open,
+.secondary-button[aria-expanded="true"] {
+  border-color: transparent;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.status-button[aria-expanded="true"] { background: var(--bg-hover); color: var(--text); }
+
+/*
+ * The status bar is a strip of small labels. The left group may shorten; the controls on the right keep their full
+ * text, so "Text size" and the terminal label stay readable when the window is narrow.
+ */
+.status-bar { flex-wrap: nowrap; white-space: nowrap; }
+.status-bar > .status-bar-group:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+/* The size popover rises out of the bar, so the right group (and the bar itself) must not clip its own children. */
+.status-bar > .status-bar-group:last-child { flex: 0 0 auto; overflow: visible; }
+.status-bar .status-item { min-width: 0; flex-shrink: 1; white-space: nowrap; }
+.status-bar .status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-popover-row { flex-wrap: nowrap; white-space: nowrap; }
+/* A menu is as tall as the window allows and scrolls inside it, so its last section is never cut off. */
+.popover,
+.context-menu,
+.terminal-menu,
+.status-popover { max-height: calc(100dvh - 32px); overflow-y: auto; }
+/* The composer's own pickers open above their trigger; cap them to the window as well. */
+.kai-option-menu > [role="listbox"] { max-height: min(18rem, calc(100dvh - 24px)); }
+.status-popover-row > span,
+.status-stepper,
+.status-segment { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 760px) {
+  /* The project name is the one thing in the bar that can go; the model and the running count matter more. */
+  .status-bar .status-bar-group:first-child > .status-item:first-child { display: none; }
+}
+
+/* A toggle row keeps its label beside its control; only the hint underneath is allowed a second line. */
+.toggle-row { flex-wrap: nowrap; white-space: nowrap; }
+.toggle-row > span { min-width: 0; }
+.toggle-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle-row small { white-space: normal; }
+.toggle-row input,
+.toggle-row [type="checkbox"],
+.toggle-row [role="switch"] { flex: 0 0 auto; margin-left: auto; }
+
+/* A table heading is a label too. The body cells already truncate; the heading used to break in half. */
+th,
+.history-head > span,
+.ops-table th,
+.usage-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-category-copy strong { overflow: hidden; text-overflow: ellipsis; }
+
+/*
+ * A page header puts its actions on their own row before it shortens them. The group never shrinks, and the buttons
+ * keep their words: "Stop everything" is not "Stop everythi…".
+ */
+.kai-page-header { min-width: 0; }
+.kai-page-header > div:last-child { flex: 0 0 auto; max-width: 100%; }
+.kai-page-header .page-actions { flex-wrap: wrap; }
+.kai-page-header .primary-button,
+.kai-page-header .secondary-button,
+.kai-page-header .status-action { flex: 0 0 auto; white-space: nowrap; }
+.page-actions,
+.graph-controls,
+.studio-actions,
+.ops-actions { min-width: 0; }
+.page-actions > button,
+.graph-controls > button { flex: 0 0 auto; }
+
+/* On a narrow window each field gets its own row, so a limit label is not squeezed behind an ellipsis. */
+@media (max-width: 640px) {
+  .field-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/*
+ * A graph card's title may take up to three lines inside its own box. Anything longer is clamped, so the card never
+ * grows past the height the layout gave it and never runs into the edge of the canvas.
+ */
+.graph-canvas .react-flow__node.graph-node {
+  max-width: 220px;
+  overflow: hidden;
+  line-height: 1.35;
+  white-space: normal;
+}
+.graph-canvas .react-flow__node.graph-node.agent { max-width: 150px; }
+.graph-node-title {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/*
+ * The rail breathes with the window: items are taller and groups further apart when there is height to spend, and
+ * tighten on a short window so the last page stays reachable without scrolling.
+ */
+.nav-rail .nav-button { height: clamp(30px, 3.6vh, 36px) !important; margin-block: clamp(1px, 0.2vh, 2px) !important; }
+.nav-rail .nav-group-label { padding-bottom: clamp(3px, 0.6vh, 6px) !important; }
+.nav-rail .nav-group-label:not(:first-child) { padding-top: clamp(12px, 2.2vh, 24px) !important; }

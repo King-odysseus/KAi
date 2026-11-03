@@ -60,6 +60,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { UiButton } from './UiButton';
 import { existingCodeTabs, readCodeTabs, writeCodeTabs } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 
 interface TreeNode {
   name: string;
@@ -2054,7 +2055,7 @@ export function CodeView({
   if (!activeProject) {
     return (
       <div className="page-view">
-        <header className="page-header"><div><h1>Code</h1><p>Open a project to browse and edit its files</p></div></header>
+        <PageHeader title="Code" detail="Open a project to browse and edit its files" />
         <div className="empty-list">No project is open</div>
       </div>
     );

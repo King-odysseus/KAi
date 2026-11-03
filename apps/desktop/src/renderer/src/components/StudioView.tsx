@@ -53,11 +53,15 @@ import {
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog, promptDialog } from './AppDialog';
 import { UiButton } from './UiButton';
+import { Pill } from './Pill';
 import { usePersistentChoice } from '../persistent-choice';
 import { Checkbox, Textarea } from 'flowbite-react';
+import { Composer, ComposerInput, ComposerSend, ComposerToolbar } from './ui/Composer';
+import { IconButton } from './ui/IconButton';
 import { ActionsMenu, type ActionsMenuItem } from './ui/ActionsMenu';
 import { UiTextInput } from './UiTextInput';
 import { UiNativeSelect } from './UiNativeSelect';
+import { PageHeader } from './ui/PageHeader';
 
 /**
  * The board's column headings in words. The status is a camelCase identifier, so printing it raw gave "INPROGRESS" as
@@ -2402,13 +2406,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     return (
       <div className="page-view studio-view">
         <div className="studio-scroll">
-          <header className="page-header">
-            <div>
-              <h1>Project Studio</h1>
-              <p>Projects you have discussed in Studio, kept separately from the folders in the Projects page.</p>
-            </div>
-            <div className="page-actions">
-              {!projectsBusy && projects.length > 0 && (
+          <PageHeader title="Project Studio" detail="Projects you have discussed in Studio, kept separately from the folders in the Projects page." actions={<>{!projectsBusy && projects.length > 0 && (
                 <span className="studio-model">
                   {showArchived ? archivedProjects.length : activeProjects.length} {(showArchived ? archivedProjects.length : activeProjects.length) === 1 ? 'project' : 'projects'}
                 </span>
@@ -2423,9 +2421,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 <UiButton type="button" className="primary-button" onClick={() => startNewProject()}>
                   <Plus size={14} /> Plan a new project
                 </UiButton>
-              )}
-            </div>
-          </header>
+              )}</>} />
 
           {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /> {error}</p>}
           {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
@@ -2549,40 +2545,67 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
 
   return (
     <div className="page-view studio-view">
-      <div className="studio-scroll">
-      <header className="page-header">
-        <div>
-          <h1>Project Studio</h1>
-          <p>{state ? 'Continue the discussion, review the brief, or turn it into artifacts and work for the team.' : 'Describe the project in a paragraph. Studio asks what it still needs to know, then saves the brief with the project.'}</p>
-        </div>
-        <div className="page-actions">
-          {readiness && <span className="studio-model">{readiness.ready ? `${readiness.displayName} · ${readiness.model}` : 'Needs setup'}</span>}
-          <UiButton type="button" className="secondary-button" onClick={() => void reloadReadiness()} disabled={busy !== null}>
-            {busy === 'load' ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />} Check connection
+      {/* The header and the tab strip stay put; only what is under them scrolls, so a long tab never carries the
+          tabs out of reach. */}
+      <PageHeader
+        title="Project Studio"
+        status={state ? (
+          <>
+            <Pill>{projectTitle}</Pill>
+            <Pill>{state.linkedProjectId ? `Using ${linkedProjectName(state.linkedProjectId)}` : "Independent (KAI's own folder)"}</Pill>
+          </>
+        ) : undefined}
+        actions={<>
+          <UiButton type="button" className="secondary-button" onClick={leaveProjectStudio} disabled={busy !== null}>
+            <ArrowLeft size={14} /> All projects
           </UiButton>
-          {state?.status === 'done' && projectId && !showHandoff && (
-            <>
-              <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>
-                {busy === 'launch' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Start on composer
-              </UiButton>
-              <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>
-                <Play size={14} /> Start generating
-              </UiButton>
-              <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
-                <Code2 size={14} /> Open in code editor
-              </UiButton>
-            </>
-          )}
           {state?.status === 'done' && projectId && !state.linkedProjectId && (
             <UiButton type="button" className="secondary-button" onClick={() => void chooseProjectFolder(projectId)} disabled={busy !== null}>
               {busy === 'folder' ? <Loader2 className="spin" size={14} /> : <FolderPlus size={14} />} Create folder
             </UiButton>
           )}
-          {state && <UiButton type="button" className="secondary-button" onClick={() => void reset()} disabled={busy !== null}><RotateCcw size={14} /> Start over</UiButton>}
-        </div>
-      </header>
+          {state?.status === 'done' && projectId && (
+            <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'editor')} disabled={busy !== null}>
+              <Code2 size={14} /> Open in code editor
+            </UiButton>
+          )}
+          {state && <UiButton type="button" className="secondary-button" title="Clear this conversation and start the interview again" onClick={() => void reset()} disabled={busy !== null}><RotateCcw size={14} /> Start over</UiButton>}
+        </>}
+      />
 
-      <div className="studio-project-bar studio-project-bar-active">
+      {state && (
+        <div className="studio-tabs" role="tablist" aria-label="Project sections">
+          {([
+            ['interview', 'Interview'],
+            ['artifacts', `Artifacts${artifacts ? ` (${artifacts.artifacts.length})` : ''}`],
+            ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
+            ['design', 'Design'],
+            ['chat', 'Studio chat'],
+            ['guide', 'Senior dev'],
+            ['team', 'Team'],
+          ] as const).map(([id, label]) => (
+            <UiButton key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</UiButton>
+          ))}
+        </div>
+      )}
+
+      <div className="studio-scroll">
+      {screen === 'project' && state && (
+        <div className="studio-relink-row">
+          <span className="studio-project-label">Folder this plan writes to</span>
+          <UiNativeSelect
+            aria-label="The folder this plan uses"
+            value={state.linkedProjectId ?? ''}
+            disabled={busy !== null}
+            onChange={(event) => void relink(event.target.value || null)}
+          >
+            <option value="">Independent (KAI's own folder)</option>
+            {desktopProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </UiNativeSelect>
+        </div>
+      )}
+
+      {screen === 'new' && <div className="studio-project-bar studio-project-bar-active">
         <UiButton type="button" className="secondary-button" onClick={leaveProjectStudio} disabled={busy !== null}>
           <ArrowLeft size={14} />
           All projects
@@ -2602,22 +2625,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   ? `Using ${linkedProjectName(state.linkedProjectId)}`
                   : 'Independent Studio workspace'}
             </small>
-            {screen === 'project' && (
-              <span className="studio-relink">
-                <UiNativeSelect
-                  aria-label="The folder this plan uses"
-                  value={state?.linkedProjectId ?? ''}
-                  disabled={busy !== null}
-                  onChange={(event) => void relink(event.target.value || null)}
-                >
-                  <option value="">Independent (KAI's own folder)</option>
-                  {desktopProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-                </UiNativeSelect>
-              </span>
-            )}
           </div>
         </div>
-      </div>
+      </div>}
 
       {error && <p className="studio-notice error" role="alert"><AlertTriangle size={14} /><span>{error}</span>{screen === 'project' && <UiButton type="button" className="secondary-button" onClick={() => { setError(null); setDetailVersion((version) => version + 1); }}>Retry</UiButton>}</p>}
       {notice && <p className="studio-notice" role="status"><Check size={14} /> {notice}</p>}
@@ -2644,21 +2654,6 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         </p>
       )}
 
-      {state?.status === 'done' && (
-        <div className="studio-tabs" role="tablist" aria-label="Project sections">
-          {([
-            ['interview', 'Interview'],
-            ['artifacts', `Artifacts${artifacts ? ` (${artifacts.artifacts.length})` : ''}`],
-            ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
-            ['design', 'Design'],
-            ['chat', 'Studio chat'],
-            ['guide', 'Senior dev'],
-            ['team', 'Team'],
-          ] as const).map(([id, label]) => (
-            <UiButton key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'active' : undefined} onClick={() => setTab(id)}>{label}</UiButton>
-          ))}
-        </div>
-      )}
       {building && (
         <article className="studio-card studio-handoff" role="status">
           <h2><Loader2 className="spin" size={16} /> Preparing the project</h2>
@@ -2865,13 +2860,57 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             </>
           )}
         </article>
+
+        {state && (
+          <aside className="studio-rail" aria-label="Studio side panel">
+            <article className="studio-card">
+              <h2>Your projects</h2>
+              <div className="studio-rail-pills">
+                <Pill tone="success">Active ({projects.filter((project) => !project.archivedAt).length})</Pill>
+                <Pill>Archived ({projects.filter((project) => project.archivedAt).length})</Pill>
+              </div>
+              <ul className="studio-rail-list">
+                {projects.filter((project) => !project.archivedAt).slice(0, 6).map((project) => (
+                  <li key={project.id}>
+                    <button type="button" className={project.id === projectId ? 'active' : undefined} onClick={() => openProjectStudio(project.id)} disabled={busy !== null}>
+                      <span className="truncate">{project.title}</span>
+                      <small>{project.status === 'done' ? 'Board' : 'Interview'}</small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {state.status === 'done' && projectId && (
+                <div className="studio-rail-actions">
+                  <UiButton type="button" className="secondary-button" onClick={() => void launchProject(projectId, 'composer')} disabled={busy !== null}>Start on composer</UiButton>
+                  <UiButton type="button" className="primary-button" onClick={() => void launchProject(projectId, 'generate')} disabled={busy !== null}>Start generating</UiButton>
+                </div>
+              )}
+            </article>
+            <article className="studio-card">
+              <h2>Autopilot</h2>
+              <p className="studio-note">Dev-only. Never blocks on a missing design. Says in one line what needs you.</p>
+              <div className="studio-rail-pills">
+                {autopilot && AUTOPILOT_ACTIVE.has(autopilot.phase) ? <Pill tone="success">Running</Pill> : <Pill>Idle</Pill>}
+                <UiButton type="button" className="secondary-button" onClick={() => setTab('board')}>Open board</UiButton>
+              </div>
+            </article>
+            {readiness && !readiness.ready && (
+              <article className="studio-card">
+                <h2>Studio not ready</h2>
+                <p className="studio-note">{readiness.reason ?? 'Set an agent and model before generating.'}</p>
+                <UiButton type="button" className="secondary-button" onClick={onOpenSettings}>Open Settings</UiButton>
+              </article>
+            )}
+          </aside>
+        )}
       </section>
       )}
 
       {state && briefReady && (
         <section className="studio-stack">
           {tab === 'artifacts' && (
-          <article className="studio-card">
+          <>
+          <article className={`studio-card studio-artifacts-card${viewing ? ' split' : ''}`}>
             <h2><FileText size={16} /> Artifacts</h2>
             <p className="studio-note">
               One file each under <code>.kai/spec</code>. Regenerating one flags everything that reads it stale, so the board never trusts a document built on an old decision.
@@ -2909,6 +2948,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                       />
                     )}
                     <div className={entry ? 'studio-artifact-open' : undefined} role={entry ? 'button' : undefined} tabIndex={entry ? 0 : undefined} aria-expanded={entry ? viewing === kind : undefined} onClick={entry ? () => void viewArtifact(kind) : undefined} onKeyDown={entry ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void viewArtifact(kind); } } : undefined} title={entry ? `Open ${kind}` : undefined}>
+                      <Pill tone={entry ? (entry.stale ? 'warning' : 'success') : 'neutral'}>{entry ? (entry.stale ? 'Stale' : 'Written') : 'Not written yet'}</Pill>
                       <strong>{kind}</strong>
                       <span className="studio-note">
                         {progress?.current === kind && busy === 'generate'
@@ -2967,10 +3007,39 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               </section>
             )}
           </article>
+          {board && (
+            <section className="studio-board-summary" aria-label="Board">
+              <h3 className="studio-board-summary-title">Board</h3>
+              <div className="studio-board-summary-columns">
+                {([
+                  ['To do', (card: BoardCard) => card.status === 'backlog' || card.status === 'ready' || card.status === 'blocked'],
+                  ['In progress', (card: BoardCard) => card.status === 'inProgress'],
+                  ['Review', (card: BoardCard) => card.status === 'review'],
+                  ['Done', (card: BoardCard) => card.status === 'done'],
+                ] as const).map(([label, matches]) => {
+                  const cards = board.cards.filter(matches);
+                  return (
+                    <div key={label} className="studio-board-summary-column">
+                      <h4>{label} ({cards.length})</h4>
+                      {cards.slice(0, 5).map((card) => (
+                        <button key={card.id} type="button" className={`studio-board-summary-card${card.claimedBy ? ' held' : ''}`} onClick={() => setTab('board')} title="Open the board">
+                          <strong className="truncate">{card.title}</strong>
+                          <small>{card.claimedBy ? `Agent: ${card.claimedBy}` : card.status === 'ready' ? 'Ready' : BOARD_STATUS_LABEL[card.status]}</small>
+                        </button>
+                      ))}
+                      {cards.length > 5 && <button type="button" className="studio-board-summary-more" onClick={() => setTab('board')}>{cards.length - 5} more</button>}
+                      {cards.length === 0 && <p className="studio-board-summary-empty">Nothing here</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+          </>
           )}
 
           {tab === 'design' && (
-          <article className="studio-card">
+          <article className="studio-card studio-design-card">
             <h2><Palette size={16} /> Design</h2>
             <p className="studio-note">
               open-pencil is the source of truth for tokens and for which screens exist. Pulling writes <code>.kai/spec/design/tokens.json</code> (the style guide is written from those tokens), gives each component and page its card, and marks the cards drawn from a node you changed. Pull the design also launches the editor for you and reconnects KAI to whatever it reports, so there is nothing to start by hand.
@@ -3022,11 +3091,13 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                 {designChatMessages.map((item, index) => <p key={`${item.role}-${index}`} className={`studio-chat-message ${item.role}`}><strong>{item.role === 'user' ? 'You' : 'Design AI'}</strong><br />{item.text}</p>)}
               </div>
               {designChatImage && <p className="studio-note">Screenshot attached: {designChatImage.name} <UiButton type="button" className="composer-text-button" onClick={() => setDesignChatImage(null)}>Remove</UiButton></p>}
-              <Textarea value={designChatText} onChange={(event) => setDesignChatText(event.target.value)} placeholder="Tell the design AI what is already there or what needs fixing…" rows={3} disabled={busy !== null} />
-              <div className="page-actions">
-                <label className="secondary-button"><ImagePlus size={14} /> Attach screenshot<input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy !== null} onChange={(event) => { void selectDesignChatImage(event.target.files?.[0]); event.target.value = ''; }} /></label>
-                <UiButton type="button" className="primary-button" onClick={() => void sendDesignChat()} disabled={busy !== null || (!designChatText.trim() && !designChatImage)}>{busy === 'design' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Send to design AI</UiButton>
-              </div>
+              <Composer>
+                <ComposerInput value={designChatText} onChange={(event) => setDesignChatText(event.target.value)} placeholder="Tell the design AI what is already there or what needs fixing…" rows={3} disabled={busy !== null} />
+                <ComposerToolbar
+                  leading={<label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"><ImagePlus size={14} /> Attach screenshot<input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy !== null} onChange={(event) => { void selectDesignChatImage(event.target.files?.[0]); event.target.value = ''; }} /></label>}
+                  actions={<ComposerSend label="Send to design AI" disabled={busy !== null || (!designChatText.trim() && !designChatImage)} sending={busy === 'design'} onClick={() => void sendDesignChat()} />}
+                />
+              </Composer>
             </section>
           </article>
           )}
@@ -3335,24 +3406,28 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                   ))}
                 </div>
                 <span className="studio-model">One or two model calls, usually under a minute.</span>
-                <Textarea
-                  value={planChatText}
-                  onChange={(event) => setPlanChatText(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault();
-                      void sendPlanChat();
-                    }
-                  }}
-                  placeholder="Tell Studio what this page is, or what should change…"
-                  rows={3}
-                  disabled={busy !== null}
-                />
-                <div className="page-actions">
-                  <UiButton type="button" className="primary-button" onClick={() => void sendPlanChat()} disabled={busy !== null || !planChatText.trim()}>{busy === 'plan-chat' ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Ask Studio</UiButton>
-                  {planPhase === 'thinking' && <UiButton type="button" className="secondary-button" onClick={stopPlanChat}>Stop waiting</UiButton>}
-                  <span className="studio-model">It proposes; you decide what to apply.</span>
-                </div>
+                <Composer>
+                  <ComposerInput
+                    value={planChatText}
+                    onChange={(event) => setPlanChatText(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        void sendPlanChat();
+                      }
+                    }}
+                    placeholder="Tell Studio what this page is, or what should change…"
+                    rows={3}
+                    disabled={busy !== null}
+                  />
+                  <ComposerToolbar
+                    leading={<>
+                      {planPhase === 'thinking' && <UiButton type="button" variant="secondary" onClick={stopPlanChat}>Stop waiting</UiButton>}
+                      <span className="text-[11px] text-[var(--text-dim)]">It proposes; you decide what to apply.</span>
+                    </>}
+                    actions={<ComposerSend label="Ask Studio" disabled={busy !== null || !planChatText.trim()} sending={busy === 'plan-chat'} onClick={() => void sendPlanChat()} />}
+                  />
+                </Composer>
               </div>
             </section>
             {planActions && planActions.length > 0 && (
@@ -3842,8 +3917,8 @@ function StudioComposer({ value, onChange, onSubmit, placeholder, ariaLabel, dis
   const sendable = canSend ?? Boolean(value.trim());
   return (
     <>
-      <div className="composer-box">
-        <Textarea
+      <Composer>
+        <ComposerInput
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
@@ -3858,19 +3933,15 @@ function StudioComposer({ value, onChange, onSubmit, placeholder, ariaLabel, dis
           rows={3}
           disabled={disabled}
         />
-        <div className="composer-toolbar">
-          <div className="composer-leading">{extra}</div>
-          <div className="composer-actions">
-            <UiButton type="button" className={`composer-icon-button ${enhancing ? 'active' : ''}`} disabled={!value.trim() || disabled} onClick={onEnhance} title="Improve this with the Prompt Guide" aria-label="Enhance">
-              {enhancing ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />}
-            </UiButton>
-            <UiButton type="button" className="send-button" disabled={!sendable || disabled} onClick={onSubmit} title={sendTitle ?? 'Send'} aria-label="Send">
-              {sending ? <Loader2 className="spin" size={15} /> : <Send size={16} />}
-            </UiButton>
-          </div>
-        </div>
-      </div>
-      <div className="composer-footer">{footer}</div>
+        <ComposerToolbar
+          leading={extra}
+          actions={<>
+            <IconButton aria-label="Enhance" title="Improve this with the Prompt Guide" disabled={!value.trim() || disabled} onClick={onEnhance} icon={enhancing ? <Loader2 className="spin" size={14} /> : <Wand2 size={14} />} />
+            <ComposerSend title={sendTitle ?? 'Send'} disabled={!sendable || disabled} sending={sending} onClick={onSubmit} />
+          </>}
+        />
+      </Composer>
+      <div className="mx-auto mt-1.5 w-full max-w-[var(--composer-max)] px-3.5 text-[11px] text-[var(--text-dim)]">{footer}</div>
     </>
   );
 }

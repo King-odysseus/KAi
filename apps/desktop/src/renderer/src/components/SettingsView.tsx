@@ -19,6 +19,7 @@ import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 type McpServer = AppSettings['mcpServers'][number];
 type HttpMcpServer = Extract<McpServer, { transport: 'http' }>;
 type StdioMcpServer = Extract<McpServer, { transport: 'stdio' }>;
@@ -517,13 +518,23 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
 
   return (
     <div className="page-view settings-view">
-      <PageHeader title="Settings" detail="App-owned configuration and local diagnostics" />
-      <div className={`settings-save-bar ${changed.length > 0 ? 'dirty' : 'saved'}`}>
-        <div className="settings-save-summary">
-          <strong>{changed.length > 0 ? `${changed.length} card${changed.length === 1 ? '' : 's'} with unsaved changes` : 'All changes saved'}</strong>
-          <small>{changed.length > 0 ? changed.map((group) => GROUP_LABELS[group]).join(' · ') : 'Every card below matches what KAI has stored.'}</small>
-        </div>
-        <div className="button-row">
+      <PageHeader
+        title="Settings"
+        detail={changed.length > 0 ? `${changed.length} card${changed.length === 1 ? '' : 's'} with unsaved changes: ${changed.map((group) => GROUP_LABELS[group]).join(' · ')}` : 'All changes saved'}
+        actions={<>
+          <label className="settings-search">
+            <Search size={14} />
+            <UiTextInput
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Escape') setQuery(''); }}
+              placeholder="Search settings"
+              title="Search every setting: model, API key, token, open-pencil…"
+              aria-label="Search settings"
+            />
+            {searching && <UiButton type="button" onClick={() => setQuery('')} aria-label="Clear search"><X size={13} /></UiButton>}
+          </label>
           <UiButton type="button" className="secondary-button" disabled={busy || changed.length === 0} onClick={discardDraft}>
             <RotateCcw size={15} />
             <span>Discard</span>
@@ -535,25 +546,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             onClick={() => void saveGroups(SETTINGS_GROUP_NAMES, 'all')}
           >
             <Save size={15} />
-            <span>{cardFeedback.all?.kind === 'pending' ? 'Saving everything' : 'Save all changes'}</span>
+            <span>{cardFeedback.all?.kind === 'pending' ? 'Saving everything' : 'Save all'}</span>
           </UiButton>
-        </div>
-        <FeedbackMessage feedback={cardFeedback.all ?? null} />
-      </div>
+        </>}
+      />
+      <FeedbackMessage feedback={cardFeedback.all ?? null} />
       <div className="settings-sticky">
-        <label className="settings-search">
-          <Search size={14} />
-          <UiTextInput
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Escape') setQuery(''); }}
-            placeholder="Search settings"
-            title="Search every setting: model, API key, token, open-pencil…"
-            aria-label="Search settings"
-          />
-          {searching && <UiButton type="button" onClick={() => setQuery('')} aria-label="Clear search"><X size={13} /></UiButton>}
-        </label>
         <nav className="settings-category-nav" aria-label="Settings categories">
           {SETTINGS_CATEGORIES.map((category) => (
             <UiButton
@@ -563,7 +561,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
               aria-current={!searching && activeCategory === category.id ? 'location' : undefined}
               onClick={() => jumpToCategory(category.id)}
             >
-              {category.title}
+              <strong>{category.title}</strong>
+              {category.detail && <small>{category.detail}</small>}
             </UiButton>
           ))}
         </nav>
@@ -1200,10 +1199,6 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
       </div>
     </div>
   );
-}
-
-function PageHeader({ title, detail }: { title: string; detail: string }): ReactNode {
-  return <header className="page-header"><div><h1>{title}</h1><p>{detail}</p></div></header>;
 }
 
 function AgentConfigImportCard(): ReactNode {

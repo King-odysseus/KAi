@@ -6,6 +6,7 @@ import type { BoardCard, BoardStatus, StudioBoard, StudioProjectSummary } from '
 import { agentLinks, connectedCardIds, layoutAgentLinks, layoutCards, reducedDependencies } from '../graph-layout';
 import { unwrap } from '../types';
 import { UiButton } from './UiButton';
+import { PageHeader } from './ui/PageHeader';
 import { UiNativeSelect } from './UiNativeSelect';
 
 /**
@@ -88,7 +89,7 @@ export function GraphView(): ReactNode {
 
   const cards = board?.cards ?? [];
   const { nodes, edges } = useMemo(() => buildGraph(cards, mode), [cards, mode]);
-  const chosen = cards.find((card) => card.id === selected) ?? null;
+  const chosen = cards.find((card) => card.id === selected) ?? cards.find((card) => card.status === 'inProgress') ?? null;
   const counts = useMemo(() => {
     const result = new Map<BoardStatus, number>();
     for (const card of cards) result.set(card.status, (result.get(card.status) ?? 0) + 1);
@@ -97,15 +98,13 @@ export function GraphView(): ReactNode {
 
   return (
     <div className={`graph-view${full ? ' graph-view-full' : ''}`}>
-      <header className="graph-head">
-        <div>
-          <h1><Workflow size={16} /> Project graph</h1>
-          <p className="studio-note">What blocks what, and which agent holds which card. Read-only: move cards from the Studio board.</p>
-        </div>
-        <div className="graph-controls">
+      <PageHeader
+        title="Project graph"
+        detail="What blocks what, and which agent holds which card. Read-only: move cards from the Studio board."
+        actions={<>
           <UiNativeSelect className="studio-move" value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value || null)} aria-label="Studio project" disabled={projects.length === 0}>
             {projects.length === 0 && <option value="">No Studio projects</option>}
-            {projects.map((project) => <option key={project.id} value={project.id}>{project.title.slice(0, 60)}</option>)}
+            {projects.map((project) => <option key={project.id} value={project.id}>{`Studio project: ${project.title.slice(0, 50)}`}</option>)}
           </UiNativeSelect>
           <div className="mode-toggle" role="group" aria-label="Graph view">
             <UiButton type="button" className={mode === 'dependencies' ? 'active' : ''} aria-pressed={mode === 'dependencies'} onClick={() => setMode('dependencies')}><span>Dependencies</span></UiButton>
@@ -117,16 +116,10 @@ export function GraphView(): ReactNode {
           <UiButton type="button" className="secondary-button" onClick={() => setFull((value) => !value)} aria-pressed={full} title={full ? 'Exit full screen (Esc)' : 'Show the project graph full screen'}>
             {full ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {full ? 'Exit full screen' : 'Full screen'}
           </UiButton>
-        </div>
-      </header>
+        </>}
+      />
 
       {error && <p className="studio-notice warning" role="alert">{error}</p>}
-
-      <div className="graph-legend" aria-label="Legend">
-        {(Object.keys(STATUS_LABELS) as BoardStatus[]).map((status) => (
-          <span key={status} className={`graph-chip ${status}`}>{STATUS_LABELS[status]} <b>{counts.get(status) ?? 0}</b></span>
-        ))}
-      </div>
 
       <div className="graph-body">
         <div className="graph-canvas">
@@ -141,6 +134,9 @@ export function GraphView(): ReactNode {
               edges={edges}
               fitView
               fitViewOptions={{ padding: 0.2 }}
+              // Fit again on the frame after mount: a web font that lands late changes a title's width, and the
+              // first fit is then a hair too tight for the rightmost card.
+              onInit={(instance) => { window.requestAnimationFrame(() => instance.fitView({ padding: 0.2 })); }}
               nodesDraggable={false}
               nodesConnectable={false}
               elementsSelectable
@@ -154,22 +150,37 @@ export function GraphView(): ReactNode {
             </ReactFlow>
           )}
         </div>
-        {chosen && (
-          <aside className="graph-detail" aria-label="Card details">
-            <h2>{chosen.title}</h2>
-            <span className={`graph-chip ${chosen.status}`}>{STATUS_LABELS[chosen.status]}</span>
-            <p className="studio-note">{chosen.kind} · {moverLabel(chosen)}</p>
-            {chosen.claimedBy && <p className="studio-note">Held by {chosen.claimedBy}</p>}
-            {chosen.dependsOn.length > 0 && <p className="studio-note">Waits on: {chosen.dependsOn.map((id) => cards.find((card) => card.id === id)?.title ?? id).join(', ')}</p>}
-            {chosen.acceptance.length > 0 && (
-              <>
-                <h3>Done when</h3>
-                <ul className="studio-list">{chosen.acceptance.map((item) => <li key={item}>{item}</li>)}</ul>
-              </>
-            )}
-            {chosen.stale && <p className="studio-note">Stale: {chosen.staleReason ?? 'something it reads changed.'}</p>}
-          </aside>
-        )}
+        <aside className="graph-detail" aria-label="Card details">
+          <h2>Card details</h2>
+          {!chosen ? (
+            <p className="studio-note">Select a card to see what holds it and what it waits on.</p>
+          ) : (
+            <>
+              <strong className="graph-detail-title">{chosen.title}</strong>
+              <p className="studio-note">
+                {chosen.claimedBy ? `Held by ${chosen.claimedBy}` : STATUS_LABELS[chosen.status]} · {chosen.kind} · {moverLabel(chosen)}
+              </p>
+              {chosen.acceptance.length > 0 && (
+                <>
+                  <h3>Done when</h3>
+                  <ul className="studio-list">{chosen.acceptance.map((item) => <li key={item}>{item}</li>)}</ul>
+                </>
+              )}
+              <h3>Blocks</h3>
+              <p className="studio-note">{cards.filter((card) => card.dependsOn.includes(chosen.id)).map((card) => card.title).join(', ') || 'Nothing'}</p>
+              <h3>Blocked by</h3>
+              <p className="studio-note">{chosen.dependsOn.map((id) => cards.find((card) => card.id === id)).filter((card) => card && card.status !== 'done').map((card) => card!.title).join(', ') || 'Nothing'}</p>
+              {chosen.stale && <p className="studio-note">Stale: {chosen.staleReason ?? 'something it reads changed.'}</p>}
+            </>
+          )}
+        </aside>
+      </div>
+
+      <div className="graph-legend" aria-label="Legend">
+        <span className="graph-legend-label">Legend</span>
+        {(Object.keys(STATUS_LABELS) as BoardStatus[]).map((status) => (
+          <span key={status} className={`graph-chip ${status}`}>{STATUS_LABELS[status]} <b>{counts.get(status) ?? 0}</b></span>
+        ))}
       </div>
     </div>
   );
@@ -180,7 +191,7 @@ function buildGraph(cards: readonly BoardCard[], mode: Mode): { nodes: Node[]; e
   const cardNode = (card: BoardCard, x: number, y: number): Node => ({
     id: card.id,
     position: { x, y },
-    data: { label: card.title },
+    data: { label: <span className="graph-node-title">{card.title}</span> },
     className: `graph-node ${card.status}${card.claimedBy ? ' held' : ''}`,
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
@@ -214,7 +225,7 @@ function buildGraph(cards: readonly BoardCard[], mode: Mode): { nodes: Node[]; e
   const agentNodes: Node[] = agents.map((agent, index) => ({
     id: `agent:${agent}`,
     position: { x: agentPositions.get(`agent:${agent}`)?.x ?? 0, y: agentPositions.get(`agent:${agent}`)?.y ?? index * 120 },
-    data: { label: agent },
+    data: { label: <span className="graph-node-title">{agent}</span> },
     className: 'graph-node agent',
     sourcePosition: Position.Right,
     targetPosition: Position.Left,

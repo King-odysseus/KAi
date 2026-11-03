@@ -18,3 +18,4 @@ output/
 tmp/
 .tmp/
 .playwright-mcp/
+release-final/

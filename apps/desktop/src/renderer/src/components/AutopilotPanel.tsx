@@ -6,6 +6,7 @@ import { useRunPanelCollapsed } from './run-panel-collapse';
 import { AUTOPILOT_ACTIVE, useAutopilotStatus } from './use-autopilot-status';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
+import { IconButton } from './ui/IconButton';
 import { UiTextInput } from './UiTextInput';
 
 interface Props {
@@ -250,16 +251,13 @@ export function AutopilotPanel({ projectId, ready, inProgress, waiting, blocked,
             </UiButton>
             </>
           )}
-          <UiButton
-            type="button"
-            className="composer-icon-button"
+          <IconButton
             onClick={toggleCollapsed}
             aria-expanded={!collapsed}
             title={collapsed ? 'Show Autopilot details' : 'Minimise Autopilot'}
             aria-label={collapsed ? 'Show Autopilot details' : 'Minimise Autopilot'}
-          >
-            {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-          </UiButton>
+            icon={collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+          />
         </div>
       </div>
       {/* On a collapsed panel this line is the whole screen, so the way out of a stall lives in it. It used to be

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { planItemStateSchema, type AutonomyMode, type PermissionKey, type PermissionRule } from '@kai/contracts';
+import { diffHunks, planItemStateSchema, type AutonomyMode, type PermissionKey, type PermissionRule } from '@kai/contracts';
 import type { ToolHookRunner } from './automation';
 import { FileConflictError, readProjectFile, writeProjectFile } from './project-files';
 import { RunGuard } from './run-guard';
@@ -413,7 +413,25 @@ export interface ProjectToolExecution {
     path: string;
     action: 'edited' | 'created';
     summary: string;
+    /** Unified diff of before/after, so the activity card can show the comparison. */
+    diff?: string;
   };
+}
+
+/** A unified diff for the activity card, built from the before/after text the tool already has in hand. */
+function unifiedDiff(filePath: string, before: string, after: string): string {
+  const hunks = diffHunks(before, after);
+  if (hunks.length === 0) return '';
+  const clean = (line: string): string => line.replace(/\r?\n$/, '');
+  const lines = [`--- a/${filePath}`, `+++ b/${filePath}`];
+  for (const hunk of hunks) {
+    lines.push(`@@ -${hunk.oldStart},${hunk.removed.length} +${hunk.newStart},${hunk.added.length} @@`);
+    lines.push(...hunk.contextBefore.map((line) => ` ${clean(line)}`));
+    lines.push(...hunk.removed.map((line) => `-${clean(line)}`));
+    lines.push(...hunk.added.map((line) => `+${clean(line)}`));
+    lines.push(...hunk.contextAfter.map((line) => ` ${clean(line)}`));
+  }
+  return lines.join('\n');
 }
 
 export type ProjectToolPolicy =
@@ -762,6 +780,7 @@ export class DesktopProjectToolRuntime {
         path: normalizeRelative(input.path),
         action: 'edited',
         summary: `Replaced ${input.replace_all ? occurrences : 1} occurrence(s) in ${input.path}.`,
+        diff: unifiedDiff(normalizeRelative(input.path), content, next),
       },
     };
   }
@@ -783,6 +802,7 @@ export class DesktopProjectToolRuntime {
         path: normalizeRelative(input.path),
         action: 'created',
         summary: `Created ${input.path}.`,
+        diff: unifiedDiff(normalizeRelative(input.path), '', input.content),
       },
     };
   }
@@ -826,6 +846,7 @@ export class DesktopProjectToolRuntime {
         path: normalizeRelative(input.path),
         action: 'edited',
         summary: `Applied ${input.edits.length} edit(s) to ${input.path}.`,
+        diff: unifiedDiff(normalizeRelative(input.path), opened.content, content),
       },
     };
   }
@@ -835,6 +856,7 @@ export class DesktopProjectToolRuntime {
     const root = await this.projectRoot();
     let existed = true;
     let expectedHash: string | null = null;
+    let before = '';
     try {
       const stat = await fs.stat(target);
       if (!stat.isFile()) throw new Error(`${input.path} is not a file.`);
@@ -846,6 +868,7 @@ export class DesktopProjectToolRuntime {
     if (existed) {
       const opened = await readProjectFile(root, input.path);
       if (opened.hash !== expectedHash) throw new FileConflictError(`${input.path} changed while the agent was preparing its edit.`);
+      before = opened.content;
       await writeProjectFile(root, input.path, input.content, { expectedHash: opened.hash, eol: opened.eol, bom: opened.bom });
     } else {
       await fs.mkdir(path.dirname(target), { recursive: true });
@@ -858,6 +881,7 @@ export class DesktopProjectToolRuntime {
         path: normalizeRelative(input.path),
         action: existed ? 'edited' : 'created',
         summary: `${existed ? 'Rewrote' : 'Created'} ${input.path}.`,
+        diff: unifiedDiff(normalizeRelative(input.path), before, input.content),
       },
     };
   }
@@ -888,6 +912,8 @@ export class DesktopProjectToolRuntime {
   private async deleteFile(input: z.infer<typeof deleteFileInputSchema>): Promise<ProjectToolExecution> {
     const target = await this.resolveInsideProject(input.path, true);
     if (!(await fs.stat(target)).isFile()) throw new Error(`${input.path} is not a file. Directories are never deleted.`);
+    const root = await this.projectRoot();
+    const before = await readProjectFile(root, input.path).then((opened) => opened.content).catch(() => '');
     await fs.unlink(target);
     return {
       ok: true,
@@ -896,6 +922,7 @@ export class DesktopProjectToolRuntime {
         path: normalizeRelative(input.path),
         action: 'edited',
         summary: `Deleted ${input.path}.`,
+        diff: unifiedDiff(normalizeRelative(input.path), before, ''),
       },
     };
   }

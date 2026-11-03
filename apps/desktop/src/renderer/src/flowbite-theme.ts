@@ -42,13 +42,13 @@ export const kaiFlowbiteTheme = createTheme({
   badge: {
     root: {
       base: 'inline-flex h-fit items-center gap-1.5 whitespace-nowrap font-medium',
-      size: { xs: 'rounded-md px-2 py-0.5 text-xs', sm: 'rounded-md px-2.5 py-1 text-sm' },
+      size: { xs: 'rounded-[var(--radius-pill)] px-2 py-0.5 text-[11px]', sm: 'rounded-[var(--radius-pill)] px-2.5 py-1 text-xs' },
       color: {
         gray: 'bg-[var(--bg-hover)] text-[var(--text-muted)]',
-        info: 'bg-[var(--mint-soft)] text-[var(--mint)]',
-        success: 'bg-[color-mix(in_srgb,var(--mint)_16%,transparent)] text-[var(--mint)]',
-        warning: 'bg-[color-mix(in_srgb,var(--amber)_15%,transparent)] text-[var(--amber)]',
-        failure: 'bg-[color-mix(in_srgb,var(--red)_15%,transparent)] text-[var(--red)]',
+        info: 'bg-[var(--accent-soft)] text-[var(--accent)]',
+        success: 'bg-[var(--success-soft)] text-[var(--success)]',
+        warning: 'bg-[var(--warning-soft)] text-[var(--waiting)]',
+        failure: 'bg-[var(--danger-soft)] text-[var(--danger)]',
       },
     },
     icon: { off: '', on: 'rounded-md px-1 py-0.5' },
@@ -60,7 +60,7 @@ export const kaiFlowbiteTheme = createTheme({
     // Flowbite's default base carries `focus:ring-4` and its colors carry `focus:ring-gray-300` etc.; the theme merge
     // only dedupes within a utility group, so they survive unless cancelled explicitly. That ring is the rounded box
     // that stays on a button after a click.
-    base: 'relative inline-flex items-center justify-center gap-1.5 rounded-md border text-center font-medium ring-0 focus:ring-0 focus-visible:ring-0 focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
+    base: 'relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border text-center font-medium ring-0 focus:ring-0 focus-visible:ring-0 focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
     size: { xs: 'min-h-6 px-2 text-xs', sm: 'min-h-7 px-2.5 text-xs', md: 'min-h-8 px-3 text-sm' },
     color: {
       default: 'border-transparent bg-[var(--mint)] text-[var(--bg-deep)] hover:bg-[var(--mint-strong)]',
@@ -98,5 +98,60 @@ export const kaiFlowbiteTheme = createTheme({
   radio: {
     base: 'h-4 w-4 shrink-0 appearance-none rounded-full border border-[color:var(--border)] bg-[var(--bg-input)] checked:border-transparent checked:bg-current focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50',
     color: { default: 'text-[var(--mint)]' },
+  },
+  card: {
+    root: {
+      base: 'flex rounded-[var(--radius-card)] border border-[color:var(--border-soft)] bg-[var(--bg-shell)] text-[var(--text)] shadow-none',
+      children: 'flex h-full flex-col justify-center gap-2 p-3.5',
+      horizontal: { off: 'flex-col', on: 'flex-col md:flex-row' },
+      href: 'hover:bg-[var(--bg-hover)]',
+    },
+    img: { base: '', horizontal: { off: 'rounded-t-lg', on: 'rounded-none' } },
+  },
+  toggleSwitch: {
+    root: {
+      base: 'group flex rounded-full focus:outline-none',
+      active: { on: 'cursor-pointer', off: 'cursor-not-allowed opacity-50' },
+      label: 'ms-2.5 text-start text-sm text-[var(--text-muted)]',
+      input: 'sr-only',
+    },
+    toggle: {
+      base: 'relative rounded-full after:absolute after:rounded-full after:border-0 after:bg-[var(--bg-deep)] after:transition-all group-focus-visible:brightness-125',
+      checked: {
+        on: 'after:translate-x-full rtl:after:-translate-x-full',
+        off: 'bg-[var(--border)] after:bg-[var(--text-muted)]',
+        color: {
+          default: 'bg-[var(--accent)]',
+          success: 'bg-[var(--success)]',
+          warning: 'bg-[var(--waiting)]',
+          failure: 'bg-[var(--danger)]',
+        },
+      },
+      sizes: {
+        sm: 'h-4 w-7 min-w-7 after:left-0.5 after:top-0.5 after:h-3 after:w-3 rtl:after:right-0.5',
+        md: 'h-5 w-9 min-w-9 after:left-0.5 after:top-0.5 after:h-4 after:w-4 rtl:after:right-0.5',
+        lg: 'h-6 w-11 min-w-11 after:left-0.5 after:top-0.5 after:h-5 after:w-5 rtl:after:right-0.5',
+      },
+    },
+  },
+  table: {
+    root: {
+      base: 'w-full text-left text-[12.5px] text-[var(--text-muted)]',
+      shadow: 'hidden',
+      wrapper: 'relative overflow-x-auto',
+    },
+    body: {
+      base: 'group/body',
+      cell: { base: 'px-2 py-2 align-top' },
+    },
+    head: {
+      base: 'group/head text-[11px] font-medium text-[var(--text-dim)]',
+      cell: { base: 'border-b border-[color:var(--border-soft)] bg-transparent px-2 py-1.5' },
+    },
+    row: {
+      base: 'group/row border-b border-[color:var(--border-soft)] last:border-b-0',
+      hovered: 'hover:bg-[var(--bg-hover)]',
+      striped: '',
+    },
   },
 });

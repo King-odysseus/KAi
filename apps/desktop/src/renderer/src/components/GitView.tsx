@@ -20,6 +20,7 @@ import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { Checkbox, Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
+import { PageHeader } from './ui/PageHeader';
 const POLL_MS = 10_000;
 
 const STATE_WORDS: Record<string, string> = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', '?': 'new', U: 'conflict', '.': '' };
@@ -174,13 +175,13 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
   );
 
   if (!activeProject) {
-    return <div className="page-view"><header className="page-header"><div><h1>Git</h1><p>Open a project to see its branches and changes</p></div></header><div className="empty-list">No project is open</div></div>;
+    return <div className="page-view"><PageHeader title="Git" detail="Open a project to see its branches and changes" /><div className="empty-list">No project is open</div></div>;
   }
-  if (!overview) return <div className="page-view"><header className="page-header"><div><h1>Git</h1></div></header>{error ? <div className="workbench-error" role="alert">{error}</div> : <div className="empty-list">Loading…</div>}</div>;
+  if (!overview) return <div className="page-view"><PageHeader title="Git" />{error ? <div className="workbench-error" role="alert">{error}</div> : <div className="empty-list">Loading…</div>}</div>;
   if (!overview.isRepository) {
     return (
       <div className="page-view">
-        <header className="page-header"><div><h1>Git</h1><p>{activeProject.name}</p></div></header>
+        <PageHeader title="Git" detail={<>{activeProject.name}</>} />
         <div className="empty-list">
           <p>This project is not a Git repository yet. Starting one is a single command, and KAI can run it for you.</p>
           <div className="git-starter">
@@ -276,18 +277,10 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
 
   return (
     <div className="page-view git-view">
-      <header className="page-header">
-        <div>
-          <h1>Git</h1>
-          <p>
-            {activeProject.name} · <GitBranch size={12} /> {overview.branch ?? 'detached HEAD'}
+      <PageHeader title="Git" detail={<>{activeProject.name} · <GitBranch size={12} /> {overview.branch ?? 'detached HEAD'}
             {overview.upstream ? ` → ${overview.upstream}` : ' (not published)'}
             {overview.ahead > 0 && <span className="git-count"><ArrowUp size={11} />{overview.ahead}</span>}
-            {overview.behind > 0 && <span className="git-count"><ArrowDown size={11} />{overview.behind}</span>}
-          </p>
-        </div>
-        <div className="page-actions">
-          <UiButton type="button" className="secondary-button" disabled={busy !== null} title="Ask the remote what has changed. Changes nothing on your machine." onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></UiButton>
+            {overview.behind > 0 && <span className="git-count"><ArrowDown size={11} />{overview.behind}</span>}</>} actions={<><UiButton type="button" className="secondary-button" disabled={busy !== null} title="Ask the remote what has changed. Changes nothing on your machine." onClick={() => void sync('fetch', 'Fetch')}><RefreshCw size={14} /><span>Fetch</span></UiButton>
           <UiButton type="button" className="secondary-button" disabled={busy !== null || !overview.upstream} title="Fast-forward only; never merges or rewrites history" onClick={() => void sync('pull', 'Pull')}><ArrowDown size={14} /><span>Pull</span></UiButton>
           <UiButton type="button" className="primary-button" disabled={busy !== null || !overview.branch || overview.remotes.length === 0 || (overview.upstream !== null && overview.ahead === 0)} title={overview.remotes.length === 0 ? 'There is nowhere to push to yet — create a repository on GitHub in the GitHub section below' : undefined} onClick={() => void (async () => {
             const target = overview.githubRepository ? `origin (${overview.githubRepository})` : 'the remote';
@@ -298,8 +291,12 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
             });
             if (confirmed) await sync('push', 'Push');
           })()}><ArrowUp size={14} /><span>{overview.upstream ? 'Push' : 'Publish branch'}</span></UiButton>
-        </div>
-      </header>
+          <UiButton type="button" className="secondary-button" disabled={busy !== null || overview.changes.length === 0} title="Stage every changed file for the next commit" onClick={() => void act('Stage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, overview.changes.map((change) => change.path), true)).output, 'Staged everything.')}>Stage all</UiButton>
+          <UiButton type="button" className="secondary-button" disabled={busy !== null || staged.length === 0} title="Leave every staged file out of the next commit" onClick={() => void act('Unstage all', async () => unwrap(await window.kaiDesktop.gitStage(activeProject.id, staged.map((change) => change.path), false)).output, 'Unstaged everything.')}>Unstage all</UiButton>
+          <UiButton type="button" className="primary-button" disabled={busy !== null || staged.length === 0 || !commitMessage.trim()} title="Commit the staged files with the message below" onClick={() => void act('Commit', async () => {
+            unwrap(await window.kaiDesktop.gitCommit(activeProject.id, commitMessage.trim()));
+            setCommitMessage('');
+          }, `Committed ${staged.length} file${staged.length === 1 ? '' : 's'}.`)}>Commit</UiButton></>} />
 
       {message && <div className="workbench-notice" role="status"><span className="git-message">{message}</span></div>}
       {error && <div className="workbench-error" role="alert"><span className="git-message">{error}</span></div>}
@@ -320,7 +317,8 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
         <p className="settings-note">The everyday loop is: stage, commit, push. A branch is a separate line of work you can throw away without touching the main one.</p>
       </details>
 
-      <div className="settings-grid">
+      <div className="git-grid">
+        <div className="git-col">
         <section className="settings-section">
           <div className="section-title"><GitBranch size={16} /><span>Branches</span></div>
           <div className="field-with-action">
@@ -338,16 +336,12 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           <ul className="git-list">{overview.branches.map((branch) => <li key={branch.name} className={branch.current ? 'current' : ''}><strong>{branch.name}</strong><span className="truncate">{branch.subject}</span><small>{branch.upstream ?? 'local only'}</small></li>)}</ul>
         </section>
 
-        <section className="settings-section">
-          <div className="section-title"><GitCommitHorizontal size={16} /><span>Commit</span></div>
-          <label className="field"><span>Message</span><Textarea rows={3} value={commitMessage} placeholder="Describe what changed and why" onChange={(event) => setCommitMessage(event.target.value)} /></label>
-          <UiButton type="button" className="primary-button align-end" disabled={busy !== null || staged.length === 0 || !commitMessage.trim()} onClick={() => void act('Commit', async () => {
-            unwrap(await window.kaiDesktop.gitCommit(activeProject.id, commitMessage.trim()));
-            setCommitMessage('');
-          }, `Committed ${staged.length} file${staged.length === 1 ? '' : 's'}.`)}>Commit {staged.length} staged file{staged.length === 1 ? '' : 's'}</UiButton>
-          <p className="settings-note">Repository hooks run as usual. Only staged files are committed.</p>
+        <section className="settings-section span-two">
+          <div className="section-title"><span>Recent commits</span></div>
+          <ul className="git-list">{overview.commits.map((commit) => <li key={commit.hash}><code>{commit.hash}</code><span className="truncate">{commit.subject}</span><small>{commit.author} · {relativeTime(commit.date)}</small></li>)}</ul>
         </section>
-
+        </div>
+        <div className="git-col">
         <section className="settings-section span-two">
           <div className="section-title"><span>Changes ({overview.changes.length})</span></div>
           {overview.changes.length === 0 ? <div className="empty-list">Working tree is clean</div> : (
@@ -401,6 +395,17 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
           )}
         </section>
 
+        <section className="settings-section">
+          <div className="section-title"><GitCommitHorizontal size={16} /><span>Commit</span></div>
+          <label className="field"><span>Message</span><Textarea rows={3} value={commitMessage} placeholder="Describe what changed and why" onChange={(event) => setCommitMessage(event.target.value)} /></label>
+          <UiButton type="button" className="primary-button align-end" disabled={busy !== null || staged.length === 0 || !commitMessage.trim()} onClick={() => void act('Commit', async () => {
+            unwrap(await window.kaiDesktop.gitCommit(activeProject.id, commitMessage.trim()));
+            setCommitMessage('');
+          }, `Committed ${staged.length} file${staged.length === 1 ? '' : 's'}.`)}>Commit {staged.length} staged file{staged.length === 1 ? '' : 's'}</UiButton>
+          <p className="settings-note">Repository hooks run as usual. Only staged files are committed.</p>
+        </section>
+        </div>
+        <div className="git-col">
         <section className="settings-section span-two">
           <div className="section-title"><GitPullRequest size={16} /><span>GitHub</span></div>
           {!overview.githubRepository ? githubPanel : (
@@ -437,11 +442,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
             </>
           )}
         </section>
-
-        <section className="settings-section span-two">
-          <div className="section-title"><span>Recent commits</span></div>
-          <ul className="git-list">{overview.commits.map((commit) => <li key={commit.hash}><code>{commit.hash}</code><span className="truncate">{commit.subject}</span><small>{commit.author} · {relativeTime(commit.date)}</small></li>)}</ul>
-        </section>
+        </div>
       </div>
     </div>
   );

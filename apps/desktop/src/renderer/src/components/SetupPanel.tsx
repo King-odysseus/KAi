@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import { useState } from 'react';
 import type { SetupCheck, SetupGuideAnswer, SetupStatus } from '@kai/contracts';
 import { UiButton } from './UiButton';
+import { Composer, ComposerInput, ComposerSend, ComposerToolbar } from './ui/Composer';
 import { UiTextInput } from './UiTextInput';
 import { Modal } from 'flowbite-react';
 
@@ -89,9 +90,11 @@ export function SetupPanel({
                     </article>
                   ))}
                 </div>
-                <form className="setup-guide-form" onSubmit={(event) => void askGuide(event)}>
-                  <UiTextInput aria-label="Ask KAI Guide" value={guideQuestion} maxLength={1_000} onChange={(event) => setGuideQuestion(event.target.value)} placeholder="What do you want help with?" />
-                  <UiButton type="submit" className="primary-button" disabled={guideBusy || !guideQuestion.trim()}>{guideBusy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}<span>{guideBusy ? 'Thinking' : 'Ask'}</span></UiButton>
+                <form onSubmit={(event) => void askGuide(event)}>
+                  <Composer>
+                    <ComposerInput aria-label="Ask KAI Guide" value={guideQuestion} maxLength={1_000} rows={2} onChange={(event) => setGuideQuestion(event.target.value)} placeholder="What do you want help with?" />
+                    <ComposerToolbar actions={<ComposerSend submit label={guideBusy ? 'Thinking' : 'Ask KAI Guide'} sending={guideBusy} disabled={guideBusy || !guideQuestion.trim()} />} />
+                  </Composer>
                 </form>
                 {guideError && <p className="setup-guide-error" role="alert">{guideError}</p>}
               </>
