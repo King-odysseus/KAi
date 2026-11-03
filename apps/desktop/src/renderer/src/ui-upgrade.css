@@ -828,3 +828,32 @@ th,
 /* The Studio chat's task choices are pills, and the studio side-cards are rounded like the rest. */
 .studio-chat-intents button { border-radius: 999px; padding: 6px 14px; }
 .studio-team-roles { margin-bottom: 14px; }
+
+/*
+ * The tutor's lesson rows are sentences in a button, not one-line labels: they wrap inside the panel and grow to fit,
+ * instead of being clipped at the panel edge or drawn over the line beneath.
+ */
+.learning-path button,
+.learning-memory button,
+.learning-pending button {
+  display: flex;
+  height: auto;
+  min-height: 0;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 2px;
+  overflow: visible;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.learning-path button > span,
+.learning-path button > small,
+.learning-memory button > span { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.learning-path-next button { flex-direction: column; align-items: flex-start; }
+.learning-memory button { width: 100%; margin-top: 6px; }
+.learning-memory p, .learning-path p { margin: 6px 0; overflow-wrap: anywhere; }
+.learning-scroll { overflow-x: hidden; }
+.learning-scroll p, .learning-scroll li, .learning-scroll h3 { overflow-wrap: anywhere; }
