@@ -45,7 +45,7 @@ export const ComposerInput = forwardRef<HTMLTextAreaElement, ComponentProps<type
     <Textarea
       ref={ref}
       rows={rows}
-      className={`!block !w-full !resize-none !border-0 !bg-transparent !p-0 !pb-2 !text-sm !shadow-none !outline-none !ring-0 focus:!border-0 focus:!ring-0 ${className}`.trim()}
+      className={`!block !w-full !resize-none !border-0 !bg-transparent !p-0 !pb-2 !text-sm !leading-5 !min-h-[28px] !shadow-none !outline-none !ring-0 focus:!border-0 focus:!ring-0 ${className}`.trim()}
       {...props}
     />
   );

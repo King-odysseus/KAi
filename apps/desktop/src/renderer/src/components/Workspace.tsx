@@ -669,8 +669,11 @@ export function WorkspaceView({
     const textarea = promptRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 260)}px`;
+    // offsetHeight - clientHeight is the border, which scrollHeight leaves out; one spare pixel stops rounding from clipping the first line.
+    const chrome = textarea.offsetHeight - textarea.clientHeight;
+    textarea.style.height = `${Math.min(textarea.scrollHeight + chrome + 1, 260)}px`;
     textarea.style.overflowY = textarea.scrollHeight > 260 ? 'auto' : 'hidden';
+    if (textarea.scrollHeight <= 260) textarea.scrollTop = 0;
   }, [prompt]);
 
   useEffect(() => {
@@ -1632,7 +1635,6 @@ export function WorkspaceView({
             ariaLabel="More workspace actions"
             items={[
               { key: 'raw', label: `Raw events (${rawEvents.length})`, icon: <Braces size={14} />, onSelect: () => setRawEventsOpen((current) => !current) },
-              { key: 'compact', label: 'Compact conversation', disabled: busy || !activeConversation, onSelect: onCompactConversation },
               { key: 'continue', label: 'Continue in new tab', disabled: busy || !activeConversation, onSelect: onContinueInNewTab },
             ]}
             trigger={({ onClick, expanded }) => <IconButton aria-label="More workspace actions" aria-expanded={expanded} onClick={onClick} icon={<Ellipsis size={15} />} />}
@@ -2266,6 +2268,8 @@ export function WorkspaceView({
             leading={<>
               <IconButton aria-label="Add context" title="Add files, images, memory, or project context" active={contextPickerOpen} onClick={() => setContextPickerOpen((current) => !current)} icon={<Plus size={15} />} />
               <IconButton aria-label="Saved prompts" title="Saved prompts" active={presetsOpen} onClick={() => setPresetsOpen((current) => !current)} icon={<Hash size={14} />} />
+              <IconButton aria-label="Slash commands" title="Commands: type / in the message box" onClick={() => { setPrompt((current) => (current.startsWith('/') ? current : `/${current}`)); window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Task prompt"]')?.focus(), 0); }} icon={<span className="font-mono text-[13px] font-semibold leading-none">/</span>} />
+              {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={COMPACTION_WARNING_TOKENS} busy={busy || running} onCompact={onCompactConversation} />}
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
@@ -2893,6 +2897,52 @@ function modelGroup(name: string): string {
   if (name.startsWith('deepseek')) return 'DeepSeek';
   if (name.startsWith('qwen')) return 'Qwen';
   return 'Other';
+}
+
+/**
+ * How full the conversation's context is, as a small ring beside the composer's other tools. Opening it says how much
+ * is used and holds the one action that frees room, Compact, so that action sits where the fullness is shown.
+ */
+function ContextRing({ tokens, limit, busy, onCompact }: { tokens: number; limit: number; busy: boolean; onCompact: () => void }): ReactNode {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent): void => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
+  }, [open]);
+  const ratio = limit > 0 ? Math.min(1, tokens / limit) : 0;
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const tone = ratio >= 0.9 ? 'var(--needs-you, var(--danger))' : ratio >= 0.7 ? 'var(--waiting, var(--accent))' : 'var(--accent)';
+  return (
+    <div ref={rootRef} className="context-ring relative inline-flex">
+      <IconButton
+        aria-label={`Context used: about ${Math.round(ratio * 100)} percent`}
+        aria-expanded={open}
+        title={open ? undefined : "Context used"}
+        active={open}
+        onClick={() => setOpen((current) => !current)}
+        icon={(
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <circle cx="9" cy="9" r={radius} fill="none" stroke="var(--border)" strokeWidth="2.5" />
+            <circle cx="9" cy="9" r={radius} fill="none" stroke={tone} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={`${circumference * ratio} ${circumference}`} transform="rotate(-90 9 9)" />
+          </svg>
+        )}
+      />
+      {open && (
+        <div role="dialog" aria-label="Context used" className="absolute bottom-[calc(100%+6px)] left-0 z-[60] w-64 rounded-xl border border-[color:var(--border)] bg-[var(--bg-raised)] p-3 shadow-[0_14px_34px_rgba(0,0,0,0.4)]">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-dim)]">Context</div>
+          <div className="mt-1 text-sm text-[var(--text)]">About {Math.round(ratio * 100)}% used</div>
+          <div className="mt-0.5 text-xs text-[var(--text-muted)]">~{formatCompact(tokens)} of ~{formatCompact(limit)} tokens before KAI suggests compacting.</div>
+          <UiButton type="button" className="secondary-button mt-2.5" disabled={busy} onClick={() => { setOpen(false); onCompact(); }}>Compact conversation</UiButton>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function positiveLine(value: string): string | null {
