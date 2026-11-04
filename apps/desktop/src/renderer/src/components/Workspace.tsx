@@ -25,6 +25,7 @@ import {
   Download,
   Eye,
   Lightbulb,
+  ListChecks,
   Users,
   File,
   FileSearch,
@@ -2217,29 +2218,6 @@ export function WorkspaceView({
         {taskIntent === 'equalizer' && activeProject && (
           <EqualizerPanel projectId={activeProject.id} message={prompt} onFix={applyEqualizerFix} />
         )}
-        {activeProject && (
-          <div className="composer-project-scope" title={`Agent runs in ${activeProject.path}`}>
-            <FolderOpen size={12} aria-hidden="true" />
-            <strong>{activeProject.name}</strong>
-            <span>{activeProject.path}</span>
-          </div>
-        )}
-        {activeProject && activePersona.recipes && activePersona.recipes.length > 1 && (
-          <div className="composer-recipes" role="group" aria-label={`${activePersona.label} recipes`}>
-            {activePersona.recipes.map((recipe) => (
-              <UiButton
-                key={recipe.id}
-                type="button"
-                variant={activeRecipe?.id === recipe.id ? 'primary' : 'secondary'}
-                disabled={busy}
-                title={recipe.description}
-                onClick={() => chooseRecipe(recipe)}
-              >
-                {recipe.label}
-              </UiButton>
-            ))}
-          </div>
-        )}
         <Composer
           tone={composerRun?.line.state ?? 'idle'}
           status={composerRun ? (
@@ -2309,6 +2287,21 @@ export function WorkspaceView({
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
+              {activePersona.recipes && activePersona.recipes.length > 1 && (
+                <OptionMenu
+                  ariaLabel="Recipe"
+                  disabled={busy}
+                  icon={<ListChecks size={14} />}
+                  labelPrefix="Recipe"
+                  onChange={(value) => {
+                    const recipe = activePersona.recipes?.find((entry) => entry.id === value);
+                    if (recipe) chooseRecipe(recipe);
+                  }}
+                  options={activePersona.recipes.map((recipe) => ({ value: recipe.id, label: recipe.label, description: recipe.description }))}
+                  title={`Choose the kind of ${activePersona.label.toLowerCase()} task`}
+                  value={activeRecipe?.id ?? activePersona.recipes[0]?.id ?? ''}
+                />
+              )}
               <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
               <IconButton data-tour="composer-advanced" aria-label="More run options" title="More run options" aria-expanded={advancedComposerOpen} active={advancedComposerOpen} disabled={busy} onClick={() => setAdvancedComposerOpen((open) => !open)} icon={<Settings2 size={14} />} />
             </>}

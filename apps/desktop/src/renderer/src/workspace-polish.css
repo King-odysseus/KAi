@@ -177,27 +177,6 @@ html[data-theme]:root .compaction-banner {
   font-size: 10px;
 }
 .composer { gap: 5px; padding: 3px clamp(10px, 1.2vw, 18px) 8px; }
-.composer-project-scope {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 6px;
-  padding: 0 6px;
-  color: var(--text-muted);
-  font-size: 10px;
-}
-.composer-project-scope svg { flex: 0 0 auto; }
-.composer-project-scope strong { flex: 0 0 auto; color: var(--text); font-weight: 600; }
-.composer-project-scope span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* The recipe row inside a selector: one button per specialist, above the composer. */
-.composer-recipes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 6px;
-}
-.composer-recipes button { font-size: 11px; }
 
 .composer textarea { min-height: 54px; padding: 9px 11px 3px; color: var(--text); }
 
