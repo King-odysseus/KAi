@@ -122,7 +122,6 @@ import {
   isAutoLikeIntent,
   isKnownStarter,
   personaFor,
-  savedTaskIntent,
   type PersonaRecipe,
   type TaskIntent,
 } from './personas';
@@ -194,6 +193,12 @@ interface WorkspaceViewProps {
   executionMode: ExecutionMode;
   selectedRoute: RouteMode;
   selectedAutonomy: AutonomyMode;
+  /** The composer's Task selector, owned by the conversation rather than the window. */
+  taskIntent: TaskIntent;
+  /** The chosen recipe inside each Task selector, for this conversation. */
+  taskRecipes: Record<string, string>;
+  onSelectTaskIntent: (intent: TaskIntent) => void;
+  onSelectTaskRecipe: (intent: TaskIntent, recipeId: string) => void;
   proxyReady: boolean;
   proxyContinuationAgent: AgentId | null;
   onSelectExecution: (mode: ExecutionMode) => void;
@@ -262,14 +267,6 @@ interface WorkspaceViewProps {
   onAskSideQuestion: (question: string) => void;
   onOpenFile: (path: string, line?: number) => void;
 }
-
-/**
- * Where the chosen intent is remembered. It is a working preference rather than part of a message, so it is kept for
- * the app rather than for one conversation.
- */
-const INTENT_KEY = 'kai.composer.intent';
-/** The recipe chosen inside each selector, keyed by selector id. */
-const RECIPE_KEY = 'kai.composer.recipes';
 
 /**
  * How long each composer action may hold its own button before the UI stops waiting on it. Generous, because the
@@ -387,6 +384,10 @@ export function WorkspaceView({
   executionMode,
   selectedRoute,
   selectedAutonomy,
+  taskIntent,
+  taskRecipes,
+  onSelectTaskIntent,
+  onSelectTaskRecipe,
   proxyReady,
   proxyContinuationAgent,
   onSelectExecution,
@@ -467,26 +468,6 @@ export function WorkspaceView({
   const [compareAgent, setCompareAgent] = useState<AgentId>('claude');
   const [compareResult, setCompareResult] = useState<CompareRun | null>(null);
   const [comparing, setComparing] = useState(false);
-  // Remembered, because the composer is unmounted whenever the person looks at another screen. Plain component state
-  // meant picking Auto, glancing at the Studio, and coming back to Ask — the choice silently discarded, which reads as
-  // the app forgetting what you told it.
-  const [taskIntent, setTaskIntent] = useState<TaskIntent>(() => {
-    try {
-      return savedTaskIntent(window.localStorage.getItem(INTENT_KEY));
-    } catch {
-      return 'ask';
-    }
-  });
-  // Which recipe was chosen inside each selector, so Audit can remember Accessibility while Build remembers
-  // Refactor. A selector with no saved choice falls back to its first recipe.
-  const [recipeByIntent, setRecipeByIntent] = useState<Record<string, string>>(() => {
-    try {
-      const saved = JSON.parse(window.localStorage.getItem(RECIPE_KEY) ?? '{}') as unknown;
-      return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Record<string, string> : {};
-    } catch {
-      return {};
-    }
-  });
   const [advancedComposerOpen, setAdvancedComposerOpen] = useState(false);
   const [composerStatusOpen, setComposerStatusOpen] = useState(false);
   const [noticesExpanded, setNoticesExpanded] = useState(false);
@@ -568,7 +549,7 @@ export function WorkspaceView({
     : selectedModel || selectedAgent;
   const activeGoal = activeConversation?.goal ?? null;
   const activePersona = personaFor(taskIntent);
-  const activeRecipe = activePersona.recipes?.find((recipe) => recipe.id === recipeByIntent[activePersona.id])
+  const activeRecipe = activePersona.recipes?.find((recipe) => recipe.id === taskRecipes[activePersona.id])
     ?? defaultRecipe(activePersona);
   const allContextChips: ContextChip[] = [
     ...selectedFiles.map((path) => ({ type: 'file' as const, path })),
@@ -1125,14 +1106,12 @@ export function WorkspaceView({
    * panel rather than from the row.
    */
   function rememberIntent(intent: TaskIntent): void {
-    setTaskIntent(intent);
-    // A window with storage locked down keeps it in memory instead.
-    try { window.localStorage.setItem(INTENT_KEY, intent); } catch { /* memory only */ }
+    onSelectTaskIntent(intent);
   }
 
   function chooseTaskIntent(intent: TaskIntent): void {
     const persona = personaFor(intent);
-    const remembered = persona.recipes?.find((recipe) => recipe.id === recipeByIntent[intent]);
+    const remembered = persona.recipes?.find((recipe) => recipe.id === taskRecipes[intent]);
     const starter = (remembered ?? defaultRecipe(persona))?.starter ?? persona.starter;
     rememberIntent(intent);
     // A recipe chosen earlier comes back with the selector. Typed text is never overwritten, but a starter that
@@ -1143,11 +1122,7 @@ export function WorkspaceView({
 
   /** Picks a specialist inside the current selector and loads its skill. */
   function chooseRecipe(recipe: PersonaRecipe): void {
-    setRecipeByIntent((current) => {
-      const next = { ...current, [taskIntent]: recipe.id };
-      try { window.localStorage.setItem(RECIPE_KEY, JSON.stringify(next)); } catch { /* memory only */ }
-      return next;
-    });
+    onSelectTaskRecipe(taskIntent, recipe.id);
     if (isKnownStarter(prompt)) setPrompt(recipe.starter);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }

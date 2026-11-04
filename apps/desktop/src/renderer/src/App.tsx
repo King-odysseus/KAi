@@ -62,6 +62,7 @@ import {
   type WorkspaceCommandKind,
   type WorkspaceCommandRequest,
 } from './components/Workspace';
+import { savedTaskIntent, type TaskIntent } from './components/personas';
 import { GraphView } from './components/GraphView';
 import { composerSettingsFor } from './components/composer-settings';
 import { TourGuide } from './components/TourGuide';
@@ -110,9 +111,16 @@ interface ComposerSelection {
   style?: ResponseStyle;
   /** How many helper agents this conversation's runs may use; auto lets the agent decide. */
   helpers?: HelperChoice;
+  /** The composer's Task selector for this conversation. */
+  intent?: TaskIntent;
+  /** The chosen recipe inside each Task selector, for this conversation. */
+  recipes?: Record<string, string>;
 }
 
 const COMPOSER_SELECTIONS_KEY = 'kai.composerSelections.v1';
+/** The last Task/Recipe used anywhere, which is what a brand-new conversation starts with. */
+const LAST_TASK_KEY = 'kai.composer.intent';
+const LAST_RECIPES_KEY = 'kai.composer.recipes';
 const COMPOSER_DRAFTS_KEY = 'kai.composerDrafts.v1';
 const COMPOSER_CONTEXTS_KEY = 'kai.composerContexts.v1';
 /** How long startup may wait on its own calls before saying so, generous because it starts services as well. */
@@ -213,6 +221,19 @@ function loadDefaultHelperChoice(): HelperChoice {
 
 function reasoningFor(agent: AgentId, execution: ExecutionMode, reasoning: string | undefined): ReasoningEffort | '' {
   return execution === 'cli' && effortFitsAgent(agent, reasoning) ? reasoning : '';
+}
+
+/** The last Task/Recipe used, read once at startup; a new conversation inherits it. */
+function loadLastTaskChoice(): { intent: TaskIntent; recipes: Record<string, string> } {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(LAST_RECIPES_KEY) ?? '{}') as unknown;
+    const recipes = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+      : {};
+    return { intent: savedTaskIntent(window.localStorage.getItem(LAST_TASK_KEY)), recipes };
+  } catch {
+    return { intent: 'ask', recipes: {} };
+  }
 }
 
 function loadComposerSelections(windowId?: number): Record<string, ComposerSelection> {
@@ -362,6 +383,8 @@ export function App(): ReactNode {
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>(loadComposerDrafts);
   const [composerContexts, setComposerContexts] = useState<Record<string, ComposerContextDraft>>(loadComposerContexts);
   const [composerSelections, setComposerSelections] = useState<Record<string, ComposerSelection>>(loadComposerSelections);
+  /** The last Task/Recipe used, so a new conversation starts where the person left off. */
+  const [lastTaskChoice, setLastTaskChoice] = useState(loadLastTaskChoice);
   const [queuedPromptsByConversation, setQueuedPromptsByConversation] = useState<Record<string, QueuedPrompt[]>>({});
   const [composerQueueReady, setComposerQueueReady] = useState(false);
   const [playwrightViewport, setPlaywrightViewport] = useState<PlaywrightViewportStatus | null>(null);
@@ -442,6 +465,9 @@ export function App(): ReactNode {
   const activeContextKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
   const activeComposerContext = composerContexts[activeContextKey] ?? emptyComposerContext;
   const activeComposerSelection = composerSelections[activeDraftKey];
+  /** Task/Recipe belong to the conversation; a conversation with no choice yet inherits the last one used. */
+  const activeTaskIntent = activeComposerSelection?.intent ?? lastTaskChoice.intent;
+  const activeTaskRecipes = activeComposerSelection?.recipes ?? lastTaskChoice.recipes;
   // The saved selection only counts while it still names the agent and mode on screen; otherwise it is another
   // agent's leftover and the model remembered for this agent is shown instead.
   const selectionFits = activeComposerSelection?.agent === selectedAgent && activeComposerSelection?.execution === executionMode;
@@ -486,6 +512,49 @@ export function App(): ReactNode {
       return next;
     });
   }, [activeDraftKey, executionMode, modelChoices, selectedAgent, selectedAutonomy, selectedRoute, windowId]);
+
+  /**
+   * The last Task/Recipe chosen, kept for new conversations. It is not the source of truth for an open conversation:
+   * that one has its own entry in `composerSelections`, so another tab changing the Task cannot move it.
+   */
+  const rememberTaskChoice = useCallback((intent: TaskIntent, recipes: Record<string, string>) => {
+    setLastTaskChoice({ intent, recipes });
+    try {
+      window.localStorage.setItem(LAST_TASK_KEY, intent);
+      window.localStorage.setItem(LAST_RECIPES_KEY, JSON.stringify(recipes));
+    } catch {
+      // The in-memory choice still works when storage is unavailable.
+    }
+  }, []);
+
+  /**
+   * Gives a conversation its own Task/Recipe the first time it becomes active. The effect deliberately does not
+   * depend on `lastTaskChoice`: a later change in another tab must not move a conversation that is already open.
+   */
+  useEffect(() => {
+    if (!activeConversationId) return;
+    setComposerSelections((current) => {
+      if (current[activeConversationId]?.intent) return current;
+      const fallback: ComposerSelection = current[activeConversationId] ?? {
+        agent: selectedAgent,
+        execution: executionMode,
+        route: selectedRoute,
+        autonomy: selectedAutonomy,
+        model: modelChoices[`${executionMode}:${selectedAgent}`] ?? '',
+      };
+      const next = {
+        ...current,
+        [activeConversationId]: { ...fallback, intent: lastTaskChoice.intent, recipes: lastTaskChoice.recipes },
+      };
+      try {
+        window.localStorage.setItem(windowStorageKey(COMPOSER_SELECTIONS_KEY, windowId), JSON.stringify(next));
+      } catch {
+        // The rendered state remains usable when storage is unavailable.
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConversationId]);
 
   useEffect(() => {
     if (activeConversationId) setOpenConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
@@ -2386,6 +2455,17 @@ export function App(): ReactNode {
               executionMode={executionMode}
               selectedRoute={selectedRoute}
               selectedAutonomy={selectedAutonomy}
+              taskIntent={activeTaskIntent}
+              taskRecipes={activeTaskRecipes}
+              onSelectTaskIntent={(intent) => {
+                updateComposerSelection({ intent });
+                rememberTaskChoice(intent, activeTaskRecipes);
+              }}
+              onSelectTaskRecipe={(intent, recipeId) => {
+                const recipes = { ...activeTaskRecipes, [intent]: recipeId };
+                updateComposerSelection({ intent, recipes });
+                rememberTaskChoice(intent, recipes);
+              }}
               proxyReady={serviceFor(bootstrap, 'universalProxy').status === 'ready'}
               proxyContinuationAgent={proxyContinuationAgent}
               streamingText={streamingText}
