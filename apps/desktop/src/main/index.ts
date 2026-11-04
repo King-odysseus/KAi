@@ -1419,18 +1419,18 @@ async function startApplication(): Promise<void> {
     suggestCheck: async (projectId) => suggestTestCommand(await projectRootFor(projectId)),
     // Auto's finish signal: the agent's own plan, read fresh after every turn. A missing or unreadable plan is no
     // plan — readPlan says so rather than throwing, which leaves the check as the thing to judge by.
-    readPlan: async (projectId) => readPlan(await projectRootFor(projectId)),
+    readPlan: async (projectId, conversationId) => readPlan(await projectRootFor(projectId), conversationId),
     // A second model reads the plan against the task and KAI writes what it named. Nothing is removed, and a review
     // that cannot run — no connection, a refusal, a daft reply — leaves the plan exactly as the agent set it.
-    reviewPlan: async (projectId, request) => {
+    reviewPlan: async (projectId, conversationId, request) => {
       const root = await projectRootFor(projectId);
-      const plan = await readPlan(root);
+      const plan = await readPlan(root, conversationId);
       if (!plan || plan.items.length === 0) return null;
       const review = await planReviewer.review(request, plan).catch(() => null);
       if (!review || review.missing.length === 0) return [];
       const merged = mergePlanItems(plan.items, review.missing);
       const added = merged.slice(plan.items.length);
-      await writePlan(root, merged, new Date().toISOString()).catch(() => undefined);
+      await writePlan(root, conversationId, merged, new Date().toISOString()).catch(() => undefined);
       return added;
     },
     checkCoverage: async (projectId, command, changedFiles) => {

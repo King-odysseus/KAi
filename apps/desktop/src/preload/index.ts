@@ -367,7 +367,7 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('terminal:event', handler);
     return () => ipcRenderer.removeListener('terminal:event', handler);
   },
-  readTaskPlan: (projectId) => ipcRenderer.invoke('plan:read', { projectId }),
+  readTaskPlan: (projectId, conversationId) => ipcRenderer.invoke('plan:read', { projectId, conversationId }),
   gitOverview: (projectId) => ipcRenderer.invoke('git:overview', { projectId }),
   gitInit: (projectId) => ipcRenderer.invoke('git:init', { projectId }),
   gitStage: (projectId, paths, stage) => ipcRenderer.invoke('git:stage', { projectId, paths, stage }),

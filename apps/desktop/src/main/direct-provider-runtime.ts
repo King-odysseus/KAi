@@ -368,10 +368,10 @@ const REASONING_ONLY = ' produced only reasoning and no reply: the model spent i
  * A reply that asks the person something is not a cue to proceed, however much the plan still lists. And the nudge
  * budget is shared, so a model that keeps stalling on an open item ends the run instead of looping.
  */
-async function planContinuation(projectRoot: string, roundText: string, nudges: number): Promise<string | null> {
+async function planContinuation(projectRoot: string, conversationId: string, roundText: string, nudges: number): Promise<string | null> {
   if (nudges >= MAX_UNFINISHED_NUDGES) return null;
   if (awaitsTheUser(roundText)) return null;
-  const plan = await readPlan(projectRoot).catch(() => null);
+  const plan = await readPlan(projectRoot, conversationId).catch(() => null);
   if (!plan || !planIsUnfinished(plan)) return null;
   return openPlanReminder(plan);
 }
@@ -572,7 +572,7 @@ export class DesktopDirectProviderRuntime {
     if (answer === 'wrap-up') toolRuntime.guard.requestWrapUp();
   }
 
-  private async newToolRuntime(projectRoot: string, customPermissions?: Partial<Record<PermissionKey, boolean>>): Promise<DesktopProjectToolRuntime> {
+  private async newToolRuntime(projectRoot: string, customPermissions: Partial<Record<PermissionKey, boolean>> | undefined, conversationId: string): Promise<DesktopProjectToolRuntime> {
     const loaded = await this.settings.load().catch(() => undefined);
     const web = loaded
       ? new WebToolRuntime({
@@ -585,6 +585,7 @@ export class DesktopDirectProviderRuntime {
       }, this.credentials)
       : undefined;
     const runtime = new DesktopProjectToolRuntime(projectRoot, customPermissions, web);
+    runtime.conversationId = conversationId;
     const permissionRules = this.options.loadPermissionRules
       ? await this.options.loadPermissionRules(projectRoot).catch(() => [])
       : [];
@@ -1011,7 +1012,7 @@ export class DesktopDirectProviderRuntime {
       );
     }
 
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     const cancelledDuringToolRuntime = checkCancelledEarly();
     if (cancelledDuringToolRuntime) return cancelledDuringToolRuntime;
     let externalToolDefinitions: readonly unknown[] = [];
@@ -1168,7 +1169,7 @@ export class DesktopDirectProviderRuntime {
           }
           // The plan is consulted first, because it answers the question the prose can only guess at: open items mean
           // the work is not done, whatever the wording of the reply looked like.
-          const planned = await planContinuation(projectRoot, roundText, nudges);
+          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (planned) {
             nudges += 1;
             providerInput = planned;
@@ -1293,7 +1294,7 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
@@ -1436,7 +1437,7 @@ export class DesktopDirectProviderRuntime {
             messages.push({ role: 'user', content: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' });
             continue;
           }
-          const planned = await planContinuation(projectRoot, roundText, nudges);
+          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (!forceFinalAnswer && planned) {
             nudges += 1;
             messages.push({ role: 'assistant', content: roundText });
@@ -1601,7 +1602,7 @@ export class DesktopDirectProviderRuntime {
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
     maxTokens: number = OUTPUT_TOKEN_BUDGET,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
@@ -1765,7 +1766,7 @@ export class DesktopDirectProviderRuntime {
             messages.push({ role: 'user', content: [{ type: 'text', text: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' }] });
             continue;
           }
-          const planned = await planContinuation(projectRoot, roundText, nudges);
+          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (planned) {
             nudges += 1;
             messages.push({ role: 'assistant', content: [{ type: 'text', text: roundText }] });
@@ -1865,7 +1866,7 @@ export class DesktopDirectProviderRuntime {
     history?: readonly DirectApiHistoryTurn[],
     customPermissions?: Partial<Record<PermissionKey, boolean>>,
   ): Promise<AgentExecutionResult> {
-    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions);
+    const toolRuntime = await this.newToolRuntime(projectRoot, customPermissions, request.conversationId);
     if (controller.signal.aborted) return cancelledEarly(request);
     let externalToolDefinitions: readonly unknown[] = [];
     try {
@@ -1978,7 +1979,7 @@ export class DesktopDirectProviderRuntime {
             contents.push({ role: 'user', parts: [{ text: 'Resume the original task from where you paused. Continue its unfinished steps before you finish this run.' }] });
             continue;
           }
-          const planned = await planContinuation(projectRoot, roundText, nudges);
+          const planned = await planContinuation(projectRoot, request.conversationId, roundText, nudges);
           if (planned) {
             nudges += 1;
             contents.push({ role: 'model', parts: [{ text: roundText }] });

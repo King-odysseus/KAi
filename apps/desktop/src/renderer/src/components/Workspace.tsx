@@ -1522,7 +1522,7 @@ export function WorkspaceView({
   const latestRequest = latestRequestText.replace(/\s+/g, ' ').trim().slice(0, 80) || undefined;
   // The composer's status line names only the step in hand ("Editing payment.service.ts"); the card holds the rest.
   const liveStep = running ? currentStep(deriveActivitySteps(recentEvents)) : null;
-  const planProgress = usePlanProgress(activeProject?.id ?? null, activeConversation?.updatedAt);
+  const planProgress = usePlanProgress(activeProject?.id ?? null, activeConversation?.id ?? null, activeConversation?.updatedAt);
   // Autopilot runs a Studio plan, so it is reached through the plan this conversation was opened for — the studio id,
   // not the desktop project the plan happens to be registered as. Auto, by contrast, is about this conversation.
   const autopilotOrigin = activeConversation?.origin?.kind === 'autopilot' ? activeConversation.origin : null;
@@ -2187,7 +2187,7 @@ export function WorkspaceView({
             if (files.length > 0) void attachComposerFiles(files);
           }}
         />
-        {activeProject && <PlanStrip projectId={activeProject.id} refreshKey={activeConversation?.updatedAt} />}
+        {activeProject && <PlanStrip projectId={activeProject.id} conversationId={activeConversation?.id ?? null} refreshKey={activeConversation?.updatedAt} />}
         {/* `busy` here is the boolean prop. It used to be compared to null, which is always true, so the Stop
             button on this line was disabled on every run: the one control that ends a run was unreachable. */}
         {taskIntent === 'equalizer' && activeProject && (

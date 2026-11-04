@@ -100,13 +100,19 @@ describe('the kai-project tools an outside agent is given', () => {
   it('writes the plan an outside agent records, so the same file serves both paths', async () => {
     server = await Server.create();
     const result = await server.tool('update_plan')({
+      conversationId: 'conv_cli',
       items: [{ text: 'Read the spec', state: 'done' }, { text: 'Write the parser', state: 'active' }],
     });
 
     expect(result).toMatchObject({ summary: 'Plan recorded: 1 of 2 done, 1 still to do.' });
-    expect(await readPlan(server.root)).toMatchObject({
+    expect(await readPlan(server.root, 'conv_cli')).toMatchObject({
       items: [{ text: 'Read the spec', state: 'done' }, { text: 'Write the parser', state: 'active' }],
     });
+  });
+
+  it('refuses a plan with no conversationId rather than writing one nobody reads', async () => {
+    server = await Server.create();
+    await expect(server.tool('update_plan')({ items: [{ text: 'Orphan', state: 'pending' }] })).rejects.toThrow(/conversationId/);
   });
 });
 

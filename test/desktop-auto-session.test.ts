@@ -93,7 +93,7 @@ function harness(options: {
       const passed = options.check?.(checkCalls) ?? true;
       return { passed, exitCode: passed ? 0 : 1, output: passed ? '' : 'FAIL: expected 1 to be 2' };
     },
-    readPlan: async () => {
+    readPlan: async (_projectId, _conversationId) => {
       planCalls += 1;
       return options.plan?.(planCalls) ?? null;
     },

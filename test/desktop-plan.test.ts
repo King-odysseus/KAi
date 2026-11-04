@@ -2,10 +2,12 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PLAN_PATH, openPlanItems, planIsUnfinished, openPlanReminder, type Plan } from '@kai/contracts';
+import { planPathFor, openPlanItems, planIsUnfinished, openPlanReminder, type Plan } from '@kai/contracts';
 import { planBriefingFor, readPlan, writePlan } from '../apps/desktop/src/main/plan-store';
 
 const NOW = '2026-10-02T10:00:00.000Z';
+const TAB = 'conv_one';
+const OTHER_TAB = 'conv_two';
 const directories: string[] = [];
 
 afterEach(async () => {
@@ -29,20 +31,43 @@ function plan(items: Array<{ text: string; state: 'pending' | 'active' | 'done' 
 describe('the task plan', () => {
   it('survives a round trip, which is what lets it outlive a run', async () => {
     const root = await project();
-    await writePlan(root, [{ text: 'Read the spec', state: 'done' }, { text: 'Write the parser', state: 'active' }], NOW);
+    await writePlan(root, TAB, [{ text: 'Read the spec', state: 'done' }, { text: 'Write the parser', state: 'active' }], NOW);
 
-    const read = await readPlan(root);
+    const read = await readPlan(root, TAB);
     expect(read?.items).toHaveLength(2);
     expect(read?.items[1]).toMatchObject({ text: 'Write the parser', state: 'active' });
   });
 
   it('treats a missing, unreadable, or malformed plan as no plan rather than failing the run', async () => {
     const root = await project();
-    expect(await readPlan(root)).toBeNull();
+    expect(await readPlan(root, TAB)).toBeNull();
 
+    await mkdir(path.join(root, '.kai', 'plans'), { recursive: true });
+    await writeFile(path.join(root, planPathFor(TAB)!), '{ not json', 'utf8');
+    expect(await readPlan(root, TAB)).toBeNull();
+  });
+
+  it('keeps the plan of each conversation to itself, so a new tab starts with none', async () => {
+    const root = await project();
+    await writePlan(root, TAB, [{ text: 'Only for the first tab', state: 'pending' }], NOW);
+
+    expect(await readPlan(root, OTHER_TAB)).toBeNull();
+    await writePlan(root, OTHER_TAB, [{ text: 'Second tab work', state: 'done' }], NOW);
+    expect((await readPlan(root, TAB))?.items).toEqual([{ text: 'Only for the first tab', state: 'pending' }]);
+    expect((await readPlan(root, OTHER_TAB))?.items).toEqual([{ text: 'Second tab work', state: 'done' }]);
+  });
+
+  it('ignores the old project-wide plan file and refuses ids that are not safe file names', async () => {
+    const root = await project();
     await mkdir(path.join(root, '.kai'), { recursive: true });
-    await writeFile(path.join(root, PLAN_PATH), '{ not json', 'utf8');
-    expect(await readPlan(root)).toBeNull();
+    await writeFile(path.join(root, '.kai', 'plan.json'), JSON.stringify(plan([{ text: 'stale', state: 'pending' }])), 'utf8');
+    expect(await readPlan(root, TAB)).toBeNull();
+
+    expect(planPathFor('../escape')).toBeNull();
+    expect(planPathFor('a/b')).toBeNull();
+    expect(await readPlan(root, '../escape')).toBeNull();
+    await expect(writePlan(root, '../escape', [], NOW)).rejects.toThrow();
+    await expect(writePlan(root, undefined, [], NOW)).rejects.toThrow();
   });
 
   it('counts only unfinished items, so a plan of done work ends the run', () => {

@@ -1248,7 +1248,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'terminal:resize', async ({ id, cols, rows }) => context.terminal.resize(id, cols, rows));
   handle(context, 'terminal:stop', async ({ id }) => context.terminal.stop(id));
   handle(context, 'terminal:buffer', async ({ id }) => context.terminal.buffer(id) ?? '');
-  handle(context, 'plan:read', async ({ projectId }) => readPlan(await projectPath(projectId)));
+  handle(context, 'plan:read', async ({ projectId, conversationId }) => readPlan(await projectPath(projectId), conversationId));
   handle(context, 'git:overview', async ({ projectId }) => gitOverview(await projectPath(projectId)));
   // Idempotent, so the Git page can offer it as an ordinary button rather than a one-shot action.
   handle(context, 'git:init', async ({ projectId }) => gitInit(await projectPath(projectId)));
@@ -2092,7 +2092,7 @@ export async function runConversationAgent(
   // A run started while a plan is unfinished is very often a diversion: the person steered, or asked a question, and
   // the run that was doing the work is gone. Told what it interrupted, it can answer and then carry on; without this
   // the plan would sit in the project unread while the model dealt with the new request and stopped.
-  const planNote = planBriefingFor(await readPlan(workRoot).catch(() => null));
+  const planNote = planBriefingFor(await readPlan(workRoot, conversation.id).catch(() => null), executionMode === 'cli' ? conversation.id : undefined);
   if (planNote) effectivePrompt = `${planNote}\n\n${effectivePrompt}`;
   const historyTurns = conversation.compaction
     ? conversation.turns.slice(conversation.compaction.throughTurnIndex + 1)
@@ -2261,7 +2261,7 @@ export async function runConversationAgent(
     // Bounded, and only after a run that finished cleanly: a run that failed or was cancelled stopped for a reason,
     // and asking it to carry on would be arguing with the person. Each round is a full invocation, so the cap is low.
     if (executionMode === 'cli') {
-      execution = await continueWhilePlanOpen(workRoot, execution, (prompt, sessionId) => context.agents.run(
+      execution = await continueWhilePlanOpen(workRoot, conversation.id, execution, (prompt, sessionId) => context.agents.run(
         { ...executionRequest, prompt },
         workRoot,
         sessionId ?? resumeSessionId,
@@ -2388,7 +2388,7 @@ export async function runConversationAgent(
   // activity list and nothing saying what they added up to — so KAI states the outcome from the facts it holds.
   // What the plan still lists. Said either way, because a model's own account describes what it did and reliably
   // leaves out what it did not get to — which is the half the reader needs to decide what happens next.
-  const remaining = openPlanItems(await readPlan(workRoot).catch(() => null)).map((item) => item.text);
+  const remaining = openPlanItems(await readPlan(workRoot, conversation.id).catch(() => null)).map((item) => item.text);
   const spoken = execution.output?.trim();
   // A failed run's own words are usually the symptom — an exit code, a stderr tail, "the provider returned no
   // output" — so KAI names the cause under them when it can tell what it was.
@@ -3516,13 +3516,14 @@ const MAX_PLAN_CONTINUATIONS = 3;
  */
 export async function continueWhilePlanOpen(
   workRoot: string,
+  conversationId: string,
   first: AgentExecutionResult,
   runAgain: (prompt: string, sessionId?: string) => Promise<AgentExecutionResult>,
   limit = MAX_PLAN_CONTINUATIONS,
 ): Promise<AgentExecutionResult> {
   let execution = first;
   for (let round = 0; round < limit && execution.status === 'completed'; round += 1) {
-    const plan = await readPlan(workRoot).catch(() => null);
+    const plan = await readPlan(workRoot, conversationId).catch(() => null);
     if (!planIsUnfinished(plan)) break;
     const again = await runAgain(openPlanReminder(plan!), execution.sessionId ?? undefined);
     execution = {

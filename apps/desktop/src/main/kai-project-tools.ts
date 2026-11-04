@@ -75,6 +75,7 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
       description:
         'Record or revise your plan for the current task: a short list of steps and which are done. Call this first for anything that takes more than a couple of steps, and again whenever a step finishes or the plan changes. It is what tells KAI whether the task is finished, so keep it current rather than describing the plan in your reply.',
       input: {
+        conversationId: z.string().min(1).max(120).optional().describe('The task id the run briefing gave you. The plan is kept under it.'),
         items: z
           .array(
             z.object({
@@ -87,7 +88,11 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
       },
       run: async (input) => {
         const items = z.array(z.object({ text: z.string().min(1).max(300), state: planItemStateSchema })).max(50).parse(input.items);
-        const plan = await writePlan(await ports.projectRoot(), items, ports.now());
+        // A CLI agent reaches this server through a config that cannot say which tab it serves, so the briefing hands it
+        // the id. Without one there is no task to attach a plan to, and saying so beats writing a plan nobody reads.
+        const conversationId = typeof input.conversationId === 'string' ? input.conversationId : undefined;
+        if (!conversationId) throw new Error('Pass the conversationId from your run briefing: the plan is kept per task.');
+        const plan = await writePlan(await ports.projectRoot(), conversationId, items, ports.now());
         const done = plan.items.filter((item) => item.state === 'done').length;
         const open = plan.items.length - done;
         return {

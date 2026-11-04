@@ -23,7 +23,7 @@ import { diagnoseRun, diagnosisLine } from './run-doctor';
 /**
  * Auto mode: one task, one conversation, worked on its own until the agent says it is finished.
  *
- * The finish is the agent's own, read from the plan it keeps in `.kai/plan.json` through `update_plan`: while that
+ * The finish is the agent's own, read from the plan it keeps in `.kai/plans/<conversation>.json` through `update_plan`: while that
  * plan still has items open, Auto hands the run back to it with what is left; when the plan is done, the task is
  * done. A check command does not define the ending — it confirms it, in the person's own terms, and a failure is
  * handed straight back to the agent. That is the shape Claude Code's loop has: the model works, says what is left,
@@ -79,12 +79,12 @@ export interface AutoSessionPorts {
   cancelAgent(conversationId: string): boolean;
   runCheck(projectId: string, command: string, signal: AbortSignal): Promise<AutoCheckResult>;
   /** The agent's own plan, which is how the task says it is finished. Null when it kept none. */
-  readPlan(projectId: string): Promise<Plan | null>;
+  readPlan(projectId: string, conversationId: string): Promise<Plan | null>;
   /**
    * A second model's read of the plan against the task, added to the plan: the steps it named that the plan never
    * mentioned. Empty when the plan covers the task, null when there is no plan or no model to ask.
    */
-  reviewPlan(projectId: string, request: string): Promise<PlanItem[] | null>;
+  reviewPlan(projectId: string, conversationId: string, request: string): Promise<PlanItem[] | null>;
   /** What the check will and will not confirm about the files this run changed, or null when there is nothing to say. */
   checkCoverage(projectId: string, command: string, changedFiles: string[]): Promise<string | null>;
   changedFilesFor(projectId: string): Promise<string[]>;
@@ -369,18 +369,18 @@ export class DesktopAutoSession {
 
         // What is left, in the agent's own words. The plan is the finish signal; no plan at all is not a finished
         // one but an absent one, which leaves the check as the only thing to judge by — what Auto did before plans.
-        let plan = await this.ports.readPlan(input.projectId).catch(() => null);
+        let plan = await this.ports.readPlan(input.projectId, conversationId).catch(() => null);
 
         // Once a run, before the loop starts following it: a second reader that adds what the plan never mentioned.
         // The plan is what closes an unattended run, so a thin one is a way to look finished; nothing the agent wrote
         // is ever removed, and this only runs while there is a plan to read.
         if (!reviewed && plan) {
           reviewed = true;
-          const added = await this.ports.reviewPlan(input.projectId, input.prompt).catch(() => null);
+          const added = await this.ports.reviewPlan(input.projectId, conversationId, input.prompt).catch(() => null);
           if (added?.length) {
             this.record(conversationId, owner, 'info',
               `The plan did not mention ${added.length} thing${added.length === 1 ? '' : 's'} the task asks for; added: ${added.map((item) => item.text).join('; ')}`);
-            plan = await this.ports.readPlan(input.projectId).catch(() => null);
+            plan = await this.ports.readPlan(input.projectId, conversationId).catch(() => null);
           }
         }
 

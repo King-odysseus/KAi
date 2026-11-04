@@ -688,23 +688,29 @@ export function App(): ReactNode {
     }
     let cancelled = false;
     setContextPreviewLoading(true);
-    void window.kaiDesktop
-      .previewContext({
-        projectId: activeProject.id,
-        ...(activeConversation ? { conversationId: activeConversation.id } : {}),
-      })
-      .then(unwrap)
-      .then((preview) => {
-        if (!cancelled) setContextPreview(preview);
-      })
-      .catch(() => {
-        if (!cancelled) setContextPreview(null);
-      })
-      .finally(() => {
-        if (!cancelled) setContextPreviewLoading(false);
-      });
+    // Every run event changes this effect's inputs, and each preview is a full brain recall plus a project scan. Run
+    // unthrottled that was hundreds of calls a minute: the brain answered "Too many requests" and the app ran out of
+    // memory. Waiting for a quiet moment means a busy run asks once, after it settles.
+    const timer = setTimeout(() => {
+      void window.kaiDesktop
+        .previewContext({
+          projectId: activeProject.id,
+          ...(activeConversation ? { conversationId: activeConversation.id } : {}),
+        })
+        .then(unwrap)
+        .then((preview) => {
+          if (!cancelled) setContextPreview(preview);
+        })
+        .catch(() => {
+          if (!cancelled) setContextPreview(null);
+        })
+        .finally(() => {
+          if (!cancelled) setContextPreviewLoading(false);
+        });
+    }, 2_000);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [activeProject?.id, activeConversation?.id, activeConversation?.updatedAt, activeConversation?.events.length]);
 

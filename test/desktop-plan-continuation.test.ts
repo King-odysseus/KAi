@@ -30,13 +30,13 @@ function result(overrides: Partial<AgentExecutionResult> = {}): AgentExecutionRe
 describe('carrying a CLI run on when its plan is unfinished', () => {
   it('asks again while items remain, and stops when the plan is finished', async () => {
     const root = await project();
-    await writePlan(root, [{ text: 'One', state: 'pending' }], NOW);
+    await writePlan(root, 'conv_one', [{ text: 'One', state: 'pending' }], NOW);
 
     const prompts: string[] = [];
-    const outcome = await continueWhilePlanOpen(root, result(), async (prompt) => {
+    const outcome = await continueWhilePlanOpen(root, 'conv_one', result(), async (prompt) => {
       prompts.push(prompt);
       // The second round finishes the plan, so no third is asked for.
-      await writePlan(root, [{ text: 'One', state: 'done' }], NOW);
+      await writePlan(root, 'conv_one', [{ text: 'One', state: 'done' }], NOW);
       return result({ output: 'finished the plan', sessionId: `session-${prompts.length}` });
     });
 
@@ -51,39 +51,39 @@ describe('carrying a CLI run on when its plan is unfinished', () => {
     let calls = 0;
     const again = async (): Promise<AgentExecutionResult> => { calls += 1; return result(); };
 
-    expect((await continueWhilePlanOpen(root, result(), again)).output).toBe('did a step');
-    await writePlan(root, [{ text: 'Done', state: 'done' }], NOW);
-    await continueWhilePlanOpen(root, result(), again);
+    expect((await continueWhilePlanOpen(root, 'conv_one', result(), again)).output).toBe('did a step');
+    await writePlan(root, 'conv_one', [{ text: 'Done', state: 'done' }], NOW);
+    await continueWhilePlanOpen(root, 'conv_one', result(), again);
     expect(calls).toBe(0);
   });
 
   it('never asks a run that failed or was cancelled to carry on', async () => {
     const root = await project();
-    await writePlan(root, [{ text: 'One', state: 'pending' }], NOW);
+    await writePlan(root, 'conv_one', [{ text: 'One', state: 'pending' }], NOW);
     let calls = 0;
     const again = async (): Promise<AgentExecutionResult> => { calls += 1; return result(); };
 
-    await continueWhilePlanOpen(root, result({ status: 'failed' }), again);
+    await continueWhilePlanOpen(root, 'conv_one', result({ status: 'failed' }), again);
     expect(calls).toBe(0);
   });
 
   it('gives up after the cap, because each round is a whole agent run', async () => {
     const root = await project();
-    await writePlan(root, [{ text: 'Never finishes', state: 'pending' }], NOW);
+    await writePlan(root, 'conv_one', [{ text: 'Never finishes', state: 'pending' }], NOW);
 
     let calls = 0;
-    await continueWhilePlanOpen(root, result(), async () => { calls += 1; return result(); }, 2);
+    await continueWhilePlanOpen(root, 'conv_one', result(), async () => { calls += 1; return result(); }, 2);
     expect(calls).toBe(2);
   });
 
   it('resumes the same agent session, so each round is not starting over', async () => {
     const root = await project();
-    await writePlan(root, [{ text: 'One', state: 'pending' }], NOW);
+    await writePlan(root, 'conv_one', [{ text: 'One', state: 'pending' }], NOW);
 
     const sessions: Array<string | undefined> = [];
-    await continueWhilePlanOpen(root, result({ sessionId: 'session-first' }), async (prompt, sessionId) => {
+    await continueWhilePlanOpen(root, 'conv_one', result({ sessionId: 'session-first' }), async (prompt, sessionId) => {
       sessions.push(sessionId);
-      await writePlan(root, [{ text: 'One', state: 'done' }], NOW);
+      await writePlan(root, 'conv_one', [{ text: 'One', state: 'done' }], NOW);
       return result();
     });
 

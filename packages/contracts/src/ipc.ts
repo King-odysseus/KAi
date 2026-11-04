@@ -1125,7 +1125,7 @@ export const ipcInputSchemas = {
   'terminal:resize': terminalResizeInputSchema,
   'terminal:stop': terminalStopInputSchema,
   'terminal:buffer': terminalBufferInputSchema,
-  'plan:read': z.object({ projectId: z.string().min(1) }).strict(),
+  'plan:read': z.object({ projectId: z.string().min(1), conversationId: z.string().min(1) }).strict(),
   'git:overview': z.object({ projectId: z.string().min(1) }).strict(),
   'git:init': z.object({ projectId: z.string().min(1) }).strict(),
   'git:stage': gitStageInputSchema,
@@ -1809,7 +1809,7 @@ export interface KaiDesktopBridge {
   mirrorBrain(request: BrainMirrorInput): Promise<IpcResponse<BrainMirrorOutcome>>;
   gitOverview(projectId: string): Promise<IpcResponse<GitOverview>>;
   /** The plan the agent is working to for this project, so it can be shown rather than inferred. */
-  readTaskPlan(projectId: string): Promise<IpcResponse<Plan | null>>;
+  readTaskPlan(projectId: string, conversationId: string): Promise<IpcResponse<Plan | null>>;
   /** Starts a repository in the project folder. Safe to call when one already exists. */
   gitInit(projectId: string): Promise<IpcResponse<GitOverview>>;
   gitStage(projectId: string, paths: string[], stage: boolean): Promise<IpcResponse<GitActionResult>>;

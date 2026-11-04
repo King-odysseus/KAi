@@ -483,6 +483,8 @@ export class DesktopProjectToolRuntime {
   toolHook: ToolHookRunner | undefined;
   /** A nested helper gets only these tools. Undefined means every built-in tool. */
   toolFilter: ReadonlySet<string> | undefined;
+  /** The conversation this run belongs to: the plan it keeps is that conversation's own, never the project's. */
+  conversationId: string | undefined;
 
   constructor(
     private readonly root: string,
@@ -635,7 +637,8 @@ export class DesktopProjectToolRuntime {
    * lost the thread whether it is finished, without it having to remember.
    */
   private async updatePlan(input: z.infer<typeof updatePlanInputSchema>): Promise<ProjectToolExecution> {
-    const plan = await writePlan(this.root, input.items, new Date().toISOString());
+    if (!this.conversationId) return toolFailure('This run has no conversation to keep a plan for.');
+    const plan = await writePlan(this.root, this.conversationId, input.items, new Date().toISOString());
     const done = plan.items.filter((item) => item.state === 'done').length;
     const open = plan.items.length - done;
     return {
