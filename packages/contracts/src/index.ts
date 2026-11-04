@@ -35,6 +35,7 @@ export * from './plan';
 export * from './preview';
 export * from './proxy';
 export * from './security-findings';
+export * from './security-audit';
 export * from './playwright-viewport';
 export * from './recovery';
 export * from './review';

@@ -30,7 +30,7 @@ export class QwenConfigWriter {
     const modelProviders = asProviderMap(settings.modelProviders);
     const model = asRecord(settings.model);
     const authSnapshots = readAuthSnapshots(settings);
-    const authOriginals = authSnapshots ?? { providers: [] as AuthHeaderSnapshot[], model: null as AuthHeaderSnapshot | null };
+    const authOriginals = authSnapshots ?? { providers: [] as ProviderAuthHeaderSnapshot[], model: null as AuthHeaderSnapshot | null };
 
     // Snapshot the user's real upstreams before the first rewrite so a later
     // restore can put them back. A base URL already pointing at a local proxy
@@ -55,7 +55,7 @@ export class QwenConfigWriter {
           changed = true;
         }
         if (config.authToken) {
-          if (!authSnapshots) authOriginals.providers.push({ provider: providerKey, id: idOf(provider), customHeaders: readCustomHeaders(provider) });
+          if (!authSnapshots) authOriginals.providers.push({ provider: providerKey, id: idOf(provider), ...readCustomHeaders(provider) });
           changed = setProxyAuthorization(provider, config.authToken) || changed;
         }
       }
@@ -66,7 +66,7 @@ export class QwenConfigWriter {
         changed = true;
       }
       if (config.authToken) {
-        if (!authSnapshots) authOriginals.model = { customHeaders: readCustomHeaders(model) };
+        if (!authSnapshots) authOriginals.model = readCustomHeaders(model);
         changed = setProxyAuthorization(model, config.authToken) || changed;
       }
     }
@@ -121,13 +121,13 @@ export class QwenConfigWriter {
       for (const original of authOriginals.providers) {
         for (const provider of modelProviders[original.provider] ?? []) {
           if (idOf(provider) !== original.id) continue;
-          restoreCustomHeaders(provider, original.customHeaders);
+          restoreCustomHeaders(provider, original);
           restored++;
         }
       }
       const model = asRecord(settings.model);
       if (model && authOriginals.model) {
-        restoreCustomHeaders(model, authOriginals.model.customHeaders);
+        restoreCustomHeaders(model, authOriginals.model);
         restored++;
       }
     }
@@ -178,14 +178,17 @@ interface RecordedOriginals {
 }
 
 interface AuthHeaderSnapshot {
-  provider?: string;
-  id?: string;
   hadGenerationConfig: boolean;
   customHeaders: Record<string, unknown> | null;
 }
 
+interface ProviderAuthHeaderSnapshot extends AuthHeaderSnapshot {
+  provider: string;
+  id: string;
+}
+
 interface RecordedAuthHeaders {
-  providers: AuthHeaderSnapshot[];
+  providers: ProviderAuthHeaderSnapshot[];
   model: AuthHeaderSnapshot | null;
 }
 
@@ -244,7 +247,7 @@ function readAuthSnapshots(settings: Record<string, unknown>): RecordedAuthHeade
   const raw = asRecord(settings[AUTH_ORIGINALS_KEY]);
   if (!raw) return null;
   const providers = Array.isArray(raw.providers)
-    ? raw.providers.flatMap((item): AuthHeaderSnapshot[] => {
+    ? raw.providers.flatMap((item): ProviderAuthHeaderSnapshot[] => {
       const value = asRecord(item);
       if (!value || typeof value.provider !== 'string' || typeof value.id !== 'string') return [];
       return [{ provider: value.provider, id: value.id, hadGenerationConfig: value.hadGenerationConfig === true, customHeaders: asRecord(value.customHeaders) ? { ...asRecord(value.customHeaders)! } : null }];

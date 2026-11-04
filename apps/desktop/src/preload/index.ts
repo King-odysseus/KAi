@@ -94,6 +94,7 @@ const bridge: KaiDesktopBridge = {
   securityFindings: () => ipcRenderer.invoke('learning:security-findings', {}),
   saveSecurityFinding: (input) => ipcRenderer.invoke('learning:save-security-finding', input),
   updateSecurityFindingStatus: (input) => ipcRenderer.invoke('learning:update-security-finding-status', input),
+  runSecurityScan: (input) => ipcRenderer.invoke('learning:security-scan', input),
   formatCode: (input) => ipcRenderer.invoke('code:format', input),
   installCodeFormatter: (input) => ipcRenderer.invoke('code:install-formatter', input),
   gitFileInfo: (projectId, path) => ipcRenderer.invoke('git:file-info', { projectId, path }),

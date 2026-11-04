@@ -1,8 +1,20 @@
 import { z } from 'zod';
-import { ARTIFACT_KINDS, artifactKindSchema, boardStatusSchema, planItemStateSchema, readyCards, type ArtifactKind, type BoardCard } from '@kai/contracts';
+import {
+  ARTIFACT_KINDS,
+  artifactKindSchema,
+  boardStatusSchema,
+  planItemStateSchema,
+  readyCards,
+  securityFindingSaveInputSchema,
+  securityFindingSeveritySchema,
+  securityFindingStatusSchema,
+  type ArtifactKind,
+  type BoardCard,
+} from '@kai/contracts';
 import { writePlan } from './plan-store';
 import type { StudioArtifacts } from './artifacts';
 import type { StudioBoardStore } from './board';
+import type { SecurityFindingsStore } from './security-findings-store';
 import type { SpecStore } from './spec-store';
 
 /**
@@ -21,6 +33,11 @@ export interface KaiProjectPorts {
   spec: SpecStore;
   artifacts: StudioArtifacts;
   board: StudioBoardStore;
+  /**
+   * Where an audit files what it reproduced. Absent when the server was started without a findings file, in which
+   * case the save tool is not offered at all rather than offered and then refusing.
+   */
+  findings?: SecurityFindingsStore;
   now(): string;
 }
 
@@ -36,6 +53,7 @@ const cardIdField = z.string().min(1).max(120).describe('The board card id, from
 const agentField = z.string().min(1).max(120).describe('Your own name, so the card records who held it.');
 
 export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] {
+  const tools: KaiProjectTool[] = [];
   const boardSummary = (card: BoardCard) => ({
     id: card.id,
     title: card.title,
@@ -49,7 +67,7 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
     runCount: card.runs.length,
   });
 
-  return [
+  tools.push(
     {
       // The same plan the Direct API path keeps, so a CLI session is not told to maintain something it cannot write.
       // CLAUDE.md and the run briefing both assume this tool exists.
@@ -76,6 +94,29 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
           summary: `Plan recorded: ${done} of ${plan.items.length} done${open > 0 ? `, ${open} still to do` : ', nothing outstanding'}.`,
           items: plan.items,
         };
+      },
+    },
+    {
+      // The finish line for a persona that produces evidence but not code: the report is a file the person can
+      // read later, not a paragraph that scrolls away with the chat.
+      name: 'write_report',
+      description:
+        'Write one Markdown report under .kai/spec/reports. Use it to finish a plan, review, test, audit or operate task: the commands you ran, the file and line for each claim, and what you could not verify. The file is kept in the project and versioned like every other spec artifact.',
+      input: {
+        kind: z.enum(['plan', 'review', 'build', 'test', 'audit', 'operate']).describe('What kind of pass produced this report.'),
+        title: z.string().min(1).max(200).describe('One specific line, for example "Test triage for the checkout change".'),
+        body: z.string().min(1).max(60_000).describe('The report in Markdown. Evidence first; do not pad it.'),
+      },
+      run: async (input) => {
+        const kind = z.enum(['plan', 'review', 'build', 'test', 'audit', 'operate']).parse(input.kind);
+        const title = z.string().min(1).max(200).parse(input.title);
+        const body = z.string().min(1).max(60_000).parse(input.body);
+        const now = ports.now();
+        const stamp = `${now.slice(0, 10)}-${now.slice(11, 16).replace(':', '')}`;
+        const relative = `reports/${kind}/${stamp}-${reportSlug(title)}.md`;
+        const content = `# ${title}\n\n- kind: ${kind}\n- written: ${now}\n\n${body.trim()}\n`;
+        const result = await ports.spec.write(await ports.projectRoot(), relative, content);
+        return { path: `.kai/spec/${relative}`, version: result.version };
       },
     },
     {
@@ -187,7 +228,60 @@ export function createKaiProjectTools(ports: KaiProjectPorts): KaiProjectTool[] 
         return boardSummary(await ports.board.move(ports.projectId, cardId, outcome, summary));
       },
     },
-  ];
+  );
+
+  // Offered only when this server was started with the findings file. The audit prompt tells an agent to call it
+  // "if it is available", so a server without one is a supported shape, not a broken tool.
+  if (ports.findings) {
+    const findings = ports.findings;
+    tools.push({
+      name: 'save_security_finding',
+      description:
+        'File one reproduced security finding in the person\'s Security Auditor log. Local only: the finding must come from this project\'s own code and a dev server you started on localhost. Call it once per finding, after you can reproduce it; do not file speculation, style opinions, or anything you could not show. Never include a real secret or live credential in the evidence — redact it. Filing the same issue again updates the existing record, so a re-scan does not duplicate it.',
+      input: {
+        severity: securityFindingSeveritySchema.describe('How much this issue matters. Do not inflate it.'),
+        vulnClass: z.string().min(1).max(80).describe('A short slug such as sql-injection, broken-auth, secrets-in-code, path-traversal, ssrf, dependency-cve.'),
+        title: z.string().min(1).max(200).describe('One specific line, for example "Login form accepts \' OR 1=1 and bypasses auth".'),
+        location: z.string().min(1).max(500).describe('A file and line for a static finding (src/api/login.ts:42), or the local method and route for a dynamic one.'),
+        evidence: z.string().min(1).max(4_000).describe('The exact input or request and the exact unexpected result, enough to reproduce in one step. Redact credentials.'),
+        conceptCard: z.string().min(1).max(4_000).describe('For a learner: what this bug class is, why this instance is exploitable, and the general fix pattern.'),
+        status: securityFindingStatusSchema.optional().describe('Set "fixed" only when a verify pass re-tested it and the reproduction no longer works.'),
+        id: z.string().min(1).max(200).optional().describe('The existing finding id, on a verify pass, so that record is updated.'),
+      },
+      run: async (input) => {
+        // Built field by field rather than spread: the fingerprint and the seen/verified stamps are the store's
+        // business, and a model must not be able to choose the identity two findings dedupe under.
+        const saved = await findings.add(securityFindingSaveInputSchema.parse({
+          severity: input.severity,
+          vulnClass: input.vulnClass,
+          title: input.title,
+          location: input.location,
+          evidence: input.evidence,
+          conceptCard: input.conceptCard,
+          ...(input.status ? { status: input.status } : {}),
+          ...(input.id ? { id: input.id } : {}),
+        }));
+        return {
+          id: saved.id,
+          status: saved.status,
+          title: saved.title,
+          location: saved.location,
+          summary: `Filed "${saved.title}" as ${saved.severity} (${saved.status}).`,
+        };
+      },
+    });
+  }
+
+  return tools;
+}
+
+/** A file-system-safe name for a report title; the timestamp in front keeps two reports of the same title apart. */
+function reportSlug(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'report';
 }
 
 /** The spec store takes spec-relative paths and rejects an absolute one; a `..` segment would still leave the root. */

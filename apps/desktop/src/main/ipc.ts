@@ -68,10 +68,14 @@ import {
   type WorkflowStartInput,
   createDefaultCrewConfig,
   parseIpcInput,
+  parseSecurityFindingsReport,
   parseTasks,
   parseTestCounts,
   revertHunks,
   proxyServiceSettingsSchema,
+  securityAuditPrompt,
+  type SecurityScanInput,
+  type SecurityScanResult,
 } from '@kai/contracts';
 import type { ConversationStore, NodeFileSystem, RedactedLogger, SettingsService } from '@kai/runtime';
 import type { CredentialVault } from './credential-vault';
@@ -111,6 +115,7 @@ import type { TerminalManager } from './terminal';
 import { findGitBash } from './terminal';
 import { availableShells, terminalBriefing } from './agent-terminal';
 import { windowBriefing } from './window-control';
+import { runSecurityPrepass } from './security-prepass';
 import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
@@ -1172,6 +1177,7 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'learning:security-findings', async () => context.securityFindings.list());
   handle(context, 'learning:save-security-finding', async (input) => context.securityFindings.add(input));
   handle(context, 'learning:update-security-finding-status', async (input) => context.securityFindings.updateStatus(input));
+  handle(context, 'learning:security-scan', async (input, request) => runSecurityScan(context, input, request.ownerWindowId));
   handle(context, 'learning:generate-teaching-draft', async (input, request) => {
     const settings = await context.settings.load();
     const learningProjectId = request.session
@@ -1601,6 +1607,116 @@ export async function runScheduledGoal(context: IpcContext, schedule: Schedule):
   );
   const summary = result.status === 'completed' ? result.output.replace(/\s+/g, ' ').trim().slice(0, 300) || 'Completed.' : result.error ?? 'The run failed.';
   return { status: result.status === 'completed' ? 'completed' : 'failed', summary, conversationId: conversation.id };
+}
+
+/**
+ * One Security Auditor pass, run as a real agent task rather than as a tutor turn.
+ *
+ * The old path sent the instruction to the Learning Tutor, which is a single structured call with no shell, file or
+ * browser tools: it could neither start a dev server nor reproduce anything, and nothing in that path wrote a
+ * finding. This one opens a conversation, runs the project's own agent with the `security-auditor` skill selected —
+ * so it has the same tools as any other task — and then files the report the prompt asks for. Findings the agent
+ * saved through the `save_security_finding` tool are already in the log; the report block is what makes the same
+ * promise true for a provider that has no MCP tools.
+ */
+async function runSecurityScan(
+  context: IpcContext,
+  input: SecurityScanInput,
+  ownerWindowId: number,
+): Promise<SecurityScanResult> {
+  const project = (await context.projects.list()).find((candidate) => candidate.id === input.projectId);
+  if (!project) throw new NotFoundError('Project not found.');
+  const existing = input.findingId
+    ? (await context.securityFindings.list()).find((finding) => finding.id === input.findingId)
+    : undefined;
+  if (input.profile === 'verify' && !existing) throw new NotFoundError('That finding is no longer in the log.');
+
+  const settings = await context.settings.load();
+  const now = new Date().toISOString();
+  const label = input.target.trim() || (existing ? existing.title : project.name);
+  const conversation: ConversationRecord = {
+    schemaVersion: 1,
+    id: `conv_${crypto.randomUUID()}`,
+    projectId: project.id,
+    title: `Security audit — ${label}`.slice(0, 120),
+    createdAt: now,
+    updatedAt: now,
+    archived: false,
+    unread: false,
+    activeAgent: settings.defaultAgent,
+    route: settings.defaultRoute,
+    autonomy: 'autoEdit',
+    execution: 'cli',
+    turns: [],
+    events: [],
+  };
+  await context.conversations.save(conversation);
+
+  // Secrets are the one class where a regex is more reliable than a model's guess at which files to open. Run that
+  // pass first and give the agent the leads; it still decides whether each match is a real credential.
+  const prepass = input.profile === 'full' || input.profile === 'secrets'
+    ? await runSecurityPrepass(project.path).catch(() => null)
+    : null;
+  const prompt = securityAuditPrompt({
+    profile: input.profile,
+    target: input.target,
+    projectName: project.name,
+    ...(existing ? { finding: existing } : {}),
+    ...(prepass ? { prepass: prepass.text } : {}),
+  });
+  const result = await runConversationAgent(context, {
+    conversationId: conversation.id,
+    prompt,
+    agent: settings.defaultAgent,
+    execution: 'cli',
+    route: settings.defaultRoute,
+    autonomy: 'autoEdit',
+    skills: ['security-auditor'],
+  }, ownerWindowId);
+
+  // A verify pass addresses the record it was asked about; a normal pass lets the fingerprint decide, so the same
+  // issue found twice updates one row.
+  await fileSecurityReport(context, result.output, {
+    ...(input.profile === 'verify' && existing ? { findingId: existing.id, verifiedAt: now } : {}),
+  });
+
+  return {
+    conversationId: conversation.id,
+    status: result.status,
+    output: result.output,
+    ...(result.error ? { error: result.error } : {}),
+    findings: await context.securityFindings.list(),
+  };
+}
+
+/**
+ * Files the report block an audit run ends with. This is the path that works for every provider: a CLI session with
+ * the `kai-project` server saves through the tool and the block repeats it (the fingerprint makes that one row), while
+ * an API run has no MCP tools and this is the only way its findings reach the log.
+ */
+async function fileSecurityReport(
+  context: IpcContext,
+  output: string | undefined,
+  options: { findingId?: string; verifiedAt?: string } = {},
+): Promise<void> {
+  if (!output?.trim()) return;
+  for (const item of parseSecurityFindingsReport(output)) {
+    await context.securityFindings.add({
+      severity: item.severity,
+      vulnClass: item.vulnClass,
+      title: item.title,
+      location: item.location,
+      evidence: item.evidence,
+      conceptCard: item.conceptCard,
+      ...(item.status ? { status: item.status } : {}),
+      ...(options.findingId
+        ? {
+            id: item.findingId ?? options.findingId,
+            ...(options.verifiedAt ? { lastVerifiedAt: options.verifiedAt } : {}),
+          }
+        : {}),
+    });
+  }
 }
 
 /**
@@ -2385,6 +2501,19 @@ export async function runConversationAgent(
     context.logger.error('agent_crash', `Agent ${request.agent} (${executionMode}) failed`, execution.error);
   } else {
     context.logger.info('internal', `Agent ${request.agent} (${executionMode}) completed`, conversation.title);
+  }
+
+  // An audit run files its own report here, whoever started it — the composer's Security Auditor intent, the
+  // Learn panel, or any other caller that selected the skill. Auto only carries `skills` on its first turn, so the
+  // conversation's own text is checked too; that is what lets an API run's final turn file its report, since it
+  // has no MCP tools. The MCP tool may have saved the same records already; the fingerprint makes that an update
+  // rather than a duplicate.
+  const securityAudit = request.skills?.includes('security-auditor')
+    || conversation.turns.some((turn) => turn.role === 'user' && /\$security-auditor\b|security-auditor skill/i.test(turn.text));
+  if (securityAudit && !cancelled && execution.status === 'completed') {
+    await fileSecurityReport(context, execution.output).catch((error) => {
+      context.logger.warn('internal', 'Could not file the security audit report', error instanceof Error ? error.message : String(error));
+    });
   }
 
   return {
@@ -3879,6 +4008,7 @@ async function createBootstrap(
   if (openProject) void startWatchingProject(openProject.path).catch(() => undefined);
 
   return {
+    windowId: session?.id ?? 0,
     appName: context.appName,
     version: context.version,
     platform: process.platform,

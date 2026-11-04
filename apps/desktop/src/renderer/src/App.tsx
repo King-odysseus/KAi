@@ -126,9 +126,11 @@ interface ComposerContextDraft {
 
 const emptyComposerContext: ComposerContextDraft = { selectedFiles: [], contextChips: [], selectedSkills: [] };
 
-function loadComposerContexts(): Record<string, ComposerContextDraft> {
+function windowStorageKey(key: string, windowId?: number): string { return windowId === undefined ? key : `${key}:window:${windowId}`; }
+
+function loadComposerContexts(windowId?: number): Record<string, ComposerContextDraft> {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_CONTEXTS_KEY) ?? '{}');
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(windowStorageKey(COMPOSER_CONTEXTS_KEY, windowId)) ?? '{}');
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).flatMap(([key, value]) => {
       if (!value || typeof value !== 'object') return [];
@@ -150,9 +152,9 @@ function loadComposerContexts(): Record<string, ComposerContextDraft> {
   }
 }
 
-function loadComposerDrafts(): Record<string, string> {
+function loadComposerDrafts(windowId?: number): Record<string, string> {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_DRAFTS_KEY) ?? '{}');
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(windowStorageKey(COMPOSER_DRAFTS_KEY, windowId)) ?? '{}');
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   } catch {
@@ -213,9 +215,9 @@ function reasoningFor(agent: AgentId, execution: ExecutionMode, reasoning: strin
   return execution === 'cli' && effortFitsAgent(agent, reasoning) ? reasoning : '';
 }
 
-function loadComposerSelections(): Record<string, ComposerSelection> {
+function loadComposerSelections(windowId?: number): Record<string, ComposerSelection> {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(COMPOSER_SELECTIONS_KEY) ?? '{}');
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(windowStorageKey(COMPOSER_SELECTIONS_KEY, windowId)) ?? '{}');
     if (!parsed || typeof parsed !== 'object') return {};
     return Object.fromEntries(Object.entries(parsed as Record<string, ComposerSelection>).map(([key, selection]) => [
       key,
@@ -434,10 +436,9 @@ export function App(): ReactNode {
   const openConversations = openConversationIds
     .map((id) => conversations.find((conversation) => conversation.id === id))
     .filter((conversation): conversation is ConversationRecord => conversation !== undefined && conversation.projectId === activeProject?.id);
-  // BrowserWindows share localStorage. A single "new conversation" key therefore
-  // made the unsent prompt and agent settings from one project's window appear in
-  // another project's window. Keep new-conversation state within its project.
-  const activeDraftKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
+  // BrowserWindows share localStorage, so both saved values and new-chat keys are window scoped.
+  const windowId = bootstrap?.windowId;
+  const activeDraftKey = activeConversationId ?? `__new__:${windowId ?? 'boot'}:${activeProject?.id ?? 'none'}`;
   const activeContextKey = activeConversationId ?? `__new__:${activeProject?.id ?? 'none'}`;
   const activeComposerContext = composerContexts[activeContextKey] ?? emptyComposerContext;
   const activeComposerSelection = composerSelections[activeDraftKey];
@@ -478,13 +479,13 @@ export function App(): ReactNode {
       // Save in the selection event itself. This must survive an immediate app close,
       // before React has a chance to flush the state-effect below.
       try {
-        window.localStorage.setItem(COMPOSER_SELECTIONS_KEY, JSON.stringify(next));
+        window.localStorage.setItem(windowStorageKey(COMPOSER_SELECTIONS_KEY, windowId), JSON.stringify(next));
       } catch {
         // The rendered state remains usable when storage is unavailable.
       }
       return next;
     });
-  }, [activeDraftKey, executionMode, modelChoices, selectedAgent, selectedAutonomy, selectedRoute]);
+  }, [activeDraftKey, executionMode, modelChoices, selectedAgent, selectedAutonomy, selectedRoute, windowId]);
 
   useEffect(() => {
     if (activeConversationId) setOpenConversationIds((current) => current.includes(activeConversationId) ? current : [...current, activeConversationId]);
@@ -495,25 +496,25 @@ export function App(): ReactNode {
   useEffect(() => {
     if (!bootstrap || conversations.length === 0) return;
     const projectConversations = conversations.filter((conversation) => conversation.projectId === bootstrap.activeProjectId);
-    writeOpenTabs(window.localStorage, liveOpenTabs(openConversationIds, projectConversations, activeConversationId), bootstrap.activeProjectId);
+    writeOpenTabs(window.localStorage, liveOpenTabs(openConversationIds, projectConversations, activeConversationId), bootstrap.activeProjectId, bootstrap.windowId);
   }, [openConversationIds, conversations, activeConversationId, bootstrap?.activeProjectId]);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(COMPOSER_SELECTIONS_KEY, JSON.stringify(composerSelections));
+      window.localStorage.setItem(windowStorageKey(COMPOSER_SELECTIONS_KEY, bootstrap?.windowId), JSON.stringify(composerSelections));
     } catch {
       // Per-tab composer preferences are a convenience only.
     }
-  }, [composerSelections]);
+  }, [composerSelections, bootstrap?.windowId]);
 
   useEffect(() => {
-    try { window.localStorage.setItem(COMPOSER_DRAFTS_KEY, JSON.stringify(composerDrafts)); } catch { /* Drafts remain available until the app closes. */ }
-  }, [composerDrafts]);
+    if (bootstrap) try { window.localStorage.setItem(windowStorageKey(COMPOSER_DRAFTS_KEY, bootstrap.windowId), JSON.stringify(composerDrafts)); } catch { /* Drafts remain available until the app closes. */ }
+  }, [composerDrafts, bootstrap]);
   useEffect(() => {
     try {
-      window.localStorage.setItem(COMPOSER_CONTEXTS_KEY, JSON.stringify(composerContexts, (key, value) => key === 'dataUrl' ? undefined : value));
+      if (bootstrap) window.localStorage.setItem(windowStorageKey(COMPOSER_CONTEXTS_KEY, bootstrap.windowId), JSON.stringify(composerContexts, (key, value) => key === 'dataUrl' ? undefined : value));
     } catch { /* The selected context remains available until the app closes. */ }
-  }, [composerContexts]);
+  }, [composerContexts, bootstrap]);
   useEffect(() => window.kaiDesktop.onComposerQueueChanged(setQueuedPromptsByConversation), []);
   useEffect(() => window.kaiDesktop.onPlaywrightViewportStatus(setPlaywrightViewport), []);
 
@@ -769,12 +770,15 @@ export function App(): ReactNode {
       const startConversationId = preferredConversationId(nextBootstrap, nextConversations);
       const startChoice = startupAgentChoice(
         nextConversations.find((conversation) => conversation.id === startConversationId),
-        rememberedAgentChoice(),
+        rememberedAgentChoice(window.localStorage, nextBootstrap.windowId),
         { agent: nextBootstrap.settings.defaultAgent, route: nextBootstrap.settings.defaultRoute, execution: 'cli' },
       );
       setBootstrap(nextBootstrap);
+      setComposerDrafts(loadComposerDrafts(nextBootstrap.windowId));
+      setComposerContexts(loadComposerContexts(nextBootstrap.windowId));
+      setComposerSelections(loadComposerSelections(nextBootstrap.windowId));
       setOpenConversationIds(liveOpenTabs(
-        readOpenTabs(window.localStorage, nextBootstrap.activeProjectId),
+        readOpenTabs(window.localStorage, nextBootstrap.activeProjectId, nextBootstrap.windowId),
         nextConversations.filter((conversation) => conversation.projectId === nextBootstrap.activeProjectId),
         startConversationId,
       ));
@@ -972,7 +976,7 @@ export function App(): ReactNode {
   useEffect(() => {
     // Wait for startup to restore the choice, so the placeholder state never overwrites it.
     if (!applicationLoaded) return;
-    rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: executionMode });
+    rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: executionMode }, window.localStorage, windowId);
   }, [applicationLoaded, executionMode, selectedAgent, selectedRoute]);
 
   useEffect(() => {
@@ -1123,7 +1127,7 @@ export function App(): ReactNode {
   function restoreProjectTabs(projectId: string | null, activeId: string | null): void {
     const projectConversations = conversations.filter((conversation) => conversation.projectId === projectId);
     setOpenConversationIds(liveOpenTabs(
-      readOpenTabs(window.localStorage, projectId),
+      readOpenTabs(window.localStorage, projectId, bootstrap?.windowId),
       projectConversations,
       activeId,
     ));
@@ -2395,7 +2399,7 @@ export function App(): ReactNode {
               onSelectExecution={(mode) => {
                 setExecutionMode(mode);
                 updateComposerSelection({ execution: mode, model: modelFor(selectedAgent, mode, modelChoices[`${mode}:${selectedAgent}`]), reasoning: '' });
-                rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: mode });
+                rememberAgentChoice({ agent: selectedAgent, route: selectedRoute, execution: mode }, window.localStorage, windowId);
                 setAgentNotice(null);
               }}
               onSelectAgent={(agent) => {
@@ -2405,13 +2409,13 @@ export function App(): ReactNode {
                 if (route !== selectedRoute) setSelectedRoute(route);
                 // The model and effort belong to the agent that was chosen with them; the new agent starts from its own.
                 updateComposerSelection({ agent, route, model: modelFor(agent, executionMode, modelChoices[`${executionMode}:${agent}`]), reasoning: '' });
-                rememberAgentChoice({ agent, route, execution: executionMode });
+                rememberAgentChoice({ agent, route, execution: executionMode }, window.localStorage, windowId);
                 setAgentNotice(null);
               }}
               onSelectRoute={(route) => {
                 setSelectedRoute(route);
                 updateComposerSelection({ route });
-                rememberAgentChoice({ agent: selectedAgent, route, execution: executionMode });
+                rememberAgentChoice({ agent: selectedAgent, route, execution: executionMode }, window.localStorage, windowId);
                 if (route === 'proxy') setProxyContinuationAgent(null);
                 setAgentNotice(null);
               }}
@@ -2424,7 +2428,7 @@ export function App(): ReactNode {
                 setSelectedAgent(agent);
                 setSelectedRoute('proxy');
                 updateComposerSelection({ execution: 'cli', agent, route: 'proxy' });
-                rememberAgentChoice({ agent, route: 'proxy', execution: 'cli' });
+                rememberAgentChoice({ agent, route: 'proxy', execution: 'cli' }, window.localStorage, windowId);
                 setProxyContinuationAgent(null);
                 setAgentNotice(`${agentCapabilities.find((item) => item.id === agent)?.displayName ?? agent} now uses the proxy for the next message in this conversation.`);
               }}

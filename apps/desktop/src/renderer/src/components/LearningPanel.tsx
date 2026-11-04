@@ -48,11 +48,11 @@ import type {
   TeachingLibraryEntryInput,
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
-import type { SecurityFinding } from '@kai/contracts';
+import type { SecurityFinding, SecurityScanResult } from '@kai/contracts';
 import { responseReferenceTarget, suggestionTarget } from '../learning-placement';
 import { projectLessons } from './learning-path';
 import { TeachingLibraryPanel } from './TeachingLibraryPanel';
-import { SecurityAuditorPanel } from './SecurityAuditorPanel';
+import { SecurityAuditorPanel, type SecurityScanRequest } from './SecurityAuditorPanel';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
@@ -122,9 +122,11 @@ interface LearningPanelProps {
   securityFindings: SecurityFinding[];
   securityBusy: boolean;
   securityError: string | null;
+  /** The last finished audit, kept so its report stays readable after a reload of the findings. */
+  securityReport: SecurityScanResult | null;
   onRefreshSecurityFindings: () => void;
-  /** Starts the Security Auditor persona against a target (a file/feature, or the whole project when blank). */
-  onRunSecurityScan: (target: string) => void;
+  /** Runs one audit recipe as a real agent task, local only. */
+  onRunSecurityScan: (request: SecurityScanRequest) => void;
   onMarkSecurityFindingFixed: (findingId: string) => void;
   onOpenSettings: () => void;
   onClose: () => void;
@@ -228,6 +230,7 @@ export function LearningPanel({
   securityFindings,
   securityBusy,
   securityError,
+  securityReport,
   onRefreshSecurityFindings,
   onRunSecurityScan,
   onMarkSecurityFindingFixed,
@@ -552,9 +555,10 @@ export function LearningPanel({
             busy={securityBusy}
             loadError={securityError}
             currentFile={selection?.filePath ?? null}
+            lastReport={securityReport}
             onReference={(filePath) => onReference(filePath)}
             onRefresh={onRefreshSecurityFindings}
-            onRunScan={(target) => { setTab('tutor'); onRunSecurityScan(target); }}
+            onRunScan={onRunSecurityScan}
             onMarkFixed={onMarkSecurityFindingFixed}
           />
         )}

@@ -39,6 +39,8 @@ function fixture(script: Script = {}, patch: Partial<CrewConfig> = {}) {
         ({ conversation: {} as never, status, output, ...(error ? { error } : {}), costUsd: cost });
       if (request.prompt.includes('You are the Lead of a small crew')) return reply(pick(script.plan, plans++, PLAN));
       if (request.prompt.includes('You are the security reviewer')) return reply(pick(script.security, securities++, '{"verdict":"accept"}'));
+      if (request.prompt.includes('You are the tester.')) return reply('{"verdict":"accept"}');
+      if (request.prompt.includes('You are the auditor.')) return reply('{"verdict":"accept"}');
       if (request.prompt.includes('You are the Lead. Check this finished task')) return reply(pick(script.lead, leads++, '{"verdict":"accept"}'));
       builds += 1;
       if (builds <= (script.buildFails ?? 0)) return reply('', 'failed', 'The agent crashed.');
@@ -101,6 +103,26 @@ describe('crew runner', () => {
     expect(lead).toMatchObject({ agent: 'claude', execution: 'cli', autonomy: 'plan' });
     const security = f.requests.find((request) => request.prompt.includes('security reviewer'))!;
     expect(security.autonomy).toBe('plan');
+  });
+
+  it('runs tester and auditor roles on finished work, read-only', async () => {
+    const base = createDefaultCrewConfig('claude', 'codex');
+    const role = (id: string, kind: 'tester' | 'auditor', label: string) => ({
+      id, kind, label, agent: 'claude' as const, execution: 'cli' as const, route: 'direct' as const,
+      access: 'read' as const, subAgents: { max: 0 }, instructions: '',
+    });
+    const f = fixture({}, { roles: [...base.roles, role('tester', 'tester', 'Tester'), role('auditor', 'auditor', 'Auditor')] });
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+
+    expect(run.status).toBe('completed');
+    const tester = f.requests.find((request) => request.prompt.includes('You are the tester.'))!;
+    const auditor = f.requests.find((request) => request.prompt.includes('You are the auditor.'))!;
+    expect(tester.autonomy).toBe('plan');
+    expect(auditor.autonomy).toBe('plan');
+    // Each accepted pass is remembered on the task, so a resumed run does not pay for it again.
+    expect(run.tasks.every((task) => task.reviews.some((review) => review.reviewer === 'tester'))).toBe(true);
+    expect(run.tasks.every((task) => task.reviews.some((review) => review.reviewer === 'auditor'))).toBe(true);
   });
 
   it('turns a role\'s sub-agent count into the composer\'s helper setting', async () => {

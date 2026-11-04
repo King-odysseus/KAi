@@ -5,7 +5,7 @@ import {
   addCheckFix, addSpend, addTasks, answerAsk, enforceLimits, failBuild, helperChoiceFor, isFinished, parseReview, pickTasks, reviewTask,
   roleAccess, settle, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason,
 } from './crew-engine';
-import { parsePlan, planPrompt, retryPrompt, reviewPrompt, securityPrompt } from './crew-prompts';
+import { parsePlan, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt } from './crew-prompts';
 
 export interface CrewRunnerPorts {
   createConversation(projectId: string, title: string): Promise<{ id: string }>;
@@ -305,27 +305,32 @@ export class DesktopCrewRunner {
     await this.review(active, taskId);
   }
 
-  /** The security role (when there is one) and then the Lead check a finished task. */
+  /** Every reviewer kind that exists, then the Lead, check a finished task. */
   private async review(active: ActiveRun, taskId: string): Promise<void> {
     const at = (): string => this.now().toISOString();
     const roles = active.run.config.roles;
     const task = (): CrewTask => active.run.tasks.find((item) => item.id === taskId)!;
-    const security = roles.find((role) => role.kind === 'security');
     const builder = roles.find((role) => role.id === task().assignedTo);
     const mayChangeFiles = builder ? roleAccess(builder) === 'edit' : true;
 
-    if (security && mayChangeFiles && !task().reviews.some((review) => review.reviewer === security.id && review.round === task().round)) {
-      const answer = await this.askJson(active, security, securityPrompt(active.run, task()), 'review', parseReview);
-      if (active.cancelled) return;
-      let run = addSpend(active.run, taskId, answer.costUsd, at());
-      if (answer.value && answer.value.verdict === 'accept') {
-        // A pass is remembered in the task's reviews so a resumed run does not pay for the same check twice.
-        run = { ...run, tasks: run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: '', reviewer: security.id, at: at() }] } : item)) };
-        await this.commit(active, run);
-      } else {
-        const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: `${security.label} gave an answer that could not be read, so the work was not checked.` };
-        await this.commit(active, reviewTask(run, taskId, { ...verdict, reviewer: security.id }, at()));
-        return;
+    // A fixed order keeps a run reproducible: security first, then the test and audit passes, then a plain
+    // reviewer. Each role runs once per round; a pass is remembered so a resumed run does not pay twice.
+    const REVIEW_ORDER = ['security', 'tester', 'auditor', 'reviewer'] as const;
+    for (const kind of REVIEW_ORDER) {
+      for (const reviewer of roles.filter((role) => role.kind === kind)) {
+        if (!mayChangeFiles) continue;
+        if (task().reviews.some((review) => review.reviewer === reviewer.id && review.round === task().round)) continue;
+        const answer = await this.askJson(active, reviewer, reviewRolePrompt(kind, active.run, task()), 'review', parseReview);
+        if (active.cancelled) return;
+        let run = addSpend(active.run, taskId, answer.costUsd, at());
+        if (answer.value && answer.value.verdict === 'accept') {
+          run = { ...run, tasks: run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: '', reviewer: reviewer.id, at: at() }] } : item)) };
+          await this.commit(active, run);
+        } else {
+          const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: `${reviewer.label} gave an answer that could not be read, so the work was not checked.` };
+          await this.commit(active, reviewTask(run, taskId, { ...verdict, reviewer: reviewer.id }, at()));
+          return;
+        }
       }
     }
 
@@ -334,7 +339,7 @@ export class DesktopCrewRunner {
     if (active.cancelled) return;
     const run = addSpend(active.run, taskId, answer.costUsd, at());
     const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: 'The Lead gave an answer that could not be read, so the work was not accepted without a check.' };
-    // The security pass stays in the task's reviews; the Lead's verdict is the one that decides the task.
+    // The reviewer passes stay in the task's reviews; the Lead's verdict is the one that decides the task.
     await this.commit(active, reviewTask(run, taskId, { ...verdict, reviewer: lead.id }, at()));
     this.builderReply.delete(taskId);
   }

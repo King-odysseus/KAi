@@ -15,6 +15,10 @@ Each finding written to the security findings store (`SecurityFindingSaveInput`)
   2. Why *this* instance of it is exploitable (the specific missing check/sanitization)
   3. The general fix pattern (parameterized queries, output encoding, allowlisting, etc.) — not just "patch this
      line," the pattern to recognize next time
+- `status` (verify passes only): `fixed` when the original reproduction no longer works, `open` when it still does.
+  A normal scan leaves it out; a finding is open by default.
+- `id` (verify passes only): the existing record's id, so the re-test updates that record even if the title was
+  reworded. The store computes the fingerprint itself; do not supply one.
 
 ## Example
 

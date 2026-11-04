@@ -1,10 +1,12 @@
 import * as os from 'node:os';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { NodeFileSystem } from '@kai/runtime';
 import { StudioArtifacts } from './artifacts';
 import { StudioBoardStore } from './board';
 import { writeHandoffFiles } from './handoff-files';
 import { createKaiProjectTools } from './kai-project-tools';
+import { SecurityFindingsStore } from './security-findings-store';
 import { SpecStore } from './spec-store';
 
 /**
@@ -26,7 +28,17 @@ function projectArg(argv: readonly string[]): string | null {
   return process.env.KAI_PROJECT_ROOT?.trim() || null;
 }
 
-export async function runKaiProjectServer(root: string): Promise<void> {
+/**
+ * Where the app keeps its findings log. Passed explicitly rather than derived from the project because the log is
+ * one per installation, not one per repository — the panel reads that same file.
+ */
+function findingsArg(argv: readonly string[]): string | null {
+  const index = argv.indexOf('--findings');
+  if (index >= 0 && argv[index + 1]) return argv[index + 1]!;
+  return process.env.KAI_FINDINGS_FILE?.trim() || null;
+}
+
+export async function runKaiProjectServer(root: string, findingsFile?: string | null): Promise<void> {
   const spec = new SpecStore();
   const projectRoot = async (): Promise<string> => root;
   const now = (): string => new Date().toISOString();
@@ -34,6 +46,7 @@ export async function runKaiProjectServer(root: string): Promise<void> {
     projectId: PROJECT_ID,
     projectRoot,
     spec,
+    ...(findingsFile ? { findings: new SecurityFindingsStore(findingsFile, new NodeFileSystem()) } : {}),
     artifacts: new StudioArtifacts({ spec, projectRoot, now }),
     board: new StudioBoardStore({
       spec,
@@ -114,7 +127,7 @@ async function main(): Promise<void> {
     process.stderr.write('kai-project: pass --project <path> or set KAI_PROJECT_ROOT.\n');
     process.exit(2);
   }
-  await runKaiProjectServer(root);
+  await runKaiProjectServer(root, findingsArg(process.argv.slice(2)));
 }
 
 // Started as a script, not imported. The guard keeps the module importable from a test.

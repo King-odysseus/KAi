@@ -92,19 +92,79 @@ export function reviewPrompt(run: CrewRun, task: CrewTask, builderReply: string)
   ].join('\n');
 }
 
-export function securityPrompt(run: CrewRun, task: CrewTask): string {
+/** The verdict shape every reviewer role replies with. */
+const REVIEW_SHAPE = [
+  'Reply with one JSON object and nothing else:',
+  '{"verdict":"accept"} when there is nothing to fix,',
+  '{"verdict":"sendBack","feedback":"the specific problem and where"} for a problem the builder can fix,',
+  '{"verdict":"needsYou","feedback":"why this must stop and ask"} for a problem that is serious or needs a decision.',
+];
+
+function reviewPreamble(run: CrewRun, task: CrewTask): string[] {
   return [
-    'You are the security reviewer. Review the code this task changed for secrets in code, missing authentication or authorisation, unsafe input handling, data exposure and risky defaults. Do not change any files.',
-    '',
     `Project goal: ${run.goal}`,
     `Task: ${task.title}`,
     ...(task.files.length > 0 ? [`Files changed: ${task.files.slice(0, 40).join(', ')}`] : []),
     '',
-    'Reply with one JSON object and nothing else:',
-    '{"verdict":"accept"} when there is nothing to fix,',
-    '{"verdict":"sendBack","feedback":"the specific problem and where"} for a problem the builder can fix,',
-    '{"verdict":"needsYou","feedback":"why this must stop and ask"} for a problem that is serious or needs a decision.',
+    ...REVIEW_SHAPE,
+  ];
+}
+
+export function securityPrompt(run: CrewRun, task: CrewTask): string {
+  return [
+    'You are the security reviewer. Review the code this task changed for secrets in code, missing authentication or authorisation, unsafe input handling, data exposure and risky defaults. Do not change any files.',
+    '',
+    ...reviewPreamble(run, task),
   ].join('\n');
+}
+
+/** The tester runs the real checks; it does not fix them. */
+export function testerPrompt(run: CrewRun, task: CrewTask): string {
+  return [
+    'You are the tester. Run the project\'s real check command against this finished task and judge it against the task\'s acceptance criteria. Do not change any files.',
+    'If the check cannot run because of a missing dependency, environment or service, say that and use "needsYou" rather than pretending it passed.',
+    '',
+    'Acceptance criteria:',
+    ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),
+    '',
+    ...reviewPreamble(run, task),
+  ].join('\n');
+}
+
+/** The auditor reviews one named risk area; the role's own guidance says which. */
+export function auditorPrompt(run: CrewRun, task: CrewTask): string {
+  return [
+    'You are the auditor. Review this finished task for the risk area named in your role guidance: accessibility, performance, privacy, reliability or dependencies. Report evidence from the code or a local run, not opinions. Do not change any files.',
+    'If your guidance names no area, review for the risk this task most plausibly introduces and say which.',
+    '',
+    ...reviewPreamble(run, task),
+  ].join('\n');
+}
+
+/** A plain reviewer: correctness and the acceptance criteria, with no speciality. */
+export function reviewerPrompt(run: CrewRun, task: CrewTask): string {
+  return [
+    'You are the reviewer. Check this finished task against its acceptance criteria by reading the changed code and, where it helps, running a read-only command. Do not change any files.',
+    '',
+    'Acceptance criteria:',
+    ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),
+    '',
+    ...reviewPreamble(run, task),
+  ].join('\n');
+}
+
+/** The prompt for a reviewer kind. The caller appends the role's own instructions. */
+export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'reviewer', run: CrewRun, task: CrewTask): string {
+  switch (kind) {
+    case 'security':
+      return securityPrompt(run, task);
+    case 'tester':
+      return testerPrompt(run, task);
+    case 'auditor':
+      return auditorPrompt(run, task);
+    case 'reviewer':
+      return reviewerPrompt(run, task);
+  }
 }
 
 export function retryPrompt(kind: 'plan' | 'review'): string {

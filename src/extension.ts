@@ -38,6 +38,8 @@ import { WorkbenchViewProvider } from './panel/workbench-view-provider';
 import { RawEventInspector, registerRawInspectorCommand } from './panel/raw-event-inspector';
 import { ProxyManager } from './proxy/proxy-manager';
 import { KaiProxyServer, type ProxyServerConfig } from './proxy/proxy-server';
+import { AutomationStore } from './core/automations';
+import { buildSkillPrompt, discoverSkills } from './core/skills';
 
 interface SessionRecoveryState {
   prompt: string;
@@ -295,6 +297,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Register webview providers
   const attachmentsDir = path.join(context.globalStorageUri.fsPath, 'attachments');
   const workbenchProvider = new WorkbenchViewProvider(context.extensionUri, orchestrator, prefs, attachmentsDir, context.globalStorageUri.fsPath);
+  const automationStore = new AutomationStore(path.join(context.globalStorageUri.fsPath, 'automations.json'));
+  await automationStore.load();
+  const automationRuns = new Map<string, string>();
+  orchestrator.on('event', (event: WorkbenchEvent) => {
+    if (event.type !== 'agent.lifecycle' || !['completed', 'failed'].includes(event.status)) return;
+    const runId = automationRuns.get(event.taskId);
+    if (!runId) return;
+    automationRuns.delete(event.taskId);
+    void automationStore.finishRun(runId, event.status === 'completed' ? 'needsReview' : 'failed', event.detail);
+  });
+  const runDueAutomations = async () => {
+    const due = await automationStore.due();
+    for (const automation of due) {
+      if (orchestrator.getState().isRunning) {
+        const run = await automationStore.beginRun(automation);
+        await automationStore.finishRun(run.id, 'skipped', 'KAI was busy; this scheduled run was skipped.');
+        continue;
+      }
+      const run = await automationStore.beginRun(automation);
+      try {
+        const skillDefs = await discoverSkills(projectPath);
+        const chosen = automation.skills.map((name) => skillDefs.find((skill) => skill.name === name)).filter((skill) => skill !== undefined);
+        const started = orchestrator.startTask({
+          prompt: buildSkillPrompt(chosen, `[SCHEDULED AUTOMATION: ${automation.name}]\n${automation.prompt}`),
+          agent: automation.agent,
+          route: orchestrator.getState().route,
+          autonomy: 'ask',
+        });
+        const taskId = orchestrator.getState().activeTaskId;
+        if (taskId) automationRuns.set(taskId, run.id);
+        await started;
+      } catch (error) {
+        await automationStore.finishRun(run.id, 'failed', error instanceof Error ? error.message : String(error));
+      }
+    }
+  };
+  const automationTimer = setInterval(() => { void runDueAutomations(); }, 30_000);
+  context.subscriptions.push({ dispose: () => clearInterval(automationTimer) });
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(WorkbenchViewProvider.viewType, workbenchProvider),
     workbenchProvider.registerCheckpointContentProvider(),
@@ -457,6 +497,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('kai.openGoal', async () => {
       await workbenchProvider.openGoalEditor();
+    }),
+
+    vscode.commands.registerCommand('kai.createAutomation', async () => {
+      const name = await vscode.window.showInputBox({ title: 'Create KAI automation', prompt: 'What should this recurring task be called?', validateInput: (value) => value.trim() ? undefined : 'Enter a name.' });
+      if (!name) return;
+      const prompt = await vscode.window.showInputBox({ title: 'Automation instructions', prompt: 'Describe the recurring task KAI should run.', validateInput: (value) => value.trim() ? undefined : 'Enter instructions.' });
+      if (!prompt) return;
+      const interval = await vscode.window.showInputBox({ title: 'Run interval', prompt: 'Interval in minutes (minimum 5).', value: '1440', validateInput: (value) => /^\d+$/.test(value) && Number(value) >= 5 ? undefined : 'Enter a whole number of at least 5.' });
+      if (!interval) return;
+      const agent = await vscode.window.showQuickPick(AGENT_IDS, { title: 'Choose the agent for this automation' });
+      if (!agent) return;
+      const skills = await discoverSkills(projectPath);
+      const pickedSkills = skills.length ? await vscode.window.showQuickPick(skills.map((skill) => ({ label: skill.name, description: skill.description, picked: false })), { title: 'Optional skills (press Enter to continue)', canPickMany: true }) : [];
+      await automationStore.add({ name: name.trim(), prompt: prompt.trim(), intervalMinutes: Number(interval), agent: agent as AgentId, status: 'active', skills: (pickedSkills ?? []).map((skill) => skill.label) });
+      void vscode.window.showInformationMessage(`KAI automation “${name.trim()}” created. First run is scheduled in ${interval} minutes.`);
+    }),
+
+    vscode.commands.registerCommand('kai.manageAutomations', async () => {
+      const items: vscode.QuickPickItem[] = [
+        ...automationStore.list().map((item) => ({ label: `${item.status === 'active' ? '$(play)' : '$(debug-pause)'} ${item.name}`, description: `Every ${item.intervalMinutes} min · next ${new Date(item.nextRunAt).toLocaleString()}`, detail: item.id })),
+        ...automationStore.listRuns().filter((run) => run.status === 'needsReview' || run.status === 'failed' || run.status === 'skipped').map((run) => ({ label: `$(eye) Review: ${run.automationName}`, description: `${run.status} · ${new Date(run.startedAt).toLocaleString()}`, detail: `run:${run.id}` })),
+      ];
+      if (!items.length) { void vscode.window.showInformationMessage('No KAI automations or runs awaiting review.'); return; }
+      const selected = await vscode.window.showQuickPick(items, { title: 'KAI Automations and Review Queue' });
+      if (!selected?.detail) return;
+      if (selected.detail.startsWith('run:')) {
+        const id = selected.detail.slice(4);
+        const run = automationStore.listRuns().find((entry) => entry.id === id);
+        if (!run) return;
+        const action = await vscode.window.showInformationMessage(`${run.status}: ${run.detail ?? 'Open KAI chat to inspect the run and its changes.'}`, 'Open KAI Chat', 'Dismiss');
+        if (action === 'Open KAI Chat') await vscode.commands.executeCommand('kai.openChatTab');
+        else if (action === 'Dismiss') await automationStore.acknowledgeRun(id);
+        return;
+      }
+      const automation = automationStore.list().find((item) => item.id === selected.detail);
+      if (!automation) return;
+      const action = await vscode.window.showQuickPick(['Pause / Resume', 'Delete'], { title: automation.name });
+      if (action === 'Pause / Resume') await automationStore.setStatus(automation.id, automation.status === 'active' ? 'paused' : 'active');
+      if (action === 'Delete') await automationStore.remove(automation.id);
     }),
 
     vscode.commands.registerCommand('kai.conventions', async () => {

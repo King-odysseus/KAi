@@ -44,7 +44,10 @@ describe('crew access', () => {
   it('keeps the Lead, planner, reviewers and security read-only even if a config says otherwise', () => {
     expect(roleAccess({ kind: 'lead', access: 'edit' })).toBe('read');
     expect(roleAccess({ kind: 'security', access: 'edit' })).toBe('read');
+    expect(roleAccess({ kind: 'tester', access: 'edit' })).toBe('read');
+    expect(roleAccess({ kind: 'auditor', access: 'edit' })).toBe('read');
     expect(roleAccess({ kind: 'builder', access: 'edit' })).toBe('edit');
+    expect(roleAccess({ kind: 'operator', access: 'edit' })).toBe('edit');
     expect(roleAccess({ kind: 'custom', access: 'read' })).toBe('read');
   });
 });

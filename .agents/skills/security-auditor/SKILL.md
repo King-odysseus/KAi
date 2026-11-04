@@ -35,15 +35,26 @@ what it found. It is not a pentest-as-a-service tool and it does not touch anyon
      never anything with live credentials.
    - Record exactly what request/input triggered what response; a finding is only real once it's reproduced.
 3. **For every reproduced finding, write a finding record** (see `references/finding-template.md`) with:
-   severity, vuln class, file/location, the exact reproduction steps, and a short concept card — what the bug
-   class is, why it's exploitable, and the fix pattern — written for someone learning the concept, not just fixing
-   the line.
-4. **File a fixer task** for each finding through the project's existing task system (`task_create`/`task_route`),
+   severity, vuln class, file/location, the exact evidence, and a short concept card — what the bug class is, why
+   it's exploitable, and the fix pattern — written for someone learning the concept, not just fixing the line.
+4. **File each finding with the `save_security_finding` tool** from the `kai-project` MCP server. Call it once per
+   finding, after the reproduction works. The tool stores the record the Security Auditor panel and the Learn tab
+   read, and filing the same issue again updates that record instead of duplicating it. If the tool is not
+   available in this session, still finish with the report block in step 6: KAI files it from that.
+5. **File a fixer task** for each finding through the project's existing task system (`task_create`/`task_route`),
    so it's routed to whichever agent the project already assigns that kind of work to. Do not fix the
    vulnerability directly in this pass unless the user asks for that — the point is to separate "found it" from
    "fixed it" so both get reviewed.
-5. **Log the finding** to the project's security findings store (`SecurityFindingsStore` / `@kai/contracts`
-   `security-findings`) so it surfaces on the Learn tab as a concept card, independent of the fixer task's status.
+6. **End with the machine-readable report block.** The prompt states the exact shape:
+   ```` ```json kai-security-findings ```` followed by an array of finding objects. This is what a run without MCP
+   tools is filed from, so do not omit it or wrap it in another code fence. An empty array means nothing was found.
+
+## Re-testing a finding
+
+A verify pass is the one case where the finding already exists. Re-run its recorded evidence, inspect the current
+code for the missing check, and call `save_security_finding` with the record's `id` and a `status` of `fixed` when
+the reproduction no longer works, or `open` when it still does. Report one object for that finding in the block.
+Do not scan anything else and do not change project files.
 
 ## Reporting
 

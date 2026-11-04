@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { savedTaskIntent } from '../apps/desktop/src/renderer/src/components/Workspace';
+import { savedTaskIntent } from '../apps/desktop/src/renderer/src/components/personas';
 
 /**
  * The composer's intent is remembered, because the screen is unmounted whenever somebody looks at another one. Before
@@ -12,6 +12,13 @@ describe('remembering the composer intent', () => {
     expect(savedTaskIntent('auto')).toBe('auto');
     expect(savedTaskIntent('build')).toBe('build');
     expect(savedTaskIntent('equalizer')).toBe('equalizer');
+    expect(savedTaskIntent('test')).toBe('test');
+    expect(savedTaskIntent('audit')).toBe('audit');
+    expect(savedTaskIntent('operate')).toBe('operate');
+  });
+
+  it('takes the old security-auditor id as Audit, because storage outlives the rename', () => {
+    expect(savedTaskIntent('security-auditor')).toBe('audit');
   });
 
   it('falls back to General for nothing, or for something it no longer offers', () => {

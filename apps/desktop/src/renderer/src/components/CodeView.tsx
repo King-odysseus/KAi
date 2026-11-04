@@ -40,6 +40,7 @@ import type {
   ProjectFileEntry,
   ProjectRecord,
   SecurityFinding,
+  SecurityScanResult,
   TeachingDraft,
   TeachingDraftGenerateInput,
   TeachingLibrary,
@@ -52,6 +53,7 @@ import { changeMap, type FileChange } from './project-files-tree';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
 import { unwrap } from '../types';
 import { LearningPanel, type LearningSelectionPreview, type TutorConversationTurn } from './LearningPanel';
+import type { SecurityScanRequest } from './SecurityAuditorPanel';
 import { projectLessons } from './learning-path';
 import { GuidedReviewPanel } from './GuidedReviewPanel';
 import { CodeGuidePanel, CodeGuideStrip } from './CodeGuidePanel';
@@ -361,6 +363,8 @@ export function CodeView({
   const [teachingLibrary, setTeachingLibrary] = useState<TeachingLibrary | null>(null);
   const [teachingBusy, setTeachingBusy] = useState<string | null>(null);
   const [securityFindings, setSecurityFindings] = useState<SecurityFinding[]>([]);
+  /** The last finished audit's report text, so the panel can show it without a second run. */
+  const [securityReport, setSecurityReport] = useState<SecurityScanResult | null>(null);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const assistance = optimisticPreferences?.assistance ?? progress?.preferences.assistance ?? 'guided';
@@ -714,6 +718,12 @@ export function CodeView({
   useEffect(() => {
     void loadSecurityFindings();
   }, [loadSecurityFindings]);
+
+  // An audit started from the composer files its findings in the main process; this panel is where they are read,
+  // so reload when a run ends rather than waiting for someone to press Refresh.
+  useEffect(() => window.kaiDesktop.onAgentRunState(({ status }) => {
+    if (status === 'finished') void loadSecurityFindings();
+  }), [loadSecurityFindings]);
 
   useEffect(() => {
     try {
@@ -1844,18 +1854,30 @@ export function CodeView({
   }
 
   /**
-   * Runs the Security Auditor persona against a target the learner built, local only — never a deployed or
-   * public URL. Rides the same tutor pipeline as a normal lesson (`runLearningAction`); findings the tutor's turn
-   * writes land in the security findings store and the list refreshes once the turn comes back.
+   * Runs one Security Auditor recipe as a real agent task, local only — never a deployed or public URL.
+   *
+   * It is deliberately not a tutor turn: the tutor is one structured call with no shell, file or browser tools, so
+   * it could not start a dev server or reproduce anything. The main process opens a conversation, runs the agent
+   * with the `security-auditor` skill, and files the report it returns; this side only has to show the result.
    */
-  async function runSecurityScan(target: string): Promise<void> {
+  async function runSecurityScan(request: SecurityScanRequest): Promise<void> {
+    if (!projectId) {
+      setSecurityError('Open a project before running an audit.');
+      return;
+    }
     setSecurityBusy(true);
     setSecurityError(null);
-    const scope = target.trim() ? `the feature at ${target.trim()}` : 'this whole project';
-    const prompt = `Act as the security-auditor skill. Attack ${scope}: try to find real vulnerabilities (injection, broken auth, secrets, insecure deserialization, path traversal, SSRF, dependency CVEs, CORS/header misconfig). Local only — never a deployed or public URL, only this repo and a dev server you start on localhost. For every reproduced finding, log it to the security findings store and file a fixer task; then report a short severity-ranked summary.`;
     try {
-      await runLearningAction('next-step', false, undefined, prompt);
-      await loadSecurityFindings();
+      const result = unwrap(await window.kaiDesktop.runSecurityScan({
+        projectId,
+        profile: request.profile,
+        target: request.target,
+        ...(request.findingId ? { findingId: request.findingId } : {}),
+      }));
+      setSecurityReport(result);
+      setSecurityFindings(result.findings);
+    } catch (caught) {
+      setSecurityError(caught instanceof Error ? caught.message : 'The audit could not run.');
     } finally {
       setSecurityBusy(false);
     }
@@ -2295,8 +2317,9 @@ export function CodeView({
             securityFindings={securityFindings}
             securityBusy={securityBusy}
             securityError={securityError}
+            securityReport={securityReport}
             onRefreshSecurityFindings={() => void loadSecurityFindings()}
-            onRunSecurityScan={(target) => void runSecurityScan(target)}
+            onRunSecurityScan={(request) => void runSecurityScan(request)}
             onMarkSecurityFindingFixed={(findingId) => void markSecurityFindingFixed(findingId)}
             onOpenSettings={onOpenSettings}
             onClose={() => setTutorOpen(false)}

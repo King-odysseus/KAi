@@ -1,4 +1,5 @@
 import {
+  securityFindingFingerprint,
   securityFindingsLogSchema,
   type SecurityFinding,
   type SecurityFindingsLog,
@@ -35,17 +36,52 @@ export class SecurityFindingsStore {
     return [...findings].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  /**
+   * Files a finding, or updates the same issue rather than appending a second row for it.
+   *
+   * The fingerprint is what makes a scan re-runnable: the same class at the same place with the same title is one
+   * issue whether it was found on Tuesday or Thursday. A finding that was marked fixed and is seen again reopens —
+   * a regression is not a new ticket — while a `wont-fix` stays as the person left it. A supplied id wins over the
+   * fingerprint, which is how a verify pass re-tests the record it was asked about even if the wording changed.
+   */
   async add(input: SecurityFindingSaveInput): Promise<SecurityFinding> {
     return this.serial(async () => {
       const state = await this.store.load();
-      const finding: SecurityFinding = {
-        ...input,
-        id: input.id ?? randomUUID(),
-        status: input.status ?? 'open',
-        createdAt: this.now().toISOString(),
+      const now = this.now().toISOString();
+      const fingerprint = input.fingerprint ?? securityFindingFingerprint(input);
+      const existing = (input.id ? state.findings.find((finding) => finding.id === input.id) : undefined)
+        ?? state.findings.find((finding) => (finding.fingerprint ?? securityFindingFingerprint(finding)) === fingerprint);
+
+      if (!existing) {
+        const finding: SecurityFinding = {
+          ...input,
+          id: input.id ?? randomUUID(),
+          status: input.status ?? 'open',
+          fingerprint,
+          createdAt: now,
+          lastSeenAt: now,
+        };
+        await this.store.save({ ...state, findings: [...state.findings, finding], updatedAt: now });
+        return finding;
+      }
+
+      const updated: SecurityFinding = {
+        ...existing,
+        severity: input.severity,
+        vulnClass: input.vulnClass,
+        title: input.title,
+        location: input.location,
+        evidence: input.evidence,
+        conceptCard: input.conceptCard,
+        status: input.status ?? (existing.status === 'fixed' ? 'open' : existing.status),
+        fingerprint,
+        lastSeenAt: now,
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        ...(input.lastVerifiedAt ? { lastVerifiedAt: input.lastVerifiedAt } : {}),
       };
-      await this.store.save({ ...state, findings: [...state.findings, finding], updatedAt: this.now().toISOString() });
-      return finding;
+      const findings = state.findings.map((finding) => (finding.id === existing.id ? updated : finding));
+      await this.store.save({ ...state, findings, updatedAt: now });
+      return updated;
     });
   }
 

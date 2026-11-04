@@ -407,6 +407,7 @@ import {
   type SecurityFindingSaveInput,
   type SecurityFindingStatusUpdateInput,
 } from './security-findings';
+import { securityScanInputSchema, type SecurityScanInput, type SecurityScanResult } from './security-audit';
 import {
   teamPlanDraftSchema,
   teamPlanInputSchema,
@@ -516,6 +517,7 @@ export const ipcChannels = [
   'learning:security-findings',
   'learning:save-security-finding',
   'learning:update-security-finding-status',
+  'learning:security-scan',
   'code:format',
   'code:install-formatter',
   'code:guide-read',
@@ -896,6 +898,7 @@ export const ipcInputSchemas = {
   'learning:security-findings': emptyInputSchema,
   'learning:save-security-finding': securityFindingSaveInputSchema,
   'learning:update-security-finding-status': securityFindingStatusUpdateInputSchema,
+  'learning:security-scan': securityScanInputSchema,
   'code:format': codeFormatInputSchema,
   'code:install-formatter': codeInstallFormatterInputSchema,
   'code:guide-read': studioProjectInputSchema,
@@ -1323,6 +1326,8 @@ export interface DataLocation {
 }
 
 export interface BootstrapPayload {
+  /** Electron webContents id; scopes renderer-only drafts and tabs to this window. */
+  windowId: number;
   appName: string;
   version: string;
   platform: string;
@@ -1467,6 +1472,8 @@ export interface KaiDesktopBridge {
   securityFindings(): Promise<IpcResponse<SecurityFinding[]>>;
   saveSecurityFinding(input: SecurityFindingSaveInput): Promise<IpcResponse<SecurityFinding>>;
   updateSecurityFindingStatus(input: SecurityFindingStatusUpdateInput): Promise<IpcResponse<SecurityFinding | null>>;
+  /** Runs one audit recipe as a real agent task, then returns the whole findings log. Local only. */
+  runSecurityScan(input: SecurityScanInput): Promise<IpcResponse<SecurityScanResult>>;
   formatCode(input: CodeFormatInput): Promise<IpcResponse<CodeFormatResult>>;
   installCodeFormatter(input: CodeInstallFormatterInput): Promise<IpcResponse<{ message: string }>>;
   /**

@@ -7,7 +7,7 @@
     "plugin:@typescript-eslint/strict-type-checked"
   ],
   "parserOptions": {
-    "project": "./tsconfig.json",
+    "project": "./tsconfig.eslint.json",
     "ecmaVersion": 2022,
     "sourceType": "module"
   },

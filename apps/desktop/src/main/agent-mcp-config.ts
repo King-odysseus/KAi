@@ -61,6 +61,11 @@ export interface KaiProjectMcpInstallOptions extends AgentMcpInstallOptions {
   serverPath: string;
   /** The one project the server is scoped to. */
   projectRoot: string;
+  /**
+   * The app's security findings log. Given, the server offers `save_security_finding` so an audit run can file what
+   * it reproduced; omitted, the tool is simply not offered.
+   */
+  findingsFile?: string;
   /** What runs the script: `node` in development, the Electron binary (`ELECTRON_RUN_AS_NODE`) once packaged. */
   command: string;
   /** Extra arguments before the script path, for instance `-e` or nothing at all. */
@@ -244,7 +249,13 @@ export async function installKaiProjectMcpForAgents(
   options: KaiProjectMcpInstallOptions,
 ): Promise<AgentMcpInstallResult[]> {
   const serverName = KAI_PROJECT_CLI_SERVER_NAME;
-  const args = [...(options.leadingArgs ?? []), options.serverPath, '--project', options.projectRoot];
+  const args = [
+    ...(options.leadingArgs ?? []),
+    options.serverPath,
+    '--project',
+    options.projectRoot,
+    ...(options.findingsFile ? ['--findings', options.findingsFile] : []),
+  ];
   const env = options.env ?? {};
   const jsonEntry = { command: options.command, args: [...args], ...(Object.keys(env).length > 0 ? { env } : {}) };
   return installMcpForAgents(serverName, () => ({

@@ -2884,6 +2884,29 @@ button.learning-question.answerable:hover { background: rgba(240, 180, 92, 0.12)
 .learning-security-finding footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .learning-security-finding.resolved { opacity: 0.7; }
 .learning-security-resolved summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+.learning-security-recipes { display: flex; flex-wrap: wrap; gap: 6px; }
+.learning-security-recipe { font-size: 11px; }
+.learning-security-recipe-help { margin: 0; font-size: 11px; color: var(--text-dim); }
+.learning-security-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.learning-security-saved { display: inline-flex; align-items: center; gap: 4px; color: var(--mint-strong, var(--mint)); }
+.learning-security-save-error { color: var(--red); }
+.learning-security-evidence summary { cursor: pointer; font-size: 11px; color: var(--text-dim); }
+.learning-security-evidence p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.learning-security-finding-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.learning-security-location { color: var(--text-dim); overflow-wrap: anywhere; }
+.learning-security-report summary { cursor: pointer; font-size: 12px; }
+.learning-security-report pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .learning-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .learning-tabs button { font-size: 10px; padding-inline: 3px; gap: 3px; }

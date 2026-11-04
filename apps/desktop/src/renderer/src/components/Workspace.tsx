@@ -115,6 +115,16 @@ import { ActivityCard } from './ActivityCard';
 import { currentStep, deriveActivitySteps } from '../activity-steps';
 import { BlockedActionsStrip } from './BlockedActionsStrip';
 import type { QueuedPrompt } from './composer-queue';
+import {
+  PERSONAS,
+  defaultRecipe,
+  isAutoLikeIntent,
+  isKnownStarter,
+  personaFor,
+  savedTaskIntent,
+  type PersonaRecipe,
+  type TaskIntent,
+} from './personas';
 
 import { Select } from './ui/Select';
 import { Composer, ComposerInput, ComposerPause, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
@@ -252,29 +262,13 @@ interface WorkspaceViewProps {
   onOpenFile: (path: string, line?: number) => void;
 }
 
-type TaskIntent = 'ask' | 'plan' | 'build' | 'review' | 'learn' | 'equalizer' | 'auto' | 'security-auditor';
-
-/** Both intents send through startAuto and share Auto's access requirement; Security Auditor only differs in its
- *  starter text (the security-auditor skill, attacking the project rather than building it). */
-function isAutoLikeIntent(intent: TaskIntent): intent is 'auto' | 'security-auditor' {
-  return intent === 'auto' || intent === 'security-auditor';
-}
-
 /**
  * Where the chosen intent is remembered. It is a working preference rather than part of a message, so it is kept for
  * the app rather than for one conversation.
  */
 const INTENT_KEY = 'kai.composer.intent';
-
-/**
- * The intent a stored value names, or Ask when it names nothing KAI still offers.
- *
- * Storage is outliving the code that wrote it: an intent that has since been renamed or removed would otherwise leave
- * the composer showing a mode that no longer exists, so anything unrecognised falls back rather than being trusted.
- */
-export function savedTaskIntent(stored: string | null): TaskIntent {
-  return TASK_INTENTS.some((intent) => intent.id === stored) ? stored as TaskIntent : 'ask';
-}
+/** The recipe chosen inside each selector, keyed by selector id. */
+const RECIPE_KEY = 'kai.composer.recipes';
 
 /**
  * How long each composer action may hold its own button before the UI stops waiting on it. Generous, because the
@@ -288,16 +282,6 @@ const STOP_WAIT_MS = 30_000;
 const IMAGE_ONLY_PROMPT = 'Please look at the attached image.';
 const FILE_ONLY_PROMPT = 'Please read the attached file.';
 
-const TASK_INTENTS: ReadonlyArray<{ id: TaskIntent; label: string; description: string; placeholder: string; starter: string }> = [
-  { id: 'ask', label: 'General', description: 'Ask a question or describe a task in your own words', placeholder: 'Ask KAI about this project or describe a task', starter: '' },
-  { id: 'plan', label: 'Plan', description: 'Inspect first; do not change files', placeholder: 'Describe the outcome you want to plan', starter: 'Plan this work. Inspect the project first. Do not change files. Explain the approach, affected areas, risks, and how you would verify it:\n\n' },
-  { id: 'build', label: 'Build', description: 'Make a safe, verified change', placeholder: 'Describe what you want KAI to build', starter: 'Build this safely. First state the plan, then make the smallest useful change and run relevant checks:\n\n' },
-  { id: 'review', label: 'Review', description: 'Check code, risks, and tests', placeholder: 'Paste or describe what you want reviewed', starter: 'Review this for correctness, architecture, security, and missing tests. Do not change files unless I ask:\n\n' },
-  { id: 'learn', label: 'Learn', description: 'Understand architecture or security', placeholder: 'What do you want to understand?', starter: 'Teach me this in simple terms. Focus on the architecture, security implications, trade-offs, and one small way I can check my understanding:\n\n' },
-  { id: 'equalizer', label: 'Equalizer', description: 'Compare the built screens with their design and report every difference', placeholder: 'Say what does not match, for example: the dashboard on my dev server', starter: '' },
-  { id: 'auto', label: 'Auto', description: 'Send the task and KAI works it on its own until the agent says it is done, switching provider when a limit is hit', placeholder: 'Describe the task; send it and Auto works it until it is done', starter: '' },
-  { id: 'security-auditor', label: 'Security Auditor', description: 'Auto mode that attacks your own project instead of building it: injection, broken auth, secrets, insecure dependencies, against your code and a local dev server only', placeholder: 'Say what to attack (a file, a feature, or leave it to scan the whole project); send it and Auto works it until it is done', starter: 'Act as the security-auditor skill. Attack ' },
-];
 
 const STATUS_WORDS = [
   'Thinking',
@@ -492,6 +476,16 @@ export function WorkspaceView({
       return 'ask';
     }
   });
+  // Which recipe was chosen inside each selector, so Audit can remember Accessibility while Build remembers
+  // Refactor. A selector with no saved choice falls back to its first recipe.
+  const [recipeByIntent, setRecipeByIntent] = useState<Record<string, string>>(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(RECIPE_KEY) ?? '{}') as unknown;
+      return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Record<string, string> : {};
+    } catch {
+      return {};
+    }
+  });
   const [advancedComposerOpen, setAdvancedComposerOpen] = useState(false);
   const [composerStatusOpen, setComposerStatusOpen] = useState(false);
   const [noticesExpanded, setNoticesExpanded] = useState(false);
@@ -572,7 +566,9 @@ export function WorkspaceView({
       : `${directApiCapability?.displayName || 'Direct API'}${(selectedModel || directApiCapability?.model) ? ` · ${selectedModel || directApiCapability?.model}` : ''}`
     : selectedModel || selectedAgent;
   const activeGoal = activeConversation?.goal ?? null;
-  const activeTaskIntent = TASK_INTENTS.find((intent) => intent.id === taskIntent) ?? TASK_INTENTS[0];
+  const activePersona = personaFor(taskIntent);
+  const activeRecipe = activePersona.recipes?.find((recipe) => recipe.id === recipeByIntent[activePersona.id])
+    ?? defaultRecipe(activePersona);
   const allContextChips: ContextChip[] = [
     ...selectedFiles.map((path) => ({ type: 'file' as const, path })),
     ...contextChips,
@@ -860,7 +856,10 @@ export function WorkspaceView({
     const namedSkills = skills
       .filter((skill) => new RegExp(`\\$${escapeRegExp(skill.name)}(?![A-Za-z0-9_-])`, 'i').test(text))
       .map((skill) => skill.name);
-    const skillNames = [...new Set([...selectedSkills.map((skill) => skill.name), ...namedSkills])];
+    // A selector or recipe is a skill, not just a starter sentence. Selecting it loads the full instructions even
+    // when the person never types the `$name`.
+    const intentSkills = activeRecipe?.skills ?? [];
+    const skillNames = [...new Set([...selectedSkills.map((skill) => skill.name), ...namedSkills, ...intentSkills])];
     const options: WorkspaceSendOptions = {
       ...(sendOptions ?? {}),
       ...(skillNames.length ? { skills: skillNames } : {}),
@@ -871,7 +870,13 @@ export function WorkspaceView({
   const send = (): void => {
     const typedText = prompt.trim();
     if ((!typedText && !hasAttachment) || !activeProject || busy || refiningPrompt || !ready) return;
-    const text = typedText || attachmentOnlyPrompt;
+    let text = typedText || attachmentOnlyPrompt;
+    // An audit starter ends in "Attack " / "Audit " / "Profile " and waits for a target. Sent as-is it should
+    // still run, not arrive as a dangling sentence, so an empty target becomes the whole project.
+    const activeStarter = activeRecipe?.starter ?? activePersona.starter;
+    if (taskIntent === 'audit' && activeStarter.trim() && typedText.trim() === activeStarter.trim()) {
+      text = `${text.trim()} this whole project.`;
+    }
     if (isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
       setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
       return;
@@ -1125,9 +1130,24 @@ export function WorkspaceView({
   }
 
   function chooseTaskIntent(intent: TaskIntent): void {
-    const definition = TASK_INTENTS.find((item) => item.id === intent)!;
+    const persona = personaFor(intent);
+    const remembered = persona.recipes?.find((recipe) => recipe.id === recipeByIntent[intent]);
+    const starter = (remembered ?? defaultRecipe(persona))?.starter ?? persona.starter;
     rememberIntent(intent);
-    if (!prompt.trim() && definition.starter) setPrompt(definition.starter);
+    // A recipe chosen earlier comes back with the selector. Typed text is never overwritten, but a starter that
+    // belonged to the previous selector is replaced (or cleared, for a selector with no starter).
+    if (isKnownStarter(prompt)) setPrompt(starter);
+    window.setTimeout(() => promptRef.current?.focus(), 0);
+  }
+
+  /** Picks a specialist inside the current selector and loads its skill. */
+  function chooseRecipe(recipe: PersonaRecipe): void {
+    setRecipeByIntent((current) => {
+      const next = { ...current, [taskIntent]: recipe.id };
+      try { window.localStorage.setItem(RECIPE_KEY, JSON.stringify(next)); } catch { /* memory only */ }
+      return next;
+    });
+    if (isKnownStarter(prompt)) setPrompt(recipe.starter);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
 
@@ -2204,6 +2224,22 @@ export function WorkspaceView({
             <span>{activeProject.path}</span>
           </div>
         )}
+        {activeProject && activePersona.recipes && activePersona.recipes.length > 1 && (
+          <div className="composer-recipes" role="group" aria-label={`${activePersona.label} recipes`}>
+            {activePersona.recipes.map((recipe) => (
+              <UiButton
+                key={recipe.id}
+                type="button"
+                variant={activeRecipe?.id === recipe.id ? 'primary' : 'secondary'}
+                disabled={busy}
+                title={recipe.description}
+                onClick={() => chooseRecipe(recipe)}
+              >
+                {recipe.label}
+              </UiButton>
+            ))}
+          </div>
+        )}
         <Composer
           tone={composerRun?.line.state ?? 'idle'}
           status={composerRun ? (
@@ -2260,7 +2296,7 @@ export function WorkspaceView({
             }}
             placeholder={running
               ? apiRun ? 'Steer the run, or press Stop to take over…' : 'Queue a message for the next turn…'
-              : activeTaskIntent.placeholder}
+              : activePersona.placeholder}
             aria-label="Task prompt"
             disabled={!activeProject || (busy && !running) || !ready || refiningPrompt}
           />
@@ -2272,7 +2308,7 @@ export function WorkspaceView({
               {activeConversation && <ContextRing tokens={liveTokenEstimate} limit={COMPACTION_WARNING_TOKENS} busy={busy || running} onCompact={onCompactConversation} />}
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
-              <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={TASK_INTENTS.map((intent) => ({ value: intent.id, label: intent.label, description: intent.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
+              <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
               <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
               <IconButton data-tour="composer-advanced" aria-label="More run options" title="More run options" aria-expanded={advancedComposerOpen} active={advancedComposerOpen} disabled={busy} onClick={() => setAdvancedComposerOpen((open) => !open)} icon={<Settings2 size={14} />} />
             </>}

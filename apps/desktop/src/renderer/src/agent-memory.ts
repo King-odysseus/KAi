@@ -3,6 +3,7 @@ import { agentIdSchema, executionModeSchema, routeModeSchema, type AgentId, type
 const AGENT_KEY = 'kai.lastAgent';
 const ROUTE_KEY = 'kai.lastRoute';
 const EXECUTION_KEY = 'kai.lastExecution';
+function scoped(key: string, windowId?: number): string { return windowId === undefined ? key : `${key}:window:${windowId}`; }
 
 export interface AgentChoice {
   agent: AgentId;
@@ -11,23 +12,23 @@ export interface AgentChoice {
 }
 
 /** The composer agent, execution mode, and route picked last, or null when nothing valid was saved. */
-export function rememberedAgentChoice(storage: Pick<Storage, 'getItem'> | null = safeStorage()): AgentChoice | null {
+export function rememberedAgentChoice(storage: Pick<Storage, 'getItem'> | null = safeStorage(), windowId?: number): AgentChoice | null {
   try {
-    const agent = agentIdSchema.safeParse(storage?.getItem(AGENT_KEY));
+    const agent = agentIdSchema.safeParse(storage?.getItem(scoped(AGENT_KEY, windowId)));
     if (!agent.success) return null;
-    const route = routeModeSchema.safeParse(storage?.getItem(ROUTE_KEY));
-    const execution = executionModeSchema.safeParse(storage?.getItem(EXECUTION_KEY));
+    const route = routeModeSchema.safeParse(storage?.getItem(scoped(ROUTE_KEY, windowId)));
+    const execution = executionModeSchema.safeParse(storage?.getItem(scoped(EXECUTION_KEY, windowId)));
     return { agent: agent.data, route: route.success ? route.data : 'direct', execution: execution.success ? execution.data : 'cli' };
   } catch {
     return null;
   }
 }
 
-export function rememberAgentChoice(choice: AgentChoice, storage: Pick<Storage, 'setItem'> | null = safeStorage()): void {
+export function rememberAgentChoice(choice: AgentChoice, storage: Pick<Storage, 'setItem'> | null = safeStorage(), windowId?: number): void {
   try {
-    storage?.setItem(AGENT_KEY, choice.agent);
-    storage?.setItem(ROUTE_KEY, choice.route);
-    storage?.setItem(EXECUTION_KEY, choice.execution);
+    storage?.setItem(scoped(AGENT_KEY, windowId), choice.agent);
+    storage?.setItem(scoped(ROUTE_KEY, windowId), choice.route);
+    storage?.setItem(scoped(EXECUTION_KEY, windowId), choice.execution);
   } catch {
     // Remembering the last agent is a convenience only.
   }

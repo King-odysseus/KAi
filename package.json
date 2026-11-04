@@ -50,6 +50,14 @@
         "title": "KAI: Start or Edit Goal"
       },
       {
+        "command": "kai.createAutomation",
+        "title": "KAI: Create Scheduled Automation"
+      },
+      {
+        "command": "kai.manageAutomations",
+        "title": "KAI: Manage Automations and Review Queue"
+      },
+      {
         "command": "kai.openSkills",
         "title": "KAI: Browse Skills"
       },

@@ -74,11 +74,27 @@ afterEach(async () => {
 });
 
 describe('the kai-project tools an outside agent is given', () => {
-  it('exposes the seven the plan names, and nothing else', async () => {
+  it('exposes the eight the plan names, and nothing else', async () => {
     server = await Server.create();
     // update_plan is here so a CLI session can keep the same plan the Direct API path does. The run briefing tells
     // every run to maintain one, so a CLI agent without this tool would be told to use something it does not have.
-    expect(server.names().sort()).toEqual(['claim_task', 'get_board', 'list_artifacts', 'move_task', 'read_artifact', 'submit_output', 'update_plan']);
+    // write_report is the finish line for a persona that produces evidence rather than code.
+    expect(server.names().sort()).toEqual(['claim_task', 'get_board', 'list_artifacts', 'move_task', 'read_artifact', 'submit_output', 'update_plan', 'write_report']);
+  });
+
+  it('writes a report under the spec folder, where the person can read it later', async () => {
+    server = await Server.create();
+    const result = await server.tool('write_report')({
+      kind: 'test',
+      title: 'Triage the checkout change',
+      body: 'Ran `npm test`; two failures, both in checkout.',
+    }) as { path: string; version: number };
+
+    expect(result.path).toBe('.kai/spec/reports/test/2026-09-28-1200-triage-the-checkout-change.md');
+    const written = await server.specStore().read(server.root, result.path.replace(/^\.kai\/spec\//, ''));
+    expect(written).toContain('# Triage the checkout change');
+    expect(written).toContain('two failures, both in checkout.');
+    expect(result.version).toBe(0);
   });
 
   it('writes the plan an outside agent records, so the same file serves both paths', async () => {

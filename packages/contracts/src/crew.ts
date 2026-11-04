@@ -7,7 +7,7 @@ import { agentIdSchema, autonomyModeSchema, executionModeSchema, routeModeSchema
  * code until the Lead accepts it. The plan, not anyone's prose, decides when the project is done.
  */
 
-export const CREW_ROLE_KINDS = ['lead', 'planner', 'builder', 'reviewer', 'security', 'designer', 'custom'] as const;
+export const CREW_ROLE_KINDS = ['lead', 'planner', 'builder', 'reviewer', 'security', 'tester', 'auditor', 'designer', 'operator', 'custom'] as const;
 export const crewRoleKindSchema = z.enum(CREW_ROLE_KINDS);
 export type CrewRoleKind = z.infer<typeof crewRoleKindSchema>;
 
@@ -18,7 +18,10 @@ export const CREW_ROLE_INFO: Record<Exclude<CrewRoleKind, 'custom'>, { label: st
   builder: { label: 'Builder', does: 'Claims a task, writes the code, runs the checks and submits it for review.', access: 'edit' },
   reviewer: { label: 'Reviewer', does: 'Reads finished work for correctness and gives a ship or no-ship verdict.', access: 'read' },
   security: { label: 'Security', does: 'Reviews finished tasks for secrets, permissions and unsafe input. A block stops the run and asks you.', access: 'read' },
+  tester: { label: 'Tester', does: 'Runs the project\'s real checks against finished work and reports what is broken, without fixing it.', access: 'read' },
+  auditor: { label: 'Auditor', does: 'Reviews finished work for one named risk area — accessibility, performance, privacy, reliability — and reports evidence, not opinions.', access: 'read' },
   designer: { label: 'Designer', does: 'Draws pages in Open Pencil and keeps built pages matching the design.', access: 'edit' },
+  operator: { label: 'Operator', does: 'Prepares releases, preflights deploys and handles incidents. Asks before anything outward or irreversible.', access: 'edit' },
 };
 
 const modelNameSchema = z
@@ -231,6 +234,8 @@ export function createDefaultCrewRoles(defaultAgent: z.infer<typeof agentIdSchem
     subAgents: { max: subAgents },
     instructions: '',
   });
+  // Tester, auditor and operator are offered when someone adds a role; they are not on a new crew by default,
+  // because each reviewer adds a model call to every finished task.
   return [
     make('lead', 'lead', defaultAgent, 1),
     make('planner', 'planner', defaultAgent, 2),
@@ -266,7 +271,7 @@ export const crewAnswerInputSchema = z
 export type CrewAnswerInput = z.infer<typeof crewAnswerInputSchema>;
 
 /** Kinds of role that may never change files, whatever the autonomy level says. */
-const READ_ONLY_KINDS: ReadonlySet<CrewRoleKind> = new Set(['lead', 'planner', 'reviewer', 'security']);
+const READ_ONLY_KINDS: ReadonlySet<CrewRoleKind> = new Set(['lead', 'planner', 'reviewer', 'security', 'tester', 'auditor']);
 
 export function roleAccess(role: Pick<CrewRole, 'kind' | 'access'>): 'read' | 'edit' {
   return READ_ONLY_KINDS.has(role.kind) ? 'read' : role.access;

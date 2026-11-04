@@ -1,8 +1,22 @@
-import { AlertOctagon, Bug, RefreshCw, ShieldAlert } from 'lucide-react';
+import { AlertOctagon, Bug, CheckCircle2, RefreshCw, RotateCcw, Save, ShieldAlert } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import type { SecurityFinding, SecurityFindingSeverity } from '@kai/contracts';
+import {
+  SECURITY_SCAN_RECIPES,
+  securityAuditPrompt,
+  type SecurityFinding,
+  type SecurityFindingSeverity,
+  type SecurityScanProfile,
+  type SecurityScanResult,
+} from '@kai/contracts';
+import { unwrap } from '../types';
 import { UiButton } from './UiButton';
 import { UiTextInput } from './UiTextInput';
+
+export interface SecurityScanRequest {
+  profile: SecurityScanProfile;
+  target: string;
+  findingId?: string;
+}
 
 interface SecurityAuditorPanelProps {
   findings: SecurityFinding[];
@@ -10,10 +24,12 @@ interface SecurityAuditorPanelProps {
   loadError: string | null;
   /** The file open in the editor right now, if any — offered as the default scan target. */
   currentFile: string | null;
+  /** The last finished pass, so its report can be read without leaving the panel. */
+  lastReport: SecurityScanResult | null;
   onReference: (filePath: string) => void;
   onRefresh: () => void;
-  /** Starts the Security Auditor persona against a target, local only. An empty target scans the whole project. */
-  onRunScan: (target: string) => void;
+  /** Runs one recipe as a real agent task, local only. */
+  onRunScan: (request: SecurityScanRequest) => void;
   onMarkFixed: (findingId: string) => void;
 }
 
@@ -31,15 +47,42 @@ export function SecurityAuditorPanel({
   busy,
   loadError,
   currentFile,
+  lastReport,
   onReference,
   onRefresh,
   onRunScan,
   onMarkFixed,
 }: SecurityAuditorPanelProps): ReactNode {
   const [target, setTarget] = useState('');
+  const [profile, setProfile] = useState<SecurityScanProfile>('full');
+  const [savedSlot, setSavedSlot] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const open = findings.filter((finding) => finding.status === 'open' || finding.status === 'assigned');
   const resolved = findings.filter((finding) => finding.status === 'fixed' || finding.status === 'wont-fix');
   const sorted = [...open].sort((a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity));
+  const selected = SECURITY_SCAN_RECIPES.find((recipe) => recipe.id === profile) ?? SECURITY_SCAN_RECIPES[0]!;
+
+  /**
+   * Saves a recipe into the first empty numbered slot, so it is reachable with `#` in the composer exactly like a
+   * prompt the person wrote themselves. The panel's recipes are always here; the slot is for carrying one over.
+   */
+  async function saveToSlot(): Promise<void> {
+    setSaveError(null);
+    setSavedSlot(null);
+    try {
+      const preset = securityAuditPrompt({ profile: selected.id, target: target.trim() });
+      const existing = unwrap(await window.kaiDesktop.listPromptPresets());
+      const slot = Array.from({ length: 9 }, (_, index) => index + 1).find((candidate) => !existing.some((entry) => entry.slot === candidate));
+      if (!slot) {
+        setSaveError('All nine saved-prompt slots are full. Delete one in the composer\'s # menu first.');
+        return;
+      }
+      unwrap(await window.kaiDesktop.savePromptPreset(slot, selected.label.slice(0, 60), preset));
+      setSavedSlot(slot);
+    } catch (caught) {
+      setSaveError(caught instanceof Error ? caught.message : 'The prompt could not be saved.');
+    }
+  }
 
   return (
     <section className="learning-security-auditor">
@@ -48,11 +91,29 @@ export function SecurityAuditorPanel({
         <div>
           <strong>Security Auditor</strong>
           <p>
-            Tries to break a feature you just built — injection, broken auth, secrets, insecure dependencies — against
-            your own code and a local dev server. Local only: it never touches a deployed or public URL.
+            Runs a real agent task against your own code and a local dev server: injection, broken auth, secrets,
+            paths, dependency advisories. Local only — it never touches a deployed or public URL. The task opens in the
+            chat so you can watch what it does, and findings land back here when it finishes.
           </p>
         </div>
       </div>
+
+      <div className="learning-security-recipes" role="group" aria-label="Audit recipe">
+        {SECURITY_SCAN_RECIPES.map((recipe) => (
+          <UiButton
+            key={recipe.id}
+            type="button"
+            variant={recipe.id === profile ? 'primary' : 'secondary'}
+            className="learning-security-recipe"
+            title={recipe.description}
+            disabled={busy}
+            onClick={() => setProfile(recipe.id)}
+          >
+            {recipe.label}
+          </UiButton>
+        ))}
+      </div>
+      <p className="learning-security-recipe-help">{selected.description}</p>
 
       <div className="learning-security-scan">
         <label className="input-with-icon">
@@ -60,22 +121,30 @@ export function SecurityAuditorPanel({
           <UiTextInput
             value={target}
             onChange={(event) => setTarget(event.target.value)}
-            placeholder={currentFile ? `Scan ${currentFile} (leave blank for the whole project)` : 'File or feature to scan (leave blank for the whole project)'}
+            placeholder={currentFile ? `Scan ${currentFile} (leave blank for this recipe's default)` : selected.targetHint}
             aria-label="Scan target"
           />
         </label>
-        <UiButton
-          type="button"
-          disabled={busy}
-          onClick={() => onRunScan(target.trim() || currentFile || '')}
-        >
-          {busy ? 'Scanning…' : 'Attack this feature'}
-        </UiButton>
+        <div className="learning-security-actions">
+          <UiButton
+            type="button"
+            variant="primary"
+            disabled={busy}
+            onClick={() => onRunScan({ profile: selected.id, target: target.trim() })}
+          >
+            {busy ? 'Scanning…' : `Run ${selected.label.toLowerCase()} audit`}
+          </UiButton>
+          <UiButton type="button" variant="secondary" disabled={busy} onClick={() => void saveToSlot()}>
+            <Save size={13} /> Save prompt to a slot
+          </UiButton>
+        </div>
         {currentFile && !target.trim() && <small>Defaults to the open file: {currentFile}</small>}
+        {savedSlot !== null && <small className="learning-security-saved"><CheckCircle2 size={12} /> Saved to slot {savedSlot} — open it with # in the composer.</small>}
+        {saveError && <small className="learning-security-save-error" role="alert">{saveError}</small>}
         {busy && (
           <div className="learning-security-running" role="status">
-            Scanning — the attack itself runs as a Tutor turn; switch to the <strong>Tutor</strong> tab to watch it work.
-            Findings land back here once it finishes.
+            Running the audit as an agent task. Follow it in the <strong>chat</strong>; findings land back here when it
+            finishes.
           </div>
         )}
       </div>
@@ -88,7 +157,7 @@ export function SecurityAuditorPanel({
       </div>
 
       {loadError && <div className="learning-error" role="alert">{loadError}</div>}
-      {!loadError && sorted.length === 0 && <p>No open findings. Run a scan on a feature you just built to check it.</p>}
+      {!loadError && sorted.length === 0 && <p>No open findings. Run a recipe on a feature you just built to check it.</p>}
 
       {sorted.map((finding) => (
         <article key={finding.id} className={`learning-security-finding severity-${finding.severity}`}>
@@ -97,16 +166,50 @@ export function SecurityAuditorPanel({
             <span className="learning-security-vuln-class">{finding.vulnClass}</span>
           </header>
           <strong>{finding.title}</strong>
-          <UiButton type="button" className="secondary-button" onClick={() => onReference(locationFile(finding.location))}>
-            {finding.location}
-          </UiButton>
+          {isFilePath(finding.location) ? (
+            <UiButton type="button" className="secondary-button" onClick={() => onReference(locationFile(finding.location))}>
+              {finding.location}
+            </UiButton>
+          ) : (
+            <small className="learning-security-location">{finding.location}</small>
+          )}
+          <details className="learning-security-evidence">
+            <summary>Evidence — how to reproduce it</summary>
+            <p>{finding.evidence}</p>
+          </details>
           <p>{finding.conceptCard}</p>
           <footer>
-            {finding.taskId ? <small>Fixer task filed: {finding.taskId}</small> : <small>No fixer task filed yet.</small>}
-            <UiButton type="button" className="secondary-button" onClick={() => onMarkFixed(finding.id)}>Mark fixed</UiButton>
+            <small>
+              {finding.lastSeenAt ? `Last seen ${relativeTime(finding.lastSeenAt)}` : 'Not seen by a scan yet'}
+              {finding.lastVerifiedAt ? ` · re-tested ${relativeTime(finding.lastVerifiedAt)}` : ''}
+            </small>
+            <span className="learning-security-finding-actions">
+              <UiButton
+                type="button"
+                variant="secondary"
+                disabled={busy}
+                title="Re-run the original reproduction and update this finding"
+                onClick={() => onRunScan({ profile: 'verify', target: locationFile(finding.location), findingId: finding.id })}
+              >
+                <RotateCcw size={13} /> Re-test
+              </UiButton>
+              <UiButton type="button" className="secondary-button" onClick={() => onMarkFixed(finding.id)}>Mark fixed</UiButton>
+            </span>
           </footer>
+          <small>{finding.taskId ? `Fixer task filed: ${finding.taskId}` : 'No fixer task filed yet.'}</small>
         </article>
       ))}
+
+      {lastReport && (
+        <details className="learning-security-report">
+          <summary>
+            Last audit — {lastReport.status === 'completed' ? 'finished' : 'failed'}
+            {lastReport.findings.length > 0 ? ` · ${lastReport.findings.length} finding${lastReport.findings.length === 1 ? '' : 's'} in the log` : ''}
+          </summary>
+          {lastReport.error && <p role="alert">{lastReport.error}</p>}
+          <pre>{lastReport.output.trim() || 'The run produced no report text.'}</pre>
+        </details>
+      )}
 
       {resolved.length > 0 && (
         <details className="learning-security-resolved">
@@ -122,8 +225,25 @@ export function SecurityAuditorPanel({
   );
 }
 
-/** A finding's location may carry a line/route suffix after the file path; the reference only needs the path. */
+/** A finding's location may carry a line suffix after the file path; the reference only needs the path. */
 function locationFile(location: string): string {
-  const match = location.match(/^[^:]+\.[a-zA-Z0-9]+/);
-  return match ? match[0] : location;
+  const match = location.match(/^[^:]+?\.\w+(?::\d+)*$/);
+  return match ? location.replace(/:\d+(?::\d+)*$/, '') : location;
+}
+
+/** A dynamic finding names a route, not a file; offering to open it in the editor would open nothing. */
+function isFilePath(location: string): boolean {
+  return /^[^:\s]+\.\w+(?::\d+)*$/.test(location.trim());
+}
+
+/** Short, human wording for a timestamp; the table is read at a glance rather than parsed. */
+function relativeTime(value: string): string {
+  const then = Date.parse(value);
+  if (!Number.isFinite(then)) return value;
+  const minutes = Math.max(0, Math.round((Date.now() - then) / 60_000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }

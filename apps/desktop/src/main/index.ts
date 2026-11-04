@@ -493,6 +493,7 @@ async function startApplication(): Promise<void> {
       const results = await installKaiProjectMcpForAgents({
         serverPath: path.join(__dirname, 'kai-project.cjs'),
         projectRoot: active.path,
+        findingsFile: path.join(paths.learning, 'security-findings.json'),
         command: app.isPackaged ? process.execPath : 'node',
         env: app.isPackaged ? { ELECTRON_RUN_AS_NODE: '1' } : {},
       });
