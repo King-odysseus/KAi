@@ -1924,7 +1924,7 @@ export function WorkspaceView({
             </UiButton>
           </div>
         )}
-        {activeConversation && <BlockedActionsStrip events={activeConversation.events} />}
+        {activeConversation && <BlockedActionsStrip conversationId={activeConversation.id} events={activeConversation.events} />}
         {/* A missing CLI is explained even before a project is open, so the user knows how to get it. */}
         {(activeProject || (!apiRun && selectedCapability?.state === 'not_installed')) && !ready && (apiRun ? directApiCapability : selectedCapability) && (
           <div className="agent-setup-banner" role="status">

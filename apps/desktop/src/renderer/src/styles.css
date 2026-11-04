@@ -1385,8 +1385,24 @@ button:disabled {
   background: color-mix(in srgb, var(--amber) 6%, var(--bg-panel));
 }
 
+.blocked-actions-head { display: flex; align-items: center; }
+.blocked-actions-dismiss {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--amber);
+  cursor: pointer;
+}
+.blocked-actions-dismiss:hover { background: color-mix(in srgb, var(--amber) 14%, transparent); }
+
 .blocked-actions-toggle {
   display: flex;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   align-items: center;
   gap: 7px;
