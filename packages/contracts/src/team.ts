@@ -10,12 +10,14 @@ export const TEAM_ROLE_IDS = [
   'tests',
   'securityReviewer',
   'codeReviewer',
+  'licenseReviewer',
+  'complianceReviewer',
   'docs',
 ] as const;
 
 export const teamRoleIdSchema = z.enum(TEAM_ROLE_IDS);
 /** Roles that can own a part of the plan (everything except the orchestrator). */
-export const teamWorkerRoleIdSchema = z.enum(['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'docs']);
+export const teamWorkerRoleIdSchema = z.enum(['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'licenseReviewer', 'complianceReviewer', 'docs']);
 
 /**
  * A role the user defines. Its id is fixed when it is created, so renaming it never orphans a plan or a running job.
@@ -110,6 +112,8 @@ export const TEAM_ROLE_INFO: Record<TeamRoleId, TeamRoleInfo> = {
   tests: { label: 'Test writer', description: 'Writes and runs tests for the new code.', access: 'edit', routine: true },
   securityReviewer: { label: 'Security reviewer', description: 'Read-only review for auth, secrets, injection and unsafe input. Can stop the job.', access: 'read', routine: false },
   codeReviewer: { label: 'Code reviewer', description: 'Read-only review of correctness and quality across all parts.', access: 'read', routine: false },
+  licenseReviewer: { label: 'Licence and attribution checker', description: 'Read-only check that every dependency, asset, model and copied snippet is licensed for how it is used, with the notices it requires.', access: 'read', routine: false },
+  complianceReviewer: { label: 'Legal compliance checker', description: 'Read-only check against the laws and data regulations of each country the app is distributed in. Not legal advice.', access: 'read', routine: false },
   docs: { label: 'Docs writer', description: 'README, comments and user-facing documentation.', access: 'edit', routine: true },
 };
 
@@ -123,6 +127,8 @@ export const DEFAULT_AUTO_ADD: Record<TeamRoleId, TeamAutoAdd> = {
   tests: 'never',
   securityReviewer: 'sensitive',
   codeReviewer: 'always',
+  licenseReviewer: 'never',
+  complianceReviewer: 'never',
   docs: 'never',
 };
 
@@ -307,6 +313,8 @@ export function createDefaultAgentTeam(): AgentTeam {
       tests: { ...auto },
       securityReviewer: { ...auto },
       codeReviewer: { ...auto },
+      licenseReviewer: { ...auto },
+      complianceReviewer: { ...auto },
       docs: { ...auto },
     },
   };

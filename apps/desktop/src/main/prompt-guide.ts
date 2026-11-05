@@ -43,7 +43,7 @@ export interface PromptGuidePorts {
 const NAMES = { feature: 'the Prompt Guide', card: 'Prompt Guide' };
 // The guide plans; it does not need the whole project, only enough to name real files and folders.
 const GUIDE_CONTEXT_CHARS = 12_000;
-const WORKER_ROLES: readonly TeamWorkerRoleId[] = ['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'docs'];
+const WORKER_ROLES: readonly TeamWorkerRoleId[] = ['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'licenseReviewer', 'complianceReviewer', 'docs'];
 
 const PROMPT_GUIDE_JSON_SCHEMA = {
   type: 'object',

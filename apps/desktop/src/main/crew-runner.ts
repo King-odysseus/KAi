@@ -315,7 +315,7 @@ export class DesktopCrewRunner {
 
     // A fixed order keeps a run reproducible: security first, then the test and audit passes, then a plain
     // reviewer. Each role runs once per round; a pass is remembered so a resumed run does not pay twice.
-    const REVIEW_ORDER = ['security', 'tester', 'auditor', 'reviewer'] as const;
+    const REVIEW_ORDER = ['security', 'tester', 'auditor', 'license', 'compliance', 'reviewer'] as const;
     for (const kind of REVIEW_ORDER) {
       for (const reviewer of roles.filter((role) => role.kind === kind)) {
         if (!mayChangeFiles) continue;

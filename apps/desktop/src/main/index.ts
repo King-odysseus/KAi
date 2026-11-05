@@ -43,6 +43,7 @@ import { AgentExperienceStore } from './experience-store';
 import { DesktopScheduler, ScheduleStore } from './scheduler';
 import { cancelConversationRun, closeCompareRuns, closeMemorySessions, confirmEditorNavigation, ensureStudioDesktopProject, handleRendererWindowClosed, importBrainFromDirectory, cognitive1Ready, mirrorBrainNow, registerIpc, runConversationAgent, runInteractiveAgent, runScheduledGoal, type IpcContext } from './ipc';
 import { createDesktopPaths } from './paths';
+import { setBundledSkillsRoot } from './skills';
 import { configureProjectKnowledge, stopProjectKnowledge } from './project-knowledge';
 import { UniversalProxyClient } from './proxy-client';
 import { DesktopProxyRouting } from './proxy-routing';
@@ -504,6 +505,7 @@ async function startApplication(): Promise<void> {
     }
   }
   const kaiRoot = app.isPackaged ? process.resourcesPath : path.resolve(app.getAppPath(), '..', '..');
+  setBundledSkillsRoot(app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(kaiRoot, '.agents', 'skills'));
   const proxyLauncherPath = app.isPackaged
     ? path.join(process.resourcesPath, 'integrations', 'start-proxy.cjs')
     : path.join(kaiRoot, 'packages', 'integrations', 'launchers', 'start-proxy.cjs');

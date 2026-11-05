@@ -1,6 +1,6 @@
 import { Checkbox, Textarea } from 'flowbite-react';
 import {
-  Activity, AlertTriangle, ClipboardList, Coins, Compass, FileText, FlaskConical, Kanban, Lock, Minus, Palette, Pause, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, Save, ScanSearch, ShieldCheck, Square, Trash2, Users, Wrench,
+  Activity, AlertTriangle, ClipboardList, Coins, Compass, FileCheck, FileText, FlaskConical, Kanban, Lock, Minus, Palette, Pause, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, Save, Scale, ScanSearch, ShieldCheck, Square, Trash2, Users, Wrench,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
@@ -27,7 +27,7 @@ const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
 
 const ROLE_ICON: Record<CrewRole['kind'], typeof Compass> = {
   lead: Compass, planner: ClipboardList, builder: Wrench, reviewer: ShieldCheck, security: ShieldCheck,
-  tester: FlaskConical, auditor: ScanSearch, designer: Palette, operator: Rocket, custom: Users,
+  tester: FlaskConical, auditor: ScanSearch, license: FileCheck, compliance: Scale, designer: Palette, operator: Rocket, custom: Users,
 };
 
 const AUTONOMY: ReadonlyArray<{ value: AutonomyMode; label: string }> = [

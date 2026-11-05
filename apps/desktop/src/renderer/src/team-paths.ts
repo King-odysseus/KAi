@@ -1,8 +1,10 @@
 import type { PreflightResult, TeamPart } from '@kai/contracts';
 
+const READ_ONLY_ROLES: ReadonlySet<string> = new Set(['securityReviewer', 'codeReviewer', 'licenseReviewer', 'complianceReviewer']);
+
 /** Every folder or file the plan's editing parts will touch, once each: what to ask the coordination service about. */
 export function teamPaths(parts: readonly Pick<TeamPart, 'role' | 'paths'>[]): string[] {
-  const editing = parts.filter((part) => part.role !== 'securityReviewer' && part.role !== 'codeReviewer');
+  const editing = parts.filter((part) => !READ_ONLY_ROLES.has(part.role));
   return [...new Set(editing.flatMap((part) => part.paths.map((path) => path.trim()).filter(Boolean)))].slice(0, 200);
 }
 

@@ -17,7 +17,7 @@ import {
 const MAX_ORCHESTRATOR_PARTS = 10;
 const STEP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-const WORKER_ROLES: readonly TeamWorkerRoleId[] = ['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'docs'];
+const WORKER_ROLES: readonly TeamWorkerRoleId[] = ['frontend', 'backend', 'tests', 'securityReviewer', 'codeReviewer', 'licenseReviewer', 'complianceReviewer', 'docs'];
 
 export function buildOrchestratorPrompt(goal: string, team?: TeamLike): string {
   const builtIn = WORKER_ROLES.map((role) => `- "${role}": ${TEAM_ROLE_INFO[role].label}. ${TEAM_ROLE_INFO[role].description}`);

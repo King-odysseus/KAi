@@ -90,6 +90,10 @@
         "to": "agent-rules"
       },
       {
+        "from": "../../.agents/skills",
+        "to": "skills"
+      },
+      {
         "from": "resources/kai-cli",
         "to": "kai-cli"
       },

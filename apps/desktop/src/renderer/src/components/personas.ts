@@ -285,6 +285,20 @@ export const PERSONAS: readonly Persona[] = [
         skills: ['dependency-auditor'],
         starter: 'Act as the $dependency-auditor skill. Audit ',
       },
+      {
+        id: 'licences',
+        label: 'Licences',
+        description: 'Licences, attribution and copied code, to avoid unlicensed use',
+        skills: ['license-attribution-checker'],
+        starter: 'Act as the $license-attribution-checker skill. Check ',
+      },
+      {
+        id: 'compliance',
+        label: 'Legal compliance',
+        description: 'Laws and data rules of each country the app is distributed in',
+        skills: ['legal-compliance-checker'],
+        starter: 'Act as the $legal-compliance-checker skill. Check compliance for distributing in ',
+      },
     ],
   },
   {

@@ -43,6 +43,12 @@ describe('composer personas', () => {
     }
   });
 
+  it('offers licence and legal-compliance checks as Audit recipes', () => {
+    const recipes = personaFor('audit').recipes ?? [];
+    expect(recipes.find((recipe) => recipe.id === 'licences')?.skills).toEqual(['license-attribution-checker']);
+    expect(recipes.find((recipe) => recipe.id === 'compliance')?.skills).toEqual(['legal-compliance-checker']);
+  });
+
   it('only treats a composer-known starter as replaceable', () => {
     expect(isKnownStarter('')).toBe(true);
     expect(isKnownStarter('  ')).toBe(true);

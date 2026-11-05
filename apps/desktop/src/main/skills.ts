@@ -12,9 +12,20 @@ interface SkillRoot {
   scope: 'repo' | 'user';
 }
 
+/**
+ * The skills that ship with KAI. They live in KAI's own repository, so without this a project opened from anywhere
+ * else would find none of them and the composer's roles and recipes would load nothing.
+ */
+let bundledSkillsRoot: string | undefined;
+
+export function setBundledSkillsRoot(root: string | undefined): void {
+  bundledSkillsRoot = root;
+}
+
 export async function discoverDesktopSkills(projectPath?: string): Promise<DesktopSkill[]> {
   const found: DesktopSkill[] = [];
   const seen = new Set<string>();
+  const seenNames = new Set<string>();
   for (const root of skillRoots(projectPath)) {
     let entries: import('node:fs').Dirent[];
     try {
@@ -28,8 +39,10 @@ export async function discoverDesktopSkills(projectPath?: string): Promise<Deskt
       const key = path.resolve(skillPath).toLowerCase();
       if (seen.has(key)) continue;
       const skill = await readSkill(skillPath, root);
-      if (!skill) continue;
+      // The nearest copy of a skill wins; a farther or bundled one of the same name would only repeat it.
+      if (!skill || seenNames.has(skill.name.toLowerCase())) continue;
       seen.add(key);
+      seenNames.add(skill.name.toLowerCase());
       found.push(skill);
     }
   }
@@ -71,6 +84,8 @@ function skillRoots(projectPath?: string): SkillRoot[] {
     }
   }
   for (const relative of relativeRoots) roots.push({ path: path.join(homedir(), relative), scope: 'user' });
+  // Last, so a project's or the person's own skill of the same name still wins (the first one found is kept).
+  if (bundledSkillsRoot) roots.push({ path: bundledSkillsRoot, scope: 'user' });
   return roots.filter((root, index) => roots.findIndex((candidate) => candidate.path === root.path) === index);
 }
 

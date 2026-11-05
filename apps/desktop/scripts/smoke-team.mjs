@@ -558,6 +558,8 @@ async function createFixtures() {
         tests: auto,
         securityReviewer: auto,
         codeReviewer: auto,
+        licenseReviewer: auto,
+        complianceReviewer: auto,
         docs: auto,
       },
     },

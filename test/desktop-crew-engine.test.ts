@@ -46,6 +46,8 @@ describe('crew access', () => {
     expect(roleAccess({ kind: 'security', access: 'edit' })).toBe('read');
     expect(roleAccess({ kind: 'tester', access: 'edit' })).toBe('read');
     expect(roleAccess({ kind: 'auditor', access: 'edit' })).toBe('read');
+    expect(roleAccess({ kind: 'license', access: 'edit' })).toBe('read');
+    expect(roleAccess({ kind: 'compliance', access: 'edit' })).toBe('read');
     expect(roleAccess({ kind: 'builder', access: 'edit' })).toBe('edit');
     expect(roleAccess({ kind: 'operator', access: 'edit' })).toBe('edit');
     expect(roleAccess({ kind: 'custom', access: 'read' })).toBe('read');

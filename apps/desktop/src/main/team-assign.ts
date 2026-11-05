@@ -75,6 +75,8 @@ const STRENGTH: Record<TeamRoleId, Record<TeamResolvedAssignee, number>> = {
   tests: { codex: 8, claude: 8, qwen: 7, kimi: 6, gemini: 6, api: 6 },
   securityReviewer: { claude: 9, codex: 8, gemini: 6, kimi: 5, qwen: 5, api: 6 },
   codeReviewer: { claude: 9, codex: 8, gemini: 7, kimi: 6, qwen: 6, api: 6 },
+  licenseReviewer: { claude: 9, codex: 8, gemini: 7, kimi: 6, qwen: 6, api: 6 },
+  complianceReviewer: { claude: 9, codex: 8, gemini: 7, kimi: 6, qwen: 6, api: 6 },
   docs: { claude: 8, kimi: 8, qwen: 7, gemini: 7, codex: 6, api: 6 },
 };
 

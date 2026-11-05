@@ -141,6 +141,26 @@ export function auditorPrompt(run: CrewRun, task: CrewTask): string {
   ].join('\n');
 }
 
+/** Unlicensed use and missing attribution: the finished task's new dependencies, assets, models and pasted code. */
+export function licensePrompt(run: CrewRun, task: CrewTask): string {
+  return [
+    'You are the licence checker. Review this finished task for anything it added or changed that is used without a licence that allows it, or without the attribution a licence requires: new dependencies, fonts, images, audio, models, datasets and code copied from elsewhere. Read the licence each one carries and compare it with how this project ships. Report evidence, not opinions. Do not change any files and do not give a legal verdict.',
+    'If the task added nothing that carries a licence, accept it.',
+    '',
+    ...reviewPreamble(run, task),
+  ].join('\n');
+}
+
+/** Law and data rules: what the finished task does that a country the app is distributed in regulates. */
+export function compliancePrompt(run: CrewRun, task: CrewTask): string {
+  return [
+    'You are the compliance checker. Review this finished task for behaviour that the laws or data rules of the countries named in your role guidance regulate: personal data, children, payments, consent, retention, transfers, accessibility, encryption and platform policy. Look each rule up in a current source rather than relying on memory. Report evidence, not opinions. Do not change any files and do not give legal advice.',
+    'If your guidance names no country, say so and use "needsYou" only when the task touches regulated behaviour; otherwise accept it.',
+    '',
+    ...reviewPreamble(run, task),
+  ].join('\n');
+}
+
 /** A plain reviewer: correctness and the acceptance criteria, with no speciality. */
 export function reviewerPrompt(run: CrewRun, task: CrewTask): string {
   return [
@@ -154,7 +174,7 @@ export function reviewerPrompt(run: CrewRun, task: CrewTask): string {
 }
 
 /** The prompt for a reviewer kind. The caller appends the role's own instructions. */
-export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'reviewer', run: CrewRun, task: CrewTask): string {
+export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'license' | 'compliance' | 'reviewer', run: CrewRun, task: CrewTask): string {
   switch (kind) {
     case 'security':
       return securityPrompt(run, task);
@@ -162,6 +182,10 @@ export function reviewRolePrompt(kind: 'security' | 'tester' | 'auditor' | 'revi
       return testerPrompt(run, task);
     case 'auditor':
       return auditorPrompt(run, task);
+    case 'license':
+      return licensePrompt(run, task);
+    case 'compliance':
+      return compliancePrompt(run, task);
     case 'reviewer':
       return reviewerPrompt(run, task);
   }
