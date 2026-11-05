@@ -31,8 +31,14 @@ function facts(over: Partial<UiDomFacts> = {}): UiDomFacts {
     phoneClientWidth: 390,
     tabbables: 6,
     landedRoute: '/sign-up',
+    layouts: measured(),
     ...over,
   };
+}
+
+/** Both sizes measured on a page that passes every layout rule; a test overrides only the phone it cares about. */
+function measured(phone: Partial<UiLayoutFacts> = {}): NonNullable<UiDomFacts['layouts']> {
+  return { phone: layout(phone), wide: layout({ innerWidth: 1920, contentLeft: 344, contentRight: 1576 }) };
 }
 
 /** A page that passes every layout rule, so a test names only the one thing it changes. */
@@ -80,33 +86,33 @@ describe('the visual report', () => {
   });
 
   it('catches sideways scroll at phone width, with one pixel of tolerance', () => {
-    expect(evaluateUiChecks(card(), facts({ phoneScrollWidth: 391 }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'phone-no-scroll')?.passed).toBe(true);
-    expect(evaluateUiChecks(card(), facts({ phoneScrollWidth: 402 }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'phone-no-scroll')?.passed).toBe(false);
+    expect(evaluateUiChecks(card(), facts({ layouts: measured({ scrollWidth: 391 }) }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'phone-no-scroll')?.passed).toBe(true);
+    expect(evaluateUiChecks(card(), facts({ layouts: measured({ scrollWidth: 402 }) }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'phone-no-scroll')?.passed).toBe(false);
   });
 
   it('fails a screen the keyboard cannot reach, and one whose flow lands elsewhere', () => {
     expect(evaluateUiChecks(card(), facts({ tabbables: 0 }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'keyboard')?.passed).toBe(false);
     const page = card({ kind: 'page' });
-    const flow = evaluateUiChecks(page, facts({ landedRoute: '/sign-in' }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'flow');
+    const flow = evaluateUiChecks(page, facts({ landedRoute: '/sign-in' }), TOKENS, '/sign-up').find((outcome) => outcome.id === 'route');
     expect(flow?.passed).toBe(false);
     expect(flow?.detail).toContain('/sign-in');
   });
 
   it('does not ask a backend card to follow a route', () => {
     const backend = card({ kind: 'backend' });
-    expect(evaluateUiChecks(backend, facts(), TOKENS, '/sign-up').some((outcome) => outcome.id === 'flow')).toBe(false);
+    expect(evaluateUiChecks(backend, facts(), TOKENS, '/sign-up').some((outcome) => outcome.id === 'route')).toBe(false);
   });
 
-  it('skips the token check when the design layer has not written tokens yet', () => {
+  it('reports the token check as unknown, not failed, when the design layer has not written tokens yet', () => {
     const outcomes = evaluateUiChecks(card(), facts({ tokens: {} }), null, '/sign-up');
-    expect(outcomes.find((outcome) => outcome.id === 'tokens')?.passed).toBe(true);
+    expect(outcomes.find((outcome) => outcome.id === 'tokens')?.status).toBe('unknown');
   });
 
   it('summarises only the failures, so the agent is handed what to repair', () => {
     const outcomes = evaluateUiChecks(card(), facts({ states: ['empty'], tabbables: 0 }), TOKENS, '/sign-up');
     const summary = failureSummary({ cardId: 'sign-up-form', at: NOW, passed: false, route: '/sign-up', outcomes, screenshots: [] });
-    expect(summary).toContain('Shows empty, loading, error and disabled states');
-    expect(summary).toContain('Reachable with the keyboard');
+    expect(summary).toContain('Declares hooks for empty, loading, error and disabled states');
+    expect(summary).toContain('Has visible keyboard focus targets');
     expect(summary).not.toContain('No sideways scroll');
   });
 });
@@ -125,7 +131,7 @@ describe('the layout rules', () => {
   it('passes a phone page whose navigation stays on screen, and one that has no navigation to lose', () => {
     expect(outcome({ phone: layout({ navCount: 1, navVisibleAtTop: true, navVisibleAtBottom: true }) }, 'phone-nav')?.passed).toBe(true);
     // A sign-in screen has no navigation. It is not failed for that.
-    expect(outcome({ phone: layout({ navCount: 0, navVisibleAtTop: false, navVisibleAtBottom: false }) }, 'phone-nav')).toBeUndefined();
+    expect(outcome({ phone: layout({ navCount: 0, navVisibleAtTop: false, navVisibleAtBottom: false }) }, 'phone-nav')).toMatchObject({ status: 'not-applicable', passed: true });
   });
 
   it('fails content that ends under a fixed bottom bar, and passes content that clears it', () => {
@@ -134,7 +140,7 @@ describe('the layout rules', () => {
     expect(covered?.detail).toContain('padding-bottom');
     expect(outcome({ phone: layout({ fixedNavTop: 780, contentBottomAtScrollEnd: 732 }) }, 'phone-content-clear')?.passed).toBe(true);
     // No fixed bar, nothing to be covered by.
-    expect(outcome({ phone: layout({ fixedNavTop: null, contentBottomAtScrollEnd: 812 }) }, 'phone-content-clear')).toBeUndefined();
+    expect(outcome({ phone: layout({ fixedNavTop: null, contentBottomAtScrollEnd: 812 }) }, 'phone-content-clear')).toMatchObject({ status: 'not-applicable', passed: true });
   });
 
   it('fails a page with no viewport meta, because a phone then shows a shrunken desktop page', () => {
@@ -163,14 +169,15 @@ describe('the layout rules', () => {
     expect(top({ headerLeft: 0, headerRight: 1920 })?.passed).toBe(true);
     // A narrow header box sitting on a full-width painted bar reads as full width.
     expect(top({ headerLeft: 272, headerRight: 1648, headerBacked: true })?.passed).toBe(true);
-    // No top bar, no judgement.
-    expect(top({})).toBeUndefined();
+    // No top bar, nothing to judge.
+    expect(top({})).toMatchObject({ status: 'not-applicable', passed: true });
   });
 
-  it('makes no layout judgement when nothing was measured', () => {
-    expect(evaluateLayoutChecks(undefined)).toEqual([]);
-    expect(evaluateLayoutChecks({})).toEqual([]);
-    expect(evaluateLayoutChecks({ wide: layout({ contentLeft: null, contentRight: null }) })).toEqual([]);
+  it('calls a size that was not measured unknown, and never passes or fails it', () => {
+    const ids = (layouts: UiDomFacts['layouts']) => evaluateLayoutChecks(layouts).filter((entry) => entry.status === 'unknown').map((entry) => entry.id);
+    expect(ids(undefined)).toEqual(['phone-layout', 'wide-layout']);
+    expect(ids({})).toEqual(['phone-layout', 'wide-layout']);
+    expect(ids({ wide: layout({ contentLeft: null, contentRight: null }) })).toEqual(['phone-layout', 'wide-fills']);
   });
 });
 
@@ -184,6 +191,7 @@ describe('the visual check run', () => {
         return 'ZmFrZQ==';
       },
       probe: async () => facts(),
+      layout: async ({ viewport }) => (viewport.name === 'phone' ? layout() : layout({ innerWidth: 1920, contentLeft: 344, contentRight: 1576 })),
       tokens: async () => TOKENS,
       writeShot: async (_root, relativePath) => relativePath,
       now: () => NOW,
@@ -218,7 +226,7 @@ describe('the visual check run', () => {
     expect(result.outcomes.find((outcome) => outcome.id === 'phone-no-scroll')?.detail).toContain('520px wide in a 390px viewport');
   });
 
-  it('stays quiet about layout when the port cannot measure it', async () => {
+  it('does not pass a card whose layout could not be measured, and says it is unknown', async () => {
     const ports: UiCheckPorts = {
       previewUrl: async () => 'http://localhost:5173',
       capture: async () => 'ZmFrZQ==',
@@ -229,7 +237,8 @@ describe('the visual check run', () => {
       now: () => NOW,
     };
     const result = await new DesktopUiCheck(ports).run('p1', 'C:/project', card(), '/sign-up');
-    expect(result.passed).toBe(true);
+    expect(result.passed).toBe(false);
+    expect(result.outcomes.find((outcome) => outcome.id === 'phone-layout')?.status).toBe('unknown');
     expect(result.outcomes.map((outcome) => outcome.id)).not.toContain('phone-nav');
     expect(result.outcomes.map((outcome) => outcome.id)).not.toContain('wide-fills');
   });
