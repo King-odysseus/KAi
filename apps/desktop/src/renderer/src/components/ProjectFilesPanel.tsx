@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderOpen, Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { FileTypeIcon, FolderTypeIcon } from './FileTypeIcon';
+import { ChevronDown, ChevronRight, Copy, ExternalLink, FileText, Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { GitChange } from '@kai/contracts';
 import { unwrap } from '../types';
@@ -238,7 +239,7 @@ export function ProjectFilesPanel({
               title={node.path}
             >
               {collapsed.has(node.path) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-              {collapsed.has(node.path) ? <Folder size={13} /> : <FolderOpen size={13} />}
+              <FolderTypeIcon name={node.name} open={!collapsed.has(node.path)} size={14} />
               <span className="truncate">{node.name}</span>
               {node.changed > 0 && <b className="files-folder-count" title={`${node.changed} changed file${node.changed === 1 ? '' : 's'} in this folder`}>{node.changed}</b>}
             </UiButton>
@@ -284,7 +285,7 @@ function FileRow({ name, title, depth, change, onOpen, onContextMenu }: {
       onContextMenu={onContextMenu}
       title={change ? `${title}\n${describeChange(change)}` : title}
     >
-      <FileText size={13} />
+      <FileTypeIcon name={name} size={14} />
       <span className="truncate">{name}</span>
       {change && <GitBadge change={change} />}
     </UiButton>

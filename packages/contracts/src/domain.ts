@@ -269,6 +269,21 @@ export const editorSettingsSchema = z
     autoSaveDelayMs: z.number().int().min(300).max(10_000).default(1_000),
     // Formats a file when the learner saves it (Ctrl+S or the Save button); autosave never reformats mid-typing.
     formatOnSave: z.boolean().default(true),
+    // How the editor and the file trees look. Each is one switch so a taste can be turned off without losing the rest.
+    bracketColors: z.boolean().default(true),
+    guides: z.boolean().default(true),
+    stickyScroll: z.boolean().default(true),
+    ligatures: z.boolean().default(true),
+    smoothScrolling: z.boolean().default(true),
+    minimap: z.boolean().default(false),
+    wordWrap: z.boolean().default(false),
+    errorLens: z.boolean().default(true),
+    gitBlame: z.boolean().default(true),
+    todoHighlight: z.boolean().default(true),
+    colorSwatches: z.boolean().default(true),
+    linkedTagEditing: z.boolean().default(true),
+    inlayHints: z.boolean().default(true),
+    fileIcons: z.boolean().default(true),
   })
   .strict();
 
@@ -609,6 +624,20 @@ export function createDefaultSettings(): AppSettings {
       autoSave: true,
       autoSaveDelayMs: 1_000,
       formatOnSave: true,
+      bracketColors: true,
+      guides: true,
+      stickyScroll: true,
+      ligatures: true,
+      smoothScrolling: true,
+      minimap: false,
+      wordWrap: false,
+      errorLens: true,
+      gitBlame: true,
+      todoHighlight: true,
+      colorSwatches: true,
+      linkedTagEditing: true,
+      inlayHints: true,
+      fileIcons: true,
     },
     mcpServers: [{
       id: PLAYWRIGHT_MCP_SERVER_ID,

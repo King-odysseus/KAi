@@ -929,6 +929,12 @@ export function App(): ReactNode {
     }
   }
 
+  // Whether the file trees show type icons (Material artwork) or the plain file and folder glyphs.
+  const fileIconsOn = bootstrap?.settings.editor.fileIcons !== false;
+  useEffect(() => {
+    document.documentElement.dataset.fileIcons = fileIconsOn ? 'on' : 'off';
+  }, [fileIconsOn]);
+
   useEffect(() => {
     const theme = bootstrap?.settings.theme ?? 'dark';
     document.documentElement.dataset.theme = theme;
@@ -2760,7 +2766,7 @@ export function App(): ReactNode {
           <main className={`app-main view-${view}${view === 'workspace' && workspaceFilePath && activeProject ? ' file-preview-open' : ''}`}>
             {view !== 'code' && renderCurrentView()}
             {workspaceFilePath && activeProject && (
-              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} line={workspaceFileLine} formatOnSave={bootstrap.settings.editor.formatOnSave} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
+              <WorkspaceFilePreview key={`${activeProject.id}:${workspaceFilePath}`} projectId={activeProject.id} path={workspaceFilePath} line={workspaceFileLine} formatOnSave={bootstrap.settings.editor.formatOnSave} editorView={bootstrap.settings.editor} onDirtyChange={setWorkspaceFileDirty} onClose={() => void closeWorkspaceFile()} />
             )}
             {(studioKept || view === 'studio') && (
               <div className={`persistent-studio-view ${view === 'studio' ? 'active' : ''}`} aria-hidden={view !== 'studio'}>
@@ -2789,6 +2795,7 @@ export function App(): ReactNode {
                 autoSave={bootstrap.settings.editor.autoSave}
                 autoSaveDelayMs={bootstrap.settings.editor.autoSaveDelayMs}
                 formatOnSave={bootstrap.settings.editor.formatOnSave}
+                editorView={bootstrap.settings.editor}
                 onOpenSettings={() => setView('settings')}
                 onCreateReviewFollowup={(prompt) => { updateComposerDraft(prompt); setView('workspace'); }}
                 learnRequest={codeLearnRequest}

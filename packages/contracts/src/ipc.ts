@@ -352,7 +352,7 @@ import {
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
 import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
-import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
+import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileMutationResultSchema, filePathInputSchema, fileReadInputSchema, fileRenameInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileMutationResult, type FilePathInput, type FileRenameInput, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
@@ -740,6 +740,7 @@ export const ipcChannels = [
   'git:pull-team-branch',
   'git:clone-team-repository',
   'git:diff',
+  'git:blame',
   'review:change',
   'review:changes',
   'experiences:count',
@@ -814,6 +815,20 @@ export const ipcInputSchemas = {
           autoSave: z.boolean().optional(),
           autoSaveDelayMs: z.number().int().min(300).max(10_000).optional(),
           formatOnSave: z.boolean().optional(),
+          bracketColors: z.boolean().optional(),
+          guides: z.boolean().optional(),
+          stickyScroll: z.boolean().optional(),
+          ligatures: z.boolean().optional(),
+          smoothScrolling: z.boolean().optional(),
+          minimap: z.boolean().optional(),
+          wordWrap: z.boolean().optional(),
+          errorLens: z.boolean().optional(),
+          gitBlame: z.boolean().optional(),
+          todoHighlight: z.boolean().optional(),
+          colorSwatches: z.boolean().optional(),
+          linkedTagEditing: z.boolean().optional(),
+          inlayHints: z.boolean().optional(),
+          fileIcons: z.boolean().optional(),
         })
         .strict()
         .optional(),
@@ -1143,6 +1158,7 @@ export const ipcInputSchemas = {
   'git:pull-team-branch': gitTeamBranchInputSchema,
   'git:clone-team-repository': gitTeamCloneInputSchema,
   'git:diff': gitDiffInputSchema,
+  'git:blame': gitBlameInputSchema,
   'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
   'review:changes': reviewChangesInputSchema,
   'experiences:count': emptyInputSchema,
@@ -1832,6 +1848,7 @@ export interface KaiDesktopBridge {
   gitPullTeamBranch(projectId: string, repository: string, branch: string): Promise<IpcResponse<GitActionResult>>;
   gitCloneTeamRepository(repository: string): Promise<IpcResponse<{ projectId: string; path: string } | null>>;
   gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
+  gitBlame(projectId: string, path: string): Promise<IpcResponse<GitBlameResult>>;
   reviewChange(request: string, diff: string, mode: 'novice' | 'intermediate' | 'expert'): Promise<IpcResponse<string | null>>;
   /** Reads the diffs of several changed files and returns findings that each name their file. */
   reviewChanges(request: ReviewChangesInput): Promise<IpcResponse<ChangeReviewResult>>;

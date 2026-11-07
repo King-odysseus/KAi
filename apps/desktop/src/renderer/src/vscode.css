@@ -380,3 +380,38 @@ html[data-theme]:root .composer textarea {
   display: block;
   overflow-wrap: anywhere;
 }
+
+/* File-type icons (Material Icon Theme artwork) sit before the name in trees, tabs and change lists. */
+.file-type-icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: -3px;
+  margin-right: 6px;
+  pointer-events: none;
+}
+.files-row .file-type-icon,
+.code-tree-item .file-type-icon,
+.code-tab-name .file-type-icon,
+.git-file .file-type-icon {
+  margin-right: 0;
+}
+.review-pick strong .file-type-icon,
+.git-file .file-type-icon { margin-right: 6px; }
+
+/* Error Lens: the diagnostic message, inline at the end of its line. Warnings are amber, errors red. */
+.kai-lens-line.kai-lens-error { background: rgba(244, 71, 71, 0.1); }
+.kai-lens-line.kai-lens-warning { background: rgba(205, 151, 49, 0.1); }
+.kai-lens-text { margin-left: 1.5em; font-style: italic; opacity: 0.9; pointer-events: none; }
+.kai-lens-text-error { color: #f48771; }
+.kai-lens-text-warning { color: #cca700; }
+
+/* Todo highlight: TODO and friends stand out inside comments. */
+.kai-todo { font-weight: 600; border-radius: 3px; background: rgba(255, 204, 0, 0.18); color: #ffcc00; }
+.kai-todo-fixme,
+.kai-todo-bug { background: rgba(244, 71, 71, 0.18); color: #ff6b6b; }
+.kai-todo-note { background: rgba(86, 156, 214, 0.18); color: #6cb6ff; }
+.kai-todo-hack,
+.kai-todo-xxx { background: rgba(255, 140, 0, 0.18); color: #ffa94d; }
+
+/* Inline blame on the cursor's line. */
+.kai-blame { margin-left: 2em; font-style: italic; opacity: 0.45; pointer-events: none; }

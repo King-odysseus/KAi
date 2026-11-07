@@ -380,6 +380,7 @@ const bridge: KaiDesktopBridge = {
   gitPullTeamBranch: (projectId, repository, branch) => ipcRenderer.invoke('git:pull-team-branch', { projectId, repository, branch }),
   gitCloneTeamRepository: (repository) => ipcRenderer.invoke('git:clone-team-repository', { repository }),
   gitDiff: (projectId, path, staged) => ipcRenderer.invoke('git:diff', { projectId, path, staged }),
+  gitBlame: (projectId, path) => ipcRenderer.invoke('git:blame', { projectId, path }),
   reviewChanges: (request) => ipcRenderer.invoke('review:changes', request),
   reviewChange: (request, diff, mode) => ipcRenderer.invoke('review:change', { request, diff, mode }),
   experienceCount: () => ipcRenderer.invoke('experiences:count', {}),

@@ -1,3 +1,4 @@
+import { FileTypeIcon } from './FileTypeIcon';
 import { CheckCircle2, ListChecks, RefreshCw, Sparkles, Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ChangeReviewResult, CheckpointReview, ConversationRecord, FileVerificationState, ProjectRecord, ReviewMode, VerificationOverview } from '@kai/contracts';
@@ -188,7 +189,7 @@ export function ReviewView({ activeProject, conversation, reviewMode, onReviewCh
               {files.map((file) => (
                 <li key={file.path}>
                   <button type="button" className={`review-pick${file.path === current?.path ? ' current' : ''}`} onClick={() => setSelectedFile(file.path)} title={file.path}>
-                    <strong className="truncate">{file.path}</strong>
+                    <strong className="truncate"><FileTypeIcon name={file.path.split('/').at(-1) ?? file.path} size={14} />{file.path}</strong>
                     <small><b className="diff-add">+{file.added}</b> <b className="diff-remove">-{file.removed}</b> <VerificationBadge status={statuses[file.path] ?? 'unverified'} /></small>
                   </button>
                 </li>

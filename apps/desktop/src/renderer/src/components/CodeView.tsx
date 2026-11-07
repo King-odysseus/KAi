@@ -48,6 +48,8 @@ import type {
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
 import { placeSuggestion } from '../learning-placement';
+import { FileTypeIcon, FolderTypeIcon } from './FileTypeIcon';
+import { createEditorExtras, editorViewOptions, type EditorExtras, type EditorView } from '../editor-view';
 import { GitBadge } from './GitBadge';
 import { changeMap, type FileChange } from './project-files-tree';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
@@ -240,6 +242,7 @@ export function CodeView({
   autoSave,
   autoSaveDelayMs,
   formatOnSave = true,
+  editorView,
   onOpenSettings,
   onCreateReviewFollowup,
   openRequest = null,
@@ -254,6 +257,8 @@ export function CodeView({
   autoSave: boolean;
   autoSaveDelayMs: number;
   formatOnSave?: boolean;
+  /** How the editor looks: bracket colours, guides, Error Lens, blame and the rest. */
+  editorView?: EditorView;
   onOpenSettings: () => void;
   onCreateReviewFollowup: (prompt: string) => void;
 }): ReactNode {
@@ -396,6 +401,9 @@ export function CodeView({
   projectIdRef.current = projectId;
   autoSaveConfigRef.current = { enabled: autoSave, delayMs: autoSaveDelayMs };
   // Read through a ref: the Ctrl+S command is registered once, when the editor is created.
+  const editorViewRef = useRef(editorView);
+  editorViewRef.current = editorView;
+  const extrasRef = useRef<EditorExtras | null>(null);
   const formatOnSaveRef = useRef(formatOnSave);
   formatOnSaveRef.current = formatOnSave;
   // Languages whose missing formatter was already mentioned, so each save does not repeat it.
@@ -734,6 +742,28 @@ export function CodeView({
     }
   }, [filePaneWidth, learningPaneWidth]);
 
+  // A switch flipped in Settings repaints the open editor at once, with no reload.
+  useEffect(() => {
+    if (!editorReady || !editorView) return;
+    editorRef.current?.updateOptions(editorViewOptions(editorView));
+    extrasRef.current?.setView(editorView);
+  }, [editorReady, editorView]);
+
+  // Inline blame follows the file in view and is fetched again once it is saved (an unsaved file is skipped).
+  const activeDirty = activePath ? Boolean(dirty[activePath]) : false;
+  useEffect(() => {
+    const extras = extrasRef.current;
+    if (!editorReady || !extras || !projectId || !activePath || activeDirty || !editorView?.gitBlame) {
+      extras?.setBlame(null);
+      return;
+    }
+    let cancelled = false;
+    void window.kaiDesktop.gitBlame(projectId, activePath).then((response) => {
+      if (!cancelled) extras.setBlame(response.ok && response.data.lines.length ? response.data.lines : null);
+    }).catch(() => { if (!cancelled) extras.setBlame(null); });
+    return () => { cancelled = true; };
+  }, [editorReady, projectId, activePath, activeDirty, editorView?.gitBlame]);
+
   useEffect(() => {
     if (!autoSave) {
       clearAutoSaveTimer();
@@ -846,7 +876,7 @@ export function CodeView({
         model: null,
         theme: monacoThemeName(),
         automaticLayout: true,
-        minimap: { enabled: false },
+        ...(editorViewRef.current ? editorViewOptions(editorViewRef.current) : { minimap: { enabled: false } }),
         fontSize: 13,
         scrollBeyondLastLine: false,
         renderWhitespace: 'selection',
@@ -958,6 +988,11 @@ export function CodeView({
       }));
 
       editorRef.current = editor;
+      if (editorViewRef.current) {
+        const extras = createEditorExtras(monaco, editor, editorViewRef.current);
+        extrasRef.current = extras;
+        disposables.push({ dispose: () => { extras.dispose(); extrasRef.current = null; } });
+      }
       observer = new MutationObserver(() => monaco.editor.setTheme(monacoThemeName()));
       observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
       setEditorError(null);
@@ -1988,7 +2023,7 @@ export function CodeView({
         }}
         title={path}
       >
-        <FileIcon size={12} /><span className="truncate">{label}</span>
+        <FileTypeIcon name={label.split('/').at(-1) ?? label} size={14} /><span className="truncate">{label}</span>
         {dirty[path] && <span className="code-dirty" aria-label="Unsaved changes">●</span>}
         {change && <GitBadge change={change} />}
       </UiButton>
@@ -2025,7 +2060,7 @@ export function CodeView({
               setFileMenu({ x: event.clientX, y: event.clientY, kind: 'folder', path: child.path });
             }}
           >
-            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<Folder size={12} /><span className="truncate">{child.name}</span>
+            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}<FolderTypeIcon name={child.name} open={open} size={14} /><span className="truncate">{child.name}</span>
             {changedInside > 0 && <b className="files-folder-count" title={`${changedInside} changed file${changedInside === 1 ? '' : 's'} in this folder`}>{changedInside}</b>}
           </UiButton>
           {open && renderNode(child, depth + 1)}
@@ -2150,7 +2185,7 @@ export function CodeView({
                 setFileMenu({ x: event.clientX, y: event.clientY, kind: 'file', path });
               }}
             >
-              <UiButton type="button" className="code-tab-name" onClick={() => void openFile(path)}><span className="truncate">{path.split('/').at(-1)}</span>{dirty[path] && <span className="code-dirty">●</span>}</UiButton>
+              <UiButton type="button" className="code-tab-name" onClick={() => void openFile(path)}><FileTypeIcon name={path.split('/').at(-1) ?? path} size={14} /><span className="truncate">{path.split('/').at(-1)}</span>{dirty[path] && <span className="code-dirty">●</span>}</UiButton>
               <UiButton type="button" className="icon-button compact" aria-label={`Close ${path}`} onClick={() => void closeFile(path)}><X size={11} /></UiButton>
             </div>
           ))}

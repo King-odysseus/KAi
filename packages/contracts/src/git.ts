@@ -91,6 +91,14 @@ export const gitTeamBranchInputSchema = z.object({ ...projectInput, repository: 
 export const gitTeamCloneInputSchema = z.object({ repository: githubRepositoryRefSchema }).strict();
 export const gitTeamCloneResultSchema = z.object({ projectId: z.string().min(1), path: z.string().min(1) }).strict();
 export const gitDiffInputSchema = z.object({ ...projectInput, path: z.string().min(1).max(1_000), staged: z.boolean() }).strict();
+export const gitBlameInputSchema = z.object({ ...projectInput, path: z.string().min(1).max(1_000) }).strict();
+/** Who last changed each line of a file, one entry per line in order. A line not committed yet has no `commit`. */
+export const gitBlameResultSchema = z
+  .object({
+    lines: z.array(z.object({ commit: z.string().max(64).optional(), author: z.string().max(200), time: z.number().int().nonnegative(), summary: z.string().max(500) }).strict()).max(200_000),
+  })
+  .strict();
+export type GitBlameResult = z.infer<typeof gitBlameResultSchema>;
 export const gitPullRequestInputSchema = z
   .object({ ...projectInput, title: z.string().trim().min(1).max(256), body: z.string().max(20_000) })
   .strict();

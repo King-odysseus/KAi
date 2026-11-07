@@ -1,3 +1,4 @@
+import { FileTypeIcon } from './FileTypeIcon';
 import { AlertCircle, ArrowDown, ArrowUp, CheckCircle2, Copy, ExternalLink, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, Minus, Plus, RefreshCw, TerminalSquare } from 'lucide-react';
 import type { GitChecksState } from '@kai/contracts';
 import { Pill } from './Pill';
@@ -368,7 +369,7 @@ export function GitView({ activeProject, onOpenTerminal, onSignInGitHub }: { act
                           <li key={`${group}:${change.path}`} className={`git-${kind}`}>
                             <Checkbox className="git-change-select" checked={selectedPaths.has(change.path)} aria-label={`Select ${change.path}`} onChange={() => setSelectedPaths((current) => { const next = new Set(current); if (next.has(change.path)) next.delete(change.path); else next.add(change.path); return next; })} />
                             <GitBadge change={shown} />
-                            <UiButton type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, group === 'staged').then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><span className="truncate">{change.path}</span></UiButton>
+                            <UiButton type="button" className="git-file" title="Show changes" onClick={() => void window.kaiDesktop.gitDiff(activeProject.id, change.path, group === 'staged').then((response) => setDiff({ path: change.path, text: response.ok ? response.data.output || '(no textual changes)' : response.error.message }))}><FileTypeIcon name={change.path.split('/').at(-1) ?? change.path} size={14} /><span className="truncate">{change.path}</span></UiButton>
                             <small>{describeChange(change)}</small>
                             <UiButton
                               type="button"

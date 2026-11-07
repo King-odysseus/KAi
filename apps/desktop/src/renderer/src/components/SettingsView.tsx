@@ -695,6 +695,90 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             checked={draft.editor.formatOnSave}
             onChange={(formatOnSave) => setDraft((current) => ({ ...current, editor: { ...current.editor, formatOnSave } }))}
           />
+          <NotificationToggle
+            label="File type icons"
+            hint="A distinct icon for each kind of file and folder in the file trees, tabs and change lists"
+            checked={draft.editor.fileIcons}
+            onChange={(fileIcons) => setDraft((current) => ({ ...current, editor: { ...current.editor, fileIcons } }))}
+          />
+          <NotificationToggle
+            label="Bracket pair colours"
+            hint="Matching brackets share a colour, nested ones differ"
+            checked={draft.editor.bracketColors}
+            onChange={(bracketColors) => setDraft((current) => ({ ...current, editor: { ...current.editor, bracketColors } }))}
+          />
+          <NotificationToggle
+            label="Indent and bracket guides"
+            hint="Vertical lines that show nesting and link a bracket to its partner"
+            checked={draft.editor.guides}
+            onChange={(guides) => setDraft((current) => ({ ...current, editor: { ...current.editor, guides } }))}
+          />
+          <NotificationToggle
+            label="Sticky scroll"
+            hint="Keeps the enclosing function or class pinned at the top while you scroll"
+            checked={draft.editor.stickyScroll}
+            onChange={(stickyScroll) => setDraft((current) => ({ ...current, editor: { ...current.editor, stickyScroll } }))}
+          />
+          <NotificationToggle
+            label="Error Lens"
+            hint="Shows each error or warning message at the end of its line"
+            checked={draft.editor.errorLens}
+            onChange={(errorLens) => setDraft((current) => ({ ...current, editor: { ...current.editor, errorLens } }))}
+          />
+          <NotificationToggle
+            label="Inline Git blame"
+            hint="Faint “who changed this, and when” text on the line your cursor is on"
+            checked={draft.editor.gitBlame}
+            onChange={(gitBlame) => setDraft((current) => ({ ...current, editor: { ...current.editor, gitBlame } }))}
+          />
+          <NotificationToggle
+            label="Highlight TODO and FIXME"
+            hint="Colours TODO, FIXME, HACK, BUG and NOTE markers inside comments"
+            checked={draft.editor.todoHighlight}
+            onChange={(todoHighlight) => setDraft((current) => ({ ...current, editor: { ...current.editor, todoHighlight } }))}
+          />
+          <NotificationToggle
+            label="Colour swatches"
+            hint="A small swatch beside colour values such as #ff8800, with a picker"
+            checked={draft.editor.colorSwatches}
+            onChange={(colorSwatches) => setDraft((current) => ({ ...current, editor: { ...current.editor, colorSwatches } }))}
+          />
+          <NotificationToggle
+            label="Rename paired tags together"
+            hint="Editing an HTML or JSX opening tag edits its closing tag"
+            checked={draft.editor.linkedTagEditing}
+            onChange={(linkedTagEditing) => setDraft((current) => ({ ...current, editor: { ...current.editor, linkedTagEditing } }))}
+          />
+          <NotificationToggle
+            label="Inline hints"
+            hint="Parameter names and inferred types shown inside the code, where the language supports it"
+            checked={draft.editor.inlayHints}
+            onChange={(inlayHints) => setDraft((current) => ({ ...current, editor: { ...current.editor, inlayHints } }))}
+          />
+          <NotificationToggle
+            label="Font ligatures"
+            hint="Draws sequences like =>, !== and >= as single symbols (needs Cascadia Code, Fira Code or JetBrains Mono)"
+            checked={draft.editor.ligatures}
+            onChange={(ligatures) => setDraft((current) => ({ ...current, editor: { ...current.editor, ligatures } }))}
+          />
+          <NotificationToggle
+            label="Smooth scrolling and cursor"
+            hint="Animates scrolling and the caret"
+            checked={draft.editor.smoothScrolling}
+            onChange={(smoothScrolling) => setDraft((current) => ({ ...current, editor: { ...current.editor, smoothScrolling } }))}
+          />
+          <NotificationToggle
+            label="Minimap"
+            hint="A zoomed-out map of the file along the right edge"
+            checked={draft.editor.minimap}
+            onChange={(minimap) => setDraft((current) => ({ ...current, editor: { ...current.editor, minimap } }))}
+          />
+          <NotificationToggle
+            label="Wrap long lines"
+            hint="Wraps lines at the edge of the editor instead of scrolling sideways"
+            checked={draft.editor.wordWrap}
+            onChange={(wordWrap) => setDraft((current) => ({ ...current, editor: { ...current.editor, wordWrap } }))}
+          />
           {cardSave('editor', 'Save editor settings', ['editor'])}
         </section>
 

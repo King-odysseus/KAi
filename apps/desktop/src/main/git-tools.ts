@@ -295,6 +295,30 @@ export async function gitDiffFile(cwd: string, filePath: string, staged: boolean
 }
 
 /**
+ * Who last changed each line, for the editor's inline blame. `--line-porcelain` repeats the commit's header for every
+ * line, so the result is one entry per line in file order with no bookkeeping. A file Git does not know (new, ignored,
+ * outside a repository) has nothing to blame and gives no lines rather than an error.
+ */
+export async function gitBlameFile(cwd: string, filePath: string): Promise<{ lines: Array<{ commit?: string; author: string; time: number; summary: string }> }> {
+  const output = await git(cwd, ['blame', '--line-porcelain', '--', filePath]).catch(() => '');
+  const lines: Array<{ commit?: string; author: string; time: number; summary: string }> = [];
+  let current: { commit?: string; author: string; time: number; summary: string } | null = null;
+  for (const row of output.split(/\r?\n/)) {
+    const header = /^([0-9a-f]{40}) \d+ \d+/.exec(row);
+    if (header) {
+      current = { commit: /^0+$/.test(header[1]!) ? undefined : header[1]!.slice(0, 8), author: '', time: 0, summary: '' };
+    } else if (current && row.startsWith('author ')) current.author = row.slice(7, 207);
+    else if (current && row.startsWith('author-time ')) current.time = Number.parseInt(row.slice(12), 10) || 0;
+    else if (current && row.startsWith('summary ')) current.summary = row.slice(8, 508);
+    else if (current && row.startsWith('\t')) {
+      lines.push(current);
+      current = null;
+    }
+  }
+  return { lines: lines.slice(0, 200_000) };
+}
+
+/**
  * Everything a file changed against the last commit, staged or not, as one diff. A file that is untracked (new) is
  * compared with nothing. This is what a review should read: the unstaged-only diff is empty for a change that has
  * already been staged.

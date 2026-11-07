@@ -3,13 +3,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type { OpenedFile } from '@kai/contracts';
 import { loadMonaco, monacoThemeName } from '../monaco-loader';
+import { editorViewOptions, type EditorView } from '../editor-view';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { MockupFrame } from './MockupFrame';
 import { UiButton } from './UiButton';
 
 /** The same editor as Learn & Code, kept beside the conversation and composer. */
-export function WorkspaceFilePreview(props: { projectId: string; path: string; line?: number; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+export function WorkspaceFilePreview(props: { projectId: string; path: string; line?: number; formatOnSave: boolean; editorView?: EditorView; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
   return IMAGE_PATH.test(props.path) ? <WorkspaceImagePreview projectId={props.projectId} path={props.path} onClose={props.onClose} onDirtyChange={props.onDirtyChange} /> : <WorkspaceCodePreview {...props} />;
 }
 
@@ -47,7 +48,7 @@ function WorkspaceImagePreview({ projectId, path, onClose, onDirtyChange }: { pr
   );
 }
 
-function WorkspaceCodePreview({ projectId, path, line, formatOnSave, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; formatOnSave: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
+function WorkspaceCodePreview({ projectId, path, line, formatOnSave, editorView, onClose, onDirtyChange }: { projectId: string; path: string; line?: number; formatOnSave: boolean; editorView?: EditorView; onClose: () => void; onDirtyChange: (dirty: boolean) => void }): ReactNode {
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(false);
@@ -95,7 +96,7 @@ function WorkspaceCodePreview({ projectId, path, line, formatOnSave, onClose, on
         theme: monacoThemeName(),
         readOnly: !editingRef.current,
         automaticLayout: true,
-        minimap: { enabled: false },
+        ...(editorView ? editorViewOptions(editorView) : { minimap: { enabled: false } }),
         fontSize: 13,
         scrollBeyondLastLine: false,
         renderWhitespace: 'selection',

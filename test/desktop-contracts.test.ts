@@ -22,7 +22,14 @@ describe('desktop contracts', () => {
     expect(settings.theme).toBe('code');
     expect(settings.directApi).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
     expect(settings.learningTutor).toMatchObject({ enabled: true, provider: 'openai', model: 'gpt-6-astra' });
-    expect(settings.editor).toEqual({ autoSave: true, autoSaveDelayMs: 1_000, formatOnSave: true });
+    expect(settings.editor).toEqual({
+      autoSave: true,
+      autoSaveDelayMs: 1_000,
+      formatOnSave: true,
+      // The look of the editor: every helper on except the minimap and wrapping.
+      bracketColors: true, guides: true, stickyScroll: true, ligatures: true, smoothScrolling: true, minimap: false, wordWrap: false,
+      errorLens: true, gitBlame: true, todoHighlight: true, colorSwatches: true, linkedTagEditing: true, inlayHints: true, fileIcons: true,
+    });
     expect(settings.cognitive1.overwatch).toEqual({
       enabled: false,
       provider: 'deepseek',
