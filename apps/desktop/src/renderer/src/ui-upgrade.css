@@ -857,3 +857,41 @@ th,
 .learning-memory p, .learning-path p { margin: 6px 0; overflow-wrap: anywhere; }
 .learning-scroll { overflow-x: hidden; }
 .learning-scroll p, .learning-scroll li, .learning-scroll h3 { overflow-wrap: anywhere; }
+
+/*
+ * Buttons are pills. styles.css gave the legacy button classes a 6px radius, a border and muted text, and being
+ * unlayered it beat the Flowbite theme's own pill. This block comes last and settles it for every page at once:
+ * a fully round shape, a raised surface instead of an outline, and the label in the normal text colour. The primary
+ * button keeps the theme's accent fill, so each theme still has its own.
+ */
+.chip-button,
+.secondary-button,
+.primary-button,
+.danger-button {
+  min-height: 30px;
+  padding-inline: 14px;
+  border-radius: var(--radius-pill);
+}
+.chip-button { min-height: 26px; padding-inline: 11px; }
+.chip-button,
+.secondary-button {
+  border-color: transparent;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.chip-button:hover:not(:disabled),
+.secondary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--bg-hover) 82%, var(--text)); }
+.danger-button {
+  border-color: transparent;
+  background: var(--bg-hover);
+  color: var(--red);
+}
+.danger-button:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 14%, var(--bg-hover)); }
+/* A card's own caption rule must not recolour or shrink the words inside the buttons it holds. */
+.project-card-copy button span,
+.project-card-copy button small { color: inherit; font-size: inherit; }
+
+/* Option tiles are rounded boxes like every other card, and a pill on a tinted (active) card keeps a visible fill. */
+.workflow-style-options button { border-radius: 12px; }
+.project-card.active .secondary-button,
+.project-card.active .chip-button { background: color-mix(in srgb, var(--bg-hover) 70%, var(--text) 12%); }

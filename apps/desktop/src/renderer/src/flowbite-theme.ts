@@ -60,19 +60,19 @@ export const kaiFlowbiteTheme = createTheme({
     // Flowbite's default base carries `focus:ring-4` and its colors carry `focus:ring-gray-300` etc.; the theme merge
     // only dedupes within a utility group, so they survive unless cancelled explicitly. That ring is the rounded box
     // that stays on a button after a click.
-    base: 'relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border text-center font-medium ring-0 focus:ring-0 focus-visible:ring-0 focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
-    size: { xs: 'min-h-6 px-2 text-xs', sm: 'min-h-7 px-2.5 text-xs', md: 'min-h-8 px-3 text-sm' },
+    base: 'relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--radius-pill)] border text-center font-medium ring-0 focus:ring-0 focus-visible:ring-0 focus:outline-none focus-visible:outline-none focus-visible:bg-[var(--bg-hover)] disabled:pointer-events-none disabled:opacity-50',
+    size: { xs: 'min-h-7 px-3.5 text-xs', sm: 'min-h-8 px-4 text-xs', md: 'min-h-9 px-4 text-sm' },
     color: {
       default: 'border-transparent bg-[var(--mint)] text-[var(--bg-deep)] hover:bg-[var(--mint-strong)]',
-      alternative: 'border-[color:var(--border)] bg-[var(--bg-panel)] text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]',
+      alternative: 'border-transparent bg-[var(--bg-hover)] text-[var(--text)] hover:bg-[color-mix(in_srgb,var(--bg-hover)_82%,var(--text))]',
       gray: 'border-transparent bg-transparent text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]',
-      red: 'border-[color:var(--border)] bg-[var(--bg-panel)] text-[var(--red)] hover:bg-[color-mix(in_srgb,var(--red)_12%,var(--bg-panel))]',
+      red: 'border-transparent bg-[var(--bg-hover)] text-[var(--red)] hover:bg-[color-mix(in_srgb,var(--red)_14%,var(--bg-hover))]',
     },
   },
   textInput: {
     base: 'flex min-w-0',
     field: { input: {
-      base: 'block w-full min-w-0 rounded-md border focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
+      base: 'block w-full min-w-0 rounded-[10px] border focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
       sizes: { md: 'px-2.5 py-1.5 text-sm' },
       colors: { gray: 'border-[color:var(--border)] bg-[var(--bg-input)] text-[var(--text)] placeholder:text-[var(--text-dim)] focus:border-[color:var(--mint)] focus:ring-[color:var(--mint)]' },
     } },
@@ -80,12 +80,12 @@ export const kaiFlowbiteTheme = createTheme({
   select: {
     base: 'contents',
     field: { base: 'contents', select: {
-      base: 'block w-full min-w-0 rounded-md border px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
+      base: 'block w-full min-w-0 rounded-[10px] border px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
       colors: { gray: 'border-[color:var(--border)] bg-[var(--bg-input)] text-[var(--text)] focus:border-[color:var(--mint)] focus:ring-[color:var(--mint)]' },
     } },
   },
   textarea: {
-    base: 'block w-full rounded-md border p-2.5 text-sm focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
+    base: 'block w-full rounded-[10px] border p-2.5 text-sm focus:outline-none focus:ring-1 disabled:cursor-not-allowed disabled:opacity-50',
     colors: { gray: 'border-[color:var(--border)] bg-[var(--bg-input)] text-[var(--text)] placeholder:text-[var(--text-dim)] focus:border-[color:var(--mint)] focus:ring-[color:var(--mint)]' },
   },
   // Flowbite's own checkbox/radio `base` is literal `border-gray-300 bg-gray-100` — fine on a white page, a glaring
