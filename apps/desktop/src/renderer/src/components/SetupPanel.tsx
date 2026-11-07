@@ -5,7 +5,7 @@ import type { SetupCheck, SetupGuideAnswer, SetupStatus } from '@kai/contracts';
 import { UiButton } from './UiButton';
 import { Composer, ComposerInput, ComposerSend, ComposerToolbar } from './ui/Composer';
 import { UiTextInput } from './UiTextInput';
-import { Modal } from 'flowbite-react';
+import { Dialog } from './ui/Dialog';
 
 export function SetupPanel({
   status,
@@ -57,7 +57,7 @@ export function SetupPanel({
     }
   }
   return (
-    <Modal show size="4xl" dismissible={false} aria-labelledby="setup-title">
+    <Dialog size="4xl" dismissible={false} titleId="setup-title">
       <section className="setup-panel">
         <header className="setup-head">
           <div>
@@ -135,7 +135,7 @@ export function SetupPanel({
           </UiButton>
         </footer>
       </section>
-    </Modal>
+    </Dialog>
   );
 }
 

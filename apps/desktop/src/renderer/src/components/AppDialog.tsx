@@ -1,7 +1,8 @@
 import { AlertTriangle, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { UiButton } from './UiButton';
-import { Checkbox, Modal, Textarea } from 'flowbite-react';
+import { Checkbox, Textarea } from 'flowbite-react';
+import { Dialog as ModalDialog } from './ui/Dialog';
 import { UiTextInput } from './UiTextInput';
 
 export interface PromptDialogOptions {
@@ -141,14 +142,13 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
   const titleId = `kai-dialog-title-${request.id}`;
   const detailId = `kai-dialog-detail-${request.id}`;
   return (
-    <Modal
-      show
+    <ModalDialog
       size="lg"
       position="center"
       dismissible
       onClose={cancel}
       initialFocus={request.kind === 'prompt' ? inputRef : request.kind === 'message' ? confirmRef : cancelRef}
-      aria-labelledby={titleId}
+      titleId={titleId}
       aria-describedby={detailId}
     >
       <form className="app-dialog" data-kai-dialog="true" onSubmit={submit}>
@@ -194,6 +194,6 @@ function Dialog({ request, onFinish }: { request: DialogRequest; onFinish: (valu
           </UiButton>
         </footer>
       </form>
-    </Modal>
+    </ModalDialog>
   );
 }

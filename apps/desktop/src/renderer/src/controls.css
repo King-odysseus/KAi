@@ -273,3 +273,8 @@
 .kai-switch-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kai-switch-control:disabled { cursor: not-allowed; opacity: 0.5; }
 .toggle-row > .kai-switch { margin-left: auto; }
+
+/* The title bar's project picker is one line: the name and path truncate together. The global `button small` rule lets a
+   description wrap, which is right for a card but made the path drop to a second line in a narrow window. */
+.project-picker-button strong,
+.project-picker-button small { white-space: nowrap; }

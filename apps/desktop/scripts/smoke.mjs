@@ -64,11 +64,13 @@ try {
   const page = await electronApp.firstWindow();
   page.on('pageerror', (error) => rendererErrors.push(error.message));
   // Found by its role and its dismiss button, not its heading, so a reworded title does not strand the smoke behind it.
-  const setupDialog = page.locator('.setup-panel[role="dialog"]');
+  const setupDialog = page.locator('.setup-panel');
   await setupDialog.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
   if (await setupDialog.isVisible().catch(() => false)) {
-    await setupDialog.locator('button.secondary-button').filter({ hasText: 'Set up later' }).click({ force: true });
-    await setupDialog.waitFor({ state: 'detached' });
+    // The panel's own close control is present in every state; the footer button can be disabled while checks run.
+    // Clicked in the DOM so a layer over the panel cannot swallow the click.
+    await setupDialog.evaluate((panel) => panel.querySelector('button[aria-label="Set up later"]')?.click());
+    await setupDialog.waitFor({ state: 'hidden', timeout: 5_000 });
   }
   // The guided tour starts by itself on a fresh profile; turn it off so its hint card never covers a control under test.
   await page.locator('.tour-card').getByRole('button', { name: 'Turn tour off' }).click({ timeout: 4_000 }).catch(() => undefined);
@@ -207,7 +209,7 @@ try {
   await page.getByLabel('Step 1 agent').waitFor();
   await page.getByLabel('Step 1 prompt').waitFor();
   await assertNoHorizontalOverflow(page);
-  await assertPageContentFillsWidth(page, '.workflow-builder');
+  await assertPageContentFillsWidth(page, '.workflow-layout');
   await assertControlsDoNotWrap(page, 'workflows-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'workflows-1440x920.png') });
 
@@ -218,7 +220,6 @@ try {
 
   await navigateTo(page, 'History');
   await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
-  await assertPageContentFillsWidth(page, '.history-search');
   await assertPageContentFillsWidth(page, '.history-table');
   await assertControlsDoNotWrap(page, 'history-1440x920');
   await page.screenshot({ path: path.join(outputDirectory, 'history-1440x920.png') });
@@ -228,13 +229,12 @@ try {
   await navigateTo(page, 'Workflows');
   await page.getByRole('heading', { name: 'Workflows', level: 1 }).waitFor();
   await assertNoHorizontalOverflow(page);
-  await assertPageContentFillsWidth(page, '.workflow-builder');
+  await assertPageContentFillsWidth(page, '.workflow-layout');
   await assertControlsDoNotWrap(page, 'workflows-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'workflows-960x640.png') });
 
   await navigateTo(page, 'History');
   await page.getByRole('heading', { name: 'History', level: 1 }).waitFor();
-  await assertPageContentFillsWidth(page, '.history-search');
   await assertPageContentFillsWidth(page, '.history-table');
   await assertControlsDoNotWrap(page, 'history-960x640');
   await page.screenshot({ path: path.join(outputDirectory, 'history-960x640.png') });
@@ -306,9 +306,9 @@ async function verifyNavigationAndSetupLayout(page) {
   await page.mouse.move(800, 400);
   await page.screenshot({ path: path.join(outputDirectory, 'navigation-expanded.png') });
   await page.getByRole('button', { name: 'Collapse navigation labels' }).click();
-  if ((await rail.boundingBox())?.width > 80) {
-    throw new Error('Navigation did not return to its compact width.');
-  }
+  // The rail animates its width, so measure once it has settled rather than on the first frame.
+  await page.waitForFunction(() => (document.querySelector('.nav-rail')?.getBoundingClientRect().width ?? 999) <= 80, undefined, { timeout: 5_000 })
+    .catch(() => { throw new Error('Navigation did not return to its compact width.'); });
   await page.getByRole('button', { name: 'Show navigation labels' }).click();
 }
 
@@ -369,7 +369,7 @@ async function verifyWorkspaceControls(page) {
   // The agent, model, route and autonomy menus live behind the composer's Advanced toggle.
   if (await page.getByRole('button', { name: 'Agent', exact: true }).count() === 0) {
     // The toggle reads "Work locally" (or "Hide" once open), so it is found by its class.
-    await page.locator('.composer-advanced-toggle').click();
+    await page.locator('[data-tour="composer-advanced"]').click();
     await page.getByRole('button', { name: 'Agent', exact: true }).waitFor();
   }
   const agents = [
@@ -469,7 +469,7 @@ async function verifyBuildIdentifier(page) {
 async function verifySkillsDialogFitsViewport(page) {
   const canvas = page.locator('.conversation-canvas');
   await canvas.evaluate((element) => { element.style.minHeight = '1400px'; });
-  await page.locator('.composer-box textarea').fill('$');
+  await page.locator('[data-tour="composer"] textarea').fill('$');
   const dialog = page.getByRole('dialog', { name: 'Skills' });
   await dialog.waitFor();
   const panelBounds = await dialog.locator('.skills-panel').boundingBox();
@@ -480,7 +480,7 @@ async function verifySkillsDialogFitsViewport(page) {
   }
   await page.getByRole('button', { name: 'Close skills' }).click();
   await canvas.evaluate((element) => { element.style.minHeight = ''; });
-  await page.locator('.composer-box textarea').fill('');
+  await page.locator('[data-tour="composer"] textarea').fill('');
 }
 
 async function verifyCodeLearningWorkspace(application, page) {

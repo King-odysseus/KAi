@@ -4,7 +4,7 @@ import { DEFAULT_DESKTOP_SHORTCUTS, type AppSettings } from '@kai/contracts';
 import { SHORTCUT_DEFINITIONS, shortcutConflicts, shortcutFromEvent, shortcutsWithDefaults } from '../shortcuts';
 import { UiButton } from './UiButton';
 import { UiTextInput } from './UiTextInput';
-import { Modal } from 'flowbite-react';
+import { Dialog } from './ui/Dialog';
 
 type DesktopShortcuts = AppSettings['shortcuts'];
 
@@ -102,7 +102,7 @@ export function ShortcutSheet({
   }
 
   return (
-    <Modal show size="3xl" dismissible onClose={onClose} aria-labelledby="shortcut-sheet-title">
+    <Dialog size="3xl" dismissible onClose={onClose} titleId="shortcut-sheet-title">
       <section className="shortcut-sheet">
         <header className="shortcut-sheet-head">
           <div className="shortcut-sheet-title">
@@ -130,6 +130,6 @@ export function ShortcutSheet({
           </div>
         </footer>
       </section>
-    </Modal>
+    </Dialog>
   );
 }

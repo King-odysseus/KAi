@@ -320,7 +320,7 @@ async function verifyTour(page) {
   await page.waitForTimeout(500);
   const geometry = await page.evaluate(() => {
     const box = (selector) => { const element = document.querySelector(selector); if (!element) return null; const r = element.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
-    return { spot: box('.tour-spot'), composer: box('.composer-box'), card: box('.tour-card') };
+    return { spot: box('.tour-spot'), composer: box('[data-tour="composer"]'), card: box('.tour-card') };
   });
   if (!geometry.spot || !geometry.composer || !geometry.card) throw new Error('The tour ring, the composer or the card is missing.');
   if (Math.abs(geometry.spot.top - geometry.composer.top) > 12 || Math.abs(geometry.spot.left - geometry.composer.left) > 12) throw new Error('The tour ring is not on the composer: ' + JSON.stringify(geometry));
@@ -575,11 +575,14 @@ async function verifyTasksAndSettings(page) {
   const learningSection = page.locator('section.settings-section').filter({ has: page.getByText('Learning Tutor API', { exact: true }) });
   const learningProvider = learningSection.locator('label.field:has(span:text-is("Provider")) > .kai-select');
   await chooseOption(learningProvider, 'deepseek');
-  const learningModel = learningSection.locator('label.field:has(span:text-is("Model")) input');
-  if ((await learningModel.inputValue()) !== 'deepseek-v4-pro') {
-    throw new Error(`The DeepSeek tutor default is stale: ${await learningModel.inputValue()}`);
+  // The model is a dropdown: its choice is the control's value, and its catalog is the options it lists.
+  const learningModel = learningSection.locator('label.field:has(span:text-is("Model")) > .kai-select');
+  if ((await selectedValue(learningModel)) !== 'deepseek-v4-pro') {
+    throw new Error(`The DeepSeek tutor default is stale: ${await selectedValue(learningModel)}`);
   }
-  const learningModels = await learningSection.locator('#learning-tutor-models option').evaluateAll((options) => options.map((option) => option.value));
+  await learningModel.click();
+  const learningModels = await page.locator('.kai-select-list [role="option"]').evaluateAll((options) => options.map((option) => option.getAttribute('data-value')));
+  await page.keyboard.press('Escape');
   if (!learningModels.includes('deepseek-flash') || !learningModels.includes('deepseek-v4-pro')) {
     throw new Error(`The DeepSeek tutor catalog is stale: ${learningModels.join(', ')}`);
   }
@@ -613,7 +616,7 @@ async function verifyTasksAndSettings(page) {
   // The agent, model, route and autonomy menus live behind the composer's Advanced toggle.
   if (await page.getByRole('button', { name: 'Agent', exact: true }).count() === 0) {
     // The toggle reads "Work locally" (or "Hide" once open), so it is found by its class.
-    await page.locator('.composer-advanced-toggle').click();
+    await page.locator('[data-tour="composer-advanced"]').click();
   }
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
   await page.getByRole('listbox', { name: 'Agent', exact: true }).getByRole('option', { name: /^Qwen Code/ }).click();
@@ -622,7 +625,7 @@ async function verifyTasksAndSettings(page) {
   await modelMenu.getByRole('option', { name: 'qwen3.8-max', exact: true }).waitFor();
   await modelMenu.getByRole('option', { name: 'Other model…' }).waitFor();
   const modelMenuStacking = await modelMenu.evaluate((element) => {
-    const composer = document.querySelector('.composer-box');
+    const composer = document.querySelector('[data-tour="composer"]');
     const rect = element.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.left + 10, rect.top + 10);
     return {
@@ -725,7 +728,7 @@ async function verifyBuildIdentifier(page) {
   if (!response.ok || !response.data.buildIdentifier || response.data.buildIdentifier.includes('unidentified')) {
     throw new Error(`The desktop build identifier is missing: ${JSON.stringify(response)}`);
   }
-  const rail = await page.locator('.rail-footer span').getAttribute('title');
+  const rail = await page.locator('.rail-footer span[title]').getAttribute('title');
   const suffix = response.data.buildIdentifier.split('+').at(-1);
   if (!suffix || !rail?.includes(suffix)) {
     throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail ?? '<missing title>'}`);
@@ -895,22 +898,28 @@ async function verifyShortcutSheet(page) {
 async function assertTutorTextareaStyled(page) {
   const textarea = page.getByLabel('Tutor question');
   await textarea.waitFor();
+  // The tutor uses the shared composer box: the box carries the padding, border, radius and surface, and the textarea
+  // sits flush inside it, so the box is what has to look like an input.
   const style = await textarea.evaluate((element) => {
     const computed = getComputedStyle(element);
+    const box = element.closest('.kai-composer');
+    const boxStyle = box ? getComputedStyle(box) : null;
     return {
       minHeight: Number.parseFloat(computed.minHeight),
-      paddingTop: Number.parseFloat(computed.paddingTop),
-      paddingLeft: Number.parseFloat(computed.paddingLeft),
-      borderRadius: Number.parseFloat(computed.borderRadius),
       caretColor: computed.caretColor,
-      backgroundColor: computed.backgroundColor,
+      inBox: Boolean(box),
+      boxPaddingTop: boxStyle ? Number.parseFloat(boxStyle.paddingTop) : 0,
+      boxPaddingLeft: boxStyle ? Number.parseFloat(boxStyle.paddingLeft) : 0,
+      boxBorderRadius: boxStyle ? Number.parseFloat(boxStyle.borderRadius) : 0,
+      boxBorderWidth: boxStyle ? Number.parseFloat(boxStyle.borderTopWidth) : 0,
+      boxBackground: boxStyle?.backgroundColor ?? '',
     };
   });
-  if (style.minHeight < 32 || style.minHeight > 48 || style.paddingTop < 8 || style.paddingLeft < 12 || style.borderRadius < 8) {
-    throw new Error(`The tutor textarea style is incomplete: ${JSON.stringify(style)}`);
+  if (!style.inBox || style.minHeight < 32 || style.minHeight > 48 || style.boxPaddingTop < 8 || style.boxPaddingLeft < 12 || style.boxBorderRadius < 8 || style.boxBorderWidth <= 0) {
+    throw new Error(`The tutor input style is incomplete: ${JSON.stringify(style)}`);
   }
-  if (style.caretColor === 'transparent' || style.backgroundColor === 'rgba(0, 0, 0, 0)') {
-    throw new Error(`The tutor textarea lacks visible caret/background styling: ${JSON.stringify(style)}`);
+  if (style.caretColor === 'transparent' || style.boxBackground === 'rgba(0, 0, 0, 0)') {
+    throw new Error(`The tutor input lacks a visible caret or surface: ${JSON.stringify(style)}`);
   }
 }
 
@@ -1038,7 +1047,8 @@ async function verifyTutorCompactControls(page) {
   const input = page.getByLabel('Tutor question');
   await input.fill('');
   const small = await input.boundingBox();
-  if (!small || small.height > 48) throw new Error('Tutor prompt must start as one line.');
+  // The tutor uses the shared composer input, which starts at two rows and grows; it must not start as a tall block.
+  if (!small || small.height > 80) throw new Error(`Tutor prompt must start compact, not ${small?.height}px tall.`);
   await input.fill('Explain this line.\nAnd this part.\nAnd one more.\nWhat should I test?');
   const expanded = await input.boundingBox();
   if (!expanded || expanded.height <= small.height) throw new Error('Tutor prompt did not grow.');
@@ -1140,7 +1150,7 @@ async function verifySettingsCheckboxRetention(page) {
   });
   await page.waitForTimeout(500);
   if (!(await overwatch.isChecked())) throw new Error('Settings refresh discarded the Overwatch checkbox draft.');
-  await page.getByRole('button', { name: 'Save all changes' }).click();
+  await page.getByRole('button', { name: 'Save all', exact: true }).click();
   await page.getByText('saved and shared with all open KAI windows.', { exact: false }).waitFor();
   const saved = await page.evaluate(async () => (await window.kaiDesktop.getSettings()).data);
   if (!saved.cognitive1.overwatch.enabled) throw new Error('Overwatch checkbox did not persist.');

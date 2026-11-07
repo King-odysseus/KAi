@@ -193,12 +193,12 @@ async function verifyLmStudioProvider(page) {
   await direct.getByText('API key (optional)').waitFor();
   await direct.getByText('Uses the LM Studio server on this computer; no key needed').waitFor();
 
-  // Point it at the stand-in server, clear the model, and refresh: the coding model is chosen, not the embedding one.
+  // Point it at the stand-in server and refresh: the coding model is chosen, not the embedding one. The model is a
+  // dropdown now, so its choice is read from the control's value.
   await direct.locator('label.field:has(span:text-is("Base URL")) input').fill(localServer.url);
-  await direct.locator('label.field:has(span:text-is("Model")) input').fill('');
   await direct.getByRole('button', { name: 'Refresh models' }).click();
   await direct.getByText('3 models on this computer.').waitFor({ timeout: 15_000 });
-  const chosen = await direct.locator('label.field:has(span:text-is("Model")) input').inputValue();
+  const chosen = await selectedValue(direct.locator('label.field:has(span:text-is("Model")) > .kai-select'));
   if (chosen !== 'qwen2.5-coder-7b-instruct') throw new Error(`Expected the Qwen coder model to be chosen, got "${chosen}".`);
 
   // Enable it and save: it works with no key stored and no vault involved, and the settings persist.
@@ -245,14 +245,24 @@ async function verifyPlan(page) {
   const titles = await page.locator('.team-part .team-part-title strong').allTextContents();
   const expected = ['Login form', 'Auth endpoint', 'Security review', 'Code review'];
   if (JSON.stringify(titles) !== JSON.stringify(expected)) throw new Error(`Unexpected plan parts: ${JSON.stringify(titles)}`);
-  // Balanced + Auto with everything ready: Claude for the UI, Codex for the API, reviewers who did not write the code.
+  // Balanced + Auto with everything ready: the paid subscriptions (Claude, Codex) are kept for review, so the two
+  // parts that write code go to the other agents, and the reviewers are agents that did not write any of it.
   const agentOf = (title) => selectedValue(page.getByLabel(`${title} agent`));
-  if (await agentOf('Login form') !== 'claude') throw new Error('Frontend should go to Claude.');
-  if (await agentOf('Auth endpoint') !== 'codex') throw new Error('Backend should go to Codex.');
+  const writers = new Set();
+  for (const part of ['Login form', 'Auth endpoint']) {
+    const agent = await agentOf(part);
+    if (agent === 'claude' || agent === 'codex') throw new Error(`${part} went to ${agent}, a paid subscription that Auto keeps for review.`);
+    writers.add(agent);
+  }
   for (const reviewer of ['Security review', 'Code review']) {
     const agent = await agentOf(reviewer);
-    if (agent === 'claude' || agent === 'codex') throw new Error(`${reviewer} went to ${agent}, which wrote the code.`);
+    if (writers.has(agent)) throw new Error(`${reviewer} went to ${agent}, which wrote the code.`);
   }
+  // The rest of the run checks the exact arguments Claude and Codex receive for parts that edit files, so those two
+  // parts are pinned to them here, and the security review to Gemini, the way a person would choose an agent for a part.
+  await chooseOption(page.getByLabel('Login form agent'), 'claude');
+  await chooseOption(page.getByLabel('Auth endpoint agent'), 'codex');
+  await chooseOption(page.getByLabel('Security review agent'), 'gemini');
   const notes = await page.locator('.team-warnings').innerText();
   if (!/security review because this job touches/i.test(notes)) throw new Error(`The added security review was not explained: ${notes}`);
   if (!(await page.locator('.team-billing.subscription').count())) throw new Error('Parts on a CLI account should be marked as such.');

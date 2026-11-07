@@ -1,5 +1,5 @@
 import { AlertTriangle, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { Modal } from 'flowbite-react';
+import { Dialog } from './components/ui/Dialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   AgentCapability,
@@ -2958,7 +2958,7 @@ function ApprovalDialog({
   const question = approval.runQuestion;
   const actions = approvalActions(approval);
   return (
-    <Modal show size="3xl" aria-labelledby="approval-title">
+    <Dialog size="3xl" titleId="approval-title">
       <section className="approval-dialog">
         <div className="approval-dialog-head">
           {question ? <AlertTriangle size={20} /> : <ShieldCheck size={20} />}
@@ -2981,7 +2981,7 @@ function ApprovalDialog({
           )}
         </div>
       </section>
-    </Modal>
+    </Dialog>
   );
 }
 
