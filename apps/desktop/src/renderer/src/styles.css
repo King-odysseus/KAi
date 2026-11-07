@@ -10599,6 +10599,8 @@ button.tool-call-head:hover strong { color: var(--mint); }
   display: flex;
   width: 100%;
   align-items: center;
+  /* The button base centres its content; a file tree reads down the left edge. */
+  justify-content: flex-start;
   gap: 6px;
   min-height: 24px;
   padding-right: 8px;

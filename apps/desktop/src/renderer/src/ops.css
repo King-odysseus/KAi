@@ -238,6 +238,8 @@
   display: flex;
   width: 100%;
   align-items: center;
+  /* The button base centres its content; a file tree reads down the left edge. */
+  justify-content: flex-start;
   gap: 6px;
   padding-top: 3px;
   padding-bottom: 3px;
