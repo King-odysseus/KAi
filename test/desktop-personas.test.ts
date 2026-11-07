@@ -7,6 +7,7 @@ import {
   isAutoLikeIntent,
   isKnownStarter,
   personaFor,
+  recipesFor,
 } from '../apps/desktop/src/renderer/src/components/personas';
 
 /**
@@ -55,5 +56,35 @@ describe('composer personas', () => {
     expect(isKnownStarter(personaFor('build').starter)).toBe(true);
     expect(isKnownStarter(personaFor('audit').recipes?.[0]?.starter ?? '')).toBe(true);
     expect(isKnownStarter('Build a login form with rate limiting')).toBe(false);
+  });
+});
+
+describe('saved recipes', () => {
+  const saved = [
+    { id: 'saved_ab12cd34', intent: 'build', label: 'Fix a flaky test', description: 'x', starter: 'Fix the flaky test:', skills: ['test-author'] },
+    { id: 'saved_ef56ab78', intent: 'review', label: 'Quick look', description: 'y', starter: 'Look:', skills: [] },
+  ];
+
+  it('adds the ones for a selector after its built-in recipes, and leaves the default alone', () => {
+    const build = personaFor('build');
+    const offered = recipesFor(build, saved);
+    expect(offered.slice(0, build.recipes!.length).map((recipe) => recipe.id)).toEqual(build.recipes!.map((recipe) => recipe.id));
+    expect(offered.at(-1)).toMatchObject({ id: 'saved_ab12cd34', label: 'Fix a flaky test', skills: ['test-author'] });
+    expect(offered[0]?.id).toBe(build.recipes![0]!.id);
+    expect(offered.some((recipe) => recipe.id === 'saved_ef56ab78')).toBe(false);
+  });
+
+  it('offers just the built-in recipes when nothing is saved, and none for a selector without recipes', () => {
+    expect(recipesFor(personaFor('test'), [])).toEqual(personaFor('test').recipes);
+    expect(recipesFor(personaFor('auto'), saved)).toEqual([]);
+  });
+
+  it('only names skills that exist, as every built-in recipe does', () => {
+    // A saved recipe copies the skill names of the recipe it was made under, so it cannot name a skill that is not there.
+    const root = path.resolve('.agents/skills');
+    for (const recipe of recipesFor(personaFor('build'), saved)) {
+      if (recipe.id.startsWith('saved_')) continue;
+      for (const skill of recipe.skills) expect(existsSync(path.join(root, skill, 'SKILL.md'))).toBe(true);
+    }
   });
 });

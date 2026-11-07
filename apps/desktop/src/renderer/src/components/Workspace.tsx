@@ -89,6 +89,7 @@ import type {
   PersistedEvent,
   PermissionKey,
   ProjectPreferences,
+  SavedRecipe,
   ProjectRecord,
   PromptGuideReadiness,
   PromptPreset,
@@ -99,7 +100,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, estimateResponseCostUsd, experienceProfile } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -119,6 +120,7 @@ import type { QueuedPrompt } from './composer-queue';
 import {
   PERSONAS,
   defaultRecipe,
+  recipesFor,
   isAutoLikeIntent,
   isKnownStarter,
   personaFor,
@@ -549,8 +551,10 @@ export function WorkspaceView({
     : selectedModel || selectedAgent;
   const activeGoal = activeConversation?.goal ?? null;
   const activePersona = personaFor(taskIntent);
-  const activeRecipe = activePersona.recipes?.find((recipe) => recipe.id === taskRecipes[activePersona.id])
-    ?? defaultRecipe(activePersona);
+  const savedRecipes = projectPreferences?.recipes ?? [];
+  const activeRecipes = recipesFor(activePersona, savedRecipes);
+  const activeRecipe = activeRecipes.find((recipe) => recipe.id === taskRecipes[activePersona.id])
+    ?? activeRecipes[0];
   const allContextChips: ContextChip[] = [
     ...selectedFiles.map((path) => ({ type: 'file' as const, path })),
     ...contextChips,
@@ -754,6 +758,15 @@ export function WorkspaceView({
     if (wasRunningRef.current && !running) setPendingUser(null);
     wasRunningRef.current = running;
   }, [running]);
+
+  // A send that is refused before a run starts (agent unavailable, proxy down, a cancelled prompt) never flips
+  // `running`, so nothing would ever clear the optimistic bubble and the answer box would look dead. Give the run a
+  // moment to start, then drop the bubble so the box comes back and the error banner is the only thing left.
+  useEffect(() => {
+    if (!pendingUser || running) return;
+    const timer = window.setTimeout(() => setPendingUser(null), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [pendingUser, running]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1111,14 +1124,62 @@ export function WorkspaceView({
 
   function chooseTaskIntent(intent: TaskIntent): void {
     const persona = personaFor(intent);
-    const remembered = persona.recipes?.find((recipe) => recipe.id === taskRecipes[intent]);
-    const starter = (remembered ?? defaultRecipe(persona))?.starter ?? persona.starter;
+    const available = recipesFor(persona, savedRecipes);
+    const remembered = available.find((recipe) => recipe.id === taskRecipes[intent]);
+    const starter = (remembered ?? available[0])?.starter ?? persona.starter;
     rememberIntent(intent);
     // A recipe chosen earlier comes back with the selector. Typed text is never overwritten, but a starter that
     // belonged to the previous selector is replaced (or cleared, for a selector with no starter).
     if (isKnownStarter(prompt)) setPrompt(starter);
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }
+
+  /** Keeps the prompt of one of the person's own messages as a recipe behind the current selector. */
+  async function saveTurnAsRecipe(turnId: string): Promise<void> {
+    if (!activeProject) return;
+    const turn = activeConversation?.turns.find((item) => item.id === turnId);
+    if (!turn || !turn.text.trim()) return;
+    if (savedRecipes.length >= MAX_SAVED_RECIPES) {
+      setWorkbenchNotice(`This project already has ${MAX_SAVED_RECIPES} saved recipes. Remove one first.`);
+      return;
+    }
+    // A selector with no recipes of its own (General, Learn, Equalizer, Auto) cannot hold one, so it goes under Build.
+    const intent = (SAVED_RECIPE_INTENTS as readonly string[]).includes(taskIntent) ? taskIntent : 'build';
+    const name = await promptDialog({
+      title: 'Save as a recipe',
+      label: `Name (it will appear under ${personaFor(intent as TaskIntent).label})`,
+      initialValue: turn.text.trim().split('\n')[0]!.slice(0, 40),
+      placeholder: 'Fix a flaky test',
+      confirmLabel: 'Save recipe',
+      validate: (value) => (value.trim() ? null : 'Give the recipe a name.'),
+    });
+    if (!name?.trim()) return;
+    const recipe: SavedRecipe = {
+      id: `saved_${crypto.randomUUID().slice(0, 8)}`,
+      intent: intent as SavedRecipe['intent'],
+      label: name.trim().slice(0, 40),
+      description: turn.text.trim().replace(/\s+/g, ' ').slice(0, 140),
+      starter: turn.text.trim().slice(0, 4_000),
+      skills: [...(intent === taskIntent ? activeRecipe?.skills ?? [] : [])],
+      createdAt: new Date().toISOString(),
+    };
+    await onUpdatePreferences({ schemaVersion: 1, projectId: activeProject.id, ...(projectPreferences ?? {}), recipes: [...savedRecipes, recipe] });
+    onSelectTaskRecipe(intent as TaskIntent, recipe.id);
+    setWorkbenchNotice(`Saved "${recipe.label}" under ${personaFor(intent as TaskIntent).label}.`);
+  }
+
+  async function removeSavedRecipe(recipeId: string): Promise<void> {
+    if (!activeProject) return;
+    const recipe = savedRecipes.find((item) => item.id === recipeId);
+    if (!recipe) return;
+    if (!(await confirmDialog({ title: `Remove "${recipe.label}"?`, detail: 'This only removes the saved recipe. The conversation it came from is not touched.', confirmLabel: 'Remove recipe' }))) return;
+    const { recipes: _removed, ...rest } = projectPreferences ?? { schemaVersion: 1 as const, projectId: activeProject.id };
+    const remaining = savedRecipes.filter((item) => item.id !== recipeId);
+    await onUpdatePreferences({ ...rest, schemaVersion: 1, projectId: activeProject.id, ...(remaining.length > 0 ? { recipes: remaining } : {}) });
+    const first = personaFor(taskIntent).recipes?.[0];
+    if (first) onSelectTaskRecipe(taskIntent, first.id);
+  }
+  const saveTurnAsRecipeStable = useLatestHandler(saveTurnAsRecipe);
 
   /** Picks a specialist inside the current selector and loads its skill. */
   function chooseRecipe(recipe: PersonaRecipe): void {
@@ -1813,15 +1874,15 @@ export function WorkspaceView({
                 {!foldedBefore.has(turn.id) && renderInlineEvents(inlineEventsByTurn.get(turn.id) ?? [])}
                 {(() => {
                   const parts = runParts.get(turn.id);
-                  const awaiting = Boolean(turn.awaitingAnswer) && !running && index === activeConversation.turns.length - 1;
+                  const awaiting = Boolean(turn.awaitingAnswer) && !running && !pendingUser && index === activeConversation.turns.length - 1;
                   if (!parts) {
-                    return <MessageTurn turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} onRewind={onRewindTurn} onOpenFile={onOpenFile} awaitingAnswer={awaiting} onAnswer={queueOrSendStable} />;
+                    return <MessageTurn turn={turn} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} onRewind={onRewindTurn} onSaveRecipe={saveTurnAsRecipeStable} onOpenFile={onOpenFile} awaitingAnswer={awaiting} onAnswer={queueOrSendStable} />;
                   }
                   const lastText = parts.map((part) => part.kind).lastIndexOf('text');
                   const firstText = parts.findIndex((part) => part.kind === 'text');
                   return parts.map((part, partIndex) => part.kind === 'events'
                     ? <Fragment key={`events-${partIndex}`}>{renderInlineEvents(part.events)}</Fragment>
-                    : <MessageTurn key={`text-${partIndex}`} turn={turn} partText={part.text} partFirst={partIndex === firstText} partLast={partIndex === lastText} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} onRewind={onRewindTurn} onOpenFile={onOpenFile} awaitingAnswer={awaiting} onAnswer={queueOrSendStable} />);
+                    : <MessageTurn key={`text-${partIndex}`} turn={turn} partText={part.text} partFirst={partIndex === firstText} partLast={partIndex === lastText} brainReady={brainReady} onSaveToBrain={setBrainDraft} onBranch={onBranchTurn} onRewind={onRewindTurn} onSaveRecipe={saveTurnAsRecipeStable} onOpenFile={onOpenFile} awaitingAnswer={awaiting} onAnswer={queueOrSendStable} />);
                 })()}
               </Fragment>
             ))}
@@ -2262,21 +2323,22 @@ export function WorkspaceView({
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
-              {activePersona.recipes && activePersona.recipes.length > 1 && (
+              {activeRecipes.length > 1 && (
                 <OptionMenu
                   ariaLabel="Recipe"
                   disabled={busy}
                   icon={<ListChecks size={14} />}
                   labelPrefix="Recipe"
                   onChange={(value) => {
-                    const recipe = activePersona.recipes?.find((entry) => entry.id === value);
+                    const recipe = activeRecipes.find((entry) => entry.id === value);
                     if (recipe) chooseRecipe(recipe);
                   }}
-                  options={activePersona.recipes.map((recipe) => ({ value: recipe.id, label: recipe.label, description: recipe.description }))}
+                  options={activeRecipes.map((recipe) => ({ value: recipe.id, label: recipe.label, description: recipe.description }))}
                   title={`Choose the kind of ${activePersona.label.toLowerCase()} task`}
-                  value={activeRecipe?.id ?? activePersona.recipes[0]?.id ?? ''}
+                  value={activeRecipe?.id ?? activeRecipes[0]?.id ?? ''}
                 />
               )}
+              {activeRecipe && activeRecipe.id.startsWith('saved_') && <IconButton aria-label="Remove saved recipe" title="Remove this saved recipe" disabled={busy} onClick={() => void removeSavedRecipe(activeRecipe.id)} icon={<Trash2 size={14} />} />}
               <OptionMenu ariaLabel="Model" disabled={busy} icon={<Sparkles size={14} />} onChange={(value) => { if (value !== CUSTOM_MODEL) { onSelectModel(value); return; } void promptDialog({ title: 'Use a custom model', label: 'Model name', initialValue: selectedModel, placeholder: 'provider/model-name', confirmLabel: 'Use model', validate: validateModelName }).then((typed) => { if (typed) onSelectModel(typed); }); }} options={modelOptions(apiRun, selectedAgent, directApiCapability, selectedModel)} title="Model for this conversation" value={selectedModel} />
               <IconButton data-tour="composer-advanced" aria-label="More run options" title="More run options" aria-expanded={advancedComposerOpen} active={advancedComposerOpen} disabled={busy} onClick={() => setAdvancedComposerOpen((open) => !open)} icon={<Settings2 size={14} />} />
             </>}
@@ -2416,7 +2478,7 @@ function ExecutableCommandsGroup({ events, runActive, children }: { events: Arra
   );
 }
 
-const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onRewind, onOpenFile, awaitingAnswer, onAnswer, partText, partFirst = true, partLast = true }: {
+const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain, onBranch, onRewind, onSaveRecipe, onOpenFile, awaitingAnswer, onAnswer, partText, partFirst = true, partLast = true }: {
   turn: ConversationTurn;
   /** Set when the reply is drawn in pieces with its activity between them: this piece's text, and whether it opens or closes the reply. */
   partText?: string;
@@ -2426,6 +2488,8 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
   onSaveToBrain: (text: string) => void;
   onBranch: (turnId: string) => void;
   onRewind: (turnId: string) => void;
+  /** Keeps this message's prompt as a recipe. */
+  onSaveRecipe: (turnId: string) => void;
   onOpenFile: (path: string) => void;
   /** Set only for the conversation's latest turn, while nothing is running, so answering it is unambiguous. */
   awaitingAnswer: boolean;
@@ -2470,6 +2534,7 @@ const MessageTurn = memo(function MessageTurn({ turn, brainReady, onSaveToBrain,
         <>
           <UiButton type="button" className="message-action" title="Rewind to before this message" aria-label="Rewind to before this message" onClick={() => onRewind(turn.id)}><Undo2 size={12} /><span>Rewind</span></UiButton>
           <UiButton type="button" className="message-action" title="Branch from this message" aria-label="Branch from this message" onClick={() => onBranch(turn.id)}><GitFork size={12} /><span>Branch</span></UiButton>
+          <UiButton type="button" className="message-action" title="Keep this prompt as a recipe in the task picker" aria-label="Save this prompt as a recipe" onClick={() => onSaveRecipe(turn.id)}><BookmarkPlus size={12} /><span>Save as recipe</span></UiButton>
         </>
       ) : undefined} />}
       {awaitingAnswer && partLast && <AnswerBox onAnswer={onAnswer} />}

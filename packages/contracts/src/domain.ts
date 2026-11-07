@@ -391,6 +391,31 @@ export const appSettingsV1Schema = z
   })
   .strict();
 
+/** The task selectors that offer recipes, so a saved recipe says which door it belongs behind. */
+export const SAVED_RECIPE_INTENTS = ['plan', 'build', 'review', 'test', 'audit', 'operate'] as const;
+
+/**
+ * A recipe the person saved from one of their own runs: the prompt that worked, under a name, behind the selector it
+ * was used in, loading the same skills. It belongs to one project and stays on this machine with the other
+ * per-project choices; the repository never supplies one.
+ */
+export const savedRecipeSchema = z
+  .object({
+    /** Always starts with `saved_`, so it can never collide with a built-in recipe's id. */
+    id: z.string().regex(/^saved_[A-Za-z0-9-]{4,40}$/),
+    intent: z.enum(SAVED_RECIPE_INTENTS),
+    label: z.string().trim().min(1).max(40),
+    description: z.string().max(140),
+    /** What is placed in the composer when the recipe is chosen. */
+    starter: z.string().min(1).max(4_000),
+    /** Names of skills on disk, as a built-in recipe lists them. */
+    skills: z.array(z.string().min(1).max(60)).max(8),
+    createdAt: z.string().min(1),
+  })
+  .strict();
+export type SavedRecipe = z.infer<typeof savedRecipeSchema>;
+export const MAX_SAVED_RECIPES = 30;
+
 export const projectPreferencesV1Schema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -404,6 +429,8 @@ export const projectPreferencesV1Schema = z
     alwaysAllowRules: z.array(z.string()).optional(),
     // Checks, hooks and review that run around this project's agent runs. Set up by the user, never by the repository.
     automation: projectAutomationSchema.optional(),
+    // Recipes saved from this project's own runs, shown in the composer beside the built-in ones.
+    recipes: z.array(savedRecipeSchema).max(MAX_SAVED_RECIPES).optional(),
   })
   .strict();
 

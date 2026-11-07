@@ -91,6 +91,27 @@ export const PERSONAS: readonly Persona[] = [
         skills: ['project-recon'],
         starter: 'Check the scope of this work: what is in, what is out, the main risks, roughly how long it takes, and what to cut first if it has to shrink. Do not change files. Finish with a write_report (kind: plan):\n\n',
       },
+      {
+        id: 'spike',
+        label: 'Spike',
+        description: 'A throwaway prototype on a branch to answer one question',
+        skills: ['spike-runner'],
+        starter: 'Spike this. Name the one question, build the least that answers it on a spike branch, and report what you learned. Do not touch the main branch:\n\n',
+      },
+      {
+        id: 'breakdown',
+        label: 'Break down',
+        description: 'A goal into small ordered tasks with checkable acceptance',
+        skills: ['task-breaker'],
+        starter: 'Break this goal into small, ordered tasks. Give each one acceptance criteria that can be checked, mark dependencies and the riskiest task, and list open questions. Do not change files. Finish with a write_report (kind: plan):\n\n',
+      },
+      {
+        id: 'decision',
+        label: 'Decision record',
+        description: 'Compare the real options and record why one was chosen',
+        skills: ['decision-recorder'],
+        starter: 'Write a decision record for this. Compare the real options against this project\'s constraints, recommend one, and record the reasons and what would make us revisit it:\n\n',
+      },
     ],
   },
   {
@@ -109,6 +130,48 @@ export const PERSONAS: readonly Persona[] = [
         starter: BUILD_STARTER,
       },
       {
+        id: 'bugfix',
+        label: 'Fix from a report',
+        description: 'Reproduce it, pin it with a failing test, then fix the cause',
+        skills: ['bug-fixer'],
+        starter: 'Fix this bug. Reproduce it first, write a test that fails for the reported reason, find the cause, make the smallest fix, and show the test passing:\n\n',
+      },
+      {
+        id: 'tdd',
+        label: 'Test-first',
+        description: 'Red, green, refactor in small verified steps',
+        skills: ['tdd-loop'],
+        starter: 'Build this test-first. List the smallest behaviours in order, and for each one show the test failing before the code that makes it pass:\n\n',
+      },
+      {
+        id: 'spec',
+        label: 'From a spec',
+        description: 'Build exactly what the requirements say and check each one',
+        skills: ['spec-implementer'],
+        starter: 'Implement this spec. List each requirement, build them one at a time with evidence, and tell me about any gap or conflict instead of choosing silently:\n\n',
+      },
+      {
+        id: 'port',
+        label: 'Port or translate',
+        description: 'Move code between languages or frameworks with identical behaviour',
+        skills: ['porter'],
+        starter: 'Port this. Capture the current behaviour in tests first, port one unit at a time, and keep the original until the port is proven:\n\n',
+      },
+      {
+        id: 'deadcode',
+        label: 'Remove dead code',
+        description: 'Prove code is unused, then remove it in small checked steps',
+        skills: ['dead-code-remover'],
+        starter: 'Find and remove dead code. Prove each piece is unused, including dynamic uses, remove it in small steps, and run the checks after each step:\n\n',
+      },
+      {
+        id: 'mockup',
+        label: 'Mockup to code',
+        description: 'Build a screen from a design, then compare it in a real browser',
+        skills: ['mockup-builder'],
+        starter: 'Build this screen from the design using the project\'s own components and tokens. Then open it in a browser, compare it with the design, and fix the differences:\n\n',
+      },
+      {
         id: 'refactor',
         label: 'Refactor',
         description: 'Behaviour-preserving cleanup, gated on tests',
@@ -119,7 +182,7 @@ export const PERSONAS: readonly Persona[] = [
         id: 'migration',
         label: 'Migration',
         description: 'Forward and rollback, dry-run on a copy',
-        skills: ['migration-author'],
+        skills: ['migration-author', 'safe-schema-change'],
         starter: 'Write this migration with a forward and a rollback path. Take a checkpoint and dry-run it on a copy before touching real data:\n\n',
       },
       {
@@ -135,6 +198,13 @@ export const PERSONAS: readonly Persona[] = [
         description: 'One package at a time, revert on failure',
         skills: ['dependency-upgrader'],
         starter: 'Upgrade this dependency one package at a time. Run the checks after each step and revert anything that fails:\n\n',
+      },
+      {
+        id: 'upgrade-batch',
+        label: 'Batch dependency update',
+        description: 'Several packages in one pass, each tested, revert what fails',
+        skills: ['dependency-upgrader'],
+        starter: 'Update the outdated dependencies in one pass. Group them by risk, update each group, run the checks after every group, and revert what fails:\n\n',
       },
       {
         id: 'fixtures',
@@ -166,6 +236,34 @@ export const PERSONAS: readonly Persona[] = [
         description: 'Correctness, architecture, security and missing tests',
         skills: [],
         starter: REVIEW_STARTER,
+      },
+      {
+        id: 'branch',
+        label: 'Branch vs main',
+        description: 'Review the diff against the base, ranked by what blocks a merge',
+        skills: ['branch-reviewer'],
+        starter: 'Review this branch against its base. Read the diff in context, run the project check, and rank what must be fixed before merging. Do not change files. Finish with a write_report (kind: review):\n\n',
+      },
+      {
+        id: 'selfreview',
+        label: 'Before commit',
+        description: 'Read your uncommitted changes like a reviewer and say if they are ready',
+        skills: ['self-reviewer', 'commit-pr-writer'],
+        starter: 'Review my uncommitted changes before I commit. Flag leftovers and unrelated changes, run the check, say if it is ready, and draft a commit message in this project\'s style. Do not change files:\n\n',
+      },
+      {
+        id: 'explain',
+        label: 'Explain this code',
+        description: 'Walk through how it works, with files and lines',
+        skills: ['code-explainer'],
+        starter: 'Explain how this works. Start with what it does and why, then walk the path in the order it runs with file and line references. Do not change files:\n\n',
+      },
+      {
+        id: 'conventions',
+        label: 'Conventions check',
+        description: 'Compare a change with the habits this project actually follows',
+        skills: ['conventions-enforcer'],
+        starter: 'Check this change against this project\'s conventions, both written and in the existing code. Cite an example file for each difference. Do not change files. Finish with a write_report (kind: review):\n\n',
       },
       {
         id: 'api',
@@ -213,6 +311,27 @@ export const PERSONAS: readonly Persona[] = [
         starter: 'Write the missing tests for this change, run them, and report the pass/fail result. Only test files may change:\n\n',
       },
       {
+        id: 'browser',
+        label: 'Browser flow check',
+        description: 'Run the app locally and click through a real flow',
+        skills: ['browser-verifier'],
+        starter: 'Check this in the browser. Start the app on localhost, click through the flow with Playwright, and report each step with a screenshot and any console errors. Do not change product code:\n\n',
+      },
+      {
+        id: 'repro',
+        label: 'Reproduce from a log',
+        description: 'Turn an error report into a minimal failing case',
+        skills: ['bug-reproducer'],
+        starter: 'Reproduce this from the report. Build the smallest case that fails on demand and show the exact failing output. Do not fix the bug:\n\n',
+      },
+      {
+        id: 'edgecases',
+        label: 'Edge-case hunt',
+        description: 'Try unusual inputs against the real code and report what breaks',
+        skills: ['edge-case-hunter'],
+        starter: 'Try to break this. List its assumptions, test inputs that violate each one against the real code, and report what fails, with the exact input and output. Do not change product code:\n\n',
+      },
+      {
         id: 'coverage',
         label: 'Coverage gaps',
         description: 'Untested paths, ranked by risk',
@@ -249,6 +368,13 @@ export const PERSONAS: readonly Persona[] = [
         description: 'Injection, auth, secrets, paths, SSRF and dependencies',
         skills: ['security-auditor'],
         starter: 'Act as the $security-auditor skill. Attack ',
+      },
+      {
+        id: 'secrets',
+        label: 'Secrets and injection',
+        description: 'Leaked secrets and unsafe handling of input',
+        skills: ['secrets-injection-check'],
+        starter: 'Check for committed secrets and injection. Look in the files and the history, trace untrusted input to every sink, and report each finding with its file and line. Do not change files. Finish with a write_report (kind: audit):\n\n',
       },
       {
         id: 'accessibility',
@@ -317,6 +443,27 @@ export const PERSONAS: readonly Persona[] = [
         starter: 'Prepare this release. Read the changes, write the release notes, and list the exact steps. Do not push or deploy without asking:\n\n',
       },
       {
+        id: 'changelog',
+        label: 'Changelog',
+        description: 'Release notes from the history since the last release',
+        skills: ['changelog-writer'],
+        starter: 'Write the release notes since the last release. Group the changes by what they mean for the user, call out anything that breaks, and match the existing changelog\'s style. Do not tag or publish:\n\n',
+      },
+      {
+        id: 'branches',
+        label: 'Clean up branches',
+        description: 'List stale branches and worktrees, then remove only what you approve',
+        skills: ['branch-cleaner'],
+        starter: 'List the stale local branches and worktrees with the reason for each. Do not delete anything until I approve the names:\n\n',
+      },
+      {
+        id: 'postmortem',
+        label: 'Postmortem',
+        description: 'A blameless write-up with a sourced timeline and actions',
+        skills: ['postmortem-writer'],
+        starter: 'Write a blameless postmortem for this. Build the timeline from real evidence with a source for each entry, and separate confirmed causes from likely ones:\n\n',
+      },
+      {
         id: 'preflight',
         label: 'Deploy preflight',
         description: 'Env, secrets, migrations, health and rollback',
@@ -382,6 +529,28 @@ export function personaFor(intent: TaskIntent): Persona {
 }
 
 /** The recipe a selector starts on: its first, or none for selectors with no recipes. */
+/** A recipe saved from a run, in the shape this file needs. Kept structural so this file stays free of the schema. */
+export interface SavedRecipeLike {
+  id: string;
+  intent: string;
+  label: string;
+  description: string;
+  starter: string;
+  skills: readonly string[];
+}
+
+/**
+ * The recipes to offer inside a selector: the built-in ones, then the person's own saved for that selector. A saved
+ * one never replaces a built-in, and the first recipe (the default) stays the built-in's.
+ */
+export function recipesFor(persona: Persona, saved: readonly SavedRecipeLike[] = []): readonly PersonaRecipe[] {
+  const own = saved
+    .filter((recipe) => recipe.intent === persona.id)
+    .map((recipe) => ({ id: recipe.id, label: recipe.label, description: recipe.description, skills: recipe.skills, starter: recipe.starter }));
+  const builtIn = persona.recipes ?? [];
+  return own.length === 0 ? builtIn : [...builtIn, ...own];
+}
+
 export function defaultRecipe(persona: Persona): PersonaRecipe | undefined {
   return persona.recipes?.[0];
 }
