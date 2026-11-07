@@ -421,3 +421,6 @@ html[data-theme]:root .composer textarea {
 .kai-bar-added { background: #2ea043; }
 .kai-bar-modified { background: #388bfd; }
 .kai-bar-deleted { background: transparent; border-top: 3px solid #f85149; width: 6px !important; height: 0 !important; margin-top: 0; }
+
+/* Flowbite's Card centres its content vertically; a card here is a panel whose content starts at the top. */
+.kai-card > div { justify-content: flex-start; }

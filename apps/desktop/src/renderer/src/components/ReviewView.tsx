@@ -1,6 +1,6 @@
 import { FileTypeIcon } from './FileTypeIcon';
 import { CheckCircle2, ListChecks, RefreshCw, Sparkles, Undo2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChangeReviewResult, CheckpointReview, ConversationRecord, FileVerificationState, ProjectRecord, ReviewMode, VerificationOverview } from '@kai/contracts';
 import { MAX_REVIEW_FILES } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
@@ -71,18 +71,23 @@ export function ReviewView({ activeProject, conversation, reviewMode, onReviewCh
   const projectId = activeProject?.id ?? null;
   const activeTurn = selectedTurn && turns.some((turn) => turn.turnId === selectedTurn) ? selectedTurn : turns[0]?.turnId ?? null;
 
+  // App makes a new onReviewCheckpoint on every render, and loading sets App's busy state. Depending on it directly
+  // re-ran the load forever, pulling megabytes of diff over IPC each time until the app fell over.
+  const reviewRef = useRef(onReviewCheckpoint);
+  reviewRef.current = onReviewCheckpoint;
+
   const load = useCallback(async (): Promise<void> => {
     if (!conversationId || !activeTurn) { setReview(null); return; }
     setLoading(true);
     try {
-      setReview(await onReviewCheckpoint(conversationId, activeTurn));
+      setReview(await reviewRef.current(conversationId, activeTurn));
     } catch (caught) {
       setReview(null);
       setNotice(caught instanceof Error ? caught.message : 'The changes could not be loaded.');
     } finally {
       setLoading(false);
     }
-  }, [conversationId, activeTurn, onReviewCheckpoint]);
+  }, [conversationId, activeTurn]);
 
   useEffect(() => { setAi({ state: 'idle' }); setSelectedFile(null); void load(); }, [load]);
 
