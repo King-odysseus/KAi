@@ -209,12 +209,36 @@ describe('crew runner', () => {
   it('runs the project check before finishing and adds a fix task when it fails', async () => {
     let calls = 0;
     const f = fixture({}, { checkCommand: 'npm test' });
-    f.ports.runCheck = async (_project, command) => { f.checks.push(command); calls += 1; return { passed: calls > 1, output: 'FAIL src/a.test.ts' }; };
+    // Failing from the start means no task is blamed; the final check fails once too, then passes after the fix task.
+    f.ports.runCheck = async (_project, command) => { f.checks.push(command); calls += 1; return { passed: calls > 2, output: 'FAIL src/a.test.ts' }; };
     const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
     const run = await runToIdle(f.runner, started.id);
-    expect(f.checks).toEqual(['npm test', 'npm test']);
+    expect(f.checks).toEqual(['npm test', 'npm test', 'npm test']);
     expect(run.tasks.map((task) => task.id)).toContain('check-fix-1');
     expect(run.status).toBe('completed');
+  });
+
+  it('sends a task back with the check output when the project check fails after it', async () => {
+    let calls = 0;
+    const f = fixture({}, { checkCommand: 'npm test' });
+    // Call 1 is the baseline, which passes; call 2 is the first task's check, which fails.
+    f.ports.runCheck = async (_project, command) => { f.checks.push(command); calls += 1; return { passed: calls !== 2, output: 'FAIL src/a.test.ts' }; };
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    const sentBack = run.tasks.flatMap((task) => task.reviews).find((review) => review.reviewer === 'check' && review.verdict === 'sendBack');
+    expect(sentBack?.feedback).toContain('npm test');
+    expect(sentBack?.feedback).toContain('FAIL src/a.test.ts');
+    const accepted = run.tasks.flatMap((task) => task.reviews).filter((review) => review.reviewer === 'check' && review.verdict === 'accept');
+    expect(accepted.length).toBeGreaterThan(0);
+  });
+
+  it('does not blame a task for a check that already failed before the crew started', async () => {
+    const f = fixture({}, { checkCommand: 'npm test' });
+    f.ports.runCheck = async (_project, command) => { f.checks.push(command); return { passed: false, output: 'FAIL already' }; };
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build Zuri Log', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+    expect(run.tasks.flatMap((task) => task.reviews).some((review) => review.reviewer === 'check')).toBe(false);
+    expect(run.feed.some((item) => item.text.includes('already fails'))).toBe(true);
   });
 
   it('pauses on request and picks up where it left off', async () => {

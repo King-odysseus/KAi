@@ -39,11 +39,16 @@ export interface CrewStartInput {
   config: CrewConfig;
 }
 
+/** The reviewer id the per-task project check is recorded under; it is not a role. */
+const CHECK_REVIEWER = 'check';
+
 interface ActiveRun {
   ownerWindowId: number;
   conversationId: string;
   controller: AbortController;
   run: CrewRun;
+  /** Whether the project's check already failed before the crew changed anything; then it cannot blame a task. */
+  baselineFailing?: boolean;
   cancelled: boolean;
   done: Promise<void>;
 }
@@ -58,6 +63,8 @@ export class DesktopCrewRunner {
   private readonly active = new Map<string, ActiveRun>();
   /** What a builder said about the task it just finished, for the Lead's review of it. */
   private readonly builderReply = new Map<string, string>();
+  /** What the per-task project check found, for the Lead's review of the same task. */
+  private readonly checkNote = new Map<string, string>();
 
   constructor(private readonly ports: CrewRunnerPorts) {}
 
@@ -232,7 +239,21 @@ export class DesktopCrewRunner {
     await this.commit(active, { ...run, status: run.config.approvePlan ? 'awaitingApproval' : 'running', updatedAt: at });
   }
 
+  /** On a fresh run, runs the project check once before any task, so a repository that already fails is not blamed on the first builder. */
+  private async measureBaseline(active: ActiveRun): Promise<void> {
+    const { run } = active;
+    const command = run.config.checkCommand;
+    if (!command || active.baselineFailing !== undefined || run.tasks.some((task) => task.status !== 'backlog' || task.reviews.length > 0)) return;
+    const check = await this.ports.runCheck(run.projectId, command, active.controller.signal);
+    if (active.cancelled) return;
+    active.baselineFailing = !check.passed;
+    if (check.passed) return;
+    const at = this.now().toISOString();
+    await this.commit(active, { ...run, feed: [...run.feed, { id: `feed_${randomUUID()}`, at, who: 'crew', kind: 'info' as const, text: `"${command}" already fails before any task, so it is only checked once everything is accepted.` }] });
+  }
+
   private async loop(active: ActiveRun): Promise<void> {
+    await this.measureBaseline(active);
     for (;;) {
       if (active.cancelled) return;
       let run = enforceLimits(active.run, this.now());
@@ -313,6 +334,23 @@ export class DesktopCrewRunner {
     const builder = roles.find((role) => role.id === task().assignedTo);
     const mayChangeFiles = builder ? roleAccess(builder) === 'edit' : true;
 
+    // The project's own check comes before any opinion: a task that breaks it is sent back with the output, so a break
+    // is found one task after it happens, not after every task has been accepted. Runs once per round.
+    const checkCommand = active.run.config.checkCommand;
+    if (checkCommand && mayChangeFiles && !active.baselineFailing && !task().reviews.some((review) => review.reviewer === CHECK_REVIEWER && review.round === task().round)) {
+      const check = await this.ports.runCheck(active.run.projectId, checkCommand, active.controller.signal);
+      if (active.cancelled) return;
+      if (!check.passed) {
+        const tail = check.output.trim().slice(-1_500);
+        await this.commit(active, reviewTask(active.run, taskId, { verdict: 'sendBack', feedback: `The project check "${checkCommand}" fails with this task's changes.${tail ? `
+${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
+        this.checkNote.delete(taskId);
+        return;
+      }
+      this.checkNote.set(taskId, `The project check "${checkCommand}" passed after this task.`);
+      await this.commit(active, { ...active.run, tasks: active.run.tasks.map((item) => (item.id === taskId ? { ...item, reviews: [...item.reviews, { round: item.round, verdict: 'accept' as const, feedback: '', reviewer: CHECK_REVIEWER, at: at() }] } : item)) });
+    }
+
     // A fixed order keeps a run reproducible: security first, then the test and audit passes, then a plain
     // reviewer. Each role runs once per round; a pass is remembered so a resumed run does not pay twice.
     const REVIEW_ORDER = ['security', 'tester', 'auditor', 'license', 'compliance', 'reviewer'] as const;
@@ -335,7 +373,7 @@ export class DesktopCrewRunner {
     }
 
     const lead = roles.find((role) => role.kind === 'lead')!;
-    const answer = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? ''), 'review', parseReview);
+    const answer = await this.askJson(active, lead, reviewPrompt(active.run, task(), this.builderReply.get(taskId) ?? '', this.checkNote.get(taskId)), 'review', parseReview);
     if (active.cancelled) return;
     const run = addSpend(active.run, taskId, answer.costUsd, at());
     const verdict = answer.value ?? { verdict: 'needsYou' as const, feedback: 'The Lead gave an answer that could not be read, so the work was not accepted without a check.' };

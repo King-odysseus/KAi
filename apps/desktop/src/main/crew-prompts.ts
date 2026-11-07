@@ -69,7 +69,7 @@ export function planPrompt(goal: string, config: CrewConfig, conventions: string
   ].join('\n');
 }
 
-export function reviewPrompt(run: CrewRun, task: CrewTask, builderReply: string): string {
+export function reviewPrompt(run: CrewRun, task: CrewTask, builderReply: string, checkNote?: string): string {
   return [
     'You are the Lead. Check this finished task against its acceptance criteria by reading the changed code and, where it helps, running a command. Do not change any files.',
     '',
@@ -81,6 +81,7 @@ export function reviewPrompt(run: CrewRun, task: CrewTask, builderReply: string)
     ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),
     ...designReviewLines(run, task),
     ...(task.files.length > 0 ? ['', `Files the builder reported changing: ${task.files.slice(0, 40).join(', ')}`] : []),
+    ...(checkNote ? ['', checkNote] : []),
     '',
     'The builder said:',
     builderReply.trim().slice(-2_500) || '(no reply)',
