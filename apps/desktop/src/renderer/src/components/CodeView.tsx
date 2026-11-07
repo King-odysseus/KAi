@@ -49,6 +49,8 @@ import type {
 } from '@kai/contracts';
 import { placeSuggestion } from '../learning-placement';
 import { FileTypeIcon, FolderTypeIcon } from './FileTypeIcon';
+import { ProblemsPanel, RecentPanel, TodoPanel } from './CodeSidePanels';
+import { pushRecent, readRecent, writeRecent } from '../recent-files';
 import { createEditorExtras, editorViewOptions, type EditorExtras, type EditorView } from '../editor-view';
 import { GitBadge } from './GitBadge';
 import { changeMap, type FileChange } from './project-files-tree';
@@ -266,6 +268,10 @@ export function CodeView({
   const [files, setFiles] = useState<ProjectFileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [query, setQuery] = useState('');
+  type SideTab = 'files' | 'recent' | 'todo' | 'problems';
+  const [sideTab, setSideTab] = useState<SideTab>('files');
+  const [recent, setRecent] = useState<string[]>([]);
+  const [problemCount, setProblemCount] = useState(0);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Where the right-click menu is, and what it was opened on.
   const [fileMenu, setFileMenu] = useState<{ x: number; y: number; kind: 'file' | 'folder' | 'root'; path: string } | null>(null);
@@ -764,6 +770,21 @@ export function CodeView({
     return () => { cancelled = true; };
   }, [editorReady, projectId, activePath, activeDirty, editorView?.gitBlame]);
 
+  // Change bars come from the diff against the last commit. They are fetched when a file is opened or saved, and
+  // cleared while it has unsaved edits, because their line numbers describe the saved text.
+  useEffect(() => {
+    const extras = extrasRef.current;
+    if (!editorReady || !extras || !projectId || !activePath || activeDirty || !editorView?.changeBars) {
+      extras?.setChanges(null);
+      return;
+    }
+    let cancelled = false;
+    void window.kaiDesktop.gitChanges(projectId, activePath).then((response) => {
+      if (!cancelled) extras.setChanges(response.ok ? response.data.hunks : null);
+    }).catch(() => { if (!cancelled) extras.setChanges(null); });
+    return () => { cancelled = true; };
+  }, [editorReady, projectId, activePath, activeDirty, editorView?.changeBars]);
+
   useEffect(() => {
     if (!autoSave) {
       clearAutoSaveTimer();
@@ -1235,7 +1256,24 @@ export function CodeView({
     setActivePath(path);
     setLearningError(null);
     setReferenceNotice(null);
+    setRecent((current) => {
+      const next = pushRecent(current, path);
+      writeRecent(currentProjectId, next);
+      return next;
+    });
     return true;
+  }
+
+  /** Opens a file and puts the cursor on a line, for the To-do and Problems lists. */
+  async function jumpTo(path: string, line: number, column = 1): Promise<void> {
+    if (!(await openFile(path))) return;
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const target = Math.min(Math.max(1, line), model.getLineCount());
+    editor.setPosition({ lineNumber: target, column: Math.min(column, model.getLineMaxColumn(target)) });
+    editor.revealLineInCenter(target);
+    editor.focus();
   }
 
   async function saveDocument(path: string, mode: 'manual' | 'auto'): Promise<void> {
@@ -1996,6 +2034,12 @@ export function CodeView({
     }
   }
 
+  // The recent list belongs to a project, so it is read again whenever the project changes.
+  useEffect(() => {
+    setRecent(projectId ? readRecent(projectId) : []);
+    setSideTab('files');
+  }, [projectId]);
+
   const root = useMemo(() => buildTree(files), [files]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -2130,7 +2174,21 @@ export function CodeView({
           <UiButton type="button" className="icon-button compact" title="New file" aria-label="New file" onClick={() => void createFile()}><FilePlus size={14} /></UiButton>
           <UiButton type="button" className="icon-button compact" title="Refresh files" aria-label="Refresh files" onClick={() => { void loadTree(); void refreshGitChanges(); }}><RefreshCw size={14} /></UiButton>
         </div>
+        <div className="code-side-tabs" role="tablist" aria-label="Sidebar views">
+          {([['files', 'Files'], ['recent', 'Recent'], ['todo', 'To-do'], ['problems', 'Problems']] as const).map(([id, label]) => (
+            <UiButton key={id} type="button" role="tab" className="secondary-button" aria-selected={sideTab === id} onClick={() => setSideTab(id)}>
+              {label}{id === 'problems' && problemCount > 0 && <span className="tab-count">{problemCount}</span>}
+            </UiButton>
+          ))}
+        </div>
+        {sideTab === 'recent' && <RecentPanel paths={recent} activePath={activePath} onOpen={(path) => void openFile(path)} onClear={() => { setRecent([]); if (projectId) writeRecent(projectId, []); }} />}
+        {sideTab === 'todo' && projectId && <TodoPanel projectId={projectId} onOpen={(path, line) => void jumpTo(path, line)} />}
+        {/* Kept mounted so the count on its tab stays current while another list is showing. */}
+        <div hidden={sideTab !== 'problems'} className="side-panel-host">
+          <ProblemsPanel monaco={editorReady ? monacoRef.current : null} onOpen={(path, line, column) => void jumpTo(path, line, column)} onCount={setProblemCount} />
+        </div>
         <div
+          hidden={sideTab !== 'files'}
           className="code-tree"
           tabIndex={0}
           onKeyDown={(event) => {

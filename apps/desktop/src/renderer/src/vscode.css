@@ -415,3 +415,9 @@ html[data-theme]:root .composer textarea {
 
 /* Inline blame on the cursor's line. */
 .kai-blame { margin-left: 2em; font-style: italic; opacity: 0.45; pointer-events: none; }
+
+/* Change bars: a strip in the gutter beside lines that differ from the last commit. */
+.kai-bar { margin-left: 3px; width: 3px !important; }
+.kai-bar-added { background: #2ea043; }
+.kai-bar-modified { background: #388bfd; }
+.kai-bar-deleted { background: transparent; border-top: 3px solid #f85149; width: 6px !important; height: 0 !important; margin-top: 0; }

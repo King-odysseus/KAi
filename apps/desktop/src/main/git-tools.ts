@@ -319,6 +319,72 @@ export async function gitBlameFile(cwd: string, filePath: string): Promise<{ lin
 }
 
 /**
+ * The lines of a file that differ from the last commit, as ranges of the file as it is now. Consecutive removed and added
+ * lines make a "modified" range, added lines alone make "added", and removed lines alone leave a one-line "deleted" mark
+ * where they used to be. This feeds the editor's change bars.
+ */
+export function hunksFromDiff(diff: string): Array<{ start: number; count: number; kind: 'added' | 'modified' | 'deleted' }> {
+  const hunks: Array<{ start: number; count: number; kind: 'added' | 'modified' | 'deleted' }> = [];
+  let line = 0;
+  let removed = 0;
+  let added = 0;
+  let addStart = 0;
+  const flush = (): void => {
+    if (added > 0) hunks.push({ start: addStart, count: added, kind: removed > 0 ? 'modified' : 'added' });
+    else if (removed > 0) hunks.push({ start: Math.max(1, line), count: 0, kind: 'deleted' });
+    removed = 0;
+    added = 0;
+  };
+  for (const row of diff.split(/\r?\n/)) {
+    const header = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(row);
+    if (header) {
+      flush();
+      line = Number.parseInt(header[1]!, 10);
+    } else if (line === 0) {
+      continue;
+    } else if (row.startsWith('+')) {
+      if (added === 0) addStart = line;
+      added += 1;
+      line += 1;
+    } else if (row.startsWith('-')) {
+      removed += 1;
+    } else {
+      flush();
+      line += 1;
+    }
+  }
+  flush();
+  return hunks.slice(0, 5_000);
+}
+
+export async function gitChangedHunks(cwd: string, filePath: string): Promise<{ hunks: ReturnType<typeof hunksFromDiff> }> {
+  return { hunks: hunksFromDiff(await gitDiffAgainstHead(cwd, filePath).catch(() => '')) };
+}
+
+/**
+ * To-do markers (TODO, FIXME, HACK, BUG, XXX, NOTE after a comment opener) across the project's tracked and untracked,
+ * non-ignored files. `git grep` is used because it already knows what to skip; a folder that is not a repository gives
+ * nothing rather than walking everything.
+ */
+export async function scanTodos(cwd: string): Promise<{ items: Array<{ path: string; line: number; kind: string; text: string }>; truncated: boolean }> {
+  const output = await git(cwd, [
+    'grep', '-n', '-I', '--untracked', '-E', '(//|#|/[*]|[*]|<!--|--|;)[[:space:]]*(TODO|FIXME|HACK|XXX|BUG|NOTE)([^A-Za-z0-9_]|$)',
+    '--', '.', ':!*.lock', ':!package-lock.json', ':!*.generated.*', ':!*.min.*', ':!*.svg', ':!*.map',
+  ], 30_000).catch((error: { stdout?: string }) => error.stdout ?? '');
+  const items: Array<{ path: string; line: number; kind: string; text: string }> = [];
+  const pattern = /(?:\/\/|#|\/\*|\*|<!--|--|;)\s*(TODO|FIXME|HACK|XXX|BUG|NOTE)\b[:(\s-]*(.*)$/;
+  for (const row of output.split(/\r?\n/)) {
+    const match = /^(.+?):(\d+):(.*)$/.exec(row);
+    if (!match) continue;
+    const found = pattern.exec(match[3]!);
+    if (!found) continue;
+    items.push({ path: match[1]!.slice(0, 1_000), line: Number.parseInt(match[2]!, 10), kind: found[1]!, text: found[2]!.replace(/\s*(\*\/|-->)\s*$/, '').trim().slice(0, 300) });
+    if (items.length >= 1_000) return { items, truncated: true };
+  }
+  return { items, truncated: false };
+}
+
+/**
  * Everything a file changed against the last commit, staged or not, as one diff. A file that is untracked (new) is
  * compared with nothing. This is what a review should read: the unstaged-only diff is empty for a change that has
  * already been staged.

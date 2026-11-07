@@ -352,7 +352,7 @@ import {
 import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
 import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
-import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
+import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitBlameInputSchema, type GitBlameResult, type GitChangesResult, todoScanInputSchema, type TodoScanResult, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
 import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileMutationResultSchema, filePathInputSchema, fileReadInputSchema, fileRenameInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileMutationResult, type FilePathInput, type FileRenameInput, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
@@ -741,6 +741,8 @@ export const ipcChannels = [
   'git:clone-team-repository',
   'git:diff',
   'git:blame',
+  'git:changes',
+  'files:todos',
   'review:change',
   'review:changes',
   'experiences:count',
@@ -829,6 +831,7 @@ export const ipcInputSchemas = {
           linkedTagEditing: z.boolean().optional(),
           inlayHints: z.boolean().optional(),
           fileIcons: z.boolean().optional(),
+          changeBars: z.boolean().optional(),
         })
         .strict()
         .optional(),
@@ -1159,6 +1162,8 @@ export const ipcInputSchemas = {
   'git:clone-team-repository': gitTeamCloneInputSchema,
   'git:diff': gitDiffInputSchema,
   'git:blame': gitBlameInputSchema,
+  'git:changes': gitBlameInputSchema,
+  'files:todos': todoScanInputSchema,
   'review:change': z.object({ request: z.string().max(4_000), diff: z.string().max(100_000), mode: z.enum(['novice', 'intermediate', 'expert']) }).strict(),
   'review:changes': reviewChangesInputSchema,
   'experiences:count': emptyInputSchema,
@@ -1849,6 +1854,8 @@ export interface KaiDesktopBridge {
   gitCloneTeamRepository(repository: string): Promise<IpcResponse<{ projectId: string; path: string } | null>>;
   gitDiff(projectId: string, path: string, staged: boolean): Promise<IpcResponse<GitActionResult>>;
   gitBlame(projectId: string, path: string): Promise<IpcResponse<GitBlameResult>>;
+  gitChanges(projectId: string, path: string): Promise<IpcResponse<GitChangesResult>>;
+  scanTodos(projectId: string): Promise<IpcResponse<TodoScanResult>>;
   reviewChange(request: string, diff: string, mode: 'novice' | 'intermediate' | 'expert'): Promise<IpcResponse<string | null>>;
   /** Reads the diffs of several changed files and returns findings that each name their file. */
   reviewChanges(request: ReviewChangesInput): Promise<IpcResponse<ChangeReviewResult>>;

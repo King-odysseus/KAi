@@ -702,6 +702,12 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             onChange={(fileIcons) => setDraft((current) => ({ ...current, editor: { ...current.editor, fileIcons } }))}
           />
           <NotificationToggle
+            label="Change bars"
+            hint="A coloured bar beside lines that differ from the last commit: green added, blue changed, red where lines were removed"
+            checked={draft.editor.changeBars}
+            onChange={(changeBars) => setDraft((current) => ({ ...current, editor: { ...current.editor, changeBars } }))}
+          />
+          <NotificationToggle
             label="Bracket pair colours"
             hint="Matching brackets share a colour, nested ones differ"
             checked={draft.editor.bracketColors}

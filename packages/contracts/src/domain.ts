@@ -284,6 +284,7 @@ export const editorSettingsSchema = z
     linkedTagEditing: z.boolean().default(true),
     inlayHints: z.boolean().default(true),
     fileIcons: z.boolean().default(true),
+    changeBars: z.boolean().default(true),
   })
   .strict();
 
@@ -638,6 +639,7 @@ export function createDefaultSettings(): AppSettings {
       linkedTagEditing: true,
       inlayHints: true,
       fileIcons: true,
+      changeBars: true,
     },
     mcpServers: [{
       id: PLAYWRIGHT_MCP_SERVER_ID,

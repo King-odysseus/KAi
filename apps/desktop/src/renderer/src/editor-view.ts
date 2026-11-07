@@ -40,6 +40,8 @@ export function editorViewOptions(view: EditorView): Monaco.editor.IEditorOption
 /** Words an editor treats as a to-do marker when they follow a comment opener. */
 const TODO_PATTERN = '(?://|#|/\*|\*|<!--|--|;)\s*(TODO|FIXME|HACK|XXX|BUG|NOTE)\b[^\n]*';
 
+export interface ChangeHunk { start: number; count: number; kind: 'added' | 'modified' | 'deleted' }
+
 export interface BlameLine { commit?: string; author: string; time: number; summary: string }
 
 /** "3 days ago" style age, from seconds since the epoch. */
@@ -67,6 +69,8 @@ const cap = (text: string, max: number): string => (text.length > max ? `${text.
 export interface EditorExtras {
   /** Turn each helper on or off to match the settings. */
   setView(view: EditorView): void;
+  /** Lines that differ from the last commit, for the change bars; null clears them. */
+  setChanges(hunks: readonly ChangeHunk[] | null): void;
   /** The blame for the file now in the editor, or null when there is none (an untracked file, no repository). */
   setBlame(lines: readonly BlameLine[] | null): void;
   dispose(): void;
@@ -80,6 +84,8 @@ export function createEditorExtras(monaco: typeof Monaco, editor: Monaco.editor.
   const lens = editor.createDecorationsCollection();
   const todos = editor.createDecorationsCollection();
   const blameMark = editor.createDecorationsCollection();
+  const bars = editor.createDecorationsCollection();
+  let hunks: readonly ChangeHunk[] | null = null;
   let todoTimer: ReturnType<typeof setTimeout> | undefined;
 
   function paintLens(): void {
@@ -114,6 +120,17 @@ export function createEditorExtras(monaco: typeof Monaco, editor: Monaco.editor.
     })));
   }
 
+  function paintBars(): void {
+    const model = editor.getModel();
+    if (!model || !view.changeBars || !hunks) return void bars.clear();
+    const last = model.getLineCount();
+    bars.set(hunks.map((hunk) => {
+      const start = Math.min(Math.max(1, hunk.start), last);
+      const end = hunk.kind === 'deleted' ? start : Math.min(last, start + Math.max(1, hunk.count) - 1);
+      return { range: new monaco.Range(start, 1, end, 1), options: { isWholeLine: true, linesDecorationsClassName: `kai-bar kai-bar-${hunk.kind}` } };
+    }));
+  }
+
   function paintBlame(): void {
     const model = editor.getModel();
     const position = editor.getPosition();
@@ -131,7 +148,7 @@ export function createEditorExtras(monaco: typeof Monaco, editor: Monaco.editor.
       const model = editor.getModel();
       if (model && uris.some((uri) => uri.toString() === model.uri.toString())) paintLens();
     }),
-    editor.onDidChangeModel(() => { blame = null; paintLens(); paintTodos(); paintBlame(); }),
+    editor.onDidChangeModel(() => { blame = null; hunks = null; paintBars(); paintLens(); paintTodos(); paintBlame(); }),
     editor.onDidChangeModelContent(() => {
       clearTimeout(todoTimer);
       todoTimer = setTimeout(paintTodos, 250);
@@ -141,7 +158,8 @@ export function createEditorExtras(monaco: typeof Monaco, editor: Monaco.editor.
   ];
 
   return {
-    setView(next) { view = next; paintLens(); paintTodos(); paintBlame(); },
+    setView(next) { view = next; paintBars(); paintLens(); paintTodos(); paintBlame(); },
+    setChanges(next) { hunks = next; paintBars(); },
     setBlame(lines) {
       blame = lines;
       blameVersion = editor.getModel()?.getAlternativeVersionId() ?? -1;
@@ -150,7 +168,7 @@ export function createEditorExtras(monaco: typeof Monaco, editor: Monaco.editor.
     dispose() {
       clearTimeout(todoTimer);
       for (const item of disposables) item.dispose();
-      lens.clear(); todos.clear(); blameMark.clear();
+      lens.clear(); todos.clear(); blameMark.clear(); bars.clear();
     },
   };
 }

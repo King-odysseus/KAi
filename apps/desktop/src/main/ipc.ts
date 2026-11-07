@@ -120,7 +120,7 @@ import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
-import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
+import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitBlameFile, gitChangedHunks, gitDiffAgainstHead, scanTodos, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
 import { importCardId, scanForImport } from './import-scan';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { publishInlineMockup, publishProjectMockup } from './mockup-server';
@@ -1293,6 +1293,8 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   });
   handle(context, 'git:diff', async ({ projectId, path: filePath, staged }) => gitDiffFile(await projectPath(projectId), filePath, staged));
   handle(context, 'git:blame', async ({ projectId, path: filePath }) => gitBlameFile(await projectPath(projectId), filePath));
+  handle(context, 'git:changes', async ({ projectId, path: filePath }) => gitChangedHunks(await projectPath(projectId), filePath));
+  handle(context, 'files:todos', async ({ projectId }) => scanTodos(await projectPath(projectId)));
   handle(context, 'review:change', async ({ request: reviewRequest, diff, mode }) => context.changeReviewer.review(reviewRequest, diff, mode));
   handle(context, 'review:changes', async ({ projectId, paths, request: reviewRequest, mode }) => {
     const root = await projectPath(projectId);

@@ -99,6 +99,22 @@ export const gitBlameResultSchema = z
   })
   .strict();
 export type GitBlameResult = z.infer<typeof gitBlameResultSchema>;
+/** Lines of a file that differ from the last commit, as ranges of the file as it is now (for the editor's change bars). */
+export const gitChangesResultSchema = z
+  .object({
+    hunks: z.array(z.object({ start: z.number().int().min(1), count: z.number().int().min(0), kind: z.enum(['added', 'modified', 'deleted']) }).strict()).max(5_000),
+  })
+  .strict();
+export type GitChangesResult = z.infer<typeof gitChangesResultSchema>;
+/** To-do markers found across the project's files. */
+export const todoScanInputSchema = z.object({ ...projectInput }).strict();
+export const todoScanResultSchema = z
+  .object({
+    items: z.array(z.object({ path: z.string().max(1_000), line: z.number().int().min(1), kind: z.string().max(10), text: z.string().max(300) }).strict()).max(1_000),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type TodoScanResult = z.infer<typeof todoScanResultSchema>;
 export const gitPullRequestInputSchema = z
   .object({ ...projectInput, title: z.string().trim().min(1).max(256), body: z.string().max(20_000) })
   .strict();

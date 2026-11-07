@@ -1,0 +1,19 @@
+/* Code sidebar: tab strip and the Recent, To-do and Problems lists. */
+.code-side-tabs { display: flex; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border-soft); }
+.code-side-tabs button { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
+.code-side-tabs button[aria-selected='true'] { font-weight: 600; }
+.code-side-tabs .tab-count { margin-left: 4px; font-size: 10px; opacity: 0.7; }
+.side-list { display: flex; flex-direction: column; gap: 1px; padding: 6px; overflow: auto; min-height: 0; }
+.side-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px; text-align: left; justify-content: flex-start; }
+.side-row.active { font-weight: 600; }
+.side-row .side-row-dir { margin-left: auto; padding-left: 8px; opacity: 0.55; max-width: 45%; }
+.side-row .file-type-icon { margin-right: 0; }
+.side-tools { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; }
+.side-filter { flex: 1; min-width: 0; }
+.side-clear { margin-top: 8px; }
+.todo-kind { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(255, 204, 0, 0.18); color: #ffcc00; }
+.todo-kind-fixme, .todo-kind-bug { background: rgba(244, 71, 71, 0.18); color: #ff6b6b; }
+.todo-kind-note { background: rgba(86, 156, 214, 0.18); color: #6cb6ff; }
+.todo-kind-hack, .todo-kind-xxx { background: rgba(255, 140, 0, 0.18); color: #ffa94d; }
+.problem.error .problem-icon { color: #f85149; }
+.problem.warning .problem-icon { color: #d29922; }

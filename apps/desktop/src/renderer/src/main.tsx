@@ -12,6 +12,7 @@ import './uap-dashboard.css';
 import './controls.css';
 import './workspace-polish.css';
 import './vscode.css';
+import './code-side.css';
 import './ui-upgrade.css';
 
 createRoot(document.getElementById('root')!).render(

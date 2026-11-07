@@ -28,7 +28,7 @@ describe('desktop contracts', () => {
       formatOnSave: true,
       // The look of the editor: every helper on except the minimap and wrapping.
       bracketColors: true, guides: true, stickyScroll: true, ligatures: true, smoothScrolling: true, minimap: false, wordWrap: false,
-      errorLens: true, gitBlame: true, todoHighlight: true, colorSwatches: true, linkedTagEditing: true, inlayHints: true, fileIcons: true,
+      errorLens: true, gitBlame: true, todoHighlight: true, colorSwatches: true, linkedTagEditing: true, inlayHints: true, fileIcons: true, changeBars: true,
     });
     expect(settings.cognitive1.overwatch).toEqual({
       enabled: false,
