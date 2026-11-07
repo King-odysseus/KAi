@@ -1,4 +1,5 @@
-import { ImageCard, ImageChip } from './ImageAttachment';
+import { ImageCard, ImageChip } from './ImageAttachment';
+import { Switch } from './ui/Switch';
 import { AutoSettings } from './AutoSettings';
 import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerRunLine';
 import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
@@ -136,7 +137,7 @@ import { PageHeader } from './ui/PageHeader';
 import { NoticeBanner } from './ui/NoticeBanner';
 import { OptionMenu, type OptionMenuOption } from './ui/OptionMenu';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 export interface WorkspaceSendOptions {
   goal?: NormalizedGoalInput;
@@ -2385,7 +2386,7 @@ export function WorkspaceView({
           <div className="permission-grid">
             {PERMISSIONS.map((permission) => (
               <label key={permission.key} title={permission.description}>
-                <Checkbox checked={Boolean(projectPreferences?.customPermissions?.[permission.key])} onChange={(event) => void togglePermission(permission.key, event.target.checked)} />
+                <Switch checked={Boolean(projectPreferences?.customPermissions?.[permission.key])} onChange={(event) => void togglePermission(permission.key, event.target.checked)} />
                 <span><strong>{permission.label}</strong><small>{permission.description}</small></span>
               </label>
             ))}

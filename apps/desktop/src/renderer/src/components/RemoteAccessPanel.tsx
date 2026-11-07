@@ -1,4 +1,5 @@
-import { Check, Copy, KeyRound, RefreshCw, Smartphone, Trash2, Wifi } from 'lucide-react';
+import { Check, Copy, KeyRound, RefreshCw, Smartphone, Trash2, Wifi } from 'lucide-react';
+import { Switch } from './ui/Switch';
 import { useEffect, useState, type ReactNode } from 'react';
 import type {
   AppSettings,
@@ -10,7 +11,7 @@ import type {
 } from '@kai/contracts';
 import { unwrap } from '../types';
 import { UiButton } from './UiButton';
-import { Checkbox } from 'flowbite-react';
+
 import { UiTextInput } from './UiTextInput';
 
 /**
@@ -119,7 +120,7 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
 
       <label className="toggle-row">
         <span><strong>KAI Remote</strong><small>Serves a small web app on this machine for your phone.</small></span>
-        <Checkbox disabled={disabled} checked={remote.enabled} onChange={(event) => void save({ ...remote, enabled: event.target.checked })} />
+        <Switch disabled={disabled} checked={remote.enabled} onChange={(event) => void save({ ...remote, enabled: event.target.checked })} />
       </label>
 
       {!remote.enabled && phoneUrl && (
@@ -144,7 +145,7 @@ export function RemoteAccessPanel({ settings, onSave, busy }: {
               <strong>Allow other devices on this network</strong>
               <small>Off means only this machine can reach it. On binds your private network address — never 0.0.0.0.</small>
             </span>
-            <Checkbox disabled={disabled} checked={remote.lanEnabled} onChange={(event) => void save({ ...remote, lanEnabled: event.target.checked })} />
+            <Switch disabled={disabled} checked={remote.lanEnabled} onChange={(event) => void save({ ...remote, lanEnabled: event.target.checked })} />
           </label>
           {remote.lanEnabled && (
             <p className="settings-note"><strong>Any device on this network that has the token can run your agents, read your files and start commands.</strong> Only turn this on where you trust the network.</p>

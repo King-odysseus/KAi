@@ -27,7 +27,8 @@ import {
   Square,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Switch } from './ui/Switch';
 import type {
   AgentCapability,
   AgentId,
@@ -50,7 +51,7 @@ import { Pill } from './Pill';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 export function ProjectsView({
@@ -570,7 +571,7 @@ export function WorkflowsView({
         <div className="workflow-loop-panel">
           <label className="toggle-row workflow-loop-toggle">
             <span><strong>Loop until the check passes</strong><small>Repeat the workflow, run a check, then stop at the round, cost, or time limit.</small></span>
-            <Checkbox checked={loopEnabled} disabled={running} onChange={(event) => setLoopEnabled(event.target.checked)} />
+            <Switch checked={loopEnabled} disabled={running} onChange={(event) => setLoopEnabled(event.target.checked)} />
           </label>
           {loopEnabled && (
             <div className="workflow-loop-fields">
@@ -690,7 +691,7 @@ export function HistoryView({
       <PageHeader title="History" detail={`${conversations.length} conversations stored on this machine`}>
         <div className="history-header-tools">
           <label className="input-with-icon history-search"><Search size={15} /><UiTextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" /></label>
-          <label className="toggle-row history-archive-filter"><span><strong>Show archived</strong><small>Include archived conversations</small></span><Checkbox checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /></label>
+          <label className="toggle-row history-archive-filter"><span><strong>Show archived</strong><small>Include archived conversations</small></span><Switch checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /></label>
         </div>
       </PageHeader>
       <div className="history-table">

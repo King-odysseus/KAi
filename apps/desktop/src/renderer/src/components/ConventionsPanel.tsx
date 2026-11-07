@@ -1,5 +1,6 @@
-import { Checkbox } from 'flowbite-react';
+
 import { BookMarked, Palette, Plus, RefreshCw, Trash2, Wrench } from 'lucide-react';
+import { Switch } from './ui/Switch';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { ConventionItem, ConventionsState } from '@kai/contracts';
 import { unwrap } from '../types';
@@ -72,7 +73,7 @@ export function ConventionsPanel(): ReactNode {
           <li key={item.key}>
             <span><BookMarked size={13} /> {item.text}</span>
             <span className="conventions-row-actions">
-              <label className="conventions-serve"><Checkbox checked={!item.muted} onChange={(event) => void act(async () => { setState(unwrap(await window.kaiDesktop.muteConvention(item.key, !event.target.checked))); return { ok: true }; })} /><small>Serve</small></label>
+              <label className="conventions-serve"><Switch checked={!item.muted} onChange={(event) => void act(async () => { setState(unwrap(await window.kaiDesktop.muteConvention(item.key, !event.target.checked))); return { ok: true }; })} /><small>Serve</small></label>
               <UiButton type="button" className="icon-button" aria-label={`Remove rule: ${item.text}`} onClick={() => void act(async () => { setState(unwrap(await window.kaiDesktop.removeConventionRule(item.key.replace(/^rule:/, '')))); return { ok: true }; })}><Trash2 size={14} /></UiButton>
             </span>
           </li>
@@ -85,7 +86,7 @@ export function ConventionsPanel(): ReactNode {
         {state.projects.map((project) => (
           <li key={project.path}>
             <span title={project.path}>{project.name}</span>
-            <label className="conventions-serve"><Checkbox checked={project.reference} onChange={(event) => void act(async () => { setState(unwrap(await window.kaiDesktop.setConventionReference(project.path, event.target.checked))); return { ok: true }; })} /><small>Style reference</small></label>
+            <label className="conventions-serve"><Switch checked={project.reference} onChange={(event) => void act(async () => { setState(unwrap(await window.kaiDesktop.setConventionReference(project.path, event.target.checked))); return { ok: true }; })} /><small>Style reference</small></label>
           </li>
         ))}
         {state.projects.length === 0 && <small className="crew-empty">Open a project first.</small>}
@@ -104,7 +105,7 @@ export function ConventionsPanel(): ReactNode {
                   {items.map((item) => (
                     <li key={item.key}>
                       <span>{item.text}{item.isNew && <> <Pill tone="info">New</Pill></>}<small className="crew-empty"> · {item.evidence}</small></span>
-                      <label className="conventions-serve"><Checkbox checked={!item.muted} onChange={(event) => void act(async () => { setState(unwrap(await window.kaiDesktop.muteConvention(item.key, !event.target.checked))); return { ok: true }; })} /><small>Serve</small></label>
+                      <label className="conventions-serve"><Switch checked={!item.muted} onChange={(event) => void act(async () => { setState(unwrap(await window.kaiDesktop.muteConvention(item.key, !event.target.checked))); return { ok: true }; })} /><small>Serve</small></label>
                     </li>
                   ))}
                 </ul>

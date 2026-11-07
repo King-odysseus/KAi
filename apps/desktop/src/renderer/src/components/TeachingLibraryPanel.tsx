@@ -20,7 +20,8 @@ import type {
   TeachingLibrarySaveInput,
 } from '@kai/contracts';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
+import { Toggle } from './ui/Toggle';
 import { UiTextInput } from './UiTextInput';
 
 interface TeachingLibraryPanelProps {
@@ -219,7 +220,7 @@ export function TeachingLibraryPanel({
         <section className="teaching-editor" aria-label="Teaching entry editor">
           <div className="teaching-editor-head">
             <div><strong>{draft.builtIn ? 'Built-in KAI entry' : 'Custom KAI entry'}</strong><small>{draft.builtIn ? 'Editable, and can be reset' : 'Saved under your KAI data folder'}</small></div>
-            <label className="teaching-enabled"><Checkbox checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>Enabled</span></label>
+            <div className="teaching-enabled"><span>{draft.enabled ? 'Enabled' : 'Disabled'}</span><Toggle checked={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })} ariaLabel="Use this entry when teaching" /></div>
           </div>
           <label><span>Title</span><UiTextInput value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
           <label><span>Description</span><UiTextInput value={draft.description} maxLength={1_000} placeholder="When should KAI use this?" onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>

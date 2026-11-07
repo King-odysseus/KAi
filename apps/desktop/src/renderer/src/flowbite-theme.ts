@@ -110,13 +110,16 @@ export const kaiFlowbiteTheme = createTheme({
   },
   toggleSwitch: {
     root: {
-      base: 'group flex rounded-full focus:outline-none',
+      // The switch is a <button>; without these it keeps the browser's default 2px outset border, padding and grey face
+      // as a ring around the track.
+      base: 'group flex rounded-full border-0 bg-transparent p-0 focus:outline-none',
       active: { on: 'cursor-pointer', off: 'cursor-not-allowed opacity-50' },
       label: 'ms-2.5 text-start text-sm text-[var(--text-muted)]',
       input: 'sr-only',
     },
     toggle: {
-      base: 'relative rounded-full after:absolute after:rounded-full after:border-0 after:bg-[var(--bg-deep)] after:transition-all group-focus-visible:brightness-125',
+      // The track fades between its two colours and the thumb slides; a keyboard user gets a visible outline.
+      base: 'relative rounded-full transition-colors duration-150 after:absolute after:rounded-full after:border-0 after:bg-[var(--bg-deep)] after:shadow-sm after:transition-all after:duration-150 group-focus-visible:brightness-125 group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-offset-2 group-focus-visible:outline-[var(--accent)]',
       checked: {
         on: 'after:translate-x-full rtl:after:-translate-x-full',
         off: 'bg-[var(--border)] after:bg-[var(--text-muted)]',

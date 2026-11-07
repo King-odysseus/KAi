@@ -174,7 +174,7 @@ try {
   await openSettingsCategory(page, 'Services and access');
   const overwatchHeading = page.getByText('AI Overwatch', { exact: true });
   await overwatchHeading.waitFor();
-  await page.getByRole('checkbox', { name: /Enable Overwatch/ }).waitFor();
+  await page.getByRole('switch', { name: /Enable Overwatch/ }).waitFor();
   await overwatchHeading.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(outputDirectory, 'settings-overwatch-1440x920.png') });
   const directApiSection = page.locator('section.settings-section').filter({ has: page.getByText('Direct API', { exact: true }) });
@@ -459,7 +459,7 @@ async function verifyBuildIdentifier(page) {
   if (!response.ok || !response.data.buildIdentifier || response.data.buildIdentifier.includes('unidentified')) {
     throw new Error(`The desktop build identifier is missing: ${JSON.stringify(response)}`);
   }
-  const rail = await page.locator('.rail-footer span').getAttribute('title');
+  const rail = await page.locator('.rail-footer span[title]').getAttribute('title');
   const suffix = response.data.buildIdentifier.split('+').at(-1);
   if (!suffix || !rail?.includes(suffix)) {
     throw new Error(`The desktop UI did not expose build identifier ${response.data.buildIdentifier}: ${rail ?? '<missing title>'}`);

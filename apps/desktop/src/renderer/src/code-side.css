@@ -1,8 +1,7 @@
 /* Code sidebar: tab strip and the Recent, To-do and Problems lists. */
-.code-side-tabs { display: flex; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border-soft); }
-.code-side-tabs button { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
-.code-side-tabs button[aria-selected='true'] { font-weight: 600; }
-.code-side-tabs .tab-count { margin-left: 4px; font-size: 10px; opacity: 0.7; }
+.code-side-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+.code-side-tabs button { min-width: 0; min-height: 28px; padding: 0 4px; font-size: 12px; justify-content: center; }
+.code-side-tabs .tab-count { margin-left: 4px; padding: 0 5px; border-radius: 999px; font-size: 10px; background: var(--danger-soft, rgba(248, 81, 73, 0.18)); color: var(--danger, #f85149); }
 .side-list { display: flex; flex-direction: column; gap: 1px; padding: 6px; overflow: auto; min-height: 0; }
 .side-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px; text-align: left; justify-content: flex-start; }
 .side-row.active { font-weight: 600; }

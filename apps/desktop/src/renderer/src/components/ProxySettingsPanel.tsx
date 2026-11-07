@@ -1,7 +1,8 @@
 // Configuration sections of the Universal Agent Proxy dashboard: the Agents, Providers and Advanced
 // tabs. Layout, wording and field order follow ClaudeCode-Proxy `dashboard.html`; secrets are held
 // in the desktop OS vault and the settings carry only their credential IDs.
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
+import { Switch } from './ui/Switch';
 import { AlertTriangle, Check, ClipboardCopy, Download, KeyRound, RotateCcw, Upload, X } from 'lucide-react';
 import type { CredentialStatus, ProxyAgentId, ProxyAgentRoute } from '@kai/contracts';
 import { confirmDialog, promptDialog } from './AppDialog';
@@ -35,7 +36,7 @@ import {
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 export interface ConfigTabProps {
   draft: ProxySettings;
@@ -170,7 +171,7 @@ function BackendSection(props: ConfigTabProps & {
         <SaveRow label={`Save ${name} settings`} saved={savedSection === `agent:${agent}`} busy={props.busy} onSave={() => save(`agent:${agent}`)} />
         <p className="hint lead">{copy.hint}</p>
         <div className="u-field u-toggle">
-          <Checkbox id={`uap-${agent}-enabled`} checked={backend.enabled} onChange={(event) => update({ enabled: event.target.checked })} />
+          <Switch id={`uap-${agent}-enabled`} checked={backend.enabled} onChange={(event) => update({ enabled: event.target.checked })} />
           <label htmlFor={`uap-${agent}-enabled`}>{copy.toggle}</label>
         </div>
         <div style={{ marginTop: 12 }}>
@@ -839,7 +840,7 @@ function SaveRow({ label, saved, busy, onSave }: { label: string; saved: boolean
 function Toggle({ id, label, checked, onChange }: { id: string; label: ReactNode; checked: boolean; onChange: (checked: boolean) => void }): ReactNode {
   return (
     <div className="u-field u-toggle">
-      <Checkbox id={id} checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <Switch id={id} checked={checked} onChange={(event) => onChange(event.target.checked)} />
       <label htmlFor={id}>{label}</label>
     </div>
   );

@@ -191,8 +191,6 @@
 .uap .btn.sec { border-color: var(--border); font-weight: 500; }
 .uap .btn.small { min-height: 26px; padding: 3px 9px; font-size: 11px; }
 
-/* A checkbox keeps its own size even where a panel stretches its inputs to the full width. */
-.teaching-enabled input[type="checkbox"] { width: 16px; min-width: 16px; flex: 0 0 auto; }
 .teaching-editor > label :is(input, .kai-select) { font-size: 12px; }
 
 /* ---------- Prompt Guide (Auto team card) ---------- */
@@ -234,3 +232,44 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ---------- Switch (components/ui/Toggle.tsx) ----------
+   A track that fades between "off" and the theme accent, with a thumb that slides. Sizes are in rem so the switch scales
+   with the rest of the controls. Only theme variables are used, so every theme and the light family get it for free. */
+.kai-switch { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; cursor: pointer; }
+.kai-switch.with-label { white-space: nowrap; }
+.kai-switch-label { color: var(--text-muted); font-size: 12px; }
+.kai-switch-control {
+  --switch-h: 1.25rem;
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: calc(var(--switch-h) * 1.75);
+  height: var(--switch-h);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.kai-switch-control.sm { --switch-h: 1rem; }
+.kai-switch-control.lg { --switch-h: 1.5rem; }
+.kai-switch-control[aria-checked='true'] { background: var(--accent); }
+.kai-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(var(--switch-h) - 4px);
+  height: calc(var(--switch-h) - 4px);
+  border-radius: 999px;
+  background: var(--text-muted);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+.kai-switch-control[aria-checked='true'] .kai-switch-thumb { background: var(--bg-deep); transform: translateX(calc(var(--switch-h) * 0.75)); }
+.kai-switch-control:hover:not(:disabled) { filter: brightness(1.1); }
+.kai-switch-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kai-switch-control:disabled { cursor: not-allowed; opacity: 0.5; }
+.toggle-row > .kai-switch { margin-left: auto; }

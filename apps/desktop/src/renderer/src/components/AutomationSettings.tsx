@@ -1,11 +1,12 @@
-import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type EvalResult, type PermissionRule, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
+import { MAX_AUTO_FIX_ROUNDS, type AgentScorecard, type EvalOverview, type EvalResult, type PermissionRule, type ProjectAutomation, type Schedule, type ScheduleInput } from '@kai/contracts';
+import { Switch } from './ui/Switch';
 import { Check, Play, Plus, Trash2, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { UiNativeSelect } from './UiNativeSelect';
 
@@ -184,7 +185,7 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
       </p>
       <label className="toggle-row">
         <span><strong>Check my changes and fix failures</strong><small>After a run that edits files, run the check below and send any failure back to the agent</small></span>
-        <Checkbox checked={checkEnabled} onChange={(event) => { setCheckEnabled(event.target.checked); setSaved(null); }} />
+        <Switch checked={checkEnabled} onChange={(event) => { setCheckEnabled(event.target.checked); setSaved(null); }} />
       </label>
       <div className="field-grid">
         <label className="field">
@@ -198,7 +199,7 @@ function RunAutomationCard({ project, automation, onSave, busy }: {
       </div>
       <label className="toggle-row">
         <span><strong>Review the change before calling it done</strong><small>A second model reads the diff against your request. Uses the Prompt Guide or Direct API connection</small></span>
-        <Checkbox checked={review} onChange={(event) => { setReview(event.target.checked); setSaved(null); }} />
+        <Switch checked={review} onChange={(event) => { setReview(event.target.checked); setSaved(null); }} />
       </label>
       <div className="settings-subsection-title"><span>Hooks</span></div>
       <p className="settings-note">One command per line, run in the project folder. A failing beforeRun hook stops the run; what it prints is given to the agent. The others only report problems.</p>
@@ -339,7 +340,7 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
                 {schedule.lastSummary && <small className={schedule.lastStatus === 'failed' ? 'field-error' : ''}>{schedule.lastSummary}</small>}
               </div>
               <div className="automation-row-actions">
-                <label className="toggle-inline"><Checkbox checked={schedule.enabled} onChange={() => void toggle(schedule)} /><span>On</span></label>
+                <label className="toggle-inline"><Switch checked={schedule.enabled} onChange={() => void toggle(schedule)} /><span>On</span></label>
                 <UiButton type="button" className="secondary-button compact" disabled={working !== null} onClick={() => void runNow(schedule)}><Play size={14} /><span>{working === schedule.id ? 'Running' : 'Run now'}</span></UiButton>
                 <UiButton type="button" className="icon-button danger-button" aria-label={`Delete ${schedule.name}`} onClick={() => void remove(schedule)}><Trash2 size={14} /></UiButton>
               </div>
@@ -357,8 +358,8 @@ function SchedulesCard({ projectId }: { projectId: string }): ReactNode {
         <label className="field"><span>Access</span><Select value={autonomy} onChange={(event) => setAutonomy(event.target.value as 'plan' | 'full')}><option value="plan">Plan (read only)</option><option value="full">Full access</option></Select></label>
       </div>
       <label className="field"><span>What should the agent do?</span><Textarea rows={3} value={prompt} placeholder="Run the test suite and summarise anything failing" onChange={(event) => setPrompt(event.target.value)} /></label>
-      <label className="toggle-row"><span><strong>Use the direct API instead of the agent CLI</strong><small>Runs on the model chosen under Settings, Direct API</small></span><Checkbox checked={useApi} onChange={(event) => setUseApi(event.target.checked)} /></label>
-      <label className="toggle-row"><span><strong>Sign in directly</strong><small>Off sends the run through the Universal Proxy</small></span><Checkbox checked={direct} onChange={(event) => setDirect(event.target.checked)} /></label>
+      <label className="toggle-row"><span><strong>Use the direct API instead of the agent CLI</strong><small>Runs on the model chosen under Settings, Direct API</small></span><Switch checked={useApi} onChange={(event) => setUseApi(event.target.checked)} /></label>
+      <label className="toggle-row"><span><strong>Sign in directly</strong><small>Off sends the run through the Universal Proxy</small></span><Switch checked={direct} onChange={(event) => setDirect(event.target.checked)} /></label>
       {autonomy === 'full' && <p className="settings-note">Full access lets this schedule edit files and run commands with nobody watching. Spend is still capped per run.</p>}
       <div className="button-row align-start">
         <UiButton type="button" className="primary-button" disabled={!ready || working !== null} onClick={() => void add()}><Plus size={16} /><span>Add schedule</span></UiButton>

@@ -1,4 +1,5 @@
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
+import { Switch } from './ui/Switch';
 import {
   Activity, AlertTriangle, ClipboardList, Coins, Compass, FileCheck, FileText, FlaskConical, Kanban, Lock, Minus, Palette, Pause, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, Save, Scale, ScanSearch, ShieldCheck, Square, Trash2, Users, Wrench,
 } from 'lucide-react';
@@ -248,7 +249,7 @@ export function CrewView({ activeProject, agentCapabilities, settings }: {
                       {AUTONOMY.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </Select>
                   </label>
-                  <label className="toggle-row"><span><strong>Show me the plan first</strong><small>The crew waits for your approval before it builds.</small></span><Checkbox checked={draft.approvePlan} onChange={(event) => updateDraft((current) => ({ ...current, approvePlan: event.target.checked }))} /></label>
+                  <label className="toggle-row"><span><strong>Show me the plan first</strong><small>The crew waits for your approval before it builds.</small></span><Switch checked={draft.approvePlan} onChange={(event) => updateDraft((current) => ({ ...current, approvePlan: event.target.checked }))} /></label>
                 </div>
                 <label className="workflow-field" htmlFor="crew-check"><span>Project check (optional)</span>
                   <UiTextInput id="crew-check" value={draft.checkCommand} onChange={(event) => updateDraft((current) => ({ ...current, checkCommand: event.target.value }))} placeholder="For example: npm test. The project is not done until it passes." />
@@ -552,7 +553,7 @@ function CostTab({ config, readOnly, run, onLimits, onSavings }: {
       <h3 className="crew-subheading">Ways the crew saves money</h3>
       {savings.map((item) => (
         <label key={item.key} className="toggle-row"><span><strong>{item.title}</strong><small>{item.detail}</small></span>
-          <Checkbox checked={config.savings[item.key]} disabled={readOnly} onChange={(event) => onSavings({ [item.key]: event.target.checked })} />
+          <Switch checked={config.savings[item.key]} disabled={readOnly} onChange={(event) => onSavings({ [item.key]: event.target.checked })} />
         </label>
       ))}
       {run && (

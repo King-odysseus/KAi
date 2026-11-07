@@ -28,7 +28,8 @@ import {
   Target,
   WandSparkles,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Switch } from './ui/Switch';
 import { MAX_SAVED_LESSONS } from '@kai/contracts';
 import type {
   GitFileInfo,
@@ -57,7 +58,7 @@ import { SecurityAuditorPanel, type SecurityScanRequest } from './SecurityAudito
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { Composer, ComposerInput, ComposerSend, ComposerToolbar } from './ui/Composer';
 import { ActionsMenu } from './ui/ActionsMenu';
@@ -356,7 +357,7 @@ export function LearningPanel({
               </div>
 
               <label className="learning-inline-toggle" title="Copilot only: pause typing or press Alt + Backslash for ghost text. Tab accepts; Escape dismisses. Combined teaching modes keep completion off.">
-                <Checkbox
+                <Switch
                   checked={assistance === 'copilot' && inlineSuggestions}
                   disabled={assistance !== 'copilot'}
                   onChange={(event) => onPreferences(assistance, event.target.checked)}

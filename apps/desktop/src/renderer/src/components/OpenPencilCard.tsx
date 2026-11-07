@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Switch } from './ui/Switch';
 import { Check, KeyRound, Loader2, PenTool, PlugZap } from 'lucide-react';
 import { OPENPENCIL_ENDPOINT, type OpenPencilStatus } from '@kai/contracts';
 import { unwrap } from '../types';
 import { UiButton } from './UiButton';
-import { Checkbox } from 'flowbite-react';
+
 import { UiTextInput } from './UiTextInput';
 
 /**
@@ -70,7 +71,7 @@ export function OpenPencilCard(): ReactNode {
       </p>
       <label className="toggle-row">
         <span><strong>Connect to open-pencil</strong><small>{status?.tokenStored ? 'A token is stored in the OS vault' : 'No token stored yet'}</small></span>
-        <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+        <Switch checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
       </label>
       <div className="field-grid">
         <label className="field"><span>MCP address</span><UiTextInput value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder={OPENPENCIL_ENDPOINT} spellCheck={false} /></label>

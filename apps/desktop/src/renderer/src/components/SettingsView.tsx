@@ -1,4 +1,5 @@
-import { reconcileSettingsDraft } from './settings-draft';
+import { reconcileSettingsDraft } from './settings-draft';
+import { Switch } from './ui/Switch';
 import { Archive, ArchiveRestore, Check, ChevronDown, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, PenTool, Play, Plug, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, ShieldCheck, Trash2, Users, Wand2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { UpdatesPanel } from './UpdatesPanel';
@@ -17,7 +18,7 @@ import { shortcutConflicts } from '../shortcuts';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
 type McpServer = AppSettings['mcpServers'][number];
@@ -588,7 +589,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <NumberField label="Log entries" value={draft.logRetentionEntries} min={100} max={100000} onChange={(value) => setDraft({ ...draft, logRetentionEntries: value })} />
           </div>
           <p className="settings-note">{experienceProfile(draft.experienceLevel).summary} Changing the level also resets the default access to match; you can still pick any access level per chat. {ACCESS_LEVELS.find((level) => level.value === draft.defaultAutonomy)?.description}</p>
-          <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><Checkbox checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
+          <label className="toggle-row"><span><strong>Diagnostics</strong><small>Store redacted local diagnostics</small></span><Switch checked={draft.diagnosticsEnabled} onChange={(event) => setDraft({ ...draft, diagnosticsEnabled: event.target.checked })} /></label>
           <div className="settings-subsection">
             <div className="settings-subsection-title"><span>Colours</span></div>
             <ThemeColors theme={settings.theme} themeLabel={THEME_MODES.find((item) => item.id === settings.theme)?.label ?? settings.theme} />
@@ -1004,7 +1005,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             {draft.mcpServers.map((server, index) => (
               <div className="mcp-server-row" key={server.id}>
                 <div className="mcp-server-head">
-                  <label className="mcp-enable"><Checkbox checked={server.enabled} onChange={(event) => updateMcpServer(index, { enabled: event.target.checked })} /><span>{server.enabled ? 'Enabled' : 'Disabled'}</span></label>
+                  <label className="mcp-enable"><Switch checked={server.enabled} onChange={(event) => updateMcpServer(index, { enabled: event.target.checked })} /><span>{server.enabled ? 'Enabled' : 'Disabled'}</span></label>
                   <UiButton type="button" className="icon-button compact" aria-label={`Remove ${server.name}`} onClick={() => setDraft({ ...draft, mcpServers: draft.mcpServers.filter((item) => item.id !== server.id) })}><Trash2 size={14} /></UiButton>
                 </div>
                 <div className="field-grid">
@@ -1094,7 +1095,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <div className="service-setting">
               <label className="toggle-row">
                 <span><strong>C1 Brain</strong><small>Run the pinned Cognitive1 daemon locally</small></span>
-                <Checkbox checked={draft.cognitive1.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, enabled: event.target.checked } })} />
+                <Switch checked={draft.cognitive1.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, enabled: event.target.checked } })} />
               </label>
               <ServiceStatusLine kind="cognitive1" service={serviceState('cognitive1')} busy={busy} onStart={() => onControlService('cognitive1', 'start')} onRestart={() => onControlService('cognitive1', 'restart')} />
               <div className="field-grid">
@@ -1105,7 +1106,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <div className="settings-subsection-title"><Database size={14} /><span>Second brain</span></div>
                 <label className="toggle-row">
                   <span><strong>Mirror every lesson</strong><small>Files each lesson into another Cognitive1 daemon as well, such as the standalone one on port 9876 that commits and pushes its brain on a timer. Reads and sessions stay with KAI's own daemon.</small></span>
-                  <Checkbox checked={draft.cognitive1.mirror.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, enabled: event.target.checked } } })} />
+                  <Switch checked={draft.cognitive1.mirror.enabled} onChange={(event) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, enabled: event.target.checked } } })} />
                 </label>
                 <div className="field-grid">
                   <TextField label="Mirror endpoint" value={draft.cognitive1.mirror.endpoint} onChange={(value) => setDraft({ ...draft, cognitive1: { ...draft.cognitive1, mirror: { ...draft.cognitive1.mirror, endpoint: value } } })} />
@@ -1117,7 +1118,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
                 <div className="settings-subsection-title"><ShieldCheck size={14} /><span>AI Overwatch</span></div>
                 <label className="toggle-row">
                   <span><strong>Enable Overwatch</strong><small>Runs brain quality audits, draft classification, duplicate detection, and kernel distillation</small></span>
-                  <Checkbox
+                  <Switch
                     checked={draft.cognitive1.overwatch.enabled}
                     onChange={(event) => setDraft({
                       ...draft,
@@ -1205,7 +1206,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
             <div className="service-setting">
               <label className="toggle-row">
                 <span><strong>Universal Proxy</strong><small>Run the pinned proxy on loopback only</small></span>
-                <Checkbox checked={draft.proxy.enabled} onChange={(event) => setDraft({ ...draft, proxy: { ...draft.proxy, enabled: event.target.checked } })} />
+                <Switch checked={draft.proxy.enabled} onChange={(event) => setDraft({ ...draft, proxy: { ...draft.proxy, enabled: event.target.checked } })} />
               </label>
               <ServiceStatusLine kind="universalProxy" service={serviceState('universalProxy')} busy={busy} onStart={() => onControlService('universalProxy', 'start')} onRestart={() => onControlService('universalProxy', 'restart')} />
               <div className="field-grid">
@@ -1242,8 +1243,8 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
         <section className="settings-section span-two">
           <div className="section-title"><Database size={17} /><span>Local agent experience capture</span></div>
           <p className="settings-note">Optional Cognitive1 training-data foundation. Records stay on this device, redact common secret formats, and never include hidden model reasoning. Content is excluded unless you explicitly enable it.</p>
-          <label className="toggle-row"><Checkbox checked={draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, enabled: event.target.checked } })} /><span>Collect run outcomes and verification metadata locally</span></label>
-          <label className="toggle-row"><Checkbox checked={draft.experienceCapture.includeContent} disabled={!draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, includeContent: event.target.checked } })} /><span>Include redacted request, response, and code diffs for later curation</span></label>
+          <label className="toggle-row"><Switch checked={draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, enabled: event.target.checked } })} /><span>Collect run outcomes and verification metadata locally</span></label>
+          <label className="toggle-row"><Switch checked={draft.experienceCapture.includeContent} disabled={!draft.experienceCapture.enabled} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, includeContent: event.target.checked } })} /><span>Include redacted request, response, and code diffs for later curation</span></label>
           <label className="field"><span>Retention (days)</span><UiTextInput type="number" min={1} max={3650} value={draft.experienceCapture.retentionDays} onChange={(event) => setDraft({ ...draft, experienceCapture: { ...draft.experienceCapture, retentionDays: Math.max(1, Math.min(3650, Number(event.target.value) || 1)) } })} /></label>
           {cardSave('experienceCapture', 'Save experience capture settings', ['experienceCapture'])}
           <div className="backup-create-row"><span>{experienceCount} local run records</span><UiButton type="button" className="secondary-button" disabled={!experienceCount} onClick={() => void exportExperiences()}><Archive size={14} />Export JSONL</UiButton><UiButton type="button" className="secondary-button danger-button" disabled={!experienceCount} onClick={() => void clearExperiences()}><Trash2 size={14} />Delete all</UiButton></div>
@@ -1450,7 +1451,7 @@ function ProviderConnectionSection({
     <section className="settings-section">
       <div className="section-title">{icon}<span>{title}</span></div>
       <p className="settings-note">{detail}</p>
-      <label className="toggle-row"><span><strong>{toggleLabel}</strong><small>{toggleHint}</small></span><Checkbox checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} /></label>
+      <label className="toggle-row"><span><strong>{toggleLabel}</strong><small>{toggleHint}</small></span><Switch checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} /></label>
       <div className="field-grid">
         <SelectField label="Provider" value={provider} onChange={(value) => onProviderChange(value as AppSettings['directApi']['provider'])} options={DIRECT_PROVIDER_ORDER.map((id) => ({ value: id, label: directProviderPreset(id).displayName }))} />
         <ModelField label="Model" value={model} models={models} onChange={onModelChange} />
@@ -1512,7 +1513,7 @@ function formatRefreshTime(value: string): string {
 type SelectOption = string | { value: string; label: string };
 
 function NotificationToggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (value: boolean) => void }): ReactNode {
-  return <label className="toggle-row"><span><strong>{label}</strong><small>{hint}</small></span><Checkbox checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
+  return <label className="toggle-row"><span><strong>{label}</strong><small>{hint}</small></span><Switch checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
 }
 
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }): ReactNode {

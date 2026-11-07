@@ -23,7 +23,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { Switch } from './ui/Switch';
 import { Markdown } from './Markdown';
 import { Pill } from './Pill';
 import {
@@ -668,7 +669,7 @@ function OverwatchPanel({ data, disabled, onRun, autoApprove, onAutoApprove }: P
         </div>
         <label className="toggle-row cognitive1-auto-toggle">
           <span><strong>Auto approve useful lessons</strong><small>{autoApprove ? 'On: Overwatch checks every 15 minutes while KAI runs. Uncertain drafts still wait for you.' : 'Off: Overwatch suggests; you decide in Approvals.'}</small></span>
-          <Checkbox checked={autoApprove} disabled={disabled || (!autoApprove && overwatch.ready !== true)} onChange={(event) => void onAutoApprove(event.target.checked)} />
+          <Switch checked={autoApprove} disabled={disabled || (!autoApprove && overwatch.ready !== true)} onChange={(event) => void onAutoApprove(event.target.checked)} />
         </label>
       </section>
 

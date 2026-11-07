@@ -1,10 +1,11 @@
-import { Download, RefreshCw, RotateCw } from 'lucide-react';
+import { Download, RefreshCw, RotateCw } from 'lucide-react';
+import { Switch } from './ui/Switch';
 import { useEffect, useState, type ReactNode } from 'react';
 import type { AppSettings, UpdateState } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
 import { UiButton } from './UiButton';
-import { Checkbox } from 'flowbite-react';
+
 
 function useUpdateState(): [UpdateState | null, (state: UpdateState) => void] {
   const [state, setState] = useState<UpdateState | null>(null);
@@ -79,7 +80,7 @@ export function UpdatesPanel({ settings }: { settings: AppSettings }): ReactNode
           if (confirmed) void step(async () => unwrap(await window.kaiDesktop.installUpdate()));
         })}><RotateCw size={14} /><span>Install and restart</span></UiButton>}
       </div>
-      <label className="toggle-row"><span><strong>Check automatically</strong><small>Once after startup and every few hours. Nothing is downloaded or installed without you.</small></span><Checkbox checked={autoCheck} onChange={(event) => {
+      <label className="toggle-row"><span><strong>Check automatically</strong><small>Once after startup and every few hours. Nothing is downloaded or installed without you.</small></span><Switch checked={autoCheck} onChange={(event) => {
         setAutoCheck(event.target.checked);
         void window.kaiDesktop.updateSettings({ updates: { autoCheck: event.target.checked } });
       }} /></label>

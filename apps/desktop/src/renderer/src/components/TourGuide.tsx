@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Switch } from './ui/Switch';
 import { Check, ChevronLeft, ChevronRight, GraduationCap, RotateCcw, X } from 'lucide-react';
 import { TOUR_LESSONS, lessonFor, markLessonDone, resetTour, shouldAutoStart, turnTourOff, type TourProgress } from '../tour-lessons';
 import type { ViewId } from '../types';
 import { UiButton } from './UiButton';
-import { Checkbox } from 'flowbite-react';
+
 
 interface Spot {
   top: number;
@@ -162,7 +163,7 @@ export function TourGuide({ view, progress, suspended, listOpen, onProgress, onC
             </header>
             <label className="toggle-row">
               <span><strong>Start lessons by themselves</strong><small>Each screen explains itself the first time you open it</small></span>
-              <Checkbox checked={progress.enabled} onChange={(event) => onProgress(event.target.checked ? { ...progress, enabled: true } : turnTourOff(progress))} />
+              <Switch checked={progress.enabled} onChange={(event) => onProgress(event.target.checked ? { ...progress, enabled: true } : turnTourOff(progress))} />
             </label>
             <ul>
               {TOUR_LESSONS.map((item) => {

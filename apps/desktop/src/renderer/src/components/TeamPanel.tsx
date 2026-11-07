@@ -1,4 +1,5 @@
-import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet, Wand2, X } from 'lucide-react';
+import { AlertTriangle, Loader2, Play, Trash2, Users, Wallet, Wand2, X } from 'lucide-react';
+import { Switch } from './ui/Switch';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Pill } from './Pill';
 import {
@@ -30,7 +31,7 @@ import { confirmDialog } from './AppDialog';
 
 import { Select } from './ui/Select';
 import { UiButton } from './UiButton';
-import { Checkbox, Textarea } from 'flowbite-react';
+import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
 const AUTONOMY_OPTIONS: Array<{ value: AutonomyMode; label: string }> = [
   { value: 'autoEdit', label: 'Auto-edit' },
@@ -444,7 +445,7 @@ export function TeamPanel({
                   <strong>Run independent parts at the same time</strong>
                   <small>Each part works in its own copy of the project; KAI merges the copies and runs a part again if its changes clash. Needs a git project with at least one commit.</small>
                 </span>
-                <Checkbox aria-label="Run independent parts at the same time" checked={sideBySide} disabled={disabled} onChange={(event) => setSideBySide(event.target.checked)} />
+                <Switch aria-label="Run independent parts at the same time" checked={sideBySide} disabled={disabled} onChange={(event) => setSideBySide(event.target.checked)} />
               </label>
               {sideBySide && (
                 <>

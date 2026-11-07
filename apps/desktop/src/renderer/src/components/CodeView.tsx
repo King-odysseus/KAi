@@ -2176,7 +2176,7 @@ export function CodeView({
         </div>
         <div className="code-side-tabs" role="tablist" aria-label="Sidebar views">
           {([['files', 'Files'], ['recent', 'Recent'], ['todo', 'To-do'], ['problems', 'Problems']] as const).map(([id, label]) => (
-            <UiButton key={id} type="button" role="tab" className="secondary-button" aria-selected={sideTab === id} onClick={() => setSideTab(id)}>
+            <UiButton key={id} type="button" role="tab" aria-selected={sideTab === id} onClick={() => setSideTab(id)}>
               {label}{id === 'problems' && problemCount > 0 && <span className="tab-count">{problemCount}</span>}
             </UiButton>
           ))}

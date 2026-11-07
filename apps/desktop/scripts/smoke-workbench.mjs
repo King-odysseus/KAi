@@ -198,7 +198,7 @@ async function verifyLivePreview(application, page) {
 async function verifyEditorAutosave(page) {
   await navigateTo(page, 'Settings');
   await page.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
-  const autoSaveToggle = page.getByRole('checkbox', { name: /Autosave edited files/ });
+  const autoSaveToggle = page.getByRole('switch', { name: /Autosave edited files/ });
   await autoSaveToggle.waitFor();
   if (await autoSaveToggle.isChecked()) throw new Error('The autosave smoke expected autosave to start disabled.');
   await autoSaveToggle.check();
@@ -340,7 +340,7 @@ async function verifyTour(page) {
   const list = page.getByRole('dialog', { name: 'Lessons' });
   await list.waitFor();
   for (const title of ['Workspace', 'Project Studio', 'Project Graph', 'Settings']) await list.getByText(title, { exact: true }).first().waitFor();
-  if (await list.getByRole('checkbox').isChecked()) throw new Error('The lessons list still says lessons start by themselves.');
+  if (await list.getByRole('switch').isChecked()) throw new Error('The lessons list still says lessons start by themselves.');
   await page.screenshot({ path: path.join(outputDirectory, 'tour-list-1440x920.png') });
   await page.keyboard.press('Escape');
   await list.waitFor({ state: 'detached' });
@@ -1101,7 +1101,7 @@ async function verifyTutorInlineCompletion(page) {
     const mode = modes.getByRole('button', { name, exact: true });
     if (await mode.getAttribute('aria-pressed') === 'true') await mode.click();
   }
-  const inline = page.getByRole('checkbox', { name: 'Inline suggestions', exact: true });
+  const inline = page.getByRole('switch', { name: 'Inline suggestions', exact: true });
   await inline.check();
   await page.getByRole('tab', { name: 'History', exact: true }).click();
   await page.getByRole('tab', { name: 'Tutor', exact: true }).click();
@@ -1131,7 +1131,7 @@ async function openSettingsCategory(page, name) {
 async function verifySettingsCheckboxRetention(page) {
   await navigateTo(page, 'Settings');
   await openSettingsCategory(page, 'Services and access');
-  const overwatch = page.getByRole('checkbox', { name: /Enable Overwatch/ });
+  const overwatch = page.getByRole('switch', { name: /Enable Overwatch/ });
   await overwatch.check();
   // An unrelated write broadcasts fresh settings to the open form.
   await page.evaluate(async () => {

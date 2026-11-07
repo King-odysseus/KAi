@@ -104,7 +104,7 @@ async function verifySettingsCard(page) {
   const section = page.locator('section.settings-section[aria-label="Agent team"]');
   await section.scrollIntoViewIfNeeded();
   const roles = await section.locator('fieldset.team-role').count();
-  if (roles !== 7) throw new Error(`Expected 7 built-in roles in the Agent team card, saw ${roles}.`);
+  if (roles !== 9) throw new Error(`Expected 9 built-in roles in the Agent team card, saw ${roles}.`);
   await section.getByLabel('Orchestrator agent').waitFor();
   if (await selectedValue(section.getByLabel('Orchestrator agent')) !== 'codex') throw new Error('The saved orchestrator choice was not shown.');
   if (await selectedValue(section.getByLabel('Security reviewer agent')) !== 'auto') throw new Error('Reviewer roles should default to Auto.');
@@ -202,7 +202,7 @@ async function verifyLmStudioProvider(page) {
   if (chosen !== 'qwen2.5-coder-7b-instruct') throw new Error(`Expected the Qwen coder model to be chosen, got "${chosen}".`);
 
   // Enable it and save: it works with no key stored and no vault involved, and the settings persist.
-  await direct.getByRole('checkbox', { name: /Enable direct API mode/ }).check();
+  await direct.getByRole('switch', { name: /Enable direct API mode/ }).check();
   await direct.getByRole('button', { name: 'Save Direct API settings' }).click();
   await page.getByText('All changes saved').waitFor({ timeout: 10_000 });
   const capability = await page.evaluate(async () => (await window.kaiDesktop.directApiCapability()).data);
@@ -213,7 +213,7 @@ async function verifyLmStudioProvider(page) {
   await page.screenshot({ path: path.join(outputDirectory, 'settings-lmstudio.png') });
 
   // Put the direct API back the way it was so the rest of the run is unaffected.
-  await direct.getByRole('checkbox', { name: /Enable direct API mode/ }).uncheck();
+  await direct.getByRole('switch', { name: /Enable direct API mode/ }).uncheck();
   await direct.getByRole('button', { name: 'Save Direct API settings' }).click();
   await page.getByText('All changes saved').waitFor({ timeout: 10_000 });
 }
