@@ -14198,3 +14198,27 @@ button.tool-call-head:hover strong { color: var(--mint); }
 .workspace-file-preview-monaco[hidden] {
   display: none;
 }
+
+/* Review page: the turn and file pickers. Selection is a surface tint, never a border. */
+.review-pick {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--radius-control, 8px);
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.review-pick:hover,
+.review-pick.current { background: var(--bg-hover); }
+.review-pick small { color: var(--text-dim); white-space: nowrap; }
+.review-note.high { color: var(--needs-you); }
+
+/* Import wizard: one finding per row, tinted on hover. */
+.import-finding { border-radius: var(--radius-control, 8px); padding: 8px; }
+.import-finding:hover { background: var(--bg-hover); }

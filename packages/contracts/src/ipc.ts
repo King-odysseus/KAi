@@ -353,6 +353,7 @@ import { planSchema, type Plan } from './plan';
 import { conventionsGetInputSchema, conventionsMuteInputSchema, conventionsReferenceInputSchema, conventionsRuleAddInputSchema, conventionsRuleRemoveInputSchema, type ConventionsState } from './conventions';
 import { crewAnswerInputSchema, crewControlInputSchema, crewDefaultsInputSchema, crewDesignInputSchema, crewStartInputSchema, type CrewAnswerInput, type CrewConfig, type CrewDesign, type CrewRun, type CrewStartInput } from './crew';
 import { gitActionResultSchema, gitCheckoutInputSchema, gitGithubStateSchema, gitCommitInputSchema, gitCreateBranchInputSchema, gitCreateRepositoryInputSchema, gitCreateRepositoryResultSchema, gitDiffInputSchema, gitOverviewSchema, gitPullRequestInputSchema, gitPullRequestResultSchema, gitStageInputSchema, gitSyncInputSchema, gitTeamBranchInputSchema, gitTeamCloneInputSchema, type GitActionResult, type GitCreateRepositoryResult, type GitGithubState, type GitOverview, type GitRepositoryVisibility, type GitSyncAction } from './git';
+import { importAddCardsInputSchema, importScanInputSchema, type ImportReport } from './import';
 import { verificationOverviewSchema, verificationRunInputSchema, verificationRunSchema, type VerificationOverview, type VerificationRun } from './verification';
 import { editorDocumentRemoveSchema, editorDocumentStateSchema, editorSavedDocumentSchema, editorWindowSnapshotSchema, fileChangedInputSchema, fileMutationResultSchema, filePathInputSchema, fileReadInputSchema, fileRenameInputSchema, fileWriteInputSchema, openedFileSchema, projectFileTreeSchema, rejectHunksInputSchema, writtenFileSchema, type EditorDocumentRemove, type EditorDocumentState, type EditorSavedDocument, type EditorWindowSnapshot, type FileMutationResult, type FilePathInput, type FileRenameInput, type FileWriteInput, type OpenedFile, type ProjectFileTree, type WrittenFile } from './files';
 import {
@@ -587,6 +588,8 @@ export const ipcChannels = [
   'studio:artifacts-generate-selected',
   'studio:artifacts-mark-edited',
   'studio:board-read',
+  'import:scan',
+  'import:add-cards',
   'studio:board-plan',
   'studio:board-arrange',
   'studio:board-next',
@@ -973,6 +976,8 @@ export const ipcInputSchemas = {
   'studio:artifacts-generate-selected': studioArtifactsGenerateSelectedInputSchema,
   'studio:artifacts-mark-edited': studioArtifactInputSchema,
   'studio:board-read': studioProjectInputSchema,
+  'import:scan': importScanInputSchema,
+  'import:add-cards': importAddCardsInputSchema,
   'studio:board-plan': studioProjectInputSchema,
   'studio:board-arrange': studioProjectInputSchema,
   'studio:board-next': studioProjectInputSchema,
@@ -1835,6 +1840,8 @@ export interface KaiDesktopBridge {
   clearExperiences(): Promise<IpcResponse<boolean>>;
   gitPullRequest(projectId: string, title: string, body: string): Promise<IpcResponse<{ url: string }>>;
   verificationOverview(projectId: string): Promise<IpcResponse<VerificationOverview>>;
+  importScan(projectId: string): Promise<IpcResponse<ImportReport>>;
+  importAddCards(projectId: string, findingIds: string[]): Promise<IpcResponse<{ added: string[]; report: ImportReport }>>;
   runVerification(projectId: string, command: string): Promise<IpcResponse<VerificationRun>>;
   /** Every run left over from a close, including the ones whose record is too damaged to offer anything from. */
   listInterruptedRuns(): Promise<IpcResponse<RecoveryListing>>;

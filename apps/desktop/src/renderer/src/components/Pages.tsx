@@ -64,7 +64,7 @@ export function ProjectsView({
   projects: ProjectRecord[];
   activeProjectId: string | null;
   onChoose: () => void;
-  onOpen: (id: string, destination: 'workspace' | 'code') => void;
+  onOpen: (id: string, destination: 'workspace' | 'code' | 'import') => void;
   onOpenInNewWindow: (id: string) => void;
   onRemove: (id: string) => void;
 }): ReactNode {
@@ -91,6 +91,7 @@ export function ProjectsView({
               <span className="mono project-card-path" title={project.path}>{project.path}</span>
               <div className="project-card-actions">
                 <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'workspace')} title={`Open ${project.name} in the composer`}><span>Composer</span></UiButton>
+                <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'import')} title={`Scan ${project.name} for what it is missing`}><span>Scan</span></UiButton>
                 <UiButton type="button" className="secondary-button" onClick={() => onOpen(project.id, 'code')} title={`Open ${project.name} in the editor`}><span>Editor</span></UiButton>
                 <UiButton type="button" className="secondary-button" onClick={() => onOpenInNewWindow(project.id)} title={`Open ${project.name} in a new window`}><span>Open in new window</span></UiButton>
               </div>

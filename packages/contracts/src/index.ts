@@ -8,6 +8,7 @@ export * from './brain-mirror';
 export * from './catalog';
 export * from './context';
 export * from './conventions';
+export * from './import';
 export * from './crew';
 export * from './composer-queue';
 export * from './build-progress';

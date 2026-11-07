@@ -208,6 +208,11 @@ export class DesktopStudio {
     return this.ports.board.read(projectId);
   }
 
+  /** Adds cards to the board, leaving existing ones as they are. */
+  addCards(projectId: string, cards: readonly BoardCard[]): Promise<{ board: StudioBoard; added: string[] }> {
+    return this.ports.board.append(projectId, cards);
+  }
+
   /** The files the studio has written under `.kai/spec`, for a UI that lists real files rather than guesses. */
   files(projectId: string): Promise<string[]> {
     return this.ports.artifacts.files(projectId);

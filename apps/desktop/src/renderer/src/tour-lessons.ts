@@ -92,6 +92,16 @@ export const TOUR_LESSONS: TourLesson[] = [
     ],
   },
   {
+    view: 'review',
+    title: 'Review',
+    summary: 'Read what the agent changed, file by file',
+    steps: [
+      RAIL,
+      { title: 'Every turn that changed files', body: 'Pick a turn, then a file, and read its diff. Reject one hunk, restore a whole file, or undo the whole turn. Each file shows whether the latest check covered it.' },
+      { title: 'A second opinion', body: 'AI review reads the changed files and lists what to look at, pinned to the file it is about. The verdict at the top says whether the checks and the review agree the work is ready.' },
+    ],
+  },
+  {
     view: 'history',
     title: 'History',
     summary: 'Find, rename, fork and reopen conversations',

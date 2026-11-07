@@ -30,11 +30,13 @@ import type {
   PlaywrightViewportStatus,
   TeamPlanDraft,
 } from '@kai/contracts';
-import { CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, type ThemeMode } from '@kai/contracts';
+import { experienceProfile, CLI_EFFORT_LEVELS, COMPACTION_WARNING_TOKENS, REASONING_LABEL, helperChoiceSchema, responseStyleSchema, effortFitsAgent, modelBelongsToOtherAgent, contextChipSchema, estimateConversationTokens, skillSummarySchema, THEME_MODES, themeFamily, type ThemeMode } from '@kai/contracts';
 import { StatusBar } from './components/StatusBar';
 import { applyColorOverrides, loadColorOverrides } from './custom-colors';
 import { applyAppearance, clampScale, loadAppearance, saveAppearance, type Appearance } from './appearance';
 import { CommandPalette, ConversationSidebar, NavigationRail, TitleBar, navigation, type CommandPaletteItem } from './components/Chrome';
+import { ReviewView } from './components/ReviewView';
+import { ImportView } from './components/ImportView';
 import { HistoryView, ProjectsView, ServiceView, WorkflowsView } from './components/Pages';
 import { CrewView } from './components/CrewView';
 import { Cognitive1Panel } from './components/Cognitive1Panel';
@@ -621,6 +623,8 @@ export function App(): ReactNode {
     { id: 'graph', label: 'Open Project Graph', description: 'See what blocks what on the board and which agent holds which card', run: () => setView('graph') },
     { id: 'studio', label: 'Open Project Studio', description: 'Interview a project idea and write the brief the board and agents work from', run: () => setView('studio') },
     { id: 'verification', label: 'Open Checks (test results per file)', description: 'See whether changed files are verified, stale or failing, and re-run checks', run: () => openOperations('verification') },
+    { id: 'import', label: 'Scan this project for a first backlog', description: 'Find what an existing project is missing and add the fixes to the board', run: () => setView('import') },
+    { id: 'review', label: 'Open Review', description: 'Read what the agent changed, file by file, and put back what you do not want', run: () => setView('review') },
     { id: 'git', label: 'Open Git and GitHub', description: 'Branches, changes, commits, push and pull requests', run: () => setView('git') },
     {
       id: 'project-knowledge',
@@ -1208,7 +1212,7 @@ export function App(): ReactNode {
     ));
   }
 
-  async function openProject(id: string, destination: 'workspace' | 'code' | 'stay' = 'workspace'): Promise<BootstrapPayload | null> {
+  async function openProject(id: string, destination: 'workspace' | 'code' | 'import' | 'stay' = 'workspace'): Promise<BootstrapPayload | null> {
     const next = await perform(() => window.kaiDesktop.openProject(id).then(unwrap), 'Opening project');
     if (next) {
       setBootstrap(next);
@@ -2392,6 +2396,10 @@ export function App(): ReactNode {
         return <UsageView settings={bootstrap.settings} activeConversationId={activeConversationId} busy={Boolean(busy)} onSave={(update) => void saveSettings(update)} />;
       case 'commands':
         return <CommandsView onOpenTerminal={() => setTerminalOpen(true)} />;
+      case 'import':
+        return <ImportView activeProject={activeProject} onOpenStudio={() => setView('studio')} />;
+      case 'review':
+        return <ReviewView activeProject={activeProject} conversation={activeConversation} reviewMode={experienceProfile(bootstrap.settings.experienceLevel).reviewMode} onReviewCheckpoint={reviewConversationCheckpoint} onRejectCheckpointFile={rejectConversationFile} onRestoreCheckpoint={restoreConversationCheckpoint} />;
       case 'git':
         return <GitView activeProject={activeProject} onOpenTerminal={() => setTerminalOpen(true)} onSignInGitHub={() => { setTerminalCommand({ command: 'gh auth login', nonce: Date.now() }); setTerminalOpen(true); }} />;
       case 'tasks':

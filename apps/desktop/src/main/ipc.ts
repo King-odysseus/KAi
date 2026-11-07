@@ -116,10 +116,12 @@ import { findGitBash } from './terminal';
 import { availableShells, terminalBriefing } from './agent-terminal';
 import { windowBriefing } from './window-control';
 import { runSecurityPrepass } from './security-prepass';
+import { boardCardSchema, type ImportReport } from '@kai/contracts';
 import type { ExecutionMode } from '@kai/contracts';
 import type { UpdateController } from './updater';
 import { buildDiagnosticsReport } from './diagnostics-report';
 import { gitCheckout, gitCloneTeamRepository, gitCommit, gitCreateBranch, gitCreatePullRequest, gitCreateRepository, gitDiffAgainstHead, gitDiffFile, githubCliStatus, gitInit, gitOverview, gitPullTeamBranch, gitStage, gitSync } from './git-tools';
+import { importCardId, scanForImport } from './import-scan';
 import { agentChecksFromEvents, recordVerification, runCheckCommand, suggestTestCommand, verificationOverview, type RecordedCheck, type VerificationStore } from './verification';
 import { publishInlineMockup, publishProjectMockup } from './mockup-server';
 import { FileConflictError, createProjectFolder, deleteProjectPath, fileChangedOnDisk, listProjectFiles, readProjectFile, readProjectImage, renameProjectPath, writeProjectFile } from './project-files';
@@ -653,6 +655,22 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'studio:artifacts-generate-selected', async ({ projectId, kinds }) => context.studio.generateSelected(projectId, kinds));
   handle(context, 'studio:artifacts-mark-edited', async ({ projectId, kind }) => context.studio.markEdited(projectId, kind));
   handle(context, 'studio:board-read', async ({ projectId }) => context.studio.board(projectId));
+  handle(context, 'import:scan', async ({ projectId }) => scanProjectForImport(context, projectId));
+  handle(context, 'import:add-cards', async ({ projectId, findingIds }) => {
+    const report = await scanProjectForImport(context, projectId);
+    const picked = report.findings.filter((finding) => findingIds.includes(finding.id));
+    if (picked.length === 0) throw new Error('None of those findings are in the project any more. Scan again.');
+    const at = new Date().toISOString();
+    const cards = picked.map((finding) => boardCardSchema.parse({
+      id: importCardId(finding.id), title: finding.card.title, kind: finding.card.kind, story: finding.card.story,
+      acceptance: finding.card.acceptance,
+      prompt: [finding.card.title, '', finding.detail, '', 'Done when:', ...finding.card.acceptance.map((line) => `- ${line}`)].join('\n'),
+      status: 'backlog', createdAt: at, updatedAt: at,
+    }));
+    const { board, added } = await context.studio.addCards(projectId, cards);
+    announceBoard(context, projectId, board);
+    return { added, report: { ...report, onBoard: board.cards.map((card) => card.id).filter((id) => id.startsWith('import-')).map((id) => id.slice('import-'.length)) } };
+  });
   handle(context, 'studio:board-plan', async ({ projectId }) => announceBoard(context, projectId, await context.studio.plan(projectId)));
   // Arranging rewrites the order of an existing board, so every window is told, not only the one that asked.
   handle(context, 'studio:board-arrange', async ({ projectId }) => announceBoard(context, projectId, await context.studio.arrange(projectId)));
@@ -4300,6 +4318,15 @@ async function credentialStatus(context: IpcContext): Promise<CredentialStatus> 
 }
 
 /** Every window redraws its board when a card moves, whichever window or agent moved it. */
+/** Scans a project for the import wizard and marks the findings whose cards the board already holds. */
+async function scanProjectForImport(context: IpcContext, projectId: string): Promise<ImportReport> {
+  const project = await resolveProject(context, projectId, true);
+  const report = await scanForImport(project.id, project.path, project.name);
+  const board = await context.studio.board(project.id).catch(() => null);
+  const onBoard = new Set((board?.cards ?? []).map((card) => card.id));
+  return { ...report, onBoard: report.findings.map((finding) => finding.id).filter((id) => onBoard.has(importCardId(id))) };
+}
+
 function announceBoard(context: IpcContext, projectId: string, board: StudioBoard): StudioBoard {
   context.windows.broadcast('studio:board-changed', { projectId, board });
   return board;

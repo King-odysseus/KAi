@@ -330,6 +330,19 @@ export class StudioBoardStore {
     return this.save(projectId, { schemaVersion: 1, revision: current.revision, cards: promoteReady(applyStaleness(merged, artifacts)) });
   }
 
+  /**
+   * Adds cards without touching the ones already there: a card whose id is on the board is left alone, so adding the
+   * same import twice changes nothing. Returns the board and the ids that were actually added.
+   */
+  async append(projectId: string, cards: readonly BoardCard[]): Promise<{ board: StudioBoard; added: string[] }> {
+    const current = await this.read(projectId);
+    const have = new Set(current.cards.map((card) => card.id));
+    const fresh = cards.filter((card) => !have.has(card.id));
+    if (fresh.length === 0) return { board: current, added: [] };
+    const board = await this.save(projectId, { schemaVersion: 1, revision: current.revision, cards: promoteReady([...current.cards, ...fresh]) });
+    return { board, added: fresh.map((card) => card.id) };
+  }
+
   /** Moves a card to a new status, enforcing the dependency and done rules. */
   async move(projectId: string, cardId: string, status: BoardStatus, note = '', by: 'user' | 'agent' | 'check' = 'agent'): Promise<BoardCard> {
     const board = await this.read(projectId);
