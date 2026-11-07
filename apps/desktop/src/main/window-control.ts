@@ -198,5 +198,10 @@ export function windowBriefing(executionMode: 'cli' | 'api'): string {
   return [
     '# KAI windows',
     `To check how a KAI screen looks or behaves, use ${executionMode === 'cli' ? 'the `kai-window` MCP server' : 'the `kai-window` tools'} (${tools}) instead of guessing from file names: take a screenshot, list the controls with \`window_snapshot\`, then click or type by ref. They reach KAI's own windows only, not other applications. Input pauses while the person has an approval to answer. If you cannot verify something, say so.`,
+    ...(executionMode === 'cli' ? [
+      '',
+      '# Browser',
+      'For any web page (a dev server, a preview, a deployed site), use the `playwright` MCP server: `browser_tabs`, `browser_navigate`, `browser_snapshot`, `browser_take_screenshot`, `browser_resize`. It drives the one shared Chrome KAI runs, and it is already connected. If those tools are not listed up front they are deferred: find them with your tool search (query "playwright" or "browser_navigate") before concluding there is no browser. Do not look for a Playwright package in the project and do not use a built-in browser plugin or computer-use host; neither exists in a KAI run. Only report browser checking as unavailable after a `browser_tabs` call with action "list" has actually failed, and quote its error.',
+    ] : []),
   ].join('\n');
 }

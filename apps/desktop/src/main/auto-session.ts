@@ -120,6 +120,8 @@ interface ActiveAutoRun {
   restStreak: number;
   restedMs: number;
   capability: AutoProviderCapability | null;
+  /** What the person said while the run was live; it becomes the next turn's prompt in place of the plan reminder. */
+  pendingAnswer: string | null;
 }
 
 /** A split's briefing, found only by the exact marker and the JSON after it - never by reading the prose around it. */
@@ -182,7 +184,22 @@ export class DesktopAutoSession {
 
   async start(input: AutoStartInput, ownerWindowId: number, options: { opened?: boolean } = {}): Promise<AutoStatus> {
     const conversation = await this.resolveConversation(input);
-    if (this.runs.has(conversation.id)) throw new Error('Auto is already running on this conversation.');
+    const live = this.runs.get(conversation.id);
+    if (live) {
+      // The agent asked something and the person answered while the loop was parked or between turns. Refusing
+      // left the answer sitting in the chat with nothing reading it; it becomes the next turn instead, and a run
+      // parked on a repeated failure is given fresh attempts because a person has now said something new.
+      const answer = input.prompt.trim();
+      if (!answer) throw new Error('Auto is already running on this conversation.');
+      live.pendingAnswer = answer;
+      live.repeatSignature = null;
+      live.repeatFiles = null;
+      live.repeatCount = 0;
+      live.paused = false;
+      live.wake?.();
+      this.record(conversation.id, live.ownerWindowId, 'info', 'Your answer will be the next turn.');
+      return this.statuses.get(conversation.id) ?? this.fresh(conversation, input, '');
+    }
     // A blank box means the project's own test command, when there is one. With neither, the agent's plan is the
     // only account of the work and nothing confirms it — which is a legitimate way to run, not a reason to refuse.
     const command = input.checkCommand.trim() || (await this.ports.suggestCheck(input.projectId).catch(() => null)) || '';
@@ -201,6 +218,7 @@ export class DesktopAutoSession {
       restStreak: 0,
       restedMs: 0,
       capability: null,
+      pendingAnswer: null,
     };
     const state = this.fresh(conversation, input, command);
     this.runs.set(conversation.id, active);
@@ -306,7 +324,8 @@ export class DesktopAutoSession {
     try {
       for (;;) {
         if (active.controller.signal.aborted) return this.settle(conversationId, owner, 'stopped', 'Auto was stopped.');
-        if (active.paused) await this.pauseForHuman(conversationId, active, null, 'Paused. Press Resume and Auto carries on from here.');
+        if (active.paused && !active.pendingAnswer) await this.pauseForHuman(conversationId, active, null, 'Paused. Press Resume and Auto carries on from here.');
+        if (active.pendingAnswer) { prompt = active.pendingAnswer; active.pendingAnswer = null; }
 
         const cap = this.capReached(input, conversationId, active, deadline);
         if (cap) {
