@@ -1,4 +1,5 @@
-import { reconcileSettingsDraft } from './settings-draft';
+import { reconcileSettingsDraft } from './settings-draft';
+
 import { Switch } from './ui/Switch';
 import { Archive, ArchiveRestore, Check, ChevronDown, Cloud, Code2, Cpu, Database, FolderInput, Gauge, GraduationCap, KeyRound, Keyboard, PenTool, Play, Plug, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog, ShieldCheck, Trash2, Users, Wand2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -9,7 +10,7 @@ import { AgentTeamCard } from './TeamSettings';
 import { ProjectAutomation } from './AutomationSettings';
 import { changedGroups, SETTINGS_GROUP_NAMES, updateForGroups, type SettingsGroup } from './settings-groups';
 import { ThemeColors } from './ThemeColors';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, cliApiKeyCredentialId, DIRECT_PROVIDER_ORDER, EXPERIENCE_PROFILES, experienceProfile, WORK_LEVELS, WORK_LEVEL_LABEL, THEME_MODES, WEB_SEARCH_SOURCES, WEB_SEARCH_SOURCE_LABEL, directProviderPreset, isLocalProvider, localProviderGuide, nativeSearchProvider, pickLocalModel, searchCredentialId } from '@kai/contracts';
 import type { AgentConfigImportPreview, AppSettings, ConnectorCatalogEntry, ProjectAutomation as ProjectAutomationSettings, ConfigBackup, CredentialStatus, DataLocation, LogEntry, ProviderModelCatalog, ServiceState, SettingsUpdate, WebSearchTestResult } from '@kai/contracts';
 import { confirmDialog } from './AppDialog';
 import { ModelField } from './ModelField';
@@ -820,7 +821,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           icon={<GraduationCap size={17} />}
           detail="Dedicated provider connection for Learn, Guided, Pair, and Copilot. It stays independent from Compose and Direct API mode."
           toggleLabel="Enable Learning Tutor API"
-          toggleHint={isLocalProvider(draft.learningTutor.provider) ? 'Uses the LM Studio server on this computer; no key needed' : 'Uses its own provider and OS-vault credential'}
+          toggleHint={isLocalProvider(draft.learningTutor.provider) ? `Uses ${localProviderGuide(draft.learningTutor.provider)?.name ?? 'a local server'} on this computer; no key needed` : 'Uses its own provider and OS-vault credential'}
           enabled={draft.learningTutor.enabled}
           provider={draft.learningTutor.provider}
           model={draft.learningTutor.model}
@@ -854,7 +855,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           icon={<Wand2 size={17} />}
           detail="Turns a rough idea into a clear goal, the questions still open, and one prompt per teammate, from the Auto team card on Workflows. A small, cheap model is enough. It reads the project but never changes it."
           toggleLabel="Enable the Prompt Guide"
-          toggleHint={isLocalProvider(draft.promptGuide.provider) ? 'Uses the LM Studio server on this computer; no key needed' : 'Uses its own provider and OS-vault credential'}
+          toggleHint={isLocalProvider(draft.promptGuide.provider) ? `Uses ${localProviderGuide(draft.promptGuide.provider)?.name ?? 'a local server'} on this computer; no key needed` : 'Uses its own provider and OS-vault credential'}
           enabled={draft.promptGuide.enabled}
           provider={draft.promptGuide.provider}
           model={draft.promptGuide.model}
@@ -886,7 +887,7 @@ export function SettingsView({ activeProject, projectTeam, onSaveProjectTeam, pr
           icon={<Cloud size={17} />}
           detail="Provider connection used by Compose when execution is set to API. Changing it does not change Learning Tutor."
           toggleLabel="Enable direct API mode"
-          toggleHint={isLocalProvider(draft.directApi.provider) ? 'Uses the LM Studio server on this computer; no key needed' : 'Uses a provider key from the OS vault'}
+          toggleHint={isLocalProvider(draft.directApi.provider) ? `Uses ${localProviderGuide(draft.directApi.provider)?.name ?? 'a local server'} on this computer; no key needed` : 'Uses a provider key from the OS vault'}
           enabled={draft.directApi.enabled}
           provider={draft.directApi.provider}
           model={draft.directApi.model}
@@ -1467,12 +1468,12 @@ function ProviderConnectionSection({
           {catalog?.source === 'live'
             ? `${catalog.models.length} ${local ? 'models on this computer' : 'live provider models'}. Refreshed ${formatRefreshTime(catalog.fetchedAt)}.`
             : local
-              ? 'Refresh lists the models you have downloaded in LM Studio.'
+              ? (localProviderGuide(provider)?.list ?? 'Refresh lists the models the local server offers.')
               : 'Bundled model list, which can be out of date. Save a key, then Refresh to load every model your key can use. Refresh uses the stored credential without exposing it.'}
         </span>
       </div>
       <FeedbackMessage feedback={modelFeedback} />
-      {local && <p className="settings-note local-provider-note">Runs on your computer, so there is no key and nothing is billed. In LM Studio open the Developer tab, start the local server and load a model (for example Qwen2.5 Coder), then refresh here. Only add a key below if you switched on API-token protection in LM Studio.</p>}
+      {local && <p className="settings-note local-provider-note">{localProviderGuide(provider)?.setup ?? 'Runs on your computer, so there is no key and nothing is billed. Start the local server and load a model, then refresh here.'}</p>}
       <div className="credential-form">
         <TextField label={local ? 'API key (optional)' : 'API key'} value={credentialValue} type="password" onChange={onCredentialValueChange} />
         <div className="button-row align-start">

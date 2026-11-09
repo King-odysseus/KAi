@@ -50,6 +50,9 @@ export const providerIdSchema = z.enum([
   'together',
   'fireworks',
   'lmstudio',
+  'ollama',
+  'llamacpp',
+  'vllm',
   'openai-compatible',
 ]);
 export const autonomyModeSchema = z.enum(['plan', 'ask', 'autoEdit', 'full', 'custom']);

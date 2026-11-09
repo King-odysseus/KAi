@@ -4,6 +4,7 @@ import type {
   AutonomyMode,
   ContextChip,
   ExecutionMode,
+  ArchitectSplit,
   GoalInput,
   RouteMode,
 } from '@kai/contracts';
@@ -109,6 +110,8 @@ export interface AutoStartDraft {
   /** Continue this conversation; without it Auto opens one for the task. */
   conversationId?: string | null;
   model?: string;
+  /** The Architect / Implementer split, when it is on. */
+  architect?: ArchitectSplit;
   goal?: GoalInput;
   skills?: string[];
   selectedPaths?: string[];
@@ -136,6 +139,7 @@ export function buildAutoStartRequest(draft: AutoStartDraft): AutoStartRequest {
     maxHours: settings.maxHours,
     apiFallback: settings.apiFallback,
     minGapSeconds: settings.minGapSeconds,
+    ...(draft.architect ? { architect: draft.architect } : {}),
     ...(draft.goal ? { goal: draft.goal } : {}),
     ...(draft.skills?.length ? { skills: draft.skills } : {}),
     ...(draft.selectedPaths?.length ? { selectedPaths: draft.selectedPaths } : {}),

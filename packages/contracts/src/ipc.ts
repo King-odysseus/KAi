@@ -44,6 +44,18 @@ import {
   type AutopilotStatus,
 } from './autopilot';
 import {
+  architectAnswerInputSchema,
+  architectConversationInputSchema,
+  architectReadinessInputSchema,
+  architectRunInputSchema,
+  type ArchitectAnswerInput,
+  type ArchitectConversationInput,
+  type ArchitectReadiness,
+  type ArchitectRunInput,
+  type ArchitectStatus,
+  type RoleTarget,
+} from './architect';
+import {
   autoConversationInputSchema,
   autoStartInputSchema,
   autoStatusResponseSchema,
@@ -614,6 +626,11 @@ export const ipcChannels = [
   'auto:status',
   'auto:pause',
   'auto:resume',
+  'architect:run',
+  'architect:stop',
+  'architect:answer',
+  'architect:status',
+  'architect:ready',
   'studio:design-pull',
   'studio:design-read',
   'studio:design-status',
@@ -1020,6 +1037,11 @@ export const ipcInputSchemas = {
   'auto:status': autoConversationInputSchema,
   'auto:pause': autoConversationInputSchema,
   'auto:resume': autoConversationInputSchema,
+  'architect:run': architectRunInputSchema,
+  'architect:stop': architectConversationInputSchema,
+  'architect:answer': architectAnswerInputSchema,
+  'architect:status': architectConversationInputSchema,
+  'architect:ready': architectReadinessInputSchema,
   'studio:design-pull': studioDesignPullInputSchema,
   'studio:design-read': studioProjectInputSchema,
   'studio:design-status': studioProjectInputSchema,
@@ -1648,6 +1670,18 @@ export interface KaiDesktopBridge {
   /** Picks a paused Auto back up, re-checking that there is a provider to run on. */
   resumeAuto(request: AutoConversationInput): Promise<IpcResponse<AutoStatus | null>>;
   onAutoChanged(listener: (status: AutoStatus) => void): () => void;
+  /**
+   * Runs one send through the Architect / Implementer split: the Architect plans, the Implementer builds, the
+   * Architect reviews and sends work back until it is right.
+   */
+  runArchitect(request: ArchitectRunInput): Promise<IpcResponse<ArchitectStatus>>;
+  stopArchitect(request: ArchitectConversationInput): Promise<IpcResponse<ArchitectStatus | null>>;
+  /** The person's answer to "continue or finish here?" */
+  answerArchitect(request: ArchitectAnswerInput): Promise<IpcResponse<ArchitectStatus | null>>;
+  architectStatus(request: ArchitectConversationInput): Promise<IpcResponse<ArchitectStatus | null>>;
+  /** Whether one role's choice can run right now, and why not when it cannot. */
+  architectReady(target: RoleTarget): Promise<IpcResponse<ArchitectReadiness>>;
+  onArchitectChanged(listener: (status: ArchitectStatus) => void): () => void;
   /** What KAI last read from open-pencil. */
   studioDesign(projectId: string): Promise<IpcResponse<StudioDesign>>;
   studioDesignStatus(projectId: string): Promise<IpcResponse<StudioDesignStatus>>;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { cliModelNameSchema, conversationRecordV1Schema } from './domain';
+import { apiConnectionSchema } from './architect';
 import { contextChipSchema } from './context';
 import { workLevelSchema } from './model-tiers';
 import { persistedEventV1Schema } from './events';
@@ -120,6 +121,10 @@ export const agentRunRequestSchema = z
     // The project's allow/ask/deny rules. API runs enforce them directly; a CLI run gets the whole-tool denials
     // its harness can express (Claude Code), because a CLI's own tool loop cannot be intercepted.
     permissionRules: permissionRulesSchema.optional(),
+    // The API connection this run talks to, when it is not the one in Settings. A role in the Architect / Implementer
+    // split carries its own, so two roles can use different providers, keys or a model on this computer. Only an
+    // `api` run reads it.
+    apiConnection: apiConnectionSchema.optional(),
   })
   .strict();
 

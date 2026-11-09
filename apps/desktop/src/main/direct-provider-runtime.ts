@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { trimAnthropicToolResults, trimChatToolResults, trimGeminiToolResults } from './context-trimming';
-import { directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, planIsUnfinished, type ProviderId } from '@kai/contracts';
+import { directProviderPreset, helperLimitOf, isLocalProvider, LOCAL_PROVIDER_PLACEHOLDER_KEY, openPlanReminder, pickLocalModel, planIsUnfinished, type ApiConnection, type ProviderId } from '@kai/contracts';
+import { localServerHint, resolveApiConnection } from './api-connection';
 import type {
   AppSettings,
   AgentRunRequest,
@@ -788,9 +789,14 @@ export class DesktopDirectProviderRuntime {
     };
   }
 
-  async capability(): Promise<DirectApiCapability> {
+  /**
+   * What the API can do right now. With `connection` it answers for that connection instead of the one in Settings —
+   * a role in the Architect / Implementer split names its own provider, key and model. Choosing a connection for a
+   * run is itself the instruction to use the API, so Settings' on/off switch does not veto it.
+   */
+  async capability(connection?: ApiConnection): Promise<DirectApiCapability> {
     const settings = await this.settings.load();
-    const directApi = settings.directApi;
+    const directApi = connection ? resolveApiConnection(settings.directApi, connection) : settings.directApi;
     const preset = directProviderPreset(directApi.provider);
     const displayName = preset.displayName;
     const local = isLocalProvider(directApi.provider);
@@ -810,7 +816,10 @@ export class DesktopDirectProviderRuntime {
     if (!directApi.enabled) {
       return { ...base, available: false, unavailableReason: 'Direct API mode is disabled in Settings.' };
     }
-    if (!directApi.model.trim()) {
+    // A role's own local connection with no model chosen takes one from the running server, the way Settings' refresh
+    // does. Everything else must name a model: guessing one for a paid provider would spend money on a choice nobody made.
+    const modelFromServer = Boolean(connection) && local && !directApi.model.trim();
+    if (!directApi.model.trim() && !modelFromServer) {
       return { ...base, available: false, unavailableReason: 'Set a direct API model in Settings.' };
     }
     if (local) {
@@ -820,17 +829,17 @@ export class DesktopDirectProviderRuntime {
         return {
           ...base,
           available: false,
-          unavailableReason: `${displayName} is not reachable at ${directApi.baseUrl}. Open LM Studio, start its local server (Developer tab), load a model, then refresh.`,
+          unavailableReason: `${displayName} is not reachable at ${directApi.baseUrl}. ${localServerHint(directApi.provider)}`,
         };
       }
       if (probe.models.length === 0) {
         return {
           ...base,
           available: false,
-          unavailableReason: `${displayName} is running but has no models. Download one in LM Studio (for example Qwen2.5 Coder) and try again.`,
+          unavailableReason: `${displayName} is running but has no models. Download or load one (for example Qwen2.5 Coder) and try again.`,
         };
       }
-      return { ...base, available: true };
+      return { ...base, ...(modelFromServer ? { model: pickLocalModel(probe.models) } : {}), available: true };
     }
     if (!this.credentials.isAvailable()) {
       return {
@@ -878,11 +887,11 @@ export class DesktopDirectProviderRuntime {
       return cancelledEarly(request);
     };
 
-    let capability = await this.capability();
+    let capability = await this.capability(request.apiConnection);
     const cancelledDuringCapability = checkCancelledEarly();
     if (cancelledDuringCapability) return cancelledDuringCapability;
-    // A model chosen in the composer applies to this run only.
-    if (request.model) capability = { ...capability, model: request.model };
+    // A model chosen in the composer applies to this run only. A role's own connection already carries its model.
+    if (request.model && !request.apiConnection?.model) capability = { ...capability, model: request.model };
     let apiKey: string;
     if (request.route === 'proxy') {
       const preset = directProviderPreset(capability.provider);

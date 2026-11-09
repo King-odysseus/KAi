@@ -57,7 +57,8 @@ import { UpdateController } from './updater';
 import { autoUpdater } from 'electron-updater';
 import { hashFile, recordVerification, runCheckCommand, suggestTestCommand, VerificationStore } from './verification';
 import { runToolHooks, type ToolHookCall } from './automation';
-import { gitOverview } from './git-tools';
+import { gitDiffAgainstHead, gitOverview } from './git-tools';
+import type { ArchitectReadiness, ArchitectSplit, ArchitectStatus, RoleTarget } from '@kai/contracts';
 import { NotificationCenter } from './notification-rules';
 import { DesktopServiceController } from './service-controller';
 import { WorkflowTemplateStore } from './workflow-templates';
@@ -75,6 +76,7 @@ import { ConventionService } from './conventions-service';
 import { DesktopTeamPlanner } from './team-planner';
 import { DesktopAutopilot } from './autopilot';
 import { DesktopAutoSession } from './auto-session';
+import { ArchitectCoach, ArchitectLoop, targetLabel } from './architect-loop';
 import { AutoWindowStore } from './auto-session-store';
 import { AutopilotRunStore } from './autopilot-store';
 import { BrainMirrorLoop } from './brain-mirror';
@@ -305,6 +307,7 @@ app.on('before-quit', (event) => {
     .then(() => activeContext?.workflows.dispose())
     .then(() => activeContext?.autopilot.dispose())
     .then(() => activeContext?.auto.dispose())
+    .then(() => activeContext?.architect.dispose())
     // Written out now rather than on its timer. Nothing depends on it: it is rebuilt from the conversations if lost.
     .then(() => activeContext?.usageLedger?.flush())
     .then(() => mirrorLoop?.stop())
@@ -803,6 +806,8 @@ async function startApplication(): Promise<void> {
   let teamPlanner!: DesktopTeamPlanner;
   let autopilot!: DesktopAutopilot;
   let auto!: DesktopAutoSession;
+  let architect!: ArchitectLoop;
+  let architectReadiness!: (target: RoleTarget) => Promise<ArchitectReadiness>;
   let promptGuide!: DesktopPromptGuide;
   let interview!: DesktopInterview;
   let studio!: DesktopStudio;
@@ -925,6 +930,8 @@ async function startApplication(): Promise<void> {
     teamPlanner,
     autopilot,
     auto,
+    architect,
+    architectReadiness,
     promptGuide,
     interview,
     studio,
@@ -1405,6 +1412,57 @@ async function startApplication(): Promise<void> {
     if (!project) throw new Error('Project not found.');
     return project.path;
   };
+  // The Architect / Implementer split. One set of ports serves both Auto and a normal send, so a role is judged
+  // "ready" in exactly one way: a CLI that is signed in, an API with its key, or a local server that answers.
+  const agentNames: Record<string, string> = {};
+  const roleReadiness = async (target: RoleTarget): Promise<{ ready: boolean; reason?: string }> => {
+    if (target.execution === 'cli') {
+      const capabilities = await agents.capabilities();
+      for (const capability of capabilities) agentNames[capability.id] = capability.displayName;
+      const found = capabilities.find((capability) => capability.id === target.agent);
+      if (!found) return { ready: false, reason: 'that agent is not known to this build' };
+      return found.available ? { ready: true } : { ready: false, reason: found.unavailableReason ?? `${found.displayName} is ${found.state.replace('_', ' ')}` };
+    }
+    const capability = await directApi.capability(target.api);
+    return capability.available ? { ready: true } : { ready: false, reason: capability.unavailableReason ?? 'the API is unavailable' };
+  };
+  const architectPorts = {
+    runAgent: (request: AgentRunRequest, ownerWindowId: number) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    cancelAgent: (conversationId: string) => cancelConversationRun(ipcContext!, conversationId),
+    ready: roleReadiness,
+    // What the Architect reads to review: the changed files and their diffs, bounded so a big change cannot flood it.
+    reviewMaterial: async (projectId: string) => {
+      const root = await projectRootFor(projectId);
+      const changes = (await gitOverview(root)).changes.map((change) => change.path).slice(0, 30);
+      const parts: string[] = [];
+      for (const file of changes) {
+        const diff = await gitDiffAgainstHead(root, file).catch(() => '');
+        parts.push(diff.trim() ? `--- ${file}\n${diff.slice(0, 6_000)}` : `--- ${file} (new or unreadable as a diff)`);
+      }
+      return parts.join('\n\n');
+    },
+    agentNames: () => agentNames,
+    // A task started with no conversation gets one, shown in the window, exactly as Auto does for its own.
+    openNewConversation: async (projectId: string, title: string, ownerWindowId: number) => {
+      const created = await createBlankConversation(projectId, title);
+      openConversationInWindow(ownerWindowId, created, true);
+      return created;
+    },
+    // Saved on the conversation so the tab reopens with the same Architect, Implementer and fallback.
+    rememberSplit: async (conversationId: string, split: ArchitectSplit) => {
+      const conversation = await conversations.get(conversationId);
+      if (!conversation) return;
+      await conversations.save({ ...conversation, architect: split });
+    },
+    announce: (ownerWindowId: number, status: ArchitectStatus) => desktopWindows.send(ownerWindowId, 'architect:changed', status),
+    now: () => Date.now(),
+  };
+  architect = new ArchitectLoop(architectPorts);
+  architectReadiness = async (target) => {
+    const ready = await roleReadiness(target);
+    return { ready: ready.ready, label: targetLabel(target, agentNames), ...(ready.reason ? { reason: ready.reason } : {}) };
+  };
+
   auto = new DesktopAutoSession({
     getConversation: (conversationId) => conversations.get(conversationId),
     saveConversation: async (conversation) => { await conversations.save(conversation); return conversation; },
@@ -1453,8 +1511,10 @@ async function startApplication(): Promise<void> {
     openNewTab: (ownerWindowId, conversation) => openConversationInWindow(ownerWindowId, conversation, true),
     announce: (ownerWindowId, status) => desktopWindows.send(ownerWindowId, 'auto:changed', status),
     now: () => Date.now(),
-  }, new AutoWindowStore(path.join(paths.root, 'auto-windows.json')));
+  }, new AutoWindowStore(path.join(paths.root, 'auto-windows.json')), architect.coach);
   ipcContext.auto = auto;
+  ipcContext.architect = architect;
+  ipcContext.architectReadiness = architectReadiness;
   desktopShell = shell;
 
   await importLocalCognitive1Brain(ipcContext, kaiRoot);

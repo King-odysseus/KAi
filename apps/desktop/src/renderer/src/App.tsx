@@ -2476,6 +2476,7 @@ export function App(): ReactNode {
               selectedRoute={selectedRoute}
               selectedAutonomy={selectedAutonomy}
               taskIntent={activeTaskIntent}
+              windowId={windowId}
               taskRecipes={activeTaskRecipes}
               onSelectTaskIntent={(intent) => {
                 updateComposerSelection({ intent });

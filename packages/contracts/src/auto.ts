@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { architectSplitSchema } from './architect';
 import { contextChipSchema } from './context';
 import { cliModelNameSchema } from './domain';
 import { agentIdSchema, autonomyModeSchema, executionModeSchema, routeModeSchema } from './primitives';
@@ -94,6 +95,11 @@ export const autoStartInputSchema = z
     turnsUsed: z.number().int().min(0).default(0),
     /** Split levels already spent, so a chain of new tabs cannot go on forever. */
     splitDepth: z.number().int().min(0).max(10).default(0),
+    /**
+     * The Architect / Implementer split. When it is on, the Architect plans and reviews and the Implementer takes every
+     * working turn; `agent`, `execution` and `model` above are then only what the composer showed, not who does the work.
+     */
+    architect: architectSplitSchema.optional(),
     // The composer's context, carried through to every turn exactly as a normal send would.
     goal: goalInputSchema.optional(),
     skills: z.array(z.string().min(1).max(200)).max(50).optional(),

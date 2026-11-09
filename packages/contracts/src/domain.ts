@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { architectSplitSchema } from './architect';
 import { persistedEventV1Schema } from './events';
 import { experienceLevelSchema } from './experience';
 import {
@@ -532,6 +533,8 @@ export const conversationRecordV1Schema = z
     route: routeModeSchema.nullable(),
     autonomy: autonomyModeSchema.nullable(),
     execution: executionModeSchema.optional(),
+    /** The Architect / Implementer split chosen for this tab, so it comes back when the tab is reopened. */
+    architect: architectSplitSchema.optional(),
     agentSessionId: z.string().min(1).optional(),
     goal: workbenchGoalSchema.nullable().optional(),
     workflow: workflowSchema.nullable().optional(),

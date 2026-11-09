@@ -184,6 +184,16 @@ const bridge: KaiDesktopBridge = {
     ipcRenderer.on('auto:changed', handler);
     return () => ipcRenderer.removeListener('auto:changed', handler);
   },
+  runArchitect: (request) => ipcRenderer.invoke('architect:run', request),
+  stopArchitect: (request) => ipcRenderer.invoke('architect:stop', request),
+  answerArchitect: (request) => ipcRenderer.invoke('architect:answer', request),
+  architectStatus: (request) => ipcRenderer.invoke('architect:status', request),
+  architectReady: (target) => ipcRenderer.invoke('architect:ready', { target }),
+  onArchitectChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: import('@kai/contracts').ArchitectStatus): void => listener(payload);
+    ipcRenderer.on('architect:changed', handler);
+    return () => ipcRenderer.removeListener('architect:changed', handler);
+  },
   studioDesign: (projectId) => ipcRenderer.invoke('studio:design-read', { projectId }),
   studioDesignStatus: (projectId) => ipcRenderer.invoke('studio:design-status', { projectId }),
   pullStudioDesign: (projectId, adopt) => ipcRenderer.invoke('studio:design-pull', { projectId, ...(adopt ? { adopt } : {}) }),

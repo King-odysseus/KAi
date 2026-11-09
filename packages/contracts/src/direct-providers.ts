@@ -247,6 +247,36 @@ export const DIRECT_PROVIDER_PRESETS: Readonly<Record<ProviderId, DirectProvider
     supportsTools: true,
     models: [],
   },
+  ollama: {
+    id: 'ollama',
+    displayName: 'Ollama (local models)',
+    protocol: 'chat-completions',
+    defaultBaseUrl: 'http://127.0.0.1:11434/v1',
+    defaultModel: '',
+    credentialId: 'provider.ollama',
+    supportsTools: true,
+    models: [],
+  },
+  llamacpp: {
+    id: 'llamacpp',
+    displayName: 'llama.cpp server (local models)',
+    protocol: 'chat-completions',
+    defaultBaseUrl: 'http://127.0.0.1:8080/v1',
+    defaultModel: '',
+    credentialId: 'provider.llamacpp',
+    supportsTools: true,
+    models: [],
+  },
+  vllm: {
+    id: 'vllm',
+    displayName: 'vLLM (local or self-hosted)',
+    protocol: 'chat-completions',
+    defaultBaseUrl: 'http://127.0.0.1:8000/v1',
+    defaultModel: '',
+    credentialId: 'provider.vllm',
+    supportsTools: true,
+    models: [],
+  },
   'openai-compatible': {
     id: 'openai-compatible',
     displayName: 'Custom OpenAI-compatible API',
@@ -273,11 +303,14 @@ export const DIRECT_PROVIDER_ORDER: readonly ProviderId[] = [
   'together',
   'fireworks',
   'lmstudio',
+  'ollama',
+  'llamacpp',
+  'vllm',
   'openai-compatible',
 ];
 
 /** Providers that run on the user's own machine or network: no API key is needed and nothing is billed. */
-export const LOCAL_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['lmstudio']);
+export const LOCAL_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(['lmstudio', 'ollama', 'llamacpp', 'vllm']);
 
 export function isLocalProvider(provider: ProviderId): boolean {
   return LOCAL_PROVIDERS.has(provider);
@@ -293,6 +326,41 @@ export const LOCAL_PROVIDER_PLACEHOLDER_KEY = 'lm-studio';
 export function pickLocalModel(models: readonly string[]): string {
   const chat = models.filter((model) => !/embed/i.test(model));
   return chat.find((model) => /coder/i.test(model)) ?? chat.at(0) ?? '';
+}
+
+/**
+ * How to get a local server answering, in that server's own words, for the Settings screen and for error messages.
+ * `list` is the sentence about the Refresh button; `setup` is the paragraph under the provider.
+ */
+export function localProviderGuide(provider: ProviderId): { name: string; list: string; setup: string } | null {
+  switch (provider) {
+    case 'lmstudio':
+      return {
+        name: 'LM Studio',
+        list: 'Refresh lists the models you have downloaded in LM Studio.',
+        setup: 'Runs on your computer, so there is no key and nothing is billed. In LM Studio open the Developer tab, start the local server and load a model (for example Qwen2.5 Coder), then refresh here. Only add a key below if you switched on API-token protection in LM Studio.',
+      };
+    case 'ollama':
+      return {
+        name: 'Ollama',
+        list: 'Refresh lists the models you have pulled in Ollama.',
+        setup: 'Runs on your computer, so there is no key and nothing is billed. Start Ollama (the app, or `ollama serve`), pull a coding model with `ollama pull qwen2.5-coder`, then refresh here. Ollama listens on port 11434; change the address above if yours is elsewhere.',
+      };
+    case 'llamacpp':
+      return {
+        name: 'llama.cpp',
+        list: 'Refresh lists the model the llama.cpp server has loaded.',
+        setup: 'Runs on your computer, so there is no key and nothing is billed. Start `llama-server` with a model (for example `llama-server -m qwen2.5-coder.gguf`), then refresh here. It listens on port 8080 unless you passed --port. Only add a key below if you started it with --api-key.',
+      };
+    case 'vllm':
+      return {
+        name: 'vLLM',
+        list: 'Refresh lists the models the vLLM server is serving.',
+        setup: 'Runs on your own machine or network, so nothing is billed by a provider. Start the server (`vllm serve <model>`), then refresh here. It listens on port 8000 unless you passed --port. Only add a key below if you started it with --api-key.',
+      };
+    default:
+      return null;
+  }
 }
 
 export function directProviderPreset(provider: ProviderId): DirectProviderPreset {

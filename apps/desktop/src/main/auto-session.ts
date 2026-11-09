@@ -1,8 +1,11 @@
 import {
   AUTO_SPLIT_SENTINEL,
+  architectSplitActive,
   autoSplitDirectiveSchema,
   type AgentRunRequest,
   type AgentRunResult,
+  type ArchitectBrief,
+  type RoleTarget,
   type AutoLogEntry,
   type AutoProviderRef,
   type AutoSplitDirective,
@@ -16,6 +19,15 @@ import {
   openPlanReminder,
   planIsUnfinished,
 } from '@kai/contracts';
+import {
+  correctionPrompt,
+  implementerIsStuck,
+  implementPrompt,
+  REVISIONS_BEFORE_STEP_IN,
+  RunStoppedError,
+  type ArchitectCoach,
+  type CoachContext,
+} from './architect-loop';
 import { formatDuration } from './autopilot';
 import { cooldownMs, detectRateLimit, RequestPacer, sleepAbortable } from './rate-limit';
 import { diagnoseRun, diagnosisLine } from './run-doctor';
@@ -122,6 +134,41 @@ interface ActiveAutoRun {
   capability: AutoProviderCapability | null;
   /** What the person said while the run was live; it becomes the next turn's prompt in place of the plan reminder. */
   pendingAnswer: string | null;
+  /** Set when the Architect / Implementer split is on: the brief being worked from and how the review has gone. */
+  architect: {
+    brief: ArchitectBrief | null;
+    /** Reviews in a row that sent the work back. */
+    revisions: number;
+    /** The failure the Architect last stepped in on, so it steps in once per wall rather than once per run. */
+    steppedInOn: string | null;
+    context: CoachContext;
+  } | null;
+}
+
+/**
+ * The composer's agent, execution and model replaced by the Implementer's, so everything Auto already does around a
+ * working turn (usage windows, the API fallback, the conversation's recorded settings) applies to the agent that is
+ * actually doing the work. The split itself rides along untouched.
+ */
+export function withImplementer(input: AutoStartInput): AutoStartInput {
+  const split = input.architect;
+  if (!architectSplitActive(split)) return input;
+  const target: RoleTarget = split.implementer;
+  if (target.execution === 'api') {
+    return {
+      ...input,
+      execution: 'api',
+      route: 'direct',
+      ...(target.api?.model ? { model: target.api.model } : {}),
+    };
+  }
+  const { model: _composerModel, ...rest } = input;
+  return {
+    ...rest,
+    execution: 'cli',
+    agent: target.agent ?? input.agent,
+    ...(target.model ? { model: target.model } : {}),
+  };
 }
 
 /** A split's briefing, found only by the exact marker and the JSON after it - never by reading the prose around it. */
@@ -172,6 +219,8 @@ export class DesktopAutoSession {
   constructor(
     private readonly ports: AutoSessionPorts,
     private readonly windows: AutoWindowPort,
+    /** The Architect's side of a split run. Without it a run that asks for a split is refused, not quietly run alone. */
+    private readonly coach?: ArchitectCoach,
   ) {}
 
   status(conversationId: string): AutoStatus | null {
@@ -182,7 +231,11 @@ export class DesktopAutoSession {
     return this.runs.has(conversationId);
   }
 
-  async start(input: AutoStartInput, ownerWindowId: number, options: { opened?: boolean } = {}): Promise<AutoStatus> {
+  async start(requested: AutoStartInput, ownerWindowId: number, options: { opened?: boolean } = {}): Promise<AutoStatus> {
+    if (architectSplitActive(requested.architect) && !this.coach) {
+      throw new Error('The Architect / Implementer split is not available in this build.');
+    }
+    const input = withImplementer(requested);
     const conversation = await this.resolveConversation(input);
     const live = this.runs.get(conversation.id);
     if (live) {
@@ -203,6 +256,7 @@ export class DesktopAutoSession {
     // A blank box means the project's own test command, when there is one. With neither, the agent's plan is the
     // only account of the work and nothing confirms it — which is a legitimate way to run, not a reason to refuse.
     const command = input.checkCommand.trim() || (await this.ports.suggestCheck(input.projectId).catch(() => null)) || '';
+    let fallbackSaid = false;
     const active: ActiveAutoRun = {
       controller: new AbortController(),
       ownerWindowId,
@@ -219,6 +273,31 @@ export class DesktopAutoSession {
       restedMs: 0,
       capability: null,
       pendingAnswer: null,
+      architect: architectSplitActive(input.architect)
+        ? {
+            brief: null,
+            revisions: 0,
+            steppedInOn: null,
+            context: {
+              split: input.architect,
+              projectId: input.projectId,
+              base: { conversationId: conversation.id, route: input.route, autonomy: input.autonomy, placeholderAgent: input.agent },
+              ownerWindowId,
+              firstTurn: {
+                ...(input.goal ? { goal: input.goal } : {}),
+                ...(input.skills?.length ? { skills: input.skills } : {}),
+                ...(input.selectedPaths?.length ? { selectedPaths: input.selectedPaths } : {}),
+                ...(input.contextChips?.length ? { contextChips: input.contextChips } : {}),
+              },
+              // Said the first time only; the status line keeps showing that a stand-in is working.
+              onFallback: (message) => {
+                if (fallbackSaid) return;
+                fallbackSaid = true;
+                this.record(conversation.id, ownerWindowId, 'warn', message);
+              },
+            },
+          }
+        : null,
     };
     const state = this.fresh(conversation, input, command);
     this.runs.set(conversation.id, active);
@@ -322,6 +401,9 @@ export class DesktopAutoSession {
     /** The plan is read against the task once per run, not once per turn. */
     let reviewed = false;
     try {
+      // With the split on, the Architect plans first and the Implementer works from its brief. Both are checked to be
+      // ready before any planning is paid for, so a dead agent fails here with its name on it, not halfway through.
+      if (active.architect) prompt = await this.architectPlan(input, conversationId, active);
       for (;;) {
         if (active.controller.signal.aborted) return this.settle(conversationId, owner, 'stopped', 'Auto was stopped.');
         if (active.paused && !active.pendingAnswer) await this.pauseForHuman(conversationId, active, null, 'Paused. Press Resume and Auto carries on from here.');
@@ -362,9 +444,19 @@ export class DesktopAutoSession {
           // would park the session on a person.
           if (turn.cancelled) return this.settle(conversationId, owner, 'stopped', 'The run was stopped, so Auto stopped too.');
           this.record(conversationId, owner, 'warn', `The turn ended with an error: ${turn.error.slice(0, 300)}`);
-          if (await this.noteFailure(input, active, `turn:${turn.error.slice(-400)}`)) continue;
+          const turnSignature = `turn:${turn.error.slice(-400)}`;
+          if (await this.noteFailure(input, active, turnSignature)) continue;
+          const turnStepIn = await this.tryStepIn(input, conversationId, active, turnSignature, `The Implementer's turns keep ending in the same error: ${turn.error.slice(0, 300)}`);
+          if (turnStepIn) { prompt = turnStepIn; continue; }
           await this.pauseForHuman(conversationId, active, 'repeated-failure',
             `The same error came back ${input.maxRepeatedFailures} turns in a row with no files changed, which points at the setup rather than the work: ${turn.error.slice(0, 300)}`);
+          continue;
+        }
+
+        // The Implementer said it cannot make progress: the Architect steps in before anything else is tried.
+        if (active.architect && implementerIsStuck(turn.output)) {
+          this.record(conversationId, owner, 'info', 'The Implementer asked for help.');
+          prompt = await this.architectStepIn(input, conversationId, active, 'The Implementer said it is stuck.');
           continue;
         }
 
@@ -408,7 +500,10 @@ export class DesktopAutoSession {
           this.record(conversationId, owner, 'info', `The plan still has ${open.length} item${open.length === 1 ? '' : 's'}; carrying on with the next one.`);
           // Judged the same way a failing check is: the same items and the same working tree twice running means
           // nothing is moving, however the model describes it.
-          if (!(await this.noteFailure(input, active, `plan:${open.map((item) => item.text).join('\n')}`))) {
+          const planSignature = `plan:${open.map((item) => item.text).join('\n')}`;
+          if (!(await this.noteFailure(input, active, planSignature))) {
+            const planStepIn = await this.tryStepIn(input, conversationId, active, planSignature, `The Implementer keeps coming back with the same plan items open: ${open.map((item) => item.text).join('; ').slice(0, 400)}`);
+            if (planStepIn) { prompt = planStepIn; continue; }
             await this.pauseForHuman(conversationId, active, 'repeated-failure',
               `The same plan came back unchanged ${input.maxRepeatedFailures} times with no files changed in between, so pushing on is not moving it. Left on the plan: ${open[0]?.text ?? ''}`);
             continue;
@@ -418,6 +513,9 @@ export class DesktopAutoSession {
         }
 
         if (!command) {
+          // The Architect reads the work before it is called finished. Sent back, the run carries on with the fixes.
+          const sentBack = await this.architectGate(input, conversationId, active, turn.output);
+          if (sentBack) { prompt = sentBack; continue; }
           // Nothing to confirm it with, and the plan says the work is done: the agent's own account is the finish.
           // Said plainly rather than dressed up as verification that never happened.
           return this.settle(conversationId, owner, 'finished',
@@ -429,6 +527,8 @@ export class DesktopAutoSession {
         state.checkStatus = check.passed ? 'passing' : 'failing';
         if (check.passed) {
           this.record(conversationId, owner, 'check', `The check passed after ${turns(state.turnCount)}.`);
+          const sentBack = await this.architectGate(input, conversationId, active, turn.output);
+          if (sentBack) { prompt = sentBack; continue; }
           // Said right under it, because this is the sentence the run closes on: a lint that passed is not the same
           // claim as a test that passed, and files nothing is named for are not confirmed by either.
           const coverage = await this.ports
@@ -440,7 +540,10 @@ export class DesktopAutoSession {
 
         const failure = `The check \`${command}\` failed${check.exitCode === null ? '' : ` (exit ${check.exitCode})`}. Fix the cause, do not weaken the check. Output:\n${check.output.slice(-TAIL_CHARS)}`;
         this.record(conversationId, owner, 'check', `Check failed after ${turns(state.turnCount)}.`);
-        if (!(await this.noteFailure(input, active, `check:${check.output.slice(-400)}`))) {
+        const checkSignature = `check:${check.output.slice(-400)}`;
+        if (!(await this.noteFailure(input, active, checkSignature))) {
+          const checkStepIn = await this.tryStepIn(input, conversationId, active, checkSignature, `The check \`${command}\` keeps failing the same way: ${check.output.slice(-400)}`);
+          if (checkStepIn) { prompt = checkStepIn; continue; }
           await this.pauseForHuman(conversationId, active, 'repeated-failure',
             `The check failed the same way ${input.maxRepeatedFailures} times with no files changed in between, so running it again will not help: \`${command}\``);
           continue;
@@ -448,11 +551,92 @@ export class DesktopAutoSession {
         prompt = continuationPrompt(command, failure);
       }
     } catch (error) {
-      if (active.controller.signal.aborted) return this.settle(conversationId, owner, 'stopped', 'Auto was stopped.');
+      // The person stopped an Architect run while it was working: Auto stops with it, as it does for any stopped turn.
+      if (active.controller.signal.aborted || error instanceof RunStoppedError) return this.settle(conversationId, owner, 'stopped', 'Auto was stopped.');
       const message = error instanceof Error ? error.message : String(error);
       this.record(conversationId, owner, 'warn', message);
       return this.settle(conversationId, owner, 'failed', message);
     }
+  }
+
+  // -- The Architect's side ---------------------------------------------------------------------------------------
+
+  /** The Architect plans; the Implementer's first prompt is the brief. Throws with the agent's name if either is unavailable. */
+  private async architectPlan(input: AutoStartInput, conversationId: string, active: ActiveAutoRun): Promise<string> {
+    const arch = active.architect!;
+    const coach = this.coach!;
+    const owner = active.ownerWindowId;
+    const implementer = await coach.implementerTarget(arch.context);
+    const architectLabel = coach.label(arch.context.split.architect!);
+    this.phase(conversationId, owner, 'working', `The Architect is planning (${architectLabel}).`);
+    const planned = await coach.plan(arch.context, input.prompt);
+    this.state(conversationId).costUsd += planned.costUsd;
+    arch.brief = planned.brief;
+    this.record(conversationId, owner, 'info', planned.readable
+      ? `Architect (${planned.label}) wrote the brief: ${planned.brief.goal}`
+      : `${planned.label} did not return a readable brief, so the task itself is the brief.`);
+    return implementPrompt(planned.brief, input.prompt, coach.label(implementer));
+  }
+
+  /** The Architect reads the work before Auto lets it finish. Null means approved; otherwise what the Implementer does next. */
+  private async architectGate(input: AutoStartInput, conversationId: string, active: ActiveAutoRun, implementerNote: string): Promise<string | null> {
+    const arch = active.architect;
+    if (!arch?.brief) return null;
+    const coach = this.coach!;
+    const owner = active.ownerWindowId;
+    this.phase(conversationId, owner, 'working', 'The Architect is reviewing the work.');
+    const reviewed = await coach.review(arch.context, arch.brief, input.prompt, implementerNote);
+    this.state(conversationId).costUsd += reviewed.costUsd;
+    const verdict = reviewed.verdict;
+    this.record(conversationId, owner, 'info', `Architect (${reviewed.label}): ${verdict.verdict.toUpperCase()}. ${verdict.summary}`);
+    if (!reviewed.readable) this.record(conversationId, owner, 'warn', 'The review could not be read, so the work was sent back rather than waved through.');
+    if (verdict.verdict === 'approve') {
+      arch.revisions = 0;
+      return null;
+    }
+    arch.revisions = verdict.verdict === 'revise' ? arch.revisions + 1 : 0;
+    if (verdict.verdict === 'replan' || arch.revisions >= REVISIONS_BEFORE_STEP_IN) {
+      const why = verdict.verdict === 'replan'
+        ? `Your review found the approach is wrong: ${verdict.summary}`
+        : `The Implementer has failed review ${arch.revisions} times in a row. Latest problems: ${verdict.corrections.join('; ') || verdict.summary}`;
+      return this.architectStepIn(input, conversationId, active, why, verdict.verdict === 'replan' ? verdict.brief : undefined);
+    }
+    return correctionPrompt(verdict, arch.brief, coach.label(arch.context.split.implementer!));
+  }
+
+  /** The Architect re-plans or points the Implementer in the right direction; the Implementer then carries on from the new brief. */
+  private async architectStepIn(input: AutoStartInput, conversationId: string, active: ActiveAutoRun, why: string, given?: ArchitectBrief): Promise<string> {
+    const arch = active.architect!;
+    const coach = this.coach!;
+    const owner = active.ownerWindowId;
+    this.phase(conversationId, owner, 'working', 'The Architect is stepping in.');
+    if (given) {
+      arch.brief = given;
+      this.record(conversationId, owner, 'info', 'Architect issued a new brief.');
+    } else {
+      const stepped = await coach.stepIn(arch.context, arch.brief ?? { goal: input.prompt.slice(0, 2_000), files: [], avoid: [], doneChecks: ['The task is done as requested.'] }, input.prompt, why);
+      this.state(conversationId).costUsd += stepped.costUsd;
+      arch.brief = stepped.brief;
+      this.record(conversationId, owner, 'info', stepped.readable
+        ? `Architect (${stepped.label}) stepped in with a new brief.`
+        : `Architect (${stepped.label}) stepped in, but the new brief could not be read; the old one stands.`);
+    }
+    arch.revisions = 0;
+    return implementPrompt(arch.brief!, input.prompt, coach.label(arch.context.split.implementer!));
+  }
+
+  /**
+   * A wall the same failure keeps hitting: the Architect gets one go at it before the person is asked. Once per wall,
+   * judged by the failure itself, so a different wall later gets the Architect's help again.
+   */
+  private async tryStepIn(input: AutoStartInput, conversationId: string, active: ActiveAutoRun, signature: string, why: string): Promise<string | null> {
+    const arch = active.architect;
+    if (!arch || arch.steppedInOn === signature) return null;
+    arch.steppedInOn = signature;
+    active.repeatSignature = null;
+    active.repeatFiles = null;
+    active.repeatCount = 0;
+    return this.architectStepIn(input, conversationId, active, why);
   }
 
   /**
@@ -550,6 +734,11 @@ export class DesktopAutoSession {
       autonomy: input.autonomy,
       ...(input.goal ? { goal: input.goal } : {}),
       ...(input.model ? { model: input.model } : {}),
+      // The Implementer's own API connection, while it is the one running. After a fall back from a spent CLI window
+      // the global API connection applies instead, exactly as it did before the split existed.
+      ...(execution === 'api' && architectSplitActive(input.architect) && input.architect.implementer.execution === 'api' && input.architect.implementer.api
+        ? { apiConnection: input.architect.implementer.api }
+        : {}),
       // The heavy context belongs to the first turn; later turns are the same task being pushed at.
       ...(first && input.skills ? { skills: input.skills } : {}),
       ...(first && input.selectedPaths ? { selectedPaths: input.selectedPaths } : {}),

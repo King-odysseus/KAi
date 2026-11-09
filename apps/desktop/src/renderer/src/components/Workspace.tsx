@@ -1,4 +1,5 @@
-import { ImageCard, ImageChip } from './ImageAttachment';
+import { ImageCard, ImageChip } from './ImageAttachment';
+
 import { Switch } from './ui/Switch';
 import { AutoSettings } from './AutoSettings';
 import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerRunLine';
@@ -101,7 +102,7 @@ import type {
   VerificationOverview,
   WorkbenchGoal,
 } from '@kai/contracts';
-import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS } from '@kai/contracts';
+import { ACCESS_LEVELS, CLI_MODEL_SUGGESTIONS, HELPER_CHOICES, HELPER_CHOICE_DESCRIPTION, HELPER_CHOICE_LABEL, REASONING_LABEL, RESPONSE_STYLES, RESPONSE_STYLE_DESCRIPTION, RESPONSE_STYLE_LABEL, COMPACTION_WARNING_TOKENS, MAX_REVIEW_FILES, directProviderPreset, estimateConversationTokens, estimateResponseCostUsd, experienceProfile, MAX_SAVED_RECIPES, SAVED_RECIPE_INTENTS, architectSplitActive } from '@kai/contracts';
 import { relativeTime, statusLabel, unwrap } from '../types';
 import { HunkReview, canReviewHunks } from './HunkReview';
 import { ToolCallCard, toolCallStatus } from './ToolCallCard';
@@ -132,6 +133,7 @@ import {
 import { Select } from './ui/Select';
 import { Composer, ComposerInput, ComposerPause, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
 import { IconButton } from './ui/IconButton';
+import { ArchitectRow, ArchitectStatusLine, ArchitectToggle, useArchitectSplit, useArchitectStatus } from './ArchitectControls';
 import { ActionsMenu } from './ui/ActionsMenu';
 import { PageHeader } from './ui/PageHeader';
 import { NoticeBanner } from './ui/NoticeBanner';
@@ -198,6 +200,8 @@ interface WorkspaceViewProps {
   selectedAutonomy: AutonomyMode;
   /** The composer's Task selector, owned by the conversation rather than the window. */
   taskIntent: TaskIntent;
+  /** This window, so the Architect / Implementer choice is remembered per window as well as per tab. */
+  windowId?: number;
   /** The chosen recipe inside each Task selector, for this conversation. */
   taskRecipes: Record<string, string>;
   onSelectTaskIntent: (intent: TaskIntent) => void;
@@ -388,6 +392,7 @@ export function WorkspaceView({
   selectedRoute,
   selectedAutonomy,
   taskIntent,
+  windowId,
   taskRecipes,
   onSelectTaskIntent,
   onSelectTaskRecipe,
@@ -519,6 +524,9 @@ export function WorkspaceView({
   const [pendingUser, setPendingUser] = useState<{ text: string; baseCount: number; images: Array<{ name: string; dataUrl: string }> } | null>(null);
   const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
   const selectedCapability = agentCapabilities.find((agent) => agent.id === selectedAgent);
+  // The Architect / Implementer split: its own choices, remembered per tab and per window.
+  const architect = useArchitectSplit({ conversationId: activeConversation?.id, recorded: activeConversation?.architect, windowId, capabilities: agentCapabilities });
+  const architectStatus = useArchitectStatus(activeConversation?.id);
   const brainReady = settings.cognitive1.enabled;
   const profile = experienceProfile(settings.experienceLevel);
   const apiRun = executionMode === 'api';
@@ -840,6 +848,11 @@ export function WorkspaceView({
       void startAuto(text, options);
       return;
     }
+    // With the split on, the Architect plans and reviews and the Implementer builds; the box and the send are the same.
+    if (architectSplitActive(architect.split)) {
+      void startArchitect(text, options);
+      return;
+    }
     if (activeConversation) onSend(text, options);
     else onCreateConversation(text, options);
   };
@@ -875,6 +888,10 @@ export function WorkspaceView({
     }
     if (isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy)) {
       setWorkbenchNotice('Auto needs Edit files or Full access. Choose an access level below, then send again.');
+      return;
+    }
+    if (architect.split.enabled && architect.problem) {
+      setWorkbenchNotice(architect.problem);
       return;
     }
     const goalAndImplementation = typedText ? goalAndImplementationFor(text) : null;
@@ -941,6 +958,8 @@ export function WorkspaceView({
         autonomy: selectedAutonomy,
         ...(activeConversation ? { conversationId: activeConversation.id } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
+        // Auto honours the chosen Architect and Implementer instead of choosing its own.
+        ...(architectSplitActive(architect.split) ? { architect: architect.split } : {}),
         ...(options?.goal ? { goal: options.goal } : {}),
         ...(options?.skills?.length ? { skills: options.skills } : {}),
         ...(options?.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
@@ -950,6 +969,40 @@ export function WorkspaceView({
       // Unlike the flags below, this call is not side-effect free: it starts a real Auto session. So the deadline
       // clears the button but says what happened, rather than quietly re-enabling send onto a second session.
       if (!started.settled) setStuckNotice('Auto did not start in time, so the button was released. If a run did start, Stop everything ends it.');
+    } catch (caught) {
+      setWorkbenchNotice(messageOf(caught));
+    } finally {
+      setStartingAuto(false);
+    }
+  }
+
+  /**
+   * Sends the task through the Architect / Implementer split: the Architect plans, the Implementer builds, the
+   * Architect reviews and sends work back. The same box and the same send; only who does what is different.
+   */
+  async function startArchitect(text: string, options: WorkspaceSendOptions | undefined): Promise<void> {
+    if (!activeProject) return;
+    if (selectedAutonomy === 'plan') {
+      setWorkbenchNotice('The Implementer cannot change files at Plan only access. Choose Edit files or Full access, then send again.');
+      return;
+    }
+    setStartingAuto(true);
+    setWorkbenchNotice(null);
+    try {
+      const started = await settleWithin(() => window.kaiDesktop.runArchitect({
+        projectId: activeProject.id,
+        prompt: text,
+        split: architect.split,
+        route: selectedRoute,
+        autonomy: selectedAutonomy,
+        agent: selectedAgent,
+        ...(activeConversation ? { conversationId: activeConversation.id } : {}),
+        ...(options?.goal ? { goal: options.goal } : {}),
+        ...(options?.skills?.length ? { skills: options.skills } : {}),
+        ...(options?.selectedPaths?.length ? { selectedPaths: options.selectedPaths } : {}),
+        ...(options?.contextChips?.length ? { contextChips: options.contextChips } : {}),
+      }).then(unwrap), START_WAIT_MS);
+      if (!started.settled) setStuckNotice('The Architect did not start in time, so the button was released. If a run did start, Stop everything ends it.');
     } catch (caught) {
       setWorkbenchNotice(messageOf(caught));
     } finally {
@@ -2324,6 +2377,7 @@ export function WorkspaceView({
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
+              <ArchitectToggle state={architect} disabled={busy || running} />
               {activeRecipes.length > 1 && (
                 <OptionMenu
                   ariaLabel="Recipe"
@@ -2363,6 +2417,8 @@ export function WorkspaceView({
               )}
             </>}
           />
+          <ArchitectRow state={architect} disabled={busy || running} />
+          <ArchitectStatusLine status={architectStatus} />
           {advancedComposerOpen && <div className="composer-advanced-options" aria-label="More run options">
             <OptionMenu ariaLabel="Reply style" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
             <OptionMenu ariaLabel="Agents" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />

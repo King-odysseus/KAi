@@ -161,6 +161,8 @@ import type { ConventionService } from './conventions-service';
 import type { DesktopTeamPlanner } from './team-planner';
 import type { DesktopAutopilot } from './autopilot';
 import type { DesktopAutoSession } from './auto-session';
+import type { ArchitectLoop } from './architect-loop';
+import type { ArchitectReadiness, RoleTarget } from '@kai/contracts';
 import { syncBrainToMirror } from './brain-mirror';
 import type { BrainMirrorOutcome } from '@kai/contracts';
 import { modelBelongsToOtherAgent } from '@kai/contracts';
@@ -270,6 +272,10 @@ export interface IpcContext {
   teamPlanner: DesktopTeamPlanner;
   autopilot: DesktopAutopilot;
   auto: DesktopAutoSession;
+  /** The Architect / Implementer split for a normal send. Auto runs the same Architect through its own session. */
+  architect: ArchitectLoop;
+  /** Whether one role's choice can run right now; the composer asks before a run and the engine asks during one. */
+  architectReadiness: (target: RoleTarget) => Promise<ArchitectReadiness>;
   promptGuide: DesktopPromptGuide;
   interview: DesktopInterview;
   studio: DesktopStudio;
@@ -728,6 +734,11 @@ export function registerIpc(context: IpcContext): IpcRegistry {
   handle(context, 'auto:status', async ({ conversationId }) => context.auto.status(conversationId));
   handle(context, 'auto:pause', async ({ conversationId }) => context.auto.pause(conversationId));
   handle(context, 'auto:resume', async ({ conversationId }) => context.auto.resume(conversationId));
+  handle(context, 'architect:run', async (input, request) => context.architect.start(input, request.ownerWindowId));
+  handle(context, 'architect:stop', async ({ conversationId }) => context.architect.stop(conversationId));
+  handle(context, 'architect:answer', async ({ conversationId, carryOn }) => context.architect.answer(conversationId, carryOn));
+  handle(context, 'architect:status', async ({ conversationId }) => context.architect.status(conversationId));
+  handle(context, 'architect:ready', async ({ target }) => context.architectReadiness(target));
   handle(context, 'studio:design-read', async ({ projectId }) => context.studio.design(projectId));
   handle(context, 'studio:design-status', async ({ projectId }) => context.studio.designStatus(projectId));
   handle(context, 'studio:design-pull', async ({ projectId, adopt }) => {
