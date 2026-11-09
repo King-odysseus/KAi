@@ -164,12 +164,41 @@ export function ArchitectToggle({ state, disabled }: { state: ArchitectSplitStat
   );
 }
 
+/**
+ * The small chip on the toolbar while the split is on: "A&I" for Architect and Implementer. The controls live in the
+ * run options panel, so this is what says the split is active when that panel is closed. It names who is who on
+ * hover, turns amber when something needs attention, and opens the panel when clicked.
+ */
+export function ArchitectChip({ state, onOpen }: { state: ArchitectSplitState; onOpen: () => void }): ReactNode {
+  if (!state.split.enabled) return null;
+  const names = Object.fromEntries(state.capabilities.map((capability) => [capability.id, capability.displayName]));
+  const notReady = [state.split.architect, state.split.implementer, state.split.fallback].flatMap((target) => {
+    const result = target ? state.readiness.get(roleTargetKey(target)) : undefined;
+    return result && !result.ready ? [`${result.label || 'A role'} is not ready${result.reason ? `: ${result.reason}` : ''}`] : [];
+  });
+  const trouble = state.problem ?? notReady[0] ?? null;
+  const title = [splitSummary(state.split, names), trouble ? `Needs attention: ${trouble}` : null, 'Click to change'].filter(Boolean).join('. ');
+  return (
+    <UiButton
+      type="button"
+      variant="secondary"
+      className={`!min-h-6 !gap-1 !rounded-full !px-2 !text-[11px] ${trouble ? '!border-[color:var(--waiting)] !text-[var(--waiting)]' : ''}`}
+      aria-label="Architect and Implementer are on. Open run options to change them"
+      title={title}
+      onClick={onOpen}
+    >
+      <Compass size={13} aria-hidden="true" />
+      <span>A&amp;I</span>
+    </UiButton>
+  );
+}
+
 /** The three pickers: who plans and reviews, who builds, and who stands in for the Architect. */
 export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; disabled?: boolean }): ReactNode {
   if (!state.split.enabled) return null;
   const current = [state.split.architect, state.split.implementer, state.split.fallback];
   return (
-    <div className="composer-advanced-options" aria-label="Architect and Implementer">
+    <>
       {ROLES.map(({ role, label, hint }) => {
         const target = state.split[role];
         const ready = target ? state.readiness.get(roleTargetKey(target)) : undefined;
@@ -210,7 +239,7 @@ export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; 
         );
       })}
       {state.problem && <span className="text-xs text-[var(--waiting)]" role="note">{state.problem}</span>}
-    </div>
+    </>
   );
 }
 

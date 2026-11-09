@@ -133,7 +133,7 @@ import {
 import { Select } from './ui/Select';
 import { Composer, ComposerInput, ComposerPause, ComposerSend, ComposerStop, ComposerToolbar } from './ui/Composer';
 import { IconButton } from './ui/IconButton';
-import { ArchitectRow, ArchitectStatusLine, ArchitectToggle, useArchitectSplit, useArchitectStatus } from './ArchitectControls';
+import { ArchitectChip, ArchitectRow, ArchitectStatusLine, ArchitectToggle, useArchitectSplit, useArchitectStatus } from './ArchitectControls';
 import { ActionsMenu } from './ui/ActionsMenu';
 import { PageHeader } from './ui/PageHeader';
 import { NoticeBanner } from './ui/NoticeBanner';
@@ -2377,7 +2377,7 @@ export function WorkspaceView({
               {activeConversation && <IconButton aria-label="Side question" title="Ask a quick question without derailing this conversation" active={sideOpen} onClick={() => setSideOpen((current) => !current)} icon={<MessageCircleQuestion size={14} />} />}
               <OptionMenu ariaLabel="Access level" disabled={busy} icon={<ShieldCheck size={13} />} labelPrefix="Access" onChange={onSelectAutonomy} options={ACCESS_OPTIONS} title="Choose how much access KAI has" value={selectedAutonomy} />
               <OptionMenu ariaLabel="Task type" disabled={busy} icon={<Sparkles size={14} />} labelPrefix="Task" onChange={chooseTaskIntent} options={PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, description: persona.description }))} title="Choose a task guide; this does not change access" value={taskIntent} />
-              <ArchitectToggle state={architect} disabled={busy || running} />
+              <ArchitectChip state={architect} onOpen={() => setAdvancedComposerOpen(true)} />
               {activeRecipes.length > 1 && (
                 <OptionMenu
                   ariaLabel="Recipe"
@@ -2417,9 +2417,10 @@ export function WorkspaceView({
               )}
             </>}
           />
-          <ArchitectRow state={architect} disabled={busy || running} />
           <ArchitectStatusLine status={architectStatus} />
           {advancedComposerOpen && <div className="composer-advanced-options" aria-label="More run options">
+            <ArchitectToggle state={architect} disabled={busy || running} />
+            <ArchitectRow state={architect} disabled={busy || running} />
             <OptionMenu ariaLabel="Reply style" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
             <OptionMenu ariaLabel="Agents" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
             {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
