@@ -138,6 +138,7 @@ import { ActionsMenu } from './ui/ActionsMenu';
 import { PageHeader } from './ui/PageHeader';
 import { NoticeBanner } from './ui/NoticeBanner';
 import { OptionMenu, type OptionMenuOption } from './ui/OptionMenu';
+import { OptionSection } from './ui/OptionSection';
 import { UiButton } from './UiButton';
 import { Textarea } from 'flowbite-react';
 import { UiTextInput } from './UiTextInput';
@@ -2418,16 +2419,22 @@ export function WorkspaceView({
             </>}
           />
           <ArchitectStatusLine status={architectStatus} />
-          {advancedComposerOpen && <div className="composer-advanced-options" aria-label="More run options">
-            <ArchitectToggle state={architect} disabled={busy || running} />
-            <ArchitectRow state={architect} disabled={busy || running} />
-            <OptionMenu ariaLabel="Reply style" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
-            <OptionMenu ariaLabel="Agents" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
-            {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
-            <OptionMenu ariaLabel="Route" tone={effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : undefined} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
-            <div className="mode-toggle" role="group" aria-label="Execution mode"><UiButton type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}>CLI</UiButton><UiButton type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}>API</UiButton></div>
-            {apiRun ? <IconButton title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy} icon={<Cloud size={14} />} /> : <OptionMenu ariaLabel="Agent" tone={ready ? undefined : 'unavailable'} disabled={busy || running} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={running ? 'The current run is using its original agent; stop it before switching' : (selectedCapability?.unavailableReason ?? 'Which agent works on this conversation')} value={selectedAgent} />}
-            {!apiRun && reasoningLevels.length > 0 && <OptionMenu ariaLabel="Thinking effort" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
+          {advancedComposerOpen && <div className="mt-2.5 flex flex-col gap-4 border-t border-[color:var(--border)] pt-3" aria-label="More run options">
+            <OptionSection title="How it runs">
+              <OptionMenu ariaLabel="Route" tone={effectiveRoute === 'proxy' && !proxyReady ? 'unavailable' : undefined} disabled={busy || !routeAvailable} icon={<Route size={14} />} onChange={onSelectRoute} options={[{ value: 'direct', label: 'Direct' }, { value: 'proxy', label: proxyReady ? 'Proxy' : 'Proxy (not ready)', disabled: !routeAvailable || !proxyReady }]} title={!routeAvailable ? 'This agent does not support the Universal Proxy route' : proxyReady ? 'Choose direct provider access or the KAI Universal Proxy route' : 'Start Universal Proxy in Settings to use the proxy route'} value={effectiveRoute} />
+              <div className="mode-toggle" role="group" aria-label="Execution mode"><UiButton type="button" className={!apiRun ? 'active' : ''} aria-pressed={!apiRun} onClick={() => onSelectExecution('cli')} disabled={busy}>CLI</UiButton><UiButton type="button" className={apiRun ? 'active' : ''} aria-pressed={apiRun} onClick={() => onSelectExecution('api')} disabled={busy}>API</UiButton></div>
+              {apiRun ? <IconButton title={`${providerLabel} — open provider settings`} aria-label={`Provider: ${providerLabel}. Open provider settings`} onClick={onOpenSettings} disabled={busy} icon={<Cloud size={14} />} /> : <OptionMenu ariaLabel="Agent" tone={ready ? undefined : 'unavailable'} disabled={busy || running} icon={<Cpu size={14} />} onChange={onSelectAgent} options={agentCapabilities.map((agent) => ({ value: agent.id, label: `${agent.displayName}${setupSuffix(agent)}` }))} title={running ? 'The current run is using its original agent; stop it before switching' : (selectedCapability?.unavailableReason ?? 'Which agent works on this conversation')} value={selectedAgent} />}
+              {!apiRun && reasoningLevels.length > 0 && <OptionMenu ariaLabel="Thinking effort" disabled={busy} icon={<Brain size={14} />} onChange={(value) => onSelectReasoning(value as ReasoningEffort | '')} options={[{ value: '', label: 'Effort: default' }, ...reasoningLevels.map((level) => ({ value: level, label: REASONING_LABEL[level] }))]} title="How hard the agent thinks on this conversation's next runs" value={selectedReasoning} />}
+            </OptionSection>
+            <OptionSection title="Replies and helpers">
+              <OptionMenu ariaLabel="Reply style" disabled={busy} icon={<Lightbulb size={14} />} onChange={(value) => onSelectStyle(value as ResponseStyle)} options={RESPONSE_STYLES.map((style) => ({ value: style, label: RESPONSE_STYLE_LABEL[style], description: RESPONSE_STYLE_DESCRIPTION[style] }))} title="How the agent words what it tells you" value={selectedStyle} />
+              <OptionMenu ariaLabel="Agents" disabled={busy} icon={<Users size={14} />} onChange={(value) => onSelectHelpers(value as HelperChoice)} options={HELPER_CHOICES.map((choice) => ({ value: choice, label: HELPER_CHOICE_LABEL[choice], description: HELPER_CHOICE_DESCRIPTION[choice] }))} title="How many helper agents may work on a job at once" value={selectedHelpers} />
+              {helperAgentCount > 0 && <Pill tone="info" title={`${helperAgentCount} helper agents in this conversation`}><Search size={12} />{helperAgentCount}</Pill>}
+            </OptionSection>
+            <OptionSection title="Architect and Implementer" className="!items-start !gap-3">
+              <ArchitectToggle state={architect} disabled={busy || running} />
+              <ArchitectRow state={architect} disabled={busy || running} />
+            </OptionSection>
           </div>}
         </Composer>
         {isAutoLikeIntent(taskIntent) && !AUTO_WORKING_AUTONOMY.has(selectedAutonomy) && (

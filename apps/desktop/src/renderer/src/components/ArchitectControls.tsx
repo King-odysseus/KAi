@@ -54,10 +54,10 @@ export interface ArchitectSplitState {
   capabilities: readonly AgentCapability[];
 }
 
-const ROLES: ReadonlyArray<{ role: ArchitectRole; label: string; hint: string }> = [
-  { role: 'architect', label: 'Architect', hint: 'Plans the work, reviews it, and sends it back until it is right. Never writes the code.' },
-  { role: 'implementer', label: 'Implementer', hint: 'Builds what the Architect planned.' },
-  { role: 'fallback', label: 'Fallback', hint: 'Takes the Architect\'s place if the Architect is not available. Left empty, the Implementer does.' },
+const ROLES: ReadonlyArray<{ role: ArchitectRole; label: string; short: string; hint: string }> = [
+  { role: 'architect', label: 'Architect', short: 'Plans and reviews', hint: 'Plans the work, reviews it, and sends it back until it is right. Never writes the code.' },
+  { role: 'implementer', label: 'Implementer', short: 'Builds', hint: 'Builds what the Architect planned.' },
+  { role: 'fallback', label: 'Fallback', short: 'If the Architect is down', hint: 'Takes the Architect\'s place if the Architect is not available. Left empty, the Implementer does.' },
 ];
 
 function modelCacheKey(target: RoleTarget): string {
@@ -152,15 +152,16 @@ export function useArchitectSplit(input: {
   return { split, setEnabled, setRole, problem: splitProblem(split), readiness, credentialIds, liveModels, capabilities };
 }
 
-/** The switch on the toolbar. */
+/** The switch, as a row that says what it does. It lives in the run options panel, under its own heading. */
 export function ArchitectToggle({ state, disabled }: { state: ArchitectSplitState; disabled?: boolean }): ReactNode {
-  const on = state.split.enabled;
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full px-1.5 text-xs text-[var(--text-muted)]" title="Let one agent plan and review while another builds">
-      <Compass size={13} aria-hidden="true" />
-      <span>Architect</span>
-      <Switch checked={on} disabled={disabled} aria-label="Plan and review with an Architect, build with an Implementer" onChange={(event) => state.setEnabled(event.target.checked)} />
-    </span>
+    <label className="flex w-full cursor-pointer items-center gap-2.5 text-xs text-[var(--text)]" title="Let one agent plan and review while another builds">
+      <Switch checked={state.split.enabled} disabled={disabled} aria-label="Plan and review with an Architect, build with an Implementer" onChange={(event) => state.setEnabled(event.target.checked)} />
+      <span className="flex min-w-0 flex-col">
+        <span>Use an Architect and an Implementer</span>
+        <small className="text-[11px] leading-snug text-[var(--text-dim)]">One agent plans and reviews, another builds. Applies to normal sends and to Auto.</small>
+      </span>
+    </label>
   );
 }
 
@@ -198,8 +199,8 @@ export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; 
   if (!state.split.enabled) return null;
   const current = [state.split.architect, state.split.implementer, state.split.fallback];
   return (
-    <>
-      {ROLES.map(({ role, label, hint }) => {
+    <div className="flex w-full flex-col gap-2.5">
+      {ROLES.map(({ role, label, short, hint }) => {
         const target = state.split[role];
         const ready = target ? state.readiness.get(roleTargetKey(target)) : undefined;
         const live = target?.execution === 'api' && target.api ? state.liveModels.get(modelCacheKey(target)) : undefined;
@@ -209,12 +210,15 @@ export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; 
           : [{ value: '', label: 'Choose…' }, ...targets];
         const icon = role === 'architect' ? <Compass size={13} /> : role === 'implementer' ? <Hammer size={13} /> : <LifeBuoy size={13} />;
         return (
-          <div key={role} className="inline-flex items-center gap-1" role="group" aria-label={label}>
+          <div key={role} className="flex flex-wrap items-center gap-1.5" role="group" aria-label={label}>
+            <span className="flex w-[8.5rem] shrink-0 flex-col" title={hint}>
+              <span className="text-xs font-medium text-[var(--text)]">{label}</span>
+              <small className="text-[11px] leading-snug text-[var(--text-dim)]">{short}</small>
+            </span>
             <OptionMenu
               ariaLabel={label}
               disabled={disabled}
               icon={icon}
-              labelPrefix={label}
               tone={ready && !ready.ready ? 'unavailable' : undefined}
               onChange={(value) => state.setRole(role, targetFromValue(value, target))}
               options={options}
@@ -239,7 +243,7 @@ export function ArchitectRow({ state, disabled }: { state: ArchitectSplitState; 
         );
       })}
       {state.problem && <span className="text-xs text-[var(--waiting)]" role="note">{state.problem}</span>}
-    </>
+    </div>
   );
 }
 

@@ -9,7 +9,7 @@ import { _electron as electron } from '@playwright/test';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { assertControlsDoNotWrap, assertTextIsNotClipped } from './layout-checks.mjs';
+import { assertControlsDoNotWrap, assertTextIsNotClipped, findClippedText } from './layout-checks.mjs';
 import { chooseOption, optionLabels, selectedValue, waitForPage } from './smoke-helpers.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,6 +31,10 @@ const commandSmoke = process.env.KAI_COMMAND_SMOKE === '1';
 const mcpHttpCredentialId = 'mcp.smoke.http';
 const mcpHttpAuthorization = 'Bearer smoke-http-token';
 const usesAgentProject = realAgentSmoke || directApiSmoke || mcpSmoke || commandSmoke;
+// Opens a project and checks only the run options panel with the Architect split on. It needs the project's composer
+// but none of the live-agent flows, so it does not set `usesAgentProject`.
+const architectPanelSmoke = process.env.KAI_ARCHITECT_PANEL_SMOKE === '1';
+const hasProject = usesAgentProject || architectPanelSmoke;
 const enginePorts = realEngineSmoke
   ? { cognitive1: await availablePort(), universalProxy: await availablePort() }
   : null;
@@ -45,7 +49,7 @@ let electronApp;
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
 if (enginePorts) await writeEngineSettings(userDataDirectory, enginePorts);
-if (usesAgentProject) await writeAgentSettings(userDataDirectory, liveProjectPath, directApiFixture, mcpSmoke, mcpHttpFixture?.url, directApiProvider);
+if (hasProject) await writeAgentSettings(userDataDirectory, liveProjectPath, directApiFixture, mcpSmoke, mcpHttpFixture?.url, directApiProvider);
 
 try {
   electronApp = await electron.launch({
@@ -75,9 +79,9 @@ try {
   // The guided tour starts by itself on a fresh profile; turn it off so its hint card never covers a control under test.
   await page.locator('.tour-card').getByRole('button', { name: 'Turn tour off' }).click({ timeout: 4_000 }).catch(() => undefined);
   try {
-    await page.locator('.project-picker-button').getByText(usesAgentProject ? 'KAI Live Agent Smoke' : 'No project', { exact: true }).waitFor({ timeout: 20_000 });
+    await page.locator('.project-picker-button').getByText(hasProject ? 'KAI Live Agent Smoke' : 'No project', { exact: true }).waitFor({ timeout: 20_000 });
     await verifyBuildIdentifier(page);
-    if (!usesAgentProject) {
+    if (!hasProject) {
       await page.getByText('Open a local repository').waitFor({ timeout: 5_000 });
     }
   } catch (error) {
@@ -89,6 +93,15 @@ try {
   // The basic smoke profile intentionally starts without a project, so composer controls that depend on an
   // active workspace are only exercised by the profiles that provision the live smoke project.
   if (usesAgentProject) await verifyWorkspaceControls(page);
+  if (architectPanelSmoke) {
+    // This profile exists to check one panel. The rest of the smoke is written for the no-project profile, and some of
+    // it measures the title bar, where an open project's long folder path is a deliberate ellipsis, so stop here.
+    await verifyArchitectPanel(page);
+    await electronApp.close().catch(() => undefined);
+    await rm(userDataDirectory, { recursive: true, force: true }).catch(() => undefined);
+    console.log(`KAI Architect panel smoke passed. Screenshot: ${path.join(outputDirectory, 'architect-panel.png')}`);
+    process.exit(0);
+  }
   await verifyCommandPalette(page);
   await verifyDirectApiCapability(page);
   if ((directApiSmoke || mcpSmoke || commandSmoke) && directApiFixture) {
@@ -424,6 +437,49 @@ async function verifyWorkspaceControls(page) {
   }
 
   await verifyThemeToggle(page);
+}
+
+/**
+ * The run options panel with the Architect / Implementer split on: three headed sections, the Architect's roles one to a
+ * row, and the A&I chip on the toolbar. Nothing in it may wrap or be clipped, and a screenshot is kept so the layout
+ * can be looked at as well as measured.
+ */
+async function verifyArchitectPanel(page) {
+  await navigateTo(page, 'Workspace');
+  const opener = page.locator('[data-tour="composer-advanced"]');
+  await opener.waitFor({ timeout: 15_000 });
+  if (await opener.getAttribute('aria-expanded') !== 'true') await opener.click();
+
+  for (const title of ['How it runs', 'Replies and helpers', 'Architect and Implementer']) {
+    await page.getByRole('region', { name: title, exact: true }).waitFor({ timeout: 5_000 });
+  }
+  // The chip is the toolbar's only sign of the split, so it must be absent until the split is on.
+  const chip = page.getByRole('button', { name: /^Architect and Implementer are on/ });
+  if (await chip.count() !== 0) throw new Error('The A&I chip showed before the split was switched on.');
+
+  await page.getByRole('switch', { name: /Plan and review with an Architect/ }).click();
+  await chip.waitFor({ timeout: 5_000 });
+  if (!(await chip.innerText()).includes('A&I')) throw new Error(`The chip should read A&I, received ${JSON.stringify(await chip.innerText())}.`);
+
+  for (const role of ['Architect', 'Implementer', 'Fallback']) {
+    await page.getByRole('group', { name: role, exact: true }).waitFor({ timeout: 5_000 });
+  }
+  await selectMenuOption(page, 'Architect', 'Claude');
+  await selectMenuOption(page, 'Implementer', 'Codex');
+  await page.waitForFunction(() => document.querySelector('button[aria-label="Architect"]')?.textContent?.includes('Claude') ?? false);
+
+  await assertControlsDoNotWrap(page, 'the run options panel with the Architect split on');
+  // Page-wide, so a deliberately truncated line elsewhere (the project picker's long path) is not this panel's fault.
+  const clipped = (await findClippedText(page)).filter((item) => !item.ellipsis && !item.clamped && !String(item.in).includes('.truncate'));
+  if (clipped.length > 0) {
+    const lines = clipped.map((item) => `  - <${item.in}> "${item.text}" overhangs ${item.overhang}px right`);
+    throw new Error(['Prose is clipped in the run options panel:', ...lines].join(String.fromCharCode(10)));
+  }
+  await page.screenshot({ path: path.join(outputDirectory, 'architect-panel.png') });
+
+  // Clicking the chip leaves the panel open; the split is turned off again so nothing later sees it.
+  await page.getByRole('switch', { name: /Plan and review with an Architect/ }).click();
+  await chip.waitFor({ state: 'detached', timeout: 5_000 });
 }
 
 async function verifyThemeToggle(page) {
