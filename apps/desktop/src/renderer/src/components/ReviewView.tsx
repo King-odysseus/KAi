@@ -1,7 +1,7 @@
 import { FileTypeIcon } from './FileTypeIcon';
 import { CheckCircle2, ListChecks, RefreshCw, Sparkles, Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { ChangeReviewResult, CheckpointReview, ConversationRecord, FileVerificationState, ProjectRecord, ReviewMode, VerificationOverview } from '@kai/contracts';
+import type { BoardCard, ChangeReviewResult, CheckpointReview, ConversationRecord, FileVerificationState, ProjectRecord, ReviewMode, StudioProjectSummary, VerificationOverview } from '@kai/contracts';
 import { MAX_REVIEW_FILES } from '@kai/contracts';
 import { relativeTime, unwrap } from '../types';
 import { confirmDialog } from './AppDialog';
@@ -63,6 +63,7 @@ export function ReviewView({ activeProject, conversation, reviewMode, onReviewCh
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, FileVerificationState>>({});
   const [overview, setOverview] = useState<VerificationOverview | null>(null);
+  const [studioCard, setStudioCard] = useState<{ projectId: string; project: StudioProjectSummary; card: BoardCard } | null>(null);
   const [ai, setAi] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; result?: ChangeReviewResult; error?: string }>({ state: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -101,6 +102,24 @@ export function ReviewView({ activeProject, conversation, reviewMode, onReviewCh
     });
     return () => { cancelled = true; };
   }, [projectId, review]);
+
+  useEffect(() => {
+    if (!projectId || !conversation) { setStudioCard(null); return; }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const projects = unwrap(await window.kaiDesktop.studioProjects());
+        const studio = projects.find((item) => item.id === projectId || item.linkedProjectId === projectId);
+        if (!studio) { if (!cancelled) setStudioCard(null); return; }
+        const board = unwrap(await window.kaiDesktop.studioBoard(studio.id));
+        const card = board.cards.find((item) => item.runs.some((run) => run.conversationId === conversation.id));
+        if (!cancelled) setStudioCard(card ? { projectId: studio.id, project: studio, card } : null);
+      } catch {
+        if (!cancelled) setStudioCard(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId, conversation?.id]);
 
   const files = review?.files ?? [];
   const current = files.find((file) => file.path === selectedFile) ?? files[0] ?? null;
@@ -153,12 +172,27 @@ export function ReviewView({ activeProject, conversation, reviewMode, onReviewCh
 
   const notesForCurrent = current ? ai.result?.findings.filter((finding) => finding.file === current.path) ?? [] : [];
 
+  async function decideBoardReview(verdict: 'accept' | 'reject'): Promise<void> {
+    if (!studioCard) return;
+    try {
+      const card = unwrap(await window.kaiDesktop.reviewStudioBoardCard({ projectId: studioCard.projectId, cardId: studioCard.card.id, verdict }));
+      setStudioCard({ ...studioCard, card });
+      setNotice(verdict === 'accept' ? `Accepted ${card.title}. It can now move to Done.` : `Rejected ${card.title}. It has been sent back for another pass.`);
+    } catch (caught) {
+      setNotice(caught instanceof Error ? caught.message : 'The board decision could not be saved.');
+    }
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="Review"
         detail={conversation ? conversation.title : 'Open a conversation to review its changes'}
         actions={<>
+          {studioCard?.card.status === 'review' && <>
+            <UiButton type="button" className="primary-button" onClick={() => void decideBoardReview('accept')}><CheckCircle2 size={14} /><span>Accept</span></UiButton>
+            <UiButton type="button" className="secondary-button" onClick={() => void decideBoardReview('reject')}><Undo2 size={14} /><span>Reject</span></UiButton>
+          </>}
           <UiButton type="button" className="secondary-button" disabled={loading} onClick={() => void load()}><RefreshCw size={14} /><span>Refresh</span></UiButton>
           <UiButton type="button" className="secondary-button" disabled={files.length === 0 || ai.state === 'loading'} onClick={() => void runAiReview()}><Sparkles size={14} /><span>{ai.state === 'loading' ? 'Reviewing…' : 'AI review'}</span></UiButton>
           <UiButton type="button" className="secondary-button" disabled={files.length === 0} onClick={() => void undoAll()}><Undo2 size={14} /><span>Undo all</span></UiButton>

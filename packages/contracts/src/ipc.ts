@@ -82,6 +82,8 @@ import {
   studioBoardCardInputSchema,
   studioBoardClaimInputSchema,
   studioBoardMoveInputSchema,
+  boardCardReviewInputSchema,
+  studioBoardAcceptanceInputSchema,
   studioBoardRouteInputSchema,
   studioBoardWorkInputSchema,
   studioDesignBuildCancelInputSchema,
@@ -123,6 +125,8 @@ import {
   type StudioBoardCardInput,
   type StudioBoardClaimInput,
   type StudioBoardMoveInput,
+  type BoardCardReviewInput,
+  type StudioBoardAcceptanceInput,
   type StudioBoardRouteInput,
   type StudioBoardWorkInput,
   type StudioDesign,
@@ -615,6 +619,8 @@ export const ipcChannels = [
   'studio:board-arrange',
   'studio:board-next',
   'studio:board-move',
+  'studio:board-review',
+  'studio:board-acceptance-rule',
   'studio:board-route',
   'studio:board-claim',
   'studio:board-check-ui',
@@ -1031,6 +1037,8 @@ export const ipcInputSchemas = {
   'studio:board-arrange': studioProjectInputSchema,
   'studio:board-next': studioProjectInputSchema,
   'studio:board-move': studioBoardMoveInputSchema,
+  'studio:board-review': boardCardReviewInputSchema,
+  'studio:board-acceptance-rule': studioBoardAcceptanceInputSchema,
   'studio:board-route': studioBoardRouteInputSchema,
   'studio:board-claim': studioBoardClaimInputSchema,
   'studio:board-check-ui': studioBoardCardInputSchema,
@@ -1644,6 +1652,8 @@ export interface KaiDesktopBridge {
   nextStudioCard(projectId: string): Promise<IpcResponse<BoardCard | null>>;
   /** Moves a card; `done` is refused unless the check still covers the working tree. */
   moveStudioCard(input: StudioBoardMoveInput): Promise<IpcResponse<BoardCard>>;
+  reviewStudioBoardCard(input: BoardCardReviewInput): Promise<IpcResponse<BoardCard>>;
+  setStudioBoardAcceptance(input: StudioBoardAcceptanceInput): Promise<IpcResponse<StudioBoard>>;
   /** Sets the route a component or page card is checked at. Without one it can never pass, so it can never be done. */
   setStudioCardRoute(input: StudioBoardRouteInput): Promise<IpcResponse<BoardCard>>;
   /** Reserves a card for one agent, so two agents never take the same one. */

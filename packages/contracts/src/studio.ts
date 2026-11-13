@@ -285,6 +285,8 @@ export const boardCardSchema = z
     /** Artifacts this card reads. When one goes stale, so does the card. */
     needsArtifacts: z.array(artifactKindSchema).default([]),
     status: boardStatusSchema.default('backlog'),
+    /** A user decision from Review; required before Done when the board gate is enabled. */
+    reviewDecision: z.enum(['accepted', 'rejected']).nullable().default(null),
     /** Free-form check labels the card must satisfy, shown to the agent and the reviewer. */
     checks: z.array(z.string().max(200)).max(20).default([]),
     check: cardCheckSchema.nullable().default(null),
@@ -317,13 +319,24 @@ export const studioBoardSchema = z
      * existed default to 0 rather than failing to load.
      */
     revision: z.number().int().nonnegative().default(0),
+    /** Configurable gate: cards cannot move to Done until their latest review is accepted. */
+    requireAcceptance: z.boolean().default(true),
     cards: z.array(boardCardSchema),
   })
   .strict();
 export type StudioBoard = z.infer<typeof studioBoardSchema>;
 
+export const boardCardReviewInputSchema = z.object({
+  projectId: z.string().min(1),
+  cardId: z.string().min(1),
+  verdict: z.enum(['accept', 'reject']),
+}).strict();
+export type BoardCardReviewInput = z.infer<typeof boardCardReviewInputSchema>;
+export const studioBoardAcceptanceInputSchema = z.object({ projectId: z.string().min(1), required: z.boolean() }).strict();
+export type StudioBoardAcceptanceInput = z.infer<typeof studioBoardAcceptanceInputSchema>;
+
 export function createStudioBoard(): StudioBoard {
-  return { schemaVersion: 1, revision: 0, cards: [] };
+  return { schemaVersion: 1, revision: 0, requireAcceptance: true, cards: [] };
 }
 
 /**

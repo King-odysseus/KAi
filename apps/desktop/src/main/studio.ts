@@ -565,6 +565,18 @@ export class DesktopStudio {
     return card;
   }
 
+  async reviewBoardCard(projectId: string, cardId: string, verdict: 'accept' | 'reject'): Promise<BoardCard> {
+    const card = await this.ports.board.reviewCard(projectId, cardId, verdict);
+    await this.refreshHandoff(projectId);
+    return card;
+  }
+
+  async setBoardAcceptanceRequired(projectId: string, required: boolean): Promise<StudioBoard> {
+    const board = await this.ports.board.setAcceptanceRequired(projectId, required);
+    await this.refreshHandoff(projectId);
+    return board;
+  }
+
   /**
    * Rewrites `status.md` (and the root `AGENTS.md` when KAI owns it) from the board and the catalog. It is a
    * convenience for whoever picks the project up next, so a failure here never fails the move that triggered it.

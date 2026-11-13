@@ -324,10 +324,10 @@ export class StudioBoardStore {
     const merged = generated.map((card) => {
       const existing = previous.get(card.id);
       return existing
-        ? { ...card, status: existing.status, check: existing.check, runs: existing.runs, claimedBy: existing.claimedBy, notes: existing.notes }
+        ? { ...card, status: existing.status, check: existing.check, runs: existing.runs, claimedBy: existing.claimedBy, notes: existing.notes, reviewDecision: existing.reviewDecision }
         : card;
     });
-    return this.save(projectId, { schemaVersion: 1, revision: current.revision, cards: promoteReady(applyStaleness(merged, artifacts)) });
+    return this.save(projectId, { schemaVersion: 1, revision: current.revision, requireAcceptance: current.requireAcceptance, cards: promoteReady(applyStaleness(merged, artifacts)) });
   }
 
   /**
@@ -339,8 +339,31 @@ export class StudioBoardStore {
     const have = new Set(current.cards.map((card) => card.id));
     const fresh = cards.filter((card) => !have.has(card.id));
     if (fresh.length === 0) return { board: current, added: [] };
-    const board = await this.save(projectId, { schemaVersion: 1, revision: current.revision, cards: promoteReady([...current.cards, ...fresh]) });
+    const board = await this.save(projectId, { schemaVersion: 1, revision: current.revision, requireAcceptance: current.requireAcceptance, cards: promoteReady([...current.cards, ...fresh]) });
     return { board, added: fresh.map((card) => card.id) };
+  }
+
+  async reviewCard(projectId: string, cardId: string, verdict: 'accept' | 'reject'): Promise<BoardCard> {
+    const board = await this.read(projectId);
+    const card = this.require(board, cardId);
+    if (card.status !== 'review') throw new Error(`"${card.title}" is not waiting for review.`);
+    const accepted = verdict === 'accept';
+    const next = boardCardSchema.parse({
+      ...card,
+      status: accepted ? 'review' : 'ready',
+      reviewDecision: accepted ? 'accepted' : 'rejected',
+      notes: accepted ? card.notes : 'Rejected in Review; return to the builder for another pass.',
+      updatedAt: this.ports.now(),
+      movedBy: 'user',
+      movedAt: this.ports.now(),
+    });
+    await this.save(projectId, { ...board, cards: board.cards.map((item) => item.id === cardId ? next : item) });
+    return next;
+  }
+
+  async setAcceptanceRequired(projectId: string, required: boolean): Promise<StudioBoard> {
+    const board = await this.read(projectId);
+    return this.save(projectId, { ...board, requireAcceptance: required });
   }
 
   /** Moves a card to a new status, enforcing the dependency and done rules. */
@@ -361,8 +384,9 @@ export class StudioBoardStore {
         throw new Error(`"${card.title}" cannot go to Ready yet: it waits on ${waiting.join(', ')}, which ${unmet.length === 1 ? 'is' : 'are'} not done.`);
       }
     }
-    let next: BoardCard = { ...card, status, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null, movedBy: by, movedAt: this.ports.now() };
+    let next: BoardCard = { ...card, status, reviewDecision: status === 'inProgress' ? null : card.reviewDecision, notes: note || card.notes, updatedAt: this.ports.now(), claimedBy: status === 'inProgress' ? card.claimedBy : null, movedBy: by, movedAt: this.ports.now() };
     if (status === 'done') {
+      if (board.requireAcceptance && card.reviewDecision !== 'accepted') throw new Error(`"${card.title}" needs an accepted Review decision before it can move to Done.`);
       if (card.stale) throw new Error(`"${card.title}" is stale: ${card.staleReason ?? 'its design or an input changed.'} Rebuild and check it before marking it done.`);
       const blocked = await this.explainDone(projectId, card);
       if (blocked) throw new Error(blocked);
@@ -494,7 +518,7 @@ export class StudioBoardStore {
         ? boardCardSchema.parse({ ...card, designRef: null, stale: true, staleReason: 'The design was restarted in open-pencil and this screen is not in the new document. Draw it again.', updatedAt: at })
         : card));
     }
-    return this.save(projectId, { schemaVersion: 1, revision: board.revision, cards: promoteReady(withDesign) });
+    return this.save(projectId, { schemaVersion: 1, revision: board.revision, requireAcceptance: board.requireAcceptance, cards: promoteReady(withDesign) });
   }
 
   /** What KAI last read from open-pencil, or an empty record on a project that has never pulled one. */

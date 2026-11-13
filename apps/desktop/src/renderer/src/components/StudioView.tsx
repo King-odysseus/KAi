@@ -1999,6 +1999,19 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     }
   }
 
+  async function setBoardAcceptance(required: boolean): Promise<void> {
+    if (!projectId || !board) return;
+    setBusy('card');
+    setError(null);
+    try {
+      setBoard(unwrap(await window.kaiDesktop.setStudioBoardAcceptance({ projectId, required })));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function rememberBlockedApproach(card: BoardCard): Promise<void> {
     if (!projectId) return;
     const approach = await promptDialog({
@@ -3773,6 +3786,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               </UiButton>
             </h2>
             <p className="studio-note">Cards built from the stories. A card reaches done only through a passing check that still matches the working tree.</p>
+            <p className="studio-note">{board?.requireAcceptance !== false ? 'Acceptance is required before a card can reach Done.' : 'Acceptance is optional before a card reaches Done.'} <UiButton type="button" className="secondary-button" onClick={() => void setBoardAcceptance(board?.requireAcceptance === false)} disabled={busy !== null || !board}>{board?.requireAcceptance !== false ? 'Turn off acceptance gate' : 'Require acceptance'}</UiButton></p>
             {housekeeping.length > 0 && (
               <details className="studio-note">
                 <summary>Board housekeeping: {housekeeping.reduce((total, finding) => total + finding.cards.length, 0)} cards to look at</summary>

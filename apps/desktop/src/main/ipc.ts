@@ -692,6 +692,16 @@ export function registerIpc(context: IpcContext): IpcRegistry {
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));
     return card;
   });
+  handle(context, 'studio:board-review', async ({ projectId, cardId, verdict }) => {
+    const card = await context.studio.reviewBoardCard(projectId, cardId, verdict);
+    announceBoard(context, projectId, await context.studio.board(projectId));
+    return card;
+  });
+  handle(context, 'studio:board-acceptance-rule', async ({ projectId, required }) => {
+    const board = await context.studio.setBoardAcceptanceRequired(projectId, required);
+    announceBoard(context, projectId, board);
+    return board;
+  });
   handle(context, 'studio:board-route', async (input) => {
     const card = input.notAScreen ? await context.studio.markCardNotAScreen(input.projectId, input.cardId) : await context.studio.setCardRoute(input.projectId, input.cardId, input.route);
     announceBoard(context, input.projectId, await context.studio.board(input.projectId));

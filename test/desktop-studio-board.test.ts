@@ -287,6 +287,7 @@ describe('board store', () => {
     const hash = await hashFile(root, 'src/a.ts');
     p.runs.set('r1', run({ files: [{ path: 'src/a.ts', hash }] }));
     await store.replace('p1', [card({ status: 'ready' })], []);
+    await store.setAcceptanceRequired('p1', false);
     await store.setCheck('p1', 'c1', { runId: 'r1', at: NOW, visual: null, screenshots: [] });
     // A file the check never saw appears: the recorded result no longer covers the tree.
     write('src/b.ts', 'export const b = 2;\n');
@@ -295,6 +296,32 @@ describe('board store', () => {
     fs.rmSync(path.join(root, 'src', 'b.ts'));
     const done = await store.move('p1', 'c1', 'done');
     expect(done.status).toBe('done');
+  });
+
+  it('requires an accepted review decision before Done when the board gate is enabled', async () => {
+    const p = ports();
+    p.runs.set('r1', run());
+    const store = new StudioBoardStore(p);
+    await store.replace('p1', [card({ status: 'review' })], []);
+    await expect(store.move('p1', 'c1', 'done')).rejects.toThrow(/accepted Review decision/);
+    await store.reviewCard('p1', 'c1', 'accept');
+    await store.setCheck('p1', 'c1', { runId: 'r1', at: NOW, visual: null, screenshots: [] });
+    expect((await store.move('p1', 'c1', 'done')).status).toBe('done');
+  });
+
+  it('returns rejected cards to Ready and permits disabling the acceptance gate', async () => {
+    const p = ports();
+    p.runs.set('r1', run());
+    const store = new StudioBoardStore(p);
+    await store.replace('p1', [card({ status: 'review' })], []);
+    const rejected = await store.reviewCard('p1', 'c1', 'reject');
+    expect(rejected.status).toBe('ready');
+    expect(rejected.reviewDecision).toBe('rejected');
+    await store.setAcceptanceRequired('p1', false);
+    await store.setCheck('p1', 'c1', { runId: 'r1', at: NOW, visual: null, screenshots: [] });
+    const board = await store.read('p1');
+    expect(board.requireAcceptance).toBe(false);
+    expect((await store.move('p1', 'c1', 'done')).status).toBe('done');
   });
 
   it('lets one agent hold a card, and only a ready card be claimed', async () => {
