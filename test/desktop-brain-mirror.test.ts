@@ -4,6 +4,8 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BrainMirrorLoop,
+  FileRefusalMemory,
+  entryFingerprint,
   entryKey,
   fetchMirrorKeys,
   parseLearnedMarkdown,
@@ -219,6 +221,155 @@ describe('syncBrainToMirror', () => {
   it('reads each learned file, and treats a missing one as empty', async () => {
     expect(await readBrainEntries(brain)).toHaveLength(2);
     expect(parseLearnedMarkdown('decisions', '')).toEqual([]);
+  });
+});
+
+describe('remembering what the mirror refused', () => {
+  let brain: string;
+  let memoryDir: string;
+
+  const writeBrain = (body: string) => fs.writeFile(path.join(brain, 'learned', 'gotchas.md'), [
+    '# Gotchas',
+    '## [2026-11-01] Footer sat at the top of short pages -- claude-code',
+    '**Gotcha:** Needs a flex column on the page.',
+    '## [2026-11-02] the footer should always be at the bottom -- user',
+    body,
+    '',
+  ].join('\n'));
+
+  beforeEach(async () => {
+    brain = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-mirror-refuse-'));
+    memoryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-mirror-memory-'));
+    await fs.mkdir(path.join(brain, 'learned'), { recursive: true });
+    await writeBrain('should always be at the bottom of the page');
+  });
+
+  afterEach(async () => {
+    await fs.rm(brain, { recursive: true, force: true });
+    await fs.rm(memoryDir, { recursive: true, force: true });
+  });
+
+  /** A mirror that holds `held` titles, and answers a learn request for the noisy entry as given. */
+  const mirror = (held: string[], answer: () => Response) => {
+    const posted: string[] = [];
+    const fetchImpl = vi.fn(async (url: URL | string, init?: RequestInit) => {
+      if (String(url).includes('/api/brain/export')) {
+        return { ok: true, json: async () => ({ entries: held.map((title) => ({ type: 'gotchas', title })) }) } as unknown as Response;
+      }
+      const body = JSON.parse(String(init?.body ?? '{}')) as { title?: string };
+      posted.push(body.title ?? '');
+      if (body.title === 'the footer should always be at the bottom') return answer();
+      return { ok: true, json: async () => ({ ok: true }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    return { fetchImpl, posted };
+  };
+
+  const refusal = () => ({ ok: true, json: async () => ({ rejected: true, reason: 'Noise keyword detected: "should "' }) }) as unknown as Response;
+  const options = (fetchImpl: typeof fetch, refusals: FileRefusalMemory, onRejected?: (title: string, reason: string) => void) => ({
+    sourceBrain: brain,
+    endpoint: 'http://127.0.0.1:9876',
+    fetchImpl,
+    refusals,
+    ...(onRejected ? { onRejected: (entry: BrainEntry, reason: string) => onRejected(entry.title, reason) } : {}),
+  });
+
+  it('asks about a refused entry once, not on every pass', async () => {
+    const memory = new FileRefusalMemory(path.join(memoryDir, 'refused.json'));
+    const refused: string[] = [];
+    const first = mirror([], refusal);
+    const one = await syncBrainToMirror(options(first.fetchImpl, memory, (title) => refused.push(title)));
+    expect(first.posted).toHaveLength(2);
+    expect(one.rejected).toBe(1);
+    expect(refused).toEqual(['the footer should always be at the bottom']);
+
+    // The next pass: the mirror now holds the accepted entry, and the refused one is not sent or reported again.
+    const second = mirror(['Footer sat at the top of short pages'], refusal);
+    const two = await syncBrainToMirror(options(second.fetchImpl, memory, (title) => refused.push(title)));
+    expect(second.posted).toEqual([]);
+    expect(two).toMatchObject({ posted: 0, rejected: 0, knownRefused: 1 });
+    expect(refused).toHaveLength(1);
+  });
+
+  it('remembers across a restart, because the memory is a file', async () => {
+    const file = path.join(memoryDir, 'refused.json');
+    await syncBrainToMirror(options(mirror([], refusal).fetchImpl, new FileRefusalMemory(file)));
+    const after = mirror(['Footer sat at the top of short pages'], refusal);
+    const outcome = await syncBrainToMirror(options(after.fetchImpl, new FileRefusalMemory(file)));
+    expect(after.posted).toEqual([]);
+    expect(outcome.knownRefused).toBe(1);
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toHaveProperty([entryKey('gotchas', 'the footer should always be at the bottom')]);
+  });
+
+  it('asks again when the entry\'s text has changed, since an edited entry is a new question', async () => {
+    const memory = new FileRefusalMemory(path.join(memoryDir, 'refused.json'));
+    await syncBrainToMirror(options(mirror([], refusal).fetchImpl, memory));
+    await writeBrain('Pin the footer with a flex column so it sits at the bottom even on short pages.');
+    const again = mirror(['Footer sat at the top of short pages'], () => ({ ok: true, json: async () => ({ ok: true }) }) as unknown as Response);
+    const outcome = await syncBrainToMirror(options(again.fetchImpl, memory));
+    expect(again.posted).toEqual(['the footer should always be at the bottom']);
+    expect(outcome.posted).toBe(1);
+  });
+
+  it('does not remember a duplicate, because that resolves itself once the mirror lists the entry', async () => {
+    const memory = new FileRefusalMemory(path.join(memoryDir, 'refused.json'));
+    const duplicate = () => ({ ok: true, json: async () => ({ duplicate: true }) }) as unknown as Response;
+    await syncBrainToMirror(options(mirror([], duplicate).fetchImpl, memory));
+    const next = mirror(['Footer sat at the top of short pages'], duplicate);
+    await syncBrainToMirror(options(next.fetchImpl, memory));
+    expect(next.posted).toEqual(['the footer should always be at the bottom']);
+  });
+
+  it('remembers a client error as a judgement on the entry, but retries a server error and a rate limit', async () => {
+    const status = (code: number) => () => ({ ok: false, status: code, json: async () => ({}) }) as unknown as Response;
+    for (const [code, remembered] of [[422, true], [400, true], [500, false], [429, false], [408, false]] as const) {
+      const memory = new FileRefusalMemory(path.join(memoryDir, `refused-${code}.json`));
+      await syncBrainToMirror(options(mirror([], status(code)).fetchImpl, memory));
+      const next = mirror(['Footer sat at the top of short pages'], status(code));
+      await syncBrainToMirror(options(next.fetchImpl, memory));
+      expect(next.posted.length > 0, `status ${code}`).toBe(!remembered);
+    }
+  });
+
+  it('works without a memory, exactly as before', async () => {
+    const m = mirror([], refusal);
+    const outcome = await syncBrainToMirror({ sourceBrain: brain, endpoint: 'http://127.0.0.1:9876', fetchImpl: m.fetchImpl });
+    expect(outcome.rejected).toBe(1);
+    // With no memory the outcome is exactly what it always was: no extra field.
+    expect(outcome).not.toHaveProperty('knownRefused');
+  });
+});
+
+describe('the refusal file', () => {
+  let dir: string;
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-refusal-file-')); });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  const entry: BrainEntry = { type: 'gotchas', title: 'A title', agent: 'user', tags: '', date: '2026-11-01', body: 'some words' };
+
+  it('keeps a refusal for the exact wording only', async () => {
+    const memory = new FileRefusalMemory(path.join(dir, 'r.json'));
+    memory.add(entryKey(entry.type, entry.title), entryFingerprint(entry), 'noise');
+    expect(memory.has(entryKey(entry.type, entry.title), entryFingerprint(entry))).toBe(true);
+    expect(memory.has(entryKey(entry.type, entry.title), entryFingerprint({ ...entry, body: 'other words' }))).toBe(false);
+    expect(memory.has('gotchas:another title', entryFingerprint(entry))).toBe(false);
+  });
+
+  it('writes nothing when nothing was added, and starts empty from a missing or damaged file', async () => {
+    const file = path.join(dir, 'r.json');
+    const quiet = new FileRefusalMemory(file);
+    await quiet.load();
+    await quiet.save();
+    await expect(fs.stat(file)).rejects.toThrow();
+
+    await fs.writeFile(file, '{ not json');
+    const damaged = new FileRefusalMemory(file);
+    await damaged.load();
+    expect(damaged.size()).toBe(0);
+    damaged.add('k', 'f', 'why');
+    await damaged.save();
+    const reloaded = new FileRefusalMemory(file);
+    await reloaded.load();
+    expect(reloaded.has('k', 'f')).toBe(true);
   });
 });
 

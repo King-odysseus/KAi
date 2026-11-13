@@ -749,6 +749,9 @@ export class DesktopAutoSession {
       autonomy: input.autonomy,
       ...(input.goal ? { goal: input.goal } : {}),
       ...(input.model ? { model: input.model } : {}),
+      // What gets filed about this turn names the person's task, not the plan reminder, the failure text or the brief.
+      taskText: input.prompt,
+      ...(architectSplitActive(input.architect) ? { splitRole: 'implementer' as const } : {}),
       // The Implementer's own API connection, while it is the one running. After a fall back from a spent CLI window
       // the global API connection applies instead, exactly as it did before the split existed.
       ...(execution === 'api' && architectSplitActive(input.architect) && input.architect.implementer.execution === 'api' && input.architect.implementer.api

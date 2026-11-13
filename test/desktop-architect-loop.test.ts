@@ -210,9 +210,15 @@ describe('the Architect / Implementer loop', () => {
     expect(architectRuns.length).toBeGreaterThanOrEqual(2);
     for (const request of architectRuns) {
       expect(request).toMatchObject({ agent: 'claude', model: 'opus', autonomy: 'plan', execution: 'cli' });
+      // Marked as the Architect's, so nothing is filed about it, and carrying the person's request, not KAI's prompt.
+      expect(request).toMatchObject({ splitRole: 'architect', taskText: 'Add a parser for the config file.' });
     }
     // The composer showed qwen, but the Implementer is codex: the chosen role wins, not the composer's agent.
-    for (const request of builderRuns) expect(request).toMatchObject({ agent: 'codex', execution: 'cli', autonomy: 'full' });
+    for (const request of builderRuns) {
+      expect(request).toMatchObject({ agent: 'codex', execution: 'cli', autonomy: 'full', splitRole: 'implementer', taskText: 'Add a parser for the config file.' });
+      // What is filed about the build is the request, not "You are the Implementer...".
+      expect(request.taskText).not.toContain('You are the Implementer');
+    }
   });
 
   it('runs the Implementer through the API it was given, direct, with its own key and model', async () => {
@@ -452,6 +458,22 @@ describe('cost and the composer\'s record', () => {
     expect(final.architectCostUsd).toBeCloseTo(1.5);
     expect(final.implementerCostUsd).toBeCloseTo(0.25);
     expect(final.message).toContain('Architect $1.50, Implementer $0.25');
+    expect(final.message).toContain('(what was reported)');
+  });
+
+  it('says "not reported" for a CLI that gives no cost, instead of a $0.00 that reads as free', async () => {
+    const s = scripted({ architectCost: 0.26 });
+    const loop = new ArchitectLoop(s.ports);
+    await loop.start(input(split()), 1);
+    const final = await finish(loop);
+    // The Architect planned and then reviewed, so two runs at $0.26.
+    expect(final.message).toContain('Architect $0.52, Implementer not reported');
+    // An API role that really cost nothing (a model on this computer) is $0.00, not "not reported".
+    const local = scripted({ architectCost: 0.26 });
+    const loop2 = new ArchitectLoop(local.ports);
+    await loop2.start(input(split({ implementer: LOCAL }), { conversationId: 'conv-2' }), 1);
+    const done = await finish(loop2, 'conv-2');
+    expect(done.message).toContain('Implementer $0.00');
   });
 
   it('says nothing about cost when nothing was spent', async () => {
@@ -549,6 +571,29 @@ describe('Auto mode with the split on', () => {
     expect(second).toMatchObject({ agent: 'codex', execution: 'cli', autonomy: 'full' });
     expect(h.s.requests.some((request) => request.agent === 'gemini')).toBe(false);
     expect(h.s.buildPrompts[0]).toContain('parser.test.ts passes');
+  });
+
+  it('names the person\'s task on every turn, so the brief and the reminders are not what gets remembered', async () => {
+    const h = autoHarness({ verdicts: [verdict('revise'), verdict('approve')] });
+    await h.session.start(autoInput({ architect: split() }), 1);
+    await autoSettled(h.session);
+    const builds = h.s.requests.filter((request) => !request.freshSession);
+    expect(builds).toHaveLength(2);
+    for (const request of builds) expect(request).toMatchObject({ taskText: 'Add a parser for the config file.', splitRole: 'implementer' });
+    // The second build's own prompt is the Architect's correction, which is exactly what must not be filed as the task.
+    expect(builds[1]!.prompt).toContain('Fix the off-by-one in parse()');
+    expect(builds[1]!.taskText).not.toContain('Fix the off-by-one');
+    for (const request of h.s.requests.filter((r) => r.freshSession)) expect(request.splitRole).toBe('architect');
+  });
+
+  it('keeps naming the task on a plain Auto run too, where the reminder is KAI\'s wording', async () => {
+    const h = autoHarness();
+    await h.plain.start(autoInput({ checkCommand: 'npm test' }), 1);
+    await autoSettled(h.plain);
+    for (const request of h.s.requests) {
+      expect(request.taskText).toBe('Add a parser for the config file.');
+      expect(request.splitRole).toBeUndefined();
+    }
   });
 
   it('runs the working turns through the Implementer\'s API when that is what was chosen', async () => {

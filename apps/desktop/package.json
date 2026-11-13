@@ -1,6 +1,6 @@
 {
   "name": "@kai/desktop",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "KAI standalone desktop workbench",
@@ -17,6 +17,7 @@
     "smoke:mobile": "node scripts/smoke-mobile.mjs",
     "stage:engines": "node scripts/stage-engines.mjs",
     "package": "npm run stage:engines && npm run build && electron-builder --win --dir",
+    "install:local": "node scripts/install-local.mjs",
     "dist": "npm run stage:engines && npm run build && electron-builder --win nsis"
   },
   "dependencies": {

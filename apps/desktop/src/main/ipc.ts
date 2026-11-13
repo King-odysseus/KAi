@@ -164,7 +164,7 @@ import type { DesktopAutopilot } from './autopilot';
 import type { DesktopAutoSession } from './auto-session';
 import type { ArchitectLoop } from './architect-loop';
 import type { ArchitectReadiness, RoleTarget } from '@kai/contracts';
-import { syncBrainToMirror } from './brain-mirror';
+import { FileRefusalMemory, syncBrainToMirror } from './brain-mirror';
 import type { BrainMirrorOutcome } from '@kai/contracts';
 import { modelBelongsToOtherAgent } from '@kai/contracts';
 import { composeRunLesson, type RunLessonInput } from './run-learning';
@@ -2414,13 +2414,15 @@ export async function runConversationAgent(
   //
   // Guarded, and it matters that it is: this runs before the turn is saved, so a brain that refused the write used to
   // take the whole turn with it — no reply kept, and no announcement that the run had ended.
-  const lessonEvent = await fileRunLesson(context, {
+  // The Architect only plans and reviews, so it has nothing to teach the brain; the step's own prompt is KAI's wording,
+  // so the lesson names the person's request instead (see `taskText`).
+  const lessonEvent = request.splitRole === 'architect' ? null : await fileRunLesson(context, {
     conversationId: conversation.id,
     agent: request.agent,
     projectPath: project.path,
     projectName: project.name,
     ...(conversation.goal ? { taskId: conversation.goal.id, taskOutcome: conversation.goal.outcome } : {}),
-    prompt: userTurn.text,
+    prompt: request.taskText ?? userTurn.text,
     output: execution.output ?? '',
     status: execution.status,
     error: execution.error,
@@ -3934,22 +3936,29 @@ export function cancelConversationRun(context: IpcContext, conversationId: strin
  * Brings the mirror brain level with this one. It reads the entries this brain holds rather than intercepting writes,
  * which is what makes it cover agents that call brain_learn over their own MCP connection as well as KAI's own runs.
  */
+let mirrorRefusals: FileRefusalMemory | null = null;
+
 export async function mirrorBrainNow(context: IpcContext, dryRun: boolean): Promise<BrainMirrorOutcome> {
   const settings = await context.settings.load();
   const mirror = settings.cognitive1.mirror;
   if (!mirror.enabled) throw new Error('Turn on the brain mirror in Settings, then try again.');
   if (!(await cognitive1Ready(context))) throw new Error('Cognitive1 is not running yet.');
-  return syncBrainToMirror({
+  // The outcome schema is strict, so the count of entries skipped as already-refused stays inside the main process.
+  const { knownRefused: _knownRefused, ...outcome } = await syncBrainToMirror({
     sourceBrain: await sharedBrainPath(context),
     endpoint: mirror.endpoint,
     ...(mirror.token ? { token: mirror.token } : {}),
     dryRun,
+    // Entries the mirror has already refused are remembered across passes and restarts, and asked about again only
+    // if their text changes. Before this, the same few were re-sent and re-refused every fifteen minutes for ever.
+    refusals: (mirrorRefusals ??= new FileRefusalMemory(path.join(context.paths.root, 'brain-mirror-refused.json'))),
     // A refused entry is not a failure, so it stays out of the outcome — but silence about it means the same entry
     // comes back on every reconcile forever and nobody can see which one or why. The log is where it goes.
     onRejected: (entry, reason) => {
       context.logger.warn('internal', `The brain mirror refused "${entry.title}" (${entry.type}): ${reason}`);
     },
   });
+  return outcome;
 }
 
 /** Stops on Stop: the checks and hooks a run's automation is executing, not only the agent. */

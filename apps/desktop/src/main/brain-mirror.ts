@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -95,6 +96,79 @@ export async function postEntries(entries: readonly BrainEntry[], transport: Mir
   return outcome;
 }
 
+/** A short fingerprint of what an entry says, so a refusal is remembered for this wording and not for the title forever. */
+export function entryFingerprint(entry: BrainEntry): string {
+  return createHash('sha1').update(`${entry.title}\n${entry.tags}\n${entry.body}`).digest('hex').slice(0, 16);
+}
+
+/**
+ * What the mirror has already turned away.
+ *
+ * A refusal is a judgement about the entry's wording (noise, too similar, too short), and it does not change on the
+ * next pass. Without a memory the same entries were re-sent every fifteen minutes for ever and refused again each time:
+ * a third of the log was that one warning, and the log said nothing else about them after the first. An entry is
+ * sent again only when its text changes, because an edited entry is a new question.
+ */
+export interface RefusalMemory {
+  has(key: string, fingerprint: string): boolean;
+  add(key: string, fingerprint: string, reason: string): void;
+  load?(): Promise<void>;
+  save?(): Promise<void>;
+}
+
+const MAX_REMEMBERED_REFUSALS = 5_000;
+
+/** Refusals kept in a small file in the app's data folder, so they survive a restart. */
+export class FileRefusalMemory implements RefusalMemory {
+  private known = new Map<string, { fingerprint: string; reason: string; at: string }>();
+  private loaded = false;
+  private dirty = false;
+
+  constructor(private readonly file: string) {}
+
+  async load(): Promise<void> {
+    if (this.loaded) return;
+    this.loaded = true;
+    try {
+      const parsed = JSON.parse(await fs.readFile(this.file, 'utf8')) as Record<string, { fingerprint?: unknown; reason?: unknown; at?: unknown }>;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value?.fingerprint === 'string') {
+          this.known.set(key, { fingerprint: value.fingerprint, reason: typeof value.reason === 'string' ? value.reason : '', at: typeof value.at === 'string' ? value.at : '' });
+        }
+      }
+    } catch {
+      // No file yet, or one that cannot be read: start with nothing remembered. Worst case is one more round of refusals.
+    }
+  }
+
+  has(key: string, fingerprint: string): boolean {
+    return this.known.get(key)?.fingerprint === fingerprint;
+  }
+
+  add(key: string, fingerprint: string, reason: string): void {
+    this.known.set(key, { fingerprint, reason: reason.slice(0, 200), at: new Date().toISOString() });
+    this.dirty = true;
+  }
+
+  size(): number {
+    return this.known.size;
+  }
+
+  async save(): Promise<void> {
+    if (!this.dirty) return;
+    // The oldest go first once the file is large; they are the ones least likely to still be in the brain.
+    const entries = [...this.known.entries()].sort((a, b) => a[1].at.localeCompare(b[1].at)).slice(-MAX_REMEMBERED_REFUSALS);
+    this.known = new Map(entries);
+    try {
+      await fs.mkdir(path.dirname(this.file), { recursive: true });
+      await fs.writeFile(this.file, `${JSON.stringify(Object.fromEntries(entries), null, 2)}\n`, 'utf8');
+      this.dirty = false;
+    } catch {
+      // Remembering is an optimisation; failing to write it must not fail the sync.
+    }
+  }
+}
+
 /** Reads the four learned files of a brain. A missing file is no entries, not a failure. */
 export async function readBrainEntries(brainDir: string): Promise<BrainEntry[]> {
   const entries: BrainEntry[] = [];
@@ -151,6 +225,8 @@ export interface MirrorBrainOptions {
    * entry or why. That is a loop nobody can see or fix.
    */
   onRejected?: (entry: BrainEntry, reason: string) => void;
+  /** Entries the mirror has turned away before are not sent again unless their text has changed. */
+  refusals?: RefusalMemory;
 }
 
 /**
@@ -162,17 +238,21 @@ export interface MirrorBrainOptions {
  * intercepting calls would miss. The receiving brain still applies its own duplicate and quality rules, so a race
  * between this and a live mirror of the same entry costs a wasted request, never a duplicate entry.
  */
-export async function syncBrainToMirror(options: MirrorBrainOptions): Promise<MirrorOutcome & { skipped: number }> {
+export async function syncBrainToMirror(options: MirrorBrainOptions): Promise<MirrorOutcome & { skipped: number; knownRefused?: number }> {
   const entries = await readBrainEntries(options.sourceBrain);
   const empty = { read: entries.length, posted: 0, rejected: 0, failed: 0, skipped: 0 };
   if (options.dryRun) return empty;
+  await options.refusals?.load?.();
 
   const send = options.fetchImpl ?? fetch;
   // A mirror that will not say what it holds is not a reason to stop: the entries it already has will be turned
   // away as duplicates, so the sync still converges, just with more requests.
   const known = await fetchMirrorKeys(options.endpoint, options.token, send).catch(() => new Set<string>());
-  const missing = entries.filter((entry) => !known.has(entryKey(entry.type, entry.title)));
-  if (missing.length === 0) return empty;
+  const absent = entries.filter((entry) => !known.has(entryKey(entry.type, entry.title)));
+  // Turned away before and not changed since: the answer would be the same, so it is not asked again.
+  const missing = absent.filter((entry) => !options.refusals?.has(entryKey(entry.type, entry.title), entryFingerprint(entry)));
+  const knownRefused = absent.length - missing.length;
+  if (missing.length === 0) return { ...empty, skipped: entries.length - absent.length, ...(options.refusals ? { knownRefused } : {}) };
 
   let done = 0;
   const outcome = await postEntries(missing, {
@@ -199,16 +279,27 @@ export async function syncBrainToMirror(options: MirrorBrainOptions): Promise<Mi
       done += 1;
       options.onProgress?.(done, missing.length);
       if (!response.ok) {
-        options.onRejected?.(entry, `the mirror answered ${response.status}`);
+        const reason = `the mirror answered ${response.status}`;
+        options.onRejected?.(entry, reason);
+        // A client error is a judgement about this entry; a server error or a rate limit is about now, and is retried.
+        if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+          options.refusals?.add(entryKey(entry.type, entry.title), entryFingerprint(entry), reason);
+        }
         return false;
       }
       const payload = (await response.json().catch(() => null)) as { rejected?: boolean; duplicate?: boolean; reason?: string } | null;
       const accepted = payload?.rejected !== true && payload?.duplicate !== true;
-      if (!accepted) options.onRejected?.(entry, payload?.reason || (payload?.duplicate === true ? 'already there' : 'the mirror refused it'));
+      if (!accepted) {
+        const reason = payload?.reason || (payload?.duplicate === true ? 'already there' : 'the mirror refused it');
+        options.onRejected?.(entry, reason);
+        // Only a refusal is remembered. "Already there" resolves itself once the mirror lists the entry.
+        if (payload?.duplicate !== true) options.refusals?.add(entryKey(entry.type, entry.title), entryFingerprint(entry), reason);
+      }
       return accepted;
     },
   });
-  return { ...outcome, read: entries.length, skipped: entries.length - missing.length };
+  await options.refusals?.save?.();
+  return { ...outcome, read: entries.length, skipped: entries.length - absent.length, ...(options.refusals ? { knownRefused } : {}) };
 }
 
 export interface BrainMirrorLoopOptions {

@@ -125,6 +125,13 @@ export const agentRunRequestSchema = z
     // split carries its own, so two roles can use different providers, keys or a model on this computer. Only an
     // `api` run reads it.
     apiConnection: apiConnectionSchema.optional(),
+    // The person's own request, when this run is one step in carrying it out and its prompt is something KAI wrote: a
+    // role's prompt in the Architect / Implementer split, or Auto's "the task is not finished" reminder. What KAI files
+    // about a run (the lesson for the brain, the note in the project's memory) names this instead of the step's own
+    // prompt, which is machinery and not something worth remembering.
+    taskText: z.string().trim().min(1).max(20_000).optional(),
+    // Which side of the split this run is. The Architect only plans and reviews, changes nothing, and files no lesson.
+    splitRole: z.enum(['architect', 'implementer']).optional(),
   })
   .strict();
 

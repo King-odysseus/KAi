@@ -367,7 +367,7 @@ export class ArchitectCoach {
   }
 
   async plan(context: CoachContext, task: string): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
-    const answer = await this.ask(context, (label) => planPrompt(task, label), context.firstTurn ?? {});
+    const answer = await this.ask(context, (label) => planPrompt(task, label), { ...(context.firstTurn ?? {}), splitRole: 'architect', taskText: task });
     const brief = parseBrief(answer.output);
     return { brief: brief ?? fallbackBrief(task), readable: brief !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
   }
@@ -399,7 +399,7 @@ export class ArchitectCoach {
   ): Promise<{ verdict: ArchitectVerdict; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number; check: BriefCheck | null }> {
     const material = (await this.ports.reviewMaterial(context.projectId).catch(() => '')).slice(0, REVIEW_MATERIAL_CHARS);
     const check = await this.runBriefCheck(context.projectId, brief, signal);
-    const answer = await this.ask(context, (label) => reviewPrompt(brief, task, material, implementerNote, label, check));
+    const answer = await this.ask(context, (label) => reviewPrompt(brief, task, material, implementerNote, label, check), { splitRole: 'architect', taskText: task });
     const parsed = parseVerdict(answer.output);
     // A failing check overrules an approval: the Architect read the diff, but the work does not do what the brief said.
     const verdict = parsed && parsed.verdict === 'approve' && check?.ran && check.passed === false
@@ -431,7 +431,7 @@ export class ArchitectCoach {
     why: string,
   ): Promise<{ brief: ArchitectBrief; readable: boolean; label: string; fallbackUsed: boolean; costUsd: number }> {
     const material = (await this.ports.reviewMaterial(context.projectId).catch(() => '')).slice(0, REVIEW_MATERIAL_CHARS);
-    const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label));
+    const answer = await this.ask(context, (label) => stepInPrompt(brief, task, why, material, label), { splitRole: 'architect', taskText: task });
     const next = parseBrief(answer.output);
     return { brief: next ?? brief, readable: next !== null, label: answer.label, fallbackUsed: answer.fallbackUsed, costUsd: answer.costUsd };
   }
@@ -468,6 +468,7 @@ export interface ComposerRecord {
 }
 
 interface ActiveLoop {
+  split: ArchitectSplit;
   composer: ComposerRecord;
   controller: AbortController;
   ownerWindowId: number;
@@ -505,6 +506,7 @@ export class ArchitectLoop {
     if (this.runs.has(input.conversationId)) throw new Error('The Architect is already working on this conversation.');
     await this.ports.rememberSplit?.(input.conversationId, input.split).catch(() => undefined);
     const active: ActiveLoop = {
+      split: input.split,
       composer: { agent: input.agent, execution: input.execution ?? 'cli', route: input.route, autonomy: input.autonomy },
       controller: new AbortController(),
       ownerWindowId,
@@ -596,9 +598,13 @@ export class ArchitectLoop {
   private settle(conversationId: string, ownerWindowId: number, phase: 'finished' | 'stopped' | 'failed', message: string): void {
     const state = this.state(conversationId);
     const spent = state.architectCostUsd + state.implementerCostUsd;
+    const split = this.runs.get(conversationId)?.split;
+    // A CLI on its own subscription does not report what a run cost, so "$0.00" would read as "free" when it is "unknown".
+    const share = (usd: number, target: RoleTarget | null | undefined): string =>
+      usd > 0 ? `$${usd.toFixed(2)}` : target?.execution === 'cli' ? 'not reported' : '$0.00';
     // Said once, at the end, so a strong planner's share sits next to the builder's.
     const closing = spent > 0
-      ? `${message} Cost about $${spent.toFixed(2)}: Architect $${state.architectCostUsd.toFixed(2)}, Implementer $${state.implementerCostUsd.toFixed(2)}.`
+      ? `${message} Cost about $${spent.toFixed(2)} (what was reported): Architect ${share(state.architectCostUsd, split?.architect)}, Implementer ${share(state.implementerCostUsd, split?.implementer)}.`
       : message;
     this.phase(conversationId, ownerWindowId, phase, null, closing);
     this.record(conversationId, ownerWindowId, null, closing);
@@ -668,7 +674,7 @@ export class ArchitectLoop {
 
         this.phase(conversationId, owner, state.round === 1 ? 'implementing' : 'correcting', 'implementer',
           state.round === 1 ? 'The Implementer is building from the brief.' : 'The Implementer is fixing what the Architect sent back.', implementerLabel);
-        const built = await this.ports.runAgent(requestForTarget(implementer, base, prompt, state.round === 1 ? (context.firstTurn ?? {}) : {}), owner);
+        const built = await this.ports.runAgent(requestForTarget(implementer, base, prompt, { ...(state.round === 1 ? (context.firstTurn ?? {}) : {}), splitRole: 'implementer', taskText: input.prompt }), owner);
         this.addCost(conversationId, 'implementer', built.costUsd);
         if (stopped() || built.cancelled) return this.settle(conversationId, owner, 'stopped', 'Stopped.');
         if (built.status === 'failed' || built.error) {
