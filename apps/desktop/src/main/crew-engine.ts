@@ -292,6 +292,7 @@ export function taskBrief(run: CrewRun, taskId: string, conventions = ''): strin
     '',
     `Your task: ${task.title}`,
     task.description,
+    ...(task.note ? ['', `Task note from the previous attempt: ${task.note}`] : []),
     '',
     'Acceptance criteria (the Lead will check each one):',
     ...task.acceptance.map((criterion, index) => `${index + 1}. ${criterion}`),

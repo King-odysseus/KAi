@@ -1046,12 +1046,13 @@ async function startApplication(): Promise<void> {
       },
     },
     createConversation: createBlankConversation,
-    runAgent: (request, ownerWindowId) => runConversationAgent(ipcContext!, request, ownerWindowId),
+    runAgent: (request, ownerWindowId, options) => runConversationAgent(ipcContext!, request, ownerWindowId, options),
     cancelAgent: (conversationId) => cancelConversationRun(ipcContext!, conversationId),
-    runCheck: async (projectId, command, signal) => {
+    runCheck: async (projectId, command, signal, options) => {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
       if (!project) throw new Error('The crew project is no longer available.');
-      const check = await runCheckCommand(project.path, command, signal);
+      const check = await runCheckCommand(options?.cwd ?? project.path, command, signal);
+      if (options?.cwd) return { passed: check.exitCode === 0, output: check.output };
       await recordVerification(ipcContext!.verification, project.id, project.path, check).catch(() => undefined);
       return { passed: check.exitCode === 0, output: check.output };
     },
@@ -1068,6 +1069,7 @@ async function startApplication(): Promise<void> {
       const project = (await ipcContext!.projects.list()).find((candidate) => candidate.id === projectId);
       return project ? (await gitOverview(project.path)).changes.map((change) => change.path) : [];
     },
+    worktrees: { prepare: async (projectId, key) => createParallelSession(await projectRootFor(projectId), key) },
     conventions: async () => conventionService.briefing(),
   });
   ipcContext.crew = crewRunner;

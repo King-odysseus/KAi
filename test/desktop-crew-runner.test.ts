@@ -3,6 +3,7 @@ import { createDefaultCrewConfig, crewConfigSchema } from '@kai/contracts';
 import type { AgentRunRequest, AgentRunResult, CrewConfig, CrewRun } from '@kai/contracts';
 import { DesktopCrewRunner } from '../apps/desktop/src/main/crew-runner';
 import type { CrewRunnerPorts } from '../apps/desktop/src/main/crew-runner';
+import type { ParallelSession } from '../apps/desktop/src/main/parallel-session';
 import { parsePlan } from '../apps/desktop/src/main/crew-prompts';
 import { guideCrewRun, helperChoiceFor } from '../apps/desktop/src/main/crew-engine';
 
@@ -88,6 +89,106 @@ describe('crew runner', () => {
     expect(builds[1]?.prompt).toContain('Your task: Ingestion endpoint');
     expect(f.notifications.length).toBeGreaterThan(3);
     expect(f.saved.get(run.id)?.status).toBe('completed');
+  });
+
+  it('builds independent tasks in isolated copies and integrates them before review', async () => {
+    const f = fixture({ plan: [JSON.stringify({ tasks: [
+      { id: 'ui', title: 'Settings page', role: 'builder', description: 'Build settings UI', acceptance: ['Page renders'], dependsOn: [] },
+      { id: 'api', title: 'Settings API', role: 'builder', description: 'Build settings endpoint', acceptance: ['Endpoint responds'], dependsOn: [] },
+    ] })] }, { checkCommand: 'npm test' });
+    const checked: Array<string | undefined> = [];
+    const taskCwds: Array<string | undefined> = [];
+    const integrated: string[][] = [];
+    let taskAgents = 0;
+    let maximumConcurrentTaskAgents = 0;
+    let releaseTaskAgents!: () => void;
+    const bothTaskAgentsStarted = new Promise<void>((resolve) => { releaseTaskAgents = resolve; });
+    f.ports.worktrees = {
+      prepare: async () => ({
+        checkout: async (id) => `C:/isolated/${id}`,
+        commit: async (id) => `commit-${id}`,
+        filesChanged: async (commit) => [`src/${commit}.ts`],
+        integrate: async (commits) => { integrated.push(commits.map((item) => item.stepId)); return { conflicts: [], applied: commits.map((item) => item.stepId), integrationCommit: 'merged', skipped: [] }; },
+        dispose: async () => undefined,
+      } satisfies ParallelSession),
+    };
+    const runAgent = f.ports.runAgent;
+    f.ports.runAgent = async (request, owner, options) => {
+      if (request.prompt.startsWith('Project goal:')) {
+        taskCwds.push(options?.cwd);
+        taskAgents += 1;
+        maximumConcurrentTaskAgents = Math.max(maximumConcurrentTaskAgents, taskAgents);
+        if (taskAgents === 2) releaseTaskAgents();
+        await bothTaskAgentsStarted;
+        taskAgents -= 1;
+      }
+      return runAgent(request, owner, options);
+    };
+    const runCheck = f.ports.runCheck;
+    f.ports.runCheck = async (project, command, signal, options) => {
+      if (options?.cwd) checked.push(options.cwd);
+      return runCheck(project, command, signal, options);
+    };
+
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build settings', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+
+    expect(run.status).toBe('completed');
+    expect(taskCwds).toEqual(['C:/isolated/ui', 'C:/isolated/api']);
+    expect(checked).toEqual(['C:/isolated/ui', 'C:/isolated/api']);
+    expect(integrated).toEqual([['ui', 'api']]);
+    expect(run.tasks.map((task) => task.files)).toEqual([['src/commit-ui.ts'], ['src/commit-api.ts']]);
+    expect(maximumConcurrentTaskAgents).toBe(2);
+  });
+
+  it('retries only a conflicting task alone after the other task is integrated', async () => {
+    const f = fixture({ plan: [JSON.stringify({ tasks: [
+      { id: 'ui', title: 'Settings page', role: 'builder', description: 'Build settings UI', acceptance: ['Page renders'], dependsOn: [] },
+      { id: 'api', title: 'Settings API', role: 'builder', description: 'Build settings endpoint', acceptance: ['Endpoint responds'], dependsOn: [] },
+    ] })] });
+    let prepared = 0;
+    const taskCallCwds: Array<string | undefined> = [];
+    f.ports.worktrees = {
+      prepare: async () => {
+        prepared += 1;
+        return {
+          checkout: async (id) => `C:/isolated/${id}`,
+          commit: async (id) => `commit-${id}`,
+          filesChanged: async (commit) => [`src/${commit}.ts`],
+          integrate: async (commits) => ({ conflicts: [{ stepId: 'api', files: ['src/api.ts'], commit: 'commit-api', diff: '' }], applied: ['ui'], integrationCommit: 'merged', skipped: [] }),
+          dispose: async () => undefined,
+        } satisfies ParallelSession;
+      },
+    };
+    const runAgent = f.ports.runAgent;
+    f.ports.runAgent = async (request, owner, options) => {
+      if (request.prompt.includes('Your task:')) taskCallCwds.push(options?.cwd);
+      return runAgent(request, owner, options);
+    };
+
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build settings', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+
+    expect(run.status).toBe('completed');
+    expect(prepared).toBe(1);
+    expect(taskCallCwds).toContain('C:/isolated/ui');
+    expect(taskCallCwds).toContain('C:/isolated/api');
+    expect(taskCallCwds.at(-1)).toBeUndefined();
+    expect(run.tasks.map((task) => task.status)).toEqual(['accepted', 'accepted']);
+    expect(run.tasks.find((task) => task.id === 'api')?.round).toBe(2);
+  });
+
+  it('keeps independent tasks serial and explains the fallback when the project has no worktree support', async () => {
+    const f = fixture({ plan: [JSON.stringify({ tasks: [
+      { id: 'ui', title: 'Settings page', role: 'builder', description: 'Build settings UI', acceptance: ['Page renders'], dependsOn: [] },
+      { id: 'api', title: 'Settings API', role: 'builder', description: 'Build settings endpoint', acceptance: ['Endpoint responds'], dependsOn: [] },
+    ] })] });
+
+    const started = await f.runner.start({ projectId: 'p1', goal: 'Build settings', config: f.config }, 1);
+    const run = await runToIdle(f.runner, started.id);
+
+    expect(run.status).toBe('completed');
+    expect(run.feed.some((item) => item.text.includes('running one at a time') && item.text.includes('Git project'))).toBe(true);
   });
 
   it('waits for approval of the plan when asked to, then runs on its own', async () => {

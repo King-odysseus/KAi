@@ -6,12 +6,13 @@ import {
   roleAccess, settle, startTask, submitTask, subAgentsFor, taskBrief, unfinishedReason, guideCrewRun,
 } from './crew-engine';
 import { parsePlan, planPrompt, retryPrompt, reviewPrompt, reviewRolePrompt } from './crew-prompts';
+import type { ParallelSession } from './parallel-session';
 
 export interface CrewRunnerPorts {
   createConversation(projectId: string, title: string): Promise<{ id: string }>;
-  runAgent(request: AgentRunRequest, ownerWindowId: number): Promise<AgentRunResult>;
+  runAgent(request: AgentRunRequest, ownerWindowId: number, options?: { cwd?: string }): Promise<AgentRunResult>;
   cancelAgent(conversationId: string): boolean;
-  runCheck(projectId: string, command: string, signal: AbortSignal): Promise<{ passed: boolean; output: string }>;
+  runCheck(projectId: string, command: string, signal: AbortSignal, options?: { cwd?: string }): Promise<{ passed: boolean; output: string }>;
   save(run: CrewRun): Promise<void>;
   load(id: string): Promise<CrewRun | null>;
   list(projectId?: string): Promise<CrewRun[]>;
@@ -22,6 +23,8 @@ export interface CrewRunnerPorts {
   conventions?(projectId: string, goal: string): Promise<string>;
   /** Paths with uncommitted changes, so a task's files can be told apart from what was already changed. */
   changedFiles?(projectId: string): Promise<string[]>;
+  /** Separate copies let independent builders work at once without sharing a writable tree. */
+  worktrees?: { prepare(projectId: string, key: string): Promise<ParallelSession | null> };
   /** Open Pencil, through the one connection Studio already holds. Without it a Designer cannot draw. */
   design?: {
     status(): Promise<CrewDesign>;
@@ -53,13 +56,15 @@ interface ActiveRun {
   baselineFailing?: boolean;
   cancelled: boolean;
   done: Promise<void>;
+  wave: number;
+  serialRetryTasks: string[];
+  children: Set<string>;
 }
 
 /**
- * Drives a Crew run: the Lead writes the tasks, workers build them one at a time, the security role and the Lead check
+ * Drives a Crew run: the Lead writes the tasks, workers build independent tasks in isolated copies, the security role and the Lead check
  * each result, and a send-back goes to the builder that wrote it. The rules live in `crew-engine.ts`; this class only
- * starts agents and records what they said. Work runs one task at a time in the project; running several at once
- * needs separate copies of it, as the workflow runner uses, and is not wired here yet.
+ * starts agents and records what they said. Projects without Git worktree support fall back to one task at a time.
  */
 export class DesktopCrewRunner {
   private readonly active = new Map<string, ActiveRun>();
@@ -143,7 +148,7 @@ export class DesktopCrewRunner {
     if (!active) return this.require(runId);
     active.cancelled = true;
     active.controller.abort();
-    this.ports.cancelAgent(active.conversationId);
+    await Promise.all([active.conversationId, ...active.children].map((id) => this.ports.cancelAgent(id)));
     await active.done.catch(() => undefined);
     this.active.delete(runId);
     // A run that finished or stopped to ask while Pause was pressed keeps that outcome.
@@ -182,7 +187,7 @@ export class DesktopCrewRunner {
   }
 
   private attach(run: CrewRun, ownerWindowId: number, conversationId: string): ActiveRun {
-    const active: ActiveRun = { ownerWindowId, conversationId, controller: new AbortController(), run, cancelled: false, done: Promise.resolve() };
+    const active: ActiveRun = { ownerWindowId, conversationId, controller: new AbortController(), run, cancelled: false, done: Promise.resolve(), wave: 0, serialRetryTasks: run.tasks.filter((task) => task.note.startsWith('Its changes conflicted with another independent task') || task.note.startsWith('Its changes conflicted with another task')).map((task) => task.id), children: new Set() };
     this.active.set(run.id, active);
     return active;
   }
@@ -284,14 +289,133 @@ export class DesktopCrewRunner {
         continue;
       }
 
-      const next = pickTasks({ ...run, config: { ...run.config, limits: { ...run.config.limits, maxParallelTasks: 1 } } })[0];
+      const ready = pickTasks(run);
+      const serialRetry = active.serialRetryTasks.map((id) => ready.find((task) => task.id === id)).find((task) => task !== undefined);
+      const next = serialRetry ?? ready[0];
       if (!next) {
         const message = unfinishedReason(run) ?? 'No task can start.';
         run = { ...run, status: 'needsYou', ask: { reason: 'noProgress', message: `The crew is stuck: ${message}` }, updatedAt: this.now().toISOString() };
         await this.commit(active, settle(run, run.updatedAt));
         return;
       }
+      const roles = run.config.roles;
+      const batch = serialRetry
+        ? [next]
+        : ready.filter((task) => {
+          const role = roles.find((item) => item.id === task.role);
+          return role?.kind !== 'designer';
+        }).slice(0, run.config.limits.maxParallelTasks);
+      if (batch.length > 1 && !this.ports.worktrees && !active.run.feed.some((item) => item.text.includes('parallel Crew work needs a Git project'))) {
+        await this.commit(active, { ...active.run, feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: this.now().toISOString(), who: 'crew', kind: 'info', text: 'Independent tasks are running one at a time because parallel Crew work needs a Git project with a commit.' }] });
+      }
+      if (batch.length > 1 && this.ports.worktrees) {
+        let session: ParallelSession | null = null;
+        try { session = await this.ports.worktrees.prepare(run.projectId, `crew-${run.id}-${++active.wave}`); }
+        catch (error) {
+          await this.commit(active, { ...active.run, feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: this.now().toISOString(), who: 'crew', kind: 'info', text: `Independent tasks will run one at a time because separate project copies could not be prepared: ${error instanceof Error ? error.message : String(error)}` }] });
+        }
+        if (session) {
+          await this.buildParallel(active, batch, session);
+          continue;
+        }
+        if (!session && !active.run.feed.some((item) => item.text.includes('parallel Crew work needs a Git project'))) {
+          await this.commit(active, { ...active.run, feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: this.now().toISOString(), who: 'crew', kind: 'info', text: 'Independent tasks are running one at a time because parallel Crew work needs a Git project with a commit.' }] });
+        }
+      }
+      if (serialRetry) active.serialRetryTasks = active.serialRetryTasks.filter((id) => id !== serialRetry.id);
       await this.build(active, next.id);
+    }
+  }
+
+  /** Builds independent tasks in separate project copies, integrates their work, then reviews the integrated result. */
+  private async buildParallel(active: ActiveRun, tasks: readonly CrewTask[], session: ParallelSession): Promise<void> {
+    const at = (): string => this.now().toISOString();
+    let run = active.run;
+    for (const task of tasks) {
+      const role = run.config.roles.find((item) => item.id === task.role);
+      if (role) run = startTask(run, task.id, role.id, at());
+    }
+    await this.commit(active, run);
+    type Outcome = { taskId: string; status: 'success' | 'failed' | 'checkFailed'; commit?: string; files: string[]; output: string; costUsd: number; error?: string; checkOutput?: string };
+    const outcomes = new Map<string, Outcome>();
+    try {
+      await Promise.all(tasks.map(async (task) => {
+        const role = active.run.config.roles.find((item) => item.id === task.role);
+        if (!role) { outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: '', costUsd: 0, error: `There is no role ${task.role}.` }); return; }
+        if (roleAccess(role) !== 'edit') { outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: '', costUsd: 0, error: `${role.label} cannot change files, so it cannot build this.` }); return; }
+        let conversationId = active.conversationId;
+        try {
+          const cwd = await session.checkout(task.id);
+          if (active.cancelled) return;
+          const conversation = await this.ports.createConversation(active.run.projectId, `Crew task: ${task.title}`);
+          conversationId = conversation.id;
+          active.children.add(conversationId);
+          if (active.cancelled) return;
+          const conventions = (await this.ports.conventions?.(active.run.projectId, `${active.run.goal} ${task.title}`).catch(() => '')) ?? '';
+          const result = await this.call(active, role, taskBrief(active.run, task.id, conventions), { effortFrom: `${task.title}\n${task.description}`, fresh: true, cwd, conversationId });
+          if (active.cancelled) return;
+          if (result.status === 'failed') {
+            outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: result.output, costUsd: result.costUsd ?? 0, error: result.error ?? 'The agent stopped without finishing.' });
+            return;
+          }
+          if (active.run.config.checkCommand && !active.baselineFailing) {
+            const check = await this.ports.runCheck(active.run.projectId, active.run.config.checkCommand, active.controller.signal, { cwd });
+            if (!check.passed) {
+              outcomes.set(task.id, { taskId: task.id, status: 'checkFailed', files: [], output: result.output, costUsd: result.costUsd ?? 0, checkOutput: check.output });
+              return;
+            }
+          }
+          if (active.cancelled) return;
+          const commit = await session.commit(task.id, `Crew: ${task.title}`);
+          if (active.cancelled) return;
+          const files = await session.filesChanged(commit);
+          outcomes.set(task.id, { taskId: task.id, status: 'success', commit, files, output: result.output, costUsd: result.costUsd ?? 0 });
+        } catch (error) {
+          outcomes.set(task.id, { taskId: task.id, status: 'failed', files: [], output: '', costUsd: 0, error: error instanceof Error ? error.message : String(error) });
+        } finally {
+          if (conversationId !== active.conversationId) active.children.delete(conversationId);
+        }
+      }));
+      if (active.cancelled) return;
+      const commits = tasks.flatMap((task) => { const outcome = outcomes.get(task.id); return outcome?.status === 'success' && outcome.commit ? [{ stepId: task.id, commit: outcome.commit }] : []; });
+      const integration = commits.length ? await session.integrate(commits) : null;
+      const conflicts = new Set(integration?.conflicts.map((item) => item.stepId) ?? []);
+      for (const outcome of outcomes.values()) {
+        if (integration?.skipped.some((file) => outcome.files.includes(file))) conflicts.add(outcome.taskId);
+      }
+      if (integration?.skipped.length) await this.commit(active, { ...active.run, feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: at(), who: 'crew', kind: 'info', text: `The project changed while independent tasks were running. KAI kept your versions of: ${integration.skipped.join(', ')}. Affected tasks will retry alone.` }] });
+      for (const task of tasks) {
+        const outcome = outcomes.get(task.id);
+        if (!outcome) continue;
+        if (conflicts.has(task.id)) {
+          if (!active.serialRetryTasks.includes(task.id)) active.serialRetryTasks.push(task.id);
+          await this.commit(active, { ...active.run, tasks: active.run.tasks.map((item) => item.id === task.id ? { ...item, status: 'backlog' as const, note: 'Its changes conflicted with another independent task. It will be retried alone on top of the integrated work.' } : item), feed: [...active.run.feed, { id: `feed_${randomUUID()}`, at: at(), who: 'crew', kind: 'info' as const, taskId: task.id, text: `The changes for "${task.title}" conflicted with another task, so it will be retried on its own.` }] });
+          continue;
+        }
+        if (outcome.status === 'failed') {
+          await this.commit(active, failBuild(addSpend(active.run, task.id, outcome.costUsd, at()), task.id, outcome.error ?? 'The agent stopped without finishing.', at()));
+          continue;
+        }
+        if (outcome.status === 'checkFailed') {
+          let failed = addSpend(active.run, task.id, outcome.costUsd, at());
+          failed = submitTask(failed, task.id, { files: [], costUsd: 0 }, at());
+          failed = reviewTask(failed, task.id, { verdict: 'sendBack', feedback: `The project check "${failed.config.checkCommand}" fails in this task's isolated copy.${outcome.checkOutput ? `\n${outcome.checkOutput.trim().slice(-1_500)}` : ''}`, reviewer: CHECK_REVIEWER }, at());
+          this.builderReply.set(task.id, outcome.output);
+          await this.commit(active, failed);
+          continue;
+        }
+        let submitted = submitTask(active.run, task.id, { files: outcome.files, costUsd: outcome.costUsd }, at());
+        if (submitted.config.checkCommand && !active.baselineFailing) {
+          const current = submitted.tasks.find((item) => item.id === task.id)!;
+          submitted = { ...submitted, tasks: submitted.tasks.map((item) => item.id === task.id ? { ...item, reviews: [...item.reviews, { round: current.round, verdict: 'accept' as const, feedback: '', reviewer: CHECK_REVIEWER, at: at() }] } : item) };
+          this.checkNote.set(task.id, `The project check "${submitted.config.checkCommand}" passed in this task's isolated copy.`);
+        }
+        this.builderReply.set(task.id, outcome.output);
+        await this.commit(active, submitted);
+        await this.review(active, task.id);
+      }
+    } finally {
+      await session.dispose().catch(() => undefined);
     }
   }
 
@@ -426,11 +550,11 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
     return { value: second.status === 'completed' ? parse(second.output) : null, costUsd };
   }
 
-  private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string }): Promise<CallResult> {
+  private async call(active: ActiveRun, role: CrewRole, prompt: string, options: { fresh: boolean; effortFrom?: string; cwd?: string; conversationId?: string }): Promise<CallResult> {
     const { config } = active.run;
     const instructions = role.instructions.trim();
     const request: AgentRunRequest = {
-      conversationId: active.conversationId,
+      conversationId: options.conversationId ?? active.conversationId,
       prompt: instructions ? `${prompt}\n\nExtra guidance for your role:\n${instructions}` : prompt,
       agent: role.agent,
       execution: role.execution,
@@ -442,7 +566,7 @@ ${tail}` : ''}`, reviewer: CHECK_REVIEWER }, at()));
       ...(options.fresh ? { freshSession: true } : {}),
     };
     try {
-      return await this.ports.runAgent(request, active.ownerWindowId);
+      return await this.ports.runAgent(request, active.ownerWindowId, options.cwd ? { cwd: options.cwd } : undefined);
     } catch (error) {
       return { status: 'failed', output: '', error: error instanceof Error ? error.message : String(error) };
     }
