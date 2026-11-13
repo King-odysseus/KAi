@@ -49,6 +49,8 @@ import {
   boardHousekeeping,
   type StudioGuideView,
   type StudioProjectSummary,
+  type GitOverview,
+  type VerificationOverview,
   type StudioPlanAction,
   type StudioPlanStage,
   type StudioReadiness,
@@ -183,7 +185,9 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const [boardFull, setBoardFull] = useState(false);
   // Any artifact can be read, edited or (for flows) explored full screen.
   const [viewerFull, setViewerFull] = useState(false);
-  const [tab, setTab] = usePersistentChoice<'interview' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide' | 'team'>('kai.tab.studio', 'interview', ['interview', 'artifacts', 'board', 'design', 'chat', 'guide', 'team']);
+  const [tab, setTab] = usePersistentChoice<'interview' | 'spec' | 'artifacts' | 'board' | 'design' | 'chat' | 'guide' | 'team'>('kai.tab.studio', 'interview', ['interview', 'spec', 'artifacts', 'board', 'design', 'chat', 'guide', 'team']);
+  const [specGit, setSpecGit] = useState<GitOverview | null>(null);
+  const [specVerification, setSpecVerification] = useState<VerificationOverview | null>(null);
   // How the last design build ended, shown beside the buttons that start it. The page's own banner is at the very top,
   // a long way above the build controls, and a build that stopped there looked like one that had not said anything.
   const [buildOutcome, setBuildOutcome] = useState<string | null>(null);
@@ -302,6 +306,21 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
   const archivedProjects = projects.filter((project) => Boolean(project.archivedAt));
   const visibleProjects = showArchived ? archivedProjects : activeProjects;
   const currentFolder = activeProject && !activeProject.id.startsWith('studio_') ? activeProject : null;
+
+  useEffect(() => {
+    if (tab !== 'spec' || !state || !projectId) return;
+    let cancelled = false;
+    const codeProjectId = state.linkedProjectId ?? state.projectId;
+    void Promise.all([
+      window.kaiDesktop.gitOverview(codeProjectId).then(unwrap),
+      window.kaiDesktop.verificationOverview(codeProjectId).then(unwrap),
+    ]).then(([git, verification]) => {
+      if (!cancelled) { setSpecGit(git); setSpecVerification(verification); }
+    }).catch((caught) => {
+      if (!cancelled) setError(messageOf(caught));
+    });
+    return () => { cancelled = true; };
+  }, [tab, projectId, state?.linkedProjectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2698,6 +2717,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         <div className="studio-tabs" role="tablist" aria-label="Project sections">
           {([
             ['interview', 'Interview'],
+            ['spec', 'Spec health'],
             ['artifacts', `Artifacts${artifacts ? ` (${artifacts.artifacts.length})` : ''}`],
             ['board', `Board${board && board.cards.length > 0 ? ` (${board.cards.length})` : ''}`],
             ['design', 'Design'],
@@ -3071,6 +3091,38 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
 
       {state && briefReady && (
         <section className="studio-stack">
+          {tab === 'spec' && (
+            <article className="studio-card">
+              <h2><FileText size={16} /> Spec health</h2>
+              <p className="studio-note">Compare the brief and generated artifacts with the board and current code changes. Regenerate the side that should follow the brief, or send the spec to Crew to update code.</p>
+              <div className="studio-rail-pills">
+                <Pill tone={artifacts?.artifacts.some((item) => item.stale) ? 'warning' : 'success'}>{artifacts?.artifacts.filter((item) => item.stale).length ?? 0} stale artifacts</Pill>
+                <Pill tone={board?.cards.some((card) => card.stale) ? 'warning' : 'success'}>{board?.cards.filter((card) => card.stale).length ?? 0} stale board cards</Pill>
+                <Pill tone={specGit?.changes.length ? 'warning' : 'success'}>{specGit?.changes.length ?? '…'} changed code files</Pill>
+              </div>
+              <div className="page-actions">
+                <UiButton type="button" className="primary-button" onClick={() => void generate()} disabled={busy !== null || !readiness?.ready}><Wand2 size={14} /> Update artifacts from brief</UiButton>
+                <UiButton type="button" className="secondary-button" onClick={() => void plan()} disabled={busy !== null || !readiness?.ready}><RefreshCw size={14} /> Rebuild board from artifacts</UiButton>
+                <UiButton type="button" className="secondary-button" onClick={() => projectId && void launchProject(projectId, 'crew')} disabled={busy !== null}><Users size={14} /> Update code with Crew</UiButton>
+              </div>
+              <div className="studio-decisions">
+                <div><h3>Spec and board</h3><ul className="prompt-guide-list">
+                  {(artifacts?.artifacts.filter((item) => item.stale) ?? []).map((item) => <li key={item.kind}><strong>{item.kind}</strong> is stale{item.staleReason ? `: ${item.staleReason}` : '.'}</li>)}
+                  {(board?.cards.filter((card) => card.stale) ?? []).map((card) => <li key={card.id}><strong>{card.title}</strong> is based on stale spec artifacts{card.staleReason ? `: ${card.staleReason}` : '.'}</li>)}
+                  {!artifacts?.artifacts.some((item) => item.stale) && !board?.cards.some((card) => card.stale) && <li>Generated artifacts and board cards have no recorded drift.</li>}
+                </ul></div>
+                <div><h3>Code changes</h3><ul className="prompt-guide-list">
+                  {(specGit?.changes ?? []).map((change) => {
+                    const verification = specVerification?.files.find((item) => item.path === change.path);
+                    const recorded = board?.cards.some((card) => card.runs.some((run) => run.files.includes(change.path)));
+                    return <li key={change.path}><code>{change.path}</code> · {verification?.status ?? 'not checked'} · {recorded ? 'touched by a board run' : 'outside recorded board runs'}</li>;
+                  })}
+                  {specGit?.changes.length === 0 && <li>No uncommitted code changes are present.</li>}
+                  {specVerification?.files.filter((item) => item.status === 'stale' || item.status === 'unverified').map((item) => <li key={`check-${item.path}`}><code>{item.path}</code> has {item.status} verification evidence.</li>)}
+                </ul></div>
+              </div>
+            </article>
+          )}
           {tab === 'artifacts' && (
           <>
           <article className={`studio-card studio-artifacts-card${viewing ? ' split' : ''}`}>
