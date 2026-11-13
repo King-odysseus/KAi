@@ -16,6 +16,7 @@ import { UiButton } from './UiButton';
 import { usePersistentChoice } from '../persistent-choice';
 import { UiTextInput } from './UiTextInput';
 import { PageHeader } from './ui/PageHeader';
+import { crewLimitPolicy } from '../cost-visibility';
 
 type Tab = 'board' | 'crew' | 'design' | 'cost' | 'report';
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: typeof Kanban }> = [
@@ -337,6 +338,7 @@ function RunBar({ run, working, onPause, onResume, onStop, onApprove }: { run: C
         <div><dt>Spent</dt><dd>{money(run.spentUsd)}{maxUsd > 0 ? ` of ${money(maxUsd)}` : ''}</dd></div>
         <div><dt>Roles</dt><dd>{run.config.roles.length}</dd></div>
       </dl>
+      <small className="basis-full text-[var(--text-dim)]">{crewLimitPolicy(run.config.limits)}</small>
       <div className="crew-runbar-actions">
         {run.status === 'awaitingApproval' && <UiButton type="button" className="primary-button" disabled={working} onClick={onApprove}><Play size={14} /><span>Approve plan</span></UiButton>}
         {live && <UiButton type="button" className="secondary-button" disabled={working} onClick={onPause}><Pause size={14} /><span>Pause</span></UiButton>}
@@ -576,7 +578,7 @@ function CostTab({ config, readOnly, run, onLimits, onSavings }: {
   ];
   return (
     <section className="ops-panel">
-      <p className="tasks-tab-help">A limit pauses the crew and asks Continue or Finish. It never cuts work off halfway. Zero means no limit.</p>
+      <p className="tasks-tab-help">Limits are checked between tasks. Ask mode offers Continue or Finish; Finish mode stops with accepted work. No task is cut off halfway. Zero means no limit.</p>
       <div className="crew-limits">
         <label className="workflow-field"><span>Spend limit (USD)</span><UiTextInput type="number" min={0} step={1} disabled={readOnly} value={config.limits.maxUsd} onChange={(event) => onLimits({ maxUsd: Math.max(0, Number(event.target.value) || 0) })} /></label>
         <label className="workflow-field"><span>Time limit (minutes)</span><UiTextInput type="number" min={0} disabled={readOnly} value={config.limits.maxMinutes} onChange={(event) => onLimits({ maxMinutes: clampInt(event.target.value, 0, 1440) })} /></label>

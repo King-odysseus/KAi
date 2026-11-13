@@ -5,6 +5,7 @@ import { AutoSettings } from './AutoSettings';
 import { ComposerRunDetails, ComposerRunLine, useComposerRun } from './ComposerRunLine';
 import { AUTO_WORKING_AUTONOMY, buildAutoStartRequest, readAutoSettings } from './auto-settings';
 import { settleWithin } from '../async-deadline';
+import { composerLimitPolicy } from '../cost-visibility';
 import { steerWaitingNotice } from '../run-controls';
 import { PlanStrip, usePlanProgress } from './PlanStrip';
 import { EqualizerPanel } from './EqualizerPanel';
@@ -585,6 +586,7 @@ export function WorkspaceView({
     + Math.ceil((prompt.length + promptContextCharacters) / 4) + 1_200;
   const responseCostEstimate = apiRun && effectiveRoute === 'direct' && canSendPrompt
     ? estimateResponseCostUsd(estimateModel, estimatedInputTokens) : null;
+  const limitPolicy = composerLimitPolicy(apiRun, effectiveRoute);
   // Independent of whatever is or isn't typed yet: what resuming this conversation costs before the next word is
   // written, so the warning to compact a large idle conversation can also say what letting it ride will cost.
   const resumeCostEstimate = activeConversation && apiRun && effectiveRoute === 'direct'
@@ -2459,6 +2461,7 @@ export function WorkspaceView({
         <div className="composer-status-line">
           <UiButton type="button" aria-expanded={composerStatusOpen} onClick={() => setComposerStatusOpen((open) => !open)}><ChevronDown size={12} className={composerStatusOpen ? 'rotate-180' : ''} /> {running ? 'Running' : 'Ready'} · {apiRun ? 'API' : 'CLI'} · {runLabel}</UiButton>
           <span>{cost > 0 ? `$${cost.toFixed(4)} session` : activeConversation?.compaction ? `Context compacted ${relativeTime(activeConversation.compaction.createdAt)}` : activeConversation ? `${activeConversation.turns.length} messages` : 'New conversation'}</span>
+          {limitPolicy && <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2" title={limitPolicy}>{limitPolicy}<UiButton type="button" className="composer-text-button" onClick={onOpenUsage}>Usage</UiButton></span>}
         </div>
         {composerStatusOpen && <div className="composer-status-details">
           {responseCostEstimate && <p className="composer-cost-estimate" title={`Rough estimate for one model response on ${estimateModel}. Full agent runs can make multiple responses; context, caching, provider pricing, tools, and actual output change the bill.`}>Roughly ${responseCostEstimate.low < 0.01 ? responseCostEstimate.low.toFixed(4) : responseCostEstimate.low.toFixed(2)}–${responseCostEstimate.high < 0.01 ? responseCostEstimate.high.toFixed(4) : responseCostEstimate.high.toFixed(2)} per response <span>· full task may cost more</span></p>}
