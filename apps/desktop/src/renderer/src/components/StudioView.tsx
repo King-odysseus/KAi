@@ -22,6 +22,7 @@ import {
   machineBlocked,
   interviewGivenAnswers,
   interviewRecap,
+  INTERVIEW_TOPICS,
   interviewOpenOptions,
   interviewOpenQuestions,
   projectTitleFrom,
@@ -1392,6 +1393,35 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
         ))}
       </ul>
     );
+  }
+
+  async function askAssumedTopics(): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('answer');
+    setError(null);
+    try {
+      adopt(unwrap(await window.kaiDesktop.askStudioAssumedTopics(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function topicCoverage(current: InterviewState): ReactNode {
+    return (
+      <table className="studio-topic-coverage"><thead><tr><th>Topic</th><th>Status</th><th>Source</th></tr></thead><tbody>
+        {Object.entries(INTERVIEW_TOPICS).map(([key, label]) => {
+          const topic = current.topics[key as keyof typeof INTERVIEW_TOPICS];
+          return <tr key={key}><th scope="row">{label}</th><td>{topic?.status ?? 'open'}</td><td>{topic?.source ?? 'Not covered'}</td></tr>;
+        })}
+      </tbody></table>
+    );
+  }
+
+  function askAssumedTopicsButton(current: InterviewState): ReactNode {
+    if (!Object.values(current.topics).some((topic) => topic?.status === 'assumed')) return null;
+    return <UiButton type="button" className="secondary-button" onClick={() => void askAssumedTopics()} disabled={busy !== null}>Ask about everything still assumed</UiButton>;
   }
 
   async function reset(): Promise<void> {
@@ -2824,6 +2854,8 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
               {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
+              <h3>Topic coverage</h3>{topicCoverage(state)}
+              {askAssumedTopicsButton(state)}
             </>
           )}
           {state?.status === 'reviewing' && (
@@ -2841,8 +2873,10 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
               )}
               {recap && recap.leftToAgents.length > 0 && <Notes title="Left to the agents" items={recap.leftToAgents} />}
               {state.assumptions.length > 0 && <><h3>Assumptions</h3>{assumptionControls(state.assumptions)}</>}
+              <h3>Topic coverage</h3>{topicCoverage(state)}
               <div className="studio-actions">
                 <UiButton type="button" className="secondary-button" onClick={() => void backToQuestions()} disabled={busy !== null}><ArrowLeft size={14} /> Back to questions</UiButton>
+                {askAssumedTopicsButton(state)}
                 <UiButton type="button" className="primary-button" onClick={() => void confirmReview()} disabled={busy !== null}>{busy === 'finish' ? <Loader2 className="spin" size={14} /> : <FileText size={14} />} Write the brief</UiButton>
               </div>
             </>

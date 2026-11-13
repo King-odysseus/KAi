@@ -587,6 +587,7 @@ export const ipcChannels = [
   'studio:interview-answer',
   'studio:interview-correct',
   'studio:interview-assumption',
+  'studio:interview-assumed-topics',
   'studio:interview-finish',
   'studio:interview-confirm',
   'studio:interview-reopen',
@@ -1001,6 +1002,7 @@ export const ipcInputSchemas = {
   'studio:interview-answer': interviewAnswerInputSchema,
   'studio:interview-correct': interviewCorrectionInputSchema,
   'studio:interview-assumption': interviewAssumptionInputSchema,
+  'studio:interview-assumed-topics': interviewProjectInputSchema,
   'studio:interview-finish': interviewProjectInputSchema,
   'studio:interview-confirm': interviewProjectInputSchema,
   'studio:interview-reopen': interviewProjectInputSchema,
@@ -1574,6 +1576,7 @@ export interface KaiDesktopBridge {
   /** Replaces an answer already given and asks again from that point, dropping the rounds that followed it. */
   correctStudioInterviewAnswer(request: InterviewCorrectionInput): Promise<IpcResponse<InterviewState>>;
   actOnStudioAssumption(request: InterviewAssumptionInput): Promise<IpcResponse<InterviewState>>;
+  askStudioAssumedTopics(projectId: string): Promise<IpcResponse<InterviewState>>;
   finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   /** Writes the reviewed brief after the user confirms the summary. */
   confirmStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
+import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
 import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
@@ -92,6 +92,37 @@ describe('assumption controls', () => {
     const spent = state({ assumptions: [assumption], rounds: Array.from({ length: STUDIO_MAX_QUESTIONS }, (_value, index) => ({ questions: [`Question ${index}`], options: [], answers: [] })) });
     const noBudget = new DesktopInterview(ports({ store: memoryStore(spent) }));
     await expect(noBudget.assumption({ projectId: 'p1', text: assumption.text, action: 'ask' })).rejects.toThrow(/budget is spent/);
+  });
+});
+
+describe('topic coverage', () => {
+  it('asks about an open required topic before entering review', async () => {
+    const topics = Object.fromEntries(Object.keys(INTERVIEW_TOPICS).map((key) => [key, { status: 'assumed', source: 'idea' }])) as InterviewState['topics'];
+    topics.design = { status: 'open', source: 'not stated' };
+    const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Build a booking web app.', assumptions: [], topics, questions: [] })]));
+    const started = await interview.start({ projectId: 'p1', idea: 'A booking web app.' });
+    expect(started.status).toBe('asking');
+    expect(started.rounds[0]?.questions[0]).toContain('visual style');
+  });
+
+  it('allows assumed topics and includes their sources in the brief coverage table', async () => {
+    const topics = Object.fromEntries(Object.keys(INTERVIEW_TOPICS).map((key) => [key, { status: 'assumed', source: 'assumed: simplest fit' }])) as InterviewState['topics'];
+    const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Build a booking web app.', assumptions: [], topics, questions: [] })]));
+    const reviewed = await interview.start({ projectId: 'p1', idea: 'A booking web app.' });
+    expect(reviewed.status).toBe('reviewing');
+    const brief = briefMarkdown(reviewed, NOW);
+    expect(brief).toContain('## Coverage');
+    expect(brief).toContain('| Design | assumed | assumed: simplest fit |');
+  });
+
+  it('queues assumed topics only up to the remaining question budget', async () => {
+    const topics = Object.fromEntries(Object.keys(INTERVIEW_TOPICS).map((key) => [key, { status: 'assumed', source: 'assumed: simplest fit' }])) as InterviewState['topics'];
+    const rounds = Array.from({ length: STUDIO_MAX_QUESTIONS - 1 }, (_value, index) => ({ questions: [`Question ${index}`], options: [], answers: [] }));
+    const interview = new DesktopInterview(ports({ store: memoryStore(state({ status: 'reviewing', topics, rounds })) }));
+    const queued = await interview.askAssumedTopics({ projectId: 'p1' });
+    expect(queued.status).toBe('asking');
+    expect(queued.rounds.flatMap((round) => round.questions)).toHaveLength(STUDIO_MAX_QUESTIONS);
+    expect(queued.rounds.at(-1)?.questions).toHaveLength(1);
   });
 });
 

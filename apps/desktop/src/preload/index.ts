@@ -132,6 +132,7 @@ const bridge: KaiDesktopBridge = {
   answerStudioInterview: (request) => ipcRenderer.invoke('studio:interview-answer', request),
   correctStudioInterviewAnswer: (request) => ipcRenderer.invoke('studio:interview-correct', request),
   actOnStudioAssumption: (request) => ipcRenderer.invoke('studio:interview-assumption', request),
+  askStudioAssumedTopics: (projectId) => ipcRenderer.invoke('studio:interview-assumed-topics', { projectId }),
   finishStudioInterview: (projectId) => ipcRenderer.invoke('studio:interview-finish', { projectId }),
   confirmStudioInterview: (projectId) => ipcRenderer.invoke('studio:interview-confirm', { projectId }),
   reopenStudioInterview: (projectId) => ipcRenderer.invoke('studio:interview-reopen', { projectId }),

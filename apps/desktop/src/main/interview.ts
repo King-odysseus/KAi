@@ -11,6 +11,7 @@ import {
   STUDIO_QUESTION_CEILING,
   STUDIO_QUESTIONS_PER_ROUND,
   STUDIO_STYLE_REFERENCE_NOTES_PATH,
+  INTERVIEW_TOPICS,
   STUDIO_ROUND_QUESTION_LIMITS,
   clipOption,
   clipToLength,
@@ -55,6 +56,7 @@ const INTERVIEW_JSON_SCHEMA = {
   properties: {
     goal: { type: 'string' },
     assumptions: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, risk: { type: 'string', enum: ['high', 'medium', 'low'] }, status: { type: 'string', enum: ['assumed', 'confirmed', 'changed'] } }, required: ['text', 'risk', 'status'], additionalProperties: false } },
+    topics: { type: 'object', properties: Object.fromEntries(Object.keys(INTERVIEW_TOPICS).map((key) => [key, { type: 'object', properties: { status: { type: 'string', enum: ['decided', 'assumed', 'open'] }, source: { type: 'string' } }, required: ['status', 'source'], additionalProperties: false }])), additionalProperties: false },
     questions: {
       type: 'array',
       items: {
@@ -138,6 +140,7 @@ export class DesktopInterview {
       goal: '',
       assumptions: [],
       assumptionDecisions: [],
+      topics: {},
       rounds: [],
       extraQuestions: 0,
       status: 'asking',
@@ -159,7 +162,7 @@ export class DesktopInterview {
     const answers = mergeAnswers(last, input.answers);
     const rounds = [...state.rounds.slice(0, -1), { ...last, answers }];
     // The round budget is spent: ask the user to review before writing the brief.
-    if (rounds.length >= interviewQuestionBudget(state)) {
+    if (rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)) {
       return this.persist({ ...state, rounds, status: 'reviewing', updatedAt: this.ports.now() });
     }
     return this.persist(await this.ask({ ...state, rounds }));
@@ -264,6 +267,26 @@ export class DesktopInterview {
     return this.persist(next);
   }
 
+  /** Queues open-to-the-user assumed topics, capped by the remaining question budget. */
+  async askAssumedTopics(input: InterviewProjectInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state || (state.status !== 'reviewing' && state.status !== 'done')) throw new Error('Review the interview before asking about assumed topics.');
+    const asked = state.rounds.flatMap((round) => round.questions).length;
+    const remaining = Math.max(0, interviewQuestionBudget(state) - asked);
+    if (!remaining) throw new Error('The question budget is spent. Add five more questions to continue.');
+    const assumed = (Object.keys(INTERVIEW_TOPICS) as Array<keyof typeof INTERVIEW_TOPICS>)
+      .filter((key) => state.topics[key]?.status === 'assumed')
+      .slice(0, remaining);
+    if (!assumed.length) throw new Error('There are no assumed topics left to ask about.');
+    const questions = assumed.map(topicQuestion);
+    const rounds: InterviewRound[] = [];
+    for (let index = 0; index < questions.length; index += STUDIO_QUESTIONS_PER_ROUND) {
+      const chunk = questions.slice(index, index + STUDIO_QUESTIONS_PER_ROUND);
+      rounds.push({ questions: chunk.map((item) => item.question), options: chunk.map((item) => item.options), answers: [] });
+    }
+    return this.persist({ ...state, status: 'asking', rounds: [...state.rounds, ...rounds], updatedAt: this.ports.now() });
+  }
+
   async setArchived(input: StudioProjectArchiveInput): Promise<StudioProjectSummary> {
     const state = await this.ports.store.read(input.projectId);
     if (!state) throw new Error('Project not found.');
@@ -314,15 +337,19 @@ export class DesktopInterview {
     const fresh: Array<{ question: string; options: string[] }> = reply.questions
       .filter((item) => !asked.has(normalise(item.question)))
       .slice(0, Math.min(roundLimit(state.rounds.length), remaining));
-    // The prompt says the stack and the design must be settled before finishing, and a model that ignores that
-    // used to end the interview having assumed both. Settling them is not optional, so it is enforced here.
-    const required = fresh.length === 0 ? missingRequiredQuestion(state) : null;
+    const hasTopicMap = Object.keys(reply.topics).length > 0;
+    const topics = { ...state.topics, ...reply.topics };
+    // A topic-aware reply must resolve required gaps before finishing; old replies retain the legacy guard.
+    const required = fresh.length === 0
+      ? hasTopicMap ? missingOpenTopicQuestion(state.idea, reply.topics) : missingRequiredQuestion(state)
+      : null;
     if (required && remaining > 0) fresh.push(required);
     const questions = fresh.map((item) => item.question);
     const next: InterviewState = {
       ...state,
       goal: reply.goal,
       assumptions: mergeAssumptions(reply.assumptions, state.assumptions).slice(0, STUDIO_MAX_ASSUMPTIONS),
+      topics,
       rounds: [...state.rounds, { questions, options: fresh.map((item) => item.options), answers: [] }],
       updatedAt: this.ports.now(),
     };
@@ -378,6 +405,29 @@ function missingRequiredQuestion(state: Pick<InterviewState, 'idea' | 'rounds'>)
   return null;
 }
 
+function missingOpenTopicQuestion(idea: string, topics: InterviewState['topics']): { question: string; options: string[] } | null {
+  const isScreenApp = SCREEN_PATTERN.test(idea);
+  const required = Object.keys(INTERVIEW_TOPICS).filter((key) => key !== 'design' || isScreenApp) as Array<keyof typeof INTERVIEW_TOPICS>;
+  const open = required.find((key) => topics[key]?.status === 'open');
+  if (!open) return null;
+  return topicQuestion(open);
+}
+
+function topicQuestion(topic: keyof typeof INTERVIEW_TOPICS): { question: string; options: string[] } {
+  const questions: Record<keyof typeof INTERVIEW_TOPICS, string> = {
+    users: 'Who will use it, and what should each person be able to do?',
+    data: 'What information should it store, and where should that information live?',
+    stack: 'What technology should it be built with, or should I recommend a stack?',
+    hosting: 'Where should the finished app run?',
+    integrations: 'Which services should it connect to?',
+    auth: 'Do people need accounts, and what should each role be allowed to do?',
+    payments: 'Will the app take or manage payments?',
+    design: 'What should the visual style look like?',
+    acceptance: 'How will you know the first version is working well?',
+  };
+  return { question: questions[topic], options: ['I will decide', 'Not sure, you decide'] };
+}
+
 function summaryOf(state: InterviewState): StudioProjectSummary {
   return {
     id: state.projectId,
@@ -395,7 +445,7 @@ function summaryOf(state: InterviewState): StudioProjectSummary {
  * The interview prompt. It shows everything the user has said so far, marks what they skipped, and tells the model
  * to stop asking when it can already write a specific goal.
  */
-export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & { extraQuestions?: number }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
+export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds' | 'topics'> & { extraQuestions?: number }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
   const system = [
     'You are the Project Studio inside KAI, a desktop workbench where a team of coding agents builds software.',
     'The user has described a project in a paragraph. Your job is to close the gaps that would make the agents guess, before anything is written down as a requirement.',
@@ -404,6 +454,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
     'Write:',
     '- "goal": the project restated as one clear, specific goal (what is built, for whom, and what "done" looks like).',
     `- "assumptions": objects with "text", "risk" (high, medium or low: how much a wrong guess changes what is built), and "status" (assumed). Keep them short and concrete, under ${STUDIO_MAX_ASSUMPTION_CHARS} characters, and order high risk first.`,
+    '- "topics": for each project topic, return status decided, assumed or open, and a short source such as "idea", "answer 2" or "assumed: ...". Include all topic keys even when open.',
     `- "questions": at most ${roundLimit(state.rounds.length)} question, the single most important one only the user can answer, as an object {"question", "options"}. The whole interview may ask no more than ${interviewQuestionBudget(state)} questions; it has already asked ${state.rounds.flatMap((round) => round.questions).length}. It is shown in a chat, so write it as one short, conversational question of at most ${STUDIO_MAX_QUESTION_CHARS} characters that opens with a few words acknowledging the user's last answer (nothing, when there is none yet). Ask about the things that would change what gets built: who uses it, the data and where it lives, accounts and permissions, payments, the platform, and how the result is judged.`,
     `Give each question 2 to ${STUDIO_MAX_OPTIONS} "options": short, concrete answers fitted to THIS project and to everything the user has told you so far, so that a later question's options follow from the earlier answers (a payment question after "deposit" offers deposit styles, not generic ones). Keep every option to ${STUDIO_MAX_OPTION_CHARS} characters or fewer: they are shown as chips beside the answer box, and a longer one is cut short. Put the option you would recommend first and end its text with " (recommended)". Always make the last option "Not sure, you decide". If the user picked it, or skipped, decide yourself and add the decision to "assumptions" with a few words of reason. Use an empty options array only for a question that is truly open-ended.`,
     'Many users are new to building software. When their wording suggests that (no technical terms, "I don\'t know", very broad answers), write in plain language, explain what each option means in a few words, and prefer the simplest choice that works. Never assume they know what a framework, database or hosting service is.',
@@ -421,6 +472,7 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
   const user = [
     `Project described by the user:\n${state.idea}`,
     state.goal ? `Goal so far:\n${state.goal}` : '',
+    `Topic coverage so far:\n${JSON.stringify(state.topics)}`,
     answered.length > 0 ? `Already answered:\n${answered.join('\n\n')}` : '',
     skipped.length > 0 ? `Skipped (decide these yourself):\n${skipped.map((question) => `- ${question}`).join('\n')}` : '',
     styleReference?.trim() ? `The user attached reference images; a model described them as:\n${styleReference.trim().slice(0, 2_500)}\nTreat this as their stated taste and do not ask again for what it already answers.` : '',
@@ -479,7 +531,7 @@ function heldQuestion(item: unknown): unknown {
 }
 
 /** Reads the model's reply, dropping duplicate questions and options. */
-export function parseInterviewReply(content: string): { goal: string; assumptions: InterviewState['assumptions']; questions: Array<{ question: string; options: string[] }> } {
+export function parseInterviewReply(content: string): { goal: string; assumptions: InterviewState['assumptions']; topics: InterviewState['topics']; questions: Array<{ question: string; options: string[] }> } {
   const raw = withinShape(parseJsonResponse(content, 'Project Studio'));
   const parsed = interviewReplySchema.safeParse(raw);
   if (!parsed.success) {
@@ -489,6 +541,7 @@ export function parseInterviewReply(content: string): { goal: string; assumption
   return {
     goal: parsed.data.goal,
     assumptions: parsed.data.assumptions.slice(0, STUDIO_MAX_ASSUMPTIONS),
+    topics: parsed.data.topics,
     questions: dedupeReplyQuestions(parsed.data.questions),
   };
 }
@@ -514,6 +567,11 @@ export function briefMarkdown(state: InterviewState, writtenAt: string): string 
     '## What you decided',
     [...state.assumptionDecisions, ...decided].length > 0 ? [...state.assumptionDecisions, ...decided].map((item) => `**${item.question}**\n\n${item.answer}`).join('\n\n') : 'No questions were answered.',
     open.length > 0 ? `## Left to the agents\n\n${open.map((question) => `- ${question}`).join('\n')}` : '',
+    '## Coverage',
+    ['| Topic | Status | Source |', '| --- | --- | --- |', ...Object.entries(INTERVIEW_TOPICS).map(([key, label]) => {
+      const topic = state.topics[key as keyof typeof INTERVIEW_TOPICS];
+      return `| ${label} | ${topic?.status ?? 'open'} | ${topic?.source ?? 'not covered'} |`;
+    })].join('\n'),
     unanswered.length > 0 ? `## Still open\n\n${unanswered.map((question) => `- ${question}`).join('\n')}` : '',
     '## Next',
     'The board, the components and the pages are built from this brief in the Project Studio. This file is the source: edit it by hand whenever you like, and KAI reads your version, not a copy.',

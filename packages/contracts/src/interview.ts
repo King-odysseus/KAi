@@ -88,6 +88,35 @@ export const interviewAssumptionSchema = z.object({
 }).strict();
 export type InterviewAssumption = z.infer<typeof interviewAssumptionSchema>;
 
+export const INTERVIEW_TOPICS = {
+  users: 'Users and roles',
+  data: 'Data and where it lives',
+  stack: 'Technology stack',
+  hosting: 'Hosting',
+  integrations: 'Integrations',
+  auth: 'Accounts and permissions',
+  payments: 'Payments',
+  design: 'Design',
+  acceptance: 'Acceptance criteria',
+} as const;
+export type InterviewTopic = keyof typeof INTERVIEW_TOPICS;
+export const interviewTopicSchema = z.object({
+  status: z.enum(['decided', 'assumed', 'open']),
+  source: z.string().trim().min(1).max(120),
+}).strict();
+export const interviewTopicsSchema = z.object({
+  users: interviewTopicSchema.optional(),
+  data: interviewTopicSchema.optional(),
+  stack: interviewTopicSchema.optional(),
+  hosting: interviewTopicSchema.optional(),
+  integrations: interviewTopicSchema.optional(),
+  auth: interviewTopicSchema.optional(),
+  payments: interviewTopicSchema.optional(),
+  design: interviewTopicSchema.optional(),
+  acceptance: interviewTopicSchema.optional(),
+}).strict().default({});
+export type InterviewTopics = Partial<Record<InterviewTopic, z.infer<typeof interviewTopicSchema>>>;
+
 const savedAssumptionsSchema = z.preprocess((value) => Array.isArray(value)
   ? value.map((item) => typeof item === 'string' ? { text: item, risk: 'medium', status: 'assumed' } : item)
   : value, z.array(interviewAssumptionSchema).max(12).default([]));
@@ -107,6 +136,7 @@ export const interviewStateSchema = z
     assumptions: savedAssumptionsSchema,
     // Changes made from the assumption controls, retained as explicit user decisions in the brief.
     assumptionDecisions: z.array(interviewAnswerSchema).default([]),
+    topics: interviewTopicsSchema,
     rounds: z.array(interviewRoundSchema).max(STUDIO_QUESTION_CEILING).default([]),
     // Questions the user asked for beyond the first ten, because they wanted to be walked through more.
     extraQuestions: z.number().int().min(0).max(STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS).default(0),
@@ -134,6 +164,7 @@ export const interviewReplySchema = z
   .object({
     goal: z.string().trim().min(1).max(STUDIO_MAX_GOAL_CHARS),
     assumptions: z.array(interviewAssumptionSchema).max(STUDIO_MAX_ASSUMPTIONS).default([]),
+    topics: interviewTopicsSchema,
     // A bare string is accepted too, for models that ignore the object shape.
     questions: z
       .array(z.union([
