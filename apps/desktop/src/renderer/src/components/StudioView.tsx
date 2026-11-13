@@ -2898,6 +2898,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
           )}
           {asking && state && (
             <>
+              <p className="studio-note">I read your idea. It already covers {state.ideaStated.length ? state.ideaStated.map((topic) => INTERVIEW_TOPICS[topic]).join(', ') : 'no complete topics yet'}. I’ll ask about {state.ideaGaps.length ? state.ideaGaps.map((topic) => INTERVIEW_TOPICS[topic]).join(', ') : 'only any remaining details'}.</p>
               <div className="studio-interview-head">
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
                 <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>

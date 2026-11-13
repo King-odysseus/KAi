@@ -18,6 +18,7 @@ import {
   interviewQuestionBudget,
   directProviderPreset,
   interviewReplySchema,
+  interviewIdeaReadResultSchema,
   interviewStateSchema,
   isLocalProvider,
   type AppSettings,
@@ -30,6 +31,7 @@ import {
   type InterviewStartInput,
   type InterviewState,
   type InterviewTopicAskInput,
+  type InterviewIdeaReadResult,
   type StudioProjectArchiveInput,
   type StudioReadiness,
   type StudioProjectSummary,
@@ -70,6 +72,16 @@ const INTERVIEW_JSON_SCHEMA = {
         },
       },
     },
+  },
+} as const;
+const IDEA_READ_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'stated', 'gaps'],
+  properties: {
+    summary: { type: 'string' },
+    stated: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
+    gaps: { type: 'array', items: { type: 'string', enum: Object.keys(INTERVIEW_TOPICS) } },
   },
 } as const;
 
@@ -134,10 +146,17 @@ export class DesktopInterview {
     }
     const readiness = await this.readiness();
     if (!readiness.ready) throw new Error(readiness.reason ?? 'The Project Studio is not ready.');
+    const read = await this.readIdea(input.idea);
+    const topics: InterviewState['topics'] = {};
+    for (const topic of read.stated) topics[topic] = { status: 'decided', source: 'idea' };
+    for (const topic of read.gaps) if (!topics[topic]) topics[topic] = { status: 'open', source: 'not stated in idea' };
     const state = await this.ask({
       projectId: input.projectId,
       linkedProjectId: input.linkedProjectId ?? null,
       idea: input.idea,
+      ideaSummary: read.summary,
+      ideaStated: read.stated,
+      ideaGaps: read.gaps,
       goal: '',
       assumptions: [],
       assumptionDecisions: [],
@@ -345,6 +364,27 @@ export class DesktopInterview {
     return null;
   }
 
+  private async readIdea(idea: string): Promise<InterviewIdeaReadResult> {
+    const settings = await this.ports.settings();
+    return this.ports.requester.structuredRequest(
+      settings.promptGuide,
+      NAMES,
+      {
+        system: [
+          'Read the project idea before the interview asks anything.',
+          'Return JSON with a compact summary of at most three short sentences, the topic keys already stated, and the topic keys missing.',
+          `Topic keys and labels: ${JSON.stringify(INTERVIEW_TOPICS)}.`,
+          'Mark a topic stated only when the idea gives enough information to guide implementation. Missing topics belong in gaps.',
+          'Do not infer a decision from a generic project name. A one-line idea may leave most topics in gaps.',
+        ].join('\n'),
+        user: `Project idea:\n${idea.slice(0, 4_000)}`,
+      },
+      'kai_project_idea_read',
+      IDEA_READ_JSON_SCHEMA,
+      parseInterviewIdeaRead,
+    );
+  }
+
   /** Asks the model for the next round, updating the goal and assumptions as it learns more. */
   private async ask(state: InterviewState): Promise<InterviewState> {
     const [settings, root] = await Promise.all([
@@ -363,9 +403,12 @@ export class DesktopInterview {
     );
     const asked = new Set(state.rounds.flatMap((round) => round.questions.map(normalise)));
     const remaining = Math.max(0, interviewQuestionBudget(state) - asked.size);
-    const fresh: Array<{ question: string; options: string[] }> = reply.questions
+    let fresh: Array<{ question: string; options: string[] }> = reply.questions
       .filter((item) => !asked.has(normalise(item.question)))
       .slice(0, Math.min(roundLimit(state.rounds.length), remaining));
+    if (state.rounds.length === 0 && state.ideaGaps.length > 0 && remaining > 0) {
+      fresh = [topicQuestion(state.ideaGaps[0]!)];
+    }
     const hasTopicMap = Object.keys(reply.topics).length > 0;
     const topics = { ...state.topics, ...reply.topics };
     // A topic-aware reply must resolve required gaps before finishing; old replies retain the legacy guard.
@@ -474,7 +517,7 @@ function summaryOf(state: InterviewState): StudioProjectSummary {
  * The interview prompt. It shows everything the user has said so far, marks what they skipped, and tells the model
  * to stop asking when it can already write a specific goal.
  */
-export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds' | 'topics'> & { extraQuestions?: number }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
+export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal' | 'assumptions' | 'rounds'> & Partial<Pick<InterviewState, 'topics' | 'ideaSummary' | 'ideaGaps' | 'ideaStated'>> & { extraQuestions?: number }, context: string | null, styleReference: string | null = null): { system: string; user: string } {
   const system = [
     'You are the Project Studio inside KAI, a desktop workbench where a team of coding agents builds software.',
     'The user has described a project in a paragraph. Your job is to close the gaps that would make the agents guess, before anything is written down as a requirement.',
@@ -501,7 +544,11 @@ export function buildInterviewPrompt(state: Pick<InterviewState, 'idea' | 'goal'
   const user = [
     `Project described by the user:\n${state.idea}`,
     state.goal ? `Goal so far:\n${state.goal}` : '',
-    `Topic coverage so far:\n${JSON.stringify(state.topics)}`,
+    `Topic coverage so far:\n${JSON.stringify(state.topics ?? {})}`,
+    state.ideaSummary ? `Read idea summary:\n${state.ideaSummary}` : '',
+    state.ideaStated?.length ? `Already covered in the idea: ${state.ideaStated.map((topic) => INTERVIEW_TOPICS[topic]).join(', ')}` : '',
+    state.ideaGaps?.length ? `Gaps in the idea (ask about these first): ${state.ideaGaps.map((topic) => INTERVIEW_TOPICS[topic]).join(', ')}` : '',
+    state.rounds.length === 0 ? `Original idea:\n${state.idea}` : '',
     answered.length > 0 ? `Already answered:\n${answered.join('\n\n')}` : '',
     skipped.length > 0 ? `Skipped (decide these yourself):\n${skipped.map((question) => `- ${question}`).join('\n')}` : '',
     styleReference?.trim() ? `The user attached reference images; a model described them as:\n${styleReference.trim().slice(0, 2_500)}\nTreat this as their stated taste and do not ask again for what it already answers.` : '',
@@ -573,6 +620,15 @@ export function parseInterviewReply(content: string): { goal: string; assumption
     topics: parsed.data.topics,
     questions: dedupeReplyQuestions(parsed.data.questions),
   };
+}
+
+export function parseInterviewIdeaRead(content: string): InterviewIdeaReadResult {
+  const parsed = interviewIdeaReadResultSchema.safeParse(parseJsonResponse(content, 'Project Studio idea read'));
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(`The Project Studio idea read did not match the expected shape (${issue ? `${issue.path.join('.') || 'result'}: ${issue.message}` : 'unknown error'}).`);
+  }
+  return parsed.data;
 }
 
 /** The brief the rest of the studio reads. Plain markdown, and honest about what was skipped. */

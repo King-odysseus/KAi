@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDefaultSettings, clipOption, clipToLength, interviewAnswerInputSchema, interviewGivenAnswers, interviewOpenQuestions, interviewRecap, interviewStateSchema, INTERVIEW_TOPICS, projectTitleFrom, STUDIO_MAX_ASSUMPTION_CHARS, STUDIO_MAX_OPTIONS, STUDIO_MAX_OPTION_CHARS, STUDIO_MAX_QUESTION_CHARS, STUDIO_MAX_QUESTIONS, STUDIO_MAX_ROUNDS, type InterviewState } from '../packages/contracts/src';
-import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
+import { briefMarkdown, buildInterviewPrompt, DesktopInterview, parseInterviewIdeaRead, parseInterviewReply, type InterviewPorts } from '../apps/desktop/src/main/interview';
 import { SpecStore, specHistoryPath } from '../apps/desktop/src/main/spec-store';
 
 const NOW = '2026-09-28T12:00:00.000Z';
@@ -134,11 +134,31 @@ describe('topic coverage', () => {
   });
 });
 
+describe('idea read before the interview', () => {
+  it('asks about a gap from a detailed idea before asking about already stated scope', async () => {
+    const read = JSON.stringify({ summary: 'A barber booking service with online accounts, bookings and a defined visual style.', stated: ['users', 'data', 'stack', 'hosting', 'design', 'acceptance'], gaps: ['payments', 'integrations', 'auth'] });
+    const interview = new DesktopInterview(ports({}, [JSON.stringify({ goal: 'Build a booking app.', assumptions: [], questions: [{ question: 'What are your payment options?', options: [] }] })], read));
+    const started = await interview.start({ projectId: 'p1', idea: 'A detailed multi-page idea describing customer roles, stored bookings, online payments to be decided, brand colours and many more requirements.' });
+    expect(started.ideaStated).toContain('design');
+    expect(started.ideaGaps).toEqual(['payments', 'integrations', 'auth']);
+    expect(started.rounds[0]?.questions[0]).toContain('payments');
+  });
+
+  it('keeps the normal first question for a short idea and uses a compact summary later', () => {
+    const first = buildInterviewPrompt({ idea: 'A booking site.', ideaSummary: 'A booking site.', ideaGaps: ['users'], ideaStated: [], goal: '', assumptions: [], rounds: [] }, null);
+    const later = buildInterviewPrompt({ idea: 'A booking site.', ideaSummary: 'A booking site.', ideaGaps: ['users'], ideaStated: [], goal: '', assumptions: [], rounds: [{ questions: ['Who books?'], options: [], answers: [{ question: 'Who books?', answer: 'Customers' }] }] }, null);
+    expect(first.user).toContain('Original idea:');
+    expect(later.user).toContain('Read idea summary:');
+    expect(later.user).not.toContain('Original idea:');
+  });
+});
+
 /** A requester that replays canned replies in order; the last one repeats if the interview asks again. */
-function requesterOf(replies: string[]): InterviewPorts['requester'] {
+function requesterOf(replies: string[], ideaRead = JSON.stringify({ summary: 'A project idea.', stated: [], gaps: [] })): InterviewPorts['requester'] {
   let call = 0;
   return {
-    structuredRequest: <T,>() => {
+    structuredRequest: <T,>(_connection, _names, _prompt, schemaName) => {
+      if (schemaName === 'kai_project_idea_read') return Promise.resolve(parseInterviewIdeaRead(ideaRead) as unknown as T);
       const reply = replies[call] ?? replies[replies.length - 1] ?? '{}';
       call += 1;
       return Promise.resolve(parseInterviewReply(reply) as unknown as T);
@@ -146,14 +166,14 @@ function requesterOf(replies: string[]): InterviewPorts['requester'] {
   };
 }
 
-function ports(overrides: Partial<InterviewPorts> = {}, replies: string[] = []): InterviewPorts {
+function ports(overrides: Partial<InterviewPorts> = {}, replies: string[] = [], ideaRead?: string): InterviewPorts {
   const settings = createDefaultSettings();
   return {
     settings: () => Promise.resolve({ ...settings, promptGuide: { ...settings.promptGuide, enabled: true } }),
     projectRoot: () => Promise.resolve(root),
     credentialStored: () => Promise.resolve(true),
     vaultAvailable: () => true,
-    requester: requesterOf(replies),
+    requester: requesterOf(replies, ideaRead),
     store: memoryStore(),
     spec: { write: (projectRoot, relativePath, content) => new SpecStore().write(projectRoot, relativePath, content) },
     now: () => NOW,

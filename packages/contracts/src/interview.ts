@@ -116,6 +116,12 @@ export const interviewTopicsSchema = z.object({
   acceptance: interviewTopicSchema.optional(),
 }).strict().default({});
 export type InterviewTopics = Partial<Record<InterviewTopic, z.infer<typeof interviewTopicSchema>>>;
+export const interviewIdeaReadResultSchema = z.object({
+  summary: z.string().trim().min(1).max(1_200),
+  stated: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])),
+  gaps: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])),
+}).strict();
+export type InterviewIdeaReadResult = z.infer<typeof interviewIdeaReadResultSchema>;
 
 const savedAssumptionsSchema = z.preprocess((value) => Array.isArray(value)
   ? value.map((item) => typeof item === 'string' ? { text: item, risk: 'medium', status: 'assumed' } : item)
@@ -130,6 +136,10 @@ export const interviewStateSchema = z
     // The code folder this discussion is attached to. Null means it lives only in KAI's Studio workspace.
     linkedProjectId: z.string().min(1).nullable().default(null),
     idea: z.string().trim().min(1).max(4_000),
+    // Compact, local summary from the one-time idea read; the original idea stays intact for the brief.
+    ideaSummary: z.string().trim().max(1_200).default(''),
+    ideaStated: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])).default([]),
+    ideaGaps: z.array(z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]])).default([]),
     // The idea restated as one clear goal, refreshed each round; empty until the first reply lands.
     goal: z.string().trim().max(STUDIO_MAX_GOAL_CHARS).default(''),
     // What the model assumed where the idea was silent. The user can correct any of them in the brief.
