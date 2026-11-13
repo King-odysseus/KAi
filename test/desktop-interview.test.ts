@@ -124,6 +124,14 @@ describe('topic coverage', () => {
     expect(queued.rounds.flatMap((round) => round.questions)).toHaveLength(STUDIO_MAX_QUESTIONS);
     expect(queued.rounds.at(-1)?.questions).toHaveLength(1);
   });
+
+  it('queues a selected open topic on the current question round', async () => {
+    const interview = new DesktopInterview(ports({ store: memoryStore(state({ rounds: [{ questions: ['Who books?'], options: [], answers: [] }] })) }));
+    const queued = await interview.askTopic({ projectId: 'p1', topic: 'design' });
+    expect(queued.rounds).toHaveLength(1);
+    expect(queued.rounds[0]?.questions).toEqual(['Who books?', 'What should the visual style look like?']);
+    expect(queued.rounds[0]?.options).toHaveLength(2);
+  });
 });
 
 /** A requester that replays canned replies in order; the last one repeats if the interview asks again. */

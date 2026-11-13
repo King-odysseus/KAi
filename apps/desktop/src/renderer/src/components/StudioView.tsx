@@ -30,6 +30,7 @@ import {
   STUDIO_EXTRA_QUESTIONS,
   STUDIO_MAX_EXTENSIONS,
   STUDIO_MAX_QUESTIONS,
+  STUDIO_QUESTION_CEILING,
   interviewQuestionBudget,
   type ArtifactKind,
   type BoardCard,
@@ -37,6 +38,7 @@ import {
   type GuideAction,
   type InterviewState,
   type InterviewAssumption,
+  type InterviewTopic,
   type PersistedEvent,
   type ProjectRecord,
   type StudioArtifacts,
@@ -1401,6 +1403,19 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
     setError(null);
     try {
       adopt(unwrap(await window.kaiDesktop.askStudioAssumedTopics(projectId)));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function askTopic(topic: InterviewTopic): Promise<void> {
+    if (!projectId || busy !== null) return;
+    setBusy('answer');
+    setError(null);
+    try {
+      adopt(unwrap(await window.kaiDesktop.askStudioTopic({ projectId, topic })));
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
@@ -2885,11 +2900,18 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
             <>
               <div className="studio-interview-head">
                 <AgentOrb state={busy === 'answer' || busy === 'finish' ? 'thinking' : 'idle'} />
-                <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of up to {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
+                <p className="studio-note">Question {Math.min(state.rounds.flatMap((round) => round.questions).length, interviewQuestionBudget(state))} of {interviewQuestionBudget(state)}. Skip anything you would rather leave to the agents, or pick "Not sure, you decide".</p>
+                <UiNativeSelect aria-label="Ask me about a topic" value="" disabled={busy !== null || state.rounds.flatMap((round) => round.questions).length >= interviewQuestionBudget(state)} onChange={(event) => { const topic = event.target.value as InterviewTopic; if (topic) void askTopic(topic); }}>
+                  <option value="">Ask me about…</option>
+                  {(Object.keys(INTERVIEW_TOPICS) as InterviewTopic[]).filter((topic) => state.topics[topic]?.status !== 'decided').map((topic) => <option key={topic} value={topic}>{INTERVIEW_TOPICS[topic]}{state.topics[topic]?.status === 'assumed' ? ' · assumed' : ' · open'}</option>)}
+                </UiNativeSelect>
                 {state.extraQuestions < STUDIO_EXTRA_QUESTIONS * STUDIO_MAX_EXTENSIONS && (
-                  <UiButton type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`New to this? KAI will ask ${STUDIO_EXTRA_QUESTIONS} more questions and explain the choices.`}>
-                    I am new to this: ask me {STUDIO_EXTRA_QUESTIONS} more
-                  </UiButton>
+                  <div className="studio-question-extension">
+                    <UiButton type="button" className="composer-text-button" onClick={() => void extendInterview()} disabled={busy !== null} title={`The interview can ask up to ${STUDIO_QUESTION_CEILING} questions.`}>
+                      {STUDIO_EXTRA_QUESTIONS} more questions
+                    </UiButton>
+                    <small>Add questions in groups of five, up to {STUDIO_QUESTION_CEILING} total.</small>
+                  </div>
                 )}
               </div>
               <div className="studio-thread" role="log" aria-live="polite">
@@ -2987,7 +3009,7 @@ export function StudioView({ activeProject, projects: desktopProjects, planReque
                         )}
                       </>
                     )}
-                    footer={<><span>Enter to send · Shift+Enter for a new line</span><span>{state.rounds.flatMap((round) => round.questions).length} of up to {interviewQuestionBudget(state)} questions</span></>}
+                    footer={<><span>Enter to send · Shift+Enter for a new line</span><span>Question {state.rounds.flatMap((round) => round.questions).length} of {interviewQuestionBudget(state)}</span></>}
                   />
                 </div>
               )}

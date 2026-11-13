@@ -29,6 +29,7 @@ import {
   type InterviewRound,
   type InterviewStartInput,
   type InterviewState,
+  type InterviewTopicAskInput,
   type StudioProjectArchiveInput,
   type StudioReadiness,
   type StudioProjectSummary,
@@ -278,13 +279,41 @@ export class DesktopInterview {
       .filter((key) => state.topics[key]?.status === 'assumed')
       .slice(0, remaining);
     if (!assumed.length) throw new Error('There are no assumed topics left to ask about.');
-    const questions = assumed.map(topicQuestion);
+    return this.queueTopicQuestions(state, assumed);
+  }
+
+  /** Queues one topic selected from the visible question menu. */
+  async askTopic(input: InterviewTopicAskInput): Promise<InterviewState> {
+    const state = await this.ports.store.read(input.projectId);
+    if (!state || !['asking', 'reviewing', 'done'].includes(state.status)) throw new Error('This interview is not ready for another topic question.');
+    if (state.topics[input.topic]?.status === 'decided') throw new Error('That topic is already decided.');
+    return this.queueTopicQuestions(state, [input.topic]);
+  }
+
+  private async queueTopicQuestions(state: InterviewState, topics: Array<keyof typeof INTERVIEW_TOPICS>): Promise<InterviewState> {
+    const asked = state.rounds.flatMap((round) => round.questions).length;
+    const remaining = Math.max(0, interviewQuestionBudget(state) - asked);
+    if (!remaining) throw new Error('The question budget is spent. Add five more questions to continue.');
+    const questions = topics.slice(0, remaining).map(topicQuestion);
+    if (!questions.length) throw new Error('There are no assumed topics left to ask about.');
     const rounds: InterviewRound[] = [];
-    for (let index = 0; index < questions.length; index += STUDIO_QUESTIONS_PER_ROUND) {
-      const chunk = questions.slice(index, index + STUDIO_QUESTIONS_PER_ROUND);
+    const previous = [...state.rounds];
+    const last = previous[previous.length - 1];
+    const availableInLast = last ? STUDIO_QUESTIONS_PER_ROUND - last.questions.length : 0;
+    const appended = state.status === 'asking' ? questions.slice(0, availableInLast) : [];
+    if (last && appended.length > 0) {
+      previous[previous.length - 1] = {
+        ...last,
+        questions: [...last.questions, ...appended.map((item) => item.question)],
+        options: [...last.questions.map((_question, index) => last.options[index] ?? []), ...appended.map((item) => item.options)],
+      };
+    }
+    const rest = questions.slice(appended.length);
+    for (let index = 0; index < rest.length; index += STUDIO_QUESTIONS_PER_ROUND) {
+      const chunk = rest.slice(index, index + STUDIO_QUESTIONS_PER_ROUND);
       rounds.push({ questions: chunk.map((item) => item.question), options: chunk.map((item) => item.options), answers: [] });
     }
-    return this.persist({ ...state, status: 'asking', rounds: [...state.rounds, ...rounds], updatedAt: this.ports.now() });
+    return this.persist({ ...state, status: 'asking', rounds: [...previous, ...rounds], updatedAt: this.ports.now() });
   }
 
   async setArchived(input: StudioProjectArchiveInput): Promise<StudioProjectSummary> {

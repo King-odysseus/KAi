@@ -7,6 +7,7 @@ import {
   interviewAnswerInputSchema,
   interviewCorrectionInputSchema,
   interviewAssumptionInputSchema,
+  interviewTopicAskInputSchema,
   interviewProjectInputSchema,
   interviewStartInputSchema,
   studioProjectArchiveInputSchema,
@@ -18,6 +19,7 @@ import {
   type InterviewAnswerInput,
   type InterviewCorrectionInput,
   type InterviewAssumptionInput,
+  type InterviewTopicAskInput,
   type InterviewStartInput,
   type InterviewState,
   type StudioReadiness,
@@ -588,6 +590,7 @@ export const ipcChannels = [
   'studio:interview-correct',
   'studio:interview-assumption',
   'studio:interview-assumed-topics',
+  'studio:interview-topic-ask',
   'studio:interview-finish',
   'studio:interview-confirm',
   'studio:interview-reopen',
@@ -1003,6 +1006,7 @@ export const ipcInputSchemas = {
   'studio:interview-correct': interviewCorrectionInputSchema,
   'studio:interview-assumption': interviewAssumptionInputSchema,
   'studio:interview-assumed-topics': interviewProjectInputSchema,
+  'studio:interview-topic-ask': interviewTopicAskInputSchema,
   'studio:interview-finish': interviewProjectInputSchema,
   'studio:interview-confirm': interviewProjectInputSchema,
   'studio:interview-reopen': interviewProjectInputSchema,
@@ -1577,6 +1581,7 @@ export interface KaiDesktopBridge {
   correctStudioInterviewAnswer(request: InterviewCorrectionInput): Promise<IpcResponse<InterviewState>>;
   actOnStudioAssumption(request: InterviewAssumptionInput): Promise<IpcResponse<InterviewState>>;
   askStudioAssumedTopics(projectId: string): Promise<IpcResponse<InterviewState>>;
+  askStudioTopic(request: InterviewTopicAskInput): Promise<IpcResponse<InterviewState>>;
   finishStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;
   /** Writes the reviewed brief after the user confirms the summary. */
   confirmStudioInterview(projectId: string): Promise<IpcResponse<InterviewState>>;

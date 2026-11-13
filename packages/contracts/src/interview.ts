@@ -208,6 +208,12 @@ export const interviewAssumptionInputSchema = z.object({
 }).strict();
 export type InterviewAssumptionInput = z.infer<typeof interviewAssumptionInputSchema>;
 
+export const interviewTopicAskInputSchema = z.object({
+  projectId: z.string().min(1),
+  topic: z.enum(Object.keys(INTERVIEW_TOPICS) as [InterviewTopic, ...InterviewTopic[]]),
+}).strict();
+export type InterviewTopicAskInput = z.infer<typeof interviewTopicAskInputSchema>;
+
 export const interviewProjectInputSchema = z.object({ projectId: z.string().min(1) }).strict();
 export type InterviewProjectInput = z.infer<typeof interviewProjectInputSchema>;
 
